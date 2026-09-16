@@ -82,7 +82,7 @@ jobs:
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
           -BuildDir build/windows-x64-ninja-asan -Config Debug
-          -ExcludeLabel live
+          -ExcludeLabel live -RequireFresh
 
       - name: sccache stats
         if: always()

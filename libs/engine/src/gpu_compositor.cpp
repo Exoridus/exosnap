@@ -133,6 +133,29 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
         return false;
     }
 
+    // The mask cursor's inverting plane. With a source that is opaque white where
+    // the pixel inverts and zero elsewhere:
+    //   invert     1 * (1 - dst) + dst * 0 = 1 - dst
+    //   elsewhere  0 * (1 - dst) + dst * 1 = dst
+    // so the pass needs no clipping and a cursor that mixes inverting with
+    // ordinary opaque pixels still composites correctly. Alpha is taken from the
+    // destination alone, so an inversion cannot disturb the frame's own alpha.
+    D3D11_BLEND_DESC invert_desc{};
+    invert_desc.RenderTarget[0].BlendEnable = TRUE;
+    invert_desc.RenderTarget[0].SrcBlend = D3D11_BLEND_INV_DEST_COLOR;
+    invert_desc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    invert_desc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    invert_desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO;
+    invert_desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+    invert_desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    invert_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+
+    hr = device_->CreateBlendState(&invert_desc, invert_blend_state_.put());
+    if (FAILED(hr)) {
+        SetHResultError(err, "CreateBlendState(invert)", hr);
+        return false;
+    }
+
     D3D11_BUFFER_DESC const_desc{};
     const_desc.ByteWidth = sizeof(OverlayPixelConstants);
     const_desc.Usage = D3D11_USAGE_DEFAULT;
@@ -180,6 +203,22 @@ bool GpuCompositor::DrawCursor(const uint8_t* bgra, int width, int height, const
 
     ChromaKeyParams chroma;
     return DrawTexture(cursor_tex_.srv.get(), rect, false, chroma, false, 1.0f, err);
+}
+
+bool GpuCompositor::DrawCursorInvert(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect,
+                                     std::string& err) {
+    if (!UploadTexture(cursor_invert_tex_, bgra, width, height, static_cast<UINT>(width * 4), err)) {
+        return false;
+    }
+
+    ChromaKeyParams chroma;
+    if (MaskComposition() == MaskCursorComposition::HdrVisibleFallback) {
+        // Not the Win32 operation, and deliberately so: see MaskCursorComposition.
+        // The ordinary alpha blend draws the marked pixels and leaves the rest,
+        // because the plane is zero (alpha included) everywhere else.
+        return DrawTexture(cursor_invert_tex_.srv.get(), rect, false, chroma, false, 1.0f, err);
+    }
+    return DrawTexture(cursor_invert_tex_.srv.get(), rect, false, chroma, false, 1.0f, err, invert_blend_state_.get());
 }
 
 bool GpuCompositor::UploadTexture(TextureResource& resource, const uint8_t* bgra, int width, int height, UINT row_pitch,
@@ -234,7 +273,8 @@ bool GpuCompositor::UploadTexture(TextureResource& resource, const uint8_t* bgra
 }
 
 bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
-                                const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err) {
+                                const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err,
+                                ID3D11BlendState* blend) {
     if (srv == nullptr || context_ == nullptr || composite_rtv_ == nullptr || !rect.IsValid()) {
         err = "GpuCompositor::DrawTexture invalid arguments";
         return false;
@@ -264,7 +304,7 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
     float blend_factor[4] = {};
     ID3D11RenderTargetView* rtv = composite_rtv_.get();
     context_->OMSetRenderTargets(1, &rtv, nullptr);
-    context_->OMSetBlendState(blend_state_.get(), blend_factor, 0xffffffff);
+    context_->OMSetBlendState(blend == nullptr ? blend_state_.get() : blend, blend_factor, 0xffffffff);
     context_->RSSetViewports(1, &viewport);
     context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context_->VSSetShader(vertex_shader_.get(), nullptr, 0);
@@ -276,8 +316,21 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
     context_->PSSetShaderResources(0, 1, &srv);
     context_->Draw(3, 0);
 
+    // Unbind BOTH, not just the input. composite_tex_ is what Result() hands the
+    // caller, so leaving composite_rtv_ bound makes the next pass that samples
+    // the composite hit a read/write hazard: D3D11 resolves it by nulling the
+    // shader-resource slot, and a later OMSetRenderTargets does not restore it,
+    // so that pass silently samples nothing. Same contract as HdrToneMapper.
     ID3D11ShaderResourceView* null_srv = nullptr;
+    ID3D11RenderTargetView* null_rtv = nullptr;
     context_->PSSetShaderResources(0, 1, &null_srv);
+    context_->OMSetRenderTargets(1, &null_rtv, nullptr);
+    // The blend state too. This is the only pass in the engine that enables
+    // alpha blending, and the context keeps it for every later draw on the
+    // shared immediate context. A later pass whose shader does not write alpha
+    // -- the P010 luma/chroma planes return float/float2 -- then blends against
+    // an undefined alpha, and the result is driver-dependent.
+    context_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
     return true;
 }
 

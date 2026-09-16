@@ -60,10 +60,16 @@ jobs:
   advisory-unused-checks:
     name: advisory-unused-checks
     runs-on: windows-2022
-    # ~2x the observed worst case (45 min: full-tree clang-tidy + cppcheck).
-    # Without an explicit ceiling a stalled step (observed: some steps hang
-    # rather than fail) ran to GitHub's 6h job default, eating runner time.
-    timeout-minutes: 90
+    # The earlier 90-minute ceiling was set from runs in which the clang-tidy
+    # step never started (the command line exceeded the CreateProcess limit and
+    # the step reported success over nothing). Once the batched invocation made
+    # it run, three consecutive nights ended at the ceiling, 82 minutes into
+    # the analysis, with no report. The step runs 900+ units on four cores with
+    # no result cache and no prior duration; ~44 s per Qt-heavy unit puts the
+    # pass near three hours. This is the first ceiling set from that estimate;
+    # the next completed run is the measurement to tighten it by. Without any
+    # explicit ceiling a stalled step ran to GitHub's 6h job default.
+    timeout-minutes: 300
     # NO job-level continue-on-error: only the FINDINGS must never block (their
     # steps carry their own continue-on-error below). If the toolchain setup,
     # configure, or build breaks, this nightly must go visibly red — a job-level

@@ -112,6 +112,18 @@ class LiveVerifySource {
     // product changes its mind about is still a success, and the caller reads
     // the result back to see what it became.
     virtual bool SettingsSet(const QString& key, const QJsonValue& value, QString* error) = 0;
+
+    // Applies live overlay fields to the running recording and reports what was
+    // put into effect. `fields` carries only the keys the caller wants changed;
+    // everything else keeps its current value.
+    //
+    // `applied` is filled from the session after the store, never from the
+    // request: the engine clamps the rectangle, and a caller comparing a
+    // recording against what it asked for would read a clamp as a defect. It
+    // also carries the sequence the update was given and the counter reading
+    // taken just after it, which is a lower bound on when the state was in
+    // effect -- not the timestamp of any frame.
+    virtual bool WebcamOverlaySet(const QJsonObject& fields, QJsonObject* applied, QString* error) = 0;
     // The Settings card's own "Reset changes": back to the selected profile.
     virtual bool SettingsReset(QString* error) = 0;
 

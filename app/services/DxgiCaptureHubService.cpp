@@ -147,29 +147,19 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
 
     // Publisher state: the shared texture lives on the producer's device and is
     // recreated whenever the desktop's size or format changes.
+    exosnap::engine::CaptureTapPublishState published;
     exosnap::engine::PreviewSharedTexture shared;
-    uint32_t sharedW = 0;
-    uint32_t sharedH = 0;
-    DXGI_FORMAT sharedFmt = DXGI_FORMAT_UNKNOWN;
     bool announceFailed = false;
-    // Last HDR facts the tap descriptor was resolved from. A live Windows-HDR
-    // toggle (or Auto-HDR) can leave desc.{Width,Height,Format} unchanged — an
-    // Advanced-Color desktop keeps delivering FP16 in both states — so those
-    // alone are not sufficient to notice the tap has gone stale; hdr_active /
-    // max_luminance_nits must be compared every tick too, or the preview keeps
-    // tone-mapping with the peak/mode from whenever the texture was last
-    // (re)created, silently disagreeing with the display's current HDR state.
-    bool lastHdrActive = false;
-    float lastMaxLuminanceNits = 0.0f;
-
+    // `published` carries everything the live shared texture was created for --
+    // dimensions, format, the HDR facts the tap was resolved from, and the
+    // generation of the device it lives on. Every one of those has to be compared
+    // on every tick (ShouldRepublishCaptureTap): an Advanced-Color desktop keeps
+    // delivering FP16 across a live HDR toggle, and a reopened device keeps
+    // delivering the same size and format as the one that died.
     const auto resetPublisher = [&]() {
         shared.Reset();
-        sharedW = 0;
-        sharedH = 0;
-        sharedFmt = DXGI_FORMAT_UNKNOWN;
+        published = {};
         announceFailed = false;
-        lastHdrActive = false;
-        lastMaxLuminanceNits = 0.0f;
     };
 
     const auto publish = [&](const HubFrame& frame) {
@@ -178,27 +168,35 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
         D3D11_TEXTURE2D_DESC desc{};
         frame.texture->GetDesc(&desc);
         const exosnap::engine::HdrDisplayFacts& facts = producer->DisplayFacts();
-        if (exosnap::engine::ShouldRepublishCaptureTap(shared.Valid(), sharedW, sharedH, sharedFmt, desc.Width,
-                                                       desc.Height, desc.Format, lastHdrActive, lastMaxLuminanceNits,
-                                                       facts.hdr_active, facts.max_luminance_nits)) {
+        const exosnap::engine::CaptureTapFrameState incoming{
+            producer->DeviceGenerationValue(), desc.Width, desc.Height, desc.Format, facts.hdr_active,
+            facts.max_luminance_nits};
+        if (exosnap::engine::ShouldRepublishCaptureTap(published, incoming)) {
+            // The old shared texture belongs to the old device. Released before the
+            // new one is created, so a reopen cannot leave the consumer holding a
+            // handle into a device that is gone.
+            shared.Reset();
             HANDLE handle = nullptr;
             std::string err;
             if (!shared.Create(producer->Device(), desc.Width, desc.Height, desc.Format, &handle, err)) {
                 announceFailed = true;
+                published = {};
                 diagnostics::AppLog::warning(
                     QStringLiteral("dxgi-hub"),
                     QStringLiteral("shared texture create failed: %1").arg(QString::fromStdString(err)));
                 return;
             }
-            sharedW = desc.Width;
-            sharedH = desc.Height;
-            sharedFmt = desc.Format;
-            lastHdrActive = facts.hdr_active;
-            lastMaxLuminanceNits = facts.max_luminance_nits;
+            published.device_generation = incoming.device_generation;
+            published.shared_valid = true;
+            published.width = desc.Width;
+            published.height = desc.Height;
+            published.format = desc.Format;
+            published.hdr_active = facts.hdr_active;
+            published.max_luminance_nits = facts.max_luminance_nits;
             const exosnap::engine::PreviewTapDesc tap = exosnap::engine::ResolveRawCaptureTapDesc(
                 desc.Format, facts.hdr_active, facts.sdr_white_level_nits, facts.max_luminance_nits);
             // Ownership of the NT handle transfers to the sink.
-            sink(handle, sharedW, sharedH, tap);
+            sink(handle, published.width, published.height, tap);
         }
         publish_attempts_.fetch_add(1, std::memory_order_relaxed);
         if (shared.TryPublish(producer->Context(), frame.texture.get()).published()) {

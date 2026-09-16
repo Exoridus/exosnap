@@ -107,9 +107,16 @@ class ExoPreviewItem : public QQuickItem {
         // A pass that acquired but failed to convert has still TAKEN the frame off
         // the last-value slot and handed the key back, so it can never be consumed
         // again — which is why it is counted apart from a miss rather than with it.
+        //
+        // release_failures sits OUTSIDE that identity on purpose: the pass that
+        // failed to hand the key back still consumed its frame, so it is already
+        // in consumed_frames. What the counter explains is the run of mutex_misses
+        // that follows it, because the producer can never take the mutex again.
+        // A non-zero value here means the transport is dead, not contended.
         std::atomic<quint64> acquires{0};
         std::atomic<quint64> acquire_abandoned{0};
         std::atomic<quint64> conversion_failures{0};
+        std::atomic<quint64> release_failures{0};
         std::atomic<quint64> interval_write{0};
         std::atomic<quint64> scene_interval_write{0};
         std::atomic<quint64> submit_write{0};

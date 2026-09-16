@@ -188,21 +188,29 @@ function Get-ReleasePromotionContract {
         named below, which cannot be identical: each embeds the release version string,
         and every build's `kBuildId` is the CI run id.
 
-        What this does NOT establish is that those three files are correct -- their
-        bytes are compared to nothing. What narrows that gap is the rest of the
-        contract: the same source commit, and the same toolchain, both checked
-        alongside. A defect that the release build introduces into one of the three
-        binaries without changing the commit, the compiler, Qt, WiX, the vendored
-        FFmpeg or any other shipped file remains out of reach, and closing it needs a
-        release identity that stops being compiled in.
+        Those files are not exempt from comparison, only from a whole-file one. The
+        identity lives in fixed-width fields, so a release build of the same commit
+        lays its code out exactly as the candidate did: every PE section of a named
+        file must be byte-identical except the ones that hold the identity -- .rdata,
+        where the fields and the link's debug record sit, and .rsrc, the VERSIONINFO
+        resource. Both builds write per-section hashes for the named files, and a
+        build that did not is refused rather than trusted.
+
+        What remains out of reach is a defect confined to .rdata: constants and
+        string literals of unchanged length, with no effect on .text. The rest of the
+        contract narrows it -- the same source commit and the same toolchain, both
+        checked alongside -- and closing it needs a release identity that stops being
+        compiled in.
     .OUTPUTS
-        @{ Id; Policy; MutableEntries; MutableReason }
+        @{ Id; Policy; MutableEntries; MutableReason; MutableSections; MutableSectionsReason }
     #>
     return [ordered]@{
-        Id             = 'exosnap.release-promotion/1'
-        Policy         = 'the final tag rebuilds the qualified commit; only the declared entries may differ'
-        MutableEntries = [string[]]@('exosnap.exe', 'exosnap-updater.exe', 'crashpad_handler.exe')
-        MutableReason  = 'compiled from this commit, so each carries the release version string and the build id of the run that produced it'
+        Id              = 'exosnap.release-promotion/2'
+        Policy          = 'the final tag rebuilds the qualified commit; only the declared entries may differ, and only in the declared sections'
+        MutableEntries  = [string[]]@('exosnap.exe', 'exosnap-updater.exe', 'crashpad_handler.exe')
+        MutableReason   = 'compiled from this commit, so each carries the release version string and the build id of the run that produced it'
+        MutableSections = [string[]]@('.rdata', '.rsrc')
+        MutableSectionsReason = 'the release identity is stored in fixed-width fields in .rdata beside the link debug record, and the VERSIONINFO resource is .rsrc; every other section is the same code laid out the same way'
     }
 }
 
@@ -221,11 +229,13 @@ function Get-ReleasePromotionDeclaration {
 
     $contract = Get-ReleasePromotionContract
     return [ordered]@{
-        contract         = $contract.Id
-        policy           = $contract.Policy
-        qualifiedVersion = "$RcTag" -replace '^v', ''
-        mutableEntries   = $contract.MutableEntries
-        mutableReason    = $contract.MutableReason
+        contract              = $contract.Id
+        policy                = $contract.Policy
+        qualifiedVersion      = "$RcTag" -replace '^v', ''
+        mutableEntries        = $contract.MutableEntries
+        mutableReason         = $contract.MutableReason
+        mutableSections       = $contract.MutableSections
+        mutableSectionsReason = $contract.MutableSectionsReason
     }
 }
 
@@ -248,6 +258,18 @@ function Get-ReleaseQualificationField {
     }
     if ($Object.PSObject.Properties.Name -contains $Name) { return $Object.$Name }
     return $null
+}
+
+function Get-ReleaseQualificationFieldName {
+    <#
+    .SYNOPSIS
+        The field names of a record node, whether it is a hashtable or JSON-parsed.
+    #>
+    param($Object)
+
+    if ($null -eq $Object) { return @() }
+    if ($Object -is [System.Collections.IDictionary]) { return @($Object.Keys) }
+    return @($Object.PSObject.Properties.Name)
 }
 
 function Resolve-ReleaseScenarioOutcome {
@@ -468,6 +490,214 @@ function Get-ReleaseCatalogIdentity {
     return [ordered]@{ version = $Version; digest = $digest; scenarioCount = $Catalog.Count }
 }
 
+function Get-ReleaseQualificationPolicy {
+    <#
+    .SYNOPSIS
+        Which gates a release has to answer, as the repository states it.
+    .DESCRIPTION
+        The completeness half of a qualification cannot come from the record: a
+        record that lists two gates and proves both of them passed is internally
+        consistent and says nothing about the third gate nobody ran. So the set
+        lives in the source line being published, next to this file, and is read
+        from there.
+
+        The policy pins the catalog identity it was written against. A catalog
+        that gained, lost or reclassified a scenario without the policy being
+        revisited is a policy about a different set of gates, and is refused
+        rather than applied to the new one.
+    .PARAMETER Path
+        Policy file to read. Defaults to release-policy.json next to this module.
+    .OUTPUTS
+        The parsed policy object.
+    #>
+    param([string] $Path = '')
+
+    if (-not $Path) { $Path = Join-Path $PSScriptRoot 'release-policy.json' }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "No release policy at '$Path'. Promotion has no definition of 'complete' without it."
+    }
+    return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
+}
+
+function Get-ReleasePolicyBlockers {
+    <#
+    .SYNOPSIS
+        Every way this record disagrees with what the repository requires.
+    .DESCRIPTION
+        Three comparisons, all of them against sources outside the record:
+
+          * The catalog the record cites has to be the catalog in this source
+            line, by version, digest and count.
+          * The policy has to be about that same catalog, or it is stale.
+          * The required set has to be exactly the set the policy and the catalog
+            produce -- not the set the record nominated for itself.
+
+        The third is the one that matters. Before it, a record could declare
+        `required.ids` to be a subset of the gates, prove every one of them
+        passed, carry a correct signature over all of it, and qualify a release
+        that never ran the rest.
+    .OUTPUTS
+        [string[]] of reasons; empty when the record matches the policy.
+    #>
+    param(
+        [Parameter(Mandatory)] $Record,
+        [Parameter(Mandatory)] [object[]] $Catalog,
+        [Parameter(Mandatory)] [string] $CatalogVersion,
+        [Parameter(Mandatory)] $Policy
+    )
+
+    $reasons = @()
+
+    $identity = Get-ReleaseCatalogIdentity -Catalog $Catalog -Version $CatalogVersion
+    $recorded = Get-ReleaseQualificationField -Object $Record -Name 'catalog'
+
+    foreach ($field in @('version', 'digest', 'scenarioCount')) {
+        $mine = "$($identity[$field])"
+        $theirs = "$(Get-ReleaseQualificationField -Object $recorded -Name $field)"
+        if ($theirs -ne $mine) {
+            $reasons += "the record was produced against catalog $field '$theirs', " +
+            "but this source line's catalog is '$mine'"
+        }
+    }
+
+    $policyCatalog = Get-ReleaseQualificationField -Object $Policy -Name 'catalog'
+    foreach ($field in @('version', 'digest', 'scenarioCount')) {
+        $mine = "$($identity[$field])"
+        $theirs = "$(Get-ReleaseQualificationField -Object $policyCatalog -Name $field)"
+        if ($theirs -ne $mine) {
+            $reasons += "the release policy pins catalog $field '$theirs', but the catalog is '$mine'; " +
+            'the policy was not revisited when the catalog changed'
+        }
+    }
+
+    # A stale policy must not be used to derive a required set: it would be a
+    # statement about gates that no longer exist, or silently omit new ones.
+    if ($reasons.Count -gt 0) { return $reasons }
+
+    $namedOptIn = @(Get-ReleaseQualificationField -Object $Policy -Name 'requiredOptIn')
+    try {
+        $expected = @(Get-ReleaseRequiredScenarioIds -Catalog $Catalog -NamedOptIn $namedOptIn)
+    }
+    catch {
+        return @("the release policy names a scenario the catalog does not have: $($_.Exception.Message)")
+    }
+
+    $required = Get-ReleaseQualificationField -Object $Record -Name 'required'
+    $declared = @(Get-ReleaseQualificationField -Object $required -Name 'ids')
+
+    $missing = @($expected | Where-Object { $_ -notin $declared })
+    if ($missing.Count -gt 0) {
+        $reasons += "the release policy requires $($missing.Count) gate(s) the record does not treat as required: " +
+        "$(($missing | Sort-Object) -join ', ')"
+    }
+
+    $extra = @($declared | Where-Object { $_ -notin $expected })
+    if ($extra.Count -gt 0) {
+        $reasons += "the record treats $($extra.Count) gate(s) as required that the policy and catalog do not name: " +
+        "$(($extra | Sort-Object) -join ', ')"
+    }
+
+    # Required and present are different questions: a gate can be in the set and
+    # have no verdict row at all. The per-id PASS check in the content rules only
+    # looks at ids the record itself listed.
+    $checkIds = @(@(Get-ReleaseQualificationField -Object $Record -Name 'checks') |
+            ForEach-Object { "$(Get-ReleaseQualificationField -Object $_ -Name 'id')" })
+    $unanswered = @($expected | Where-Object { $_ -notin $checkIds })
+    if ($unanswered.Count -gt 0) {
+        $reasons += "$($unanswered.Count) required gate(s) have no verdict in the record at all: " +
+        "$(($unanswered | Sort-Object) -join ', ')"
+    }
+
+    return $reasons
+}
+
+function Test-ReleaseSourceLine {
+    <#
+    .SYNOPSIS
+        Whether the commit being promoted is on a source line this repository
+        allows a release to be cut from.
+    .DESCRIPTION
+        A qualification record says a campaign measured a commit. It says nothing
+        about where that commit came from. A correctly signed record about a
+        genuinely verified build of a private branch is a valid record and not a
+        releasable one: nothing reviewed that branch, and the protections on the
+        default branch never saw it.
+
+        So the same policy that defines the required set also names the refs a
+        release may be promoted from, and the commit has to be an ancestor of one
+        of them -- or be one of them.
+
+        Fail-closed in every direction a checkout can be unhelpful. A shallow
+        clone cannot answer an ancestry question, and answering "no ancestry
+        information, so yes" is how this check would become decoration; it says
+        what is missing instead.
+    .PARAMETER Commit
+        The commit the final tag points at.
+    .PARAMETER Policy
+        The parsed release policy.
+    .PARAMETER RepositoryPath
+        Working tree to ask. Defaults to the current directory.
+    .OUTPUTS
+        @{ Allowed = [bool]; Reasons = [string[]] }
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Commit,
+        [Parameter(Mandatory)] $Policy,
+        [string] $RepositoryPath = '.'
+    )
+
+    $promotion = Get-ReleaseQualificationField -Object $Policy -Name 'promotion'
+    if ($null -eq $promotion) {
+        return @{ Allowed = $false; Reasons = @(
+                'the release policy declares no promotion section, so nothing constrains which ' +
+                'source line a release may be cut from') }
+    }
+
+    if (-not [bool](Get-ReleaseQualificationField -Object $promotion -Name 'requireAncestry')) {
+        return @{ Allowed = $true; Reasons = @() }
+    }
+
+    $allowed = @(Get-ReleaseQualificationField -Object $promotion -Name 'allowedSourceRefs')
+    if ($allowed.Count -eq 0) {
+        return @{ Allowed = $false; Reasons = @(
+                'the release policy requires an approved source line but names no refs, ' +
+                'so no commit could ever be promoted') }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Commit)) {
+        return @{ Allowed = $false; Reasons = @('no commit was supplied to check the source line of') }
+    }
+
+    $reasons = @()
+    foreach ($ref in $allowed) {
+        # Both spellings: a workflow checkout has the remote-tracking ref, a local
+        # clone has the branch itself.
+        $candidates = @($ref, ($ref -replace '^refs/heads/', 'refs/remotes/origin/'))
+        foreach ($candidate in $candidates) {
+            $resolved = (& git -C $RepositoryPath rev-parse --verify --quiet "$candidate^{commit}" 2>$null)
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace("$resolved")) { continue }
+
+            & git -C $RepositoryPath merge-base --is-ancestor $Commit "$resolved" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { return @{ Allowed = $true; Reasons = @() } }
+            if ($LASTEXITCODE -ne 1) {
+                # Neither "is an ancestor" nor "is not": git could not tell, which on
+                # a runner means the history was not fetched.
+                $reasons += "ancestry against '$candidate' could not be determined; " +
+                'a shallow checkout cannot answer this. Fetch the full history.'
+                continue
+            }
+            $reasons += "the commit being promoted is not on '$candidate'"
+        }
+    }
+
+    if ($reasons.Count -eq 0) {
+        $reasons += "none of the approved source refs ($($allowed -join ', ')) exists in this checkout; " +
+        'a shallow or single-ref clone cannot answer where this commit came from'
+    }
+
+    return @{ Allowed = $false; Reasons = [string[]]$reasons }
+}
+
 function Get-ReleaseQualificationBlockers {
     <#
     .SYNOPSIS
@@ -477,11 +707,33 @@ function Get-ReleaseQualificationBlockers {
         Content rules only: what the record itself says. The comparisons against the
         tag being published -- commit, RC tag, published asset hashes -- belong to
         Test-ReleaseQualification, which is what the workflow calls.
+
+        Pass -Catalog, -CatalogVersion and -Policy to also check the record
+        against what this source line requires, rather than against its own
+        account of what was required. Omitting them is for inspecting a record
+        whose catalog is not available; it is not a mode a publish may use, and
+        Test-ReleaseQualification refuses that combination.
+    .PARAMETER Catalog
+        The scenario catalog of the source line being published.
+    .PARAMETER CatalogVersion
+        Its declared version.
+    .PARAMETER Policy
+        The parsed release policy (Get-ReleaseQualificationPolicy).
     #>
-    param($Record)
+    param(
+        $Record,
+        [object[]] $SourceCatalog = @(),
+        [string] $SourceCatalogVersion = '',
+        $Policy = $null
+    )
 
     $reasons = @()
     if ($null -eq $Record) { return @('no qualification record was provided') }
+
+    if ($SourceCatalog.Count -gt 0 -and $SourceCatalogVersion -and $null -ne $Policy) {
+        $reasons += @(Get-ReleasePolicyBlockers -Record $Record -Catalog $SourceCatalog `
+                -CatalogVersion $SourceCatalogVersion -Policy $Policy)
+    }
 
     $schema = "$(Get-ReleaseQualificationField -Object $Record -Name 'schema')"
     if ($schema -ne (Get-ReleaseQualificationSchema)) {
@@ -617,14 +869,29 @@ function Test-ReleaseQualification {
         $Record,
         [string] $ExpectedCommit,
         [string] $ExpectedRcTag,
-        [hashtable] $ExpectedPackageSha256
+        [hashtable] $ExpectedPackageSha256,
+        [object[]] $SourceCatalog = @(),
+        [string] $SourceCatalogVersion = '',
+        $Policy = $null
     )
 
     if ($null -eq $Record) {
         return @{ Qualified = $false; Reasons = @('no qualification record was found for this commit') }
     }
 
-    $reasons = @(Get-ReleaseQualificationBlockers -Record $Record)
+    # Without these the completeness of the required set is taken from the
+    # record, which is the one thing a record cannot be trusted about. A caller
+    # that cannot supply them can still read the content rules, but not get a
+    # qualification out of it.
+    $havePolicy = ($SourceCatalog.Count -gt 0 -and $SourceCatalogVersion -and $null -ne $Policy)
+
+    $reasons = @(Get-ReleaseQualificationBlockers -Record $Record `
+            -SourceCatalog $SourceCatalog -SourceCatalogVersion $SourceCatalogVersion -Policy $Policy)
+
+    if (-not $havePolicy) {
+        $reasons += 'no scenario catalog and release policy were supplied, so the required set could only ' +
+        'have been read from the record itself'
+    }
 
     $overall = "$(Get-ReleaseQualificationField -Object (
             Get-ReleaseQualificationField -Object $Record -Name 'qualification') -Name 'overall')"
@@ -681,11 +948,11 @@ function Get-ReleaseInstallTreeEntries {
         rather than assumed: a manifest whose root does not name the version it claims
         is not describing the package it says it is.
     .OUTPUTS
-        @{ Entries = @{ path -> sha256 }; Errors = [string[]] }
+        @{ Entries = @{ path -> sha256 }; Sections = @{ path -> @{ section -> sha256 } }; Errors = [string[]] }
     #>
     param($Manifest, [Parameter(Mandatory)] [string] $Version, [Parameter(Mandatory)] [string] $Label)
 
-    $result = @{ Entries = @{}; Errors = @() }
+    $result = @{ Entries = @{}; Sections = @{}; Errors = @() }
     if ($null -eq $Manifest) {
         $result.Errors += "$Label build manifest is missing or empty"
         return $result
@@ -712,7 +979,16 @@ function Get-ReleaseInstallTreeEntries {
             $result.Errors += "$Label build manifest entry '$path' is not under '$expectedRoot/'"
             continue
         }
-        $result.Entries[$path.Substring($separator + 1)] = $sha
+        $relative = $path.Substring($separator + 1)
+        $result.Entries[$relative] = $sha
+        $sections = Get-ReleaseQualificationField -Object $file -Name 'sections'
+        if ($null -ne $sections) {
+            $inventory = @{}
+            foreach ($name in @(Get-ReleaseQualificationFieldName -Object $sections)) {
+                $inventory[$name] = "$(Get-ReleaseQualificationField -Object $sections -Name $name)".ToLowerInvariant()
+            }
+            $result.Sections[$relative] = $inventory
+        }
     }
     return $result
 }
@@ -733,6 +1009,10 @@ function Compare-ReleaseInstallTree {
     .PARAMETER MutableEntries
         Install-tree relative paths permitted to differ, as the qualification record
         declares them.
+    .PARAMETER MutableSections
+        The PE sections of a mutable entry permitted to differ. Every other section of
+        such an entry must be byte-identical, and both manifests must say what those
+        sections hash to; a mutable entry without a section inventory is refused.
     .OUTPUTS
         @{ Differences = [string[]]; Notes = [string[]] }
     #>
@@ -741,7 +1021,8 @@ function Compare-ReleaseInstallTree {
         $CandidateManifest,
         [Parameter(Mandatory)] [string] $QualifiedVersion,
         [Parameter(Mandatory)] [string] $CandidateVersion,
-        [string[]] $MutableEntries = @()
+        [string[]] $MutableEntries = @(),
+        [string[]] $MutableSections = @()
     )
 
     $differences = @()
@@ -771,7 +1052,15 @@ function Compare-ReleaseInstallTree {
         }
         if ($qualified.Entries[$path] -eq $candidate.Entries[$path]) { continue }
         if ($mutable.ContainsKey($path.ToLowerInvariant())) {
-            $notes += "$path differs, as the promotion contract permits"
+            $sectionDifferences = @(Compare-ReleaseSectionInventory -Path $path `
+                    -Qualified $qualified.Sections[$path] -Candidate $candidate.Sections[$path] `
+                    -MutableSections $MutableSections)
+            if ($sectionDifferences.Count -gt 0) {
+                $differences += $sectionDifferences
+            }
+            else {
+                $notes += "$path differs only in $($MutableSections -join ', '), as the promotion contract permits"
+            }
             continue
         }
         $differences += "$path changed: the campaign qualified $($qualified.Entries[$path]), this release ships $($candidate.Entries[$path])"
@@ -796,6 +1085,54 @@ function Compare-ReleaseInstallTree {
     return @{ Differences = [string[]]$differences; Notes = [string[]]$notes }
 }
 
+function Compare-ReleaseSectionInventory {
+    <#
+    .SYNOPSIS
+        Whether a mutable entry differs only in the sections the contract permits.
+    .DESCRIPTION
+        Both sides must carry an inventory: a manifest written before section hashes
+        existed says nothing about the code, and "nothing to compare against" is a
+        refusal, not a pass. The two inventories must name the same sections, and every
+        section outside the permitted set must hash the same.
+    .OUTPUTS
+        [string[]] differences; empty when the entry is within contract.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        $Qualified,
+        $Candidate,
+        [string[]] $MutableSections = @()
+    )
+
+    if ($null -eq $Qualified -or $Qualified.Count -eq 0) {
+        return [string[]]@("$Path differs and the qualified candidate published no section inventory for it, so the release's code cannot be compared with the candidate's")
+    }
+    if ($null -eq $Candidate -or $Candidate.Count -eq 0) {
+        return [string[]]@("$Path differs and this release wrote no section inventory for it, so its code cannot be compared with the candidate's")
+    }
+
+    $permitted = @{}
+    foreach ($section in @($MutableSections)) { $permitted[$section] = $true }
+
+    $differences = @()
+    foreach ($section in @($Qualified.Keys | Sort-Object)) {
+        if (-not $Candidate.Contains($section)) {
+            $differences += "$Path section $section was in the qualified candidate and is not in this release"
+            continue
+        }
+        if ($Qualified[$section] -eq $Candidate[$section] -or $permitted.Contains($section)) { continue }
+        $differences += "$Path section $section changed: the campaign qualified $($Qualified[$section]), this release ships $($Candidate[$section]); the release build's code is not the candidate's"
+    }
+    foreach ($section in @($Candidate.Keys | Sort-Object)) {
+        if (-not $Qualified.Contains($section)) {
+            $differences += "$Path section $section is in this release and was not in the qualified candidate"
+        }
+    }
+    # No comma operator: the caller wraps the result in @(), and an empty list has
+    # to arrive as nothing rather than as one empty element.
+    return [string[]]$differences
+}
+
 function Compare-ReleaseToolchain {
     <#
     .SYNOPSIS
@@ -804,9 +1141,9 @@ function Compare-ReleaseToolchain {
     .DESCRIPTION
         The install-tree comparison exempts the binaries this repository compiles,
         because their bytes cannot match. This is what keeps that exemption narrow: the
-        compiler, CMake, Qt, WiX and the vendored FFmpeg that produced them have to be
-        the same ones, so "only the version string differs" stays a statement about the
-        source and not about the machine.
+        compiler, CMake, the generator and preset, Qt, WiX and the vendored FFmpeg that
+        produced them have to be the same ones, so "only the version string differs"
+        stays a statement about the source and not about the machine.
 
         The runner image version is reported rather than refused. GitHub patches an
         image between two runs of the same tag without changing anything the compared
@@ -829,6 +1166,8 @@ function Compare-ReleaseToolchain {
     $fields = [ordered]@{
         'msvc.clVersion' = @('msvc', 'clVersion')
         'cmake.version'  = @('cmake', 'version')
+        'build.generator' = @('build', 'generator')
+        'build.preset'   = @('build', 'preset')
         'qt.version'     = @('qt', 'version')
         'wix.version'    = @('wix', 'version')
         'ffmpeg.url'     = @('ffmpeg', 'url')

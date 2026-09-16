@@ -366,6 +366,17 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
 
     // --- Settings and profiles ----------------------------------------------
 
+    if (command.name == QLatin1String("webcam.overlay.set")) {
+        QJsonObject applied;
+        if (!source.WebcamOverlaySet(params, &applied, &error))
+            return IntentRefused(command, source, error);
+        // The applied state, the sequence it was given and the counter reading
+        // after the store. The request is echoed beside it rather than in place
+        // of it, so a clamp is visible without a second round trip.
+        applied.insert(QStringLiteral("requested"), params);
+        return Succeeded(applied);
+    }
+
     if (command.name == QLatin1String("settings.set")) {
         const QString key = ParamString(params, "key");
         if (!source.SettingsSet(key, params.value(QStringLiteral("value")), &error))

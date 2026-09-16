@@ -2058,25 +2058,173 @@ TEST(ExclusiveWindowCard, PresentExclusiveStillFiresWithoutWindowEvidence) {
 }
 
 } // namespace
-TEST(RecommendationEngineTest, DisplayOnAnotherAdapterWithNvidiaPresentIsABlocker) {
-    using namespace exosnap::diagnostics;
-    capability::CapabilitySet caps;
-    capability::UserRecorderConfig config;
-    RecommendationEngine engine(caps, config);
+namespace {
+
+constexpr uint64_t kIntelLuid = 0x1111;
+constexpr uint64_t kNvidiaLuid = 0x2222;
+constexpr uint64_t kOtherDisplayLuid = 0x3333;
+constexpr uint64_t kSwappedGpuLuid = 0x4444;
+
+RecommendationEngine::CaptureTargetAdapterFacts IntelDisplayWithNvidiaPresent() {
     RecommendationEngine::CaptureTargetAdapterFacts facts;
     facts.known = true;
     facts.vendor_id = 0x8086; // Intel
     facts.adapter_name = "Intel(R) UHD Graphics";
     facts.nvidia_adapter_present = true;
-    engine.SetCaptureTargetAdapter(facts);
-    const DiagnosticChecklist list = engine.Generate();
+    facts.capture_adapter_luid = kIntelLuid;
+    facts.encoder_adapter_luid = kNvidiaLuid;
+    return facts;
+}
+
+RecommendationEngine::EncoderReachabilityEvidence UnreachableOn(uint64_t capture_luid, uint64_t encoder_luid) {
+    RecommendationEngine::EncoderReachabilityEvidence evidence;
+    evidence.known = true;
+    evidence.capture_adapter_luid = capture_luid;
+    evidence.encoder_adapter_luid = encoder_luid;
+    evidence.reachable = false;
+    evidence.failure_detail = "nvEncOpenEncodeSessionEx: NV_ENC_ERR_NO_ENCODE_DEVICE";
+    return evidence;
+}
+
+const DiagnosticResult* FindAdapterMismatch(const DiagnosticChecklist& list) {
     const auto it = std::find_if(list.results.begin(), list.results.end(),
                                  [](const DiagnosticResult& r) { return r.id == "rec.capture.adapter_mismatch"; });
-    ASSERT_NE(it, list.results.end());
-    EXPECT_EQ(it->severity, DiagnosticSeverity::Blocker);
-    EXPECT_NE(it->summary.find("Intel"), std::string::npos);
+    return it == list.results.end() ? nullptr : &*it;
+}
 
-    // An NVIDIA-driven display, or a machine without an NVIDIA adapter, says nothing.
+// Whether any card OTHER than the adapter mismatch blocks. An empty
+// CapabilitySet has no NVENC, which blocks on its own -- so checklist.has_blocker
+// cannot be read as a statement about this card.
+bool BlocksAsideFromAdapterMismatch(const DiagnosticChecklist& list) {
+    return std::any_of(list.results.begin(), list.results.end(), [](const DiagnosticResult& r) {
+        return r.id != "rec.capture.adapter_mismatch" && r.tier == DiagnosticTier::Blocker;
+    });
+}
+
+} // namespace
+
+TEST(RecommendationEngineTest, AnUnmeasuredAdapterMismatchWarnsAndDoesNotBlock) {
+    // The defect had two halves pointing opposite ways: the card declared
+    // severity Blocker with tier MeasuredProblem, and ComputeVerdict counts by
+    // TIER -- so the verdict read "Recording works" above a card saying the
+    // encoder cannot record this display. And the claim was never measured: the
+    // facts are a DXGI enumeration, which describes the ordinary hybrid-GPU
+    // machine, and many of those record fine.
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config);
+    engine.SetCaptureTargetAdapter(IntelDisplayWithNvidiaPresent());
+
+    const DiagnosticChecklist list = engine.Generate();
+    const DiagnosticResult* card = FindAdapterMismatch(list);
+    ASSERT_NE(card, nullptr);
+    EXPECT_EQ(card->severity, DiagnosticSeverity::Notice) << "an unmeasured mismatch is not a proven failure";
+    EXPECT_EQ(card->tier, DiagnosticTier::MeasuredProblem);
+    EXPECT_NE(card->tier, DiagnosticTier::Blocker)
+        << "a hybrid-GPU machine must not be blocked on an enumeration alone";
+    EXPECT_NE(card->summary.find("Intel"), std::string::npos);
+    EXPECT_NE(card->summary.find("may not"), std::string::npos) << "the wording must not claim what was not measured";
+}
+
+TEST(RecommendationEngineTest, SeverityAndTierAgreeSoTheVerdictCannotContradictTheCard) {
+    // The rail: ComputeVerdict reads the tier, the card shows the severity. A
+    // Blocker severity on a non-Blocker tier is what produced "Recording works"
+    // above a blocking card, so the two must agree in both directions.
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+
+    for (const bool measured_failure : {false, true}) {
+        RecommendationEngine engine(caps, config);
+        RecommendationEngine::CaptureTargetAdapterFacts facts = IntelDisplayWithNvidiaPresent();
+        if (measured_failure) {
+            facts.encoder_reachability = RecommendationEngine::CaptureTargetAdapterFacts::EncoderReachability::Failed;
+            facts.encoder_failure_detail = "NVENC open failed: no capable device";
+        }
+        engine.SetCaptureTargetAdapter(facts);
+        const DiagnosticChecklist list = engine.Generate();
+        const DiagnosticResult* card = FindAdapterMismatch(list);
+        ASSERT_NE(card, nullptr);
+        const bool severity_blocks = card->severity == DiagnosticSeverity::Blocker;
+        const bool tier_blocks = card->tier == DiagnosticTier::Blocker;
+        EXPECT_EQ(severity_blocks, tier_blocks)
+            << "severity and tier disagreed, so the card and the verdict tell different stories";
+        // has_blocker is the checklist's flag and other cards set it too (an empty
+        // CapabilitySet has no NVENC), so it is only conclusive when this card is
+        // the only possible source of it.
+        if (!BlocksAsideFromAdapterMismatch(list))
+            EXPECT_EQ(tier_blocks, list.has_blocker) << "has_blocker must follow the tier the verdict counts";
+    }
+}
+
+TEST(RecommendationEngineTest, AMeasuredEncoderFailureIsABlockerAndNamesWhatFailed) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config);
+    engine.SetCaptureTargetAdapter(IntelDisplayWithNvidiaPresent());
+    engine.SetEncoderReachabilityEvidence(UnreachableOn(kIntelLuid, kNvidiaLuid));
+
+    const DiagnosticChecklist list = engine.Generate();
+    const DiagnosticResult* card = FindAdapterMismatch(list);
+    ASSERT_NE(card, nullptr);
+    EXPECT_EQ(card->severity, DiagnosticSeverity::Blocker);
+    EXPECT_EQ(card->tier, DiagnosticTier::Blocker);
+    EXPECT_TRUE(list.has_blocker);
+    EXPECT_NE(card->current_value.find("NV_ENC_ERR_NO_ENCODE_DEVICE"), std::string::npos)
+        << "a blocker has to say what was tried: " << card->current_value;
+}
+
+TEST(RecommendationEngineTest, AMeasuredReachableEncoderSaysNothingAtAll) {
+    // Measured working. A warning here would be a nag about a machine that has
+    // already been shown to record.
+    //
+    // Set through the evidence, not by writing the facts field: the engine derives
+    // that field from the latched evidence on every update, so a value written
+    // directly would be overwritten -- which is the point. Reachability is only
+    // ever what a measurement bound to these adapters says.
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config);
+    engine.SetCaptureTargetAdapter(IntelDisplayWithNvidiaPresent());
+
+    RecommendationEngine::EncoderReachabilityEvidence reachable;
+    reachable.known = true;
+    reachable.capture_adapter_luid = kIntelLuid;
+    reachable.encoder_adapter_luid = kNvidiaLuid;
+    reachable.reachable = true;
+    engine.SetEncoderReachabilityEvidence(reachable);
+
+    EXPECT_EQ(FindAdapterMismatch(engine.Generate()), nullptr);
+}
+
+TEST(RecommendationEngineTest, AReachabilityWrittenIntoTheFactsDirectlyIsIgnored) {
+    // The facts field is derived, not an input. Letting a caller set it would be a
+    // second way to produce a blocker -- one with no measurement behind it, which
+    // is exactly what this package removed.
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config);
+    RecommendationEngine::CaptureTargetAdapterFacts forged = IntelDisplayWithNvidiaPresent();
+    forged.encoder_reachability = RecommendationEngine::CaptureTargetAdapterFacts::EncoderReachability::Failed;
+    forged.encoder_failure_detail = "invented";
+    engine.SetCaptureTargetAdapter(forged);
+
+    const DiagnosticResult* card = FindAdapterMismatch(engine.Generate());
+    ASSERT_NE(card, nullptr);
+    EXPECT_NE(card->tier, DiagnosticTier::Blocker) << "a blocker must come from evidence, not from a written field";
+}
+
+TEST(RecommendationEngineTest, AnNvidiaDisplayOrNoNvidiaAdapterSaysNothing) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config);
+    RecommendationEngine::CaptureTargetAdapterFacts facts = IntelDisplayWithNvidiaPresent();
+
     facts.vendor_id = 0x10DE;
     engine.SetCaptureTargetAdapter(facts);
     const DiagnosticChecklist nvidia = engine.Generate();

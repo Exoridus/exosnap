@@ -80,6 +80,43 @@ struct AudioTrackPlan {
     std::vector<ResolvedAudioTrack> tracks;
 };
 
+// Why a plan's track indices have to be dense, ascending and start at zero.
+//
+// `track_index` is not a label: it is the position a worker writes into. The
+// mux's codec-private slots, the per-track RMS, the measured audio epochs and the
+// aligned durations are all fixed-size arrays indexed by it, and the mux decides
+// it has every header by asking for slots 0..count-1.
+//
+// So a plan that is otherwise valid but indexed {0, 2} has two workers and leaves
+// slot 1 empty forever: the mux waits for a header nobody will send, and the
+// recording produces nothing while looking busy. Duplicated indices are worse --
+// two workers writing one slot, the second silently overwriting the first.
+//
+// Validation rejects those before a worker starts, because after that the symptom
+// is a recording that never finishes and names no cause.
+//
+// Returns an empty string for an acceptable plan, otherwise the reason.
+[[nodiscard]] inline std::string DescribeInvalidTrackIndices(const AudioTrackPlan& plan, uint32_t max_tracks) {
+    if (plan.tracks.empty())
+        return {};
+    if (plan.tracks.size() > max_tracks)
+        return "audio_track_plan has " + std::to_string(plan.tracks.size()) + " tracks; at most " +
+               std::to_string(max_tracks) + " are supported";
+
+    // The contract is positional, so the expected index of a track is where it
+    // sits. Anything else is either a gap, a duplicate, or out of range.
+    for (size_t position = 0; position < plan.tracks.size(); ++position) {
+        const uint32_t index = plan.tracks[position].track_index;
+        if (index != position) {
+            return "audio_track_plan track at position " + std::to_string(position) + " carries track_index " +
+                   std::to_string(index) +
+                   "; indices must be dense and ascending from 0 (the mux's per-track slots are positional, so a "
+                   "gap leaves a slot nobody ever fills and the mux waits for a header that never arrives)";
+        }
+    }
+    return {};
+}
+
 // Drop the rows a non-window capture target cannot serve, and rewrite the ones it
 // can serve differently. `window_target` false means Display or Region.
 //

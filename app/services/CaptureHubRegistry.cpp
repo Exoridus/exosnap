@@ -49,6 +49,13 @@ HubFrame CaptureSubscription::HeldFrame() const {
     return hub ? hub->HeldFrame() : HubFrame{};
 }
 
+bool CaptureSubscription::SourceLost() const {
+    if (!registry_)
+        return false;
+    const CaptureSourceHub* hub = registry_->Find(key_);
+    return hub != nullptr && hub->SourceLost();
+}
+
 CaptureHubRegistry::CaptureHubRegistry(ProducerFactory factory) : factory_(std::move(factory)) {
 }
 

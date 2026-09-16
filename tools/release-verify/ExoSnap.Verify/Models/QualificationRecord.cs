@@ -40,7 +40,19 @@ public sealed record ScenarioVerdict(
     ScenarioOutcome Outcome,
     string Message,
     long DurationMs,
-    IReadOnlyList<Evidence> Evidence);
+    IReadOnlyList<Evidence> Evidence)
+{
+    /// <summary>
+    /// Why this scenario's evidence did not reach the host, or an empty string.
+    /// </summary>
+    /// <remarks>
+    /// Carried alongside the outcome rather than folded into it. A scenario whose
+    /// product assertions all held and whose evidence was destroyed is not a product
+    /// failure and is not a complete pass either, and only the promotion contract is
+    /// in a position to say which of those matters.
+    /// </remarks>
+    public string EvidenceGap { get; init; } = string.Empty;
+}
 
 /// <summary>
 /// Whether an environment property a scenario changed came back to what it was.

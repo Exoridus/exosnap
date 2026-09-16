@@ -811,6 +811,7 @@ set_tests_properties(quick.qml.about_smoke PROPERTIES
     LABELS "quick"
     ENVIRONMENT "EXOSNAP_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-config/about_smoke"
 )
+exosnap_set_test_phase(quick.qml.about_smoke desktop)
 
 # The four non-Record destinations are loaded by URL so their documents stay out
 # of the startup compile (QCR-615). That the pages are absent until navigation,
@@ -823,6 +824,7 @@ set_tests_properties(quick.qml.navigation_lifecycle PROPERTIES
     LABELS "quick"
     ENVIRONMENT "EXOSNAP_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-config/navigation_lifecycle"
 )
+exosnap_set_test_phase(quick.qml.navigation_lifecycle desktop)
 
 # An isolated run has to isolate Qt's QML bytecode cache as well — see the
 # script for why EXOSNAP_CONFIG_DIR does not reach it on its own.
@@ -834,6 +836,7 @@ add_test(
         -P ${PROJECT_SOURCE_DIR}/cmake/tests/assert_qml_cache_isolated.cmake
 )
 set_tests_properties(quick.qml.disk_cache_isolation PROPERTIES LABELS "quick")
+exosnap_set_test_phase(quick.qml.disk_cache_isolation hermetic)
 
 # The fixed-dark canon for the five capture-excluded overlays, checked at the
 # source because nothing downstream can observe it: those windows defeat every
@@ -845,6 +848,7 @@ add_test(
         -P ${PROJECT_SOURCE_DIR}/cmake/tests/assert_overlays_are_fixed_dark.cmake
 )
 set_tests_properties(quick.qml.overlays_are_fixed_dark PROPERTIES LABELS "quick")
+exosnap_set_test_phase(quick.qml.overlays_are_fixed_dark hermetic)
 
 qt_add_executable(record_controls_qml_tests
     ${EXOSNAP_QUICK_TESTS_DIR}/qml_test_main.cpp
@@ -1039,11 +1043,16 @@ get_filename_component(_exosnap_quick_qt_prefix "${Qt6_DIR}/../../.." ABSOLUTE)
 # it: a QML plugin DLL there links Qt modules that live in Qt's bin/, and the
 # staged copies next to the test binary do not include them — so the plugin
 # resolves and then fails to load. Qt's bin/ on PATH covers that.
+# `quicktest` marks a Qt QuickTest runner, one that takes `-o <file>,txt`. The
+# verify pipeline reads the label from CTest to know which failing tests it may
+# re-run for a per-function report; the `exosnap --*-test` entry points do not
+# carry it because they do not understand the flag.
 set_tests_properties(quick.qml.record_controls PROPERTIES
-    LABELS "quick"
+    LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
+exosnap_set_test_phase(quick.qml.record_controls desktop)
 
 # The Edit surface's keyboard contract (QCR-504). A second QML test executable
 # rather than more files in the one above, because EditTimeline.qml takes three
@@ -1142,10 +1151,11 @@ target_link_libraries(edit_timeline_qml_tests
 
 add_test(NAME quick.qml.edit_timeline COMMAND edit_timeline_qml_tests)
 set_tests_properties(quick.qml.edit_timeline PROPERTIES
-    LABELS "quick"
+    LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
+exosnap_set_test_phase(quick.qml.edit_timeline desktop)
 
 # The Record source picker's QML contract. A third QML test executable, for the
 # reason the edit runner states: RecordSourcePicker takes a REQUIRED, C++-typed
@@ -1217,10 +1227,11 @@ target_link_libraries(record_source_picker_qml_tests
 
 add_test(NAME quick.qml.record_source_picker COMMAND record_source_picker_qml_tests)
 set_tests_properties(quick.qml.record_source_picker PROPERTIES
-    LABELS "quick"
+    LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
+exosnap_set_test_phase(quick.qml.record_source_picker desktop)
 
 add_test(NAME quick.qml.record_preview_smoke COMMAND exosnap --preview-smoke-test)
 set_tests_properties(quick.qml.record_preview_smoke PROPERTIES
@@ -1229,6 +1240,7 @@ set_tests_properties(quick.qml.record_preview_smoke PROPERTIES
     RUN_SERIAL TRUE
     SKIP_RETURN_CODE 3
 )
+exosnap_set_test_phase(quick.qml.record_preview_smoke desktop)
 
 # Walks every navigation destination, reports the pointer over each control that
 # declares a pointing hand, and compares what Qt thinks the window cursor is with
@@ -1241,6 +1253,7 @@ set_tests_properties(quick.qml.cursor_audit PROPERTIES
     ENVIRONMENT_MODIFICATION "QT_QPA_PLATFORM=set:windows"
     RUN_SERIAL TRUE
 )
+exosnap_set_test_phase(quick.qml.cursor_audit desktop)
 
 add_test(NAME quick.qml.record_preview_lifecycle COMMAND exosnap --preview-lifecycle-test)
 set_tests_properties(quick.qml.record_preview_lifecycle PROPERTIES
@@ -1249,6 +1262,7 @@ set_tests_properties(quick.qml.record_preview_lifecycle PROPERTIES
     RUN_SERIAL TRUE
     SKIP_RETURN_CODE 3
 )
+exosnap_set_test_phase(quick.qml.record_preview_lifecycle desktop)
 
 exosnap_add_gtest(
     NAME record_viewmodel_qml_adapter_tests
@@ -1866,6 +1880,10 @@ exosnap_add_gtest(
         EditTimelineModels.h
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
+        # The export path reports a staging file it could not remove, so the
+        # atomic-publish primitives are part of what this target exercises.
+        ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.h
     # exosnap_app_log_test_support: loadMarkers() reports markers the sidecar
     # parser had to skip (QCR-207) through AppLog, same as DeviceAdapter does
     # for its rescan milestones.

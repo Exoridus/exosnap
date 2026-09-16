@@ -104,14 +104,28 @@ update checks.
 
 **The final release is its own tag-triggered build of the same commit.** What the RC validates is
 the commit, the toolchain, the packaging, and the release pipeline — all of which are identical
-between the two runs. What it does not validate is the final's exact bytes. That residual gap is
-accepted: the alternative was a version model in which an RC cannot be updated from, which
-defeats the purpose of cutting one. The RC's job is to find problems in the commit, not to be
-bit-for-bit reused.
+between the two runs. The final's exact bytes it cannot validate; what it can is narrowed to the
+bytes that carry the identity. The alternative was a version model in which an RC cannot be
+updated from, which defeats the purpose of cutting one. The RC's job is to find problems in the
+commit, not to be bit-for-bit reused.
 
 `SOURCE_DATE_EPOCH` is pinned to the commit timestamp in CI so that the two builds differ only in
 the version string and whatever the compiler does non-deterministically, rather than also in an
 embedded wall-clock timestamp.
+
+**The identity is stored in fixed-width fields, so the code is comparable.** `kVersion` and
+`kBuildId` in the generated build-info header are 32-byte arrays, not string literals of whatever
+length the version happens to have. A literal one byte longer moves everything the linker places
+after it, and a one-byte shift in `.rdata` rewrites addresses throughout `.text`: measured on one
+commit built as `0.9.0-rc1` and as `0.9.0`, the two `exosnap.exe` differed in 2.9 MB of `.text`
+with variable-length literals and in zero bytes of `.text`, `.data`, `.pdata` and `.reloc` with the
+fields fixed. Only `.rdata` (the fields themselves, 4 bytes per translation unit that includes the
+header, and the link's debug record) and `.rsrc` (VERSIONINFO) move. The promotion contract
+(`exosnap.release-promotion/2`) therefore compares the three compiled executables section by
+section and refuses a final whose code sections differ from the qualified candidate's -- a checked
+statement about the shipped code, in place of the earlier inference from "same commit, same
+toolchain". What stays out of reach is a change confined to `.rdata`: constants and literals of
+unchanged length with no effect on the code.
 
 ### The ProductVersion string is now load-bearing
 

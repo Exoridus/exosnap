@@ -91,10 +91,11 @@ public static class ReleaseVerificationRecord
     public const string NotQualified = "NOT_QUALIFIED";
 
     /// <summary>The promotion contract shared with the PowerShell publish lock.</summary>
-    private const string PromotionContract = "exosnap.release-promotion/1";
+    private const string PromotionContract = "exosnap.release-promotion/2";
 
     private const string PromotionPolicy =
-        "the final tag rebuilds the qualified commit; only the declared entries may differ";
+        "the final tag rebuilds the qualified commit; only the declared entries may differ, " +
+        "and only in the declared sections";
 
     private const string PromotionMutableReason =
         "compiled from this commit, so each carries the release version string and the build id " +
@@ -102,6 +103,18 @@ public static class ReleaseVerificationRecord
 
     private static readonly string[] PromotionMutableEntries =
         ["exosnap.exe", "exosnap-updater.exe", "crashpad_handler.exe"];
+
+    /// <summary>
+    /// The PE sections of a mutable entry that may differ between the candidate and
+    /// the final: the identity fields and the link debug record live in .rdata, the
+    /// VERSIONINFO resource in .rsrc. Every other section must be byte-identical.
+    /// </summary>
+    private static readonly string[] PromotionMutableSections = [".rdata", ".rsrc"];
+
+    private const string PromotionMutableSectionsReason =
+        "the release identity is stored in fixed-width fields in .rdata beside the link debug " +
+        "record, and the VERSIONINFO resource is .rsrc; every other section is the same code laid " +
+        "out the same way";
 
     /// <summary>The states that mean a required gate was actually answered.</summary>
     private static readonly string[] AnsweredStates = ["PASS", "FAIL", "INFRA_ERROR"];
@@ -400,6 +413,14 @@ public static class ReleaseVerificationRecord
 
         writer.WriteEndArray();
         writer.WriteString("mutableReason", PromotionMutableReason);
+        writer.WriteStartArray("mutableSections");
+        foreach (var section in PromotionMutableSections)
+        {
+            writer.WriteStringValue(section);
+        }
+
+        writer.WriteEndArray();
+        writer.WriteString("mutableSectionsReason", PromotionMutableSectionsReason);
         writer.WriteEndObject();
 
         WriteMap(writer, "capabilities", capabilities);

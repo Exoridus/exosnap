@@ -39,6 +39,7 @@
 #include "../settings/RecoveryManifestStore.h"
 #include "../viewmodels/RecordViewModel.h"
 #include "RecordingAdmission.h"
+#include "StaticWebcamFrameSource.h"
 #include "WebcamService.h"
 
 namespace exosnap::engine {
@@ -65,6 +66,29 @@ class SessionLedgerSink {
     mutable std::mutex mutex_;
     std::vector<diagnostics::LedgerEntry> ledger_;
 };
+
+// Whether the physical webcam capture should be running.
+//
+// Pure, so the rule is pinned without a device. The verification source is the
+// one term that is not about demand: when this process was started to measure
+// the overlay, the synthetic source IS the camera, and opening the real one
+// alongside it would leave the device delivering samples for a preview nobody is
+// measuring -- Media Foundation negotiating the sensor's maximum mode, USB
+// bandwidth spent, and a visible flicker in the picture-in-picture. The overlay
+// under test composites from the synthetic source either way, so the physical
+// device contributes nothing to the recording and everything to the noise around
+// it.
+//
+// `webcam.enabled` stays true throughout: the picture-in-picture is exactly what
+// is being measured. Only the device is left closed.
+[[nodiscard]] constexpr bool ShouldRunWebcamDevice(bool has_verification_source, bool webcam_enabled,
+                                                   bool has_device_id, bool recording, bool preparing,
+                                                   bool record_preview_active, bool settings_preview_active) noexcept {
+    if (has_verification_source)
+        return false;
+    return webcam_enabled && has_device_id &&
+           (recording || preparing || record_preview_active || settings_preview_active);
+}
 
 class RecordingCoordinator {
   public:
@@ -227,7 +251,26 @@ class RecordingCoordinator {
     // and a new session starts from them.
     void SetAudioSourceMuted(exosnap::engine::AudioSourceKind kind, bool muted);
 
-    void SetWebcamSettings(const WebcamSettings& settings);
+    // Returns what a live session put into effect, or nothing when no recording
+    // was running to apply it to. The live overlay fields are the only part of
+    // WebcamSettings that can change mid-recording; device, resolution and rate
+    // need a capture restart and are applied on the next start either way.
+    std::optional<exosnap::engine::AppliedWebcamOverlay> SetWebcamSettings(const WebcamSettings& settings);
+
+    // Replace the camera with an unchanging pattern for the duration of this
+    // process. Verification only, in the same class as --auto-record: it is
+    // selected by argv, never persisted, and it is chosen before a recording
+    // starts rather than swapped underneath one.
+    //
+    // A real camera advances its frame generation on every delivered sample,
+    // which recomposites the frame on its own. Measuring whether an overlay
+    // change causes a recomposition is impossible while that is happening, which
+    // is the whole reason this exists.
+    void UseStaticVerificationWebcam(int width, int height);
+
+    // Which source the next recording will composite from, for the evidence
+    // record. Empty when the real camera is in use.
+    [[nodiscard]] QString VerificationWebcamSourceName() const;
     void SetWebcamFrameCallback(WebcamService::FrameCallback cb);
     void SetWebcamFrameCallback(QObject* receiver, WebcamService::FrameCallback cb);
     // Receiver-scoped open-reader status transitions (see WebcamService::
@@ -605,6 +648,14 @@ class RecordingCoordinator {
     std::unique_ptr<diagnostics::Win32DiskSpaceProvider> default_disk_space_provider_;
     // Background thread polling free space during recording.
     std::jthread disk_monitor_thread_;
+    // Liveness token for the one queued call that must dereference the coordinator
+    // itself. Every other cross-thread post copies the std::function it needs and
+    // so survives the owner; the disk-space auto-stop has to call StopRecording(),
+    // and joining the poller does not retract a call it already put in the Qt event
+    // queue. Reset at the very top of the destructor, which runs on the same (UI)
+    // thread that dispatches the queued call, so an expired token there means the
+    // coordinator is already gone.
+    std::shared_ptr<bool> disk_stop_life_token_ = std::make_shared<bool>(true);
     // Set to true when the disk-monitor auto-stop fires to suppress duplicate stops.
     std::atomic<bool> disk_stop_triggered_{false};
     // True when the active session targets MP4 (requires remux reserve in threshold).
@@ -635,6 +686,9 @@ class RecordingCoordinator {
     VideoSettingsModel video_settings_;
     WebcamSettings webcam_settings_;
     WebcamService webcam_service_;
+    // Owned rather than borrowed: it must outlive any session that composites
+    // from it, and the session holds a bare pointer.
+    std::unique_ptr<exosnap::StaticWebcamFrameSource> static_webcam_source_;
     // Record preview requested the idle webcam capture (Ready-state live PiP).
     bool webcam_preview_active_ = false;
     bool webcam_settings_preview_active_ = false;

@@ -46,6 +46,55 @@ class HdrPqConverter {
         uint32_t encode_height = 0;
     };
 
+    // --- Chroma geometry, as two pure decisions -----------------------------
+    //
+    // The chroma plane of a 4:2:0 surface is half size in both axes, and the two
+    // things that follow from that were each computed in a way that is only
+    // correct in the easy case.
+
+    // The left-siting shift, in texcoord units of the OUTPUT raster.
+    //
+    // The chroma pass covers the content rectangle at half resolution, so each
+    // chroma sample lands between two output luma columns (centre-sited). Moving
+    // it onto the left column is a shift of half an OUTPUT luma pixel -- and
+    // `texcoord` runs 0..1 across the content rectangle, so that is
+    // 0.5 / content_w.
+    //
+    // It was 0.5 / src_crop_w, which is the same number only at 1:1. Downscaling
+    // made the shift too small and upscaling too large, so the declared left
+    // siting matched the GPU output at exactly one scale factor.
+    [[nodiscard]] static constexpr float LeftSitingShiftTexels(uint32_t content_w) noexcept {
+        return content_w == 0 ? 0.0f : 0.5f / static_cast<float>(content_w);
+    }
+
+    // The half-resolution viewport that covers a content rectangle.
+    //
+    // Both the origin and the size were divided by two with integer division. For
+    // an odd content height -- 1079 rows inside an even encode height, which a
+    // contain-fit produces -- 1079/2 is 539, and the chroma plane needs 540 rows
+    // to reach the last luma row: that row kept the neutral clear value and the
+    // bottom line of the picture came out colourless.
+    //
+    // So the origin floors (a chroma sample that straddles the content edge must
+    // still be drawn) and the END is what rounds up, with the size derived from
+    // the two. That covers the last row and column without moving the content:
+    // the viewport is a render target region, and where the content sits is set
+    // by the luma pass and the texcoord mapping, neither of which this touches.
+    struct ChromaViewport {
+        uint32_t x = 0;
+        uint32_t y = 0;
+        uint32_t w = 0;
+        uint32_t h = 0;
+    };
+    [[nodiscard]] static constexpr ChromaViewport ChromaViewportFor(uint32_t content_x, uint32_t content_y,
+                                                                    uint32_t content_w, uint32_t content_h) noexcept {
+        const uint32_t x0 = content_x / 2;
+        const uint32_t y0 = content_y / 2;
+        const uint32_t x1 = (content_x + content_w + 1) / 2;
+        const uint32_t y1 = (content_y + content_h + 1) / 2;
+        return ChromaViewport{x0, y0, x1 > x0 ? x1 - x0 : 0u, y1 > y0 ? y1 - y0 : 0u};
+    }
+
     // input_is_pq: false for scRGB FP16 (R16G16B16A16_FLOAT), true for an
     // already-PQ HDR10 R10G10B10A2 desktop. src_format is the capture texture's
     // DXGI format (used for the source shader-resource view).

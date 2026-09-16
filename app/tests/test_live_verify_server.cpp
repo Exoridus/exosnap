@@ -133,6 +133,10 @@ class StubSource final : public LiveVerifySource {
     bool SettingsSet(const QString&, const QJsonValue&, QString*) override {
         return true;
     }
+    bool WebcamOverlaySet(const QJsonObject&, QJsonObject* applied, QString*) override {
+        applied->insert(QStringLiteral("appliedSequence"), 1);
+        return true;
+    }
     bool SettingsReset(QString*) override {
         return true;
     }

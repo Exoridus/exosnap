@@ -105,4 +105,51 @@ inline bool ShiftAudioPts(uint64_t pts_ns, int64_t shift_ns, uint64_t& out_pts_n
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Placing an aligned packet on a SEGMENT's local timeline.
+//
+// A Matroska segment's timestamps start at 0 at its own epoch: the first video
+// packet written into it. Rebasing a session PTS onto that was
+//
+//     epoch unset      -> write the session PTS unchanged
+//     before the epoch -> write 0
+//
+// and both are wrong once a split has happened. After a split at ten minutes
+// the next segment's epoch is not yet known when the first audio arrives -- the
+// queues are independent, and the forced keyframe that sets the epoch may still
+// be behind it -- so that audio was written ten minutes into a file that is
+// seconds long. Audio that arrives after the epoch is set but belongs before it
+// was written at 0 instead, stacking every such packet on the same timestamp.
+//
+// The packet's own timeline position is the only thing that can decide this, so
+// it is decided explicitly and each outcome is named. There is no "write it
+// somewhere and hope": a packet that belongs to a segment already closed is
+// trimmed, and trimmed packets are counted, because silently dropping audio and
+// silently misplacing it are both defects and only one of them is visible.
+// ---------------------------------------------------------------------------
+enum class SegmentPlacement {
+    Write, // On this segment's timeline, at the returned local PTS.
+    Defer, // The segment's epoch is not known yet: hold the packet, do not guess.
+    Trim,  // Belongs before this segment began. The previous segment is closed.
+};
+
+struct SegmentLocalPts {
+    SegmentPlacement placement = SegmentPlacement::Defer;
+    uint64_t local_pts_ns = 0;
+};
+
+// `epoch_set` and `epoch_session_pts_ns` describe the segment; `pts_ns` is the
+// packet's session PTS, already shifted onto the video timeline for audio.
+//
+// A packet exactly at the epoch is written at 0 -- that is the epoch's own
+// definition, not a clamp.
+[[nodiscard]] inline SegmentLocalPts PlaceOnSegmentTimeline(uint64_t pts_ns, bool epoch_set,
+                                                            uint64_t epoch_session_pts_ns) noexcept {
+    if (!epoch_set)
+        return SegmentLocalPts{SegmentPlacement::Defer, 0};
+    if (pts_ns < epoch_session_pts_ns)
+        return SegmentLocalPts{SegmentPlacement::Trim, 0};
+    return SegmentLocalPts{SegmentPlacement::Write, pts_ns - epoch_session_pts_ns};
+}
+
 } // namespace exosnap::engine

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 // Shared atomic-publish primitives for remux output (ADR-0014 durability).
 //
@@ -33,5 +34,28 @@ std::filesystem::path MakeSiblingTempPath(const std::filesystem::path& target);
 // (identical to DWORD; declared as unsigned long to keep <windows.h> out of this
 // header).
 unsigned long AtomicReplaceInPlace(const std::filesystem::path& from, const std::filesystem::path& to);
+
+// Remove a staging file this attempt created, and SAY SO if it could not be
+// removed.
+//
+// Every call site wrote `std::filesystem::remove(temp, ec)` and then ignored the
+// ec -- twelve of them. A staging file that cannot be deleted (a scanner or an
+// indexer still holding it, a revoked ACL) then stays next to the user's
+// recordings forever, with nothing in the log and nothing on the card. The file
+// is harmless in itself; being unable to say it is there is not.
+//
+// Returns an empty string when the path is gone afterwards -- which includes the
+// case where it never existed, since a caller on an error path cannot always know
+// whether the output was ever opened. Otherwise the reason it is still there,
+// ready to be logged.
+//
+// It does not log itself on purpose: each call site has its own log component
+// ("remux", "recovery", "export"), and a line filed under this file's name would
+// be the one place nobody looks.
+//
+// Never use this for anything but a staging file this attempt produced. The
+// original recording, a recovery master and a pre-existing file at the target
+// path are not this function's business.
+[[nodiscard]] std::string DescribeFailedStagingRemoval(const std::filesystem::path& staging);
 
 } // namespace exosnap

@@ -397,6 +397,10 @@ bool NvencEncoder::Open(ID3D11Device* device, std::string& out_error) {
 
     st = m_funcs.nvEncOpenEncodeSessionEx(&params, &m_encoder);
     if (st != NV_ENC_SUCCESS || !m_encoder) {
+        // Classified here, where the driver's own status is still available. A
+        // blocker is latched from this upstream, so only a status about the device
+        // counts -- a transient loss must not become a permanent verdict.
+        m_encoder_unreachable = IsEncoderUnreachableStatus(st);
         out_error = std::string("nvEncOpenEncodeSessionEx: ") + NvencStatusName(st);
         return false;
     }
@@ -1294,7 +1298,7 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
     const bool actualIsIdr = (lockBS.pictureType == NV_ENC_PIC_TYPE_IDR);
     if (!m_pending.empty()) {
         const PendingFrame pf = m_pending.front();
-        m_pending.pop();
+        m_pending.pop_front();
         ts_ns = pf.pts_ns;
         // True submit -> bitstream-available latency for this frame. In the P5-P7
         // buffered case the consumed output belongs to an earlier submission, so
@@ -1537,7 +1541,7 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     // and predicted_keyframe are captured here (submission-side truth) so the
     // consuming lock can validate them against the driver's actual
     // outputTimeStamp / pictureType. out_idx is -1 in sync mode (unused).
-    m_pending.push(
+    m_pending.push_back(
         PendingFrame{pts_ns, slot_idx, std::chrono::steady_clock::now(), pic.inputTimeStamp, isKeyframe, out_idx});
 
     st = m_funcs.nvEncEncodePicture(m_encoder, &pic);
@@ -1560,12 +1564,12 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
             slot.mapped = false;
             slot.in_flight = false;
 
-            // Pop our own pending entry; LockAndConsumeBitstream may have
-            // already popped it if it got partway through. Best-effort: drain
-            // one entry if present.
-            if (!m_pending.empty()) {
-                m_pending.pop();
-            }
+            // Take back THIS submission's entry, by identity. The lock may or may
+            // not have consumed the front (it pops before it validates), and
+            // either way the front is the oldest buffered frame, not this one:
+            // popping it here left a frame the driver still owned without an
+            // entry, and this frame with one.
+            DiscardRejectedSubmission(m_pending, pic.inputTimeStamp);
             out_error = lockErr;
             return false;
         }
@@ -1590,9 +1594,10 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
             m_outputResources[out_idx].in_flight = false;
         }
 
-        // Remove the entry we just pushed (best-effort, front of queue)
-        if (!m_pending.empty())
-            m_pending.pop();
+        // Remove the entry we just pushed -- the back, not the front. The front
+        // is the oldest frame still buffered inside the encoder, whose slot and
+        // output buffer remain valid and whose output is still coming.
+        DiscardRejectedSubmission(m_pending, pic.inputTimeStamp);
 
         out_error = std::string("nvEncEncodePicture: ") + NvencStatusName(st);
         return false;
@@ -1695,13 +1700,15 @@ bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::stri
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        // AbortTimeout / AbortError: stop draining but do not fail — the caller
-        // (which ignores this return) still pushes video-EOS and finalises the
-        // file with whatever was already muxed, instead of wedging.
+        // AbortTimeout / AbortError: stop draining. What has drained stays in
+        // out_packets and the caller finalises with it; what has not is still in
+        // m_pending, and the false return is what tells the caller the file ends
+        // short of the recording.
         out_error = step == FlushDrainStep::AbortTimeout
                         ? "Flush drain timed out — device not delivering buffered frames"
                         : (std::string("Flush drain stopped: ") + lockErr);
-        break;
+        m_needMoreInputCount = 0;
+        return false;
     }
 
     m_needMoreInputCount = 0;
@@ -1733,7 +1740,8 @@ bool NvencEncoder::FlushAsync(std::vector<EncodedVideoPacket>& out_packets, std:
         const int32_t headOutIdx = m_pending.front().out_idx;
         if (headOutIdx < 0 || headOutIdx >= kMaxOutputResources) {
             out_error = "FlushAsync: pending frame has an invalid output-ring index";
-            break;
+            m_needMoreInputCount = 0;
+            return false;
         }
         EncodedVideoPacket pkt;
         std::string waitErr;
@@ -1743,11 +1751,12 @@ bool NvencEncoder::FlushAsync(std::vector<EncodedVideoPacket>& out_packets, std:
             out_packets.push_back(std::move(pkt));
             continue;
         }
-        // AbortTimeout / AbortError: stop draining but do not fail — the
-        // caller still pushes video-EOS and finalises with whatever was
-        // already muxed, instead of wedging (same contract as sync Flush).
+        // AbortTimeout / AbortError: stop draining and say so (same contract as
+        // the sync Flush). The packets already drained are the caller's to mux;
+        // m_pending holds the frames that will not be in the file.
         out_error = waitErr;
-        break;
+        m_needMoreInputCount = 0;
+        return false;
     }
 
     m_needMoreInputCount = 0;

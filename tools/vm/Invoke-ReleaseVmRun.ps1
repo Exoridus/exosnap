@@ -40,6 +40,30 @@
 .PARAMETER Network
     Connected, Disconnected (default) or HostOnly.
 
+.PARAMETER RequireInteractiveGuest
+    The campaign captures the guest desktop, so the run proves before it starts that
+    the guest has an interactive session on the console with a display attached --
+    rather than inferring it from PowerShell Direct answering, which proves only that
+    the OS is up. Declared per campaign: a scenario that installs and uninstalls needs
+    none of it, and refusing such a run for a missing desktop would demand more than
+    the scenario does.
+
+    Note what it does not do: the campaign is launched over PowerShell Direct, which
+    is session 0, so a run that declares this today is told so instead of producing a
+    picture nobody can explain. Launching the campaign into the interactive session
+    is the transport's job, not this switch's.
+
+.PARAMETER ProveGpuBinding
+    The run measures the host adapter it is about to partition and, once the guest
+    is up, holds the guest to it: the adapter the guest is on presents that host
+    GPU, and the driver package staged into the guest is the package the host is
+    running. Also asks for the virtual monitor mode the provisioning manifest pins,
+    on one attached display path. Implies -RequireInteractiveGuest, because the
+    receipt this reads is the interactive agent's.
+
+    A campaign whose evidence has to name the GPU it ran on declares this; an
+    install-and-uninstall run does not need it and is not refused for it.
+
 .PARAMETER KeepDisk
     Leave the differencing disk in place. For diagnosing a run that failed inside the
     guest; it is not a normal mode, and the disk has to be deleted by hand afterwards.
@@ -63,6 +87,8 @@ param(
     [int] $ProcessorCount = 0,
     [int] $BootTimeoutMinutes = 15,
     [int] $RunTimeoutMinutes = 120,
+    [switch] $RequireInteractiveGuest,
+    [switch] $ProveGpuBinding,
     [switch] $KeepDisk,
     [switch] $DryRun
 )
@@ -127,6 +153,34 @@ if (-not $planning) {
 
 Write-ReleaseVmPrerequisite -Verdict $verdict
 
+$readiness = $null
+if ($ProveGpuBinding) {
+    # Measured now, before anything is partitioned, so the identity the guest is held
+    # to is the adapter as it was when this run began. An adapter that cannot be
+    # measured binds nothing, and a run that would produce evidence attributed to no
+    # GPU is refused here rather than after an hour.
+    $hostGpu = Get-ReleaseVmHostGpu
+    if (-not $hostGpu.Measured) {
+        $verdict.Ok = $false
+        $verdict.Problems += @{
+            Id = 'host-gpu-unmeasured'
+            Message = "the host GPU could not be measured: $($hostGpu.Detail)"
+            Remedy = 'a run that proves its GPU binding needs a host adapter matching HostGpuInstancePattern'
+        }
+    }
+    $manifest = Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'provision-manifest.psd1')
+    $mode = @{
+        Width     = [int] $manifest.display.width
+        Height    = [int] $manifest.display.height
+        # The first pinned rate is the mode the virtual monitor comes up in; a gate
+        # that needs another one switches to it and says so.
+        RefreshHz = [int] @($manifest.display.refreshRates)[0]
+    }
+    $readiness = New-ReleaseVmReadinessRequirement -InteractiveAgent -ExpectedUser $defaults.GuestUserName `
+        -Display $mode -GpuBoundTo $hostGpu
+    Write-Host "  gpu binding  : $($hostGpu.Name), $($hostGpu.Package), display $($mode.Width)x$($mode.Height)@$($mode.RefreshHz)Hz"
+}
+
 $plan = New-ReleaseVmRunPlan `
     -RunPath $runPath `
     -GuestCommand $GuestCommand `
@@ -138,6 +192,8 @@ $plan = New-ReleaseVmRunPlan `
     -ProcessorCount $ProcessorCount `
     -BootTimeoutMinutes $BootTimeoutMinutes `
     -RunTimeoutMinutes $RunTimeoutMinutes `
+    -RequireInteractiveGuest:($RequireInteractiveGuest -or $ProveGpuBinding) `
+    -Readiness $readiness `
     -KeepDisk:$KeepDisk
 
 if ($planning) {
@@ -155,6 +211,34 @@ $outputs = Invoke-ReleaseVmPlan -Plan $plan -Credential (New-ReleaseVmCredential
 
 $exitCode = 0
 if ($outputs.ContainsKey('run') -and $null -ne $outputs['run']) { $exitCode = [int]$outputs['run'] }
+
+if ($ProveGpuBinding -and $outputs.ContainsKey('guest-readiness') -and $null -ne $outputs['guest-readiness']) {
+    # The binding this run was measured under, beside its evidence: the host adapter
+    # and package, the guest's receipt, and whether the guest runs the display profile
+    # the scenario was qualified on. The profile verdict is three-valued on purpose --
+    # an image that cannot run the qualified profile makes a scenario unrunnable, not
+    # failing, and a record that could only say pass or fail would say the wrong one.
+    $receipt = $outputs['guest-readiness']
+    $profile = Test-ReleaseVmDisplayProfile -Required "$($manifest.qualifiedDisplayProfile)" `
+        -Measured $(if ($receipt.Contains('displayDriver')) { $receipt['displayDriver'] } else { @{} })
+    $binding = [ordered]@{
+        runId              = $RunId
+        measuredUtc        = [DateTime]::UtcNow.ToString('o')
+        hostGpu            = $hostGpu
+        requirement        = $readiness
+        guestReceipt       = $receipt
+        displayProfile     = [ordered]@{
+            built     = "$($manifest.displayProfile)"
+            qualified = "$($manifest.qualifiedDisplayProfile)"
+            verdict   = $profile.Verdict
+            detail    = $profile.Detail
+        }
+    }
+    New-Item -ItemType Directory -Path $resultDirectory -Force | Out-Null
+    $bindingPath = Join-Path $resultDirectory 'campaign-binding.json'
+    $binding | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $bindingPath -Encoding utf8NoBOM
+    Write-Host "  binding      : $bindingPath ($($profile.Verdict): $($profile.Detail))"
+}
 
 Write-Host ''
 Write-Host "  the guest command exited $exitCode; its evidence is in $resultDirectory"

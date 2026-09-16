@@ -7,7 +7,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
-#include <queue>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -61,6 +61,66 @@ enum class EventDrainStep {
     AbortError,   // Any other result (WAIT_FAILED, WAIT_ABANDONED, ...) — stop.
 };
 EventDrainStep NextEventDrainStep(DWORD wait_result, double elapsed_ms, double budget_ms) noexcept;
+
+// ---------------------------------------------------------------------------
+// Is this failure evidence that the encoder cannot be reached from the adapter
+// the capture runs on?
+//
+// It matters because the answer is latched and shown to the user as a blocker.
+// A status that merely says "this did not work right now" must never become
+// "this machine cannot record this display": a TDR, a transient device loss and a
+// driver reset all fail an encode, all recover, and a blocker latched from one of
+// them would outlive the condition and be wrong for the rest of the session.
+//
+// Only the statuses that are a statement about the DEVICE qualify -- no encode
+// device on it, an unsupported one, an invalid one. Everything else, including a
+// plain UNSUPPORTED_PARAM or an out-of-memory, is a failure without a verdict
+// about reachability attached.
+// ---------------------------------------------------------------------------
+[[nodiscard]] constexpr bool IsEncoderUnreachableStatus(NVENCSTATUS status) noexcept {
+    switch (status) {
+    case NV_ENC_ERR_NO_ENCODE_DEVICE:
+    case NV_ENC_ERR_UNSUPPORTED_DEVICE:
+    case NV_ENC_ERR_INVALID_DEVICE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DiscardRejectedSubmission -- pure, testable removal of the one pending entry a
+// failed submission must take back.
+//
+// The pending FIFO is written BEFORE nvEncEncodePicture so a consume that races
+// the submission finds its entry. When the driver then rejects the picture, the
+// entry has to come out again -- and it is the newest one, at the back. The
+// encoder used to pop the FRONT on that path: with frames A and B buffered
+// (NEED_MORE_INPUT, or async in flight) and C rejected, A's entry vanished while
+// A's input slot and output buffer were still the driver's. C's entry stayed,
+// describing a frame that would never complete; the next consume then locked
+// B's bitstream against C's entry and aborted the session on the timestamp
+// mismatch -- or worse, matched by accident.
+//
+// The entry is found by its inputTimeStamp, which is unique per submission, so
+// this is correct whether or not a consume ran between push and rejection --
+// which the sync path cannot otherwise know. Returns how many entries were
+// removed: 1 normally, 0 when the entry was already consumed (nothing to undo),
+// never more.
+// ---------------------------------------------------------------------------
+template <typename PendingQueue>
+std::size_t DiscardRejectedSubmission(PendingQueue& pending, uint64_t rejected_input_ts) noexcept {
+    std::size_t removed = 0;
+    for (auto it = pending.begin(); it != pending.end();) {
+        if (it->input_ts == rejected_input_ts) {
+            it = pending.erase(it);
+            ++removed;
+        } else {
+            ++it;
+        }
+    }
+    return removed;
+}
 
 // ---------------------------------------------------------------------------
 // FindFreeOutputSlot — pure, testable round-robin scan for a free async
@@ -473,9 +533,23 @@ class NvencEncoder {
     // waiting.
     bool ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error, uint32_t wait_head_ms = 0);
 
-    // Flush all buffered frames (EOS drain).
-    // Appends any remaining packets to out_packets.
+    // Flush all buffered frames (EOS drain). Appends any remaining packets to
+    // out_packets. Returns false when the drain was cut short (EOS refused,
+    // device stopped delivering within the budget, lock failed); what drained is
+    // still in out_packets, and PendingFrames() is what did not.
     bool Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error);
+
+    [[nodiscard]] uint64_t PendingFrames() const noexcept {
+        return static_cast<uint64_t>(m_pending.size());
+    }
+
+    // True when an Open or Configure failed with a status that is a statement
+    // about the DEVICE (IsEncoderUnreachableStatus), rather than a failure that
+    // happens to have occurred on one. The diagnostics layer latches a blocker
+    // from this, so a transient loss must never set it.
+    [[nodiscard]] bool EncoderUnreachable() const noexcept {
+        return m_encoder_unreachable;
+    }
 
     // Unregister all slot resources.  Safe to call multiple times.
     void UnregisterAllSlots();
@@ -571,7 +645,15 @@ class NvencEncoder {
         // m_bitstreamBuffer and no completion event).
         int32_t out_idx = -1;
     };
-    std::queue<PendingFrame> m_pending;
+    // A deque rather than a queue: a rejected submission has to remove ITS OWN
+    // entry, which is at the back, and a queue can only pop the front -- which is
+    // the oldest frame still in flight, whose slot and output buffer the driver
+    // still owns. See DiscardRejectedSubmission.
+    std::deque<PendingFrame> m_pending;
+
+    // Latched by Open/Configure when the driver's status says the device cannot
+    // encode, never on a transient failure. See IsEncoderUnreachableStatus.
+    bool m_encoder_unreachable = false;
 
     int m_needMoreInputCount = 0;
 

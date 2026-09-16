@@ -22,12 +22,25 @@ public sealed record DisplayOutputInfo(string DeviceName, bool AttachedToDesktop
 /// <param name="Vendor">The vendor name derived from the vendor id, or the raw id.</param>
 /// <param name="IsSoftware">Whether this is a Microsoft software adapter rather than hardware.</param>
 /// <param name="Outputs">The outputs attached to this adapter.</param>
+/// <param name="UserModeDriverVersion">
+/// The user-mode display driver version, or an empty string when the adapter would
+/// not answer.
+/// </param>
+/// <remarks>
+/// The driver version is the user-mode one on purpose: it is the component the
+/// capture and encode paths call into, so it is the one whose change makes an older
+/// verdict a statement about a different measurement. It is read through
+/// <c>CheckInterfaceSupport</c>, which is documented to answer for the DXGI device
+/// interface and to fail on adapters that expose no Direct3D 10 or later device --
+/// a failure is reported as an empty string rather than as a version nobody read.
+/// </remarks>
 public sealed record GraphicsAdapterInfo(
     string Description,
     uint VendorId,
     string Vendor,
     bool IsSoftware,
-    ReadOnlyCollection<DisplayOutputInfo> Outputs);
+    ReadOnlyCollection<DisplayOutputInfo> Outputs,
+    string UserModeDriverVersion = "");
 
 /// <summary>
 /// Read-only DXGI and Direct3D 11 enumeration.
@@ -195,7 +208,34 @@ public static class GraphicsProbe
             vendorId,
             VendorName(vendorId),
             vendorId == VendorMicrosoft,
-            new ReadOnlyCollection<DisplayOutputInfo>(outputs));
+            new ReadOnlyCollection<DisplayOutputInfo>(outputs),
+            UserModeDriverVersion(adapter));
+    }
+
+    /// <summary>
+    /// The adapter's user-mode display driver version, or an empty string.
+    /// </summary>
+    /// <remarks>
+    /// Rendered as the four 16-bit parts of the LARGE_INTEGER the call returns, which
+    /// is the form the driver vendors publish. An adapter that exposes no Direct3D 10
+    /// or later device answers with a failure, and that is reported as empty rather
+    /// than as a zero version that would compare equal across machines.
+    /// </remarks>
+    private static string UserModeDriverVersion(IDXGIAdapter1 adapter)
+    {
+        try
+        {
+            // The projection throws rather than returning an HRESULT, and an adapter
+            // with no Direct3D 10 or later device is the ordinary reason it does.
+            adapter.CheckInterfaceSupport(typeof(IDXGIDevice).GUID, out var version);
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"{(version >> 48) & 0xFFFF}.{(version >> 32) & 0xFFFF}.{(version >> 16) & 0xFFFF}.{version & 0xFFFF}");
+        }
+        catch (COMException)
+        {
+            return string.Empty;
+        }
     }
 
     private static string VendorName(uint vendorId) => vendorId switch

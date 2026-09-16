@@ -150,4 +150,37 @@ function Enter-MsvcEnvironment {
     return $compiler
 }
 
-Export-ModuleMember -Function Enter-MsvcEnvironment, Find-VisualStudioInstallation, Get-MsvcEnvironmentBlock, Find-CompilerOnPath
+function Test-PresetUsesNinja {
+    <#
+    .SYNOPSIS
+        Whether a configure preset builds with Ninja, following inherits.
+    .DESCRIPTION
+        The Visual Studio generator locates its own toolchain; Ninja needs cl.exe on
+        PATH before the first compile. Callers ask this before deciding whether to
+        import the MSVC environment, so a preset that inherits its generator is
+        answered the same as one that names it.
+    .PARAMETER RepoRoot
+        The directory holding CMakePresets.json.
+    #>
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [string] $RepoRoot
+    )
+
+    $presets = (Get-Content -LiteralPath (Join-Path $RepoRoot 'CMakePresets.json') -Raw |
+        ConvertFrom-Json).configurePresets
+    # Bounded rather than while($true): a cycle in inherits is a broken presets
+    # file, and hanging the caller is a worse way to report it.
+    for ($hop = 0; $hop -lt 16 -and $Name; $hop++) {
+        $preset = $presets | Where-Object { $_.name -eq $Name } | Select-Object -First 1
+        if (-not $preset) { return $false }
+        if ($preset.PSObject.Properties.Name -contains 'generator' -and $preset.generator) {
+            return $preset.generator -eq 'Ninja'
+        }
+        $Name = if ($preset.PSObject.Properties.Name -contains 'inherits') { @($preset.inherits)[0] } else { $null }
+    }
+    return $false
+}
+
+Export-ModuleMember -Function Enter-MsvcEnvironment, Find-VisualStudioInstallation, Get-MsvcEnvironmentBlock, Find-CompilerOnPath, Test-PresetUsesNinja

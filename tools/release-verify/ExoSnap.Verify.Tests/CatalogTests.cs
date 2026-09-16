@@ -15,7 +15,10 @@ public sealed class CatalogTests
     {
         var catalog = ReleaseCatalog.Create();
 
-        Assert.Equal(27, catalog.Scenarios.Count);
+        // No fixed count. A number here is a line to bump whenever the catalog grows,
+        // which says nothing about whether it grew correctly -- the invariants that
+        // matter are below and in UnmigratedScenariosAreNamedNotCounted.
+        Assert.NotEmpty(catalog.Scenarios);
         Assert.Equal(
             catalog.Scenarios.Count,
             catalog.Scenarios.Select(scenario => scenario.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count());
@@ -27,6 +30,35 @@ public sealed class CatalogTests
             Assert.False(string.IsNullOrWhiteSpace(descriptor.Source), $"{descriptor.Id} cites no source");
             Assert.NotEmpty(descriptor.Oracle);
         }
+    }
+
+    /// <summary>
+    /// Every scenario has an executable body except the ones named here, with why.
+    /// </summary>
+    /// <remarks>
+    /// A list rather than a count. "27 of 28 are migrated" is satisfied by migrating
+    /// one and losing another, and it gives a reader nothing to act on; naming the
+    /// exception forces the reason to be written down and makes finishing it visible
+    /// as this list shrinking.
+    /// </remarks>
+    [Fact]
+    public void UnmigratedScenariosAreNamedNotCounted()
+    {
+        // REL-AUD-DEGRADE-001 needs an audio endpoint to physically disappear
+        // mid-recording. The envctl catalogue classifies endpoint-state as PHYSICAL
+        // because no API causes it, and the typed harness has no operator gate to ask
+        // a person through -- so faking it would be the harness verifying its own
+        // fake. It is finished when that operator gate exists.
+        string[] expected = ["REL-AUD-DEGRADE-001"];
+
+        var migrated = ReleaseCatalog.MigratedIds();
+        var declared = ReleaseCatalog.Descriptors()
+            .Select(descriptor => descriptor.Id)
+            .Where(id => !migrated.Contains(id, StringComparer.OrdinalIgnoreCase))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(expected, declared);
     }
 
     [Fact]

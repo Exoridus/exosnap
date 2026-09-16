@@ -25,12 +25,17 @@ struct Y4mHeader {
 // Parses the first line of a .y4m file, e.g.
 // "YUV4MPEG2 W1920 H1080 F30:1 Ip A1:1 C420jpeg\n". Only 8-bit 4:2:0 chroma
 // (C420, C420jpeg, C420mpeg2) is accepted — anything else, or a missing C
-// tag, is an error naming what was rejected. `data` only needs to contain at
+// tag or an odd dimension, is an error naming what was rejected. `data` only needs to contain at
 // least the header line; trailing frame data (if present) is ignored here.
 std::optional<Y4mHeader> ParseY4mHeader(std::string_view data, std::string& out_error);
 
 // Number of raw bytes one 8-bit 4:2:0 (I420) frame occupies: a full-resolution
 // Y plane plus two quarter-resolution chroma planes.
+//
+// Precondition: width and height are both even. The integer division below is
+// the correct arithmetic for that contract and silently wrong outside it, so
+// ParseY4mHeader rejects odd dimensions rather than letting an undersized frame
+// size reach a reader. Ceil-rounding here would be a different pixel layout.
 constexpr size_t I420FrameSize(uint32_t width, uint32_t height) noexcept {
     return static_cast<size_t>(width) * height +
            2 * ((static_cast<size_t>(width) / 2) * (static_cast<size_t>(height) / 2));

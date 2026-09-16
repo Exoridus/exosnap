@@ -362,7 +362,11 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     // succeeds) positions the read cursor exactly at the keyframe at or
     // before start_us — the seek target. We track whether we have locked
     // onto that keyframe yet.
-    bool trim_start_locked = !tr.HasStart(); // true = past the start boundary
+    // true = past the start boundary. Only a video keyframe can lock it, so an
+    // input with no video stream would never lock it at all: every packet would be
+    // skipped, the trailer would be written over nothing, and an empty file would
+    // be reported as a successful trim.
+    bool trim_start_locked = !tr.HasStart() || video_stream_idx < 0;
 
     // Last progress value handed to the callback. Re-sent by the unconditional
     // cancellation probe below so a cancel poll never reports a bogus position.
@@ -500,10 +504,20 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         avformat_free_context(out_ctx);
         out_guard.ctx = nullptr;
 
+        // The caller owns this path -- every call site hands in a staging file and
+        // publishes it itself -- so removing it here is a courtesy, not the
+        // transaction. It is still reported: a partial file left on disk because it
+        // could not be deleted is something the caller's own cleanup has to see.
         std::error_code ec;
         std::filesystem::remove(output_path, ec);
-
-        LogInfo("Remux cancelled by caller — partial output removed");
+        if (ec) {
+            logging::LogField fields[] = {{"output", out_str}, {"error", ec.message()}};
+            logging::log(logging::LogLevel::Warn, kLogComponent,
+                         "Remux cancelled, but the partial output could not be removed",
+                         std::span<const logging::LogField>(fields, std::size(fields)));
+        } else {
+            LogInfo("Remux cancelled by caller — partial output removed");
+        }
         return RemuxResult::Fail(AVERROR(ECANCELED), "Remux cancelled by caller");
     }
 
@@ -524,9 +538,14 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     if (progress_cb)
         progress_cb(1.0f);
 
-    const auto out_size = std::filesystem::file_size(output_path);
+    // error_code overload: this is the only throwing call on the success path of a
+    // function the caller joins synchronously on the GUI thread, and an output that
+    // briefly becomes unreadable (a share, a scanner) must not turn a completed
+    // remux into an uncaught exception. The size is only ever logged.
+    std::error_code size_ec;
+    const auto out_size = std::filesystem::file_size(output_path, size_ec);
     {
-        logging::LogField fields[] = {{"output_bytes", std::to_string(out_size)}};
+        logging::LogField fields[] = {{"output_bytes", size_ec ? std::string("unknown") : std::to_string(out_size)}};
         logging::log(logging::LogLevel::Info, kLogComponent, "Remux complete",
                      std::span<const logging::LogField>(fields, std::size(fields)));
     }

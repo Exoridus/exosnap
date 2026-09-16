@@ -209,11 +209,24 @@ void EditSessionAdapter::requestTrim(qint64 start_ms, qint64 end_ms) {
                                ? exosnap::engine::TrimRange::kNoTimestamp
                                : SnapTrimBoundaryUs(clamped_end * 1000, keyframe_timestamps_, markers_);
 
+    // Which handle moved, from the values BEFORE this call. The previous rule was
+    // `clamped_start <= 0 ? end_us : start_us` -- a test on the in-point's value,
+    // not on what the user dragged. With an in-point already set, dragging the
+    // out-point seeked to the in-point instead: the preview jumped to the start
+    // of the range while the user was looking for the frame they were cutting at.
+    const bool start_moved = start_us != trim_start_us_;
+    const bool end_moved = end_us != trim_end_us_;
+
     setTrimUs(start_us, end_us);
 
-    // Show the frame at the boundary that actually moved. A drag of the in-point
-    // is answered by the in-point; a drag of the out-point by the out-point.
-    const int64_t shown_us = clamped_start <= 0 ? end_us : start_us;
+    // Show the frame at the boundary that actually moved. When both moved (a
+    // clamp pushed the neighbour, or the range was set at once) the in-point is
+    // the answer, which is where the range now begins.
+    int64_t shown_us = exosnap::engine::TrimRange::kNoTimestamp;
+    if (start_moved)
+        shown_us = start_us;
+    else if (end_moved)
+        shown_us = end_us;
     if (shown_us != exosnap::engine::TrimRange::kNoTimestamp)
         emit seekRequested(shown_us / 1000);
 }

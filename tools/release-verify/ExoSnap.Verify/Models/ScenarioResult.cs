@@ -10,6 +10,23 @@ public sealed record ScenarioResult(ScenarioOutcome Outcome, string Message, Evi
 {
     private static readonly Evidence[] NoEvidence = [];
 
+    /// <summary>
+    /// Why the evidence for this scenario did not reach the host, or an empty string
+    /// when it did or none was asked for.
+    /// </summary>
+    /// <remarks>
+    /// A separate fact from the outcome, because they are separate questions and only
+    /// the promotion contract joins them. A disposable-OS run can assert everything it
+    /// was asked to and still lose the logs that show it: the product verdict is real,
+    /// and a record that cannot be looked into has not produced what promotion asks
+    /// for. Folding the two would either hide the loss or turn it into a product
+    /// failure, and it is neither.
+    /// </remarks>
+    public string EvidenceGap { get; init; } = string.Empty;
+
+    /// <summary>Whether the evidence this scenario produced reached the host.</summary>
+    public bool EvidenceComplete => this.EvidenceGap.Length == 0;
+
     /// <summary>The product behaved as required.</summary>
     public static ScenarioResult Pass(string message, params Evidence[] evidence) =>
         new(ScenarioOutcome.Pass, message, evidence.Length == 0 ? NoEvidence : evidence);

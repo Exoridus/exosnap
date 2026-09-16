@@ -4,6 +4,8 @@
 
 #include <dxgiformat.h>
 
+#include <exosnap/engine/device_generation.h>
+
 // ---------------------------------------------------------------------------
 // The WYSIWYG preview tap publishes the engine's pre-encode surface to the
 // preview renderer through a shared texture (see preview_shared_texture.h and
@@ -80,27 +82,56 @@ struct PreviewTapPlan {
     return plan;
 }
 
+// What the published shared texture was created for, and what the next frame
+// needs. Named fields rather than a parameter list: the two halves carry the same
+// types in the same order, and every defect this decision has had was a pair
+// that should have been compared and was not.
+struct CaptureTapPublishState {
+    // The generation of the device the shared texture lives on. A texture from a
+    // replaced device is not stale, it is dead -- see device_generation.h.
+    DeviceGeneration device_generation;
+    bool shared_valid = false;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    bool hdr_active = false;
+    float max_luminance_nits = 0.0f;
+};
+
+struct CaptureTapFrameState {
+    DeviceGeneration device_generation;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    bool hdr_active = false;
+    float max_luminance_nits = 0.0f;
+};
+
 // Pure: whether the DXGI capture hub's publish loop must (re)create the shared
 // texture and re-announce a fresh PreviewTapDesc to the preview consumer, vs.
-// publishing the next frame into the existing shared texture unchanged. True
-// whenever the shared texture is not yet valid, its dimensions/format no
-// longer match the captured frame, or the display's HDR facts have changed
-// since the tap was last resolved. An Advanced-Color desktop keeps delivering
-// the same FP16 format across a live Windows-HDR (or Auto-HDR) toggle, so
-// dimensions/format alone cannot detect that the previously-resolved tap
-// (peak_scale / transform) has gone stale — the hdr_active / max_luminance
-// comparison is what catches that case (see DxgiCaptureHubService::WorkerProc).
-[[nodiscard]] inline bool ShouldRepublishCaptureTap(bool shared_valid, uint32_t shared_width, uint32_t shared_height,
-                                                    DXGI_FORMAT shared_format, uint32_t frame_width,
-                                                    uint32_t frame_height, DXGI_FORMAT frame_format,
-                                                    bool last_hdr_active, float last_max_luminance_nits,
-                                                    bool current_hdr_active,
-                                                    float current_max_luminance_nits) noexcept {
-    if (!shared_valid || frame_width != shared_width || frame_height != shared_height ||
-        frame_format != shared_format) {
+// publishing the next frame into the existing shared texture unchanged.
+//
+// Three independent reasons, and each was learned the hard way:
+//
+//   * No shared texture yet, or its dimensions/format no longer match the frame.
+//   * The display's HDR facts changed. An Advanced-Color desktop keeps
+//     delivering the same FP16 format across a live Windows-HDR (or Auto-HDR)
+//     toggle, so dimensions and format alone cannot tell that the resolved tap's
+//     peak_scale and transform have gone stale.
+//   * The producer's device was replaced. Everything above can be identical
+//     after a DEVICE_REMOVED or an adapter-matched reopen -- the desktop is the
+//     same size, the same format, in the same HDR state -- while the shared
+//     texture belongs to a device that no longer exists. The pointer cannot
+//     answer this (an allocator may reuse the address), so the generation does.
+[[nodiscard]] inline bool ShouldRepublishCaptureTap(const CaptureTapPublishState& published,
+                                                    const CaptureTapFrameState& frame) noexcept {
+    if (!DeviceResourceIsCurrent(published.device_generation, frame.device_generation))
+        return true;
+    if (!published.shared_valid || frame.width != published.width || frame.height != published.height ||
+        frame.format != published.format) {
         return true;
     }
-    return current_hdr_active != last_hdr_active || current_max_luminance_nits != last_max_luminance_nits;
+    return frame.hdr_active != published.hdr_active || frame.max_luminance_nits != published.max_luminance_nits;
 }
 
 } // namespace exosnap::engine

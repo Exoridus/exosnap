@@ -4,11 +4,15 @@
 #include <thread>
 
 #include "session_stop_reset.h"
+#include "split_sentinel_policy.h"
 
 using exosnap::engine::kUnscopedRecordRequest;
+using exosnap::engine::PackSplitRequest;
 using exosnap::engine::PendingStopTracker;
 using exosnap::engine::ResetStopRequestedForNewSession;
 using exosnap::engine::SessionState;
+using exosnap::engine::SplitRequestState;
+using exosnap::engine::UnpackSplitRequest;
 
 // ---------------------------------------------------------------------------
 // ResetStopRequestedForNewSession — pure application of a consumed pre_stop
@@ -224,13 +228,19 @@ TEST(SessionStateReuse, ResetsTheRecordedFailure) {
 TEST(SessionStateReuse, ResetsPauseAndSplitState) {
     SessionState state;
     state.pause_requested.store(true);
-    state.split_request_seq.store(3);
+    state.split_request.store(PackSplitRequest({/*sequence=*/3, /*primary_trigger=*/2, /*coalesced=*/0x5}));
     state.size_split_armed.store(true);
 
     state.ResetForNewRecording();
 
     EXPECT_FALSE(state.pause_requested.load());
-    EXPECT_EQ(state.split_request_seq.load(), 0u);
+    // The whole word, not just the sequence: a reset that cleared the sequence
+    // and left a stale trigger or coalesce mask would have the next recording's
+    // first split report the previous recording's reason.
+    EXPECT_EQ(state.split_request.load(), 0u);
+    const SplitRequestState after = UnpackSplitRequest(state.split_request.load());
+    EXPECT_EQ(after.sequence, 0u);
+    EXPECT_EQ(after.coalesced_triggers, 0u);
     EXPECT_FALSE(state.size_split_armed.load());
 }
 

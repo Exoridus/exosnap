@@ -68,3 +68,119 @@ TEST(StartHoldBudget, RetryDelayClampedToRemainingWindow) {
 }
 
 } // namespace
+
+// ---- the overall bound the two windows above do not have between them ----
+//
+// The first-frame deadline restarts after every successful reopen, and the hold
+// budget restarts on every entry into a hold. Each window is bounded; their
+// alternation is not. A display that reopens and immediately loses access again
+// keeps both windows young for as long as it cares to. The overall clock is
+// measured from the first attempt and nothing resets it.
+
+namespace {
+
+constexpr double kOverall = std::chrono::duration<double>(kFirstFrameOverallBudget).count();
+
+TEST(FirstFrameOverallBudget, OrdinaryWaitIsUnaffected) {
+    EXPECT_EQ(FirstFrameWaitStepBounded(false, 2.0, kTimeout, 2.0, kOverall), FirstFrameWaitAction::KeepWaiting);
+    EXPECT_EQ(FirstFrameWaitStepBounded(false, 5.1, kTimeout, 5.1, kOverall), FirstFrameWaitAction::TimeoutFail);
+    EXPECT_EQ(FirstFrameWaitStepBounded(true, 12.0, kTimeout, 12.0, kOverall), FirstFrameWaitAction::HoldStep);
+}
+
+TEST(FirstFrameOverallBudget, ASingleRecoveredHoldFits) {
+    // One fullscreen switch: 14 s of hold, reopen succeeds, the frame arrives 4 s
+    // later. Both windows were honoured and the overall bound was not reached.
+    EXPECT_EQ(FirstFrameWaitStepBounded(false, 4.0, kTimeout, 18.0, kOverall), FirstFrameWaitAction::KeepWaiting);
+}
+
+TEST(FirstFrameOverallBudget, TheOverallBoundIsNotSuspendedByAHold) {
+    // This is the defect. While holding, the 5 s guard is suspended by design --
+    // and with it, before this, every bound there was. The overall bound has to
+    // end a hold that has gone on long enough, whatever the hold's own budget says.
+    EXPECT_EQ(FirstFrameWaitStepBounded(true, 0.0, kTimeout, kOverall + 0.1, kOverall),
+              FirstFrameWaitAction::TimeoutFail);
+}
+
+TEST(FirstFrameOverallBudget, AFreshDeadlineDoesNotEscapeTheOverallBound) {
+    // Just reopened: the first-frame window is brand new. The overall clock is not.
+    EXPECT_EQ(FirstFrameWaitStepBounded(false, 0.1, kTimeout, kOverall + 0.1, kOverall),
+              FirstFrameWaitAction::TimeoutFail);
+}
+
+TEST(FirstFrameOverallBudget, AlternatingReopenAndLossTerminates) {
+    // The scenario itself, driven by a fake clock. Every cycle: a hold that
+    // almost exhausts its budget, a reopen that succeeds, a fresh first-frame
+    // window, and an ACCESS_LOST before a frame arrives. Each window is honoured
+    // on its own terms; only the overall bound can end the sequence.
+    double overall = 0.0;
+    int cycles = 0;
+    for (;;) {
+        // Hold phase: the per-hold budget is never exceeded, so DecideOdReopen
+        // would keep retrying and then Continue -- unless the overall bound fires.
+        const double holdSeconds = std::chrono::duration<double>(kOdStartHoldBudget).count() - 0.5;
+        overall += holdSeconds;
+        if (FirstFrameWaitStepBounded(true, 0.0, kTimeout, overall, kOverall) == FirstFrameWaitAction::TimeoutFail)
+            break;
+        // Reopen succeeded: fresh first-frame window, then the display is lost
+        // again 1 s in, before the 5 s guard could have fired.
+        overall += 1.0;
+        if (FirstFrameWaitStepBounded(false, 1.0, kTimeout, overall, kOverall) == FirstFrameWaitAction::TimeoutFail)
+            break;
+        ++cycles;
+        ASSERT_LT(cycles, 1000) << "the start never terminated against a display that alternates reopen and loss";
+    }
+    EXPECT_GE(cycles, 1) << "one recovered hold must be allowed before the overall bound ends the start";
+    EXPECT_LE(cycles, 2) << "the overall bound must end the start within a few cycles";
+    EXPECT_LE(overall, kOverall + std::chrono::duration<double>(kOdStartHoldBudget).count())
+        << "the start overran the overall budget by more than one hold window";
+}
+
+TEST(FirstFrameOverallBudget, TheOverallBudgetExceedsTwoHoldsAndAGuard) {
+    // The constant's stated reasoning, held by a test: a start that recovers once
+    // needs a hold, a guard and some slack; a start that needs two full holds
+    // is a display that is not settling.
+    const double hold = std::chrono::duration<double>(kOdStartHoldBudget).count();
+    EXPECT_GT(kOverall, hold + kTimeout);
+    EXPECT_GT(kOverall, 2.0 * hold);
+    EXPECT_LT(kOverall, 3.0 * hold);
+}
+
+} // namespace
+
+// ---- which monitor the mid-session HDR guard asks about ----
+//
+// The guard held the HMONITOR from session start. A reopen after a hot-plug or an
+// EDID renegotiation resolves the output by device name and returns a NEW handle,
+// so every query against the old one failed, each failure read as "HDR is
+// unchanged", and the guard stopped guarding for the rest of the recording.
+
+namespace {
+
+// Handles, not dereferenced -- only compared.
+HMONITOR AtOpen() {
+    return reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(0x1000));
+}
+HMONITOR AfterReopen() {
+    return reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(0x2000));
+}
+
+TEST(HdrGuardMonitor, AnOdSessionFollowsTheLiveDuplication) {
+    EXPECT_EQ(ResolveHdrGuardMonitor(/*use_od_capture=*/true, AfterReopen(), AtOpen()), AfterReopen());
+}
+
+TEST(HdrGuardMonitor, AnOdSessionOnItsOriginalMonitorIsUnaffected) {
+    EXPECT_EQ(ResolveHdrGuardMonitor(true, AtOpen(), AtOpen()), AtOpen());
+}
+
+TEST(HdrGuardMonitor, AClosedOdSourceFallsBackToTheSessionMonitor) {
+    // Mid-hold there is no live duplication. The session handle is the only one
+    // there is; a failed query on it does not conclude a stop either way.
+    EXPECT_EQ(ResolveHdrGuardMonitor(true, nullptr, AtOpen()), AtOpen());
+}
+
+TEST(HdrGuardMonitor, AWgcSessionKeepsItsFixedTarget) {
+    // Documented behaviour: moving a captured window does not move the HDR target.
+    EXPECT_EQ(ResolveHdrGuardMonitor(/*use_od_capture=*/false, AfterReopen(), AtOpen()), AtOpen());
+}
+
+} // namespace

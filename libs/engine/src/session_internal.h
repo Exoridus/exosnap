@@ -13,6 +13,7 @@
 #include <exosnap/engine/webcam_placement.h>
 
 #include "pipeline_diagnostics_aggregator.h"
+#include "qpc_100ns.h"
 
 #include <algorithm>
 #include <array>
@@ -219,11 +220,12 @@ struct SessionState {
     // Split recording coordination (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1)
     // ---------------------------------------------------------------------------
     //
-    // A manual split is requested by incrementing split_request_seq (monotone).
+    // A manual split is requested by advancing split_request's sequence (monotone).
     // VideoThread tracks the last value it has acted upon; a higher value means a
     // new manual split is pending. Coalescing falls out naturally: many requests
     // before the boundary is reached collapse to one observed delta. The trigger
-    // of the most recent request is recorded for structured logging only.
+    // request that caused a boundary is recorded with it, together with a mask of
+    // every trigger that coalesced into the same boundary.
     //
     // VideoThread owns the actual boundary decision (it owns the media timeline
     // via encoded-frame PTS and the forced-IDR arming point) for BOTH manual and
@@ -233,13 +235,16 @@ struct SessionState {
     //
     // Size-based splits (SPLIT-BY-SIZE-R1): the mux thread monitors bytes_written()
     // on the active segment writer. When it exceeds the configured size threshold it
-    // bumps split_request_seq (setting split_last_trigger to AutomaticSize) via the
+    // bumps split_request with trigger AutomaticSize via the
     // same path as a manual request, so VideoThread arms the keyframe and the normal
     // SplitSentinel rollover fires. size_split_armed prevents repeated bumps for the
     // same segment overage; the mux thread resets it when begin_new_segment runs.
-    std::atomic<uint64_t> split_request_seq{0};
-    std::atomic<uint32_t> split_last_trigger{0}; // SplitTriggerSource of latest request
-    std::atomic<bool> size_split_armed{false};   // mux has requested a size split; reset on transition
+    // Sequence and trigger in ONE word (split_sentinel_policy.h: PackSplitRequest).
+    // They were separate atomics read in separate loads, so a request landing
+    // between the two reads made the consumer attribute a sequence to the next
+    // request's trigger -- a manual split logged as an automatic size split.
+    std::atomic<uint64_t> split_request{0};
+    std::atomic<bool> size_split_armed{false}; // mux has requested a size split; reset on transition
 
     // Cumulative bytes committed by the active segment's Matroska writer, published
     // by the mux thread (streaming loop AND during the blocking Finalize()). The
@@ -506,16 +511,35 @@ struct SessionState {
         webcam_overlay = overlay;
     }
 
-    void UpdateWebcamOverlay(WebcamOverlayLive overlay) {
+    // The sequence and the read-back happen under the same lock as the store, so
+    // a caller's acknowledgement describes the state that was actually installed
+    // and not one a concurrent update replaced in between.
+    AppliedWebcamOverlay UpdateWebcamOverlay(WebcamOverlayLive overlay) {
         overlay = SanitizeWebcamOverlay(overlay);
-        std::lock_guard lk(webcam_overlay_mutex);
-        webcam_overlay = overlay;
+        AppliedWebcamOverlay result;
+        {
+            std::lock_guard lk(webcam_overlay_mutex);
+            webcam_overlay = overlay;
+            result.sequence = ++webcam_overlay_sequence;
+            result.applied = webcam_overlay;
+        }
+        LARGE_INTEGER counter{};
+        LARGE_INTEGER frequency{};
+        if (QueryPerformanceCounter(&counter) != 0 && QueryPerformanceFrequency(&frequency) != 0 &&
+            frequency.QuadPart != 0) {
+            result.applied_qpc_100ns =
+                QpcTicksTo100ns(static_cast<uint64_t>(counter.QuadPart), static_cast<uint64_t>(frequency.QuadPart));
+        }
+        return result;
     }
 
     [[nodiscard]] WebcamOverlayLive SnapshotWebcamOverlay() const {
         std::lock_guard lk(webcam_overlay_mutex);
         return webcam_overlay;
     }
+
+    // Guarded by webcam_overlay_mutex; advanced only by a completed store.
+    uint64_t webcam_overlay_sequence = 0;
 
     // Clear everything the PREVIOUS recording left behind, so a session object
     // reused by the next Record() call starts indistinguishable from a fresh one.
@@ -554,8 +578,7 @@ struct SessionState {
         // Time the LAST session spent paused would otherwise be subtracted from
         // this one's elapsed time, reporting a recording shorter than the file.
         paused_ns.store(0, std::memory_order_relaxed);
-        split_request_seq.store(0);
-        split_last_trigger.store(static_cast<uint32_t>(SplitTriggerSource::ManualButton));
+        split_request.store(0);
         // An "armed but unconsumed" size split from a session that ended before
         // the mux's begin_new_segment reset it must not suppress the first
         // size-based split of the next recording.

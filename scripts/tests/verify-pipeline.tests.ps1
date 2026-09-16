@@ -413,13 +413,75 @@ Test-Case 'a QML failure with no diagnosis says so out loud' {
         'a failure with no diagnosis must be reported as such, not left looking complete'
 }
 
+# What a configured tree registers, as Get-CTestRegistration reads it. Three
+# runners carry the quicktest label; the smoke entry is an ordinary executable.
+$fakeRegistration = @{
+    'quick.qml.record_controls'      = [pscustomobject]@{
+        FilePath = 'C:/build/Debug/record_controls_qml_tests.exe'; Labels = @('quick', 'quicktest', 'phase.desktop') }
+    'quick.qml.edit_timeline'        = [pscustomobject]@{
+        FilePath = 'C:/build/edit_timeline_qml_tests.exe'; Labels = @('quick', 'quicktest', 'phase.desktop') }
+    'quick.qml.record_source_picker' = [pscustomobject]@{
+        FilePath = 'C:/build/record_source_picker_qml_tests.exe'; Labels = @('quick', 'quicktest', 'phase.desktop') }
+    'quick.qml.about_smoke'          = [pscustomobject]@{
+        FilePath = 'C:/build/exosnap.exe'; Labels = @('quick', 'phase.desktop') }
+    'engine.muxer'                   = [pscustomobject]@{
+        FilePath = 'C:/build/engine_tests.exe'; Labels = @('engine', 'phase.hermetic') }
+}
+
 Test-Case 'the QuickTest re-run asks for a text report' {
     $commands = Resolve-QmlDiagnosticCommand -BuildDir 'build/windows-x64-debug' -LogDirectory 'C:/logs' `
-        -FailedTestNames @('quick.qml.record_controls')
+        -FailedTestNames @('quick.qml.record_controls') -Registration $fakeRegistration
     Assert-Equal 1 $commands.Count 'the known QuickTest runner must be re-run'
     Assert-Equal 'record_controls_qml_tests' $commands[0].Executable 'the ctest name must map to its binary'
     Assert-True (($commands[0].Arguments -join ' ') -match '^-o .*,txt$') `
         'the re-run must request a txt report; without it a QuickTest failure is only an exit code'
+}
+
+Test-Case 'every registered QuickTest runner is re-run, not only the ones a list once knew' {
+    # A list of two runners kept in the pipeline missed the third one that was
+    # registered later. The registration is the only place that knows.
+    $commands = Resolve-QmlDiagnosticCommand -BuildDir 'build/x' -LogDirectory 'C:/logs' `
+        -FailedTestNames @('quick.qml.record_source_picker', 'quick.qml.edit_timeline') -Registration $fakeRegistration
+    Assert-Equal 2 $commands.Count 'both registered runners must be re-run'
+    Assert-True (@($commands.Executable) -contains 'record_source_picker_qml_tests') `
+        'the runner that was never on the old list must be found through its label'
+}
+
+Test-Case 'without a registration nothing is re-run and nothing is guessed' {
+    $commands = Resolve-QmlDiagnosticCommand -BuildDir 'build/x' -LogDirectory 'C:/logs' `
+        -FailedTestNames @('quick.qml.record_controls') -Registration @{}
+    Assert-Equal 0 $commands.Count 'a composed path to a runner that may not exist is not a diagnosis'
+}
+
+Test-Case 'the registration reads labels from the CTest json, not only the command' {
+    # Shape of `ctest --show-only=json-v1`, reduced to what the reader needs.
+    $dir = Join-Path ([IO.Path]::GetTempPath()) "verify-tests/$([guid]::NewGuid().ToString('n'))"
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    try {
+        # Only the json shape is under test here, so the ctest call is replaced
+        # by a global function of the same name for the duration of the case;
+        # the module resolves commands through the global scope, not the caller's.
+        Set-Content -LiteralPath (Join-Path $dir 'CTestTestfile.cmake') -Value '# configured'
+        function global:ctest {
+            '{"tests":[' +
+            '{"name":"quick.qml.edit_timeline","command":["C:/b/edit_timeline_qml_tests.exe"],' +
+            '"properties":[{"name":"LABELS","value":["quick","quicktest"]},{"name":"TIMEOUT","value":120}]},' +
+            '{"name":"quick.qml.about_smoke","command":["C:/b/exosnap.exe","--smoke-test"],' +
+            '"properties":[{"name":"LABELS","value":["quick"]}]},' +
+            '{"name":"pipeline.no_props","command":["C:/b/x.exe"]}' +
+            ']}'
+        }
+        $registration = Get-CTestRegistration -BuildDir $dir
+        Assert-Equal 3 $registration.Count 'every registered test with a command must be read'
+        Assert-True (@($registration['quick.qml.edit_timeline'].Labels) -contains 'quicktest') 'the label must be read'
+        Assert-True (@($registration['quick.qml.about_smoke'].Labels) -notcontains 'quicktest') 'labels must not leak between tests'
+        Assert-Equal 0 (@($registration['pipeline.no_props'].Labels)).Count 'a test without properties has no labels, not an error'
+        Assert-Equal 'C:/b/edit_timeline_qml_tests.exe' $registration['quick.qml.edit_timeline'].FilePath 'the command is the registered executable'
+    }
+    finally {
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path 'function:global:ctest' -ErrorAction SilentlyContinue
+    }
 }
 
 Test-Case 'the failing test names are read through the summary log pointer' {
@@ -453,28 +515,83 @@ Test-Case 'a raw ctest log still parses without a pointer' {
     Assert-Equal 'engine.muxer' (Get-FailedCTestName -LogPath $path)[0] 'a direct ctest log must still parse'
 }
 
-Test-Case 'an unconfigured build directory yields no registered commands' {
-    # The fallback path matters more than the lookup: a tree that was never
-    # configured must not make the resolver throw on the way to reporting a
-    # failure.
-    $paths = Get-CTestCommandPath -BuildDir (Join-Path ([IO.Path]::GetTempPath()) "verify-tests/$([guid]::NewGuid().ToString('n'))")
-    Assert-Equal 0 $paths.Count 'an unconfigured directory registers nothing'
+Test-Case 'an unconfigured build directory yields no registration' {
+    # A tree that was never configured must not make the resolver throw on the
+    # way to reporting a failure.
+    $registration = Get-CTestRegistration -BuildDir (Join-Path ([IO.Path]::GetTempPath()) "verify-tests/$([guid]::NewGuid().ToString('n'))")
+    Assert-Equal 0 $registration.Count 'an unconfigured directory registers nothing'
 }
 
-Test-Case 'the re-run targets an executable, however the generator laid it out' {
+Test-Case 'the re-run targets the executable CTest registered, wherever the generator put it' {
     $commands = Resolve-QmlDiagnosticCommand -BuildDir 'build/windows-x64-ninja-debug' -LogDirectory 'C:/logs' `
-        -FailedTestNames @('quick.qml.record_controls')
+        -FailedTestNames @('quick.qml.record_controls') -Registration $fakeRegistration
     Assert-Equal 1 $commands.Count 'the known QuickTest runner must be re-run'
-    Assert-True ($commands[0].FilePath -match '(?i)record_controls_qml_tests\.exe$') `
-        "the command must point at the runner binary, not at a directory (got '$($commands[0].FilePath)')"
+    Assert-Equal 'C:/build/Debug/record_controls_qml_tests.exe' $commands[0].FilePath `
+        'the command must be the registered path, not one composed from the build directory'
 }
 
 Test-Case 'a non-QuickTest failure is not re-run with QuickTest flags' {
     # exosnap --smoke-test is registered as a ctest test but is not a QuickTest
     # binary, and does not understand -o.
     $commands = Resolve-QmlDiagnosticCommand -BuildDir 'build/x' -LogDirectory 'C:/logs' `
-        -FailedTestNames @('quick.qml.about_smoke', 'engine.muxer')
+        -FailedTestNames @('quick.qml.about_smoke', 'engine.muxer') -Registration $fakeRegistration
     Assert-Equal 0 $commands.Count 'only real QuickTest runners may be re-run with -o'
+}
+
+Write-Host ''
+Write-Host 'Build failures name their cause'
+
+Test-Case 'the first compiler error is found above the cascade' {
+    $path = Join-Path ([IO.Path]::GetTempPath()) "verify-tests/$([guid]::NewGuid().ToString('n')).log"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+    try {
+        Set-Content -LiteralPath $path -Encoding utf8 -Value @(
+            '[12/300] Building CXX object libs/engine/error_reporting.cpp.obj',
+            'C:\src\libs\engine\src\muxer.cpp(41): error C2065: ''frame'': undeclared identifier',
+            '[13/300] Building CXX object app/main.cpp.obj',
+            'C:\src\libs\engine\src\muxer.cpp(42): error C2228: left of ''.pts'' must have class/struct/union',
+            'ninja: build stopped: subcommand failed.')
+        $first = Get-FirstBuildError -LogPath $path
+        Assert-True ($first -match 'C2065') "the first error must be the cause, not the cascade (got '$first')"
+        Assert-True ($first -notmatch 'error_reporting') 'a file name containing "error" is not an error line'
+    }
+    finally { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'linker, CMake and ninja errors are found too' {
+    $path = Join-Path ([IO.Path]::GetTempPath()) "verify-tests/$([guid]::NewGuid().ToString('n')).log"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+    try {
+        foreach ($line in @(
+                'muxer.obj : error LNK2019: unresolved external symbol',
+                'CMake Error at CMakeLists.txt:12 (find_package):',
+                'ninja: error: loading ''build.ninja'': No such file or directory',
+                'C:/src/tools/x.c:12:3: error: expected '';''')) {
+            Set-Content -LiteralPath $path -Encoding utf8 -Value @('[1/2] progress', $line)
+            Assert-Equal $line (Get-FirstBuildError -LogPath $path) "must be recognised: $line"
+        }
+        Set-Content -LiteralPath $path -Encoding utf8 -Value @('[1/2] progress', '[2/2] Linking')
+        Assert-True ($null -eq (Get-FirstBuildError -LogPath $path)) 'a clean log has no first error'
+    }
+    finally { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'the final verdict lists the log and diagnosis of every failed check' {
+    $plan = New-VerifyPlan -Mode 'Full' -Scope (Get-VerifyScope -ChangedFiles @())
+    $executor = {
+        param($check, $context)
+        if ($check.Name -eq 'tests') {
+            return @{ Status = 'FAIL'; Detail = 'exit 8'; Evidence = @{ log = 'C:/logs/tests.log' } }
+        }
+        return @{ Status = 'PASS' }
+    }
+    $provider = { param($check, $outcome) @('C:/logs/record_controls_qml_tests.txt') }
+    $run = Invoke-VerifyPlan -Plan $plan -Executor $executor -DiagnosticProvider $provider
+    $report = @(New-VerifyFailureReport -Run $run) -join "`n"
+    Assert-True ($report -match 'tests:') 'the failed check must be named'
+    Assert-True ($report -match 'log: C:/logs/tests\.log') 'the step log must be listed at the end, not only when it scrolled by'
+    Assert-True ($report -match 'diagnosis: C:/logs/record_controls_qml_tests\.txt') 'the produced diagnosis must be listed'
+    Assert-True ($report -notmatch 'build') 'a passing check has no evidence to open'
 }
 
 Write-Host ''

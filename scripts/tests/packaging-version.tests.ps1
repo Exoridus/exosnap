@@ -57,7 +57,7 @@ function New-FixtureRoot {
     New-Item -ItemType Directory -Path (Join-Path $root 'scripts') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $root 'packaging') -Force | Out-Null
     foreach ($name in @('check-packaging-version.ps1', 'validate-chocolatey-package.ps1',
-            'validate-winget-manifest.ps1', 'validate-scoop-manifest.ps1')) {
+            'validate-winget-manifest.ps1', 'validate-scoop-manifest.ps1', 'bump-version.ps1')) {
         Copy-Item -LiteralPath (Join-Path $scriptRoot $name) -Destination (Join-Path $root 'scripts') -Force
     }
     foreach ($name in @('chocolatey', 'winget', 'scoop')) {
@@ -159,6 +159,71 @@ Test-Drift -Name 'a Scoop extract_dir left behind fails the gate' `
     -Relative 'packaging/scoop/exosnap.json' `
     -Pattern "(?m)(`"extract_dir`":\s*`"ExoSnap-)$([Regex]::Escape($script:Version))" `
     -Replacement "`${1}$script:Other" -ExpectedText 'extract_dir'
+
+function Invoke-Bump {
+    param([string] $Root, [string] $Version)
+    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $Root 'scripts/bump-version.ps1') `
+        -Version $Version -RepoRoot $Root 2>&1 | Out-String
+    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+}
+
+Write-Host ''
+Write-Host 'bump-version.ps1'
+
+Test-Case 'a bump moves every literal the gate checks, and the gate agrees' {
+    # The gate and the bump are two halves of one contract: whatever the gate
+    # compares, the bump has to have moved. Running the gate on the bumped tree is
+    # the only check that stays true when a literal is added to either side.
+    $root = New-FixtureRoot
+    $result = Invoke-Bump -Root $root -Version $script:Other
+    Assert-True ($result.ExitCode -eq 0) "the bumped tree must pass the gate: $($result.Output)"
+    Assert-True ((Get-Content -LiteralPath (Join-Path $root 'CMakeLists.txt') -Raw) -match "VERSION $([Regex]::Escape($script:Other))") `
+        'the CMake version must be the new one'
+    Assert-True (Test-Path -LiteralPath (Join-Path $root "packaging/winget/manifests/c/Codexo/ExoSnap/$script:Other") -PathType Container) `
+        'the WinGet version directory must be the new one'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $root "packaging/winget/manifests/c/Codexo/ExoSnap/$script:Version"))) `
+        'the old WinGet directory must be gone, not copied: WinGet keys a submission on it'
+    foreach ($relative in @('packaging/chocolatey/exosnap.nuspec',
+            'packaging/chocolatey/tools/chocolateyinstall.ps1',
+            'packaging/scoop/exosnap.json')) {
+        $text = Get-Content -LiteralPath (Join-Path $root $relative) -Raw
+        Assert-True ($text -notmatch "(?<![0-9.])$([Regex]::Escape($script:Version))(?![0-9.])") `
+            "$relative still names the old version"
+    }
+}
+
+Test-Case 'a bump resets the values only a release can produce' {
+    # An installer hash that survives a bump describes the previous release's bytes.
+    # The full validators refuse the placeholders, which is what stops a bumped tree
+    # from being submitted by accident.
+    $root = New-FixtureRoot
+    Invoke-Bump -Root $root -Version $script:Other | Out-Null
+    $choco = Get-Content -LiteralPath (Join-Path $root 'packaging/chocolatey/tools/chocolateyinstall.ps1') -Raw
+    Assert-True ($choco -match "checksum64\s*=\s*'0{64}'") 'checksum64 must be reset to the placeholder'
+    $scoop = Get-Content -LiteralPath (Join-Path $root 'packaging/scoop/exosnap.json') -Raw
+    Assert-True ($scoop -match '"hash":\s*"0{64}"') 'the Scoop hash must be reset'
+    $installer = Get-Content -LiteralPath (Join-Path $root "packaging/winget/manifests/c/Codexo/ExoSnap/$script:Other/Codexo.ExoSnap.installer.yaml") -Raw
+    Assert-True ($installer -match "InstallerSha256:\s*'0{64}'") 'InstallerSha256 must be reset'
+    Assert-True ($installer -notmatch "ProductCode:\s*'\{[0-9A-Fa-f]*[1-9A-Fa-f][0-9A-Fa-f-]*\}'") `
+        'every ProductCode must be reset: WiX generates a new one for every MSI build'
+}
+
+Test-Case 'a bump to a prerelease identity is refused' {
+    $root = New-FixtureRoot
+    $result = Invoke-Bump -Root $root -Version "$script:Other-rc1"
+    Assert-True ($result.ExitCode -ne 0) 'a prerelease suffix is a release identity, not a product version'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $root 'CMakeLists.txt') -Raw) -match [Regex]::Escape($script:Version)) `
+        'a refused bump must not have edited anything'
+}
+
+Test-Case 'a bump to the version already declared changes nothing' {
+    $root = New-FixtureRoot
+    $before = Get-Content -LiteralPath (Join-Path $root 'packaging/scoop/exosnap.json') -Raw
+    $result = Invoke-Bump -Root $root -Version $script:Version
+    Assert-True ($result.ExitCode -eq 0) "a no-op bump must succeed: $($result.Output)"
+    Assert-True ($before -eq (Get-Content -LiteralPath (Join-Path $root 'packaging/scoop/exosnap.json') -Raw)) `
+        'a no-op bump must not reset the hashes of the release that is already there'
+}
 
 Test-Case 'a second WinGet version directory is refused rather than guessed at' {
     # WinGet keys a submission on the directory. Two of them means the bump copied

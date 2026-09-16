@@ -4,6 +4,7 @@
 
 #include <exosnap/engine/cursor_sprite.h>
 #include <exosnap/engine/gpu_hdr_tonemap.h>
+#include <exosnap/engine/preview_shared_texture.h>
 #include <exosnap/engine/webcam_placement.h>
 
 #include <QMetaObject>
@@ -259,7 +260,21 @@ bool drawCursor(exosnap::engine::GpuCompositor& compositor, const ReadyFrameSour
                     static_cast<size_t>(clip.w) * 4);
     }
     const exosnap::engine::WebcamPixelRect rect{clip.x, clip.y, clip.w, clip.h};
-    return compositor.DrawCursor(clipped.data(), clip.w, clip.h, rect, error);
+    if (!compositor.DrawCursor(clipped.data(), clip.w, clip.h, rect, error))
+        return false;
+    // The preview draws the same pixels the encoder writes, so a mask cursor's
+    // inverting plane belongs here too: without it the pointer the user checks
+    // their framing against is missing exactly the cursors the recording shows.
+    if (bitmap.invert.empty())
+        return true;
+    std::vector<uint8_t> clipped_invert(static_cast<size_t>(clip.w) * clip.h * 4);
+    for (int32_t row = 0; row < clip.h; ++row) {
+        const size_t source_offset =
+            (static_cast<size_t>(clip.bitmap_off_y + row) * bitmap.width + clip.bitmap_off_x) * 4;
+        std::memcpy(clipped_invert.data() + static_cast<size_t>(row) * clip.w * 4, bitmap.invert.data() + source_offset,
+                    static_cast<size_t>(clip.w) * 4);
+    }
+    return compositor.DrawCursorInvert(clipped_invert.data(), clip.w, clip.h, rect, error);
 }
 
 bool readback(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* source, uint32_t width,
@@ -322,7 +337,7 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
 
     ComPtr<IDXGIKeyedMutex> keyed_mutex;
     result = shared.As(&keyed_mutex);
-    if (FAILED(result) || keyed_mutex->AcquireSync(1, 500) != S_OK) {
+    if (FAILED(result) || keyed_mutex->AcquireSync(exosnap::engine::kPreviewSharedConsumerKey, 500) != S_OK) {
         fail("Ready preview frame was busy");
         return;
     }
@@ -337,7 +352,7 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
     result = device->CreateTexture2D(&local_desc, nullptr, local.GetAddressOf());
     if (SUCCEEDED(result))
         context->CopyResource(local.Get(), shared.Get());
-    keyed_mutex->ReleaseSync(0);
+    keyed_mutex->ReleaseSync(exosnap::engine::kPreviewSharedProducerKey);
     if (FAILED(result)) {
         setError(error, "CreateTexture2D(Ready frame local)", result);
         fail(std::move(error));

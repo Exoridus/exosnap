@@ -202,6 +202,19 @@ Repository specifics:
   runs it. Its default scope is the work in front of you. The branch-wide sweep
   (`check-source-hygiene.ps1 -All`) currently reports a backlog in older comments.
 
+## Commits, changelog and prose
+
+`CONTRIBUTING.md` is authoritative; the three rules an agent trips over most:
+
+- A commit is its Conventional Commits subject, `type(scope): summary`, with `!` for a breaking
+  change. The squash merge appends the pull request number, so a local commit does not carry one.
+  The reasoning goes in the pull request description, not in a commit body.
+- `CHANGELOG.md` is never edited on a branch. `scripts/new-changelog.ps1` assembles it at the
+  release cut from the merged subjects, and `scripts/check-commit-policy.ps1` fails a branch that
+  writes it.
+- Prose is written in long lines, broken where a paragraph ends rather than at a column. This
+  applies to new and changed text, not as a sweep of what is already there.
+
 ## Iteration
 
 - A normal slice targets one subsystem and 30-60 minutes. Do not broaden scope

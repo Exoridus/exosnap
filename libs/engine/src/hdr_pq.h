@@ -84,19 +84,13 @@ inline float PqEotf(float signal) {
 }
 
 // scRGB linear channel value (1.0 = reference white = 80 cd/m^2) -> normalised
-// PQ input in [0, 1] (fraction of the 10 000-nit ceiling). Negatives (wide-gamut
-// scRGB can go slightly negative) clamp to 0; values above 10 000 nits clamp to
-// 1.0 (PQ passthrough, no roll-off).
+// PQ input (fraction of the 10 000-nit ceiling). Deliberately NOT clamped:
+// scRGB carries wide-gamut colour as negative BT.709 components, and those
+// negatives are what Bt709ToBt2020 needs to land the colour inside the BT.2020
+// gamut. Clamping per channel before the matrix desaturates every wide-gamut
+// colour. PqOetf clamps its input after the matrix, which is the right place.
 inline float ScrgbToPqNormalized(float scrgb_linear) {
-    float nits = scrgb_linear * kHdrReferenceWhiteNits;
-    if (nits < 0.0f) {
-        nits = 0.0f;
-    }
-    float l = nits / kPqPeakNits;
-    if (l > 1.0f) {
-        l = 1.0f;
-    }
-    return l;
+    return scrgb_linear * kHdrReferenceWhiteNits / kPqPeakNits;
 }
 
 struct LinearRgb {

@@ -40,15 +40,31 @@ enum class MissingCaptureCause {
     return stopped_before_start ? MissingCaptureCause::StoppedBeforeCapture : MissingCaptureCause::NoFramesDelivered;
 }
 
-// Name of the backend a target kind records with, for the message below.
-[[nodiscard]] inline const char* CaptureBackendName(CaptureTarget::Kind kind) noexcept {
-    return kind == CaptureTarget::Kind::Monitor ? "DXGI desktop duplication" : "Windows Graphics Capture";
+// The backend that actually ran, spelled for a user-facing message.
+//
+// The log and report spellings live in recorder_session.h (CaptureBackendName,
+// CaptureBackendReportName); this is the third audience and the only one that
+// reads as prose.
+//
+// All three take the RESOLVED backend, never the target kind. A monitor is
+// recorded with DXGI duplication by default and with Windows Graphics Capture
+// when the session asked for it, so "kind == Monitor" has not meant "DXGI" since
+// the backend became selectable -- and a WGC monitor capture that delivered no
+// frames was reported as a DXGI duplication fault, sending the reader to the
+// wrong backend's diagnostics.
+[[nodiscard]] inline const char* CaptureBackendProseName(EffectiveCaptureBackend backend) noexcept {
+    return backend == EffectiveCaptureBackend::DxgiOutputDuplication ? "DXGI desktop duplication"
+                                                                     : "Windows Graphics Capture";
 }
 
 // Writes the cause into `result`. A no-op for MissingCaptureCause::None, so the
 // caller can apply it unconditionally.
+//
+// `backend` is the resolved backend (ResolveCaptureBackend), which the caller
+// already has; it is a separate parameter from the target kind on purpose, so
+// the two cannot be confused for each other again.
 inline void ApplyMissingCaptureOutcome(RecorderResult& result, MissingCaptureCause cause,
-                                       CaptureTarget::Kind target_kind) {
+                                       EffectiveCaptureBackend backend) {
     switch (cause) {
     case MissingCaptureCause::None:
         return;
@@ -63,7 +79,7 @@ inline void ApplyMissingCaptureOutcome(RecorderResult& result, MissingCaptureCau
         result.error_code = E_FAIL;
         result.error_phase = ErrorPhase::VideoCapture;
         result.error_detail = std::string("The capture delivered no frames before the recording stopped (backend: ") +
-                              CaptureBackendName(target_kind) + ").";
+                              CaptureBackendProseName(backend) + ").";
         return;
     }
 }

@@ -378,6 +378,67 @@ TEST(CaptureHubCommandQueueTest, ShutdownReleasesALeaseWaiterWithAFailure) {
     EXPECT_TRUE(queue.Stopping());
 }
 
+// ---- A service whose worker never got a device ----
+//
+// The WGC worker creates its D3D11 device as its first act and returns when that
+// fails. The service object outlives that: it still accepts Subscribe, and
+// RequestEngineLease still posts a command and waits for an acknowledgement that
+// nothing will ever publish. Each attempt paid the full lease timeout, and a
+// queue nobody drains accumulated every command posted for the rest of the
+// process -- while looking, from the outside, like a hub that was about to work.
+//
+// WorkerProc calls Shutdown() on that path; the cases below pin what Shutdown()
+// has to guarantee for that to be enough.
+
+TEST(CaptureHubCommandQueueTest, AfterShutdownALeaseWaitDoesNotBlock) {
+    CaptureHubCommandQueue<Payload> queue;
+    queue.Shutdown();
+
+    const auto started = std::chrono::steady_clock::now();
+    const uint64_t serial = queue.Post(CaptureHubOp::LeaseRequest);
+    const bool released = queue.WaitForLeaseRelease(serial, std::chrono::seconds(10));
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+
+    EXPECT_FALSE(released) << "no pump ever released anything";
+    EXPECT_LT(elapsed, std::chrono::seconds(1)) << "the wait sat out its timeout against a dead service";
+}
+
+TEST(CaptureHubCommandQueueTest, AfterShutdownCommandsAreNotQueuedForever) {
+    CaptureHubCommandQueue<Payload> queue;
+    queue.Shutdown();
+
+    for (int i = 0; i < 50; ++i) {
+        queue.Post(CaptureHubOp::Subscribe, Payload{});
+        queue.Post(CaptureHubOp::LeaseRequest);
+    }
+    EXPECT_EQ(queue.PendingCountForTest(), 0u) << "commands accumulated in a queue nothing will drain";
+}
+
+TEST(CaptureHubCommandQueueTest, SerialsStillAdvanceAfterShutdown) {
+    // A dropped command must not let a later waiter match an earlier command's
+    // acknowledgement by reusing its serial.
+    CaptureHubCommandQueue<Payload> queue;
+    const uint64_t before = queue.Post(CaptureHubOp::LeaseRequest);
+    queue.Shutdown();
+    const uint64_t after = queue.Post(CaptureHubOp::LeaseRequest);
+    EXPECT_GT(after, before);
+}
+
+TEST(CaptureHubCommandQueueTest, StoppingIsWhatAServiceChecksBeforeAcceptingWork) {
+    // Both public entry points read this: Subscribe refuses, RequestEngineLease
+    // returns without waiting. The flag has to be observable from another thread,
+    // which is where those calls come from.
+    CaptureHubCommandQueue<Payload> queue;
+    EXPECT_FALSE(queue.Stopping());
+    queue.Shutdown();
+    EXPECT_TRUE(queue.Stopping());
+
+    std::atomic<bool> seen{false};
+    std::thread reader([&] { seen = queue.Stopping(); });
+    reader.join();
+    EXPECT_TRUE(seen.load());
+}
+
 TEST(CaptureHubCommandQueueTest, APumpThreadDrainingConcurrentlyStillHonoursTheAck) {
     // The real threading shape: one poster thread standing in for the UI thread,
     // one for the record worker, and a pump draining both. The lease waiter must

@@ -1847,6 +1847,40 @@ void QuickApplication::updateMeters() {
                                 models::MeterDbfsFromRms(microphone));
 }
 
+std::optional<exosnap::engine::AppliedWebcamOverlay> QuickApplication::applyLiveWebcamOverlay(const QJsonObject& fields,
+                                                                                              QString* error) {
+    if (recording_coordinator_ == nullptr) {
+        if (error != nullptr)
+            *error = QStringLiteral("There is no recording coordinator to apply an overlay to");
+        return std::nullopt;
+    }
+
+    // Start from what is live now and change only the named fields, so a caller
+    // moving the rectangle does not silently reset the opacity it never mentioned.
+    WebcamOverlayRect overlay = live_config_.webcam.overlay;
+    const auto number = [&fields](const char* key, float current) {
+        const QJsonValue value = fields.value(QLatin1String(key));
+        return value.isDouble() ? static_cast<float>(value.toDouble()) : current;
+    };
+    overlay.x_norm = number("x", overlay.x_norm);
+    overlay.y_norm = number("y", overlay.y_norm);
+    overlay.w_norm = number("width", overlay.w_norm);
+    overlay.h_norm = number("height", overlay.h_norm);
+    live_config_.webcam.overlay = SanitizeWebcamOverlayRect(overlay);
+    live_config_.webcam.opacity = number("opacity", live_config_.webcam.opacity);
+    if (fields.value(QStringLiteral("mirror")).isBool())
+        live_config_.webcam.mirror = fields.value(QStringLiteral("mirror")).toBool();
+
+    // The production path, not a second one: the same call the drag makes.
+    const std::optional<exosnap::engine::AppliedWebcamOverlay> applied =
+        recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
+    synchronizeRecordState();
+    if (!applied.has_value() && error != nullptr) {
+        *error = QStringLiteral("No running recording accepted the overlay change");
+    }
+    return applied;
+}
+
 void QuickApplication::updateWebcamOverlay(const QRectF& normalized_rect) {
     if (!record_view_model_adapter_.webcamOverlayEditable())
         return;
@@ -1926,7 +1960,10 @@ void QuickApplication::updateMeterServices() {
 }
 
 void QuickApplication::startMeterServices() {
-    const bool visible = record_view_model_adapter_.active();
+    // Same two pages as updateMeterServices(). Reading only the Record page here
+    // let the Settings page arm the debounce and then bail out of its own timer,
+    // so the per-source rows the user was looking at stayed at silence.
+    const bool visible = record_view_model_adapter_.active() || settings_adapter_.active();
     const bool session = record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;
@@ -5415,9 +5452,20 @@ QuickApplication::captureTargetAdapterFacts(const std::optional<exosnap::engine:
     facts.known = true;
     facts.vendor_id = desc.VendorId;
     facts.adapter_name = QString::fromWCharArray(desc.Description).toStdString();
+    // The display's adapter identity. Reachability evidence is bound to this plus
+    // the encoder's, so a display change or a GPU swap stops an old verdict from
+    // being applied to a setup it was never about.
+    // PackAdapterLuid is the repository's one LUID packing, so the display's
+    // identity and the enumerated adapters' are comparable without a second
+    // convention to keep in step.
+    facts.capture_adapter_luid =
+        static_cast<uint64_t>(capability::PackAdapterLuid(desc.AdapterLuid.HighPart, desc.AdapterLuid.LowPart));
     for (const auto& info : capability::EnumerateAdapters()) {
-        if (info.vendor == capability::AdapterVendor::Nvidia)
+        if (info.vendor == capability::AdapterVendor::Nvidia) {
             facts.nvidia_adapter_present = true;
+            if (facts.encoder_adapter_luid == 0)
+                facts.encoder_adapter_luid = static_cast<uint64_t>(info.luid);
+        }
     }
     return facts;
 }

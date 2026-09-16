@@ -23,6 +23,12 @@ $ErrorActionPreference = 'Stop'
 $scriptRoot = Split-Path -Parent $PSScriptRoot
 Import-Module (Join-Path $scriptRoot 'lib/LiveVerifyState.psm1') -Force -DisableNameChecking
 . (Join-Path $scriptRoot 'lib/ReleaseQualification.ps1')
+. (Join-Path $scriptRoot 'lib/ReleaseArtifactIdentity.ps1')
+# The publish lock derives the required set from the catalog and the policy in the
+# source line, so the fixtures have to be about the real ones: a record built
+# against a two-scenario invention would be rejected for that alone, and every
+# negative case below would pass for the wrong reason.
+. (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
 
 $script:CheckScript = Join-Path $scriptRoot 'check-release-qualification.ps1'
 $script:RepositoryRoot = Split-Path -Parent $scriptRoot
@@ -67,6 +73,65 @@ function New-TestDirectory {
 # Fixtures
 # ---------------------------------------------------------------------------
 
+# Every fixture below runs `git init` in a temp directory. Under a git hook those
+# inherit GIT_DIR/GIT_INDEX_FILE from the repository being committed, and GIT_DIR
+# beats -C -- so the fixture's index would land on the REAL repository.
+$script:LeakedGitVariables = @(
+    'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_PREFIX',
+    'GIT_CEILING_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_QUARANTINE_PATH')
+
+function New-SourceLineRepo {
+    <#
+    .SYNOPSIS
+        A repository with a main branch and a side branch that never merged.
+    .OUTPUTS
+        @{ Path; OnMain; OffMain }
+    #>
+    $root = Join-Path ([IO.Path]::GetTempPath()) "release-source-line/$([guid]::NewGuid().ToString('n'))"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+
+    $saved = @{}
+    foreach ($name in $script:LeakedGitVariables) {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+        if ($null -ne $saved[$name]) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+    }
+    try {
+        & git -C $root init --initial-branch=main 2>&1 | Out-Null
+        & git -C $root config user.email 'fixture@example.invalid' 2>&1 | Out-Null
+        & git -C $root config user.name 'Fixture' 2>&1 | Out-Null
+
+        Set-Content -LiteralPath (Join-Path $root 'a.txt') -Value 'a' -Encoding utf8
+        & git -C $root add -A 2>&1 | Out-Null
+        & git -C $root commit -m 'first' 2>&1 | Out-Null
+        $onMain = (& git -C $root rev-parse HEAD).Trim()
+
+        & git -C $root checkout -b side 2>&1 | Out-Null
+        Set-Content -LiteralPath (Join-Path $root 'b.txt') -Value 'b' -Encoding utf8
+        & git -C $root add -A 2>&1 | Out-Null
+        & git -C $root commit -m 'side only' 2>&1 | Out-Null
+        $offMain = (& git -C $root rev-parse HEAD).Trim()
+
+        & git -C $root checkout main 2>&1 | Out-Null
+    }
+    finally {
+        foreach ($name in $script:LeakedGitVariables) {
+            if ($null -ne $saved[$name]) { Set-Item "Env:$name" -Value $saved[$name] }
+        }
+    }
+
+    return @{ Path = $root; OnMain = $onMain; OffMain = $offMain }
+}
+
+function New-SourceLinePolicy {
+    param([string[]] $AllowedSourceRefs = @('refs/heads/main'), [bool] $RequireAncestry = $true)
+    return [pscustomobject]@{
+        promotion = [pscustomobject]@{
+            allowedSourceRefs = [string[]]$AllowedSourceRefs
+            requireAncestry   = $RequireAncestry
+        }
+    }
+}
 # RFC 8032's own key material. A published test vector cannot be mistaken for a real
 # release key, and it makes the fixtures reproducible byte for byte.
 $script:TestSigningKey = 'nWGxne/9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A='
@@ -74,7 +139,11 @@ $script:TestPublicKey = 'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a6
 $script:OtherSigningKey = 'TM0Imyj/ltqdtsNG7BFOD1uKMZ81q6Yk2oz27U+4pvs='
 $script:OtherPublicKey = '3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c'
 
-$script:GoodCommit = '1111111111111111111111111111111111111111'
+# A real commit on a real main, because the publish lock now also asks where the
+# commit came from: a made-up SHA is on no source line at all, and every case
+# below would be refused for that instead of for the thing it is testing.
+$script:SourceRepo = New-SourceLineRepo
+$script:GoodCommit = $script:SourceRepo.OnMain
 $script:GoodRcTag = 'v0.9.1-rc1'
 $script:PortableName = 'ExoSnap-0.9.1-rc1-windows-x64-portable.zip'
 $script:PortableSha = '5cb4a6d95f01ccec747b5e903589caafa6abc79ad134d135d418db022a414ebc'
@@ -107,10 +176,33 @@ function New-TestRecord {
         one thing wrong, so a passing negative test cannot be an accident of the
         fixture.
     #>
-    param([object[]] $Checks)
+    param(
+        [object[]] $Checks,
+        [string[]] $OmitIds = @(),
+        [switch] $NoBackfill,
+        [object[]] $Catalog = @(),
+        $Policy = $null,
+        [string] $CatalogVersion = ''
+    )
 
-    if ($null -eq $Checks) {
-        $Checks = @((New-TestCheck -Id 'REL-CAP-001'), (New-TestCheck -Id 'REL-SCHEMA-001'))
+    $catalog = if ($Catalog.Count -gt 0) { $Catalog } else { Get-ReleaseScenarioCatalog }
+    $catalogVersion = if ($CatalogVersion) { $CatalogVersion }
+    elseif ($Catalog.Count -gt 0) { '1.0.0' }
+    else { Get-ReleaseScenarioCatalogVersion }
+    $activePolicy = if ($null -ne $Policy) { $Policy } else { Get-ReleaseQualificationPolicy }
+    $policyRequired = @(Get-ReleaseRequiredScenarioIds -Catalog $catalog `
+            -NamedOptIn @($activePolicy.requiredOptIn))
+
+    # Every gate the policy requires gets a PASS row unless the case asked for it
+    # to be missing, so a case that changes one thing changes exactly one thing.
+    # @($null) is a one-element array holding $null, not an empty one.
+    $Checks = @($Checks | Where-Object { $null -ne $_ })
+    if (-not $NoBackfill) {
+        $present = @($Checks | ForEach-Object { "$($_.id)" })
+        foreach ($id in $policyRequired) {
+            if ($id -in $present -or $id -in $OmitIds) { continue }
+            $Checks += (New-TestCheck -Id $id)
+        }
     }
     $record = [ordered]@{
         schema             = Get-ReleaseQualificationSchema
@@ -126,18 +218,40 @@ function New-TestRecord {
             })
         machineFingerprint = 'f' * 64
         harness            = [ordered]@{ version = '1.0.0'; commit = 'c' * 40; dirty = $false }
-        catalog            = [ordered]@{ version = '1.0.0'; digest = 'd' * 64; scenarioCount = 2 }
+        catalog            = Get-ReleaseCatalogIdentity -Catalog $catalog -Version $catalogVersion
         promotion          = Get-ReleasePromotionDeclaration -RcTag $script:GoodRcTag
         capabilities       = [ordered]@{ 'display.count' = '2' }
-        required           = [ordered]@{ ids = @($Checks | Where-Object required | ForEach-Object { $_.id }) }
+        required           = [ordered]@{
+            ids        = @($Checks | Where-Object required | ForEach-Object { $_.id })
+            namedOptIn = @($activePolicy.requiredOptIn)
+        }
         checks             = @($Checks)
     }
-    $blockers = @(Get-ReleaseQualificationBlockers -Record $record)
+    $blockers = @(Get-ReleaseQualificationBlockers -Record $record `
+            -SourceCatalog $catalog -SourceCatalogVersion $catalogVersion `
+            -Policy $activePolicy)
     $record['qualification'] = [ordered]@{
         overall = if ($blockers.Count -eq 0) { 'QUALIFIED' } else { 'NOT_QUALIFIED' }
         reasons = [string[]]$blockers
     }
     return $record
+}
+
+function New-FixturePolicy {
+    <#
+    .SYNOPSIS
+        A policy about a fixture catalog, pinned to that catalog's identity.
+    #>
+    param(
+        [Parameter(Mandatory)] [object[]] $Catalog,
+        [string] $Version = '1.0.0',
+        [string[]] $RequiredOptIn = @()
+    )
+    return [pscustomobject]@{
+        policyVersion = 1
+        catalog       = Get-ReleaseCatalogIdentity -Catalog $Catalog -Version $Version
+        requiredOptIn = [string[]]$RequiredOptIn
+    }
 }
 
 function Invoke-CheckScript {
@@ -160,8 +274,11 @@ function Invoke-CheckScript {
         [switch] $OmitSignature,
         [switch] $CorruptSignature,
         [switch] $OmitPublicKey,
-        [string] $PublicKeyHex = $script:TestPublicKey
+        [string] $PublicKeyHex = $script:TestPublicKey,
+        [string] $RepositoryPath = ''
     )
+
+    if (-not $RepositoryPath) { $RepositoryPath = $script:SourceRepo.Path }
 
     $recordPath = Join-Path $Directory 'release-verification.json'
     if (-not $OmitRecord) {
@@ -189,7 +306,8 @@ function Invoke-CheckScript {
     $output = & pwsh -NoProfile -NonInteractive -File $script:CheckScript `
         -RecordPath $recordPath -PublicKeyHex $key `
         -ExpectedCommit $ExpectedCommit -ExpectedRcTag $ExpectedRcTag `
-        -Sha256Directory $Directory -SummaryPath $summary 2>&1 | Out-String
+        -Sha256Directory $Directory -SummaryPath $summary `
+        -RepositoryPath $RepositoryPath 2>&1 | Out-String
     $code = $LASTEXITCODE
     $summaryText = if (Test-Path -LiteralPath $summary) { Get-Content -LiteralPath $summary -Raw } else { '' }
     return @{ ExitCode = $code; Output = $output; Summary = $summaryText }
@@ -252,7 +370,8 @@ Test-Case 'a record signed by a key that is not the release key blocks the relea
     $summary = Join-Path $directory 'summary.md'
     & pwsh -NoProfile -NonInteractive -File $script:CheckScript -RecordPath $recordPath `
         -PublicKeyHex $script:TestPublicKey -ExpectedCommit $script:GoodCommit `
-        -ExpectedRcTag $script:GoodRcTag -Sha256Directory $directory -SummaryPath $summary 2>&1 | Out-Null
+        -ExpectedRcTag $script:GoodRcTag -Sha256Directory $directory -SummaryPath $summary `
+        -RepositoryPath $script:SourceRepo.Path 2>&1 | Out-Null
     Assert-Equal 1 $LASTEXITCODE 'a foreign signature must block'
     Assert-Match 'DOES NOT VERIFY' (Get-Content -LiteralPath $summary -Raw) 'the reason must say the signature failed'
 }
@@ -280,7 +399,8 @@ Test-Case 'a record edited after signing blocks the release' {
     $summary = Join-Path $directory 'summary.md'
     & pwsh -NoProfile -NonInteractive -File $script:CheckScript -RecordPath $recordPath `
         -PublicKeyHex $script:TestPublicKey -ExpectedCommit $script:GoodCommit `
-        -ExpectedRcTag $script:GoodRcTag -Sha256Directory $directory -SummaryPath $summary 2>&1 | Out-Null
+        -ExpectedRcTag $script:GoodRcTag -Sha256Directory $directory -SummaryPath $summary `
+        -RepositoryPath $script:SourceRepo.Path 2>&1 | Out-Null
     Assert-Equal 1 $LASTEXITCODE 'an edited record must block'
     Assert-Match 'DOES NOT VERIFY' (Get-Content -LiteralPath $summary -Raw) 'the reason must be the signature, not the contents'
 }
@@ -319,7 +439,8 @@ Test-Case 'an unparseable record blocks the release' {
     & pwsh -NoProfile -NonInteractive -File $script:CheckScript -RecordPath $recordPath `
         -PublicKeyHex $script:TestPublicKey `
         -ExpectedCommit $script:GoodCommit -ExpectedRcTag $script:GoodRcTag `
-        -Sha256Directory $directory -SummaryPath $summary 2>&1 | Out-Null
+        -Sha256Directory $directory -SummaryPath $summary `
+        -RepositoryPath $script:SourceRepo.Path 2>&1 | Out-Null
     Assert-Equal 1 $LASTEXITCODE 'an unparseable record must block'
     Assert-Match 'could not be parsed' (Get-Content -LiteralPath $summary -Raw) 'the reason must say so'
 }
@@ -366,13 +487,186 @@ Test-Case 'a required gate reported DEFERRED blocks the release' {
     Assert-Match 'REL-UPD-MSI-DECLINE-001 is DEFERRED' $result.Summary 'the reason must name the unanswered gate'
 }
 
-Test-Case 'an opt-in gate nobody named does not block the release' {
+Test-Case 'an opt-in gate the policy does not name does not block the release' {
+    # Against a fixture catalog and a fixture policy, because the shipped policy
+    # names every opt-in scenario there is: with nothing left unnamed, this rule
+    # would be unobservable and the case would pass without exercising it.
+    $catalog = @(
+        [pscustomobject]@{ Id = 'FIX-BASE-001'; Title = 'base'; Layer = 'automated' },
+        [pscustomobject]@{ Id = 'FIX-LONG-001'; Title = 'long'; Layer = 'automated'; OptIn = $true })
+    $policy = New-FixturePolicy -Catalog $catalog
+    $record = New-TestRecord -NoBackfill -Checks @(
+        (New-TestCheck -Id 'FIX-BASE-001'),
+        (New-TestCheck -Id 'FIX-LONG-001' -State 'UNAVAILABLE' -Required $false)) `
+        -Catalog $catalog -Policy $policy
+
+    $blockers = @(Get-ReleaseQualificationBlockers -Record $record `
+            -SourceCatalog $catalog -SourceCatalogVersion '1.0.0' -Policy $policy)
+    Assert-Equal 0 $blockers.Count "an unnamed opt-in gate must not block: $($blockers -join '; ')"
+}
+
+Test-Case 'a record whose required set is smaller than the policy is refused' {
+    # The case this whole section exists for. Everything about the record is
+    # internally consistent -- every gate it calls required passed, and it says so
+    # -- and it is still not a qualification, because the policy requires a gate
+    # the record decided not to treat as required.
+    $catalog = @(
+        [pscustomobject]@{ Id = 'FIX-A-001'; Title = 'a'; Layer = 'automated' },
+        [pscustomobject]@{ Id = 'FIX-B-001'; Title = 'b'; Layer = 'automated' },
+        [pscustomobject]@{ Id = 'FIX-C-001'; Title = 'c'; Layer = 'automated' })
+    $policy = New-FixturePolicy -Catalog $catalog
+
+    $record = New-TestRecord -NoBackfill -Catalog $catalog -Policy $policy -Checks @(
+        (New-TestCheck -Id 'FIX-A-001'),
+        (New-TestCheck -Id 'FIX-B-001'))
+
+    Assert-Equal 'FIX-A-001 FIX-B-001' (@($record.required.ids) -join ' ') `
+        'the fixture must nominate exactly the two gates it ran'
+
+    $blockers = @(Get-ReleaseQualificationBlockers -Record $record `
+            -SourceCatalog $catalog -SourceCatalogVersion '1.0.0' -Policy $policy)
+    Assert-True ($blockers.Count -gt 0) 'a record that omitted a required gate must not qualify'
+    Assert-True (($blockers -join '; ') -match 'FIX-C-001') `
+        "the omitted gate must be named: $($blockers -join '; ')"
+
+    # And the control: with all three answered, the same fixture qualifies. A
+    # refusal that cannot be satisfied proves nothing about this rule.
+    $complete = New-TestRecord -NoBackfill -Catalog $catalog -Policy $policy -Checks @(
+        (New-TestCheck -Id 'FIX-A-001'),
+        (New-TestCheck -Id 'FIX-B-001'),
+        (New-TestCheck -Id 'FIX-C-001'))
+    $clean = @(Get-ReleaseQualificationBlockers -Record $complete `
+            -SourceCatalog $catalog -SourceCatalogVersion '1.0.0' -Policy $policy)
+    Assert-Equal 0 $clean.Count "the complete record must qualify: $($clean -join '; ')"
+}
+
+Test-Case 'a required gate with no verdict row at all is refused' {
+    $catalog = @(
+        [pscustomobject]@{ Id = 'FIX-A-001'; Title = 'a'; Layer = 'automated' },
+        [pscustomobject]@{ Id = 'FIX-B-001'; Title = 'b'; Layer = 'automated' })
+    $policy = New-FixturePolicy -Catalog $catalog
+
+    # The record nominates both, so the per-id PASS rule has nothing to object
+    # to for FIX-B-001 -- it only looks at ids that have a row.
+    $record = New-TestRecord -NoBackfill -Catalog $catalog -Policy $policy -Checks @(
+        (New-TestCheck -Id 'FIX-A-001'))
+    $record.required.ids = @('FIX-A-001', 'FIX-B-001')
+
+    $blockers = @(Get-ReleaseQualificationBlockers -Record $record `
+            -SourceCatalog $catalog -SourceCatalogVersion '1.0.0' -Policy $policy)
+    Assert-True (($blockers -join '; ') -match 'FIX-B-001') `
+        "a gate with no verdict must be named: $($blockers -join '; ')"
+}
+
+Test-Case 'a policy written against a different catalog is refused, not applied' {
+    $catalog = @([pscustomobject]@{ Id = 'FIX-A-001'; Title = 'a'; Layer = 'automated' })
+    $policy = New-FixturePolicy -Catalog $catalog
+    $record = New-TestRecord -NoBackfill -Catalog $catalog -Policy $policy -Checks @(
+        (New-TestCheck -Id 'FIX-A-001'))
+
+    # The catalog gained a gate; the policy still describes the old one.
+    $grown = @($catalog + [pscustomobject]@{ Id = 'FIX-NEW-001'; Title = 'new'; Layer = 'automated' })
+    $blockers = @(Get-ReleaseQualificationBlockers -Record $record `
+            -SourceCatalog $grown -SourceCatalogVersion '1.0.0' -Policy $policy)
+    Assert-True (($blockers -join '; ') -match 'policy was not revisited') `
+        "a stale policy must be refused: $($blockers -join '; ')"
+}
+
+# ---------------------------------------------------------------------------
+# Which source line a release may be cut from
+# ---------------------------------------------------------------------------
+
+
+
+Test-Case 'a commit on the approved source line may be promoted' {
+    $repo = New-SourceLineRepo
+    try {
+        $result = Test-ReleaseSourceLine -Commit $repo.OnMain -Policy (New-SourceLinePolicy) `
+            -RepositoryPath $repo.Path
+        Assert-True $result.Allowed "a commit on main must be promotable: $($result.Reasons -join '; ')"
+    }
+    finally { Remove-Item -LiteralPath $repo.Path -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a commit that never reached the approved line may not be promoted' {
+    # The case the rule exists for: a correctly signed record about a genuinely
+    # verified build of a branch nothing reviewed.
+    $repo = New-SourceLineRepo
+    try {
+        $result = Test-ReleaseSourceLine -Commit $repo.OffMain -Policy (New-SourceLinePolicy) `
+            -RepositoryPath $repo.Path
+        Assert-True (-not $result.Allowed) 'a commit that is not on main must not be promotable'
+        Assert-True (($result.Reasons -join '; ') -match 'not on') `
+            "the refusal must say so: $($result.Reasons -join '; ')"
+    }
+    finally { Remove-Item -LiteralPath $repo.Path -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a checkout that cannot answer the ancestry question is a refusal' {
+    $repo = New-SourceLineRepo
+    try {
+        $result = Test-ReleaseSourceLine -Commit $repo.OnMain `
+            -Policy (New-SourceLinePolicy -AllowedSourceRefs @('refs/heads/no-such-branch')) `
+            -RepositoryPath $repo.Path
+        Assert-True (-not $result.Allowed) 'an unanswerable ancestry question must not qualify'
+        Assert-True (($result.Reasons -join '; ') -match 'shallow or single-ref clone') `
+            "the refusal must name what is missing: $($result.Reasons -join '; ')"
+    }
+    finally { Remove-Item -LiteralPath $repo.Path -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a policy with no promotion section promotes nothing' {
+    $repo = New-SourceLineRepo
+    try {
+        $result = Test-ReleaseSourceLine -Commit $repo.OnMain `
+            -Policy ([pscustomobject]@{ policyVersion = 1 }) -RepositoryPath $repo.Path
+        Assert-True (-not $result.Allowed) 'a policy that constrains nothing must not permit everything'
+    }
+    finally { Remove-Item -LiteralPath $repo.Path -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'the publish lock refuses a commit that never reached the approved line' {
+    # End to end through the script the release workflow runs, not only the rule:
+    # a record that is right about everything it measured, for a commit that is on
+    # no approved source line.
     $directory = New-TestDirectory
-    $record = New-TestRecord -Checks @(
-        (New-TestCheck -Id 'REL-CAP-001'),
-        (New-TestCheck -Id 'REL-AUD-CLOCK-001' -State 'UNAVAILABLE' -Required $false))
-    $result = Invoke-CheckScript -Directory $directory -Record $record
-    Assert-Equal 0 $result.ExitCode "an unnamed opt-in gate must not block: $($result.Output)"
+    $record = New-TestRecord
+    $record.sourceCommit = $script:SourceRepo.OffMain
+    $result = Invoke-CheckScript -Directory $directory -Record $record `
+        -ExpectedCommit $script:SourceRepo.OffMain
+    Assert-Equal 1 $result.ExitCode 'a commit off the approved line must not be published'
+    Assert-Match 'is not on' $result.Summary 'the summary must say which line it is not on'
+}
+
+Test-Case 'the shipped policy names a source line at all' {
+    $policy = Get-ReleaseQualificationPolicy
+    Assert-True ($null -ne $policy.promotion) 'the shipped policy must declare a promotion section'
+    Assert-True (@($policy.promotion.allowedSourceRefs).Count -ge 1) `
+        'the shipped policy must name at least one approved source ref'
+}
+
+Test-Case 'the shipped policy is about the shipped catalog' {
+    # The policy pins a digest. Nothing keeps the two in step except this.
+    $catalog = Get-ReleaseScenarioCatalog
+    $identity = Get-ReleaseCatalogIdentity -Catalog $catalog -Version (Get-ReleaseScenarioCatalogVersion)
+    $policy = Get-ReleaseQualificationPolicy
+    foreach ($field in @('version', 'digest', 'scenarioCount')) {
+        Assert-Equal "$($identity[$field])" "$($policy.catalog.$field)" `
+            "scripts/lib/release-policy.json pins catalog $field of a different catalog"
+    }
+    foreach ($id in @($policy.requiredOptIn)) {
+        Assert-True ($id -in @($catalog | ForEach-Object { $_.Id })) `
+            "the policy requires '$id', which the catalog does not have"
+    }
+}
+
+Test-Case 'a qualification without a catalog and policy is not a qualification' {
+    $record = New-TestRecord
+    $verdict = Test-ReleaseQualification -Record $record -ExpectedCommit $script:GoodCommit `
+        -ExpectedRcTag $script:GoodRcTag
+    Assert-True (-not $verdict.Qualified) 'a verdict reached without the policy must not qualify'
+    Assert-True (($verdict.Reasons -join '; ') -match 'could only have been read from the record itself') `
+        "the reason must say why: $($verdict.Reasons -join '; ')"
 }
 
 Test-Case 'a machine left misconfigured blocks the release' {
@@ -694,7 +988,9 @@ Test-Case 'a clean campaign qualifies, and the lock accepts its record' {
         "a clean campaign must qualify: $($record.qualification.reasons -join '; ')"
 
     $verdict = Test-ReleaseQualification -Record $record -ExpectedCommit $script:GoodCommit `
-        -ExpectedRcTag $script:GoodRcTag -ExpectedPackageSha256 @{ $script:PortableName = $script:PortableSha }
+        -ExpectedRcTag $script:GoodRcTag -ExpectedPackageSha256 @{ $script:PortableName = $script:PortableSha } `
+        -SourceCatalog $fixture.Catalog -SourceCatalogVersion '1.0.0' `
+        -Policy (New-FixturePolicy -Catalog $fixture.Catalog)
     Assert-True $verdict.Qualified "the lock must accept the record it produced: $($verdict.Reasons -join '; ')"
 }
 
@@ -702,6 +998,23 @@ Write-Host ''
 Write-Host '== The promotion lock: what ships is what was qualified' -ForegroundColor Cyan
 
 $script:PromotionScript = Join-Path $scriptRoot 'check-release-promotion.ps1'
+
+function New-TestSectionInventory {
+    <#
+    .SYNOPSIS
+        Per-section hashes of one compiled executable: the code sections fixed, the
+        identity-bearing ones as given.
+    #>
+    param([string] $Identity = ('r' * 64), [string] $Code = ('t' * 64))
+    return [ordered]@{
+        '.text'  = $Code
+        '.rdata' = $Identity
+        '.data'  = 'e' * 64
+        '.pdata' = 'p' * 64
+        '.rsrc'  = $Identity
+        '.reloc' = 'l' * 64
+    }
+}
 
 function New-TestBuildManifest {
     <#
@@ -712,7 +1025,11 @@ function New-TestBuildManifest {
     param(
         [Parameter(Mandatory)] [string] $Version,
         [string] $SourceCommit = $script:GoodCommit,
-        [System.Collections.IDictionary] $Files
+        [System.Collections.IDictionary] $Files,
+        # path -> ordered section name -> sha256, for the entries the contract lets
+        # differ. $null gives the compiled executables the inventory of a build whose
+        # identity fields moved and whose code did not.
+        [System.Collections.IDictionary] $Sections
     )
 
     if ($null -eq $Files) {
@@ -723,13 +1040,21 @@ function New-TestBuildManifest {
             'qml/ExoSnap/Main.qml' = 'd' * 64
         }
     }
+    if ($null -eq $Sections) {
+        $Sections = [ordered]@{
+            'exosnap.exe'         = New-TestSectionInventory -Identity ('a' * 64)
+            'exosnap-updater.exe' = New-TestSectionInventory -Identity ('b' * 64)
+        }
+    }
     $entries = @()
     foreach ($name in $Files.Keys) {
-        $entries += [ordered]@{
+        $entry = [ordered]@{
             path   = "ExoSnap-$Version-windows-x64-portable/$name"
             size   = 1024
             sha256 = $Files[$name]
         }
+        if ($Sections.Contains($name) -and $null -ne $Sections[$name]) { $entry['sections'] = $Sections[$name] }
+        $entries += $entry
     }
     return [ordered]@{
         product         = 'ExoSnap'
@@ -744,7 +1069,11 @@ function New-TestBuildManifest {
 }
 
 function New-TestToolchainManifest {
-    param([string] $Version = '0.9.1-rc1', [string] $ClVersion = 'Version 19.44.35207 for x64')
+    param(
+        [string] $Version = '0.9.1-rc1',
+        [string] $ClVersion = 'Version 19.44.35207 for x64',
+        [string] $Generator = 'Ninja'
+    )
     return [ordered]@{
         product      = 'ExoSnap'
         version      = $Version
@@ -752,6 +1081,7 @@ function New-TestToolchainManifest {
         runner       = [ordered]@{ imageLabel = 'windows-2022'; imageOs = 'Windows'; imageVersion = '20260901.1' }
         msvc         = [ordered]@{ clVersion = $ClVersion }
         cmake        = [ordered]@{ version = 'cmake version 3.31.6' }
+        build        = [ordered]@{ generator = $Generator; preset = 'windows-x64-ninja-release' }
         qt           = [ordered]@{ version = '6.9.3'; rootDir = 'C:/Qt/6.9.3/msvc2022_64' }
         wix          = [ordered]@{ version = '4.0.5' }
         ffmpeg       = [ordered]@{ url = 'https://example.invalid/ffmpeg.zip'; sha256 = 'e' * 64 }
@@ -810,16 +1140,64 @@ function Invoke-PromotionScript {
 
 Test-Case 'a rebuild that differs only where the contract permits is promotable' {
     # The realistic case: the executables the release version is compiled into
-    # changed, nothing else did.
+    # changed in their identity sections, their code did not, nothing else did.
     $candidate = New-TestBuildManifest -Version '0.9.1' -Files ([ordered]@{
             'exosnap.exe'          = '1' * 64
             'exosnap-updater.exe'  = '2' * 64
             'Qt6Core.dll'          = 'c' * 64
             'qml/ExoSnap/Main.qml' = 'd' * 64
+        }) -Sections ([ordered]@{
+            'exosnap.exe'         = New-TestSectionInventory -Identity ('1' * 64)
+            'exosnap-updater.exe' = New-TestSectionInventory -Identity ('2' * 64)
         })
     $result = Invoke-PromotionScript -Directory (New-TestDirectory) -CandidateManifest $candidate
     Assert-Equal 0 $result.ExitCode "a permitted rebuild must promote: $($result.Output)"
-    Assert-Match 'as the promotion contract permits' $result.Summary 'the permitted differences must be listed'
+    Assert-Match 'differs only in \.rdata, \.rsrc, as the promotion contract permits' $result.Summary 'the permitted differences must be listed'
+}
+
+Test-Case 'a rebuild whose code section moved blocks the release' {
+    # The whole point of the section inventory: an executable the contract lets
+    # differ may differ only where the identity lives. Different code is a
+    # different program, whatever the commit says.
+    $candidate = New-TestBuildManifest -Version '0.9.1' -Files ([ordered]@{
+            'exosnap.exe'          = '1' * 64
+            'exosnap-updater.exe'  = '2' * 64
+            'Qt6Core.dll'          = 'c' * 64
+            'qml/ExoSnap/Main.qml' = 'd' * 64
+        }) -Sections ([ordered]@{
+            'exosnap.exe'         = New-TestSectionInventory -Identity ('1' * 64) -Code ('9' * 64)
+            'exosnap-updater.exe' = New-TestSectionInventory -Identity ('2' * 64)
+        })
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) -CandidateManifest $candidate
+    Assert-Equal 1 $result.ExitCode 'moved code must block'
+    Assert-Match 'exosnap\.exe section \.text changed' $result.Summary 'the reason must name the file and the section'
+}
+
+Test-Case 'a rebuild without a section inventory cannot be promoted' {
+    # A manifest that says nothing about the sections says nothing about the code,
+    # and nothing to compare against is a refusal, not a pass.
+    $candidate = New-TestBuildManifest -Version '0.9.1' -Files ([ordered]@{
+            'exosnap.exe'          = '1' * 64
+            'exosnap-updater.exe'  = '2' * 64
+            'Qt6Core.dll'          = 'c' * 64
+            'qml/ExoSnap/Main.qml' = 'd' * 64
+        }) -Sections ([ordered]@{})
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) -CandidateManifest $candidate
+    Assert-Equal 1 $result.ExitCode 'a release without a section inventory must block'
+    Assert-Match 'exosnap\.exe differs and this release wrote no section inventory' $result.Summary 'the reason must say what is missing'
+}
+
+Test-Case 'the section hasher reads a real image and its sections' {
+    # pwsh.exe is a PE image every test machine has; the names are what the
+    # linker gives every MSVC-built image.
+    $inventory = Get-ReleasePeSectionHash -Path (Get-Process -Id $PID).Path
+    Assert-True ($inventory.Keys -contains '.text') 'the code section must be found'
+    Assert-True ($inventory.Keys -contains '.rsrc') 'the resource section must be found'
+    foreach ($name in $inventory.Keys) {
+        Assert-Match '^[0-9a-f]{64}$' $inventory[$name] "section $name must hash to lowercase sha256"
+    }
+    $again = Get-ReleasePeSectionHash -Path (Get-Process -Id $PID).Path
+    Assert-Equal ($inventory['.text']) ($again['.text']) 'the hash must be a function of the bytes'
 }
 
 Test-Case 'a changed shipped file that is not in the contract blocks the release' {
@@ -868,6 +1246,15 @@ Test-Case 'a release built by another toolchain blocks the release' {
         -CandidateToolchain (New-TestToolchainManifest -Version '0.9.1' -ClVersion 'Version 19.50.00000 for x64')
     Assert-Equal 1 $result.ExitCode 'a moved compiler must block'
     Assert-Match 'msvc\.clVersion changed' $result.Summary 'the reason must name the toolchain field'
+}
+
+Test-Case 'a release built by another generator blocks the release' {
+    # The generator is part of what produced the bytes: a candidate qualified from
+    # a Ninja build says nothing about a final from the Visual Studio generator.
+    $result = Invoke-PromotionScript -Directory (New-TestDirectory) `
+        -CandidateToolchain (New-TestToolchainManifest -Version '0.9.1' -Generator 'Visual Studio 17 2022')
+    Assert-Equal 1 $result.ExitCode 'a moved generator must block'
+    Assert-Match 'build\.generator changed' $result.Summary 'the reason must name the generator'
 }
 
 Test-Case 'a candidate that published no build inventory cannot be promoted from' {

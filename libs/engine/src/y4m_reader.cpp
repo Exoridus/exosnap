@@ -1,5 +1,7 @@
 #include "y4m_reader.h"
 
+#include <string>
+
 #include <charconv>
 
 namespace exosnap::engine {
@@ -85,6 +87,27 @@ std::optional<Y4mHeader> ParseY4mHeader(std::string_view data, std::string& out_
 
     if (!haveWidth || !haveHeight || !haveFps || !haveChroma) {
         out_error = "y4m header: missing required tag (need W, H, F, and C)";
+        return std::nullopt;
+    }
+
+    // I420 halves both dimensions for the chroma planes, and I420FrameSize uses
+    // integer division to do it -- correct for the documented precondition that
+    // both are even, and silently wrong for anything else: an odd width makes the
+    // computed frame size smaller than the data a real encoder would read, so the
+    // mismatch surfaces later as a torn frame or a rejected GPU configuration
+    // rather than as a bad file.
+    //
+    // Rejected here, at the boundary where the dimensions are first known, rather
+    // than widening the format contract. Ceil-rounding the chroma planes would be
+    // a different pixel layout, not a fix for this one.
+    if (header.width == 0 || header.height == 0) {
+        out_error = "y4m header: width and height must be positive (got " + std::to_string(header.width) + "x" +
+                    std::to_string(header.height) + ")";
+        return std::nullopt;
+    }
+    if ((header.width % 2) != 0 || (header.height % 2) != 0) {
+        out_error = "y4m header: 8-bit 4:2:0 requires even width and height (got " + std::to_string(header.width) +
+                    "x" + std::to_string(header.height) + "); the chroma planes are half size in both axes";
         return std::nullopt;
     }
 

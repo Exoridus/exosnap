@@ -24,12 +24,12 @@ on:
 #   pull_request      lint, dev-scripts, changes, build-test (debug, full
 #                     suite), build-test (release, configure/build/link only)
 #                     when the `build` filter matches (any C++ or build
-#                     machinery), packaging-smoke when the `packaging` filter
-#                     matches
+#                     machinery), plus the packaging smoke on that release
+#                     build when the `packaging` filter matches
 #   push → main       lint, dev-scripts, changes            (quick checks only)
-#   push → v* tag     everything except packaging-smoke, with the Release
+#   push → v* tag     everything except the packaging smoke, with the Release
 #                     test suite included                   (release gate)
-#   workflow_dispatch everything except packaging-smoke     (manual full run)
+#   workflow_dispatch everything except the packaging smoke (manual full run)
 #
 # Accepted trade-off: a semantic merge skew — two PRs that are each green alone
 # but broken together — is no longer caught by the main push itself. It surfaces
@@ -152,6 +152,131 @@ jobs:
         run: pwsh -NonInteractive -File scripts/validate-network-egress.ps1
 
   # ---------------------------------------------------------------------------
+  # Cheap guardrails that block locally and did not block here. Each of them runs
+  # in the pre-commit gate on a developer's machine, and a PR from a machine that
+  # skipped the hook -- or from a contributor without it -- reached the reviewer
+  # with none of them applied. None needs a compiler.
+  #
+  # The source-hygiene check is scoped to the PR RANGE, not to the checkout. A
+  # pull_request checkout is the merge commit with a depth of one; diffing that
+  # against nothing scans an empty change set and passes over every line the PR
+  # added. The base is fetched to the depth the merge base needs and passed in
+  # explicitly.
+  #
+  # The two workflow linters are pinned by version and by digest, and a missing
+  # tool fails the step: a step that skips itself when its tool is absent reports
+  # a green check that ran nothing, which is the failure this job exists to
+  # prevent in the first place.
+  # ---------------------------------------------------------------------------
+  guardrails:
+    name: guardrails
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: ci-${{ github.workflow }}-guardrails-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Enough history to reach the merge base of the PR. 0 is the whole
+          # repository, which is what makes the base reachable on a branch that
+          # diverged a while ago; a shallow fetch would leave merge-base with
+          # nothing to answer and the hygiene check with nothing to scan.
+          fetch-depth: 0
+
+      - name: Assert PowerShell
+        # ubuntu-24.04 images carry pwsh already; asserted rather than assumed, so
+        # a runner image that drops it fails here with its name instead of later
+        # with a shell error. Through the shell's own `-Version`, not a
+        # PowerShell expression in single quotes: the step is bash, and bash
+        # single quotes are what keeps `$PSVersionTable` from being expanded
+        # by bash -- which shellcheck reads, correctly, as a variable that is not.
+        run: pwsh -Version
+
+      - name: Check drift (Qt version, Qt setup, SDK paths)
+        run: pwsh -NonInteractive -File scripts/check-drift.ps1
+
+      - name: Source hygiene over the PR range
+        # Only on a pull_request, where the range is the PR's base against its
+        # head: the set of lines this change added, which is the contract the
+        # pre-commit hook enforces locally. A tag push or a manual dispatch has no
+        # range a change can be attributed to (github.event.before is zeros or
+        # absent), and scanning the whole tree there would block a release on the
+        # 51-finding backlog in older comments that AGENTS.md names -- a decision
+        # about the backlog, not about the tag. Reported below, not enforced.
+        if: github.event_name == 'pull_request'
+        run: >-
+          pwsh -NonInteractive -File scripts/check-source-hygiene.ps1
+          -Base ${{ github.event.pull_request.base.sha }}
+
+      - name: Source hygiene backlog (whole tree, report only)
+        # Visible on every run so the number is known, never a gate: the backlog
+        # is older comments, and a release is not the place it gets paid down.
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        run: pwsh -NonInteractive -File scripts/check-source-hygiene.ps1 -All
+
+      - name: Pull request title
+        # The title, not the branch's commits: this repository squash-merges
+        # with the title alone, so the title IS the commit that lands on main
+        # and the only line the changelog cut will ever read. A well-formed
+        # branch behind a malformed title still produces an unfilable entry.
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: pwsh -NonInteractive -File scripts/check-commit-policy.ps1 -Subject "$PR_TITLE"
+
+      - name: Prose line lengths over the PR range (advisory)
+        # Advisory for the same reason the source-hygiene backlog is: the tree
+        # predates the rule, and a branch that adds a paragraph to an already
+        # wrapped document wraps it to match. check-prose-lines.ps1 records what
+        # has to be true before this loses the switch.
+        if: github.event_name == 'pull_request'
+        run: >-
+          pwsh -NonInteractive -File scripts/check-prose-lines.ps1
+          -Advisory -Base ${{ github.event.pull_request.base.sha }}
+
+      - name: Install actionlint (pinned)
+        # By version and by SHA-256 of the release archive. A linter fetched as
+        # "latest" changes what it flags between two runs of the same workflow.
+        env:
+          ACTIONLINT_VERSION: '1.7.12'
+          ACTIONLINT_SHA256: '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL -o "$archive"             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "$archive" actionlint
+          install -m 0755 actionlint /usr/local/bin/actionlint
+          actionlint -version
+
+      - name: actionlint
+        # No -color: the escape sequences are noise in the Actions log and make
+        # the log unreadable through the API.
+        run: actionlint
+
+      - name: Install zizmor (pinned)
+        env:
+          ZIZMOR_VERSION: '1.30.1'
+        run: |
+          set -euo pipefail
+          pipx install "zizmor==${ZIZMOR_VERSION}"
+          zizmor --version
+
+      - name: zizmor
+        # Offline: the audits that need the GitHub API (stale action refs) are the
+        # ones that change answer between two runs of the same workflow. What is
+        # left is what can be decided from the file, which is what a guardrail is.
+        #
+        # High only, for now. The five known high findings (caches restored on tag
+        # pushes) carry an inline 'zizmor: ignore' at the step that is the decision,
+        # with the reason, so a NEW high finding fails here. The 41 medium findings
+        # are a backlog, not a gate: blocking on them today would block on the state
+        # of the repository rather than on the change in front of the reviewer.
+        run: zizmor --offline --min-severity high .github/workflows
+
+  # ---------------------------------------------------------------------------
   # Release-verify harness: the typed C# harness under tools/release-verify. It
   # has its own SDK pin (tools/release-verify/global.json), its own package lock
   # files, and its own test runner, so it builds and tests on its own rather than
@@ -220,19 +345,25 @@ jobs:
           ffprobe -version
 
       - name: A/V-sync analyzer vs golden fixture
-        # Regression-guards the analyzer's event detection + drift math. The
-        # budget is intentionally loose: a 4 s clip's residual drift is bounded by
-        # frame quantization (~one 60 fps frame), not a real A/V budget, and must
-        # stay green across ffmpeg-version differences in reported PTS. The real
-        # 20 ms budget applies to live 2 h captures, not this fixture.
-        run: python scripts/dev/av-sync-check.py tests/fixtures/av-sync/clapper-golden.mp4 --max-drift-ms 45 --json
+        # Regression-guards the analyzer's event detection, its edge location and
+        # the drift fit. The budget is intentionally loose: a 4 s clip's residual
+        # drift is bounded by the 60 fps frame grid, not by a real A/V budget, and
+        # must stay green across ffmpeg-version differences in reported PTS. The
+        # real 20 ms budget applies to live multi-hour captures, not this fixture.
+        #
+        # Five markers, not two: the analyzer refuses a verdict from a reference
+        # that cannot carry one, and two markers never can. A two-marker fixture
+        # would only ever exercise the path that refusal takes.
+        run: >-
+          python scripts/dev/av-sync-check.py tests/fixtures/av-sync/clapper-golden.mp4
+          --max-drift-ms 25 --expected-markers 5 --json
 
   # ---------------------------------------------------------------------------
   # Detect whether this PR touches packaging-relevant or build/tooling-relevant
   # paths.
-  #   - `packaging` gates the packaging-smoke job below (a scoped-down slice of
-  #     the release-candidate pipeline, ADR 0037) so it only runs when it can
-  #     actually catch something.
+  #   - `packaging` gates the packaging smoke step on the release leg (a
+  #     scoped-down slice of the release-candidate pipeline, ADR 0037) so it
+  #     only runs when it can actually catch something.
   #   - `build` gates the windows-x64-release leg of build-test on PRs (PR-CI
   #     tiering): the debug leg always runs and carries the test suite, so the
   #     release leg — which proves the Release configure/build/link still works
@@ -244,8 +375,8 @@ jobs:
   #     (docs, screenshots, packaging-unrelated scripts) skip the release leg.
   #
   # This job runs on EVERY trigger, not just pull_request, even though its
-  # outputs are only consulted on pull_request (see build-test-release and
-  # packaging-smoke below). That is deliberate: build-test-release has
+  # outputs are only consulted on pull_request (see build-test-release below).
+  # That is deliberate: build-test-release has
   # `needs: changes`, and a job-level `if:` has an implicit `success()` guard
   # unless it names a status-check function. If `changes` were skipped (as it
   # would be on push/tag/dispatch under a plain
@@ -288,6 +419,9 @@ jobs:
               - 'apps/updater/CMakeLists.txt'
               - 'third_party/CMakeLists.txt'
               - 'THIRD_PARTY_NOTICES.md'
+            # `packaging` is a subset of `build` by construction: the packaging
+            # smoke runs on the release leg's build, so a path that arms the
+            # smoke has to arm that leg. ci-required checks the subset holds.
             build:
               - 'app/**'
               - 'apps/**'
@@ -300,6 +434,7 @@ jobs:
               - 'CMakePresets.json'
               - 'cmake/**'
               - 'packaging/**'
+              - 'THIRD_PARTY_NOTICES.md'
               - '.github/workflows/**'
               - 'scripts/build-*'
 
@@ -317,9 +452,12 @@ jobs:
   build-test-debug:
     name: build-test (windows-x64-debug)
     runs-on: windows-2022
-    # ~2x the observed worst case (46 min, cold sccache): build + qmllint +
-    # full suite + scoped clang-tidy blocking set, all in one job.
-    timeout-minutes: 90
+    # Measured over the last 20 runs: median 12 min at a 97-98 % sccache hit
+    # rate; worst 71 min on a cold cache with a header change that fanned the
+    # scoped clang-tidy set out across the tree (36 min of it). About 1.7x
+    # that worst case: a lint-policy change reaches every unit, and its first
+    # push is the run this ceiling has to let finish.
+    timeout-minutes: 120
     # Not on a push to main: that commit is the squash of a PR whose own run of
     # this exact job just went green (see "WHAT RUNS WHERE" at the top of this
     # file). Written as a positive list over the events this workflow can see
@@ -362,6 +500,7 @@ jobs:
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
 
       # No frontend flag: there is one frontend. The Qt Quick application and its
       # adapter/QML test targets are the default build (ADR 0064).
@@ -388,11 +527,19 @@ jobs:
       # they are excluded here rather than trusted to skip themselves — a future
       # runner-image change (or a new live test that forgets the self-skip)
       # would otherwise fail silently past this gate.
+      #
+      # `live` and the execution phases are two axes and neither replaces the
+      # other. A phase says what KIND of machine a test needs; `live` says the
+      # test reads real machine state. The quick.* tests are phase.desktop and run
+      # here because an offscreen Qt platform is a desktop surface — except the
+      # two that also carry `live` because they need the native platform and the
+      # real cursor. Selecting by phase alone would either lose the first group or
+      # keep the second.
       - name: Test (windows-x64-ninja-debug)
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
           -BuildDir build/windows-x64-ninja-debug -Config Debug
-          -ExcludeLabel live
+          -ExcludeLabel live -RequireFresh
 
       # Blocking static analysis. Deliberately a step inside build-test-debug
       # rather than a job of its own: build-test-debug is already a required
@@ -424,6 +571,7 @@ jobs:
       # set is never what fills it.
       - name: Restore clang-tidy result cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
         with:
           path: ${{ runner.temp }}/clang-tidy-cache
           key: clang-tidy-blocking-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -450,7 +598,8 @@ jobs:
   build-test-release:
     name: build-test (windows-x64-release)
     runs-on: windows-2022
-    # ~2x the observed worst case (27 min, cold sccache).
+    # Measured over the last 20 runs: median 7 min at a 98 % sccache hit rate,
+    # worst 34 min on a cold cache. About 2x that worst case.
     timeout-minutes: 60
     needs: changes
     # PR-CI tiering: this leg proves the Release configure/build/link still
@@ -495,6 +644,7 @@ jobs:
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
 
       # A Release build is the only configuration that compiles out the harness
       # code paths, so the Debug leg alone would miss exactly the guards that
@@ -514,6 +664,14 @@ jobs:
       # runner-image change (or a new live test that forgets the self-skip)
       # would otherwise fail silently past this gate.
       #
+      # `live` and the execution phases are two axes and neither replaces the
+      # other. A phase says what KIND of machine a test needs; `live` says the
+      # test reads real machine state. The quick.* tests are phase.desktop and run
+      # here because an offscreen Qt platform is a desktop surface — except the
+      # two that also carry `live` because they need the native platform and the
+      # real cursor. Selecting by phase alone would either lose the first group or
+      # keep the second.
+      #
       # Not on pull_request: the debug leg already carried the full suite, and
       # this leg's PR-tier job is configure/compile/link (see the job comment).
       # Tags and manual dispatches are the release gate and run the Release
@@ -523,7 +681,37 @@ jobs:
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
           -BuildDir build/windows-x64-ninja-release -Config Release
-          -ExcludeLabel live
+          -ExcludeLabel live -RequireFresh
+
+      # Packaging smoke, on the build this job just produced. ADR 0037
+      # established the full release gate (install -> audit -> MSI -> content
+      # assertion -> MSI smoke -> ZIP smoke) in release-candidate.yml, which only
+      # runs on version tags and release/** branches, so a harvest-fragment
+      # regression, a runtime DLL windeployqt fails to stage, or a leaked
+      # dev-tree file would stay invisible until a tag is pushed. This is the
+      # fastest subset that still catches those, on every pull request that
+      # touches a packaging-relevant path (the `changes` job's `packaging`
+      # filter):
+      #
+      #   - cmake --install into a pruned staging tree (identical pruning rules)
+      #   - presence / absence / leak / exe-metadata validation of that tree
+      #   - the dumpbin /dependents static runtime-dependency audit
+      #   - portable ZIP creation + the isolated launch smoke (app exe + updater
+      #     exe, both via SetErrorMode + dialog-sentinel)
+      #
+      # -SkipConfigure: configured above. -SkipMsi: the WiX/MSI build, the MSI
+      # content assertion and the MSI smoke need the WiX Toolset and add several
+      # minutes for a package format the portable-ZIP path already exercises
+      # structurally (same staging tree, same harvest source); they stay with
+      # the release gate. Same preset as the release gate, so what this smokes
+      # is the build path that ships.
+      #
+      # A step here rather than its own job: the job it would need is this one
+      # again -- checkout, MSVC, Qt, sccache, configure, build -- on a second
+      # runner, for a five-minute smoke of the build this runner already holds.
+      - name: Install, package and smoke-test (release-gate subset)
+        if: github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true'
+        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipConfigure -Preset windows-x64-ninja-release -SkipMsi
 
       - name: sccache stats
         if: always()
@@ -536,85 +724,8 @@ jobs:
           name: ctest-logs-windows-x64-ninja-release
           path: build/windows-x64-ninja-release/Testing/Temporary/
 
-  # ---------------------------------------------------------------------------
-  # Packaging smoke (PR-CI only; gated on packaging-relevant path changes,
-  # see the `changes` job above). ADR 0037 established the full release-gate
-  # pipeline (install -> audit -> MSI -> content assertion -> MSI smoke -> ZIP
-  # smoke) in release-candidate.yml, but that workflow only runs on version
-  # tags and release/** branches — harvest-fragment regressions, new runtime
-  # DLLs windeployqt fails to stage, or leaked dev-tree files are invisible
-  # until the release tag is pushed. This job runs the fastest subset of that
-  # pipeline that still catches those regressions:
-  #
-  #   - cmake --install into a pruned staging tree (identical pruning rules)
-  #   - presence / absence / leak / exe-metadata validation of that tree
-  #   - the dumpbin /dependents static runtime-dependency audit
-  #   - portable ZIP creation + the isolated launch smoke (app exe + updater
-  #     exe, both via SetErrorMode + dialog-sentinel)
-  #
-  # It deliberately skips the WiX/MSI build, the MSI content assertion, and
-  # the MSI smoke (-SkipMsi): those need the WiX Toolset installed and add
-  # several minutes for a package format the portable-ZIP path already
-  # exercises structurally (same staging tree, same harvest source). It also
-  # builds from the Ninja release preset (sccache-cacheable, shared with the
-  # build-test job's release leg above) rather than the canonical VS-generator
-  # release preset the RC pipeline uses — the VS/MSBuild generator ignores
-  # CMAKE_CXX_COMPILER_LAUNCHER, which would mean a from-scratch compile on
-  # every PR. build-release-artifacts.ps1 takes a -Preset parameter (default
-  # 'windows-x64-release', unchanged for the RC pipeline) and resolves the
-  # built exe under either generator's output layout.
-  # ---------------------------------------------------------------------------
-  packaging-smoke:
-    name: packaging-smoke
-    # ~2x the observed worst case (14 min, cold sccache).
-    timeout-minutes: 30
-    needs: changes
-    # PR-CI only (see the comment above). Now that `changes` runs on every
-    # trigger (not just pull_request — see its own comment above), its
-    # `packaging` output reflects a real push/tag diff outside pull_request
-    # too, so this needs its own explicit event_name guard to stay PR-only;
-    # without it, a push to main that happens to touch a packaging-relevant
-    # path would start running this job there as well, which is not the
-    # intended behavior (release-candidate.yml is the packaging gate for
-    # tags/release branches instead).
-    if: github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true'
-    runs-on: windows-2022
-    concurrency:
-      group: ci-${{ github.workflow }}-packaging-smoke-${{ github.event.pull_request.number || github.run_id }}
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
-
-      # 'quick': this job is the packaging gate for the Qt Quick application.
-      # install(TARGETS exosnap) plus qt_generate_deploy_qml_app_script() in
-      # app/quick/ExoSnap/Quick/CMakeLists.txt stage the QML runtime, and
-      # scripts/build-release-artifacts.ps1 fails the run if any of it is missing
-      # from the package.
-      - name: Install Qt 6
-        uses: ./.github/actions/setup-qt
-        with:
-          profile: quick
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-
-      - name: Configure (windows-x64-ninja-release)
-        run: cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
-
-      # -SkipConfigure: configured above. -SkipMsi: WiX/MSI is out of scope for
-      # this PR-CI subset (release-candidate.yml is the release gate for that).
-      - name: Build, install, and smoke-test packaging (release-gate subset)
-        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipConfigure -Preset windows-x64-ninja-release -SkipMsi
-
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
-
       - name: Upload packaging validation report
-        if: always()
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: packaging-smoke-report
@@ -622,3 +733,104 @@ jobs:
             .workspace/release/*/validation-report.md
             .workspace/release/*/artifact-manifest.json
           if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # The one required check.
+  #
+  # Naming the heavy jobs directly in branch protection looks stricter than it
+  # is: a job that skips itself reports conclusion "skipped", and GitHub counts
+  # a skipped required check as satisfied. "build-test (windows-x64-release)"
+  # is required today and skips on any pull request whose diff misses the
+  # `build` filter — so the rule it is listed under can be satisfied by a job
+  # that never ran. The inverse mistake is just as easy: requiring a
+  # conditional job that reports nothing at all leaves the rule permanently
+  # unsatisfiable.
+  #
+  # So exactly one context is required, and the policy lives here, in the
+  # repository, where it is reviewed with the code. This job always runs and
+  # always reports, and it decides per job whether a non-success result is the
+  # documented behaviour for this event or a failure being waved through.
+  # ---------------------------------------------------------------------------
+  ci-required:
+    name: ci-required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs:
+      - lint
+      - guardrails
+      - verify-harness
+      - dev-scripts
+      - changes
+      - build-test-debug
+      - build-test-release
+    steps:
+      - name: Evaluate the required set
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BUILD_FILTER: ${{ needs.changes.outputs.build }}
+          PACKAGING_FILTER: ${{ needs.changes.outputs.packaging }}
+          R_LINT: ${{ needs.lint.result }}
+          R_GUARDRAILS: ${{ needs.guardrails.result }}
+          R_VERIFY_HARNESS: ${{ needs.verify-harness.result }}
+          R_DEV_SCRIPTS: ${{ needs.dev-scripts.result }}
+          R_CHANGES: ${{ needs.changes.result }}
+          R_DEBUG: ${{ needs.build-test-debug.result }}
+          R_RELEASE: ${{ needs.build-test-release.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+
+          # $1 job label, $2 its result, $3 "skip-ok" when this event allows a
+          # skip, anything else when it does not.
+          require() {
+            local name="$1" result="$2" skip_ok="$3"
+            if [ "$result" = "success" ]; then
+              echo "ok       $name"
+            elif [ "$result" = "skipped" ] && [ "$skip_ok" = "skip-ok" ]; then
+              echo "skipped  $name (expected for this event)"
+            else
+              echo "FAILED   $name: result=$result"
+              failed=1
+            fi
+          }
+
+          is_tag=false
+          case "$REF" in refs/tags/v*) is_tag=true ;; esac
+
+          # These five run on every trigger; a skip is a workflow defect.
+          require lint                "$R_LINT"           must-run
+          require guardrails          "$R_GUARDRAILS"     must-run
+          require verify-harness      "$R_VERIFY_HARNESS" must-run
+          require dev-scripts         "$R_DEV_SCRIPTS"    must-run
+          require "detect changes"    "$R_CHANGES"        must-run
+
+          # The heavy legs deliberately do not re-run on a push to main: that
+          # commit is the squash of a pull request whose own run just proved
+          # them. Anywhere else they have to have run.
+          debug_skip=not-allowed
+          if [ "$EVENT" = "push" ] && [ "$is_tag" = false ]; then debug_skip=skip-ok; fi
+          require "build-test (debug)" "$R_DEBUG" "$debug_skip"
+
+          release_skip=not-allowed
+          if [ "$EVENT" = "push" ] && [ "$is_tag" = false ]; then release_skip=skip-ok; fi
+          if [ "$EVENT" = "pull_request" ] && [ "$BUILD_FILTER" != "true" ]; then release_skip=skip-ok; fi
+          require "build-test (release)" "$R_RELEASE" "$release_skip"
+
+          # The packaging smoke is a step of the release leg, armed by the
+          # `packaging` filter, and that leg is armed by the `build` filter. The
+          # smoke can therefore only run if every packaging path is also a build
+          # path -- a relation the filters state and nothing enforces. Checked
+          # here: a packaging change whose release leg was allowed to skip is a
+          # filter defect, not a pass.
+          if [ "$EVENT" = "pull_request" ] && [ "$PACKAGING_FILTER" = "true" ] && [ "$BUILD_FILTER" != "true" ]; then
+            echo "FAILED   packaging filter matched but the build filter did not: the packaging smoke could not have run"
+            failed=1
+          fi
+
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::A job in the required set did not pass, and its result is not an expected skip for this event."
+            exit 1
+          fi
+          echo "All required jobs accounted for."
