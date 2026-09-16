@@ -399,13 +399,28 @@ void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
     audio_ui_state.mic_channel_mode = exosnap::engine::MicChannelMode::Auto;
 
     using K = exosnap::engine::AudioSourceKind;
+    // A row the operator has already configured is a persisted setting, and a
+    // target switch is not a decision about it. Only a row that is absent -- a
+    // profile that never configured that source -- takes this target's default,
+    // so a fresh profile still gets Application audio on for a window while an
+    // Application source that was switched off stays off.
+    const auto carry = [this](K row_kind, bool default_enabled) {
+        const auto existing =
+            std::find_if(audio_ui_state.source_rows.begin(), audio_ui_state.source_rows.end(),
+                         [row_kind](const exosnap::engine::AudioSourceRow& r) { return r.kind == row_kind; });
+        if (existing != audio_ui_state.source_rows.end())
+            return *existing;
+        return exosnap::engine::AudioSourceRow{row_kind, default_enabled, false};
+    };
+
     if (kind == capability::CaptureTargetKind::Window) {
         // Window: Application audio ON; Other system audio and Microphone OFF by default.
-        audio_ui_state.source_rows = {
-            {K::App, true, false},
-            {K::Mic, false, false},
-            {K::Sys, false, false},
-        };
+        const auto app = carry(K::App, true);
+        const auto mic = carry(K::Mic, false);
+        const auto sys = carry(K::Sys, false);
+        audio_ui_state.source_rows = {app, mic, sys};
+        // The first row folds into nothing, whatever it carried before.
+        audio_ui_state.source_rows.front().merge_with_above = false;
     } else {
         // Display/Region: Computer audio ON; Microphone OFF by default.
         //

@@ -1089,4 +1089,71 @@ TEST(CaptureTargetFilter, TheKindIsCheckedBeforeTheText) {
     EXPECT_FALSE(CaptureTargetMatchesFilter(window, exosnap::engine::CaptureTarget::Kind::Monitor, "DISPLAY2"));
 }
 
+// --- An explicit audio choice survives a target switch -----------------------
+//
+// The APP row is a persisted setting, not a property of the current target: it is
+// always listed and configurable, and only whether it CONTRIBUTES follows the
+// target. A switch that rebuilds the rows from the target's defaults throws that
+// setting away, and the next recording carries a track the operator turned off.
+
+TEST(RecordViewModelAudioRows, SwitchingToAWindowKeepsAnApplicationSourceTheOperatorTurnedOff) {
+    using K = exosnap::engine::AudioSourceKind;
+    RecordViewModel vm;
+    vm.audio_ui_state.source_rows = {
+        {K::App, false, false},
+        {K::Sys, true, false},
+    };
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+
+    const auto* app = FindRow(vm.audio_ui_state, K::App);
+    ASSERT_NE(app, nullptr) << "the APP row is always present";
+    EXPECT_FALSE(app->enabled);
+}
+
+TEST(RecordViewModelAudioRows, SwitchingToAWindowKeepsASystemSourceTheOperatorTurnedOn) {
+    using K = exosnap::engine::AudioSourceKind;
+    RecordViewModel vm;
+    vm.audio_ui_state.source_rows = {
+        {K::App, false, false},
+        {K::Sys, true, false},
+    };
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+
+    const auto* sys = FindRow(vm.audio_ui_state, K::Sys);
+    ASSERT_NE(sys, nullptr);
+    EXPECT_TRUE(sys->enabled);
+}
+
+TEST(RecordViewModelAudioRows, AProfileThatNeverConfiguredAudioStillGetsTheWindowDefaults) {
+    using K = exosnap::engine::AudioSourceKind;
+    RecordViewModel vm;
+    vm.audio_ui_state.source_rows.clear();
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+
+    const auto* app = FindRow(vm.audio_ui_state, K::App);
+    ASSERT_NE(app, nullptr);
+    EXPECT_TRUE(app->enabled) << "the APP row defaults enabled for a window target";
+    const auto* sys = FindRow(vm.audio_ui_state, K::Sys);
+    ASSERT_NE(sys, nullptr);
+    EXPECT_FALSE(sys->enabled);
+}
+
+TEST(RecordViewModelAudioRows, PreservingSwitchDoesNotReviveAnApplicationSourceThatIsOff) {
+    using K = exosnap::engine::AudioSourceKind;
+    RecordViewModel vm;
+    vm.audio_ui_state.source_rows = {
+        {K::App, false, false},
+        {K::Sys, true, false},
+    };
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+
+    const auto* app = FindRow(vm.audio_ui_state, K::App);
+    ASSERT_NE(app, nullptr);
+    EXPECT_FALSE(app->enabled);
+}
+
 } // namespace exosnap

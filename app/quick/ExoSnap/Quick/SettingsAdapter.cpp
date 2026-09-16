@@ -991,12 +991,14 @@ void SettingsAdapter::setRowEnabled(exosnap::engine::AudioSourceKind kind, bool 
         }
         row->enabled = enabled;
     } else {
-        if (!enabled) {
-            return;
-        }
+        // A row is written even when it is being switched OFF. Absence has to keep
+        // meaning "never configured", because that is what the target defaults are
+        // applied to: leaving the off state unwritten made it indistinguishable
+        // from a fresh profile, and the next target switch turned the source back
+        // on.
         exosnap::engine::AudioSourceRow new_row;
         new_row.kind = kind;
-        new_row.enabled = true;
+        new_row.enabled = enabled;
         config_.audio.source_rows.push_back(new_row);
     }
     applyConfigEdit();

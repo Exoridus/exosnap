@@ -425,6 +425,22 @@ TEST_F(SettingsAdapterTest, TrackLedgerIsEmptyWhenNoSourceIsEnabled) {
     EXPECT_TRUE(adapter.audioTargetSummary().endsWith(QStringLiteral("no audio")));
 }
 
+// Switching a source off has to be written down. An off state that leaves no row
+// behind is indistinguishable from a profile that never configured the source,
+// and the target defaults are applied to exactly that case -- which turned the
+// source back on at the next target switch.
+TEST_F(SettingsAdapterTest, SwitchingASourceOffRecordsIt) {
+    adapter.setAppAudioEnabled(false);
+
+    EXPECT_FALSE(adapter.appAudioEnabled());
+    const auto& rows = adapter.config().audio.source_rows;
+    const auto app = std::find_if(rows.begin(), rows.end(), [](const exosnap::engine::AudioSourceRow& r) {
+        return r.kind == exosnap::engine::AudioSourceKind::App;
+    });
+    ASSERT_NE(app, rows.end()) << "the off state has to survive as a row";
+    EXPECT_FALSE(app->enabled);
+}
+
 // The microphone card states the missing device once in its own summary instead
 // of leaving four greyed rows to imply it.
 TEST_F(SettingsAdapterTest, MicrophoneSummaryReportsAMissingDevice) {
