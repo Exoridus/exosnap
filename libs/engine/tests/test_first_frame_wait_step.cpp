@@ -183,4 +183,20 @@ TEST(HdrGuardMonitor, AWgcSessionKeepsItsFixedTarget) {
     EXPECT_EQ(ResolveHdrGuardMonitor(/*use_od_capture=*/false, AfterReopen(), AtOpen()), AtOpen());
 }
 
+TEST(StartHolds, ATransitionThatSettlesInOneOrTwoHoldsKeepsWaiting) {
+    EXPECT_FALSE(StartHoldsExhausted(1, false));
+    EXPECT_FALSE(StartHoldsExhausted(4, false));
+}
+
+TEST(StartHolds, ADisplayThatKeepsRevokingAccessWithoutAFrameIsGivenUpOn) {
+    EXPECT_TRUE(StartHoldsExhausted(kMaxStartHoldsBeforeDuplicationIsUnavailable, false));
+    EXPECT_TRUE(StartHoldsExhausted(44, false));
+}
+
+TEST(StartHolds, AFrameThatArrivedEndsTheQuestion) {
+    // Holds before a first frame are recovery, not failure: the count is only
+    // read while nothing has been captured.
+    EXPECT_FALSE(StartHoldsExhausted(44, true));
+}
+
 } // namespace

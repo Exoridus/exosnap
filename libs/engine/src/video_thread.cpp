@@ -2331,6 +2331,27 @@ void VideoThread::Run() {
                         logging::log(logging::LogLevel::Info, "video_thread",
                                      "DXGI OD access lost before first frame — entering bounded start-hold", {});
                     }
+                    if (StartHoldsExhausted(startHoldsEntered, gotFirst)) {
+                        // Granting duplication and revoking it again without ever
+                        // presenting is what an indirect display does, and it does
+                        // not stop. Spending the rest of the budget on it buys a
+                        // longer wait and the same empty file.
+                        const logging::LogField fields[] = {{"backend", "dxgi_od"},
+                                                            {"target_desc", target.description},
+                                                            {"holds_entered", std::to_string(startHoldsEntered)}};
+                        logging::log(logging::LogLevel::Warn, "video_thread",
+                                     "DXGI OD keeps losing access before the first frame; duplication is not "
+                                     "available for this display",
+                                     std::span<const logging::LogField>(fields, std::size(fields)));
+                        char buf[256];
+                        snprintf(buf, sizeof(buf),
+                                 "This display cannot be captured with desktop duplication: it granted and revoked "
+                                 "access %u times without delivering a frame. Displays served by an indirect display "
+                                 "driver behave this way.",
+                                 startHoldsEntered);
+                        m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED), ErrorPhase::VideoCapture, buf);
+                        return;
+                    }
                 } else if (odHr == DXGI_ERROR_WAIT_TIMEOUT &&
                            ShouldRecoverIdleOdAcquire(odStartHolding, odSrc.TopologyChangedSinceOpen())) {
                     // Opened onto a topology that has since changed and never

@@ -452,6 +452,25 @@ FirstFrameWaitStep(bool od_start_holding, double elapsed_since_deadline_sec, dou
     return FirstFrameWaitStep(od_start_holding, elapsed_since_deadline_sec, timeout_sec);
 }
 
+// How many pre-first-frame access losses are still a transition rather than a
+// display that cannot be duplicated at all.
+//
+// A real fullscreen switch or mode change resolves in one hold, occasionally two.
+// An indirect display driver that grants duplication and revokes it again without
+// ever presenting produces one every few hundred milliseconds and never settles:
+// the overall budget then buys fifteen seconds of retrying and an empty file
+// where a named refusal belongs. Five leaves a genuine transition room and ends
+// the futile case in about a second and a half.
+inline constexpr unsigned kMaxStartHoldsBeforeDuplicationIsUnavailable = 5;
+
+// Whether the start should stop retrying duplication for this display.
+//
+// Counted rather than timed on purpose: the quantity that separates the two cases
+// is how often access was granted and lost without a frame, not how long it took.
+[[nodiscard]] constexpr bool StartHoldsExhausted(unsigned start_holds_entered, bool got_first_frame) noexcept {
+    return !got_first_frame && start_holds_entered >= kMaxStartHoldsBeforeDuplicationIsUnavailable;
+}
+
 // ---------------------------------------------------------------------------
 // Which monitor the mid-session HDR guard must ask about.
 //
