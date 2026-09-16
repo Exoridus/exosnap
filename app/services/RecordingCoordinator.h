@@ -67,6 +67,29 @@ class SessionLedgerSink {
     std::vector<diagnostics::LedgerEntry> ledger_;
 };
 
+// Whether the physical webcam capture should be running.
+//
+// Pure, so the rule is pinned without a device. The verification source is the
+// one term that is not about demand: when this process was started to measure
+// the overlay, the synthetic source IS the camera, and opening the real one
+// alongside it would leave the device delivering samples for a preview nobody is
+// measuring -- Media Foundation negotiating the sensor's maximum mode, USB
+// bandwidth spent, and a visible flicker in the picture-in-picture. The overlay
+// under test composites from the synthetic source either way, so the physical
+// device contributes nothing to the recording and everything to the noise around
+// it.
+//
+// `webcam.enabled` stays true throughout: the picture-in-picture is exactly what
+// is being measured. Only the device is left closed.
+[[nodiscard]] constexpr bool ShouldRunWebcamDevice(bool has_verification_source, bool webcam_enabled,
+                                                   bool has_device_id, bool recording, bool preparing,
+                                                   bool record_preview_active, bool settings_preview_active) noexcept {
+    if (has_verification_source)
+        return false;
+    return webcam_enabled && has_device_id &&
+           (recording || preparing || record_preview_active || settings_preview_active);
+}
+
 class RecordingCoordinator {
   public:
     using StateChangedCallback = std::function<void(UiRecordingState)>;

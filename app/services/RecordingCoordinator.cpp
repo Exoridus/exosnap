@@ -725,6 +725,10 @@ void RecordingCoordinator::SetAudioSourceMuted(exosnap::engine::AudioSourceKind 
 
 void RecordingCoordinator::UseStaticVerificationWebcam(int width, int height) {
     static_webcam_source_ = std::make_unique<exosnap::StaticWebcamFrameSource>(width, height);
+    // Applied at once, not at the next state change: whatever asked for the
+    // device before this call must not keep it open alongside the source that
+    // replaced it.
+    SyncWebcamService(/*force_restart=*/false);
 }
 
 QString RecordingCoordinator::VerificationWebcamSourceName() const {
@@ -775,10 +779,11 @@ void RecordingCoordinator::SyncWebcamService(bool force_restart) {
         return;
     // Recording (or an in-flight prepare) always owns the device; while idle the
     // capture runs only when the Record preview asked for it (live Ready PiP) and
-    // webcam is enabled.
-    const bool want_running = webcam_settings_.enabled && !webcam_settings_.device_id.empty() &&
-                              (is_recording_.load() || prepare_in_flight_.load() || webcam_preview_active_ ||
-                               webcam_settings_preview_active_);
+    // webcam is enabled. The verification source, when present, replaces the
+    // device outright -- see ShouldRunWebcamDevice.
+    const bool want_running = ShouldRunWebcamDevice(
+        static_webcam_source_ != nullptr, webcam_settings_.enabled, !webcam_settings_.device_id.empty(),
+        is_recording_.load(), prepare_in_flight_.load(), webcam_preview_active_, webcam_settings_preview_active_);
     if (!want_running) {
         webcam_service_.Stop();
         return;
@@ -1341,7 +1346,15 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     // SyncWebcamService early-returns on the UI thread and its want_running includes
     // prepare_in_flight_, so a queued Preparing state-callback cannot Stop() the
     // device we are opening here.
-    if (config.webcam.enabled) {
+    // The same rule the UI thread applies, so the worker cannot open a device the
+    // UI side has just decided to keep closed. It is the verification source that
+    // makes the two disagree: `config.webcam.enabled` is true for it as well --
+    // the overlay is composited either way -- but the pixels come from the
+    // synthetic source, and a camera opened here would deliver samples nothing
+    // reads.
+    if (ShouldRunWebcamDevice(static_webcam_source_ != nullptr, ctx.webcam_settings.enabled,
+                              !ctx.webcam_settings.device_id.empty(), /*recording=*/false, /*preparing=*/true,
+                              /*record_preview_active=*/false, /*settings_preview_active=*/false)) {
         // Keep the already-running shared capture (the live PiP preview) instead of
         // stopping and restarting it, which blanks the webcam for a moment right as
         // recording begins. Settings changes before this point already restarted the
