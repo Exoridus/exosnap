@@ -65,10 +65,14 @@ struct PreviewTapPlan {
                                                       float display_max_luminance_nits) noexcept;
 
 // Pure: decide whether a session's pre-encode surface can be tapped and which
-// transform the consumer must apply. hdr_peak_scale is the session's already
-// resolved HdrPeakScale() value; it is passed through for ScrgbHdr.
+// transform the consumer must apply. hdr_peak_scale and paper_white_scale are
+// the session's already resolved HdrPeakScale() and SdrPaperWhiteScale() values;
+// both are passed through for ScrgbHdr. They are taken resolved rather than
+// derived here so the session policy has exactly one owner: the caller holds the
+// display facts, and a second derivation could disagree with the one the encoder
+// already applied.
 [[nodiscard]] inline PreviewTapPlan ResolvePreviewTapPlan(bool hdr_native_active, bool pq_input_is_pq,
-                                                          float hdr_peak_scale) noexcept {
+                                                          float hdr_peak_scale, float paper_white_scale) noexcept {
     PreviewTapPlan plan;
     if (!hdr_native_active) {
         return plan; // SDR / tone-mapped sessions tap an SDR surface: no transform
@@ -79,6 +83,7 @@ struct PreviewTapPlan {
     }
     plan.desc.transform = PreviewTapTransform::ScrgbHdr;
     plan.desc.peak_scale = hdr_peak_scale;
+    plan.desc.paper_white_scale = paper_white_scale;
     return plan;
 }
 

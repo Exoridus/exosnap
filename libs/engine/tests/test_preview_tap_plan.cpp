@@ -11,7 +11,7 @@
 using namespace exosnap::engine;
 
 TEST(PreviewTapPlan, SdrSessionTapsWithoutTransform) {
-    const PreviewTapPlan plan = ResolvePreviewTapPlan(false, false, 1.0f);
+    const PreviewTapPlan plan = ResolvePreviewTapPlan(false, false, 1.0f, 1.0f);
     EXPECT_TRUE(plan.tap_enabled);
     EXPECT_EQ(plan.desc.transform, PreviewTapTransform::None);
     EXPECT_FLOAT_EQ(plan.desc.peak_scale, 1.0f);
@@ -20,23 +20,41 @@ TEST(PreviewTapPlan, SdrSessionTapsWithoutTransform) {
 TEST(PreviewTapPlan, ToneMappedSessionTapsWithoutTransform) {
     // A tone-mapped HDR session already shares an SDR surface; its peak scale
     // was consumed engine-side and must not leak into the consumer transform.
-    const PreviewTapPlan plan = ResolvePreviewTapPlan(false, false, 12.5f);
+    const PreviewTapPlan plan = ResolvePreviewTapPlan(false, false, 12.5f, 3.5f);
     EXPECT_TRUE(plan.tap_enabled);
     EXPECT_EQ(plan.desc.transform, PreviewTapTransform::None);
     EXPECT_FLOAT_EQ(plan.desc.peak_scale, 1.0f);
 }
 
 TEST(PreviewTapPlan, NativeHdrTapsWithScrgbToneMapAndSessionPeak) {
-    const PreviewTapPlan plan = ResolvePreviewTapPlan(true, false, 12.5f);
+    const PreviewTapPlan plan = ResolvePreviewTapPlan(true, false, 12.5f, 3.5f);
     EXPECT_TRUE(plan.tap_enabled);
     EXPECT_EQ(plan.desc.transform, PreviewTapTransform::ScrgbHdr);
     EXPECT_FLOAT_EQ(plan.desc.peak_scale, 12.5f);
 }
 
+TEST(PreviewTapPlan, NativeHdrCarriesTheSessionPaperWhiteScale) {
+    // The consumer divides by this before rolling off. Left at 1.0 the preview
+    // tone-maps scene-referred values the encoder has already normalised, and
+    // the same frame is brighter in the preview than in the file by exactly this
+    // factor.
+    const PreviewTapPlan plan = ResolvePreviewTapPlan(true, false, 12.5f, 3.5f);
+    EXPECT_FLOAT_EQ(plan.desc.paper_white_scale, 3.5f);
+}
+
+TEST(PreviewTapPlan, PaperWhiteScaleReachesOnlyTheScrgbHdrTransform) {
+    // Paper white is meaningful for ScrgbHdr alone (PreviewTapDesc). A session
+    // that taps an SDR surface, and the untapped already-PQ sub-path, must both
+    // report the identity whatever the caller resolved.
+    EXPECT_FLOAT_EQ(ResolvePreviewTapPlan(false, false, 12.5f, 3.5f).desc.paper_white_scale, 1.0f);
+    EXPECT_FLOAT_EQ(ResolvePreviewTapPlan(true, true, 12.5f, 3.5f).desc.paper_white_scale, 1.0f);
+    EXPECT_FLOAT_EQ(ResolvePreviewTapPlan(false, true, 1.0f, 3.5f).desc.paper_white_scale, 1.0f);
+}
+
 TEST(PreviewTapPlan, AlreadyPqNativeSubPathDoesNotTap) {
     // R10G10B10A2 PQ desktop: non-linear surface, no linear intermediate to
     // share — the preview keeps its own WGC capture (see the design doc).
-    const PreviewTapPlan plan = ResolvePreviewTapPlan(true, true, 12.5f);
+    const PreviewTapPlan plan = ResolvePreviewTapPlan(true, true, 12.5f, 3.5f);
     EXPECT_FALSE(plan.tap_enabled);
     EXPECT_EQ(plan.desc.transform, PreviewTapTransform::None);
 }
@@ -44,7 +62,7 @@ TEST(PreviewTapPlan, AlreadyPqNativeSubPathDoesNotTap) {
 TEST(PreviewTapPlan, PqFlagWithoutNativeIsIgnored) {
     // pq_input_is_pq is only ever set for native sessions; if it leaks in for a
     // non-native one the tap must still behave like plain SDR.
-    const PreviewTapPlan plan = ResolvePreviewTapPlan(false, true, 1.0f);
+    const PreviewTapPlan plan = ResolvePreviewTapPlan(false, true, 1.0f, 3.5f);
     EXPECT_TRUE(plan.tap_enabled);
     EXPECT_EQ(plan.desc.transform, PreviewTapTransform::None);
 }

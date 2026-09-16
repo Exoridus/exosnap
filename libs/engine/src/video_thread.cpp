@@ -3074,7 +3074,8 @@ void VideoThread::Run() {
     // The only untapped session is the already-PQ R10G10B10A2 native sub-path:
     // its surface is non-linear PQ with no linear intermediate, so the preview
     // keeps its own WGC capture there. See product-spec / KNOWN_LIMITATIONS.
-    const PreviewTapPlan previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, hdrPqInputIsPq, hdrPeakScale);
+    const PreviewTapPlan previewTapPlan =
+        ResolvePreviewTapPlan(hdrNativeActive, hdrPqInputIsPq, hdrPeakScale, hdrPaperWhiteScale);
     PreviewSharedTexture previewSharedTex;
     bool previewSharedInitFailed = false;
     bool previewTransportPoisoned = false;
