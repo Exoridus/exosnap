@@ -510,6 +510,21 @@ QJsonObject QuickLiveVerifySource::RecordSnapshot() const {
         const QString source = coordinator->VerificationWebcamSourceName();
         json.insert(QStringLiteral("webcamSource"), source.isEmpty() ? QStringLiteral("device") : source);
     }
+    // Which displays this machine offers, and what the product calls each of
+    // them. A campaign that has to bind one monitor needs both names: the device
+    // the operating system knows and the label the product selects by. Without
+    // this the only way to choose a display is to take whichever one enumerated
+    // first, and the evidence then cannot say which display it recorded.
+    QJsonArray displays;
+    for (const QVariant& entry : record->displayTargetOptions()) {
+        const QVariantMap option = entry.toMap();
+        QJsonObject display;
+        display.insert(QStringLiteral("identity"), option.value(QStringLiteral("identity")).toString());
+        display.insert(QStringLiteral("label"), option.value(QStringLiteral("label")).toString());
+        display.insert(QStringLiteral("selected"), option.value(QStringLiteral("selected")).toBool());
+        displays.append(display);
+    }
+    json.insert(QStringLiteral("displayTargets"), displays);
     json.insert(QStringLiteral("state"), record->state());
     json.insert(QStringLiteral("stateText"), record->stateText());
     json.insert(QStringLiteral("recording"), record->recording());
@@ -907,7 +922,7 @@ bool QuickLiveVerifySource::SelectRecordTarget(const QString& kind, const QStrin
     const auto target_kind = kind == QStringLiteral("window") ? exosnap::engine::CaptureTarget::Kind::Window
                                                               : exosnap::engine::CaptureTarget::Kind::Monitor;
     if (!application_.selectCaptureTargetForAutomation(target_kind, title_filter)) {
-        *error = QStringLiteral("No %1 target matched").arg(kind);
+        *error = QStringLiteral("No %1 target matched \"%2\"").arg(kind, title_filter);
         return false;
     }
     return true;

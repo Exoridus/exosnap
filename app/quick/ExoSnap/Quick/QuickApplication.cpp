@@ -5536,10 +5536,7 @@ bool QuickApplication::selectCaptureTargetForAutomation(exosnap::engine::Capture
                                                         const QString& title_filter) {
     for (std::size_t index = 0; index < record_view_model_.targets.size(); ++index) {
         const exosnap::engine::CaptureTarget& target = record_view_model_.targets[index];
-        if (target.kind != kind)
-            continue;
-        if (kind == exosnap::engine::CaptureTarget::Kind::Window &&
-            !QString::fromStdString(target.description).contains(title_filter, Qt::CaseInsensitive))
+        if (!CaptureTargetMatchesFilter(target, kind, title_filter.toStdString()))
             continue;
         const CaptureMode mode =
             kind == exosnap::engine::CaptureTarget::Kind::Window ? CaptureMode::Window : CaptureMode::Monitor;

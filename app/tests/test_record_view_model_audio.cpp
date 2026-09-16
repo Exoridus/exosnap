@@ -1029,4 +1029,64 @@ TEST(RecordViewModelPreviewRevertTest, DoesNotRevertWhileActiveOrTransient) {
 }
 
 } // namespace
+
+// ─── Automation target filter ────────────────────────────────────────────────
+//
+// The predicate record.selectTarget picks with. It used to apply to windows
+// only; a caller asking for one display therefore got whichever display
+// enumerated first, and the result said nothing about which.
+
+exosnap::engine::CaptureTarget MakeTarget(exosnap::engine::CaptureTarget::Kind kind, const char* description,
+                                          uintptr_t id) {
+    exosnap::engine::CaptureTarget target;
+    target.kind = kind;
+    target.native_id = id;
+    target.description = description;
+    return target;
+}
+
+TEST(CaptureTargetFilter, AMonitorFilterSelectsTheRequestedDisplay) {
+    const auto first = MakeTarget(exosnap::engine::CaptureTarget::Kind::Monitor, R"(\\.\DISPLAY1)", 1);
+    const auto second = MakeTarget(exosnap::engine::CaptureTarget::Kind::Monitor, R"(\\.\DISPLAY2)", 2);
+
+    EXPECT_FALSE(CaptureTargetMatchesFilter(first, exosnap::engine::CaptureTarget::Kind::Monitor, "DISPLAY2"));
+    EXPECT_TRUE(CaptureTargetMatchesFilter(second, exosnap::engine::CaptureTarget::Kind::Monitor, "DISPLAY2"));
+}
+
+TEST(CaptureTargetFilter, AMonitorFilterThatMatchesNothingSelectsNothing) {
+    const auto only = MakeTarget(exosnap::engine::CaptureTarget::Kind::Monitor, R"(\\.\DISPLAY1)", 1);
+
+    EXPECT_FALSE(CaptureTargetMatchesFilter(only, exosnap::engine::CaptureTarget::Kind::Monitor, "DISPLAY7"));
+}
+
+TEST(CaptureTargetFilter, AnEmptyFilterStillTakesTheFirstOfItsKind) {
+    // The behaviour every existing caller relies on: no filter means no
+    // preference, and the caller takes whatever the enumeration offers first.
+    const auto monitor = MakeTarget(exosnap::engine::CaptureTarget::Kind::Monitor, R"(\\.\DISPLAY1)", 1);
+
+    EXPECT_TRUE(CaptureTargetMatchesFilter(monitor, exosnap::engine::CaptureTarget::Kind::Monitor, ""));
+}
+
+TEST(CaptureTargetFilter, WindowFilteringIsUnchangedBySharingThePredicate) {
+    // Two windows, so this shows the shared condition still discriminates rather
+    // than merely accepting the first one.
+    const auto editor = MakeTarget(exosnap::engine::CaptureTarget::Kind::Window, "Notepad - untitled", 10);
+    const auto reference = MakeTarget(exosnap::engine::CaptureTarget::Kind::Window, "ExoSnap overlay reference", 11);
+
+    EXPECT_FALSE(CaptureTargetMatchesFilter(editor, exosnap::engine::CaptureTarget::Kind::Window, "overlay reference"));
+    EXPECT_TRUE(
+        CaptureTargetMatchesFilter(reference, exosnap::engine::CaptureTarget::Kind::Window, "overlay reference"));
+    // Case-insensitive, as it always was.
+    EXPECT_TRUE(
+        CaptureTargetMatchesFilter(reference, exosnap::engine::CaptureTarget::Kind::Window, "OVERLAY REFERENCE"));
+}
+
+TEST(CaptureTargetFilter, TheKindIsCheckedBeforeTheText) {
+    // A window whose title happens to contain a display name must not answer a
+    // request for a monitor.
+    const auto window = MakeTarget(exosnap::engine::CaptureTarget::Kind::Window, "notes about DISPLAY2", 12);
+
+    EXPECT_FALSE(CaptureTargetMatchesFilter(window, exosnap::engine::CaptureTarget::Kind::Monitor, "DISPLAY2"));
+}
+
 } // namespace exosnap
