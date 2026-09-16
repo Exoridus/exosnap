@@ -457,6 +457,16 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 
+# What a running session may adopt from its display without being rebuilt: the
+# scalars every consumer holds as a GPU constant, against the colour-space
+# change none of them can follow. Pure, GPU-free.
+exosnap_add_gtest(
+    NAME test_hdr_session_dynamic
+    TEST_PREFIX engine.
+    SOURCES tests/test_hdr_session_dynamic.cpp
+    LIBRARIES exosnap_engine
+)
+
 # Preview-tap plan: which sessions share their pre-encode surface with the
 # preview and which display transform the consumer applies. Pure, GPU-free.
 exosnap_add_gtest(

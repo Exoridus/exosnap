@@ -65,10 +65,18 @@ class DxgiSourceProducer final : public HubSourceProducer {
         return device_generation_;
     }
 
-    // HDR facts of the duplicated display, sampled at Open (see
-    // DxgiOdCaptureSrc). Feed ResolveRawCaptureTapDesc for FP16 frames.
+    // HDR facts of the duplicated display, sampled at Open and whenever
+    // RefreshDisplayFacts() is polled (see DxgiOdCaptureSrc). Feed
+    // ResolveRawCaptureTapDesc for FP16 frames.
     [[nodiscard]] const exosnap::engine::HdrDisplayFacts& DisplayFacts() const noexcept {
         return od_.DisplayFacts();
+    }
+
+    // Re-read the display's facts; true when any of them moved. See
+    // DxgiOdCaptureSrc::RefreshDisplayFacts for why this is polled rather than
+    // waited on.
+    [[nodiscard]] bool RefreshDisplayFacts() {
+        return od_.RefreshDisplayFacts();
     }
 
   private:

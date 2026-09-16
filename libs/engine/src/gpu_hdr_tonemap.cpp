@@ -112,6 +112,21 @@ struct ToneMapConstants {
     float params[4]; // x = peak scale, y = sdr scRGB source flag, z = SDR paper-white scale, w reserved
 };
 
+ToneMapConstants MakeToneMapConstants(float peak_scale, float paper_white_scale, bool sdr_scrgb_source,
+                                      bool pq_source) {
+    ToneMapConstants pc{};
+    pc.params[0] = peak_scale;
+    pc.params[1] = sdr_scrgb_source ? 1.0f : 0.0f;
+    // Only the scene-referred (HDR desktop) path normalises. An SDR
+    // Advanced-Color desktop is display-referred -- documented as "(1.0, 1.0,
+    // 1.0) always means the maximum white luminance that the display can
+    // reproduce" -- so there is nothing to undo there, and dividing would darken
+    // a picture that measures correct today.
+    pc.params[2] = sdr_scrgb_source ? 1.0f : (paper_white_scale > 1.0f ? paper_white_scale : 1.0f);
+    pc.params[3] = pq_source ? 1.0f : 0.0f;
+    return pc;
+}
+
 void SetHResultError(std::string& err, const char* what, HRESULT hr) {
     char buf[128];
     std::snprintf(buf, sizeof(buf), "%s failed 0x%08lX", what, static_cast<unsigned long>(hr));
@@ -178,16 +193,11 @@ bool HdrToneMapper::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
         return false;
     }
 
-    ToneMapConstants pc{};
-    pc.params[0] = peak_scale;
-    pc.params[1] = sdr_scrgb_source ? 1.0f : 0.0f;
-    // Only the scene-referred (HDR desktop) path normalises. An SDR
-    // Advanced-Color desktop is display-referred -- documented as "(1.0, 1.0,
-    // 1.0) always means the maximum white luminance that the display can
-    // reproduce" -- so there is nothing to undo there, and dividing would darken
-    // a picture that measures correct today.
-    pc.params[2] = sdr_scrgb_source ? 1.0f : (paper_white_scale > 1.0f ? paper_white_scale : 1.0f);
-    pc.params[3] = pq_source ? 1.0f : 0.0f;
+    peak_scale_ = peak_scale;
+    paper_white_scale_ = paper_white_scale;
+    sdr_scrgb_source_ = sdr_scrgb_source;
+    pq_source_ = pq_source;
+    const ToneMapConstants pc = MakeToneMapConstants(peak_scale_, paper_white_scale_, sdr_scrgb_source_, pq_source_);
 
     D3D11_BUFFER_DESC const_desc{};
     const_desc.ByteWidth = sizeof(ToneMapConstants);
@@ -202,6 +212,20 @@ bool HdrToneMapper::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     }
 
     return true;
+}
+
+void HdrToneMapper::SetDisplayScales(float peak_scale, float paper_white_scale) {
+    if (constants_ == nullptr) {
+        return;
+    }
+    peak_scale_ = peak_scale;
+    paper_white_scale_ = paper_white_scale;
+    WriteConstants();
+}
+
+void HdrToneMapper::WriteConstants() {
+    const ToneMapConstants pc = MakeToneMapConstants(peak_scale_, paper_white_scale_, sdr_scrgb_source_, pq_source_);
+    context_->UpdateSubresource(constants_.get(), 0, nullptr, &pc, 0, 0);
 }
 
 ID3D11ShaderResourceView* HdrToneMapper::SrvFor(ID3D11Texture2D* tex, std::string& err) {

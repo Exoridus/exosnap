@@ -5,6 +5,7 @@
 #include <dxgiformat.h>
 
 #include <exosnap/engine/device_generation.h>
+#include <exosnap/engine/sdr_white_level.h>
 
 // ---------------------------------------------------------------------------
 // The WYSIWYG preview tap publishes the engine's pre-encode surface to the
@@ -101,6 +102,7 @@ struct CaptureTapPublishState {
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
     bool hdr_active = false;
     float max_luminance_nits = 0.0f;
+    float sdr_white_level_nits = 0.0f;
 };
 
 struct CaptureTapFrameState {
@@ -110,6 +112,7 @@ struct CaptureTapFrameState {
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
     bool hdr_active = false;
     float max_luminance_nits = 0.0f;
+    float sdr_white_level_nits = 0.0f;
 };
 
 // Pure: whether the DXGI capture hub's publish loop must (re)create the shared
@@ -122,7 +125,10 @@ struct CaptureTapFrameState {
 //   * The display's HDR facts changed. An Advanced-Color desktop keeps
 //     delivering the same FP16 format across a live Windows-HDR (or Auto-HDR)
 //     toggle, so dimensions and format alone cannot tell that the resolved tap's
-//     peak_scale and transform have gone stale.
+//     peak_scale and transform have gone stale. The SDR content brightness is
+//     part of this and moves on its own: the slider changes nothing else here,
+//     and the level is compared as it RESOLVES rather than as it reads, because
+//     an unknown and an implausible value mean the same picture.
 //   * The producer's device was replaced. Everything above can be identical
 //     after a DEVICE_REMOVED or an adapter-matched reopen -- the desktop is the
 //     same size, the same format, in the same HDR state -- while the shared
@@ -136,7 +142,9 @@ struct CaptureTapFrameState {
         frame.format != published.format) {
         return true;
     }
-    return frame.hdr_active != published.hdr_active || frame.max_luminance_nits != published.max_luminance_nits;
+    return frame.hdr_active != published.hdr_active || frame.max_luminance_nits != published.max_luminance_nits ||
+           EffectiveOverlayReferenceWhiteNits(frame.sdr_white_level_nits) !=
+               EffectiveOverlayReferenceWhiteNits(published.sdr_white_level_nits);
 }
 
 } // namespace exosnap::engine

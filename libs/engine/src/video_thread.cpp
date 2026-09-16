@@ -8,6 +8,7 @@
 #include "gpu_hdr_pq.h"
 #include "gpu_rgb_to_ayuv.h"
 #include "hdr_preview.h"
+#include "hdr_session_dynamic.h"
 #include "hdr_tonemap.h"
 #include "thread_dpi_scope.h"
 #include <exosnap/engine/dxgi_od_capture_src.h>
@@ -502,6 +503,14 @@ void VideoThread::Run() {
     // monitor handle used on both paths — the WGC path's documented "resolved once
     // at session start" limitation applies here too).
     const bool initialHdrActive = useOdCapture ? odSrc.HdrActive() : wgcHdrFacts.hdr_active;
+    // The display state every consumer's colour scalars were resolved from, kept
+    // so the periodic guard can say what changed rather than only whether HDR is
+    // still on. Advanced by the guard itself when a change is one the session can
+    // adopt, so the two never drift apart.
+    HdrDisplayFacts sessionDisplayFacts = useOdCapture ? odSrc.DisplayFacts() : wgcHdrFacts;
+    // Set by the guard, consumed by the encode loop: the scalars below are held
+    // by GPU objects that are not built yet at the point the guard is declared.
+    bool displayScalarsChanged = false;
     const HMONITOR hdrCheckMonitor = useOdCapture ? reinterpret_cast<HMONITOR>(target.native_id) : wgcMonitor;
 
     // Capture dimensions
@@ -1966,7 +1975,18 @@ void VideoThread::Run() {
             return;
         }
         hdrCheckFailures = 0;
-        if (freshFacts.hdr_active != initialHdrActive) {
+        const DisplayFactsChange change = ClassifyDisplayFactsChange(sessionDisplayFacts, freshFacts);
+        if (change == DisplayFactsChange::LiveParameters) {
+            // Scalars only -- the SDR content brightness slider, or a display that
+            // reported a new peak. The desktop arrives composed at the new level
+            // from here on, so every consumer holding the old one draws the same
+            // frame at the wrong brightness. Applied together in the encode loop;
+            // this only records that it is owed.
+            sessionDisplayFacts = freshFacts;
+            displayScalarsChanged = true;
+            return;
+        }
+        if (change == DisplayFactsChange::SessionMode) {
             // Says what happened, what it cost and what to do. The colour
             // description is committed once into the encoder's bitstream, not
             // just the container, so continuing would mislabel every remaining
@@ -3074,12 +3094,55 @@ void VideoThread::Run() {
     // The only untapped session is the already-PQ R10G10B10A2 native sub-path:
     // its surface is non-linear PQ with no linear intermediate, so the preview
     // keeps its own WGC capture there. See product-spec / KNOWN_LIMITATIONS.
-    const PreviewTapPlan previewTapPlan =
+    PreviewTapPlan previewTapPlan =
         ResolvePreviewTapPlan(hdrNativeActive, hdrPqInputIsPq, hdrPeakScale, hdrPaperWhiteScale);
     PreviewSharedTexture previewSharedTex;
     bool previewSharedInitFailed = false;
     bool previewTransportPoisoned = false;
     PreviewPublishGate previewGate(kPreviewMinIntervalNs);
+
+    // The other half of the periodic display guard: every consumer of the
+    // display's colour scalars takes the new ones in the same tick.
+    //
+    // Nothing here rebuilds a GPU object. The tone-map pass rewrites two floats
+    // in its constant buffer, the compositor reads its reference white per
+    // sprite draw, and the preview tap re-announces itself -- the transform it
+    // publishes travels with the shared handle, so a fresh announcement is how
+    // the consumer learns a new one. Splitting the update across ticks is what
+    // must not happen: the preview and the file would disagree until the next.
+    const auto applyDisplayScalarChange = [&]() {
+        if (!displayScalarsChanged)
+            return;
+        displayScalarsChanged = false;
+
+        const SessionHdrDynamicState state = ResolveSessionHdrDynamicState(sessionDisplayFacts);
+        hdrPeakScale = state.peak_scale;
+        hdrPaperWhiteScale = state.paper_white_scale;
+
+        if (hdrToneMapActive)
+            hdrToneMapper.SetDisplayScales(state.peak_scale, state.paper_white_scale);
+        if (gpuCompositorReady && hdrNativeActive)
+            gpuCompositor.SetOverlayReferenceWhiteNits(state.overlay_reference_white_nits);
+
+        // Re-resolved rather than assigned field by field: which scalars are
+        // meaningful for this session is the plan's decision, and there must not
+        // be a second copy of it here.
+        previewTapPlan =
+            ResolvePreviewTapPlan(hdrNativeActive, hdrPqInputIsPq, state.peak_scale, state.paper_white_scale);
+        // Dropping the shared texture is what re-announces the descriptor: the
+        // handle callback is one-shot by contract, so the next tapped frame
+        // creates a texture and hands the consumer the new transform with it.
+        if (previewTapPlan.tap_enabled)
+            previewSharedTex.Reset();
+
+        const logging::LogField fields[] = {
+            {"sdr_white_level_nits", std::to_string(sessionDisplayFacts.sdr_white_level_nits)},
+            {"paper_white_scale", std::to_string(state.paper_white_scale)},
+            {"peak_scale", std::to_string(state.peak_scale)}};
+        logging::log(logging::LogLevel::Info, "video_thread",
+                     "the captured display changed its colour scalars; tone-map, overlays and preview updated",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    };
 
     auto tapPreviewSource = [&](ID3D11Texture2D* vpInput, uint64_t pts_ns) {
         if (!m_state.preview_shared_handle_cb)
@@ -3325,6 +3388,7 @@ void VideoThread::Run() {
             }
 
             CheckHdrStateChanged();
+            applyDisplayScalarChange();
             if (m_state.stop_requested.load()) {
                 break;
             }
@@ -4079,6 +4143,7 @@ void VideoThread::Run() {
             }
 
             CheckHdrStateChanged();
+            applyDisplayScalarChange();
             if (m_state.stop_requested.load()) {
                 break;
             }

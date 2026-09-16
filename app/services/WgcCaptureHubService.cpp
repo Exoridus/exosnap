@@ -152,9 +152,17 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
         // Same rule as the DXGI hub: a shared texture is only reusable while the
         // device it lives on is the device still in use. The dimensions and format
         // are identical across a rebuild, so they cannot answer this.
-        const exosnap::engine::CaptureTapFrameState incoming{device_generation,    description.Width,
-                                                             description.Height,   description.Format,
-                                                             published.hdr_active, published.max_luminance_nits};
+        // The display facts are carried over from `published` rather than read:
+        // this hub publishes an untransformed descriptor, so they are not what
+        // it republishes on -- only the device, the dimensions and the format
+        // are. Copying them keeps that deliberate.
+        const exosnap::engine::CaptureTapFrameState incoming{device_generation,
+                                                             description.Width,
+                                                             description.Height,
+                                                             description.Format,
+                                                             published.hdr_active,
+                                                             published.max_luminance_nits,
+                                                             published.sdr_white_level_nits};
         if (exosnap::engine::ShouldRepublishCaptureTap(published, incoming)) {
             shared.Reset();
             HANDLE handle = nullptr;

@@ -115,11 +115,12 @@ CaptureTapPublishState Published() {
                                   1440,
                                   DXGI_FORMAT_R16G16B16A16_FLOAT,
                                   /*hdr_active=*/false,
-                                  /*max_luminance_nits=*/0.0f};
+                                  /*max_luminance_nits=*/0.0f,
+                                  /*sdr_white_level_nits=*/0.0f};
 }
 
 CaptureTapFrameState Frame() {
-    return CaptureTapFrameState{kDevA, 2560, 1440, DXGI_FORMAT_R16G16B16A16_FLOAT, false, 0.0f};
+    return CaptureTapFrameState{kDevA, 2560, 1440, DXGI_FORMAT_R16G16B16A16_FLOAT, false, 0.0f, 0.0f};
 }
 
 } // namespace
@@ -245,4 +246,41 @@ TEST(PreviewTapPlanTest, PaperWhiteScaleIsCarriedForHdrAndNeutralOtherwise) {
     const PreviewTapDesc plain = ResolveRawCaptureTapDesc(DXGI_FORMAT_B8G8R8A8_UNORM, true, 280.0f, 1000.0f);
     EXPECT_EQ(plain.transform, PreviewTapTransform::None);
     EXPECT_FLOAT_EQ(plain.paper_white_scale, 1.0f);
+}
+
+// The SDR content brightness the desktop is composed at is part of what the
+// published tap describes, and it moves independently of everything else here:
+// the slider changes no dimension, no format, and not the HDR state. Without it
+// in the comparison an FP16 HDR desktop kept its first paper white for the whole
+// session, and the idle preview drew every frame at the wrong brightness until
+// something unrelated forced a refresh.
+TEST(ShouldRepublishCaptureTap, ANewSdrWhiteLevelRepublishes) {
+    CaptureTapPublishState published = Published();
+    published.hdr_active = true;
+    published.max_luminance_nits = 1000.0f;
+    published.sdr_white_level_nits = 280.0f;
+
+    CaptureTapFrameState frame = Frame();
+    frame.hdr_active = true;
+    frame.max_luminance_nits = 1000.0f;
+    frame.sdr_white_level_nits = 120.0f;
+
+    EXPECT_TRUE(ShouldRepublishCaptureTap(published, frame));
+}
+
+// What the consumer would draw is the question, not the raw reading: an unknown
+// and an implausible level both resolve to the OS default, and recreating a
+// shared texture for an identical picture costs a preview frame for nothing.
+TEST(ShouldRepublishCaptureTap, SdrWhiteReadingsResolvingToTheSameLevelDoNotRepublish) {
+    CaptureTapPublishState published = Published();
+    published.hdr_active = true;
+    published.max_luminance_nits = 1000.0f;
+    published.sdr_white_level_nits = 0.0f;
+
+    CaptureTapFrameState frame = Frame();
+    frame.hdr_active = true;
+    frame.max_luminance_nits = 1000.0f;
+    frame.sdr_white_level_nits = 100000.0f;
+
+    EXPECT_FALSE(ShouldRepublishCaptureTap(published, frame));
 }

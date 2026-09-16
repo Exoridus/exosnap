@@ -211,6 +211,20 @@ bool QueryDisplayHdrFacts(HMONITOR hmonitor, HdrDisplayFacts& out_facts) {
     return false;
 }
 
+bool DxgiOdCaptureSrc::RefreshDisplayFacts() {
+    HdrDisplayFacts fresh;
+    if (!QueryDisplayHdrFacts(m_monitor, fresh)) {
+        return false;
+    }
+    const bool changed = fresh.hdr_active != m_hdr_facts.hdr_active ||
+                         fresh.max_luminance_nits != m_hdr_facts.max_luminance_nits ||
+                         fresh.sdr_white_level_nits != m_hdr_facts.sdr_white_level_nits;
+    m_hdr_facts = fresh;
+    m_hdr_active = fresh.hdr_active;
+    m_max_luminance_nits = fresh.max_luminance_nits;
+    return changed;
+}
+
 // Resolve the IDXGIOutput to duplicate for `device`, using a FRESH DXGI factory so
 // the current display topology is seen (a device's original adapter/output
 // enumeration and HMONITOR handles go stale after a monitor hot-plug or mode/

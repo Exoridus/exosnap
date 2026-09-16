@@ -71,6 +71,17 @@ class DxgiOdCaptureSrc {
         return m_hdr_facts;
     }
 
+    // Re-read the duplicated display's facts and report whether any of them
+    // moved. The facts above are otherwise read once, in Open(), and the SDR
+    // content brightness is the one a user changes without the duplication
+    // noticing: it triggers no mode change, so nothing reopens and nothing else
+    // in the frame says the desktop is now composed at a different level.
+    //
+    // Costs one IDXGIOutput6::GetDesc1 plus one DisplayConfig query, so callers
+    // poll it rather than calling it per frame. False on a query that fails, and
+    // the previous facts are kept: not being able to answer is not a change.
+    bool RefreshDisplayFacts();
+
     // Non-blocking (timeout_ms=0) or timed acquire.
     // On success: returns true; *out_texture is borrowed until ReleaseFrame().
     // On timeout: returns false, *out_hr == DXGI_ERROR_WAIT_TIMEOUT.

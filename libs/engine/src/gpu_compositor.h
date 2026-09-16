@@ -36,6 +36,16 @@ class GpuCompositor {
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
               DXGI_FORMAT render_format = DXGI_FORMAT_B8G8R8A8_UNORM,
               float overlay_reference_white_nits = kDefaultSdrWhiteLevelNits);
+    // Replace the overlay reference white on an initialised compositor, with the
+    // same bounds Init applies (EffectiveOverlayReferenceWhiteNits) and the same
+    // FP16-only meaning.
+    //
+    // The captured display's SDR content brightness can change while a recording
+    // runs, and from that moment the desktop underneath the overlays is composed
+    // at the new level. An overlay left at the old one is the only thing in the
+    // frame that did not move with it.
+    void SetOverlayReferenceWhiteNits(float overlay_reference_white_nits) noexcept;
+
     bool BeginFrame(ID3D11Texture2D* background, std::string& err);
 
     // opacity: uniform overlay opacity [0,1] multiplied onto the sprite's alpha

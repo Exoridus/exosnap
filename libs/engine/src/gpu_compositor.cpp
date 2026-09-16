@@ -170,6 +170,12 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     return true;
 }
 
+void GpuCompositor::SetOverlayReferenceWhiteNits(float overlay_reference_white_nits) noexcept {
+    // Read per DrawTexture into the sprite's constants, so there is nothing to
+    // rewrite here -- the next draw picks this up.
+    overlay_ref_white_nits_ = EffectiveOverlayReferenceWhiteNits(overlay_reference_white_nits);
+}
+
 bool GpuCompositor::BeginFrame(ID3D11Texture2D* background, std::string& err) {
     if (background == nullptr || composite_tex_ == nullptr || context_ == nullptr) {
         err = "GpuCompositor::BeginFrame called before Init or without background";

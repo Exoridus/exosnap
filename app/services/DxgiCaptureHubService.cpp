@@ -168,9 +168,13 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
         D3D11_TEXTURE2D_DESC desc{};
         frame.texture->GetDesc(&desc);
         const exosnap::engine::HdrDisplayFacts& facts = producer->DisplayFacts();
-        const exosnap::engine::CaptureTapFrameState incoming{
-            producer->DeviceGenerationValue(), desc.Width, desc.Height, desc.Format, facts.hdr_active,
-            facts.max_luminance_nits};
+        const exosnap::engine::CaptureTapFrameState incoming{producer->DeviceGenerationValue(),
+                                                             desc.Width,
+                                                             desc.Height,
+                                                             desc.Format,
+                                                             facts.hdr_active,
+                                                             facts.max_luminance_nits,
+                                                             facts.sdr_white_level_nits};
         if (exosnap::engine::ShouldRepublishCaptureTap(published, incoming)) {
             // The old shared texture belongs to the old device. Released before the
             // new one is created, so a reopen cannot leave the consumer holding a
@@ -193,6 +197,7 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
             published.format = desc.Format;
             published.hdr_active = facts.hdr_active;
             published.max_luminance_nits = facts.max_luminance_nits;
+            published.sdr_white_level_nits = facts.sdr_white_level_nits;
             const exosnap::engine::PreviewTapDesc tap = exosnap::engine::ResolveRawCaptureTapDesc(
                 desc.Format, facts.hdr_active, facts.sdr_white_level_nits, facts.max_luminance_nits);
             // Ownership of the NT handle transfers to the sink.
@@ -213,10 +218,30 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
 
     std::vector<CaptureHubCommandQueue<SubscribePayload>::Entry> batch;
 
+    // The display's facts are read when the duplication opens and never again by
+    // itself: changing the Windows SDR content brightness triggers no mode
+    // change, so nothing reopens and the published tap keeps describing a
+    // desktop that is now composed at a different level. Polled on its own
+    // cadence rather than per frame -- it costs a DXGI and a DisplayConfig query
+    // -- and only the publish comparison decides what to do about a change.
+    auto lastFactsPollAt = std::chrono::steady_clock::now();
+    constexpr std::chrono::seconds kFactsPollDelay{2};
+
     while (!stop_token.stop_requested()) {
         commands_.WaitAndDrain(kPumpTick, batch);
         if (stop_token.stop_requested())
             break;
+
+        if (producer != nullptr) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - lastFactsPollAt >= kFactsPollDelay) {
+                lastFactsPollAt = now;
+                // The return value is deliberately unused: what the next frame is
+                // published against is the refreshed DisplayFacts(), and
+                // ShouldRepublishCaptureTap owns the decision either way.
+                (void)producer->RefreshDisplayFacts();
+            }
+        }
 
         // Every drained command is applied, in post order: nothing is dropped
         // because something newer arrived while the pump was busy.
