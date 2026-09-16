@@ -46,4 +46,18 @@ struct VisualFrameKey {
     return VisualFrameKey{gens.screen, gens.webcam, gens.cursor, gens.overlay, gens.color_pipeline};
 }
 
+// Whether one input's generation advanced since the last composited frame.
+//
+// Separate from the recomposition decision on purpose, and not the same
+// predicate. Recompositing must also happen when there is no previous key at
+// all -- the first composite of a session has nothing to reuse -- but that is
+// initialisation, not a change, and counting it makes a measurement of "did
+// this input move" read one on a session where it never did. A verification
+// source that serves one frame forever is exactly such a session, and it is the
+// baseline an overlay measurement is attributed against.
+[[nodiscard]] constexpr bool GenerationAdvanced(bool have_last_composited_key, uint64_t current,
+                                                uint64_t last_composited) noexcept {
+    return have_last_composited_key && current != last_composited;
+}
+
 } // namespace exosnap::engine

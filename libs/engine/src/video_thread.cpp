@@ -3734,7 +3734,12 @@ void VideoThread::Run() {
                 // count that a moving cursor also raises.
                 const bool overlayMoved = !haveLastCompositedKey ||
                                           currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
-                if (webcamMoved) {
+                // The counter asks whether the camera moved, which the
+                // recomposition decision above does not: that one must also fire
+                // when there is no previous key, and counting the first composite
+                // would report motion on a session that had none.
+                if (GenerationAdvanced(haveLastCompositedKey, currentVisualKey.webcam_generation,
+                                       lastCompositedKey.webcam_generation)) {
                     ++overlayTrace.webcam_generation_changes;
                 }
                 if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding, dynamicOverlayChanged,
