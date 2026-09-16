@@ -1091,10 +1091,21 @@ void VideoThread::Run() {
         uint64_t samples = 0;
         uint64_t generation_changes = 0;
         uint64_t webcam_generation_changes = 0;
+        // Ticks on which an overlay edit met a held screen and no fresh capture
+        // frame -- the only situation in which advancing the frame key has an
+        // observable consequence. Derived from the sampler's own comparison and
+        // from the capture state, never from visualGenerations, so a build whose
+        // frame key no longer advances still counts the same opportunities. A
+        // measurement whose denominator moved with the defect would report every
+        // broken run as having had nothing to find.
+        uint64_t hold_opportunities = 0;
         uint64_t recomposited_for_overlay = 0;
         uint64_t composited_with_overlay = 0;
     };
     OverlayTrace overlayTrace;
+    // Whether this tick's sample saw the overlay change. Reset per tick by
+    // sampleOverlay so the recomposition site can ask about the tick it is in.
+    bool overlayChangedThisTick = false;
 
     // Why the manually drawn WGC pointer is or is not in a frame. Every exit in
     // sampleWgcCursor below is silent by design -- an absent pointer is a normal
@@ -1160,7 +1171,8 @@ void VideoThread::Run() {
     auto sampleOverlay = [&]() -> WebcamOverlayLive {
         WebcamOverlayLive current = m_state.SnapshotWebcamOverlay();
         ++overlayTrace.samples;
-        if (!haveOverlaySnapshot || !(current == lastOverlaySnapshot)) {
+        overlayChangedThisTick = !haveOverlaySnapshot || !(current == lastOverlaySnapshot);
+        if (overlayChangedThisTick) {
             haveOverlaySnapshot = true;
             lastOverlaySnapshot = current;
             ++visualGenerations.overlay;
@@ -3742,6 +3754,16 @@ void VideoThread::Run() {
                                        lastCompositedKey.webcam_generation)) {
                     ++overlayTrace.webcam_generation_changes;
                 }
+                // The same structural preconditions the decision below uses, with
+                // the overlay term taken from the sampler instead of the frame
+                // key. Without this a run on a source that never holds -- output
+                // duplication on this machine delivers at the encode cadence
+                // whether the desktop changes or not -- reports zero
+                // recompositions and looks identical to one whose edits never
+                // reached the key at all.
+                if (overlayChangedThisTick && rawSourceTex == nullptr && !odHolding && heldScreenTex != nullptr) {
+                    ++overlayTrace.hold_opportunities;
+                }
                 if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding, dynamicOverlayChanged,
                                                 heldScreenTex != nullptr)) {
                     ++wgcCursorTrace.recomposited_for_overlay;
@@ -4560,6 +4582,7 @@ end_encode_loop:
             {"samples", std::to_string(overlayTrace.samples)},
             {"generation_changes", std::to_string(overlayTrace.generation_changes)},
             {"webcam_generation_changes", std::to_string(overlayTrace.webcam_generation_changes)},
+            {"hold_opportunities", std::to_string(overlayTrace.hold_opportunities)},
             {"recomposited_for_overlay", std::to_string(overlayTrace.recomposited_for_overlay)},
             {"composited_with_overlay", std::to_string(overlayTrace.composited_with_overlay)},
             {"backend", useOdCapture ? "od" : "wgc"}};
