@@ -3979,6 +3979,13 @@ void QuickApplication::initializeRecovery() {
                          info.manifest_entry = entry;
                          info.target_valid = false;
                          if (recording_coordinator_->ArmFromRecovery(info)) {
+                             // The interrupted artefact is the continued session's
+                             // first slice, so it is repaired in the background now.
+                             // Without this the user is given a slice boundary with
+                             // nothing before it: the artefact would stay a
+                             // ".partial" that only a later Finish ever turns into a
+                             // file.
+                             recovery_adapter_.finishById(entry.id);
                              emit shell_adapter_.navigateToPageRequested(ShellAdapter::RecordPage);
                          } else {
                              diagnostics::AppLog::warning(

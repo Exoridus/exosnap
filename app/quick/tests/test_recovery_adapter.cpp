@@ -200,8 +200,44 @@ TEST_F(RecoveryAdapterTest, ContinueHandsTheEntryToTheCompositionRootAndLowersTh
 
     ASSERT_EQ(spy.count(), 1);
     EXPECT_FALSE(adapter_.surfaceOpen()) << "arming lands on Record; a scrim over it would hide the session";
-    // The candidate stays: arming does not resolve the manifest entry, the
-    // coordinator does when the resumed session completes.
+    // The candidate stays: the request alone resolves nothing. The composition
+    // root arms the session and then asks for the repair that does.
+    EXPECT_EQ(adapter_.candidateCount(), 1);
+}
+
+// Continuing a candidate hands the repair back to this adapter by manifest id,
+// because the surface is closed by then and the row index has stopped being a
+// safe address. The repair itself is a real remux and is covered by the drills;
+// what is pinned here is that the right row is the one that starts running.
+TEST_F(RecoveryAdapterTest, ARepairAddressedByIdRunsOnThatCandidatesRow) {
+    addLiveCandidate(QStringLiteral("first"));
+    addLiveCandidate(QStringLiteral("second"));
+    ASSERT_EQ(adapter_.scan(), 2);
+
+    int row = -1;
+    for (int i = 0; i < adapter_.candidateCount(); ++i) {
+        if (role(i, "displayName").toString().contains(QStringLiteral("second")))
+            row = i;
+    }
+    ASSERT_GE(row, 0);
+
+    adapter_.finishById(QStringLiteral("second"));
+
+    EXPECT_TRUE(adapter_.busy());
+    EXPECT_TRUE(role(row, "busy").toBool());
+    for (int i = 0; i < adapter_.candidateCount(); ++i) {
+        if (i != row)
+            EXPECT_FALSE(role(i, "busy").toBool()) << "row " << i << " is not the one that was asked for";
+    }
+}
+
+TEST_F(RecoveryAdapterTest, ARepairAddressedByAnIdNoRowCarriesIsIgnored) {
+    addLiveCandidate(QStringLiteral("only"));
+    ASSERT_EQ(adapter_.scan(), 1);
+
+    adapter_.finishById(QStringLiteral("a-candidate-that-was-already-resolved"));
+
+    EXPECT_FALSE(adapter_.busy());
     EXPECT_EQ(adapter_.candidateCount(), 1);
 }
 
