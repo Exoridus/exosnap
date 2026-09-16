@@ -1315,7 +1315,26 @@ void QuickApplication::wireRecordCommands() {
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::pauseRequested, &record_view_model_adapter_,
                      [this]() { recording_coordinator_->PauseRecording(); });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::resumeRequested, &record_view_model_adapter_,
-                     [this]() { recording_coordinator_->ResumeRecording(); });
+                     [this]() {
+                         // Continue arms the coordinator paused with no session
+                         // under it, so there is nothing for ResumeRecording() to
+                         // unpause: Resume is the press that starts the next slice
+                         // (product spec, Crash recovery). The coordinator admits a
+                         // start from the armed state, and the arm is released only
+                         // once that start has been taken — a refused one leaves the
+                         // offer standing rather than dropping it on a press that
+                         // did nothing.
+                         if (recording_coordinator_->IsArmedFromRecovery()) {
+                             if (!record_view_model_adapter_.canResume())
+                                 return;
+                             if (!startRecordingNow())
+                                 return;
+                             if (recording_coordinator_->State() != UiRecordingState::ArmedFromRecovery)
+                                 recording_coordinator_->FinalizeArmedRecovery();
+                             return;
+                         }
+                         recording_coordinator_->ResumeRecording();
+                     });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::captureFrameRequested,
                      &record_view_model_adapter_, [this]() { recording_coordinator_->CaptureFrame(); });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::addMarkerRequested,

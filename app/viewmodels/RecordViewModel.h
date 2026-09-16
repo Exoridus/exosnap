@@ -283,6 +283,9 @@ class RecordViewModel {
     bool capture_target_user_chosen = false; // user manually re-chose since a miss (sticky)
 
     // Computed predicates
+    // True when a capture target is selected, or -- in region mode -- when any
+    // monitor is available for the coordinator to resolve the region against.
+    bool HasStartableTarget() const noexcept;
     bool CanStart() const noexcept;
     bool CanStop() const noexcept;
     // True only while the device-setup Preparing phase is running, so the UI can

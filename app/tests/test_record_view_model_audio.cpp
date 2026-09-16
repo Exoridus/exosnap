@@ -1004,6 +1004,30 @@ TEST(RecordViewModelStateGuardTest, CanResume_Ready_ReturnsFalse) {
     EXPECT_FALSE(vm.CanResume());
 }
 
+// Continuing an interrupted recording arms the coordinator paused, and Resume is
+// the press that starts the next slice. Without this the state is a dead end:
+// Start is not offered because the transport reads the armed session as paused,
+// and Resume has nothing to unpause.
+TEST(RecordViewModelStateGuardTest, CanResume_ArmedFromRecovery_WithATarget_ReturnsTrue) {
+    RecordViewModel vm;
+    vm.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    vm.selected_target_index = 0;
+    vm.SetState(UiRecordingState::ArmedFromRecovery);
+    EXPECT_TRUE(vm.CanResume());
+}
+
+// The manifest does not record the capture target, so the armed session carries
+// none: the next slice needs one chosen the same way a first start does.
+TEST(RecordViewModelStateGuardTest, CanResume_ArmedFromRecovery_WithoutATarget_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::ArmedFromRecovery);
+    EXPECT_FALSE(vm.CanResume());
+
+    vm.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    vm.selected_target_index = -1;
+    EXPECT_FALSE(vm.CanResume());
+}
+
 // --- WYSIWYG preview revert policy (the app-level seam RecordPage wires to) ---
 // RecordPage leaves pushed mode and restarts its own live preview on exactly these
 // terminal states. The bug this pins: a FAILED recording must also revert, or the

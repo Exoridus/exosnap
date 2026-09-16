@@ -92,10 +92,7 @@ std::string ToLowerAscii(const std::string& value) {
 // Computed predicates
 // ---------------------------------------------------------------------------
 
-bool RecordViewModel::CanStart() const noexcept {
-    if (state != UiRecordingState::Ready && state != UiRecordingState::Completed && state != UiRecordingState::Failed) {
-        return false;
-    }
+bool RecordViewModel::HasStartableTarget() const noexcept {
     if (capture_mode == CaptureMode::Region) {
         // Region mode: any selected monitor is needed as the base capture target.
         // selected_target_index may point to a monitor even if the mode is Region.
@@ -107,6 +104,13 @@ bool RecordViewModel::CanStart() const noexcept {
     if (!HasTargets())
         return false;
     return true;
+}
+
+bool RecordViewModel::CanStart() const noexcept {
+    if (state != UiRecordingState::Ready && state != UiRecordingState::Completed && state != UiRecordingState::Failed) {
+        return false;
+    }
+    return HasStartableTarget();
 }
 
 bool RecordViewModel::CanStop() const noexcept {
@@ -122,7 +126,15 @@ bool RecordViewModel::CanPause() const noexcept {
 }
 
 bool RecordViewModel::CanResume() const noexcept {
-    return state == UiRecordingState::Paused;
+    if (state == UiRecordingState::Paused)
+        return true;
+    // Continuing an interrupted recording arms the coordinator paused with no
+    // session under it, and Resume is the press that starts the next slice. The
+    // manifest does not record the capture target, so that press needs one
+    // chosen the way a first start does.
+    if (state == UiRecordingState::ArmedFromRecovery)
+        return HasStartableTarget();
+    return false;
 }
 
 bool RecordViewModel::HasTargets() const noexcept {
