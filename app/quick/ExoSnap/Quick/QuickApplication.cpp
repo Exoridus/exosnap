@@ -2372,13 +2372,15 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
         // desktop and stays a log line; the pipeline card still says the source
         // has gone quiet (CaptureDiagnostics::capture_starved).
         const bool display_off = !console_display_on_;
-        const diagnostics::WindowStallVerdict verdict = diagnostics::ClassifyConfirmedDisplayStall(display_off);
+        const bool display_missing = capturedDisplayMissing();
+        const diagnostics::WindowStallVerdict verdict =
+            diagnostics::ClassifyConfirmedDisplayStall(display_off, display_missing);
         capture_stall_monitor_.ApplyVerdict(verdict);
         if (verdict != diagnostics::WindowStallVerdict::Stalled) {
             diagnostics::AppLog::info(
                 QStringLiteral("capture"),
-                QStringLiteral("display capture produced no frame for %1 s; not reported (display is on, a static "
-                               "desktop is indistinguishable from a stall)")
+                QStringLiteral("display capture produced no frame for %1 s; not reported (display is on and still "
+                               "attached, a static desktop is indistinguishable from a stall)")
                     .arg(starved_for, 0, 'f', 1));
             return;
         }
@@ -2386,12 +2388,13 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
             recording_coordinator_->NoteWindowCaptureStall();
         diagnostics::AppLog::warning(
             QStringLiteral("capture"),
-            QStringLiteral("display capture stalled: no frame for %1 s while the console display is off, recording "
+            QStringLiteral("display capture stalled: no frame for %1 s while the captured display is %2, recording "
                            "continues")
-                .arg(starved_for, 0, 'f', 1));
+                .arg(starved_for, 0, 'f', 1)
+                .arg(display_missing ? QStringLiteral("disconnected") : QStringLiteral("off")));
         clearWindowCaptureStallWarning();
         capture_stall_toast_sequence_ = notifications_adapter_.manager().Enqueue(
-            notifications::MakeDisplayCaptureStalledEvent(starved_for, display_off));
+            notifications::MakeDisplayCaptureStalledEvent(starved_for, display_off, display_missing));
         return;
     }
     const diagnostics::WindowTargetFacts facts =
@@ -5556,6 +5559,22 @@ bool QuickApplication::prepareRecordingBenchmark(uint32_t frame_rate, QString& e
         return false;
     }
     return true;
+}
+
+bool QuickApplication::capturedDisplayMissing() const {
+    const int index = record_view_model_.selected_target_index;
+    if (index < 0 || static_cast<std::size_t>(index) >= record_view_model_.targets.size())
+        return false;
+    const exosnap::engine::CaptureTarget& target = record_view_model_.targets[static_cast<std::size_t>(index)];
+    if (target.kind != exosnap::engine::CaptureTarget::Kind::Monitor || target.native_id == 0)
+        return false;
+    // The HMONITOR itself, not the GDI device name: names are reassigned on a
+    // topology change, so a reconnected second display can inherit the name of
+    // the one that left and make a missing display look present. GetMonitorInfoW
+    // fails on a handle whose display is gone, which is the question being asked.
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    return GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &info) == FALSE;
 }
 
 bool QuickApplication::selectCaptureTargetForAutomation(exosnap::engine::CaptureTarget::Kind kind,

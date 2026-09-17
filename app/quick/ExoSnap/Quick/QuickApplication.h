@@ -128,6 +128,12 @@ class QuickApplication {
     [[nodiscard]] const RecordViewModel& recordViewModel() const noexcept;
     [[nodiscard]] bool prepareRecordingBenchmark(uint32_t frame_rate, QString& error);
 
+    // True when the selected monitor target's display is no longer attached.
+    // Stage 2 of the capture-stall decision only: it reads a Win32 fact, and the
+    // contract is that such a fact is read once per stall episode, never on a
+    // healthy recording.
+    [[nodiscard]] bool capturedDisplayMissing() const;
+
     // Automation only (--auto-record). Picks the first enumerated target of `kind`
     // whose description contains `title_filter` (ignored for monitors) and selects
     // it through the same path a source-picker click takes, so the live preview

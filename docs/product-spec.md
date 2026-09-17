@@ -1100,11 +1100,18 @@ example `Task Manager`. Identical parts are never repeated.
   `window_capture_stall` in its session report.
 
   **A display or region capture** is watched by the same clock. A desktop nobody touches is
-  legitimately silent for minutes, so starvation alone stays a log line; the one corroboration
-  that turns it into the standing notice is a **console display that is off or asleep** (Windows'
-  display power state): duplication opens on such a display and never presents. The notice then
-  reads *"Display capture appears to have stalled. … The recording is still running and holds the
-  last picture. The display is off or asleep; wake it, or stop the recording."* Either way the
+  legitimately silent for minutes, so starvation alone stays a log line. Two facts corroborate it,
+  and either one turns it into the standing notice: a **console display that is off or asleep**
+  (Windows' display power state, on which duplication opens and never presents), or a **captured
+  display that is no longer attached**. The second is its own case because Windows does not report
+  an unplugged display as one that is off, so a monitor that left the machine mid-recording
+  produced a total capture stall in silence. The notice reads *"Display capture appears to have
+  stalled. … The recording is still running and holds the last picture."* and then names whichever
+  fact was measured — *"The display is off or asleep; wake it, or stop the recording."* or *"The
+  captured display is no longer connected; reconnect it, or stop the recording."* — because telling
+  someone to wake a display they have unplugged is advice they cannot act on. The recording is
+  never ended by either: audio and every other source keep recording normally, the file keeps
+  growing, and a display that returns resumes capture on its own. Either way the
   pipeline card stops saying *Good* once the source has produced nothing for 10 seconds: the
   emitted rate stays at target through any stall (the pacer repeats the held frame), so the card's
   reason names the quiet source instead.

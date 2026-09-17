@@ -123,11 +123,18 @@ enum class WindowStallCause : uint8_t {
 [[nodiscard]] WindowStallVerdict ClassifyConfirmedStall(const WindowTargetFacts& facts, bool present_fse) noexcept;
 
 // Stage 2 for a display or region target. A desktop that nobody touches is
-// legitimately silent for minutes, so starvation alone stays Unknown; a console
-// display that is off (asleep, or switched off) is the one corroboration that
-// says the picture the user expects is not being produced, because duplication
-// opens on such a display and never presents.
-[[nodiscard]] WindowStallVerdict ClassifyConfirmedDisplayStall(bool console_display_off) noexcept;
+// legitimately silent for minutes, so starvation alone stays Unknown. Two facts
+// corroborate it, and either one is enough:
+//
+//   console_display_off      -- asleep or switched off. Duplication opens on such
+//                               a display and never presents.
+//   captured_display_missing -- the captured display is no longer attached. A
+//                               display that left cannot produce the picture the
+//                               recording is supposed to hold, and Windows does
+//                               not report an unplugged display as one that is
+//                               off, so the first fact never covers this case.
+[[nodiscard]] WindowStallVerdict ClassifyConfirmedDisplayStall(bool console_display_off,
+                                                               bool captured_display_missing) noexcept;
 
 // PURE (no Win32, no wall clock, no Qt). Stage 1: watches capture-frame progress
 // across diagnostics snapshots and owns the whole latching contract.
