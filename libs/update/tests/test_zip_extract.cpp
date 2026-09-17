@@ -40,6 +40,43 @@ TEST(ZipExtract, RoundtripPreservesTreeAndContent) {
     fs::remove_all(dir);
 }
 
+TEST(ZipExtract, ExtractsPastMaxPathIntoADeepDestination) {
+    // A portable installation sits wherever the user put it, and the deepest
+    // entry in the real package adds about 90 characters to that. A synced cloud
+    // folder or a per-project layout reaches 260 without anything unusual, and
+    // the CRT open call stays bound to MAX_PATH whatever the system long-path
+    // setting says. The destination below is built to cross it on purpose.
+    auto dir = MakeTempDir("deep");
+    fs::path deep = dir;
+    while (deep.wstring().size() < 200)
+        deep /= "a_directory_component_of_some_length";
+
+    auto zip = dir / "pkg.zip";
+    WriteZip(zip, {{"nested/plugins/networkinformation/qnetworklistmanager.dll", "payload"}});
+
+    const auto out = deep / "out";
+    ASSERT_GT((out / "nested/plugins/networkinformation/qnetworklistmanager.dll").wstring().size(), 260u)
+        << "the destination must exceed MAX_PATH or this test proves nothing";
+
+    auto err = ExtractZip(zip.wstring(), out.wstring());
+    ASSERT_FALSE(err.has_value()) << *err;
+
+    // Reading the result back is bound by MAX_PATH exactly as writing it was, so
+    // the check has to use the extended form too. A plain `fs::exists` here
+    // reports false on a file that is present, which would read as the extraction
+    // having silently done nothing.
+    const fs::path extracted =
+        out / "nested" / "plugins" / "networkinformation" / "qnetworklistmanager.dll";
+    const fs::path extracted_long(LR"(\\?\)" + fs::absolute(extracted).make_preferred().wstring());
+    EXPECT_TRUE(fs::exists(extracted_long)) << "extracted file missing at " << extracted.string();
+
+    // Removal is MAX_PATH bound the same way the write was, so the tree this
+    // test just created cannot be deleted by the plain call. Leaving it behind
+    // would also fail the NEXT run, whose setup starts by clearing this path.
+    std::error_code ec;
+    fs::remove_all(fs::path(LR"(\\?\)" + fs::absolute(dir).make_preferred().wstring()), ec);
+}
+
 TEST(ZipExtract, RejectsTraversalEntriesWithoutWriting) {
     auto dir = MakeTempDir("slip");
     auto zip = dir / "evil.zip";
