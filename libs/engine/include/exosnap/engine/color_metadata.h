@@ -74,6 +74,11 @@ struct ColorMetadata {
     // false and the container omits the HDR sub-elements entirely.
     bool hdr = false;
     // HDR10 static metadata (only written when hdr == true). 0 means "absent".
+    //
+    // A recording session leaves both at 0 and hands the measured levels to the
+    // container writer instead: they are maxima over the finished stream, which
+    // no value resolved before the first frame can carry. These fields describe
+    // a colour metadata set that is known up front.
     uint32_t max_content_light_level = 0;       // MaxCLL, cd/m^2
     uint32_t max_frame_average_light_level = 0; // MaxFALL, cd/m^2
 

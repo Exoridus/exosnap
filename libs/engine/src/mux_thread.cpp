@@ -171,6 +171,11 @@ void MuxThread::Run() {
     // Color description (ADR 0032) — carried from RecorderConfig into the track's
     // Colour element. Default SDR BT.709 limited-range.
     sw_config_template.color = m_state.config.color;
+    // An HDR10 session measures its content light levels while it records, so the
+    // track header reserves MaxCLL and MaxFALL and finalize_segment patches in
+    // what the video thread has accumulated by then. SDR and tone-mapped sessions
+    // write an SDR file and have no HDR10 metadata to carry.
+    sw_config_template.reserve_content_light_level = sw_config_template.color.hdr;
     switch (m_state.config.audio_codec) {
     case AudioCodec::Opus:
         sw_config_template.audio_codec = StreamAudioCodec::Opus;
@@ -288,6 +293,12 @@ void MuxThread::Run() {
     const auto finalize_segment = [&](bool session_end) {
         if (!seg.writer)
             return;
+        // Read as late as possible, because both only rise: the last observation
+        // before the header is patched is the one that covers the most frames.
+        // A split session finalises its earlier segments mid-recording, so those
+        // carry the levels measured up to their own boundary.
+        seg.writer->SetContentLightLevels(m_state.measured_max_cll_nits.load(std::memory_order_relaxed),
+                                          m_state.measured_max_fall_nits.load(std::memory_order_relaxed));
         const auto finalize_t0 = std::chrono::steady_clock::now();
         const bool ok = seg.writer->Finalize();
         const double finalize_ms =

@@ -50,10 +50,10 @@ namespace exosnap::engine {
 // the CONTENT's maximum luminance (MaxCLL), with the display's maximum as a
 // separate input; here the target is an SDR file rather than a panel, so what
 // this number actually drives is the content side. The display's peak is only a
-// proxy for it. The documented way to obtain the real one is a histogram pass
-// over each frame, which is the same per-frame luminance analysis this product
-// deliberately does not run over a live stream -- the reason its HDR10 metadata
-// carries no MaxCLL either.
+// proxy for it, and a tone-mapped HDR session no longer runs on the proxy: the
+// per-frame luminance pass (frame_luminance.h) measures the content peak and
+// takes over the knee within a few frames. This value is what the session starts
+// on and falls back to while no measurement has landed.
 inline constexpr float kHdrFallbackPeakNits = 1000.0f;
 
 // Knee point in reference-white multiples. Content at or below reference white

@@ -239,9 +239,11 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         // (nclx) box from the CICP fields and, for HDR sources that carry
         // KaxVideoColourMasterMeta, the mdcv (mastering-display) box from the
         // copied AV_PKT_DATA_MASTERING_DISPLAY_METADATA side data. Content-light-
-        // level is only emitted when the source carries it; our recordings set no
-        // MaxCLL/MaxFALL, so no clli box is written (absent is correct — an empty
-        // clli would be a conformance defect).
+        // level is only emitted when the source carries it: an HDR10 recording
+        // measures MaxCLL/MaxFALL per frame and writes them into the source MKV,
+        // so the clli box follows from the copied side data. A source without them
+        // writes no clli box, which is correct -- an empty one would be a
+        // conformance defect.
         //
         // For older or truncated files where the demuxer returns UNSPECIFIED
         // (0 / 2), apply the SDR Rec.709 limited-range fallback so the output is

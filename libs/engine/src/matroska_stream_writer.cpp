@@ -59,6 +59,21 @@ constexpr int64_t kMaxClusterRelativeMs = 32767LL;
 // Space reserved for the SeekHead placeholder at the start of the Segment.
 constexpr uint64_t kSeekHeadReservedBytes = 150ULL;
 
+// Width of each reserved MaxCLL / MaxFALL leaf. CTA-861.3 codes both as u(16),
+// so two bytes hold every representable level and the back-patch at Finalize()
+// can never need more room than the header reserved.
+constexpr uint64_t kContentLightLevelReservedBytes = 2ULL;
+
+// A level that does not fit the reservation saturates rather than overflowing
+// into a wider element the back-patch has no room for. The ceiling is also the
+// largest value CTA-861.3 can express, so nothing representable is lost.
+constexpr uint64_t kContentLightLevelCeiling = 0xFFFFULL;
+
+uint64_t ClampContentLightLevel(uint32_t nits) noexcept {
+    const uint64_t v = static_cast<uint64_t>(nits);
+    return v > kContentLightLevelCeiling ? kContentLightLevelCeiling : v;
+}
+
 constexpr const char* kLogComponent = "matroska_stream_writer";
 
 void LogDurabilityFlushFailure(const char* message, const std::string& reason) {
@@ -349,13 +364,32 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                     libebml::GetChild<libmatroska::KaxVideoChromaSitVert>(colour).SetValue(2);
                 }
                 if (m_config.color.hdr) {
-                    if (m_config.color.max_content_light_level > 0) {
-                        libebml::GetChild<libmatroska::KaxVideoColourMaxCLL>(colour).SetValue(
-                            static_cast<uint64_t>(m_config.color.max_content_light_level));
-                    }
-                    if (m_config.color.max_frame_average_light_level > 0) {
-                        libebml::GetChild<libmatroska::KaxVideoColourMaxFALL>(colour).SetValue(
-                            static_cast<uint64_t>(m_config.color.max_frame_average_light_level));
+                    if (m_config.reserve_content_light_level) {
+                        // Reserved, not written: MaxCLL and MaxFALL are maxima over
+                        // the whole stream and the last frame has not been encoded
+                        // yet. Both leaves are rendered now at a fixed two bytes --
+                        // the exact width CTA-861.3's u(16) coding needs, so the
+                        // patched value can never outgrow the reservation -- and
+                        // Finalize() overwrites those bytes in place. A recording
+                        // that never reaches Finalize() keeps the zeros, which is
+                        // what CTA-861.3 reads as an unknown level.
+                        auto& cll = libebml::GetChild<libmatroska::KaxVideoColourMaxCLL>(colour);
+                        cll.SetDefaultSize(kContentLightLevelReservedBytes);
+                        cll.SetValue(0);
+                        m_max_cll_element = &cll;
+                        auto& fall = libebml::GetChild<libmatroska::KaxVideoColourMaxFALL>(colour);
+                        fall.SetDefaultSize(kContentLightLevelReservedBytes);
+                        fall.SetValue(0);
+                        m_max_fall_element = &fall;
+                    } else {
+                        if (m_config.color.max_content_light_level > 0) {
+                            libebml::GetChild<libmatroska::KaxVideoColourMaxCLL>(colour).SetValue(
+                                static_cast<uint64_t>(m_config.color.max_content_light_level));
+                        }
+                        if (m_config.color.max_frame_average_light_level > 0) {
+                            libebml::GetChild<libmatroska::KaxVideoColourMaxFALL>(colour).SetValue(
+                                static_cast<uint64_t>(m_config.color.max_frame_average_light_level));
+                        }
                     }
                 }
                 // Mastering display metadata (SMPTE ST 2086). Independent of the
@@ -759,6 +793,22 @@ bool MatroskaStreamWriter::Finalize() {
                 // (Patching the whole Info master would risk a size-mismatch assert
                 // if any child's encoded size changed.)
                 dur.OverwriteData(*m_io);
+            }
+            PublishProgress();
+
+            // --- Back-patch the measured content light levels ---
+            //
+            // Same mechanism as Duration above and for the same reason: the value
+            // describes the finished stream, and the element it belongs in sits in
+            // the track header at the start of the file. Each leaf was rendered at
+            // a fixed width inside the already-written Tracks master, so
+            // OverwriteData rewrites exactly its own data bytes; patching the
+            // master would risk a size mismatch against any sibling.
+            if (m_max_cll_element != nullptr && m_max_fall_element != nullptr) {
+                m_max_cll_element->SetValue(ClampContentLightLevel(m_measured_max_cll));
+                m_max_cll_element->OverwriteData(*m_io);
+                m_max_fall_element->SetValue(ClampContentLightLevel(m_measured_max_fall));
+                m_max_fall_element->OverwriteData(*m_io);
             }
             PublishProgress();
 

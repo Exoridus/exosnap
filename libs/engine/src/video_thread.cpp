@@ -3268,7 +3268,16 @@ void VideoThread::Run() {
             contentPeak.Update(HistogramPercentileNits(stats.histogram, kContentPeakPercentile), dt_seconds);
             measured = true;
         }
-        if (!measured || !hdrToneMapActive)
+        if (!measured)
+            return;
+        // Published every tick rather than once at the end: the mux thread reads
+        // these when it finalises a segment, and a split recording finalises the
+        // first segment long before the capture stops.
+        m_state.measured_max_cll_nits.store(ContentLightLevelCode(contentLightLevels.max_cll_nits),
+                                            std::memory_order_relaxed);
+        m_state.measured_max_fall_nits.store(ContentLightLevelCode(contentLightLevels.max_fall_nits),
+                                             std::memory_order_relaxed);
+        if (!hdrToneMapActive)
             return;
         const SessionHdrDynamicState state =
             ResolveSessionHdrDynamicState(sessionDisplayFacts, contentPeak.ValueNits());
@@ -4777,6 +4786,33 @@ void VideoThread::Run() {
     }
 
 end_encode_loop:
+    // Drain the luminance ring one last time. Everything still in flight was
+    // measured on frames that ARE in the file, and on a recording of a few
+    // frames those are most of them -- a session shorter than the ring would
+    // otherwise finalise with no measurement at all.
+    //
+    // This is the one place the measurement may wait: capture has stopped, so
+    // there is no frame to stall, and the bound is the only thing that matters.
+    // A result that has not landed within it is dropped rather than waited for.
+    if (frameLuminance.Initialised()) {
+        constexpr auto kLuminanceDrainBudget = std::chrono::milliseconds{50};
+        const auto drain_deadline = std::chrono::steady_clock::now() + kLuminanceDrainBudget;
+        FrameLuminanceStats stats;
+        while (frameLuminance.HasPendingResults() && std::chrono::steady_clock::now() < drain_deadline) {
+            if (frameLuminance.TryTakeResult(&stats)) {
+                contentLightLevels.Accumulate(stats);
+                continue;
+            }
+            Sleep(1);
+        }
+        if (contentLightLevels.HasData()) {
+            m_state.measured_max_cll_nits.store(ContentLightLevelCode(contentLightLevels.max_cll_nits),
+                                                std::memory_order_relaxed);
+            m_state.measured_max_fall_nits.store(ContentLightLevelCode(contentLightLevels.max_fall_nits),
+                                                 std::memory_order_relaxed);
+        }
+    }
+
     // --- Stop capture ---
     if (useOdCapture) {
         odSrc.Close();

@@ -17,6 +17,7 @@
 
 extern "C" {
 #include <libavformat/avformat.h>
+#include <libavutil/mastering_display_metadata.h>
 }
 
 // These tests exercise the PRODUCTION streaming writer (MatroskaStreamWriter)
@@ -1098,6 +1099,158 @@ TEST_F(StreamWriterTest, WritesMasteringDisplayMetadataWhenSet) {
     EXPECT_NEAR(ReadFloat(d, *wy), 0.3290, kTol);
     EXPECT_NEAR(ReadFloat(d, *lmax), 1000.0, 0.1);
     EXPECT_NEAR(ReadFloat(d, *lmin), 0.0001, 1e-6);
+}
+
+// --- Measured content light levels (back-patched at finalize) ----------------
+
+namespace {
+
+// An HDR10 track header that reserves MaxCLL/MaxFALL instead of writing a value
+// the session does not know yet.
+MatroskaStreamConfig MakeReservedHdrConfig(const std::string& path) {
+    auto cfg = MakeConfig(path, /*h264=*/false, /*opus=*/true);
+    cfg.color.primaries = exosnap::engine::ColorPrimaries::Bt2020;
+    cfg.color.transfer = exosnap::engine::TransferCharacteristics::SmpteSt2084;
+    cfg.color.matrix = exosnap::engine::MatrixCoefficients::Bt2020Ncl;
+    cfg.color.range = exosnap::engine::ColorRange::Full;
+    cfg.color.bits_per_channel = 10;
+    cfg.color.hdr = true;
+    cfg.reserve_content_light_level = true;
+    return cfg;
+}
+
+constexpr uint64_t kMaxCllId = 0x55BCULL;
+constexpr uint64_t kMaxFallId = 0x55BDULL;
+
+} // namespace
+
+// The whole point of the reservation: MaxCLL and MaxFALL are maxima over the
+// finished stream, and the element they live in was written at the start of the
+// file. The value handed over during the recording has to reach those bytes.
+TEST_F(StreamWriterTest, MeasuredContentLightLevelsArePatchedIntoTheReservedElements) {
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(MakeReservedHdrConfig(tmp_)));
+    FeedSeconds(w, 1.0, 30, 64);
+    w.SetContentLightLevels(1237, 341);
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    const auto colour = VideoColourChildren(d);
+    ASSERT_FALSE(colour.empty());
+    const EbmlNode* maxcll = FindColourChild(colour, kMaxCllId);
+    const EbmlNode* maxfall = FindColourChild(colour, kMaxFallId);
+    ASSERT_NE(maxcll, nullptr);
+    ASSERT_NE(maxfall, nullptr);
+    EXPECT_EQ(ReadUInt(d, *maxcll), 1237u);
+    EXPECT_EQ(ReadUInt(d, *maxfall), 341u);
+
+    // The patch rewrites two leaves inside an already-written master. Its
+    // neighbours in the same Colour element are what would move first if the
+    // reservation were not the exact width the value needs.
+    const EbmlNode* transfer = FindColourChild(colour, 0x55BAULL);
+    const EbmlNode* bits = FindColourChild(colour, 0x55B2ULL);
+    ASSERT_NE(transfer, nullptr);
+    ASSERT_NE(bits, nullptr);
+    EXPECT_EQ(ReadUInt(d, *transfer), 16u);
+    EXPECT_EQ(ReadUInt(d, *bits), 10u);
+}
+
+// The reservation is two bytes because CTA-861.3 codes both levels as u(16).
+// A value that fills those two bytes must still fit, and one beyond them must
+// saturate rather than demand a third byte the header never reserved.
+TEST_F(StreamWriterTest, AContentLightLevelSaturatesAtTheReservedWidth) {
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(MakeReservedHdrConfig(tmp_)));
+    FeedSeconds(w, 1.0, 30, 64);
+    w.SetContentLightLevels(65535, 70000);
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    const auto colour = VideoColourChildren(d);
+    ASSERT_FALSE(colour.empty());
+    const EbmlNode* maxcll = FindColourChild(colour, kMaxCllId);
+    const EbmlNode* maxfall = FindColourChild(colour, kMaxFallId);
+    ASSERT_NE(maxcll, nullptr);
+    ASSERT_NE(maxfall, nullptr);
+    EXPECT_EQ(ReadUInt(d, *maxcll), 65535u);
+    EXPECT_EQ(ReadUInt(d, *maxfall), 65535u);
+}
+
+// A session whose luminance pass never produced a number must not claim one.
+// Zero is what CTA-861.3 reads as an unknown level, so the reservation left
+// unpatched says exactly what is true.
+TEST_F(StreamWriterTest, AnUnmeasuredReservationReadsAsAnUnknownLevel) {
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(MakeReservedHdrConfig(tmp_)));
+    FeedSeconds(w, 1.0, 30, 64);
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    const auto colour = VideoColourChildren(d);
+    ASSERT_FALSE(colour.empty());
+    const EbmlNode* maxcll = FindColourChild(colour, kMaxCllId);
+    const EbmlNode* maxfall = FindColourChild(colour, kMaxFallId);
+    ASSERT_NE(maxcll, nullptr);
+    ASSERT_NE(maxfall, nullptr);
+    EXPECT_EQ(ReadUInt(d, *maxcll), 0u);
+    EXPECT_EQ(ReadUInt(d, *maxfall), 0u);
+}
+
+// A session that does not reserve keeps the track header it had before the
+// measurement existed, even on an HDR track and even when levels are handed
+// over: no MaxCLL, no MaxFALL, and no zeroed leaves claiming an unknown level
+// where the file previously said nothing at all.
+TEST_F(StreamWriterTest, AnUnreservedSessionWritesNoContentLightElements) {
+    auto cfg = MakeReservedHdrConfig(tmp_);
+    cfg.reserve_content_light_level = false;
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(cfg));
+    FeedSeconds(w, 1.0, 30, 64);
+    w.SetContentLightLevels(1237, 341);
+    ASSERT_TRUE(w.Finalize());
+
+    const auto d = ReadFile(tmp_);
+    const auto colour = VideoColourChildren(d);
+    ASSERT_FALSE(colour.empty());
+    EXPECT_EQ(FindColourChild(colour, kMaxCllId), nullptr);
+    EXPECT_EQ(FindColourChild(colour, kMaxFallId), nullptr);
+}
+
+// Bytes in the right place are not the claim; a reader taking them is. ffprobe
+// reports max_content / max_average from exactly this side data, and it is the
+// evidence the HDR10 metadata work is measured against.
+TEST_F(StreamWriterTest, PatchedContentLightLevelsAreReadableByFfmpegMatroskaDemuxer) {
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(MakeReservedHdrConfig(tmp_)));
+    FeedSeconds(w, 1.0, 30, 64);
+    w.SetContentLightLevels(1237, 341);
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    AVFormatContext* fmt_ctx = nullptr;
+    ASSERT_EQ(avformat_open_input(&fmt_ctx, tmp_.c_str(), nullptr, nullptr), 0);
+    ASSERT_GE(avformat_find_stream_info(fmt_ctx, nullptr), 0);
+    int video_stream_idx = -1;
+    for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i) {
+        if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            video_stream_idx = static_cast<int>(i);
+            break;
+        }
+    }
+    ASSERT_NE(video_stream_idx, -1);
+    const AVCodecParameters* par = fmt_ctx->streams[static_cast<unsigned>(video_stream_idx)]->codecpar;
+    const AVPacketSideData* sd =
+        av_packet_side_data_get(par->coded_side_data, par->nb_coded_side_data, AV_PKT_DATA_CONTENT_LIGHT_LEVEL);
+    ASSERT_NE(sd, nullptr) << "the demuxer surfaced no content-light side data -- a remux to MP4 would write no clli "
+                              "box and ffprobe would report no max_content";
+    const auto* cll = reinterpret_cast<const AVContentLightMetadata*>(sd->data);
+    EXPECT_EQ(cll->MaxCLL, 1237u);
+    EXPECT_EQ(cll->MaxFALL, 341u);
+
+    avformat_close_input(&fmt_ctx);
 }
 
 // 9. Multi-cluster: a long recording splits into multiple clusters (2 s rule).

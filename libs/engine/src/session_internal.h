@@ -216,6 +216,17 @@ struct SessionState {
     // session end reads it so the final result agrees with what the UI showed.
     std::atomic<long long> paused_ns{0};
 
+    // Measured HDR10 content light levels in cd/m^2, CTA-861.3 MaxCLL and
+    // MaxFALL, published by the video thread as the per-frame luminance pass
+    // accumulates them and read by the mux thread when it finalises a segment.
+    //
+    // Both are maxima over the stream and only ever rise, so a reader that
+    // observes a stale value observes a value that was true earlier -- never one
+    // that overstates the content. 0 is CTA-861.3's unknown level and is what a
+    // session without the pass leaves standing.
+    std::atomic<uint32_t> measured_max_cll_nits{0};
+    std::atomic<uint32_t> measured_max_fall_nits{0};
+
     // ---------------------------------------------------------------------------
     // Split recording coordination (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1)
     // ---------------------------------------------------------------------------

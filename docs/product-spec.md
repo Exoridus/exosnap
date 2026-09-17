@@ -797,16 +797,26 @@ Behavior:
   at the container level** (MKV Colour / MasterMetadata, MP4 colr/mdcv on remux) **and in-band in the
   bitstream** — HEVC Mastering Display Colour Volume (SEI 137) messages, AV1 HDR MDCV metadata OBUs,
   emitted on every keyframe so players that ignore container-level HDR metadata (notably some Apple
-  players) still receive it. **Content light level (MaxCLL/MaxFALL) is deliberately not written**, in
-  either place: those values describe the brightest content in a finished piece, and a live recorder
-  does not know them while it is still recording. A wrong MaxCLL makes a player tone-map against a
-  peak the file never reaches, which is worse than the absent-and-ignored value. The on-screen
-  monitoring preview is an SDR approximation of the HDR signal.
+  players) still receive it. **Content light level (MaxCLL/MaxFALL) is measured and written at the
+  container level** (MKV `MaxCLL`/`MaxFALL`, MP4 `clli` on remux): a per-frame luminance pass
+  measures the brightest pixel and the frame-average level of every encoded frame, and the finished
+  values are patched into the track header when the file is finalised. They are not written in-band,
+  because an HEVC SEI or an AV1 metadata OBU is emitted while the recording is still running and
+  could only carry the maximum seen so far. A recording whose measurement is unavailable writes
+  zero, which is what the standard reads as an unknown level. The on-screen monitoring preview is an
+  SDR approximation of the HDR signal.
+- For **Tone-map to SDR**, the highlight roll-off is placed on the brightness the captured content
+  actually reaches, measured per frame rather than taken from what the display reports it can show.
+  The measurement is smoothed: it follows a highlight appearing within a few frames and lets one
+  leaving fade out over about a second, so a cut between a bright and a dark scene does not step the
+  picture's brightness. Displays frequently report a peak that is wrong or lower than the brightness
+  Windows composes SDR content at, which used to collapse every highlight onto white.
 - SDR overlay sprites (webcam PiP, cursor) are placed at the captured display's Windows SDR-content
   brightness level (`DISPLAYCONFIG_SDR_WHITE_LEVEL`) so the PiP matches SDR windows on the same
-  screen; 203 cd/m² is the fallback when the level cannot be read. The level is sampled once when
-  the recording starts — moving the Windows SDR-brightness slider afterward does not retune an
-  active recording.
+  screen; 203 cd/m² is the fallback when the level cannot be read. The level is re-read while the
+  recording runs, so moving the Windows SDR-brightness slider retunes the overlays, the tone-map and
+  the preview within about two seconds; the material recorded between the change and the next poll
+  keeps the old exposure.
 - **Advanced Color Management (SDR desktop, HDR off):** with Windows' automatic color management
   enabled, the desktop composites to scRGB FP16 even though the display stays in SDR mode. Such a
   desktop carries SDR content (reference white = 1.0) and is recorded by encoding it with the sRGB

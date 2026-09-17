@@ -56,6 +56,13 @@ class FrameLuminanceAnalyzer {
     // landed yet. Never blocks and never flushes.
     bool TryTakeResult(FrameLuminanceStats* out);
 
+    // Measurements the GPU has been given but the CPU has not taken back yet.
+    // False means every dispatched frame has been accounted for, which is how a
+    // caller draining at teardown knows it is done rather than merely early.
+    [[nodiscard]] bool HasPendingResults() const noexcept {
+        return readback_inflight_ > 0;
+    }
+
     // Drops every view cache and every in-flight readback. The device the
     // measurements were taken on is gone, so the pending results describe
     // surfaces that no longer exist and must not reach the file's metadata.
