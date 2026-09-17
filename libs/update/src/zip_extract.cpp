@@ -21,6 +21,31 @@ namespace fs = std::filesystem;
 
 namespace exosnap::update {
 
+namespace {
+
+// Absolute local path in `\\?\` form, which the Win32 layer accepts beyond
+// MAX_PATH. A UNC path takes the `\\?\UNC\` spelling instead, and anything
+// already prefixed, or that cannot be made absolute, is handed back untouched --
+// the caller's failure is then the real one rather than one this produced.
+std::wstring ToExtendedPath(const std::wstring& path) {
+    if (path.starts_with(LR"(\\?\)") || path.starts_with(LR"(\\.\)"))
+        return path;
+
+    std::error_code ec;
+    // The prefix disables all normalisation by Win32, so `.` and `..` would
+    // survive into the filesystem call and resolve to the wrong place.
+    fs::path absolute = fs::weakly_canonical(fs::absolute(fs::path(path), ec), ec);
+    if (ec || absolute.empty())
+        return path;
+
+    std::wstring native = absolute.make_preferred().wstring();
+    if (native.starts_with(LR"(\\)"))
+        return LR"(\\?\UNC\)" + native.substr(2);
+    return LR"(\\?\)" + native;
+}
+
+} // namespace
+
 bool IsSafeZipEntryName(std::string_view entry_name) {
     if (entry_name.empty())
         return false;
@@ -87,7 +112,14 @@ std::optional<std::string> ExtractZip(const std::wstring& zip_path, const std::w
         entry_names.push_back(std::move(name));
     }
 
-    fs::path dest(dest_dir);
+    // Extended-length form, because a portable installation is wherever the user
+    // put it and the deepest entry in the package adds about 90 characters on top
+    // of that. `_wfopen_s` below is a CRT entry point and stays bound to MAX_PATH
+    // whatever the system long-path opt-in says, so a destination that is merely
+    // deep -- a synced cloud folder, a per-project layout -- fails to open with
+    // nothing wrong with it. Prefixing the root once is enough: every path built
+    // from `dest` inherits it.
+    fs::path dest = ToExtendedPath(dest_dir);
     std::error_code ec;
     fs::create_directories(dest, ec);
     if (ec) {
@@ -100,7 +132,12 @@ std::optional<std::string> ExtractZip(const std::wstring& zip_path, const std::w
     zip_progress.entries_total = num_entries;
     for (mz_uint i = 0; i < num_entries; ++i) {
         const std::string& name = entry_names[i];
-        fs::path out_path = dest / fs::path(Utf8ToWide(name));
+        // Zip entry names use '/', and the `\\?\` prefix on `dest` turns off every
+        // normalisation Win32 would otherwise apply -- including the one that maps
+        // a forward slash onto a separator. An unconverted name reaches the
+        // filesystem as one long invalid component, so the separators are made
+        // native here rather than left to a layer that no longer does it.
+        fs::path out_path = (dest / fs::path(Utf8ToWide(name))).make_preferred();
 
         if (mz_zip_reader_is_file_a_directory(&archive, i)) {
             fs::create_directories(out_path, ec);
