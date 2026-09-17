@@ -134,13 +134,7 @@ Invalid combinations are not offered.
   display — what is shown is the recorded frame, viewed through the same
   roll-off an SDR player would approximate. The exception is the rare
   already-PQ 10-bit desktop (below), which has no shareable frame.
-- **Moving the Windows SDR-content-brightness slider during a recording leaves up
-  to about two seconds of wrongly exposed material.** That level decides the
-  brightness the desktop is composed at, so tone-map, overlays and preview all
-  follow it — but the engine re-reads it on a two-second cadence rather than
-  being notified, so everything recorded between a change and the next reading is
-  exposed for the level before it. The recording corrects itself from that
-  reading on; nothing needs restarting.
+- **Moving the Windows SDR-content-brightness slider during a recording is followed within a frame on Windows 11 build 22621 and later, and leaves up to about two seconds of wrongly exposed material on every older build.** That level decides the brightness the desktop is composed at, so tone-map, overlays and preview all follow it. Where Windows offers a colour-state notification to a process without a CoreWindow, it raises one for each step of a drag and the exposure tracks the slider as it moves. Where it does not, the level is re-read on a two-second cadence, and everything recorded between a change and the next reading is exposed for the level before it. The recording corrects itself from that reading on; nothing needs restarting.
 - **A recorded window that moves between an HDR and an SDR monitor keeps the
   colour state of the monitor it started on.** The colour pipeline — the frame
   pool format, the native-versus-tone-map decision, the bit depth and the colour

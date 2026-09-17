@@ -813,10 +813,7 @@ Behavior:
   Windows composes SDR content at, which used to collapse every highlight onto white.
 - SDR overlay sprites (webcam PiP, cursor) are placed at the captured display's Windows SDR-content
   brightness level (`DISPLAYCONFIG_SDR_WHITE_LEVEL`) so the PiP matches SDR windows on the same
-  screen; 203 cd/m² is the fallback when the level cannot be read. The level is re-read while the
-  recording runs, so moving the Windows SDR-brightness slider retunes the overlays, the tone-map and
-  the preview within about two seconds; the material recorded between the change and the next poll
-  keeps the old exposure.
+  screen; 203 cd/m² is the fallback when the level cannot be read. Windows notifies the engine when the level changes, so moving the SDR-brightness slider retunes the overlays, the tone-map and the preview as the slider moves. A build that offers no such notification is covered by a two-second re-read instead, and the material recorded between the change and the next reading keeps the old exposure.
 - **Advanced Color Management (SDR desktop, HDR off):** with Windows' automatic color management
   enabled, the desktop composites to scRGB FP16 even though the display stays in SDR mode. Such a
   desktop carries SDR content (reference white = 1.0) and is recorded by encoding it with the sRGB
