@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <initializer_list>
+#include <string>
 #include <vector>
 
 namespace {
@@ -290,6 +291,104 @@ TEST(DeriveAudioTrackNameTest, EndToEnd_FollowsResolveAudioTracksMergeOrder) {
     ASSERT_EQ(plan.tracks.size(), 2u);
     EXPECT_EQ(DeriveAudioTrackName(plan.tracks[0]), "Application + Microphone");
     EXPECT_EQ(DeriveAudioTrackName(plan.tracks[1]), "System");
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Track indices are positions, so a plan has to be indexed like one
+// ---------------------------------------------------------------------------
+//
+// track_index is where a worker writes: codec-private slots, per-track RMS,
+// measured epochs, aligned durations -- all fixed-size arrays indexed by it, and
+// the mux decides it has every header by asking for slots 0..count-1.
+//
+// Validation accepted anything. A plan indexed {0, 2} has two workers and leaves
+// slot 1 empty forever, so the mux waits for a header nobody sends and the
+// recording produces nothing while looking busy. These cases reject that before a
+// worker starts, because afterwards the symptom names no cause.
+
+namespace {
+
+using exosnap::engine::DescribeInvalidTrackIndices;
+using exosnap::engine::ResolvedAudioTrack;
+
+AudioTrackPlan PlanWithIndices(const std::vector<uint32_t>& indices) {
+    AudioTrackPlan plan;
+    for (const uint32_t index : indices) {
+        ResolvedAudioTrack track;
+        track.sources = {AudioSourceKind::SystemOutput};
+        track.source_gain_linear = {1.0f};
+        track.track_index = index;
+        plan.tracks.push_back(std::move(track));
+    }
+    return plan;
+}
+
+TEST(AudioTrackIndices, TheNormalDenseResolverPlanIsAccepted) {
+    // The positive case, and the one that must never regress: what
+    // ResolveAudioTracks actually produces.
+    EXPECT_TRUE(DescribeInvalidTrackIndices(PlanWithIndices({0}), 3).empty());
+    EXPECT_TRUE(DescribeInvalidTrackIndices(PlanWithIndices({0, 1}), 3).empty());
+    EXPECT_TRUE(DescribeInvalidTrackIndices(PlanWithIndices({0, 1, 2}), 3).empty());
+}
+
+TEST(AudioTrackIndices, AnEmptyPlanIsAccepted) {
+    // No plan means the single-loopback default path, which indexes itself.
+    EXPECT_TRUE(DescribeInvalidTrackIndices(AudioTrackPlan{}, 3).empty());
+}
+
+TEST(AudioTrackIndices, AGapLeavesASlotNobodyFillsAndIsRejected) {
+    const std::string reason = DescribeInvalidTrackIndices(PlanWithIndices({0, 2}), 3);
+    ASSERT_FALSE(reason.empty()) << "a sparse plan was accepted";
+    EXPECT_NE(reason.find("track_index 2"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("dense"), std::string::npos) << reason;
+}
+
+TEST(AudioTrackIndices, ADuplicateIndexIsRejected) {
+    // Two workers writing one slot: the second silently overwrites the first.
+    EXPECT_FALSE(DescribeInvalidTrackIndices(PlanWithIndices({0, 0}), 3).empty());
+    EXPECT_FALSE(DescribeInvalidTrackIndices(PlanWithIndices({0, 1, 1}), 3).empty());
+}
+
+TEST(AudioTrackIndices, WrongOrderIsRejected) {
+    // The contract is positional, so {1, 0} is not "the same set in another order";
+    // it is two tracks writing each other's slots.
+    EXPECT_FALSE(DescribeInvalidTrackIndices(PlanWithIndices({1, 0}), 3).empty());
+    EXPECT_FALSE(DescribeInvalidTrackIndices(PlanWithIndices({0, 2, 1}), 3).empty());
+}
+
+TEST(AudioTrackIndices, AnOutOfRangeIndexIsRejected) {
+    // The arrays are three long. An index past that is an out-of-bounds write
+    // waiting for the first worker to publish anything.
+    EXPECT_FALSE(DescribeInvalidTrackIndices(PlanWithIndices({3}), 3).empty());
+    EXPECT_FALSE(DescribeInvalidTrackIndices(PlanWithIndices({0, 1, 99}), 3).empty());
+}
+
+TEST(AudioTrackIndices, TooManyTracksIsRejectedBeforeTheIndicesAreRead) {
+    // Four dense indices are individually fine and still one track too many.
+    const std::string reason = DescribeInvalidTrackIndices(PlanWithIndices({0, 1, 2, 3}), 3);
+    ASSERT_FALSE(reason.empty());
+    EXPECT_NE(reason.find("at most 3"), std::string::npos) << reason;
+}
+
+TEST(AudioTrackIndices, WhatTheResolverProducesIsAlwaysAccepted) {
+    // The two halves joined: every plan the real resolver builds from ordinary
+    // rows passes the validation the engine now applies to it. A rule the
+    // production resolver cannot satisfy would reject every recording.
+    for (const size_t row_count : {size_t{1}, size_t{2}, size_t{3}}) {
+        std::vector<AudioSourceRow> rows;
+        for (size_t i = 0; i < row_count; ++i) {
+            AudioSourceRow row;
+            row.kind = AudioSourceKind::SystemOutput;
+            row.enabled = true;
+            row.merge_with_above = false;
+            rows.push_back(row);
+        }
+        const AudioTrackPlan plan = ResolveAudioTracks(rows);
+        EXPECT_TRUE(DescribeInvalidTrackIndices(plan, 3).empty())
+            << "the resolver produced a plan the engine would reject, for " << row_count << " row(s)";
+    }
 }
 
 } // namespace

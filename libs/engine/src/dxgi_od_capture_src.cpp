@@ -211,6 +211,20 @@ bool QueryDisplayHdrFacts(HMONITOR hmonitor, HdrDisplayFacts& out_facts) {
     return false;
 }
 
+bool DxgiOdCaptureSrc::RefreshDisplayFacts() {
+    HdrDisplayFacts fresh;
+    if (!QueryDisplayHdrFacts(m_monitor, fresh)) {
+        return false;
+    }
+    const bool changed = fresh.hdr_active != m_hdr_facts.hdr_active ||
+                         fresh.max_luminance_nits != m_hdr_facts.max_luminance_nits ||
+                         fresh.sdr_white_level_nits != m_hdr_facts.sdr_white_level_nits;
+    m_hdr_facts = fresh;
+    m_hdr_active = fresh.hdr_active;
+    m_max_luminance_nits = fresh.max_luminance_nits;
+    return changed;
+}
+
 // Resolve the IDXGIOutput to duplicate for `device`, using a FRESH DXGI factory so
 // the current display topology is seen (a device's original adapter/output
 // enumeration and HMONITOR handles go stale after a monitor hot-plug or mode/
@@ -288,6 +302,10 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
     if (!ResolveOutputForDevice(device, hmonitor, std::wstring{}, matchedOutput.put(), &matchedDesc, out_error))
         return false;
     m_device_name = matchedDesc.DeviceName;
+    // The handle the output actually resolved to, not the one the caller passed:
+    // after a Reopen by device name those differ, and everything that keeps
+    // querying the OS about this display has to use this one.
+    m_monitor = matchedDesc.Monitor;
     m_open_signature = ReadOutputModeSignature(m_device_name);
     m_signature_changed = false;
     m_signature_checked_at = std::chrono::steady_clock::now();
@@ -398,6 +416,10 @@ void DxgiOdCaptureSrc::Close() {
     }
     m_duplication = nullptr;
     m_topology_factory = nullptr;
+    // No live duplication, so no monitor to ask about. Deliberately cleared: a
+    // stale handle here would have a caller querying a display this source is not
+    // on, and believing the answer.
+    m_monitor = nullptr;
     m_width = 0;
     m_height = 0;
     m_refresh_rate_hz = 0;

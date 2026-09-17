@@ -646,6 +646,67 @@ in every build so an unknown-option message stays accurate. To tell the two apar
 look for a string that only exists INSIDE the guard, such as the auto-record result
 JSON's `session_report_path`.
 
+## Reading a recording: frames, a baseline, and a timebase
+
+`ExoSnap.Verify/Analysis` holds what a gate needs to say anything about a recorded
+file's pixels: the decoded frames and how they depart from a clean decode
+(`FrameSequence`), what moved against a reference frame (`GrayFrames`), and where the
+recording's timebase sits relative to the stimulus that drove it (`TimelineAnchor`).
+
+Three rules in it are worth knowing before writing a gate against them, because each
+replaces a way an earlier analysis produced a confident wrong answer.
+
+**A departure is a finding, not an exception.** A decode can drop frames, run its
+timestamps backwards across a split, or be truncated mid-write. An analysis that
+throws on a frame-count mismatch reports nothing at all about the thing under test,
+and the mismatch -- usually the interesting half -- reaches the reader as a stack
+trace. Every departure is a value the caller decides about; some are fatal to a
+particular measurement and harmless to another, which is what `IsTimebaseTrustworthy`
+separates.
+
+**The baseline is checked, not assumed.** Everything `GrayFrames` reports is relative
+to a reference frame taken while the thing being measured was absent. A baseline
+averaged over frames in which the pointer was already moving contains a smeared
+pointer, which then partly cancels out of every later difference — and that does not
+fail loudly, it quietly reports a smaller sprite, or none, which reads as "the cursor
+was not drawn".
+
+**The timebase never comes from the thing under test.** An earlier analysis found the
+first frame in which a cursor sprite appeared and declared that frame to be the first
+logged pointer move; every later check then measured the sprite against a timeline the
+sprite itself had defined. On a recording where the cursor never followed the pointer,
+the offset pins onto whatever else changed first — a window border, a blinking caret —
+and the run reports a large offset and a plausible-looking pass. `TimelineAnchor`
+therefore takes at least two estimates from *different* sources that do not depend on
+the measurement, and they have to agree inside their stated uncertainties:
+
+| Source | What it reads | Good to |
+|---|---|---|
+| `WallClock` | the stimulus epoch and the recorder's start, logged independently | the recorder's start-up latency |
+| `InBandMarker` | a marker the stimulus drew at a declared time, found in the frames | half a frame interval |
+| `PerformanceCounter` | matching QPC readings on both sides | the capture path's timestamping granularity |
+
+The counter anchor is not inferred: the recorder publishes the instant its own presentation
+timestamp 0 sits on as a `video epoch established` record in `engine.jsonl`, carrying
+`video_epoch_qpc_100ns`, the `qpc_frequency_hz` it read, and an `epoch_source` saying which
+reading opened the timeline. `EngineLog.ReadVideoEpochs` reads them, and what the source says
+decides what the record is worth:
+
+| `epoch_source` | What it is | What an estimate built on it carries |
+|---|---|---|
+| `frame_timestamp` | the first frame's own present timestamp | the instant itself, to the 100 ns the field is quantised to |
+| `capture_observed` | the counter reading taken when the capture path saw the first frame | corrected back by half an acquire interval, uncertain by the other half |
+| `session_start_floor` | the session start, because the first frame presented before recording began | no estimate at all -- a bound below the first frame is not the instant of one |
+
+The engine appends to one log across launches, so a file routinely holds several sessions.
+Every record is returned and the caller selects by session; taking the last one reads a
+previous run's timeline onto this run's frames.
+
+Two readings of one source corroborate nothing — they share whatever is wrong with
+that source. One anchor establishes nothing. Two that disagree beyond their
+uncertainties mean the run cannot be judged, which is an infrastructure result and not
+a product failure.
+
 ## Evidence
 
 Per scenario: the artifact identity, the environment before, what was requested and

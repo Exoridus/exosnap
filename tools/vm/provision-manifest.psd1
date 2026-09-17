@@ -20,6 +20,28 @@
 
     schema   = 1
 
+    # Which virtual display driver this image is built with, and which one the
+    # capture work was qualified on. Both are the MTT driver pinned below, and a
+    # scenario qualified on one driver must not quietly run on the other -- so they
+    # are recorded rather than left implicit, even while they agree.
+    #
+    # They did not always agree. The qualified profile named SudoVDA on the strength
+    # of the 4K120 Graphics Capture runs, and the matched control that was run for
+    # exactly that question does not support singling it out: 4K120 captured 112.332
+    # FPS with MTT against 112.716 with SudoVDA at the same GPU utilisation, and
+    # unattended Desktop Duplication was demonstrated on both once the capture path
+    # settles. What SudoVDA does offer is a dynamic monitor lifecycle for the test
+    # machine, which is a harness capability rather than a capture-quality claim, and
+    # the image that ran it was ReviOS-derived -- a non-stock Windows underneath every
+    # release gate. The recording application has never been qualified on SudoVDA.
+    #
+    # Naming SudoVDA here therefore claimed something nobody measured and made every
+    # scenario that requires the qualified profile unrunnable. Moving to SudoVDA later
+    # is an image rebuild on stock Windows with its package pinned the way every
+    # package here is, plus qualifying the application on it.
+    displayProfile          = 'mtt'
+    qualifiedDisplayProfile = 'mtt'
+
     packages = @(
         @{
             id      = 'vcredist'

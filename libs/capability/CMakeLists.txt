@@ -84,6 +84,8 @@ exosnap_add_gtest(
   LIBRARIES exosnap_capability
   # BuildFromHardwareQuery() issues a live GPU/encoder capability query.
   LABELS live
+  # DXGI adapter enumeration: without an adapter these can only skip.
+  PHASE gpu
 )
 
 exosnap_add_gtest(
@@ -108,6 +110,8 @@ exosnap_add_gtest(
   # EnumerateAdapters() is a live DXGI call; the "at least one real adapter"
   # assertions GTEST_SKIP on GPU-less/headless runners (see 9e3bfe4).
   LABELS live
+  # DXGI adapter enumeration: without an adapter these can only skip.
+  PHASE gpu
 )
 
 exosnap_add_gtest(

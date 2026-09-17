@@ -525,6 +525,19 @@ exosnap_add_gtest(
 target_include_directories(structured_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(structured_log_tests PROPERTIES AUTOMOC ON)
 
+# The unchanging webcam source that makes the PiP overlay the only thing able to
+# cause a recomposition. Both halves of "static" are pinned, pixels and generation,
+# each against a counter-example that would silently remove the defect the overlay
+# measurement looks for.
+exosnap_add_gtest(
+    NAME static_webcam_frame_source_tests
+    TEST_PREFIX services.
+    SOURCES
+        tests/test_static_webcam_frame_source.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(static_webcam_frame_source_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 # Session report: the pure JSON builder (deterministic, honest unavailable metrics,
 # segments, error phase, peak drift) and the writer's prune-to-keep-N.
 exosnap_add_gtest(
@@ -1356,6 +1369,14 @@ if(Python3_EXECUTABLE)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/generate-brand-marks.py" --check
     )
     set_tests_properties(brand.geometry.marks_match_the_generator PROPERTIES TIMEOUT 60)
+    exosnap_set_test_phase(brand.geometry.marks_match_the_generator hermetic)
+elseif(EXOSNAP_REQUIRE_TEST_TOOLS)
+    message(FATAL_ERROR
+        "Python 3 was not found, so brand.geometry.marks_match_the_generator would not be registered "
+        "and the suite would pass without it. Install Python 3 or configure with "
+        "-DEXOSNAP_REQUIRE_TEST_TOOLS=OFF to accept a reduced suite.")
+else()
+    message(STATUS "Python 3 not found: the brand geometry generator check will not be registered.")
 endif()
 
 # Pure unit tests for HumanizeEngineDetail (RecordingErrorPanel's raw-enum → canon
@@ -1381,6 +1402,7 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-state.tests.ps1")
     set_tests_properties(live_verify.runner_state PROPERTIES TIMEOUT 180 LABELS "live_verify")
+    exosnap_set_test_phase(live_verify.runner_state hermetic)
 
     # The client's endpoint naming. Registered for the same reason: deriving the
     # updater child's pipe name wrongly fails as a connect timeout, which is
@@ -1390,6 +1412,7 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-endpoints.tests.ps1")
     set_tests_properties(live_verify.endpoint_names PROPERTIES TIMEOUT 120 LABELS "live_verify")
+    exosnap_set_test_phase(live_verify.endpoint_names hermetic)
 
     # Wave D: the release campaign runner and the environment orchestrator. Every
     # case here runs against a FAKE envctl, which is what makes the interesting
@@ -1401,6 +1424,7 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/release-verify.tests.ps1")
     set_tests_properties(live_verify.release_runner PROPERTIES TIMEOUT 300 LABELS "live_verify")
+    exosnap_set_test_phase(live_verify.release_runner hermetic)
 
     # The publish lock: the qualification record a release is promoted on, and the
     # script the release workflow runs before it may publish anything. Registered
@@ -1412,6 +1436,7 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/release-qualification.tests.ps1")
     set_tests_properties(live_verify.release_qualification PROPERTIES TIMEOUT 300 LABELS "live_verify")
+    exosnap_set_test_phase(live_verify.release_qualification hermetic)
 
     # The signature the publish lock reads before anything else. Pinned to RFC 8032's
     # own test vectors, because a verifier that says yes to everything reports a proof
@@ -1420,6 +1445,7 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/ed25519.tests.ps1")
     set_tests_properties(pipeline.ed25519 PROPERTIES TIMEOUT 180 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.ed25519 hermetic)
 
     # Which release candidate a commit may be promoted from. Two gates read that
     # answer, so a wrong one publishes a release against evidence describing
@@ -1428,6 +1454,7 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/find-qualified-rc.tests.ps1")
     set_tests_properties(live_verify.find_qualified_rc PROPERTIES TIMEOUT 180 LABELS "live_verify")
+    exosnap_set_test_phase(live_verify.find_qualified_rc hermetic)
 
     # The packaging version-drift gate. Every case is the real packaging tree with
     # exactly one literal edited: a partial bump is the mistake the gate exists for,
@@ -1437,6 +1464,16 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/packaging-version.tests.ps1")
     set_tests_properties(pipeline.packaging_version PROPERTIES TIMEOUT 300 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.packaging_version hermetic)
+
+    # The publication policy, offline half only: what packaging/publication-policy.json
+    # is allowed to say about each channel. The feed half of check-feed-drift.ps1 reads
+    # four public services and is advisory by design, so it is not a test.
+    add_test(NAME pipeline.publication_policy
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/publication-policy.tests.ps1")
+    set_tests_properties(pipeline.publication_policy PROPERTIES TIMEOUT 300 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.publication_policy hermetic)
 
     # The Hyper-V verification guest recipe. Registered here for the reason the
     # release-runner cases are: what it is worth testing about a virtual machine is
@@ -1450,6 +1487,7 @@ if(EXOSNAP_PWSH)
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/vm-recipe.tests.ps1")
     set_tests_properties(live_verify.vm_recipe PROPERTIES TIMEOUT 300 LABELS "live_verify")
+    exosnap_set_test_phase(live_verify.vm_recipe hermetic)
 
     # The local verification pipeline's own contracts. These belong in CTest and
     # not only in verify.ps1, because verify.ps1 is the thing under test: a
@@ -1458,23 +1496,84 @@ if(EXOSNAP_PWSH)
     # prerequisite never ran. Running them from inside the pipeline they guard
     # would let a broken orchestrator pass itself.
     #
-    # Label "pipeline", deliberately not "live_verify": ctest -LE takes a regex,
-    # so the documented "-ExcludeLabel live" shortcut also drops live_verify.
-    # These cases query no hardware and must survive that exclusion.
+    # Label "pipeline", deliberately not "live_verify": these cases guard the
+    # local pipeline rather than the Live Verify runner, and nothing here queries
+    # hardware.
     add_test(NAME pipeline.drift_guards
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/check-drift.tests.ps1")
     set_tests_properties(pipeline.drift_guards PROPERTIES TIMEOUT 180 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.drift_guards hermetic)
 
     add_test(NAME pipeline.verify_orchestrator
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/verify-pipeline.tests.ps1")
     set_tests_properties(pipeline.verify_orchestrator PROPERTIES TIMEOUT 180 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.verify_orchestrator hermetic)
 
     add_test(NAME pipeline.source_hygiene
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/check-source-hygiene.tests.ps1")
     set_tests_properties(pipeline.source_hygiene PROPERTIES TIMEOUT 180 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.source_hygiene hermetic)
+
+    # The subject grammar, the changelog assembler and the release-notes
+    # renderer share one parser, and the release cut is the first place a
+    # disagreement between them would surface -- after the tag is pushed.
+    add_test(NAME pipeline.commit_policy
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/commit-policy.tests.ps1")
+    set_tests_properties(pipeline.commit_policy PROPERTIES TIMEOUT 300 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.commit_policy hermetic)
+
+    add_test(NAME pipeline.prose_lines
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/prose-lines.tests.ps1")
+    set_tests_properties(pipeline.prose_lines PROPERTIES TIMEOUT 300 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.prose_lines hermetic)
+
+    # Needs clang-tidy, and reports that it is missing rather than passing
+    # without it -- which is the same distinction the guard itself is about.
+    add_test(NAME pipeline.lint_canaries
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/lint-canaries.tests.ps1")
+    set_tests_properties(pipeline.lint_canaries PROPERTIES TIMEOUT 300 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.lint_canaries hermetic)
+
+    # The entry point every other gate runs the suite through. What it promises
+    # is negative -- that a label exclusion cannot take a category with it, that
+    # an empty selection is an error rather than a pass, and that a failing
+    # test's own logs survive the cleanup -- and none of that is observable from
+    # a green run of the real suite.
+    # The repository's own statement of what GitHub must enforce, and the
+    # report that compares it with what GitHub actually does. Registered because
+    # both halves are only wrong in one direction that matters -- a live state
+    # weaker than the declared one -- and that is unreachable without fixtures.
+    add_test(NAME pipeline.github_rulesets
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/github-rulesets.tests.ps1")
+    set_tests_properties(pipeline.github_rulesets PROPERTIES TIMEOUT 180 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.github_rulesets hermetic)
+
+    add_test(NAME pipeline.run_tests_contract
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/run-tests-contract.tests.ps1")
+    set_tests_properties(pipeline.run_tests_contract PROPERTIES TIMEOUT 300 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.run_tests_contract hermetic)
+
+    # Holds and contends the real host locks from child processes, so it runs alone:
+    # beside run_tests_contract (which runs run-tests.ps1, which takes the device
+    # lock) its timing assertions would measure the other test's hold.
+    add_test(NAME pipeline.host_resource_lock
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/host-resource-lock.tests.ps1")
+    set_tests_properties(pipeline.host_resource_lock PROPERTIES TIMEOUT 300 LABELS "pipeline" RUN_SERIAL TRUE)
+    exosnap_set_test_phase(pipeline.host_resource_lock hermetic)
+elseif(EXOSNAP_REQUIRE_TEST_TOOLS)
+    message(FATAL_ERROR
+        "pwsh was not found, so none of the Live Verify and pipeline script tests would be registered "
+        "-- including the publish lock and the signature verifier. Install PowerShell 7 or configure "
+        "with -DEXOSNAP_REQUIRE_TEST_TOOLS=OFF to accept a reduced suite.")
 else()
     message(STATUS "pwsh not found: the Live Verify and pipeline script tests will not be registered.")
 endif()

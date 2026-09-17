@@ -95,6 +95,20 @@ PreconditionVerdict CanPause(const AutomationState& state) {
                   QStringLiteral("canPause"), true, false);
 }
 
+// The live overlay fields are the only part of the webcam configuration a
+// recording can change under itself, which is why this is a command of its own
+// and not a relaxation of settings.set. Outside a running recording there is no
+// session to apply it to, and answering `applied` from a stored setting would
+// report something no frame was composited with.
+PreconditionVerdict CanSetWebcamOverlay(const AutomationState& state) {
+    if (state.recording_state == QLatin1String("Recording") || state.recording_state == QLatin1String("Paused"))
+        return Allowed();
+    return Refuse(
+        error_code::kInvalidState,
+        QStringLiteral("webcam.overlay.set applies to a running recording; the state is %1").arg(state.recording_state),
+        QStringLiteral("recordingState"), true, false);
+}
+
 PreconditionVerdict CanResume(const AutomationState& state) {
     if (state.can_resume)
         return Allowed();
@@ -419,6 +433,21 @@ const QVector<CommandDescriptor>& AllCommands() {
         {QStringLiteral("record.snapshot"), 1, false, true, Settle::NotApplicable, {}, &NoPrecondition},
         {QStringLiteral("record.result"), 1, false, true, Settle::NotApplicable, {}, &NoPrecondition},
         {QStringLiteral("overlay.snapshot"), 1, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        // Idempotent in effect but not in its answer: the applied sequence advances
+        // on every accepted call, which is what lets a caller tell a second
+        // identical request from a dropped one.
+        {QStringLiteral("webcam.overlay.set"),
+         1,
+         true,
+         false,
+         Settle::Synchronous,
+         {{QStringLiteral("x"), QStringLiteral("any"), false, {}},
+          {QStringLiteral("y"), QStringLiteral("any"), false, {}},
+          {QStringLiteral("width"), QStringLiteral("any"), false, {}},
+          {QStringLiteral("height"), QStringLiteral("any"), false, {}},
+          {QStringLiteral("opacity"), QStringLiteral("any"), false, {}},
+          {QStringLiteral("mirror"), QStringLiteral("bool"), false, {}}},
+         &CanSetWebcamOverlay},
         {QStringLiteral("editor.snapshot"), 1, false, true, Settle::NotApplicable, {}, &NoPrecondition},
         {QStringLiteral("diagnostics.snapshot"), 1, false, true, Settle::NotApplicable, {}, &NoPrecondition},
 

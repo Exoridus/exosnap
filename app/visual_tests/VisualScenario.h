@@ -22,6 +22,12 @@ enum class VisualPage {
 
 enum class VisualRecordState {
     None,
+    // No capture source at all -- the page's own empty stage, not a state set
+    // behind a selection that is still there.
+    NoSource,
+    // The empty stage carrying the brand instead of its instruction block.
+    // Harness-only, for the still the README ships.
+    Brand,
     Ready,
     Countdown,
     Preparing,

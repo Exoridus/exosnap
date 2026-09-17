@@ -650,7 +650,15 @@ Item {
                 recordViewModel: root.recordViewModel
                 previewAdapter: root.previewAdapter
                 shell: root.shell
-                active: root.currentPage === ShellAdapter.RecordPage
+                // displayedPage, not currentPage: `active` drives the live preview,
+                // the webcam frame delivery and the meters, all of which are what
+                // the page SHOWS. Following the request instead of the swap paused
+                // the preview on the click, while the Record page was still the one
+                // on screen waiting for an incubating destination -- a black preview
+                // for as long as that first load took. The capture path does not
+                // read this flag; while the engine owns the source the preview gate
+                // stands still regardless of it.
+                active: root.displayedPage === ShellAdapter.RecordPage
                 benchmarkInteractionActive: root.benchmarkInteractionActive
                 Layout.fillWidth: true
                 Layout.fillHeight: true

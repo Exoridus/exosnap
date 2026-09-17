@@ -26,6 +26,7 @@ Individual probe targets are placed under `build/<preset>/tools/probes/`.
 | probe_mf_aac_encode | Media Foundation AAC encoding (legacy/transitional) | None | `probe_mf_aac_encode.exe` |
 | probe_gpup_nvenc | NVENC session, codec caps and 60 encoded frames on adapter 0, as JSON | NVIDIA GPU, or a Hyper-V GPU partition of one | `probe_gpup_nvenc.exe` |
 | probe_idd_duplication | Output Duplication on every output: mode, colour space, frame timing and diagnostics as JSON | A desktop session | `probe_idd_duplication.exe` |
+| probe_luminance_cost | GPU execution time of the per-frame luminance analysis next to the tone-map pass, per resolution, as JSON | GPU | `probe_luminance_cost.exe` |
 
 ## The two verification-guest probes
 

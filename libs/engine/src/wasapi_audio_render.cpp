@@ -53,6 +53,20 @@ void LogWarn(const char* msg) {
     logging::log(logging::LogLevel::Warn, kLogComponent, msg);
 }
 
+// Failures the render client cannot come back from on this instance: the endpoint
+// is gone or the service died, and every later call returns the same thing. Any
+// other failure is treated as transient and simply skips one period.
+[[nodiscard]] bool IsFatalRenderHResult(HRESULT hr) noexcept {
+    return hr == AUDCLNT_E_DEVICE_INVALIDATED || hr == AUDCLNT_E_SERVICE_NOT_RUNNING || hr == AUDCLNT_E_NOT_INITIALIZED;
+}
+
+void LogRenderFailure(const char* call, HRESULT hr) {
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "render thread stopping: %s failed 0x%08lX (endpoint gone)", call,
+                  static_cast<unsigned long>(hr));
+    LogError(buf);
+}
+
 // Effective format tag of a mix format: WAVE_FORMAT_EXTENSIBLE wraps the real
 // tag in SubFormat (same Data1 shortcut as wasapi_capture_src.cpp's
 // ResolveWaveFormatTag -- Data1 of KSDATAFORMAT_SUBTYPE_* is the classic tag).
@@ -361,7 +375,17 @@ void WasapiAudioRenderer::RenderThreadMain() {
             continue;
 
         UINT32 padding_frames = 0;
-        if (FAILED(audio_client_->GetCurrentPadding(&padding_frames)) || padding_frames > buffer_frame_count_)
+        const HRESULT padding_hr = audio_client_->GetCurrentPadding(&padding_frames);
+        // A dead endpoint never recovers on this client, and the event it would
+        // have signalled is gone too, so continuing here spins on the 200 ms wait
+        // for the rest of the session with silent output and nothing logged.
+        // Stop and say so instead; the caller can open a new renderer.
+        if (IsFatalRenderHResult(padding_hr)) {
+            LogRenderFailure("GetCurrentPadding", padding_hr);
+            running_.store(false);
+            break;
+        }
+        if (FAILED(padding_hr) || padding_frames > buffer_frame_count_)
             continue;
         const UINT32 available_frames = buffer_frame_count_ - padding_frames;
         if (available_frames == 0)
@@ -397,7 +421,13 @@ void WasapiAudioRenderer::RenderThreadMain() {
         const uint32_t engine_frames = static_cast<uint32_t>(engine_buf.size() / kEngineChannels);
 
         BYTE* device_data = nullptr;
-        if (FAILED(render_client_->GetBuffer(available_frames, &device_data)))
+        const HRESULT buffer_hr = render_client_->GetBuffer(available_frames, &device_data);
+        if (IsFatalRenderHResult(buffer_hr)) {
+            LogRenderFailure("GetBuffer", buffer_hr);
+            running_.store(false);
+            break;
+        }
+        if (FAILED(buffer_hr))
             continue;
 
         if (engine_frames == 0) {

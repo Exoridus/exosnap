@@ -1004,6 +1004,30 @@ TEST(RecordViewModelStateGuardTest, CanResume_Ready_ReturnsFalse) {
     EXPECT_FALSE(vm.CanResume());
 }
 
+// Continuing an interrupted recording arms the coordinator paused, and Resume is
+// the press that starts the next slice. Without this the state is a dead end:
+// Start is not offered because the transport reads the armed session as paused,
+// and Resume has nothing to unpause.
+TEST(RecordViewModelStateGuardTest, CanResume_ArmedFromRecovery_WithATarget_ReturnsTrue) {
+    RecordViewModel vm;
+    vm.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    vm.selected_target_index = 0;
+    vm.SetState(UiRecordingState::ArmedFromRecovery);
+    EXPECT_TRUE(vm.CanResume());
+}
+
+// The manifest does not record the capture target, so the armed session carries
+// none: the next slice needs one chosen the same way a first start does.
+TEST(RecordViewModelStateGuardTest, CanResume_ArmedFromRecovery_WithoutATarget_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::ArmedFromRecovery);
+    EXPECT_FALSE(vm.CanResume());
+
+    vm.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    vm.selected_target_index = -1;
+    EXPECT_FALSE(vm.CanResume());
+}
+
 // --- WYSIWYG preview revert policy (the app-level seam RecordPage wires to) ---
 // RecordPage leaves pushed mode and restarts its own live preview on exactly these
 // terminal states. The bug this pins: a FAILED recording must also revert, or the
@@ -1029,4 +1053,131 @@ TEST(RecordViewModelPreviewRevertTest, DoesNotRevertWhileActiveOrTransient) {
 }
 
 } // namespace
+
+// ─── Automation target filter ────────────────────────────────────────────────
+//
+// The predicate record.selectTarget picks with. It used to apply to windows
+// only; a caller asking for one display therefore got whichever display
+// enumerated first, and the result said nothing about which.
+
+exosnap::engine::CaptureTarget MakeTarget(exosnap::engine::CaptureTarget::Kind kind, const char* description,
+                                          uintptr_t id) {
+    exosnap::engine::CaptureTarget target;
+    target.kind = kind;
+    target.native_id = id;
+    target.description = description;
+    return target;
+}
+
+TEST(CaptureTargetFilter, AMonitorFilterSelectsTheRequestedDisplay) {
+    const auto first = MakeTarget(exosnap::engine::CaptureTarget::Kind::Monitor, R"(\\.\DISPLAY1)", 1);
+    const auto second = MakeTarget(exosnap::engine::CaptureTarget::Kind::Monitor, R"(\\.\DISPLAY2)", 2);
+
+    EXPECT_FALSE(CaptureTargetMatchesFilter(first, exosnap::engine::CaptureTarget::Kind::Monitor, "DISPLAY2"));
+    EXPECT_TRUE(CaptureTargetMatchesFilter(second, exosnap::engine::CaptureTarget::Kind::Monitor, "DISPLAY2"));
+}
+
+TEST(CaptureTargetFilter, AMonitorFilterThatMatchesNothingSelectsNothing) {
+    const auto only = MakeTarget(exosnap::engine::CaptureTarget::Kind::Monitor, R"(\\.\DISPLAY1)", 1);
+
+    EXPECT_FALSE(CaptureTargetMatchesFilter(only, exosnap::engine::CaptureTarget::Kind::Monitor, "DISPLAY7"));
+}
+
+TEST(CaptureTargetFilter, AnEmptyFilterStillTakesTheFirstOfItsKind) {
+    // The behaviour every existing caller relies on: no filter means no
+    // preference, and the caller takes whatever the enumeration offers first.
+    const auto monitor = MakeTarget(exosnap::engine::CaptureTarget::Kind::Monitor, R"(\\.\DISPLAY1)", 1);
+
+    EXPECT_TRUE(CaptureTargetMatchesFilter(monitor, exosnap::engine::CaptureTarget::Kind::Monitor, ""));
+}
+
+TEST(CaptureTargetFilter, WindowFilteringIsUnchangedBySharingThePredicate) {
+    // Two windows, so this shows the shared condition still discriminates rather
+    // than merely accepting the first one.
+    const auto editor = MakeTarget(exosnap::engine::CaptureTarget::Kind::Window, "Notepad - untitled", 10);
+    const auto reference = MakeTarget(exosnap::engine::CaptureTarget::Kind::Window, "ExoSnap overlay reference", 11);
+
+    EXPECT_FALSE(CaptureTargetMatchesFilter(editor, exosnap::engine::CaptureTarget::Kind::Window, "overlay reference"));
+    EXPECT_TRUE(
+        CaptureTargetMatchesFilter(reference, exosnap::engine::CaptureTarget::Kind::Window, "overlay reference"));
+    // Case-insensitive, as it always was.
+    EXPECT_TRUE(
+        CaptureTargetMatchesFilter(reference, exosnap::engine::CaptureTarget::Kind::Window, "OVERLAY REFERENCE"));
+}
+
+TEST(CaptureTargetFilter, TheKindIsCheckedBeforeTheText) {
+    // A window whose title happens to contain a display name must not answer a
+    // request for a monitor.
+    const auto window = MakeTarget(exosnap::engine::CaptureTarget::Kind::Window, "notes about DISPLAY2", 12);
+
+    EXPECT_FALSE(CaptureTargetMatchesFilter(window, exosnap::engine::CaptureTarget::Kind::Monitor, "DISPLAY2"));
+}
+
+// --- An explicit audio choice survives a target switch -----------------------
+//
+// The APP row is a persisted setting, not a property of the current target: it is
+// always listed and configurable, and only whether it CONTRIBUTES follows the
+// target. A switch that rebuilds the rows from the target's defaults throws that
+// setting away, and the next recording carries a track the operator turned off.
+
+TEST(RecordViewModelAudioRows, SwitchingToAWindowKeepsAnApplicationSourceTheOperatorTurnedOff) {
+    using K = exosnap::engine::AudioSourceKind;
+    RecordViewModel vm;
+    vm.audio_ui_state.source_rows = {
+        {K::App, false, false},
+        {K::Sys, true, false},
+    };
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+
+    const auto* app = FindRow(vm.audio_ui_state, K::App);
+    ASSERT_NE(app, nullptr) << "the APP row is always present";
+    EXPECT_FALSE(app->enabled);
+}
+
+TEST(RecordViewModelAudioRows, SwitchingToAWindowKeepsASystemSourceTheOperatorTurnedOn) {
+    using K = exosnap::engine::AudioSourceKind;
+    RecordViewModel vm;
+    vm.audio_ui_state.source_rows = {
+        {K::App, false, false},
+        {K::Sys, true, false},
+    };
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+
+    const auto* sys = FindRow(vm.audio_ui_state, K::Sys);
+    ASSERT_NE(sys, nullptr);
+    EXPECT_TRUE(sys->enabled);
+}
+
+TEST(RecordViewModelAudioRows, AProfileThatNeverConfiguredAudioStillGetsTheWindowDefaults) {
+    using K = exosnap::engine::AudioSourceKind;
+    RecordViewModel vm;
+    vm.audio_ui_state.source_rows.clear();
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+
+    const auto* app = FindRow(vm.audio_ui_state, K::App);
+    ASSERT_NE(app, nullptr);
+    EXPECT_TRUE(app->enabled) << "the APP row defaults enabled for a window target";
+    const auto* sys = FindRow(vm.audio_ui_state, K::Sys);
+    ASSERT_NE(sys, nullptr);
+    EXPECT_FALSE(sys->enabled);
+}
+
+TEST(RecordViewModelAudioRows, PreservingSwitchDoesNotReviveAnApplicationSourceThatIsOff) {
+    using K = exosnap::engine::AudioSourceKind;
+    RecordViewModel vm;
+    vm.audio_ui_state.source_rows = {
+        {K::App, false, false},
+        {K::Sys, true, false},
+    };
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+
+    const auto* app = FindRow(vm.audio_ui_state, K::App);
+    ASSERT_NE(app, nullptr);
+    EXPECT_FALSE(app->enabled);
+}
+
 } // namespace exosnap

@@ -88,6 +88,7 @@ constexpr std::array kFlags = {
 
     // --- app/services + libs/control ---
     KnownFlag{"--live-verify-control", FlagArity::Value},
+    KnownFlag{"--live-verify-static-webcam", FlagArity::None},
     KnownFlag{"--update-base-url", FlagArity::Value},
     KnownFlag{"--verify-update-reinstall", FlagArity::None},
     KnownFlag{"--relaunch-page", FlagArity::Value},

@@ -197,18 +197,20 @@ TEST(RecordViewModelAdapterTest, SourceSelectionIsClosedForEveryInFlightState) {
     RecordViewModelAdapter adapter(&source);
 
     // The capture is committed, or an overlay owns the picking.
-    for (UiRecordingState state :
-         {UiRecordingState::Countdown, UiRecordingState::Preparing, UiRecordingState::RegionSelecting,
-          UiRecordingState::Recording, UiRecordingState::Paused, UiRecordingState::ArmedFromRecovery,
-          UiRecordingState::Stopping, UiRecordingState::Saving}) {
+    for (UiRecordingState state : {UiRecordingState::Countdown, UiRecordingState::Preparing,
+                                   UiRecordingState::RegionSelecting, UiRecordingState::Recording,
+                                   UiRecordingState::Paused, UiRecordingState::Stopping, UiRecordingState::Saving}) {
         source.SetState(state);
         adapter.synchronize();
         EXPECT_FALSE(adapter.canSelectSource()) << "state index " << static_cast<int>(state);
     }
 
-    // Nothing in flight: selectable, because a target exists.
-    for (UiRecordingState state : {UiRecordingState::LoadingCapabilities, UiRecordingState::Ready,
-                                   UiRecordingState::Blocked, UiRecordingState::Completed, UiRecordingState::Failed}) {
+    // Nothing in flight: selectable, because a target exists. ArmedFromRecovery is
+    // here although the transport reads it as paused -- the manifest carries no
+    // capture target, so the armed session is waiting for one to be picked.
+    for (UiRecordingState state :
+         {UiRecordingState::LoadingCapabilities, UiRecordingState::Ready, UiRecordingState::Blocked,
+          UiRecordingState::Completed, UiRecordingState::Failed, UiRecordingState::ArmedFromRecovery}) {
         source.SetState(state);
         adapter.synchronize();
         EXPECT_TRUE(adapter.canSelectSource()) << "state index " << static_cast<int>(state);
@@ -476,6 +478,27 @@ TEST(RecordViewModelAdapterTest, RegionEditingLocksOnlyWhileTheCaptureIsLive) {
         adapter.synchronize();
         EXPECT_TRUE(adapter.regionEditingLocked()) << "state " << static_cast<int>(state);
     }
+}
+
+// The transport offers Resume in the armed state because it reads that state as
+// paused. This pins that the offer is real: the press has a target to continue
+// on, and a region that has not been drawn yet withholds it for the same reason
+// it withholds a first start.
+TEST(RecordViewModelAdapterTest, ResumeIsOfferedForAnArmedRecoverySession) {
+    RecordViewModel source;
+    source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    source.selected_target_index = 0;
+    RecordViewModelAdapter adapter(&source);
+
+    source.SetState(UiRecordingState::ArmedFromRecovery);
+    adapter.synchronize();
+    EXPECT_TRUE(adapter.paused());
+    EXPECT_TRUE(adapter.canResume());
+
+    source.capture_mode = CaptureMode::Region;
+    adapter.setRegionState(QRectF(0.0, 0.0, 1.0, 1.0), true);
+    adapter.synchronize();
+    EXPECT_FALSE(adapter.canResume());
 }
 
 TEST(RecordViewModelAdapterTest, DisplayRowsCarryTheResolvedRegionLabel) {

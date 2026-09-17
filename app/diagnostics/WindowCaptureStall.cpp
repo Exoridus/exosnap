@@ -36,8 +36,8 @@ WindowStallVerdict ClassifyConfirmedStall(const WindowTargetFacts& facts, bool p
     return WindowStallVerdict::Stalled;
 }
 
-WindowStallVerdict ClassifyConfirmedDisplayStall(bool console_display_off) noexcept {
-    return console_display_off ? WindowStallVerdict::Stalled : WindowStallVerdict::Unknown;
+WindowStallVerdict ClassifyConfirmedDisplayStall(bool console_display_off, bool captured_display_missing) noexcept {
+    return console_display_off || captured_display_missing ? WindowStallVerdict::Stalled : WindowStallVerdict::Unknown;
 }
 
 WindowStallSignal WindowCaptureStallMonitor::Observe(const WindowStallSample& sample) noexcept {

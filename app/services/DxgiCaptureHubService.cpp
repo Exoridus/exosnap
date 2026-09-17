@@ -4,6 +4,8 @@
 #include "CaptureHubRegistry.h"
 #include "DxgiSourceProducer.h"
 
+#include <exosnap/engine/display_color_recheck.h>
+#include <exosnap/engine/display_color_watch.h>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 #include <exosnap/engine/preview_shared_texture.h>
 
@@ -147,29 +149,19 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
 
     // Publisher state: the shared texture lives on the producer's device and is
     // recreated whenever the desktop's size or format changes.
+    exosnap::engine::CaptureTapPublishState published;
     exosnap::engine::PreviewSharedTexture shared;
-    uint32_t sharedW = 0;
-    uint32_t sharedH = 0;
-    DXGI_FORMAT sharedFmt = DXGI_FORMAT_UNKNOWN;
     bool announceFailed = false;
-    // Last HDR facts the tap descriptor was resolved from. A live Windows-HDR
-    // toggle (or Auto-HDR) can leave desc.{Width,Height,Format} unchanged — an
-    // Advanced-Color desktop keeps delivering FP16 in both states — so those
-    // alone are not sufficient to notice the tap has gone stale; hdr_active /
-    // max_luminance_nits must be compared every tick too, or the preview keeps
-    // tone-mapping with the peak/mode from whenever the texture was last
-    // (re)created, silently disagreeing with the display's current HDR state.
-    bool lastHdrActive = false;
-    float lastMaxLuminanceNits = 0.0f;
-
+    // `published` carries everything the live shared texture was created for --
+    // dimensions, format, the HDR facts the tap was resolved from, and the
+    // generation of the device it lives on. Every one of those has to be compared
+    // on every tick (ShouldRepublishCaptureTap): an Advanced-Color desktop keeps
+    // delivering FP16 across a live HDR toggle, and a reopened device keeps
+    // delivering the same size and format as the one that died.
     const auto resetPublisher = [&]() {
         shared.Reset();
-        sharedW = 0;
-        sharedH = 0;
-        sharedFmt = DXGI_FORMAT_UNKNOWN;
+        published = {};
         announceFailed = false;
-        lastHdrActive = false;
-        lastMaxLuminanceNits = 0.0f;
     };
 
     const auto publish = [&](const HubFrame& frame) {
@@ -178,27 +170,40 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
         D3D11_TEXTURE2D_DESC desc{};
         frame.texture->GetDesc(&desc);
         const exosnap::engine::HdrDisplayFacts& facts = producer->DisplayFacts();
-        if (exosnap::engine::ShouldRepublishCaptureTap(shared.Valid(), sharedW, sharedH, sharedFmt, desc.Width,
-                                                       desc.Height, desc.Format, lastHdrActive, lastMaxLuminanceNits,
-                                                       facts.hdr_active, facts.max_luminance_nits)) {
+        const exosnap::engine::CaptureTapFrameState incoming{producer->DeviceGenerationValue(),
+                                                             desc.Width,
+                                                             desc.Height,
+                                                             desc.Format,
+                                                             facts.hdr_active,
+                                                             facts.max_luminance_nits,
+                                                             facts.sdr_white_level_nits};
+        if (exosnap::engine::ShouldRepublishCaptureTap(published, incoming)) {
+            // The old shared texture belongs to the old device. Released before the
+            // new one is created, so a reopen cannot leave the consumer holding a
+            // handle into a device that is gone.
+            shared.Reset();
             HANDLE handle = nullptr;
             std::string err;
             if (!shared.Create(producer->Device(), desc.Width, desc.Height, desc.Format, &handle, err)) {
                 announceFailed = true;
+                published = {};
                 diagnostics::AppLog::warning(
                     QStringLiteral("dxgi-hub"),
                     QStringLiteral("shared texture create failed: %1").arg(QString::fromStdString(err)));
                 return;
             }
-            sharedW = desc.Width;
-            sharedH = desc.Height;
-            sharedFmt = desc.Format;
-            lastHdrActive = facts.hdr_active;
-            lastMaxLuminanceNits = facts.max_luminance_nits;
+            published.device_generation = incoming.device_generation;
+            published.shared_valid = true;
+            published.width = desc.Width;
+            published.height = desc.Height;
+            published.format = desc.Format;
+            published.hdr_active = facts.hdr_active;
+            published.max_luminance_nits = facts.max_luminance_nits;
+            published.sdr_white_level_nits = facts.sdr_white_level_nits;
             const exosnap::engine::PreviewTapDesc tap = exosnap::engine::ResolveRawCaptureTapDesc(
                 desc.Format, facts.hdr_active, facts.sdr_white_level_nits, facts.max_luminance_nits);
             // Ownership of the NT handle transfers to the sink.
-            sink(handle, sharedW, sharedH, tap);
+            sink(handle, published.width, published.height, tap);
         }
         publish_attempts_.fetch_add(1, std::memory_order_relaxed);
         if (shared.TryPublish(producer->Context(), frame.texture.get()).published()) {
@@ -215,10 +220,45 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
 
     std::vector<CaptureHubCommandQueue<SubscribePayload>::Entry> batch;
 
+    // The display's facts are read when the duplication opens and never again by
+    // itself: changing the Windows SDR content brightness triggers no mode
+    // change, so nothing reopens and the published tap keeps describing a
+    // desktop that is now composed at a different level. The OS reports that
+    // change where it can (DisplayColorWatch) and a backstop re-read covers the
+    // builds and moments where it cannot -- the same pair the recording session
+    // uses, on the same gate, so the two cannot drift apart. Never per frame: it
+    // costs a DXGI and a DisplayConfig query.
+    exosnap::engine::DisplayColorWatch color_watch;
+    exosnap::engine::DisplayColorRecheckGate color_gate;
+    color_gate.Start(std::chrono::steady_clock::now(), color_watch.Notified());
+    HMONITOR watched_monitor = nullptr;
+
     while (!stop_token.stop_requested()) {
         commands_.WaitAndDrain(kPumpTick, batch);
         if (stop_token.stop_requested())
             break;
+
+        if (producer != nullptr) {
+            // A reopen after a topology change comes back on a new handle, and a
+            // subscription left on the old one would report a display this hub no
+            // longer duplicates.
+            const HMONITOR monitor = producer->Monitor();
+            if (monitor != watched_monitor) {
+                watched_monitor = monitor;
+                color_watch.Watch(monitor);
+            }
+            const auto now = std::chrono::steady_clock::now();
+            color_gate.SetNotified(now, color_watch.Notified());
+            if (color_gate.TakeDue(now, color_watch.TakeSignalled())) {
+                // The return value is deliberately unused: what the next frame is
+                // published against is the refreshed DisplayFacts(), and
+                // ShouldRepublishCaptureTap owns the decision either way.
+                (void)producer->RefreshDisplayFacts();
+            }
+        } else if (watched_monitor != nullptr) {
+            watched_monitor = nullptr;
+            color_watch.Watch(nullptr);
+        }
 
         // Every drained command is applied, in post order: nothing is dropped
         // because something newer arrived while the pump was busy.

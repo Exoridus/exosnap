@@ -451,6 +451,7 @@ bool WriteReport(const QString& path, const Environment& environment, const RunC
     preview_json.insert(QStringLiteral("consumer_acquire_abandoned"), MetricToJson(preview.consumer_acquire_abandoned));
     preview_json.insert(QStringLiteral("consumer_conversion_failures"),
                         MetricToJson(preview.consumer_conversion_failures));
+    preview_json.insert(QStringLiteral("consumer_release_failures"), MetricToJson(preview.consumer_release_failures));
     preview_json.insert(QStringLiteral("publish_interval_ms_p50"), MetricToJson(preview.publish_interval_ms_p50));
     preview_json.insert(QStringLiteral("publish_interval_ms_p95"), MetricToJson(preview.publish_interval_ms_p95));
     preview_json.insert(QStringLiteral("publish_interval_ms_p99"), MetricToJson(preview.publish_interval_ms_p99));

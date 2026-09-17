@@ -5,15 +5,21 @@
 #include "av_epoch_align.h"
 #include "codec_private.h"
 #include "gpu_compositor.h"
+#include "gpu_frame_luminance.h"
 #include "gpu_hdr_pq.h"
 #include "gpu_rgb_to_ayuv.h"
 #include "hdr_preview.h"
+#include "hdr_session_dynamic.h"
 #include "hdr_tonemap.h"
+#include "thread_dpi_scope.h"
+#include <exosnap/engine/display_color_recheck.h>
+#include <exosnap/engine/display_color_watch.h>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 
 #include "preview_publish_gate.h"
 #include "session_internal.h"
 #include "split_sentinel_policy.h"
+#include "video_epoch_log.h"
 #include "yuv_to_bgra.h"
 #include <exosnap/engine/cursor_sprite.h>
 #include <exosnap/engine/gpu_hdr_tonemap.h>
@@ -73,8 +79,7 @@ namespace {
 static uint64_t Qpc100ns(uint64_t freq) noexcept {
     LARGE_INTEGER qpc;
     QueryPerformanceCounter(&qpc);
-    const auto q = static_cast<uint64_t>(qpc.QuadPart);
-    return (q / freq) * 10000000ULL + (q % freq) * 10000000ULL / freq;
+    return QpcTicksTo100ns(static_cast<uint64_t>(qpc.QuadPart), freq);
 }
 
 const char* TargetKindName(CaptureTarget::Kind kind) noexcept {
@@ -118,6 +123,30 @@ int RectWidth(const RECT& r) noexcept {
 
 int RectHeight(const RECT& r) noexcept {
     return r.bottom - r.top;
+}
+
+// A cursor handle identifies the shape: the OS hands out one per loaded cursor
+// resource, so Arrow and I-beam differ here even though neither carries a name.
+// Logged so a shape change can be told apart from a position change without
+// hashing the sprite.
+std::string HandleToken(void* handle) {
+    std::ostringstream out;
+    out << "0x" << std::hex << reinterpret_cast<uintptr_t>(handle);
+    return out.str();
+}
+
+// The per-session cursor-pipeline record. Named so a log reader matches the
+// message rather than a substring of it.
+constexpr const char* kWgcCursorSummaryLogMessage = "wgc cursor pipeline summary";
+
+// The per-session overlay-generation record. Separate from the cursor summary
+// because it answers a different question and applies to both backends.
+constexpr const char* kWebcamOverlaySummaryLogMessage = "webcam overlay pipeline summary";
+
+std::string RectToken(const RECT& r) {
+    std::ostringstream out;
+    out << r.left << "," << r.top << "," << r.right << "," << r.bottom;
+    return out.str();
 }
 
 // Win32CursorBitmap / CaptureWin32CursorBitmap / ScaleCoordinateToSource /
@@ -248,6 +277,27 @@ void VideoThread::Run() {
     const bool targetIsMonitor = (target.kind == CaptureTarget::Kind::Monitor);
     const HWND targetHwnd =
         (target.kind == CaptureTarget::Kind::Window) ? reinterpret_cast<HWND>(target.native_id) : nullptr;
+    // For Monitor targets, keep capture and encode on the adapter that owns the
+    // HMONITOR. This is required by DXGI duplication and avoids a cross-adapter
+    // WGC monitor texture when the harness selects that backend.
+    //
+    // The lookup happens before anything is opened, and its failure ends the
+    // session here. Duplication requires a device built on the adapter that owns
+    // the output; without one it acquires nothing for the whole start budget and
+    // then reports that no frame was ever captured -- twenty seconds and a
+    // zero-byte partial in place of an answer. Window capture is no remedy: an
+    // HMONITOR whose adapter cannot be found is not a display this machine can
+    // capture by any route, so the honest outcome is a named refusal now.
+    winrt::com_ptr<IDXGIAdapter1> monitorAdapter;
+    if (targetIsMonitor) {
+        std::string adapterErr;
+        if (!FindAdapterForMonitor(reinterpret_cast<HMONITOR>(target.native_id), monitorAdapter.put(), adapterErr) ||
+            !monitorAdapter) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare,
+                                  "the display's graphics adapter could not be identified: " + adapterErr);
+            return;
+        }
+    }
     const EffectiveCaptureBackend captureBackend = ResolveCaptureBackend(m_state.config);
     const bool useOdCapture = (captureBackend == EffectiveCaptureBackend::DxgiOutputDuplication);
 
@@ -259,15 +309,6 @@ void VideoThread::Run() {
                                       {"dpi_awareness", DpiAwarenessName()}};
         logging::log(logging::LogLevel::Info, "video_thread", "capture session starting",
                      std::span<const logging::LogField>(fields, std::size(fields)));
-    }
-
-    // For Monitor targets, keep capture and encode on the adapter that owns the
-    // HMONITOR. This is required by DXGI duplication and avoids a cross-adapter
-    // WGC monitor texture when the harness selects that backend.
-    winrt::com_ptr<IDXGIAdapter1> monitorAdapter;
-    if (targetIsMonitor) {
-        std::string adapterErr;
-        FindAdapterForMonitor(reinterpret_cast<HMONITOR>(target.native_id), monitorAdapter.put(), adapterErr);
     }
 
     // --- D3D11 video-capable device (exclusive to this thread's context) ---
@@ -391,7 +432,7 @@ void VideoThread::Run() {
     // scRGB->SDR tone-map knee, in reference-white multiples. Only an actively-
     // HDR display's reported peak is trusted; otherwise the documented fallback
     // is used (an SDR-mode display still reports inflated EDID luminance caps).
-    float hdrPeakScale = HdrPeakScale(false, 0.0f);
+    float hdrPeakScale = HdrPeakScale(false, 0.0f, 0.0f);
     // The OS SDR reference white, in the same reference-white multiples. An HDR
     // desktop composes SDR content at that level rather than at scRGB's nominal
     // 80 nits, so the tone-map has to divide it back out; 1.0 is the
@@ -409,7 +450,8 @@ void VideoThread::Run() {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "DXGI OD open: " + odErr);
             return;
         }
-        hdrPeakScale = HdrPeakScale(odSrc.HdrActive(), odSrc.MaxLuminanceNits());
+        hdrPeakScale =
+            HdrPeakScale(odSrc.HdrActive(), odSrc.MaxLuminanceNits(), odSrc.DisplayFacts().sdr_white_level_nits);
         hdrPaperWhiteScale = SdrPaperWhiteScale(odSrc.DisplayFacts().sdr_white_level_nits);
         expectNativeHdr =
             IsHdr10NativeEffective(m_state.config.hdr_mode, odSrc.HdrActive(), m_state.config.video_codec);
@@ -444,7 +486,8 @@ void VideoThread::Run() {
         QueryDisplayHdrFacts(wgcMonitor, wgcHdrFacts);
         wgcPlan = ResolveWgcCapturePlan(wgcHdrFacts.hdr_active, m_state.config.hdr_mode,
                                         CodecSupportsHdr10Native(m_state.config.video_codec));
-        hdrPeakScale = HdrPeakScale(wgcHdrFacts.hdr_active, wgcHdrFacts.max_luminance_nits);
+        hdrPeakScale =
+            HdrPeakScale(wgcHdrFacts.hdr_active, wgcHdrFacts.max_luminance_nits, wgcHdrFacts.sdr_white_level_nits);
         hdrPaperWhiteScale = SdrPaperWhiteScale(wgcHdrFacts.sdr_white_level_nits);
         expectNativeHdr =
             IsHdr10NativeEffective(m_state.config.hdr_mode, wgcHdrFacts.hdr_active, m_state.config.video_codec);
@@ -465,7 +508,31 @@ void VideoThread::Run() {
     // monitor handle used on both paths — the WGC path's documented "resolved once
     // at session start" limitation applies here too).
     const bool initialHdrActive = useOdCapture ? odSrc.HdrActive() : wgcHdrFacts.hdr_active;
+    // The display state every consumer's colour scalars were resolved from, kept
+    // so the periodic guard can say what changed rather than only whether HDR is
+    // still on. Advanced by the guard itself when a change is one the session can
+    // adopt, so the two never drift apart.
+    HdrDisplayFacts sessionDisplayFacts = useOdCapture ? odSrc.DisplayFacts() : wgcHdrFacts;
+    // Set by the guard, consumed by the encode loop: the scalars below are held
+    // by GPU objects that are not built yet at the point the guard is declared.
+    bool displayScalarsChanged = false;
     const HMONITOR hdrCheckMonitor = useOdCapture ? reinterpret_cast<HMONITOR>(target.native_id) : wgcMonitor;
+
+    {
+        // The state every later colour-scalar record is a delta FROM. Without it
+        // a log shows only what the session changed to, so "the display moved
+        // from A to B" cannot be read back out of a recording's own evidence --
+        // which is the question any check of this behaviour asks first.
+        const SessionHdrDynamicState initialState = ResolveSessionHdrDynamicState(sessionDisplayFacts);
+        const logging::LogField fields[] = {
+            {"hdr_active", BoolText(sessionDisplayFacts.hdr_active)},
+            {"sdr_white_level_nits", std::to_string(sessionDisplayFacts.sdr_white_level_nits)},
+            {"max_luminance_nits", std::to_string(sessionDisplayFacts.max_luminance_nits)},
+            {"paper_white_scale", std::to_string(initialState.paper_white_scale)},
+            {"peak_scale", std::to_string(initialState.peak_scale)}};
+        logging::log(logging::LogLevel::Info, "video_thread", "captured display colour scalars resolved",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    }
 
     // Capture dimensions
     const int32_t sourceWidthSigned =
@@ -510,21 +577,38 @@ void VideoThread::Run() {
     uint32_t sourceWidth = static_cast<uint32_t>(sourceWidthSigned);
     uint32_t sourceHeight = static_cast<uint32_t>(sourceHeightSigned);
 
+    // The screen-to-source mapping for the manually drawn cursor. A captured
+    // window can be dragged while recording, and WGC follows it, so this has to
+    // be re-read per cursor sample rather than frozen at session start: bounds
+    // from t=0 offset the sprite by the whole move for the rest of the session.
     RECT wgcCursorBounds{};
-    if (!useOdCapture && targetIsMonitor) {
-        MONITORINFO monitorInfo{};
-        monitorInfo.cbSize = sizeof(monitorInfo);
-        if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &monitorInfo) != FALSE)
-            wgcCursorBounds = monitorInfo.rcMonitor;
-    } else if (!useOdCapture) {
-        wgcCursorBounds = windowRect;
+    auto refreshWgcCursorBounds = [&]() {
+        if (useOdCapture) {
+            return;
+        }
+        if (targetIsMonitor) {
+            MONITORINFO monitorInfo{};
+            monitorInfo.cbSize = sizeof(monitorInfo);
+            if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &monitorInfo) != FALSE)
+                wgcCursorBounds = monitorInfo.rcMonitor;
+            return;
+        }
         RECT extendedFrameBounds{};
         if (SUCCEEDED(DwmGetWindowAttribute(targetHwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &extendedFrameBounds,
                                             sizeof(extendedFrameBounds))) &&
             RectWidth(extendedFrameBounds) > 0 && RectHeight(extendedFrameBounds) > 0) {
             wgcCursorBounds = extendedFrameBounds;
+            return;
         }
+        RECT current{};
+        if (GetWindowRect(targetHwnd, &current) != FALSE && RectWidth(current) > 0 && RectHeight(current) > 0) {
+            wgcCursorBounds = current;
+        }
+    };
+    if (!useOdCapture && !targetIsMonitor) {
+        wgcCursorBounds = windowRect;
     }
+    refreshWgcCursorBounds();
 
     // Determine crop region in monitor-local pixel coordinates.
     // CaptureRegion uses virtual-screen coordinates; subtract the monitor origin.
@@ -982,6 +1066,21 @@ void VideoThread::Run() {
     DXGI_FORMAT hdrPqSrcFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     HdrPqConverter hdrPqConverter;
 
+    // Per-frame content luminance. One compute dispatch over the pre-encode
+    // surface feeds both consumers: the stream's content light levels, which
+    // become the file's HDR10 MaxCLL/MaxFALL, and a smoothed content peak that
+    // replaces the display-derived tone-map knee. Runs on a native HDR10 or a
+    // tone-mapped HDR session only -- plain SDR has nothing to analyse, and an
+    // SDR Advanced-Color desktop (OdCaptureMode::SdrScrgb) has no roll-off to
+    // place. Everything that interprets the numbers lives in frame_luminance.h.
+    FrameLuminanceAnalyzer frameLuminance;
+    ContentPeakSmoother contentPeak;
+    StreamLuminanceAccumulator contentLightLevels;
+    bool frameLuminanceFailedLogged = false;
+    // The knee the tone-map pass currently holds; a non-positive value means it
+    // holds no measured one yet (see ContentPeakScaleChangedMaterially).
+    float hdrToneMapAppliedPeakScale = 0.0f;
+
     // The WGC path decides its HDR handling up front from wgcPlan (the frame
     // pool format is *requested*, not negotiated from frames). A WGC FP16 pool is
     // always scRGB linear — never an already-PQ desktop — so hdrPqInputIsPq stays
@@ -1026,12 +1125,118 @@ void VideoThread::Run() {
     HCURSOR wgcCursorHandle = nullptr;
     Win32CursorBitmap wgcCursorBitmap;
     std::vector<uint8_t> wgcCursorUploadBgra;
+    std::vector<uint8_t> wgcCursorInvertUploadBgra;
+    int32_t wgcCursorPosX = 0;
+    int32_t wgcCursorPosY = 0;
+    bool wgcCursorVisible = false;
 
     VisualGenerations visualGenerations{};
+
+    // Whether an overlay edit reached the frame, kept apart from whether it
+    // reached the picture. Those are different failures: a generation that never
+    // advances leaves a still source re-emitting the composite made with the
+    // previous overlay, while one that advances without the composite following
+    // it is a compositing fault. Neither is visible in the encoded frames alone,
+    // and without these counters an overlay measurement could only ever report
+    // the second.
+    //
+    // Counted separately from the webcam's own generation, because a camera
+    // advances that on every delivered sample and would recomposite the frame on
+    // the overlay's behalf. Reported for both backends whenever a webcam provider
+    // is attached.
+    struct OverlayTrace {
+        uint64_t samples = 0;
+        uint64_t generation_changes = 0;
+        uint64_t webcam_generation_changes = 0;
+        // Ticks on which an overlay edit met a held screen and no fresh capture
+        // frame -- the only situation in which advancing the frame key has an
+        // observable consequence. Derived from the sampler's own comparison and
+        // from the capture state, never from visualGenerations, so a build whose
+        // frame key no longer advances still counts the same opportunities. A
+        // measurement whose denominator moved with the defect would report every
+        // broken run as having had nothing to find.
+        uint64_t hold_opportunities = 0;
+        uint64_t recomposited_for_overlay = 0;
+        uint64_t composited_with_overlay = 0;
+    };
+    OverlayTrace overlayTrace;
+    // Whether this tick's sample saw the overlay change. Reset per tick by
+    // sampleOverlay so the recomposition site can ask about the tick it is in.
+    bool overlayChangedThisTick = false;
+
+    // Why the manually drawn WGC pointer is or is not in a frame. Every exit in
+    // sampleWgcCursor below is silent by design -- an absent pointer is a normal
+    // state, not a failure -- which leaves an absent pointer and a broken one
+    // indistinguishable from the outside. These counters separate them: an OS
+    // that reports no visible cursor, a sprite that will not rasterize, and a
+    // mapping with no bounds to map into are three different answers, and only
+    // the last two are defects. Reported once per session, plus one line per
+    // change of outcome so a transition has a timestamp to correlate against.
+    struct WgcCursorTrace {
+        uint64_t samples = 0;
+        uint64_t info_failed = 0;
+        uint64_t not_showing = 0;
+        uint64_t null_handle = 0;
+        uint64_t bitmap_failed = 0;
+        uint64_t bounds_invalid = 0;
+        uint64_t dpi_scope_failed = 0;
+        uint64_t handle_changes = 0;
+        uint64_t position_changes = 0;
+        uint64_t generation_bumps = 0;
+        uint64_t recomposited_for_overlay = 0;
+        uint64_t draw_calls = 0;
+        uint64_t draw_clipped_out = 0;
+        uint64_t draw_submitted = 0;
+        uint64_t invert_submitted = 0;
+        uint64_t draw_failed = 0;
+        bool have_outcome = false;
+        WgcCursorSampleOutcome outcome = WgcCursorSampleOutcome::Sampled;
+    };
+    WgcCursorTrace wgcCursorTrace;
+    auto noteWgcCursorOutcome = [&](WgcCursorSampleOutcome outcome, const CURSORINFO& info) {
+        if (wgcCursorTrace.have_outcome && outcome == wgcCursorTrace.outcome) {
+            return;
+        }
+        wgcCursorTrace.have_outcome = true;
+        wgcCursorTrace.outcome = outcome;
+        const logging::LogField fields[] = {{"outcome", WgcCursorSampleOutcomeName(outcome)},
+                                            {"sample", std::to_string(wgcCursorTrace.samples)},
+                                            {"showing", (info.flags & CURSOR_SHOWING) != 0 ? "true" : "false"},
+                                            {"cursor_handle", HandleToken(info.hCursor)},
+                                            {"screen_x", std::to_string(info.ptScreenPos.x)},
+                                            {"screen_y", std::to_string(info.ptScreenPos.y)},
+                                            {"bounds", RectToken(wgcCursorBounds)},
+                                            {"mapped_x", std::to_string(wgcCursorPosX)},
+                                            {"mapped_y", std::to_string(wgcCursorPosY)},
+                                            {"visible", wgcCursorVisible ? "true" : "false"},
+                                            {"generation", std::to_string(visualGenerations.cursor)}};
+        logging::log(logging::LogLevel::Info, "video_thread", "wgc cursor sample outcome changed",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    };
     VisualFrameKey lastCompositedKey{};
     bool haveLastCompositedKey = false;
     uint64_t lastWebcamFrameGeneration = 0;
     bool haveWebcamFrameGeneration = false;
+    WebcamOverlayLive lastOverlaySnapshot{};
+    bool haveOverlaySnapshot = false;
+
+    // The PiP geometry, opacity and chroma key are settable while Record() runs
+    // and are part of the frame key, so a change has to advance the overlay
+    // generation BEFORE the key is taken. Read through this rather than calling
+    // SnapshotWebcamOverlay directly: a snapshot that skips the bump lets a still
+    // source keep re-emitting the composite made with the previous overlay.
+    auto sampleOverlay = [&]() -> WebcamOverlayLive {
+        WebcamOverlayLive current = m_state.SnapshotWebcamOverlay();
+        ++overlayTrace.samples;
+        overlayChangedThisTick = !haveOverlaySnapshot || !(current == lastOverlaySnapshot);
+        if (overlayChangedThisTick) {
+            haveOverlaySnapshot = true;
+            lastOverlaySnapshot = current;
+            ++visualGenerations.overlay;
+            ++overlayTrace.generation_changes;
+        }
+        return current;
+    };
 
     // Validate an acquired OD frame; on the FIRST frame, negotiate the session
     // capture format and create odCapturedTex to match it. Cheap on the
@@ -1444,43 +1649,111 @@ void VideoThread::Run() {
         return true;
     };
 
-    auto drawWin32CursorGpu = [&]() -> bool {
+    // WGC delivers no pointer events of its own; the session's built-in cursor
+    // is off so the compositor owns z-order, so nothing else on this backend
+    // advances the cursor generation. Sampling has to happen before the frame
+    // key is taken, separately from drawing: a generation that stands still
+    // leaves ShouldRecompositeHeldScreen false, and the pointer then freezes in
+    // the recording while it keeps moving on screen.
+    auto sampleWgcCursor = [&]() {
         if (useOdCapture || !m_state.config.capture_cursor) {
-            return true;
+            return;
+        }
+
+        ++wgcCursorTrace.samples;
+        // The pointer position and the bounds it is measured against, read in one
+        // coordinate space. Without this the position is virtualised for whichever
+        // monitor the pointer is over while the bounds are not, and the sprite
+        // lands short by however much of the distance lies on a scaled display.
+        // The scope covers the bounds refresh below as well: its GetWindowRect
+        // fallback is virtualised too, and fixing only the cursor would reproduce
+        // the same defect from the other side.
+        const ScopedThreadDpiAwareness dpiScope(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        if (!dpiScope.active()) {
+            // Not a fallback to the old behaviour. Mixed spaces put the pointer
+            // somewhere it never was, and a recording with the cursor in the wrong
+            // place is worse than one without it.
+            ++wgcCursorTrace.dpi_scope_failed;
+            noteWgcCursorOutcome(WgcCursorSampleOutcome::DpiScopeUnavailable, CURSORINFO{});
+            return;
         }
 
         CURSORINFO cursorInfo{};
         cursorInfo.cbSize = sizeof(cursorInfo);
-        if (GetCursorInfo(&cursorInfo) == FALSE || (cursorInfo.flags & CURSOR_SHOWING) == 0 ||
-            cursorInfo.hCursor == nullptr) {
-            return true;
+        const bool infoOk = GetCursorInfo(&cursorInfo) != FALSE;
+        const WgcCursorSampleOutcome infoOutcome =
+            ClassifyWgcCursorInfo(infoOk, (cursorInfo.flags & CURSOR_SHOWING) != 0, cursorInfo.hCursor != nullptr);
+        if (infoOutcome != WgcCursorSampleOutcome::Sampled) {
+            switch (infoOutcome) {
+            case WgcCursorSampleOutcome::CursorInfoFailed:
+                ++wgcCursorTrace.info_failed;
+                break;
+            case WgcCursorSampleOutcome::NotShowing:
+                ++wgcCursorTrace.not_showing;
+                break;
+            default:
+                ++wgcCursorTrace.null_handle;
+                break;
+            }
+            if (wgcCursorVisible) {
+                wgcCursorVisible = false;
+                ++visualGenerations.cursor;
+                ++wgcCursorTrace.generation_bumps;
+            }
+            noteWgcCursorOutcome(infoOutcome, cursorInfo);
+            return;
         }
 
         if (cursorInfo.hCursor != wgcCursorHandle || wgcCursorBitmap.bgra.empty()) {
             Win32CursorBitmap next;
             if (!CaptureWin32CursorBitmap(cursorInfo.hCursor, next)) {
-                return true;
+                ++wgcCursorTrace.bitmap_failed;
+                noteWgcCursorOutcome(WgcCursorSampleOutcome::SpriteCaptureFailed, cursorInfo);
+                return;
             }
             wgcCursorHandle = cursorInfo.hCursor;
             wgcCursorBitmap = std::move(next);
+            ++visualGenerations.cursor;
+            ++wgcCursorTrace.generation_bumps;
+            ++wgcCursorTrace.handle_changes;
         }
 
+        refreshWgcCursorBounds();
         const int boundsW = RectWidth(wgcCursorBounds);
         const int boundsH = RectHeight(wgcCursorBounds);
         if (boundsW <= 0 || boundsH <= 0) {
+            ++wgcCursorTrace.bounds_invalid;
+            noteWgcCursorOutcome(WgcCursorSampleOutcome::BoundsEmpty, cursorInfo);
+            return;
+        }
+
+        const CursorSourcePoint mapped = MapCursorToSource(
+            cursorInfo.ptScreenPos.x, cursorInfo.ptScreenPos.y, wgcCursorBounds, static_cast<int32_t>(sourceWidth),
+            static_cast<int32_t>(sourceHeight), wgcCursorBitmap.hotspot_x, wgcCursorBitmap.hotspot_y);
+        const int32_t cx = mapped.x;
+        const int32_t cy = mapped.y;
+        if (!wgcCursorVisible || cx != wgcCursorPosX || cy != wgcCursorPosY) {
+            wgcCursorVisible = true;
+            wgcCursorPosX = cx;
+            wgcCursorPosY = cy;
+            ++visualGenerations.cursor;
+            ++wgcCursorTrace.generation_bumps;
+            ++wgcCursorTrace.position_changes;
+        }
+        noteWgcCursorOutcome(WgcCursorSampleOutcome::Sampled, cursorInfo);
+    };
+
+    auto drawWin32CursorGpu = [&]() -> bool {
+        if (useOdCapture || !m_state.config.capture_cursor || !wgcCursorVisible || wgcCursorBitmap.bgra.empty()) {
             return true;
         }
 
-        const int32_t cx = ScaleCoordinateToSource(cursorInfo.ptScreenPos.x - wgcCursorBounds.left,
-                                                   static_cast<int32_t>(sourceWidth), boundsW) -
-                           wgcCursorBitmap.hotspot_x;
-        const int32_t cy = ScaleCoordinateToSource(cursorInfo.ptScreenPos.y - wgcCursorBounds.top,
-                                                   static_cast<int32_t>(sourceHeight), boundsH) -
-                           wgcCursorBitmap.hotspot_y;
+        ++wgcCursorTrace.draw_calls;
         const CursorSpriteClip clip =
-            ClipCursorSprite(cx, cy, wgcCursorBitmap.width, wgcCursorBitmap.height, static_cast<int32_t>(sourceWidth),
-                             static_cast<int32_t>(sourceHeight));
+            ClipCursorSprite(wgcCursorPosX, wgcCursorPosY, wgcCursorBitmap.width, wgcCursorBitmap.height,
+                             static_cast<int32_t>(sourceWidth), static_cast<int32_t>(sourceHeight));
         if (!clip.visible) {
+            ++wgcCursorTrace.draw_clipped_out;
             return true;
         }
 
@@ -1501,8 +1774,30 @@ void VideoThread::Run() {
 
         std::string compErr;
         if (!gpuCompositor.DrawCursor(wgcCursorUploadBgra.data(), clip.w, clip.h, rect, compErr)) {
+            ++wgcCursorTrace.draw_failed;
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU WGC cursor composite: " + compErr);
             return false;
+        }
+        ++wgcCursorTrace.draw_submitted;
+
+        // The inverting plane, when the cursor has one. Drawn after the sprite and
+        // over the same rectangle: the two planes are disjoint by construction, so
+        // the order only decides which blend each pixel goes through.
+        if (!wgcCursorBitmap.invert.empty()) {
+            wgcCursorInvertUploadBgra.resize(static_cast<size_t>(clip.w) * clip.h * 4);
+            for (int32_t row = 0; row < clip.h; ++row) {
+                const size_t srcOff =
+                    (static_cast<size_t>(clip.bitmap_off_y + row) * wgcCursorBitmap.width + clip.bitmap_off_x) * 4u;
+                const uint8_t* srcRow = wgcCursorBitmap.invert.data() + srcOff;
+                uint8_t* dstRow = wgcCursorInvertUploadBgra.data() + static_cast<size_t>(row) * clip.w * 4u;
+                std::memcpy(dstRow, srcRow, static_cast<size_t>(clip.w) * 4u);
+            }
+            if (!gpuCompositor.DrawCursorInvert(wgcCursorInvertUploadBgra.data(), clip.w, clip.h, rect, compErr)) {
+                ++wgcCursorTrace.draw_failed;
+                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU WGC cursor invert composite: " + compErr);
+                return false;
+            }
+            ++wgcCursorTrace.invert_submitted;
         }
         return true;
     };
@@ -1518,10 +1813,40 @@ void VideoThread::Run() {
     tonemapGpuTimer.Init(d3dDevice.get());
     vpbltGpuTimer.Init(d3dDevice.get());
 
+    // Measure one pre-encode frame. Inert until Init has run, which only happens
+    // for the sessions the analysis is for, so no call site repeats that gate.
+    //
+    // A dispatch failure ends the analysis for the session rather than being
+    // retried: the causes are all structural (a view the device refuses, a lost
+    // device), so retrying would log once per frame and change nothing. The
+    // recording continues on the display-derived knee, which is what it ran on
+    // before this pass existed.
+    auto analyseFrameLuminance = [&](ID3D11Texture2D* source) {
+        if (!frameLuminance.Initialised() || source == nullptr) {
+            return;
+        }
+        std::string lumErr;
+        if (frameLuminance.Dispatch(source, lumErr)) {
+            return;
+        }
+        frameLuminance.Reset();
+        if (!frameLuminanceFailedLogged) {
+            frameLuminanceFailedLogged = true;
+            logging::log(logging::LogLevel::Warn, "video_thread",
+                         "per-frame luminance analysis stopped after a dispatch failure; the tone-map knee keeps its "
+                         "display-derived value and the file carries no measured content light levels: " +
+                             lumErr,
+                         {});
+        }
+    };
+
     auto toneMapIfHdr = [&](ID3D11Texture2D* source) -> ID3D11Texture2D* {
         if (!hdrToneMapActive || source == nullptr) {
             return source;
         }
+        // Before the roll-off, not after: the knee is placed on the luminance the
+        // captured content reaches, and the tone-map output no longer carries it.
+        analyseFrameLuminance(source);
         std::string tmErr;
         tonemapGpuTimer.Begin(d3dContext.get());
         const bool ok = hdrToneMapper.Convert(source, hdrSdrTex.get(), tmErr);
@@ -1541,6 +1866,9 @@ void VideoThread::Run() {
     // tone-map + compositor + VideoProcessor route. Records the failure and
     // returns false on error.
     auto encodeNativeHdrSlot = [&](ID3D11Texture2D* source, int32_t slot) -> bool {
+        // The composited surface, so the content light levels describe what the
+        // file actually contains rather than the desktop before overlays.
+        analyseFrameLuminance(source);
         std::string pqErr;
         if (!hdrPqConverter.Convert(source, nv12Textures[slot].get(), pqErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "HDR10 native convert: " + pqErr);
@@ -1560,6 +1888,9 @@ void VideoThread::Run() {
         seedOdCursorFromWin32();
 
         const bool webcamActive = overlay.enabled && webcamProviderAvailable;
+        if (webcamActive) {
+            ++overlayTrace.composited_with_overlay;
+        }
         const bool cursorActive =
             m_state.config.capture_cursor && (!useOdCapture || (odCursorVisible && odCursorShapeValid));
         if (!webcamActive && !cursorActive) {
@@ -1668,25 +1999,101 @@ void VideoThread::Run() {
     // duplicated forever with only a one-time WARN log. Cleanly stop instead:
     // RecordFailure() finalizes the file normally (same as any other capture
     // failure) so the user can start a fresh recording with facts resolved anew.
-    // Polled rather than acted on every frame — an interactive HDR toggle doesn't
-    // need sub-second detection, and re-querying DXGI output desc every frame
-    // would be wasted GPU-adjacent work in the hot loop.
-    auto lastHdrCheckAt = std::chrono::steady_clock::now();
-    constexpr auto kHdrCheckPollDelay = std::chrono::seconds{2};
+    // Driven by the OS where it can be (DisplayColorWatch) and by a backstop
+    // re-read everywhere, because the notification is not available on every
+    // Windows build and is scoped to one monitor. Not acted on every frame either
+    // way: re-querying the DXGI output description per frame would be wasted
+    // GPU-adjacent work in the hot loop, and an interactive toggle does not need
+    // sub-frame detection.
+    DisplayColorWatch hdrColorWatch;
+    hdrColorWatch.Watch(ResolveHdrGuardMonitor(useOdCapture, odSrc.Monitor(), hdrCheckMonitor));
+    DisplayColorRecheckGate hdrCheckGate;
+    hdrCheckGate.Start(std::chrono::steady_clock::now(), hdrColorWatch.Notified());
+    // The subscription is established on the watch's own thread, so it is not live
+    // the instant Watch() returns and the cadence has to be re-read rather than
+    // decided once. Tracked so the change is logged when it happens.
+    bool hdrWatchNotified = hdrColorWatch.Notified();
+    HMONITOR hdrWatchMonitor = ResolveHdrGuardMonitor(useOdCapture, odSrc.Monitor(), hdrCheckMonitor);
+    // Consecutive failed HDR queries. A streak means the guard has not been able
+    // to answer for a while, which is not the same as "unchanged".
+    uint32_t hdrCheckFailures = 0;
+    constexpr uint32_t kHdrCheckFailureStreak = 5;
+
     const auto CheckHdrStateChanged = [&]() {
+        // The monitor the capture is on RIGHT NOW. A reopen after a hot-plug or an
+        // EDID renegotiation re-resolves the output by device name and comes back
+        // on a new HMONITOR, so the handle from session start names a monitor that
+        // no longer exists: every query against it fails, each failure is treated
+        // as "nothing changed", and the guard silently stops guarding for the rest
+        // of the recording. WGC sessions keep their documented fixed target.
+        const HMONITOR currentMonitor = ResolveHdrGuardMonitor(useOdCapture, odSrc.Monitor(), hdrCheckMonitor);
+        // The subscription names a monitor, so it has to follow the same handle the
+        // query does -- otherwise a reopened capture would be watched on a display
+        // it no longer captures, which is worse than not watching at all.
+        if (currentMonitor != hdrWatchMonitor) {
+            hdrWatchMonitor = currentMonitor;
+            hdrColorWatch.Watch(currentMonitor);
+        }
         const auto now = std::chrono::steady_clock::now();
-        if (now - lastHdrCheckAt < kHdrCheckPollDelay) {
+        if (hdrColorWatch.Notified() != hdrWatchNotified) {
+            hdrWatchNotified = hdrColorWatch.Notified();
+            hdrCheckGate.SetNotified(now, hdrWatchNotified);
+            const logging::LogField fields[] = {{"backstop_ms", std::to_string(hdrCheckGate.Backstop().count())}};
+            logging::log(logging::LogLevel::Info, "video_thread",
+                         hdrWatchNotified
+                             ? "the OS reports this display's colour changes; the periodic re-read is now a backstop"
+                             : "no colour-change notification for this display; the periodic re-read is the mechanism",
+                         std::span<const logging::LogField>(fields, std::size(fields)));
+        }
+        if (!hdrCheckGate.TakeDue(now, hdrColorWatch.TakeSignalled())) {
             return;
         }
-        lastHdrCheckAt = now;
         HdrDisplayFacts freshFacts;
-        if (!QueryDisplayHdrFacts(hdrCheckMonitor, freshFacts)) {
-            return; // transient query failure — don't false-positive a stop
+        if (!QueryDisplayHdrFacts(currentMonitor, freshFacts)) {
+            // One failure is transient and must not stop a recording. A run of them
+            // is not: it means this guard has not been able to answer its question
+            // for a while, and saying nothing would pass that off as "HDR is
+            // unchanged". The recording continues -- the colour description may
+            // still be correct -- and the diagnostics carry that it went unchecked.
+            ++hdrCheckFailures;
+            if (hdrCheckFailures == kHdrCheckFailureStreak) {
+                const logging::LogField fields[] = {{"consecutive_failures", std::to_string(hdrCheckFailures)},
+                                                    {"backstop_ms", std::to_string(hdrCheckGate.Backstop().count())}};
+                logging::log(logging::LogLevel::Warn, "video_thread",
+                             "cannot read this display's HDR state; the recording continues but a mid-session HDR "
+                             "change would not be noticed",
+                             std::span<const logging::LogField>(fields, std::size(fields)));
+            }
+            return;
         }
-        if (freshFacts.hdr_active != initialHdrActive) {
-            m_state.RecordFailure(E_ABORT, ErrorPhase::VideoCapture,
-                                  initialHdrActive ? "Windows HDR was turned off during recording"
-                                                   : "Windows HDR was turned on during recording");
+        hdrCheckFailures = 0;
+        const DisplayFactsChange change = ClassifyDisplayFactsChange(sessionDisplayFacts, freshFacts);
+        if (change == DisplayFactsChange::LiveParameters) {
+            // Scalars only -- the SDR content brightness slider, or a display that
+            // reported a new peak. The desktop arrives composed at the new level
+            // from here on, so every consumer holding the old one draws the same
+            // frame at the wrong brightness. Applied together in the encode loop;
+            // this only records that it is owed.
+            sessionDisplayFacts = freshFacts;
+            displayScalarsChanged = true;
+            return;
+        }
+        if (change == DisplayFactsChange::SessionMode) {
+            // Says what happened, what it cost and what to do. The colour
+            // description is committed once into the encoder's bitstream, not
+            // just the container, so continuing would mislabel every remaining
+            // frame -- see the roadmap entry on a colour-pipeline rollover for
+            // the alternative that keeps recording across the switch.
+            m_state.RecordFailure(
+                E_ABORT, ErrorPhase::VideoCapture,
+                initialHdrActive ? "Windows HDR was turned off on this display during the recording. The colour "
+                                   "description was committed when the recording started and no longer matches the "
+                                   "desktop, so recording stopped here. Everything captured up to this point has been "
+                                   "saved; start a new recording to continue in SDR."
+                                 : "Windows HDR was turned on on this display during the recording. The colour "
+                                   "description was committed when the recording started and no longer matches the "
+                                   "desktop, so recording stopped here. Everything captured up to this point has been "
+                                   "saved; start a new recording to capture in HDR.");
         }
     };
 
@@ -1787,8 +2194,13 @@ void VideoThread::Run() {
     // size and its surfaces never change size — a resize is reported by
     // ContentSize instead) and created lazily from the first frame's format;
     // returns nullptr after recording the failure.
-    winrt::com_ptr<ID3D11Texture2D> wgcCapturedTex;
-    auto copyWgcFrame = [&](ID3D11Texture2D* rawTex) -> ID3D11Texture2D* {
+    // Two buffers, not one. The CFR loop keeps the previous frame in heldWgcTex
+    // while the next arrival lands in pendingWgcTex; with a single texture those
+    // two handles alias, so moving pending into held transfers no content and a
+    // recomposite of the "held" frame reads the newest capture instead of the
+    // one it is holding. The caller names the buffer it is still reading.
+    std::array<winrt::com_ptr<ID3D11Texture2D>, 2> wgcCapturedTex;
+    auto copyWgcFrame = [&](ID3D11Texture2D* rawTex, ID3D11Texture2D* inUse) -> ID3D11Texture2D* {
         D3D11_TEXTURE2D_DESC rawDesc{};
         rawTex->GetDesc(&rawDesc);
         // The pool surface must be the session's source size, or CopyResource
@@ -1803,7 +2215,8 @@ void VideoThread::Run() {
             m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
             return nullptr;
         }
-        if (wgcCapturedTex == nullptr) {
+        const size_t target = (inUse != nullptr && wgcCapturedTex[0].get() == inUse) ? 1 : 0;
+        if (wgcCapturedTex[target] == nullptr) {
             D3D11_TEXTURE2D_DESC desc{};
             desc.Width = sourceWidth;
             desc.Height = sourceHeight;
@@ -1817,7 +2230,7 @@ void VideoThread::Run() {
             // the VideoProcessor from a render-target texture.
             desc.BindFlags =
                 (hdrToneMapActive || hdrNativeActive) ? D3D11_BIND_SHADER_RESOURCE : D3D11_BIND_RENDER_TARGET;
-            const HRESULT copyHr = d3dDevice->CreateTexture2D(&desc, nullptr, wgcCapturedTex.put());
+            const HRESULT copyHr = d3dDevice->CreateTexture2D(&desc, nullptr, wgcCapturedTex[target].put());
             if (FAILED(copyHr)) {
                 char buf[80];
                 snprintf(buf, sizeof(buf), "CreateTexture2D(wgcCapturedTex) failed 0x%08lX",
@@ -1826,8 +2239,8 @@ void VideoThread::Run() {
                 return nullptr;
             }
         }
-        d3dContext->CopyResource(wgcCapturedTex.get(), rawTex);
-        return wgcCapturedTex.get();
+        d3dContext->CopyResource(wgcCapturedTex[target].get(), rawTex);
+        return wgcCapturedTex[target].get();
     };
 
     // First WGC frame captured by the wait loop below. WGC (like OD) only
@@ -1852,9 +2265,18 @@ void VideoThread::Run() {
         // bounded — the user is waiting on "Preparing"). While holding, the 5 s
         // first-frame guard is suspended (FirstFrameWaitStep); after a successful
         // reopen the deadline anchor (tStart) restarts, giving a fresh 5 s window.
+        //
+        // Both of those windows restart, so neither bounds the start by itself: a
+        // display that reopens and immediately loses access again keeps each of
+        // them young for as long as it likes. tOverall is set once here and never
+        // again, and the bounded step below checks it before anything else --
+        // including while a hold has the 5 s guard suspended.
         bool odStartHolding = false;
         auto odStartLossBegan = std::chrono::steady_clock::now();
         auto odStartLastReopen = odStartLossBegan;
+        const LARGE_INTEGER tOverall = tStart;
+        constexpr double kOverallBudgetSec = std::chrono::duration<double>(kFirstFrameOverallBudget).count();
+        unsigned startHoldsEntered = 0;
 
         while (!gotFirst && !m_state.stop_requested.load()) {
             if (!useOdCapture) {
@@ -1867,7 +2289,35 @@ void VideoThread::Run() {
 
             QueryPerformanceCounter(&tNow);
             double elapsed = static_cast<double>(tNow.QuadPart - tStart.QuadPart) / static_cast<double>(freq.QuadPart);
-            const FirstFrameWaitAction waitAction = FirstFrameWaitStep(odStartHolding, elapsed, kTimeoutSec);
+            const double overallElapsed =
+                static_cast<double>(tNow.QuadPart - tOverall.QuadPart) / static_cast<double>(freq.QuadPart);
+            const FirstFrameWaitAction waitAction =
+                FirstFrameWaitStepBounded(odStartHolding, elapsed, kTimeoutSec, overallElapsed, kOverallBudgetSec);
+            if (waitAction == FirstFrameWaitAction::TimeoutFail && overallElapsed > kOverallBudgetSec) {
+                // The overall bound, not the 5 s guard: name the holds so the
+                // report reads as what happened rather than as a slow display.
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                         "%s: no first frame within %.0f s of starting, across %u display-loss recover%s. The display "
+                         "kept leaving and returning without settling (a fullscreen switch or mode change that did not "
+                         "complete).",
+                         useOdCapture ? "DXGI OD" : "WGC", kOverallBudgetSec, startHoldsEntered,
+                         startHoldsEntered == 1 ? "y" : "ies");
+                const logging::LogField fields[] = {{"backend", useOdCapture ? "dxgi_od" : "wgc"},
+                                                    {"reason", "first_frame_overall_budget"},
+                                                    {"holds_entered", std::to_string(startHoldsEntered)},
+                                                    {"overall_elapsed_s", std::to_string(overallElapsed)}};
+                logging::log(logging::LogLevel::Warn, "video_thread", "first-frame overall budget exhausted",
+                             std::span<const logging::LogField>(fields, std::size(fields)));
+                m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT), ErrorPhase::VideoCapture, buf);
+                if (!useOdCapture) {
+                    if (captureSession != nullptr)
+                        captureSession.Close();
+                    if (framePool != nullptr)
+                        framePool.Close();
+                }
+                return;
+            }
             if (waitAction == FirstFrameWaitAction::TimeoutFail) {
                 if (!useOdCapture) {
                     // Honest cause instead of a bare "timeout". The window-state facts
@@ -1987,10 +2437,32 @@ void VideoThread::Run() {
                     // 15 s budget is exhausted.
                     if (!odStartHolding) {
                         odStartHolding = true;
+                        ++startHoldsEntered;
                         odStartLossBegan = std::chrono::steady_clock::now();
                         odStartLastReopen = odStartLossBegan;
                         logging::log(logging::LogLevel::Info, "video_thread",
                                      "DXGI OD access lost before first frame — entering bounded start-hold", {});
+                    }
+                    if (StartHoldsExhausted(startHoldsEntered, gotFirst)) {
+                        // Granting duplication and revoking it again without ever
+                        // presenting is what an indirect display does, and it does
+                        // not stop. Spending the rest of the budget on it buys a
+                        // longer wait and the same empty file.
+                        const logging::LogField fields[] = {{"backend", "dxgi_od"},
+                                                            {"target_desc", target.description},
+                                                            {"holds_entered", std::to_string(startHoldsEntered)}};
+                        logging::log(logging::LogLevel::Warn, "video_thread",
+                                     "DXGI OD keeps losing access before the first frame; duplication is not "
+                                     "available for this display",
+                                     std::span<const logging::LogField>(fields, std::size(fields)));
+                        char buf[256];
+                        snprintf(buf, sizeof(buf),
+                                 "This display cannot be captured with desktop duplication: it granted and revoked "
+                                 "access %u times without delivering a frame. Displays served by an indirect display "
+                                 "driver behave this way.",
+                                 startHoldsEntered);
+                        m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED), ErrorPhase::VideoCapture, buf);
+                        return;
                     }
                 } else if (odHr == DXGI_ERROR_WAIT_TIMEOUT &&
                            ShouldRecoverIdleOdAcquire(odStartHolding, odSrc.TopologyChangedSinceOpen())) {
@@ -1999,6 +2471,7 @@ void VideoThread::Run() {
                     // same bounded start-hold instead of sitting out the 5 s
                     // first-frame guard for a duplication that cannot deliver.
                     odStartHolding = true;
+                    ++startHoldsEntered;
                     odStartLossBegan = std::chrono::steady_clock::now();
                     odStartLastReopen = odStartLossBegan;
                     logging::log(logging::LogLevel::Info, "video_thread",
@@ -2029,7 +2502,7 @@ void VideoThread::Run() {
                                 surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                             winrt::com_ptr<ID3D11Texture2D> tex;
                             if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
+                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get(), nullptr);
                                 if (copied == nullptr) {
                                     // copyWgcFrame already recorded the failure.
                                     if (captureSession != nullptr)
@@ -2039,6 +2512,7 @@ void VideoThread::Run() {
                                     return;
                                 }
                                 seedWgcTex.copy_from(copied);
+                                ++visualGenerations.screen;
                             }
                         }
                         gotFirst = true;
@@ -2210,6 +2684,32 @@ void VideoThread::Run() {
         gpuCompositorReady = true;
     }
 
+    // --- Per-frame luminance analysis init (deferred: the mode and the source
+    // format are only known once the capture format is negotiated) ---
+    //
+    // Not fatal when it fails. Every consumer has a defined answer without it --
+    // the knee keeps the display-derived value and the file carries no content
+    // light levels, which is what every release before this one shipped -- and
+    // failing a recording over a measurement would trade the footage for it.
+    if (hdrNativeActive || (hdrToneMapActive && !hdrToneMapSdrSource)) {
+        // The pre-encode surface is the composited FP16 frame on the native path
+        // and the raw capture on the tone-mapped one; both are sourceWidth x
+        // sourceHeight (the compositor is sized from the same pair). Only the
+        // encoding differs, and only for the desktops duplication hands out as
+        // PQ R10G10B10A2 instead of linear FP16.
+        const bool luminancePqSource = hdrNativeActive ? hdrPqInputIsPq : hdrToneMapPqSource;
+        std::string lumErr;
+        if (!frameLuminance.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, luminancePqSource,
+                                 lumErr)) {
+            frameLuminanceFailedLogged = true;
+            logging::log(logging::LogLevel::Warn, "video_thread",
+                         "per-frame luminance analysis is unavailable on this device; the tone-map knee keeps its "
+                         "display-derived value and the file carries no measured content light levels: " +
+                             lumErr,
+                         {});
+        }
+    }
+
     // --- Capture + encode loop ---
     bool av1CodecPrivateReady = false;
     bool h264CodecPrivateReady = false;
@@ -2230,13 +2730,13 @@ void VideoThread::Run() {
     //   manual split resets the auto timer.
     // next_auto_threshold_ns: session PTS at which the next AUTOMATIC split fires;
     //   UINT64_MAX disables (mode Off). Recomputed after every boundary.
-    // split_last_seq: last split_request_seq value VideoThread has acted on.
+    // split_last_seq: last split_request sequence VideoThread has acted on.
     // split_armed: a boundary has been decided and a forced IDR requested; the next
     //   routed keyframe is the first frame of the new segment.
     // split_armed_trigger: trigger that armed the pending boundary (for logging).
     uint32_t current_segment_index = 0;
     uint64_t segment_start_session_pts_ns = 0;
-    uint64_t split_last_seq = m_state.split_request_seq.load();
+    uint64_t split_last_seq = UnpackSplitRequest(m_state.split_request.load()).sequence;
     bool split_armed = false;
     // The PTS of the specific frame whose submission consumes the forced-
     // IDR request — set by maybeArmSplit, consumed by ShouldEmitSplitSentinel
@@ -2275,7 +2775,11 @@ void VideoThread::Run() {
     };
 
     auto maybeArmSplit = [&](uint64_t pts_ns) {
-        const uint64_t seq = m_state.split_request_seq.load();
+        // ONE load. The sequence and the trigger that produced it come out of the
+        // same word, so a request landing right now cannot make this call
+        // attribute its sequence to the next request's reason.
+        const SplitRequestState request = UnpackSplitRequest(m_state.split_request.load(std::memory_order_acquire));
+        const uint64_t seq = request.sequence;
         const bool manual = (seq != split_last_seq);
         const bool automatic = (pts_ns >= next_auto_threshold_ns);
         if (split_armed) {
@@ -2303,8 +2807,17 @@ void VideoThread::Run() {
         split_armed = true;
         split_forced_pts_ns = pts_ns; // this call's frame is the one that will carry FORCEIDR
         split_armed_secondary_logged = false;
-        split_armed_trigger = manual ? static_cast<SplitTriggerSource>(m_state.split_last_trigger.load())
-                                     : SplitTriggerSource::AutomaticDuration;
+        split_armed_trigger =
+            manual ? static_cast<SplitTriggerSource>(request.primary_trigger) : SplitTriggerSource::AutomaticDuration;
+        // Consumed: clear the coalesce mask so the NEXT boundary reports its own
+        // requests rather than inheriting this one's. Pinned to the word this call
+        // read, so a request that arrived since is left for the next boundary
+        // instead of being silently swallowed.
+        if (manual) {
+            uint64_t observed = PackSplitRequest(request);
+            m_state.split_request.compare_exchange_strong(observed, SplitRequestConsumed(request),
+                                                          std::memory_order_release, std::memory_order_relaxed);
+        }
         encoder->RequestKeyframe();
         m_state.diagnostics.OnForcedKeyframe();
         m_state.diagnostics.SetSplitPending(true);
@@ -2313,8 +2826,13 @@ void VideoThread::Run() {
         // independent duration timer crossing its threshold); name both triggers
         // instead of letting the ternary silently pick one.
         const char* trigger_label = (manual && automatic) ? "manual+automatic" : (manual ? "manual" : "automatic");
+        // What actually coalesced into this boundary, rather than one arbitrary
+        // winner. Several bits set means several requests collapsed into this
+        // split, which is correct behaviour that used to leave no trace.
+        const std::string coalesced_label = SplitTriggerMaskText(request.coalesced_triggers);
         logging::LogField fields[] = {{"segment_index", std::to_string(current_segment_index + 1u)},
                                       {"trigger", trigger_label},
+                                      {"coalesced_triggers", coalesced_label},
                                       {"session_pts_ms", std::to_string(pts_ns / 1000000ULL)}};
         logging::log(logging::LogLevel::Info, "video_thread", "split boundary armed (forced keyframe requested)",
                      std::span<const logging::LogField>(fields, std::size(fields)));
@@ -2331,6 +2849,31 @@ void VideoThread::Run() {
     const uint64_t kMaxCatchUpFrames = (m_state.config.frame_rate_den > 0 && m_state.config.frame_rate_num > 0)
                                            ? m_state.config.frame_rate_num / m_state.config.frame_rate_den
                                            : 60u;
+
+    // What one tick's drain is allowed to spend. Both drains below used to run
+    // until the source reported empty, which terminates only while the source
+    // does run out: a permanently ready one starved the encode step, the pacing
+    // tick and the stop check that follow them.
+    const DrainBudget drainBudget =
+        DrainBudgetForFrameInterval(std::chrono::microseconds{frame_interval_100ns / 10ULL});
+    // Logged once per session, not per tick: a source that keeps the drain at its
+    // budget would otherwise write a line every frame.
+    bool drainBudgetReported = false;
+    const auto reportDrainBudget = [&](const char* where, DrainContinuation why, uint32_t frames) {
+        if (drainBudgetReported || why == DrainContinuation::Continue || why == DrainContinuation::Stopped)
+            return;
+        drainBudgetReported = true;
+        const logging::LogField fields[] = {
+            {"where", where},
+            {"reason", why == DrainContinuation::FrameBudget ? "frame_budget" : "time_budget"},
+            {"frames", std::to_string(frames)},
+            {"frame_budget", std::to_string(drainBudget.frames)},
+            {"time_budget_us", std::to_string(drainBudget.time.count())},
+        };
+        logging::log(logging::LogLevel::Info, "video_thread",
+                     "capture drain hit its per-tick budget; the source is producing faster than this session encodes",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    };
 
     // Publishes the codec private data the mux waits for from the first keyframe
     // that carries it. One place for the live route and the flush drain, so a
@@ -2669,11 +3212,105 @@ void VideoThread::Run() {
     // The only untapped session is the already-PQ R10G10B10A2 native sub-path:
     // its surface is non-linear PQ with no linear intermediate, so the preview
     // keeps its own WGC capture there. See product-spec / KNOWN_LIMITATIONS.
-    const PreviewTapPlan previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, hdrPqInputIsPq, hdrPeakScale);
+    PreviewTapPlan previewTapPlan =
+        ResolvePreviewTapPlan(hdrNativeActive, hdrPqInputIsPq, hdrPeakScale, hdrPaperWhiteScale);
     PreviewSharedTexture previewSharedTex;
     bool previewSharedInitFailed = false;
     bool previewTransportPoisoned = false;
     PreviewPublishGate previewGate(kPreviewMinIntervalNs);
+
+    // The other half of the periodic display guard: every consumer of the
+    // display's colour scalars takes the new ones in the same tick.
+    //
+    // Nothing here rebuilds a GPU object. The tone-map pass rewrites two floats
+    // in its constant buffer, the compositor reads its reference white per
+    // sprite draw, and the preview tap re-announces itself -- the transform it
+    // publishes travels with the shared handle, so a fresh announcement is how
+    // the consumer learns a new one. Splitting the update across ticks is what
+    // must not happen: the preview and the file would disagree until the next.
+    const auto applyDisplayScalarChange = [&]() {
+        if (!displayScalarsChanged)
+            return;
+        displayScalarsChanged = false;
+
+        // Resolved WITH the measurement, because the two are not independent: the
+        // knee is divided by the paper-white scale in the shader, so adopting a
+        // new white while leaving a measured knee behind would place the roll-off
+        // at a luminance neither value describes.
+        const SessionHdrDynamicState state =
+            ResolveSessionHdrDynamicState(sessionDisplayFacts, contentPeak.ValueNits());
+        hdrPeakScale = state.peak_scale;
+        hdrPaperWhiteScale = state.paper_white_scale;
+
+        if (hdrToneMapActive) {
+            hdrToneMapAppliedPeakScale = state.tone_map_peak_scale;
+            hdrToneMapper.SetDisplayScales(state.tone_map_peak_scale, state.paper_white_scale);
+        }
+        if (gpuCompositorReady && hdrNativeActive)
+            gpuCompositor.SetOverlayReferenceWhiteNits(state.overlay_reference_white_nits);
+
+        // Re-resolved rather than assigned field by field: which scalars are
+        // meaningful for this session is the plan's decision, and there must not
+        // be a second copy of it here.
+        previewTapPlan =
+            ResolvePreviewTapPlan(hdrNativeActive, hdrPqInputIsPq, state.peak_scale, state.paper_white_scale);
+        // Dropping the shared texture is what re-announces the descriptor: the
+        // handle callback is one-shot by contract, so the next tapped frame
+        // creates a texture and hands the consumer the new transform with it.
+        if (previewTapPlan.tap_enabled)
+            previewSharedTex.Reset();
+
+        const logging::LogField fields[] = {
+            {"sdr_white_level_nits", std::to_string(sessionDisplayFacts.sdr_white_level_nits)},
+            {"paper_white_scale", std::to_string(state.paper_white_scale)},
+            {"peak_scale", std::to_string(state.peak_scale)},
+            {"tone_map_peak_scale", std::to_string(state.tone_map_peak_scale)}};
+        logging::log(logging::LogLevel::Info, "video_thread",
+                     "the captured display changed its colour scalars; tone-map, overlays and preview updated",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    };
+
+    // The other end of the luminance pass: collect every measurement that has
+    // landed since the last tick and let it reach its consumers.
+    //
+    // Every completed result is drained rather than one per tick. The ring is
+    // three deep and a full ring makes Dispatch skip the frame, so leaving
+    // results behind would throttle the measurement down to the tick rate of the
+    // slowest consumer and lose exactly the bright frames MaxCLL is about.
+    //
+    // The knee is only rewritten when it has moved outside the update band; the
+    // overlay reference white and the preview transform are not touched at all,
+    // because what the content reaches says nothing about what the panel in front
+    // of the user can show.
+    const auto pumpFrameLuminance = [&]() {
+        if (!frameLuminance.Initialised())
+            return;
+        const float dt_seconds = static_cast<float>(static_cast<double>(frame_interval_ns) * 1e-9);
+        FrameLuminanceStats stats;
+        bool measured = false;
+        while (frameLuminance.TryTakeResult(&stats)) {
+            contentLightLevels.Accumulate(stats);
+            contentPeak.Update(HistogramPercentileNits(stats.histogram, kContentPeakPercentile), dt_seconds);
+            measured = true;
+        }
+        if (!measured)
+            return;
+        // Published every tick rather than once at the end: the mux thread reads
+        // these when it finalises a segment, and a split recording finalises the
+        // first segment long before the capture stops.
+        m_state.measured_max_cll_nits.store(ContentLightLevelCode(contentLightLevels.max_cll_nits),
+                                            std::memory_order_relaxed);
+        m_state.measured_max_fall_nits.store(ContentLightLevelCode(contentLightLevels.max_fall_nits),
+                                             std::memory_order_relaxed);
+        if (!hdrToneMapActive)
+            return;
+        const SessionHdrDynamicState state =
+            ResolveSessionHdrDynamicState(sessionDisplayFacts, contentPeak.ValueNits());
+        if (!ContentPeakScaleChangedMaterially(hdrToneMapAppliedPeakScale, state.tone_map_peak_scale))
+            return;
+        hdrToneMapAppliedPeakScale = state.tone_map_peak_scale;
+        hdrToneMapper.SetDisplayScales(state.tone_map_peak_scale, state.paper_white_scale);
+    };
 
     auto tapPreviewSource = [&](ID3D11Texture2D* vpInput, uint64_t pts_ns) {
         if (!m_state.preview_shared_handle_cb)
@@ -2919,6 +3556,8 @@ void VideoThread::Run() {
             }
 
             CheckHdrStateChanged();
+            applyDisplayScalarChange();
+            pumpFrameLuminance();
             if (m_state.stop_requested.load()) {
                 break;
             }
@@ -2942,7 +3581,20 @@ void VideoThread::Run() {
                 // DXGI OD: drain all available frames. Newest-at-tick copies into
                 // odCapturedTex; phase-correct copies into the present-QPC ring.
                 const auto acq_t0 = std::chrono::steady_clock::now();
+                uint32_t odDrained = 0;
                 while (true) {
+                    // Between acquisitions, never inside one: nothing here can
+                    // cancel a driver call that is already blocked in
+                    // TryAcquireFrame. This bounds how many more the loop starts.
+                    const DrainContinuation odCont =
+                        NextDrainContinuation(m_state.stop_requested.load(), odDrained, drainBudget.frames,
+                                              std::chrono::duration_cast<std::chrono::microseconds>(
+                                                  std::chrono::steady_clock::now() - acq_t0),
+                                              drainBudget.time);
+                    if (odCont != DrainContinuation::Continue) {
+                        reportDrainBudget("dxgi_od", odCont, odDrained);
+                        break;
+                    }
                     ID3D11Texture2D* rawTex = nullptr;
                     DXGI_OUTDUPL_FRAME_INFO info{};
                     HRESULT odHr = S_OK;
@@ -2954,6 +3606,7 @@ void VideoThread::Run() {
                         HandleOdAcquireFailure(odHr);
                         break;
                     }
+                    ++odDrained;
                     // Format guard: skip foreign-format frames; fatal on size
                     // change (explicit failure, not a silent CopyResource no-op).
                     {
@@ -3069,10 +3722,24 @@ void VideoThread::Run() {
                     // Every frame walked past still counts as captured and, if
                     // it displaced an unencoded one, as a coalesce drop.
                     winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame{nullptr};
+                    uint32_t wgcDrained = 0;
                     for (;;) {
+                        // Same bound as the OD drain, for the same reason: a pool
+                        // that is never empty would keep this walk going past the
+                        // encode step, the pacing tick and the stop check.
+                        const DrainContinuation wgcCont =
+                            NextDrainContinuation(m_state.stop_requested.load(), wgcDrained, drainBudget.frames,
+                                                  std::chrono::duration_cast<std::chrono::microseconds>(
+                                                      std::chrono::steady_clock::now() - acq_t0),
+                                                  drainBudget.time);
+                        if (wgcCont != DrainContinuation::Continue) {
+                            reportDrainBudget("wgc", wgcCont, wgcDrained);
+                            break;
+                        }
                         auto next = framePool.TryGetNextFrame();
                         if (next == nullptr)
                             break;
+                        ++wgcDrained;
                         const bool diag_recording = !m_state.pause_requested.load();
                         if (diag_recording)
                             m_state.diagnostics.OnFrameCaptured();
@@ -3111,12 +3778,21 @@ void VideoThread::Run() {
                                 // Copy out of the pool while the frame object is
                                 // still alive — the pool recycles this surface as
                                 // soon as the frame is released (see wgcCapturedTex).
-                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
+                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get(), heldWgcTex.get());
                                 if (copied == nullptr) {
                                     // copyWgcFrame already recorded the failure.
                                     sourceLost = true;
                                 } else {
                                     pendingWgcTex.copy_from(copied);
+                                    // Every accepted screen sample advances the
+                                    // generation, exactly as the OD path does. The
+                                    // encoder-slot reuse test below compares frame
+                                    // keys, so a generation that stands still lets
+                                    // two different frames compare equal and an old
+                                    // slot be re-submitted instead of overwritten.
+                                    ++visualGenerations.screen;
+                                    if (!m_state.pause_requested.load())
+                                        m_state.diagnostics.OnScreenGenerationChanged();
                                 }
                             }
                         }
@@ -3174,6 +3850,8 @@ void VideoThread::Run() {
                 next_tick_100ns = 0; // first tick at t=0 relative to epoch
                 m_state.video_epoch_qpc_100ns.store(epochQpc100ns);
                 lastVideoPts = 0;
+                const auto epochFields = VideoEpochLogFields(epochQpc100ns, qpcFreq, VideoEpochSource::CaptureObserved);
+                logging::log(logging::LogLevel::Info, "video_thread", kVideoEpochLogMessage, epochFields);
             }
 
             if (!videoEpochSet) {
@@ -3317,18 +3995,48 @@ void VideoThread::Run() {
                 // Reopen() succeeds. Re-compositing is forbidden there — it touches
                 // display-tied GPU resources while the captured output is gone.
                 ID3D11Texture2D* const heldScreenTex = useOdCapture ? odCapturedTex.get() : heldWgcTex.get();
+                // Sampled before the key is taken, so a pointer move or overlay
+                // edit lands in this tick's key instead of the next one's.
+                sampleWgcCursor();
+                const WebcamOverlayLive overlay = sampleOverlay();
                 const VisualFrameKey currentVisualKey = MakeVisualFrameKey(visualGenerations);
                 const bool cursorOverlayMoved =
                     !haveLastCompositedKey ||
                     currentVisualKey.cursor_generation != lastCompositedKey.cursor_generation ||
                     currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
-                const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
                 const bool webcamMoved = overlay.enabled && webcamProviderAvailable &&
                                          (!haveLastCompositedKey ||
                                           currentVisualKey.webcam_generation != lastCompositedKey.webcam_generation);
                 const bool dynamicOverlayChanged = cursorOverlayMoved || webcamMoved;
+                // Attributed, not pooled: cursorOverlayMoved is true for a pointer
+                // move as well, and a measurement of the overlay cannot use a
+                // count that a moving cursor also raises.
+                const bool overlayMoved = !haveLastCompositedKey ||
+                                          currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
+                // The counter asks whether the camera moved, which the
+                // recomposition decision above does not: that one must also fire
+                // when there is no previous key, and counting the first composite
+                // would report motion on a session that had none.
+                if (GenerationAdvanced(haveLastCompositedKey, currentVisualKey.webcam_generation,
+                                       lastCompositedKey.webcam_generation)) {
+                    ++overlayTrace.webcam_generation_changes;
+                }
+                // The same structural preconditions the decision below uses, with
+                // the overlay term taken from the sampler instead of the frame
+                // key. Without this a run on a source that never holds -- output
+                // duplication on this machine delivers at the encode cadence
+                // whether the desktop changes or not -- reports zero
+                // recompositions and looks identical to one whose edits never
+                // reached the key at all.
+                if (overlayChangedThisTick && rawSourceTex == nullptr && !odHolding && heldScreenTex != nullptr) {
+                    ++overlayTrace.hold_opportunities;
+                }
                 if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding, dynamicOverlayChanged,
                                                 heldScreenTex != nullptr)) {
+                    ++wgcCursorTrace.recomposited_for_overlay;
+                    if (overlayMoved) {
+                        ++overlayTrace.recomposited_for_overlay;
+                    }
                     rawSourceTex = heldScreenTex;
                 }
 
@@ -3347,7 +4055,13 @@ void VideoThread::Run() {
                     }
                     if (useOdCapture) {
                         odCapturedTexValid = false;
-                    } else {
+                    } else if (pendingWgcTex != nullptr) {
+                        // Only when there IS a fresh frame to rotate in. This tick
+                        // may have recomposited the HELD frame instead (no fresh
+                        // source), and rotating a null pending over it would throw
+                        // the held frame away -- leaving the next tick with nothing
+                        // to recomposite, so a still source freezes the cursor and
+                        // the webcam overlay until it next repaints.
                         heldWgcTex = std::move(pendingWgcTex);
                         // Consumed. The next iteration tests pendingWgcTex against
                         // nullptr to detect a fresh frame, so clear it explicitly
@@ -3401,7 +4115,13 @@ void VideoThread::Run() {
                     }
                     if (useOdCapture) {
                         odCapturedTexValid = false;
-                    } else {
+                    } else if (pendingWgcTex != nullptr) {
+                        // Only when there IS a fresh frame to rotate in. This tick
+                        // may have recomposited the HELD frame instead (no fresh
+                        // source), and rotating a null pending over it would throw
+                        // the held frame away -- leaving the next tick with nothing
+                        // to recomposite, so a still source freezes the cursor and
+                        // the webcam overlay until it next repaints.
                         heldWgcTex = std::move(pendingWgcTex);
                         // Consumed. The next iteration tests pendingWgcTex against
                         // nullptr to detect a fresh frame, so clear it explicitly
@@ -3592,6 +4312,8 @@ void VideoThread::Run() {
             }
 
             CheckHdrStateChanged();
+            applyDisplayScalarChange();
+            pumpFrameLuminance();
             if (m_state.stop_requested.load()) {
                 break;
             }
@@ -3623,7 +4345,21 @@ void VideoThread::Run() {
             const CaptureDrainStep drainStep = NextCaptureDrainStep(useOdCapture, odHolding);
             if (drainStep == CaptureDrainStep::DrainOd) {
                 // DXGI OD: drain available frames, copy to odCapturedTex, keep newest
+                const auto acq_t0 = std::chrono::steady_clock::now();
+                uint32_t odDrained = 0;
                 while (true) {
+                    // Between acquisitions, never inside one: nothing here can
+                    // cancel a driver call that is already blocked in
+                    // TryAcquireFrame. This bounds how many more the loop starts.
+                    const DrainContinuation odCont =
+                        NextDrainContinuation(m_state.stop_requested.load(), odDrained, drainBudget.frames,
+                                              std::chrono::duration_cast<std::chrono::microseconds>(
+                                                  std::chrono::steady_clock::now() - acq_t0),
+                                              drainBudget.time);
+                    if (odCont != DrainContinuation::Continue) {
+                        reportDrainBudget("dxgi_od", odCont, odDrained);
+                        break;
+                    }
                     ID3D11Texture2D* rawTex = nullptr;
                     DXGI_OUTDUPL_FRAME_INFO info{};
                     HRESULT odHr = S_OK;
@@ -3634,6 +4370,7 @@ void VideoThread::Run() {
                         HandleOdAcquireFailure(odHr);
                         break;
                     }
+                    ++odDrained;
                     // Format guard: skip foreign-format frames; fatal on size
                     // change (explicit failure, not a silent CopyResource no-op).
                     {
@@ -3718,16 +4455,31 @@ void VideoThread::Run() {
                 }
             } else if (drainStep == CaptureDrainStep::DrainWgc) {
                 // WGC: drain frame pool — keep latest (always drain, even when paused)
+                const auto acq_t0 = std::chrono::steady_clock::now();
                 try {
                     // Drain to the newest queued frame before copying — see the
                     // CFR drain above (and WgcSourceProducer::PollFrame): only
                     // the newest is encoded, so only the newest is worth a
                     // full-surface GPU copy.
                     winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame{nullptr};
+                    uint32_t wgcDrained = 0;
                     for (;;) {
+                        // Same bound as the OD drain, for the same reason: a pool
+                        // that is never empty would keep this walk going past the
+                        // encode step, the pacing tick and the stop check.
+                        const DrainContinuation wgcCont =
+                            NextDrainContinuation(m_state.stop_requested.load(), wgcDrained, drainBudget.frames,
+                                                  std::chrono::duration_cast<std::chrono::microseconds>(
+                                                      std::chrono::steady_clock::now() - acq_t0),
+                                                  drainBudget.time);
+                        if (wgcCont != DrainContinuation::Continue) {
+                            reportDrainBudget("wgc", wgcCont, wgcDrained);
+                            break;
+                        }
                         auto next = framePool.TryGetNextFrame();
                         if (next == nullptr)
                             break;
+                        ++wgcDrained;
                         const bool diag_recording = !m_state.pause_requested.load();
                         if (diag_recording)
                             m_state.diagnostics.OnFrameCaptured();
@@ -3758,12 +4510,15 @@ void VideoThread::Run() {
                                 surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                             winrt::com_ptr<ID3D11Texture2D> tex;
                             if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
+                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get(), nullptr);
                                 if (copied == nullptr) {
                                     // copyWgcFrame already recorded the failure.
                                     sourceLost = true;
                                 } else {
                                     latestTex.copy_from(copied);
+                                    ++visualGenerations.screen;
+                                    if (!m_state.pause_requested.load())
+                                        m_state.diagnostics.OnScreenGenerationChanged();
                                     latestFrameTicks100ns = frame.SystemRelativeTime().count();
                                     if (!m_state.pause_requested.load() && wgcLastFrameTicks100ns != 0 &&
                                         latestFrameTicks100ns > wgcLastFrameTicks100ns) {
@@ -3843,6 +4598,13 @@ void VideoThread::Run() {
                     // (The CFR path has no such split: it derives PTS from the
                     // same epoch value it publishes.)
                     m_state.video_epoch_qpc_100ns.store(static_cast<uint64_t>(videoEpochTicks100ns));
+                    // Which of the two the clamp produced decides what the epoch is
+                    // worth to a measurement: the frame's own timestamp is an
+                    // instant on the QPC axis, the floor is only a bound below it.
+                    const auto epochFields =
+                        VideoEpochLogFields(static_cast<uint64_t>(videoEpochTicks100ns), qpcFreq,
+                                            VfrVideoEpochSource(videoEpochTicks100ns, latestFrameTicks100ns));
+                    logging::log(logging::LogLevel::Info, "video_thread", kVideoEpochLogMessage, epochFields);
                 }
 
                 int64_t deltaTicks = latestFrameTicks100ns - videoEpochTicks100ns;
@@ -3871,7 +4633,8 @@ void VideoThread::Run() {
                 if (slot >= 0 && hdrNativeActive) {
                     // Native HDR10 (VFR): composite webcam/cursor in linear scRGB
                     // FP16, then convert straight into the P010 slot.
-                    const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
+                    sampleWgcCursor();
+                    const WebcamOverlayLive overlay = sampleOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* nativeSrc = compositeFrameGpu(latestTex.get(), overlay);
                     const auto comp_t1 = std::chrono::steady_clock::now();
@@ -3927,7 +4690,8 @@ void VideoThread::Run() {
                     m_state.diagnostics.OnVideoTickTime(
                         tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
                 } else if (slot >= 0) {
-                    const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
+                    sampleWgcCursor();
+                    const WebcamOverlayLive overlay = sampleOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* sdrSourceTex = toneMapIfHdr(latestTex.get());
                     if (sdrSourceTex == nullptr) {
@@ -4047,6 +4811,33 @@ void VideoThread::Run() {
     }
 
 end_encode_loop:
+    // Drain the luminance ring one last time. Everything still in flight was
+    // measured on frames that ARE in the file, and on a recording of a few
+    // frames those are most of them -- a session shorter than the ring would
+    // otherwise finalise with no measurement at all.
+    //
+    // This is the one place the measurement may wait: capture has stopped, so
+    // there is no frame to stall, and the bound is the only thing that matters.
+    // A result that has not landed within it is dropped rather than waited for.
+    if (frameLuminance.Initialised()) {
+        constexpr auto kLuminanceDrainBudget = std::chrono::milliseconds{50};
+        const auto drain_deadline = std::chrono::steady_clock::now() + kLuminanceDrainBudget;
+        FrameLuminanceStats stats;
+        while (frameLuminance.HasPendingResults() && std::chrono::steady_clock::now() < drain_deadline) {
+            if (frameLuminance.TryTakeResult(&stats)) {
+                contentLightLevels.Accumulate(stats);
+                continue;
+            }
+            Sleep(1);
+        }
+        if (contentLightLevels.HasData()) {
+            m_state.measured_max_cll_nits.store(ContentLightLevelCode(contentLightLevels.max_cll_nits),
+                                                std::memory_order_relaxed);
+            m_state.measured_max_fall_nits.store(ContentLightLevelCode(contentLightLevels.max_fall_nits),
+                                                 std::memory_order_relaxed);
+        }
+    }
+
     // --- Stop capture ---
     if (useOdCapture) {
         odSrc.Close();
@@ -4075,13 +4866,76 @@ end_encode_loop:
         }
     }
 
+    // Emitted for every WGC session with the cursor on, including the ones where
+    // nothing went wrong: the counters are only useful against a baseline, and a
+    // line that appears solely on failure has none. samples==0 means the sampler
+    // never ran, which is itself distinct from every outcome it can report.
+    // Emitted for both backends and for every session with a webcam attached,
+    // including the ones where nothing went wrong: a counter that appeared only on
+    // failure would have no baseline to be read against.
+    if (webcamProviderAvailable) {
+        const logging::LogField fields[] = {
+            {"samples", std::to_string(overlayTrace.samples)},
+            {"generation_changes", std::to_string(overlayTrace.generation_changes)},
+            {"webcam_generation_changes", std::to_string(overlayTrace.webcam_generation_changes)},
+            {"hold_opportunities", std::to_string(overlayTrace.hold_opportunities)},
+            {"recomposited_for_overlay", std::to_string(overlayTrace.recomposited_for_overlay)},
+            {"composited_with_overlay", std::to_string(overlayTrace.composited_with_overlay)},
+            {"backend", useOdCapture ? "od" : "wgc"}};
+        logging::log(logging::LogLevel::Info, "video_thread", kWebcamOverlaySummaryLogMessage,
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    }
+
+    if (!useOdCapture && m_state.config.capture_cursor) {
+        const logging::LogField fields[] = {
+            {"samples", std::to_string(wgcCursorTrace.samples)},
+            {"info_failed", std::to_string(wgcCursorTrace.info_failed)},
+            {"not_showing", std::to_string(wgcCursorTrace.not_showing)},
+            {"null_handle", std::to_string(wgcCursorTrace.null_handle)},
+            {"sprite_capture_failed", std::to_string(wgcCursorTrace.bitmap_failed)},
+            {"bounds_empty", std::to_string(wgcCursorTrace.bounds_invalid)},
+            {"dpi_scope_failed", std::to_string(wgcCursorTrace.dpi_scope_failed)},
+            {"shape_changes", std::to_string(wgcCursorTrace.handle_changes)},
+            {"position_changes", std::to_string(wgcCursorTrace.position_changes)},
+            {"generation_bumps", std::to_string(wgcCursorTrace.generation_bumps)},
+            {"recomposited_for_overlay", std::to_string(wgcCursorTrace.recomposited_for_overlay)},
+            {"draw_calls", std::to_string(wgcCursorTrace.draw_calls)},
+            {"draw_clipped_out", std::to_string(wgcCursorTrace.draw_clipped_out)},
+            {"draw_submitted", std::to_string(wgcCursorTrace.draw_submitted)},
+            {"invert_submitted", std::to_string(wgcCursorTrace.invert_submitted)},
+            {"draw_failed", std::to_string(wgcCursorTrace.draw_failed)},
+            {"compositor_ready", gpuCompositorReady ? "true" : "false"},
+            {"final_outcome",
+             wgcCursorTrace.have_outcome ? WgcCursorSampleOutcomeName(wgcCursorTrace.outcome) : "none"}};
+        logging::log(logging::LogLevel::Info, "video_thread", kWgcCursorSummaryLogMessage,
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    }
+
     // --- Flush NVENC EOS ---
     {
         std::vector<EncodedVideoPacket> drainPkts;
         std::string flushErr;
-        // flushErr is not escalated — a partial drain is acceptable; any encoded
-        // output already in the mux queue is preserved regardless of flush outcome.
-        encoder->Flush(drainPkts, flushErr);
+        // Not escalated to a failure: every packet that did drain is muxed below
+        // and the file is finalised, which is the right outcome for a device that
+        // stopped delivering at the very end. But not silent either -- the file
+        // ends short of the recording by the frames the encoder still held, and a
+        // report that called that a complete success would be lying about the
+        // one thing the user cannot see in the file.
+        const bool flushComplete = encoder->Flush(drainPkts, flushErr);
+        if (!flushComplete) {
+            const uint64_t undrained = encoder->PendingFrames();
+            {
+                std::lock_guard slk(m_state.stats_mutex);
+                m_state.stats.video_flush_incomplete = true;
+                m_state.stats.video_undrained_frames = undrained;
+            }
+            const logging::LogField fields[] = {{"reason", flushErr},
+                                                {"drained_packets", std::to_string(drainPkts.size())},
+                                                {"undrained_frames", std::to_string(undrained)}};
+            logging::log(logging::LogLevel::Warn, "video_thread",
+                         "video encoder flush was cut short; the file ends before the last submitted frames",
+                         std::span<const logging::LogField>(fields, std::size(fields)));
+        }
 
         for (auto& pkt : drainPkts) {
             if (pkt.bytes.empty())

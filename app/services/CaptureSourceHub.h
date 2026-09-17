@@ -86,6 +86,18 @@ class CaptureSourceHub {
     [[nodiscard]] exosnap::engine::HubFrameKind Frame() const;
     [[nodiscard]] HubFrame HeldFrame() const;
 
+    // The hub gave up on this source: the producer reported Fatal (a replaced or
+    // removed device, and friends) and no retry loop runs against it. The held
+    // frame is still served -- lost is not blank -- but nothing new will arrive
+    // until the owner rebuilds the producer on a live device.
+    //
+    // Exposed because only the owner can do that rebuild: the hub has a producer
+    // it cannot replace, and a caller that cannot see this state keeps a dead
+    // capture and a preview frozen on its last frame, indefinitely.
+    [[nodiscard]] bool SourceLost() const noexcept {
+        return state_.lost;
+    }
+
     // Zero means nobody is watching: the capture is closed and the hub may be
     // discarded. The registry's disposal rule reads this.
     [[nodiscard]] int ConsumerCount() const {

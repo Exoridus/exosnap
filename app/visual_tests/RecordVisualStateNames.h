@@ -16,6 +16,12 @@
 
 namespace exosnap::visual::record_state {
 
+// No capture source selected: the page's empty stage.
+inline constexpr const char* kNoSource = "no-source";
+// Harness-only. The empty stage with the brand in place of its instruction
+// block, at the size a still needs. Not a product state: nothing the
+// application does on its own reaches it.
+inline constexpr const char* kBrand = "brand";
 inline constexpr const char* kReady = "ready";
 inline constexpr const char* kRecording = "recording";
 // Recording, with the standing "an audio source went silent" notification

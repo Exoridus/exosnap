@@ -36,6 +36,20 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# The caller names staged payloads by file name, because only the transport knows
+# where it put them. Resolved against the staging directory rather than left
+# relative: a relative path resolves against the working directory, which the sandbox
+# happens to set to the staging directory and the virtual-machine recipe sets to the
+# guest root -- where the files are one level below. Resolved here rather than in the
+# rehearsal worker this hands them to, so that one receives paths that are already
+# absolute wherever it runs.
+if (-not [System.IO.Path]::IsPathRooted($MsiPath)) {
+    $MsiPath = Join-Path $StagingDirectory $MsiPath
+}
+if (-not [System.IO.Path]::IsPathRooted($PackageSource)) {
+    $PackageSource = Join-Path $StagingDirectory $PackageSource
+}
+
 $logDirectory = Join-Path $StagingDirectory 'logs'
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
@@ -43,12 +57,15 @@ New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
 function Write-BootstrapFailure {
     param([Parameter(Mandatory)] [string] $Step, [Parameter(Mandatory)] [string] $Detail)
     # Written in the rehearsal worker's own document shape so the host reads one
-    # format: a bootstrap that failed and a rehearsal step that failed are the same
-    # kind of fact to a report.
+    # format. kind is 'bootstrap' for all of them, which is what these are: the
+    # release MSI, Chocolatey itself and this script's own failures are the test
+    # environment being built, and none of them measured the package. Without the
+    # field the host cannot attribute the failure and refuses to draw a verdict --
+    # which is correct, but it is not the same as saying what actually happened.
     $document = [pscustomobject]@{
         finishedUtc = [DateTime]::UtcNow.ToString('o')
         fatal       = $Detail
-        steps       = @([pscustomobject]@{ name = $Step; ok = $false; detail = $Detail })
+        steps       = @([pscustomobject]@{ name = $Step; ok = $false; detail = $Detail; kind = 'bootstrap' })
     }
     Set-Content -LiteralPath $ResultPath -Value ($document | ConvertTo-Json -Depth 12) -Encoding utf8NoBOM
 }

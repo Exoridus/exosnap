@@ -2608,6 +2608,105 @@ Test-Case 'REL-VIS-NOTIFY-001 is red when the toast never reached the desktop an
     Assert-True ($green.Prompts[0] -match '\[j\] richtig') $green.Prompts[0]
 }
 
+Test-Case 'the clean-first-start residue probe answers on a real machine instead of throwing' {
+    # The probe reads every key under the Uninstall hive and filters on DisplayName.
+    # Most keys there have no DisplayName, and the worker runs under StrictMode, where
+    # reading an absent property is an error -- so this threw on the first machine it
+    # was ever run on, before a single step had been recorded. Run against the real
+    # hive on purpose: a fixture would be a hive without the keys that break it.
+    $worker = Join-Path (Split-Path -Parent $scriptRoot) 'scripts/lib/clean-first-start-worker.ps1'
+    $source = Get-Content -LiteralPath $worker -Raw
+    $match = [regex]::Match($source, '(?ms)^function Get-ExoSnapResidue \{.*?^\}')
+    Assert-True $match.Success 'Get-ExoSnapResidue was not found in the worker'
+
+    $probe = @"
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = 'Stop'
+$($match.Value)
+@(Get-ExoSnapResidue).Count
+"@
+    $output = & pwsh -NoProfile -Command $probe 2>&1 | Out-String
+    Assert-True ($output -match '^\s*\d+\s*$') "the probe has to return a count, not an error: $output"
+}
+
+Test-Case 'the residue count is the number of leftovers, at none, one and several' {
+    # Read through @(), the way the worker reads it. One leftover is the only
+    # population where a correct return and a doubly-wrapped one agree, so a case
+    # that tests only that number cannot tell them apart: a comma in front of the
+    # returned array makes @() count the wrapper, which is one for every machine --
+    # a clean one reported unclean with an empty description, and three leftovers
+    # reported as one.
+    $worker = Join-Path (Split-Path -Parent $scriptRoot) 'scripts/lib/clean-first-start-worker.ps1'
+    $source = Get-Content -LiteralPath $worker -Raw
+    $match = [regex]::Match($source, '(?ms)^function Get-ExoSnapResidue \{.*?^\}')
+    Assert-True $match.Success 'Get-ExoSnapResidue was not found in the worker'
+
+    $localAppData = New-TestDirectory
+    $programData = New-TestDirectory
+    try {
+        # none, then one, then three, built from the locations the probe names.
+        $populations = @(
+            @{ Expected = 0; Make = { } }
+            @{ Expected = 1; Make = { New-Item -ItemType Directory -Path (Join-Path $localAppData 'ExoSnap') -Force | Out-Null } }
+            @{ Expected = 3; Make = {
+                    New-Item -ItemType Directory -Path (Join-Path $localAppData 'ExoSnap/recovery') -Force | Out-Null
+                    New-Item -ItemType Directory -Path (Join-Path $programData 'ExoSnap') -Force | Out-Null
+                } }
+        )
+        foreach ($population in $populations) {
+            & $population.Make
+            $probe = @"
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = 'Stop'
+`$env:LOCALAPPDATA = '$localAppData'
+`$env:ProgramData = '$programData'
+$($match.Value)
+"count=`$(@(Get-ExoSnapResidue).Count)"
+"@
+            $output = & pwsh -NoProfile -Command $probe 2>&1 | Out-String
+            Assert-True ($output -match "count=$($population.Expected)\b") `
+                "$($population.Expected) leftover(s) have to count as $($population.Expected): $output"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $localAppData -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $programData -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case 'machine-wide state under the product name is a leftover, with no cause attached' {
+    # The golden image this gate runs on carries C:\ProgramData\ExoSnap -- bring-up
+    # diagnostics, not an install: the package installs under Program Files and the
+    # product writes per-user locations only. A definition of clean that covers only
+    # the per-user locations calls that machine clean, and a message that blamed an
+    # install would send the reader looking for one that never happened.
+    $worker = Join-Path (Split-Path -Parent $scriptRoot) 'scripts/lib/clean-first-start-worker.ps1'
+    $source = Get-Content -LiteralPath $worker -Raw
+    $match = [regex]::Match($source, '(?ms)^function Get-ExoSnapResidue \{.*?^\}')
+    Assert-True $match.Success 'Get-ExoSnapResidue was not found in the worker'
+
+    $localAppData = New-TestDirectory
+    $programData = New-TestDirectory
+    try {
+        New-Item -ItemType Directory -Path (Join-Path $programData 'ExoSnap') -Force | Out-Null
+        $probe = @"
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = 'Stop'
+`$env:LOCALAPPDATA = '$localAppData'
+`$env:ProgramData = '$programData'
+$($match.Value)
+@(Get-ExoSnapResidue) -join '||'
+"@
+        $output = & pwsh -NoProfile -Command $probe 2>&1 | Out-String
+        Assert-True ($output -match 'machine-wide state') "the machine-wide directory has to be named: $output"
+        Assert-True ($output -notmatch 'earlier install') "no install creates this path, so none may be blamed: $output"
+    }
+    finally {
+        Remove-Item -LiteralPath $localAppData -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $programData -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host ''
 Write-Host "$script:Passed/$($script:Passed + $script:Failed) passed"
 if ($script:Failed -gt 0) { exit 1 }

@@ -115,7 +115,8 @@ bool FfmpegAacEncoder::Init(uint32_t sample_rate, uint32_t channels, std::string
         Shutdown();
         return false;
     }
-    if ((ret = swr_init(m_swr)) < 0) {
+    ret = swr_init(m_swr);
+    if (ret < 0) {
         out_error = "swr_init failed: " + AvErr(ret);
         Shutdown();
         return false;
@@ -138,7 +139,8 @@ bool FfmpegAacEncoder::Init(uint32_t sample_rate, uint32_t channels, std::string
     m_frame->sample_rate = static_cast<int>(sample_rate);
     m_frame->nb_samples = m_frame_size;
     av_channel_layout_copy(&m_frame->ch_layout, &m_ctx->ch_layout);
-    if ((ret = av_frame_get_buffer(m_frame, 0)) < 0) {
+    ret = av_frame_get_buffer(m_frame, 0);
+    if (ret < 0) {
         out_error = "av_frame_get_buffer failed: " + AvErr(ret);
         Shutdown();
         return false;

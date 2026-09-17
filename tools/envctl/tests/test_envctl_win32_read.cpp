@@ -232,8 +232,10 @@ TEST(EnvctlWin32Read, ProviderRefusesEveryNonMutableProperty) {
 
     for (const auto& descriptor : provider.Describe()) {
         if (IsMutable(descriptor.capability)) {
-            // hdr and refresh-hz only, and this test never calls Apply on them.
-            EXPECT_TRUE(descriptor.id.property == "hdr" || descriptor.id.property == "refresh-hz")
+            // hdr, acm and refresh-hz only, and this test never calls Apply on
+            // them -- it runs against the developer's own displays.
+            EXPECT_TRUE(descriptor.id.property == "hdr" || descriptor.id.property == "acm" ||
+                        descriptor.id.property == "refresh-hz")
                 << descriptor.id.Key();
             continue;
         }

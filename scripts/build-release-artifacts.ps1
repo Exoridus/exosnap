@@ -47,12 +47,12 @@
     base version so no caller ever has to hard-code a version number.
 
 .PARAMETER Preset
-    CMake preset to build and package from. Defaults to the canonical
-    'windows-x64-release' (Visual Studio generator, multi-config) used by the
-    release pipeline. The PR packaging smoke passes 'windows-x64-ninja-release'
-    (Ninja, single-config, sccache-cacheable) instead so PR CI can validate
-    packaging drift without paying for a from-scratch VS Release build. Both
-    generator layouts are supported when locating the built exosnap.exe.
+    CMake preset to build and package from. Defaults to 'windows-x64-ninja-release',
+    the preset the release pipeline and the PR packaging smoke both build from,
+    so a local run packages the same build path that ships. A Ninja preset needs
+    cl.exe on PATH; the script imports the MSVC environment itself when the
+    preset asks for Ninja, so a plain PowerShell works. Both generator layouts
+    are supported when locating the built exosnap.exe.
 
 .PARAMETER SkipConfigure
     Skip the CMake configure step (assumes the Release build tree is configured).
@@ -72,7 +72,7 @@
 [CmdletBinding()]
 param(
     [string]$ReleaseVersion = '',
-    [string]$Preset = 'windows-x64-release',
+    [string]$Preset = 'windows-x64-ninja-release',
     [switch]$SkipConfigure,
     [switch]$SkipBuild,
     [switch]$SkipSmoke,
@@ -84,13 +84,15 @@ param(
     # the single-instance guard OR something else quiet). That ambiguity is acceptable
     # for local/dev iteration, where re-running the gate is cheap. It must NOT be for an
     # official release gate: pass this switch there so every 'inconclusive' becomes a
-    # hard failure instead of silently passing. See .workspace/audit.md, "Release-Smokes
-    # sind weiterhin teilweise fail-open".
+    # hard failure instead of silently passing.
     [switch]$FailOnInconclusive
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+Import-Module (Join-Path $PSScriptRoot 'lib/MsvcEnvironment.psm1') -Force -DisableNameChecking
+. (Join-Path $PSScriptRoot 'lib/ReleaseArtifactIdentity.ps1')
 
 # ---------------------------------------------------------------------------
 # Paths (resolved from the script location, independent of the caller's CWD)
@@ -227,6 +229,11 @@ $WindowsSystemDllAllowlist = @(
     # is the Event Trace Decode Helper (TdhGetEventInformation / TdhFormatProperty),
     # a Windows system DLL present on every Win10/11 install — not bundled.
     'tdh.dll',
+    # WinRT dispatcher queue: CreateDispatcherQueueController lives in
+    # CoreMessaging.dll, a Windows system DLL since Win10 1709 and well below the
+    # baseline Windows Graphics Capture already requires. The display colour watch
+    # needs a DispatcherQueue on the registering thread, so the engine links it.
+    'coremessaging.dll',
     # Text / internationalization. Qt 6.11's Qt6Core.dll imports icuuc.dll, which
     # Qt 6.9 did not — the Qt build now uses the ICU that Windows itself ships in
     # System32 rather than bundling its own, so there is nothing for the deploy to
@@ -528,6 +535,9 @@ Write-Host ""
 # 1. Configure + build (Release)
 # ---------------------------------------------------------------------------
 if (-not $SkipBuild) {
+    # A no-op inside a Developer PowerShell or a CI job that set the toolchain
+    # up already; from a plain shell this is what puts cl.exe on PATH for Ninja.
+    if (Test-PresetUsesNinja -Name $Preset -RepoRoot $RepoRoot) { Enter-MsvcEnvironment | Out-Null }
     if (-not $SkipConfigure) {
         Invoke-Heartbeat -Name 'cmake configure' -FilePath 'cmake' -Arguments @('--preset', $Preset)
     }
@@ -1140,11 +1150,19 @@ if (@(& git -C $RepoRoot status --porcelain).Count -gt 0) {
     $sourceCommit += '-dirty'
 }
 $fileEntries = foreach ($file in ($allFiles | Sort-Object FullName)) {
-    [ordered]@{
+    $entry = [ordered]@{
         path   = "$PortablePackageName/" + $file.FullName.Substring($PackageRoot.Length + 1).Replace('\', '/')
         size   = $file.Length
         sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
+    # Every executable also gets per-section hashes. The ones this repository
+    # compiles carry the release identity, so a final release cannot match its
+    # qualified candidate file for file; the promotion contract compares their
+    # sections instead, and a manifest without them cannot be promoted from.
+    if ($file.Extension -eq '.exe') {
+        $entry['sections'] = Get-ReleasePeSectionHash -Path $file.FullName
+    }
+    $entry
 }
 $manifest = [ordered]@{
     product         = 'ExoSnap'

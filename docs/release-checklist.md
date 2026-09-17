@@ -20,6 +20,12 @@ a GPU-less runner.
 - [ ] Refresh `KNOWN_LIMITATIONS.md` to the new version and fold in any newly-shipped boundaries
       (the release script asserts the doc names the canonical version).
 - [ ] Full test suite green: `pwsh scripts/run-tests.ps1`.
+- [ ] Cut the changelog. `pwsh scripts/new-changelog.ps1` previews what the release would say; rerun
+      with `-Version x.y.z -Apply` and `EXOSNAP_CHANGELOG_CUT=1` set to write it and open a fresh
+      `## [Unreleased]`. A subject the assembler cannot file is reported rather than dropped, and has
+      to be resolved here -- after the tag it cannot be fixed on the merged commit any more.
+- [ ] Preview the release page: `pwsh scripts/render-release-notes.ps1 -Version x.y.z`. This is the
+      exact text the pipeline will publish, from `.github/templates/release-notes.md`.
 
 ## 2. Build + validate artifacts (packaging gate)
 
@@ -174,15 +180,20 @@ the workflow refuses to publish without one.
 > would ship binaries that still call themselves a release candidate.
 >
 > So the rebuild is permitted and its **difference budget is declared in the record** (`promotion`,
-> contract `exosnap.release-promotion/1`) and enforced by
+> contract `exosnap.release-promotion/2`) and enforced by
 > `scripts/check-release-promotion.ps1`, which `publish-release` runs before it creates the draft.
 > Both builds write a per-file inventory of the portable install tree (`artifact-manifest.json`, now
 > a published release asset) and a record of the toolchain that produced it
 > (`toolchain-manifest.json`). Publishing is allowed only when the two install trees hold the same
 > files, every file is byte-identical except `exosnap.exe`, `exosnap-updater.exe` and
 > `crashpad_handler.exe`, both builds came from the same commit, and both used the same compiler,
-> CMake, Qt, WiX and vendored FFmpeg. A candidate cut before the workflow attached that inventory
-> cannot be promoted from at all: cut a new one.
+> CMake, generator and preset, Qt, WiX and vendored FFmpeg. The three executables are not exempt,
+> only compared differently: the manifest carries a hash per PE section for every executable, and
+> a named executable may differ only in `.rdata` (the fixed-width identity fields and the link's
+> debug record) and `.rsrc` (VERSIONINFO) -- `.text`, `.data`, `.pdata` and `.reloc` must be
+> byte-identical, which is what makes "the same code, re-labelled" a checked statement rather than
+> an inference from the commit. A candidate cut before the workflow attached that inventory, or
+> whose manifest carries no section hashes, cannot be promoted from at all: cut a new one.
 >
 > **Not covered.** Those three binaries are compared to nothing, because they cannot be. Their
 > correctness rests on the identical commit and the identical toolchain, both checked. A regression
@@ -563,14 +574,29 @@ submission is the one step that cannot be withdrawn from users' machines, so it 
 the qualification record. Submissions for `v0.9.0` are stopped for that reason; `0.9.1` is the
 version the package managers move to.
 
-> **The version axis is now a CI gate.** `scripts/check-packaging-version.ps1` runs in `ci.yml`'s
-> `lint` job on every pull request and again before the release build, and it fails when any of the
-> roughly sixteen version literals across the three packaging surfaces disagrees with
-> `project(exosnap VERSION x.y.z)`. Run it locally after each bump below --
-> `pwsh scripts/check-packaging-version.ps1` -- rather than discovering a half-finished bump at
-> submission time. It deliberately says nothing about installer hashes: those cannot exist between a
-> bump and the release that produces the bytes, so the Chocolatey checksum placeholder and an
-> unpublished WinGet `InstallerSha256` pass it. The full validators below still check them.
+> **The version axis is a CI gate, and the bump is one command.**
+> `pwsh scripts/bump-version.ps1 -Version <x.y.z>` moves every literal the gate checks -- the CMake
+> version, the Chocolatey nuspec and install script, the Scoop manifest, and the three WinGet
+> manifests together with the directory they live in -- and resets the four values only a release
+> can produce (`checksum64`, the Scoop `hash`, `InstallerSha256`, and every `ProductCode`) to their
+> placeholders, so a bumped tree cannot be submitted by accident. It refuses a dirty tree, so the
+> bump is the whole diff, and finishes by running the gate. The per-surface notes below stay as the
+> description of what each literal is and what still has to be filled in by hand after the release
+> exists.
+>
+> The gate itself, `scripts/check-packaging-version.ps1`, runs in `ci.yml`'s `lint` job on every
+> pull request and again before the release build, and fails when any of those literals disagrees
+> with `project(exosnap VERSION x.y.z)`. It deliberately says nothing about installer hashes: those
+> cannot exist between a bump and the release that produces the bytes, so the placeholders pass it.
+> The full validators below still check them.
+>
+> **What each channel is serving is written down.** `packaging/publication-policy.json` states the
+> intent per channel -- publish, or held at a version with the reason and the version it resumes at
+> -- and `pwsh scripts/check-feed-drift.ps1` reports what the public feeds actually serve against
+> it. The policy half is checked offline by `pipeline.publication_policy` (a hold that the tree has
+> overtaken, a hold with no reason, or a packaging surface the policy says nothing about all fail).
+> The feed half is advisory and never blocks: the feeds are outside this repository, and nothing
+> here submits or publishes anything -- every submission below is a step a person runs.
 
 - [ ] **WinGet.** `packaging/winget/manifests/c/Codexo/ExoSnap/` must contain exactly one version
       directory (`scripts/validate-winget-manifest.ps1` enforces this) — `git mv` the existing

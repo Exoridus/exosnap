@@ -191,9 +191,37 @@ Item {
                         anchors.fill: parent
                     }
 
+                    // Harness seam (--visual-test record-brand): the stage
+                    // carrying the brand alone, at a size the empty state has no
+                    // room for. Unreachable in a product run on purpose -- what
+                    // the page owes a user with no source is the instruction,
+                    // not a logo over it.
+                    Row {
+                        spacing: ExoTheme.spacingMd
+                        visible: root.recordViewModel.harnessBrandStage
+                        anchors.centerIn: parent
+
+                        ExoBrandMark {
+                            width: 112
+                            height: 112
+                            anchors.verticalCenter: parent.verticalCenter
+                            Accessible.ignored: true
+                        }
+
+                        ExoBrandWordmark {
+                            typePixelSize: 72
+                            width: implicitWidth
+                            height: implicitHeight
+                            anchors.verticalCenter: parent.verticalCenter
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: "exosnap"
+                        }
+                    }
+
                     Column {
                         spacing: ExoTheme.spacingMd
                         visible: !root.recordViewModel.selectedTargetAvailable
+                                 && !root.recordViewModel.harnessBrandStage
                         anchors.centerIn: parent
 
                         Label {
@@ -696,6 +724,7 @@ Item {
 
         sourceComponent: RecordSourcePicker {
             recordViewModel: root.recordViewModel
+            hostPage: root
         }
     }
 

@@ -107,8 +107,8 @@ TEST(SrgbOetf, OnlyTheRollOffSeparatesTheSdrScrgbPathFromTheHdrPath) {
     // same input, crushes white and lifts the deep shadows toward the knee.
     EXPECT_NEAR(ScrgbSdrToSrgbChannel(1.0f), 1.0f, 1e-5f);
 
-    const float hdr_peak = HdrPeakScale(/*display_hdr_active=*/false, 0.0f); // 1000/80 fallback
-    EXPECT_NEAR(ScrgbToSdr709Channel(1.0f, hdr_peak), 0.9228f, 1e-3f);       // white -> ~235/255
+    const float hdr_peak = HdrPeakScale(/*display_hdr_active=*/false, 0.0f, 0.0f); // 1000/80 fallback
+    EXPECT_NEAR(ScrgbToSdr709Channel(1.0f, hdr_peak), 0.9228f, 1e-3f);             // white -> ~235/255
     // Below the knee the roll-off is identity, so shadows are untouched by it
     // and the transfer round-trips them exactly: linear 0.0144 is sRGB code 32.
     EXPECT_NEAR(ScrgbToSdr709Channel(0.0144f, hdr_peak) * 255.0f, 32.0f, 0.6f);
@@ -116,18 +116,18 @@ TEST(SrgbOetf, OnlyTheRollOffSeparatesTheSdrScrgbPathFromTheHdrPath) {
 
 TEST(HdrPeakScale, UsesActiveDisplayLuminance) {
     // An actively-HDR display's peak drives the knee.
-    EXPECT_FLOAT_EQ(HdrPeakScale(true, 400.0f), 5.0f);
-    EXPECT_FLOAT_EQ(HdrPeakScale(true, 1000.0f), 12.5f);
+    EXPECT_FLOAT_EQ(HdrPeakScale(true, 400.0f, 80.0f), 5.0f);
+    EXPECT_FLOAT_EQ(HdrPeakScale(true, 1000.0f, 80.0f), 12.5f);
 }
 
 TEST(HdrPeakScale, IgnoresEdidCapsOfSdrDisplay) {
     // The EDID trap: an SDR-mode display reports inflated luminance caps
     // (measured 1499 cd/m^2). Not HDR-active -> fallback, never that value.
     const float expected_fallback = kHdrFallbackPeakNits / kHdrReferenceWhiteNits;
-    EXPECT_FLOAT_EQ(HdrPeakScale(false, 1499.0f), expected_fallback);
+    EXPECT_FLOAT_EQ(HdrPeakScale(false, 1499.0f, 80.0f), expected_fallback);
     // Degenerate active reading at/below reference white also falls back.
-    EXPECT_FLOAT_EQ(HdrPeakScale(true, 50.0f), expected_fallback);
-    EXPECT_GE(HdrPeakScale(false, 0.0f), 1.0f);
+    EXPECT_FLOAT_EQ(HdrPeakScale(true, 50.0f, 80.0f), expected_fallback);
+    EXPECT_GE(HdrPeakScale(false, 0.0f, 0.0f), 1.0f);
 }
 
 // --- OD capture-format x HDR-mode negotiation ------------------------------
@@ -330,6 +330,69 @@ TEST(HdrToneMapTest, SdrPaperWhiteScaleClampsToTheDefaultAndNeverBelowUnity) {
     EXPECT_NEAR(SdrPaperWhiteScale(-5.0f), kDefaultSdrWhiteLevelNits / 80.0f, 1e-5f);
     EXPECT_NEAR(SdrPaperWhiteScale(100000.0f), kDefaultSdrWhiteLevelNits / 80.0f, 1e-5f);
     EXPECT_GE(SdrPaperWhiteScale(80.0f), 1.0f);
+}
+
+// The peak and the paper white are not independent: the shader divides BOTH the
+// signal and the peak by paper_white_scale, so what decides whether any highlight
+// range survives is peak_nits / sdr_white_nits. A display whose reported peak sits
+// at or below the white the OS composes SDR content at leaves the curve with no
+// headroom -- HdrToneMapChannel degenerates to a hard clamp at paper white and
+// every highlight above it is lost.
+//
+// Measured on this hardware: both panels report 240 cd/m^2 through
+// DXGI_OUTPUT_DESC1::MaxLuminance while Windows puts SDR white at up to 480, so
+// the degenerate case begins around half slider travel. That is ordinary use.
+TEST(HdrToneMapTest, PeakIsNotTrustedBelowTheWhiteTheOsComposesAt) {
+    constexpr float kFallback = kHdrFallbackPeakNits / kHdrReferenceWhiteNits;
+
+    // The measured case: 240 cd/m^2 peak against a 480 cd/m^2 SDR white.
+    EXPECT_FLOAT_EQ(HdrPeakScale(true, 240.0f, 480.0f), kFallback);
+    // And the boundary: equal is still no headroom.
+    EXPECT_FLOAT_EQ(HdrPeakScale(true, 240.0f, 240.0f), kFallback);
+}
+
+// A real HDR panel is unaffected: its peak is far above any SDR white the slider
+// can reach, so the reported value keeps driving the knee.
+TEST(HdrToneMapTest, AGenuineHdrPeakIsKeptAtEverySliderPosition) {
+    EXPECT_FLOAT_EQ(HdrPeakScale(true, 1000.0f, 80.0f), 12.5f);
+    EXPECT_FLOAT_EQ(HdrPeakScale(true, 1000.0f, 480.0f), 12.5f);
+    EXPECT_FLOAT_EQ(HdrPeakScale(true, 1600.0f, 480.0f), 20.0f);
+    // Just above the white: trusted, with the little headroom it claims.
+    EXPECT_FLOAT_EQ(HdrPeakScale(true, 500.0f, 480.0f), 6.25f);
+}
+
+// Whatever the inputs, the resolved pair must leave the curve a working
+// roll-off: after normalisation the peak has to clear the knee, or highlights
+// are clamped rather than compressed.
+TEST(HdrToneMapTest, ResolvedPeakAlwaysClearsTheKneeAfterNormalisation) {
+    const float whites[] = {0.0f, 80.0f, 203.0f, 240.0f, 400.0f, 480.0f, 100000.0f};
+    const float peaks[] = {0.0f, 50.0f, 240.0f, 400.0f, 1000.0f, 1600.0f, 4000.0f};
+    for (const float white : whites) {
+        for (const float peak : peaks) {
+            for (const bool active : {false, true}) {
+                const float paper_white = SdrPaperWhiteScale(white);
+                const float peak_scale = HdrPeakScale(active, peak, white);
+                const float effective = peak_scale / paper_white;
+                EXPECT_GT(effective, kHdrToneMapKnee) << "white=" << white << " peak=" << peak << " active=" << active;
+            }
+        }
+    }
+}
+
+// The end-to-end consequence on the measured configuration: a highlight above
+// paper white stays distinguishable from paper white itself.
+TEST(HdrToneMapTest, HighlightsSurviveOnADisplayReportingLessPeakThanItsWhite) {
+    constexpr float kWhiteNits = 480.0f;
+    constexpr float kReportedPeakNits = 240.0f;
+    const float paper_white = SdrPaperWhiteScale(kWhiteNits);
+    const float peak_scale = HdrPeakScale(true, kReportedPeakNits, kWhiteNits);
+
+    // scRGB values for paper white itself and for a highlight well above it.
+    const float white_signal = ScrgbToSdr709Channel(paper_white, peak_scale, paper_white);
+    const float highlight_signal = ScrgbToSdr709Channel(paper_white * 2.0f, peak_scale, paper_white);
+
+    EXPECT_GT(highlight_signal, white_signal) << "a highlight above paper white must not collapse onto paper white";
+    EXPECT_LE(highlight_signal, 1.0f);
 }
 
 } // namespace

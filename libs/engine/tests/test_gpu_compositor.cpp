@@ -16,6 +16,7 @@
 namespace {
 
 using exosnap::engine::GpuCompositor;
+using exosnap::engine::MaskCursorComposition;
 using exosnap::engine::SessionState;
 using exosnap::engine::WebcamOverlayLive;
 using exosnap::engine::WebcamPixelRect;
@@ -298,6 +299,51 @@ TEST(GpuCompositorTest, CursorUsesSourceAlpha) {
 
     const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
     ExpectPixelNear(pixels, 1, 0, 0, 128, 128, 128, 255);
+}
+
+// A mask cursor's inverting pixels against a known destination. The classic
+// I-beam is built from these alone, so a compositor that drops them draws
+// nothing at all; one that draws them opaque draws something Windows does not.
+TEST(GpuCompositorTest, InvertingCursorPixelsComplementTheDestination) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 1, 1, err)) << err;
+    EXPECT_EQ(compositor.MaskComposition(), MaskCursorComposition::ExactSdr);
+
+    // BGRA destination (0.20, 0.40, 0.80) as bytes: B=204, G=102, R=51.
+    auto background = CreateTexture(d3d.device.get(), 1, 1, SolidBgra(1, 1, 204, 102, 51, 255));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    const std::vector<uint8_t> inverting = {255, 255, 255, 255};
+    ASSERT_TRUE(compositor.DrawCursorInvert(inverting.data(), 1, 1, WebcamPixelRect{0, 0, 1, 1}, err)) << err;
+
+    // (0.80, 0.60, 0.20) back in BGRA bytes.
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 1, 0, 0, 51, 153, 204, 255);
+}
+
+TEST(GpuCompositorTest, ANonInvertingPixelOfTheInvertPlaneLeavesTheDestination) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 1, 1, err)) << err;
+
+    auto background = CreateTexture(d3d.device.get(), 1, 1, SolidBgra(1, 1, 204, 102, 51, 255));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    // Zero, which is what the plane holds for every pixel that does not invert.
+    // The blend must leave such a pixel alone rather than clip or blacken it --
+    // that is what lets one plane carry a cursor mixing both kinds of pixel.
+    const std::vector<uint8_t> passthrough = {0, 0, 0, 0};
+    ASSERT_TRUE(compositor.DrawCursorInvert(passthrough.data(), 1, 1, WebcamPixelRect{0, 0, 1, 1}, err)) << err;
+
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 1, 0, 0, 204, 102, 51, 255);
 }
 
 // ---------------------------------------------------------------------------

@@ -107,6 +107,16 @@ public static class Qualification
             }
         }
 
+        // A scenario that asserted everything it was asked to and lost the evidence
+        // showing it has not produced what promotion asks for. Not a product failure
+        // -- the assertions really did hold -- and not a complete pass either, so it
+        // is an objection of its own with the reason the collection gave.
+        foreach (var verdict in verdicts.Where(v =>
+            v.Outcome == ScenarioOutcome.Pass && v.EvidenceGap.Length > 0))
+        {
+            objections.Add($"{verdict.Id}: passed, but its evidence did not reach the record ({verdict.EvidenceGap})");
+        }
+
         // An infrastructure error anywhere disqualifies, required or not: it means
         // the run itself did not work, and the scenarios around it were measured
         // on a machine in an unknown condition.

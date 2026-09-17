@@ -361,7 +361,25 @@ TEST(WindowCaptureStallMonitor, NeitherWindowNorDisplayNeverStarves) {
     EXPECT_EQ(monitor.Observe(s), WindowStallSignal::None);
 }
 
-TEST(ClassifyConfirmedDisplayStall, OnlyAnOffDisplayCorroborates) {
-    EXPECT_EQ(ClassifyConfirmedDisplayStall(/*console_display_off=*/true), WindowStallVerdict::Stalled);
-    EXPECT_EQ(ClassifyConfirmedDisplayStall(/*console_display_off=*/false), WindowStallVerdict::Unknown);
+TEST(ClassifyConfirmedDisplayStall, StarvationAloneNeverCorroborates) {
+    EXPECT_EQ(ClassifyConfirmedDisplayStall(/*console_display_off=*/false, /*captured_display_missing=*/false),
+              WindowStallVerdict::Unknown);
+}
+
+TEST(ClassifyConfirmedDisplayStall, AnOffDisplayCorroborates) {
+    EXPECT_EQ(ClassifyConfirmedDisplayStall(/*console_display_off=*/true, /*captured_display_missing=*/false),
+              WindowStallVerdict::Stalled);
+}
+
+// The case an off-display check alone cannot reach: Windows does not report an
+// unplugged display as one that is off, so a display that left the machine
+// stayed Unknown and the user was told nothing at all.
+TEST(ClassifyConfirmedDisplayStall, ADisconnectedDisplayCorroborates) {
+    EXPECT_EQ(ClassifyConfirmedDisplayStall(/*console_display_off=*/false, /*captured_display_missing=*/true),
+              WindowStallVerdict::Stalled);
+}
+
+TEST(ClassifyConfirmedDisplayStall, BothFactsTogetherStillCorroborateOnce) {
+    EXPECT_EQ(ClassifyConfirmedDisplayStall(/*console_display_off=*/true, /*captured_display_missing=*/true),
+              WindowStallVerdict::Stalled);
 }

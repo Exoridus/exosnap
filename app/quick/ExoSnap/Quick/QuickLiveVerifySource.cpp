@@ -502,6 +502,30 @@ QJsonObject QuickLiveVerifySource::RecordSnapshot() const {
         return json;
     }
     json.insert(QStringLiteral("available"), true);
+    // Which webcam the next recording composites from. Present so a run's evidence
+    // proves the unchanging source was really in use: a measurement of the overlay
+    // against a live camera measures the camera as well, and the two are not
+    // distinguishable afterwards from the recording alone.
+    if (auto* coordinator = application_.recordingCoordinator(); coordinator != nullptr) {
+        const QString source = coordinator->VerificationWebcamSourceName();
+        json.insert(QStringLiteral("webcamSource"), source.isEmpty() ? QStringLiteral("device") : source);
+    }
+    // Which displays this machine offers, and what the product calls each of
+    // them. A campaign that has to bind one monitor needs both names: the device
+    // the operating system knows and the label the product selects by. Without
+    // this the only way to choose a display is to take whichever one enumerated
+    // first, and the evidence then cannot say which display it recorded.
+    QJsonArray displays;
+    for (const QVariant& entry : record->displayTargetOptions()) {
+        const QVariantMap option = entry.toMap();
+        QJsonObject display;
+        display.insert(QStringLiteral("identity"), option.value(QStringLiteral("identity")).toString());
+        display.insert(QStringLiteral("device"), option.value(QStringLiteral("device")).toString());
+        display.insert(QStringLiteral("label"), option.value(QStringLiteral("label")).toString());
+        display.insert(QStringLiteral("selected"), option.value(QStringLiteral("selected")).toBool());
+        displays.append(display);
+    }
+    json.insert(QStringLiteral("displayTargets"), displays);
     json.insert(QStringLiteral("state"), record->state());
     json.insert(QStringLiteral("stateText"), record->stateText());
     json.insert(QStringLiteral("recording"), record->recording());
@@ -899,7 +923,7 @@ bool QuickLiveVerifySource::SelectRecordTarget(const QString& kind, const QStrin
     const auto target_kind = kind == QStringLiteral("window") ? exosnap::engine::CaptureTarget::Kind::Window
                                                               : exosnap::engine::CaptureTarget::Kind::Monitor;
     if (!application_.selectCaptureTargetForAutomation(target_kind, title_filter)) {
-        *error = QStringLiteral("No %1 target matched").arg(kind);
+        *error = QStringLiteral("No %1 target matched \"%2\"").arg(kind, title_filter);
         return false;
     }
     return true;
@@ -1058,6 +1082,34 @@ bool QuickLiveVerifySource::SettingsSet(const QString& key, const QJsonValue& va
         return false;
     }
     return settings_automation::WriteKey(*settings, key, value, error);
+}
+
+bool QuickLiveVerifySource::WebcamOverlaySet(const QJsonObject& fields, QJsonObject* applied, QString* error) {
+    const std::optional<exosnap::engine::AppliedWebcamOverlay> result =
+        application_.applyLiveWebcamOverlay(fields, error);
+    if (!result.has_value()) {
+        if (error->isEmpty())
+            *error = QStringLiteral("The overlay change was not applied");
+        return false;
+    }
+
+    // Read back from the session, not echoed from the request: the engine clamps
+    // the rectangle, and a caller that compared a recording against what it asked
+    // for would read a clamp as a defect.
+    const exosnap::engine::WebcamOverlayLive& live = result->applied;
+    QJsonObject state;
+    state.insert(QStringLiteral("enabled"), live.enabled);
+    state.insert(QStringLiteral("x"), live.overlay_x_norm);
+    state.insert(QStringLiteral("y"), live.overlay_y_norm);
+    state.insert(QStringLiteral("width"), live.overlay_w_norm);
+    state.insert(QStringLiteral("height"), live.overlay_h_norm);
+    state.insert(QStringLiteral("opacity"), live.opacity);
+    state.insert(QStringLiteral("mirror"), live.mirror);
+
+    applied->insert(QStringLiteral("appliedSequence"), static_cast<qint64>(result->sequence));
+    applied->insert(QStringLiteral("appliedQpc100ns"), static_cast<qint64>(result->applied_qpc_100ns));
+    applied->insert(QStringLiteral("applied"), state);
+    return true;
 }
 
 bool QuickLiveVerifySource::SettingsReset(QString* error) {

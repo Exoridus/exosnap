@@ -156,14 +156,14 @@ std::vector<uint32_t> Read32(ID3D11Device* device, ID3D11DeviceContext* context,
 
 // Tone-map a row of grey scRGB inputs into `format`; return raw 32-bit texels.
 std::vector<uint32_t> ToneMapRow(D3DTestDevice& d3d, DXGI_FORMAT format, const std::vector<float>& greys,
-                                 float peak_scale, bool sdr_scrgb_source = false) {
+                                 float peak_scale, bool sdr_scrgb_source = false, float paper_white_scale = 1.0f) {
     const int width = static_cast<int>(greys.size());
     auto src = CreateFp16Source(d3d.device.get(), greys);
     auto dst = CreateRenderTarget(d3d.device.get(), format, width);
     HdrToneMapper mapper;
     std::string err;
     EXPECT_TRUE(mapper.Init(d3d.device.get(), d3d.context.get(), static_cast<UINT>(width), 1, peak_scale,
-                            sdr_scrgb_source, err))
+                            sdr_scrgb_source, err, paper_white_scale))
         << err;
     EXPECT_TRUE(mapper.Convert(src.get(), dst.get(), err)) << err;
     return Read32(d3d.device.get(), d3d.context.get(), dst.get());
@@ -271,6 +271,84 @@ TEST(GpuHdrToneMapR10, TenBitPreservesPrecisionEightBitDestroys) {
     const auto r10 = ToneMapRow(d3d, DXGI_FORMAT_R10G10B10A2_UNORM, greys, kPeak400);
     ASSERT_EQ(r10.size(), 2u);
     EXPECT_NE(R10(r10[0]), R10(r10[1])) << "10-bit target must distinguish the two inputs";
+}
+
+// --- a live display change reaches the next frame ---------------------------
+
+// The session's display can change its SDR reference white while a recording
+// runs (the Windows SDR-content-brightness slider). The pass holds that number
+// as a shader constant, so unless the constant is rewritten the recording keeps
+// normalising by a paper white the desktop is no longer composed at -- the same
+// frame comes out brighter than it should by exactly that ratio.
+//
+// Asserted against a freshly built pass rather than against a recomputed
+// expectation: what has to hold is that updating and rebuilding produce the
+// identical picture, which is the property the caller relies on when it chooses
+// the cheap path.
+TEST(GpuHdrToneMapR10, UpdatedScalesDrawTheSameAsAPassBuiltWithThem) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    constexpr float kPaperWhite280 = 3.5f; // 280 cd/m^2 SDR white.
+    const std::vector<float> greys = {0.0f, 0.2159f, 0.7557f, 1.0f, 2.5f, kPeak400};
+    const int width = static_cast<int>(greys.size());
+
+    auto src = CreateFp16Source(d3d.device.get(), greys);
+    auto dst = CreateRenderTarget(d3d.device.get(), DXGI_FORMAT_R10G10B10A2_UNORM, width);
+    std::string err;
+
+    HdrToneMapper updated;
+    ASSERT_TRUE(updated.Init(d3d.device.get(), d3d.context.get(), static_cast<UINT>(width), 1, 12.5f,
+                             /*sdr_scrgb_source=*/false, err, /*paper_white_scale=*/1.0f))
+        << err;
+    updated.SetDisplayScales(kPeak400, kPaperWhite280);
+    ASSERT_TRUE(updated.Convert(src.get(), dst.get(), err)) << err;
+    const auto after_update = Read32(d3d.device.get(), d3d.context.get(), dst.get());
+
+    const auto built_with = ToneMapRow(d3d, DXGI_FORMAT_R10G10B10A2_UNORM, greys, kPeak400,
+                                       /*sdr_scrgb_source=*/false, kPaperWhite280);
+
+    ASSERT_EQ(after_update.size(), built_with.size());
+    for (size_t i = 0; i < greys.size(); ++i) {
+        EXPECT_EQ(R10(after_update[i]), R10(built_with[i])) << "grey=" << greys[i];
+    }
+
+    // And the update is not a no-op: the pass drew something else before it.
+    const auto unnormalised = ToneMapRow(d3d, DXGI_FORMAT_R10G10B10A2_UNORM, greys, 12.5f,
+                                         /*sdr_scrgb_source=*/false, /*paper_white_scale=*/1.0f);
+    ASSERT_EQ(unnormalised.size(), after_update.size());
+    EXPECT_NE(R10(unnormalised[1]), R10(after_update[1]))
+        << "a paper-white change the pass ignored would leave the picture identical";
+}
+
+// The gating Init applies stays the caller's contract, not something the setter
+// can talk its way past: a display-referred SDR scRGB desktop has no boost to
+// undo, so a paper white handed to it later must be ignored exactly as one
+// handed to Init is.
+TEST(GpuHdrToneMapR10, UpdatedPaperWhiteIsIgnoredForAnSdrScrgbSource) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    const std::vector<float> greys = {0.0144f, 0.2159f, 1.0f};
+    const int width = static_cast<int>(greys.size());
+
+    auto src = CreateFp16Source(d3d.device.get(), greys);
+    auto dst = CreateRenderTarget(d3d.device.get(), DXGI_FORMAT_B8G8R8A8_UNORM, width);
+    std::string err;
+
+    HdrToneMapper mapper;
+    ASSERT_TRUE(mapper.Init(d3d.device.get(), d3d.context.get(), static_cast<UINT>(width), 1, 12.5f,
+                            /*sdr_scrgb_source=*/true, err))
+        << err;
+    mapper.SetDisplayScales(kPeak400, /*paper_white_scale=*/3.5f);
+    ASSERT_TRUE(mapper.Convert(src.get(), dst.get(), err)) << err;
+    const auto texels = Read32(d3d.device.get(), d3d.context.get(), dst.get());
+
+    ASSERT_EQ(texels.size(), greys.size());
+    // Unchanged from the plain sRGB encode: white still reaches 255 and mid-grey
+    // still round-trips.
+    EXPECT_EQ(R8(texels.back()), 255u);
+    EXPECT_NEAR(static_cast<int>(R8(texels[1])), 128, 1);
 }
 
 } // namespace

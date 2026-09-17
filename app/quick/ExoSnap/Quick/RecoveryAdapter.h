@@ -130,6 +130,12 @@ class RecoveryAdapter : public QObject {
     // decided by the manifest snapshot, not here). Runs off the GUI thread;
     // progress and the result arrive back as row state.
     Q_INVOKABLE void finish(int index);
+    // The same repair, addressed by manifest id rather than by row. Continuing a
+    // candidate makes its interrupted artefact the continued session's first
+    // slice, so the composition root asks for that repair once it has armed the
+    // session -- by then the surface is closed and the row index is no longer the
+    // caller's to hold. An id no row carries is ignored.
+    void finishById(const QString& id);
     // Arms the inline confirm for a destructive delete. A second call to
     // discard() within the armed state performs it; anything else disarms.
     Q_INVOKABLE void armDiscard(int index);

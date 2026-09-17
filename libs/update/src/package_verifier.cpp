@@ -2,6 +2,8 @@
 
 #include <update/package_verifier.h>
 
+#include "url_utils.h"
+
 // clang-format off
 // windows.h must come first: it defines LONG/NTSTATUS used by bcrypt.h.
 #define WIN32_LEAN_AND_MEAN
@@ -150,7 +152,11 @@ VerifyResult VerifyPackageHandle(void* file_handle, const std::string& expected_
 // ---------------------------------------------------------------------------
 bool HandoffToInstaller(const std::string& installer_path) noexcept {
     // ShellExecuteW with "runas" to invoke UAC elevation for the NSIS/MSI installer.
-    std::wstring wide(installer_path.begin(), installer_path.end());
+    // The path arrives as UTF-8, so it needs CP_UTF8 widening -- a byte-wise
+    // widen turns any non-ASCII character in the user's profile path into a path
+    // ShellExecuteW cannot resolve, and the handoff then fails before the UAC
+    // prompt with nothing to show for it.
+    const std::wstring wide = Utf8ToWide(installer_path);
     HINSTANCE result = ShellExecuteW(nullptr, L"runas", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     // ShellExecuteW returns > 32 on success
     return reinterpret_cast<intptr_t>(result) > 32;

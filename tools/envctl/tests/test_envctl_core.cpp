@@ -98,7 +98,8 @@ TEST(EnvctlCatalogue, OnlyDocumentedSettersAreClassifiedMutable) {
     }
     // The whole safety argument of this tool is that this list is short and
     // every member has a documented, reversible setter.
-    EXPECT_EQ(mutable_properties, (std::vector<std::string>{"display:hdr", "display:refresh-hz"}));
+    EXPECT_EQ(mutable_properties,
+              (std::vector<std::string>{"display:hdr", "display:acm", "display:refresh-hz"}));
 }
 
 TEST(EnvctlCatalogue, UndocumentedMechanismsAreHumanNotAutomated) {
@@ -112,11 +113,33 @@ TEST(EnvctlCatalogue, UndocumentedMechanismsAreHumanNotAutomated) {
         return CatalogueEntry{};
     };
 
-    EXPECT_EQ(find("display", "acm").capability, CapabilityClass::Human);
     EXPECT_EQ(find("display", "dpi-scale").capability, CapabilityClass::Human);
     EXPECT_EQ(find("audio-render", "default-roles").capability, CapabilityClass::Human);
     EXPECT_EQ(find("system", "apps-theme").capability, CapabilityClass::Human);
     EXPECT_EQ(find("audio-render", "endpoint-state").capability, CapabilityClass::Physical);
+}
+
+// Automatic colour management was classified ENV_HUMAN on the stated grounds that
+// "the Settings toggle has no public API". That is no longer true: the Windows 11
+// GA SDK carries DISPLAYCONFIG_DEVICE_INFO_SET_WCG_STATE with a documented
+// structure, the same shape as the HDR setter beside it, and the read side
+// already resolves through GET_ADVANCED_COLOR_INFO_2::wideColorUserEnabled.
+//
+// The classification has to follow the mechanism, not the other way round: a
+// property left in ENV_HUMAN when a documented setter exists tells the operator
+// the tool cannot do something it can.
+TEST(EnvctlCatalogue, AcmIsMutableThroughItsDocumentedSetter) {
+    for (const auto& entry : WindowsCapabilityCatalogue()) {
+        if (entry.device_kind != device_kind::kDisplay || entry.property != "acm") {
+            continue;
+        }
+        EXPECT_EQ(entry.capability, CapabilityClass::MutateSafe);
+        EXPECT_TRUE(IsMutable(entry.capability));
+        EXPECT_NE(entry.mutate_mechanism.find("SET_WCG_STATE"), std::string::npos)
+            << "the catalogue must name the setter it relies on: " << entry.mutate_mechanism;
+        return;
+    }
+    ADD_FAILURE() << "missing catalogue entry display:acm";
 }
 
 TEST(EnvctlCatalogue, DeviceFormatAndMixFormatAreDistinctProperties) {

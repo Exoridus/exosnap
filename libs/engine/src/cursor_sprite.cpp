@@ -1,6 +1,7 @@
 #include <exosnap/engine/cursor_sprite.h>
 
 #include <cstring>
+#include <vector>
 
 namespace exosnap::engine {
 
@@ -77,6 +78,70 @@ bool CaptureWin32CursorBitmap(HCURSOR cursor, Win32CursorBitmap& out) {
         out.hotspot_y = static_cast<int>(icon.yHotspot);
         out.bgra.assign(static_cast<const uint8_t*>(bits),
                         static_cast<const uint8_t*>(bits) + static_cast<size_t>(width) * height * 4u);
+
+        // DrawIconEx writes alpha only for cursors that carry an alpha channel.
+        // A mask-based cursor -- monochrome ones such as the default I-beam, or a
+        // 24-bit colour cursor with an AND mask -- leaves every alpha byte at the
+        // zero the memset put there, and the compositor's cursor pass honours
+        // sprite alpha, so such a pointer is composited fully transparent and
+        // vanishes from the recording. Rebuild alpha from the mask instead.
+        bool any_alpha = false;
+        for (size_t i = 3; i < out.bgra.size(); i += 4) {
+            if (out.bgra[i] != 0) {
+                any_alpha = true;
+                break;
+            }
+        }
+        if (!any_alpha && icon.hbmMask != nullptr) {
+            // The whole mask bitmap, not just its first plane. A cursor with no
+            // colour bitmap stores the AND plane and the XOR plane stacked in it,
+            // and the XOR plane is what separates a pixel that leaves the
+            // destination alone from one that inverts it. Reading only the AND
+            // plane collapses those two into "transparent", which erases a cursor
+            // built entirely from inverting pixels -- the default I-beam is one.
+            const bool has_xor_plane = icon.hbmColor == nullptr && bitmap.bmHeight == height * 2;
+            const int mask_rows = has_xor_plane ? height * 2 : height;
+            BITMAPINFO mask_info{};
+            mask_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            mask_info.bmiHeader.biWidth = width;
+            mask_info.bmiHeader.biHeight = -mask_rows; // top-down; the AND plane comes first
+            mask_info.bmiHeader.biPlanes = 1;
+            mask_info.bmiHeader.biBitCount = 1;
+            mask_info.bmiHeader.biCompression = BI_RGB;
+            const size_t mask_stride = (static_cast<size_t>(width) + 31u) / 32u * 4u;
+            std::vector<uint8_t> mask_bits(mask_stride * static_cast<size_t>(mask_rows) + 8u);
+            // Two-colour table follows the header; reserve room for it.
+            std::vector<uint8_t> info_storage(sizeof(BITMAPINFOHEADER) + 2u * sizeof(RGBQUAD));
+            std::memcpy(info_storage.data(), &mask_info, sizeof(BITMAPINFOHEADER));
+            if (GetDIBits(dc, icon.hbmMask, 0, static_cast<UINT>(mask_rows), mask_bits.data(),
+                          reinterpret_cast<BITMAPINFO*>(info_storage.data()), DIB_RGB_COLORS) == mask_rows) {
+                std::vector<uint8_t> invert;
+                for (int y = 0; y < height; ++y) {
+                    const uint8_t* and_row = mask_bits.data() + static_cast<size_t>(y) * mask_stride;
+                    const uint8_t* xor_row =
+                        has_xor_plane ? mask_bits.data() + static_cast<size_t>(y + height) * mask_stride : nullptr;
+                    for (int x = 0; x < width; ++x) {
+                        const bool and_bit = ((and_row[x / 8] >> (7 - (x % 8))) & 1u) != 0u;
+                        const bool xor_bit = xor_row != nullptr && ((xor_row[x / 8] >> (7 - (x % 8))) & 1u) != 0u;
+                        const size_t pixel = (static_cast<size_t>(y) * width + x) * 4u;
+                        const Win32CursorMaskState state = Win32CursorMaskStateOf(and_bit, xor_bit);
+                        if (state == Win32CursorMaskState::Invert) {
+                            if (invert.empty()) {
+                                invert.assign(static_cast<size_t>(width) * height * 4u, 0u);
+                            }
+                            invert[pixel] = 255u;
+                            invert[pixel + 1u] = 255u;
+                            invert[pixel + 2u] = 255u;
+                            invert[pixel + 3u] = 255u;
+                        }
+                        // The colour DrawIconEx produced already distinguishes the two
+                        // opaque states; only whether the pixel survives is rebuilt.
+                        out.bgra[pixel + 3u] = and_bit ? 0u : 255u;
+                    }
+                }
+                out.invert = std::move(invert);
+            }
+        }
     }
 
     DeleteObject(dib);

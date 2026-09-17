@@ -108,6 +108,57 @@ function Get-ReleasePackageIdentity {
     }
 }
 
+function Get-ReleasePeSectionHash {
+    <#
+    .SYNOPSIS
+        Lowercase SHA-256 of every section of a PE image, by section name.
+    .DESCRIPTION
+        A whole-file hash cannot compare a release build against its qualified
+        candidate: the release identity is compiled in, so the two executables differ
+        by construction. Per section, they need not. With the identity held in
+        fixed-width fields, everything the linker places in .text, .data, .pdata and
+        .reloc is byte-identical between the two builds of one commit, and only the
+        sections that hold the identity (.rdata) and the VERSIONINFO resource (.rsrc)
+        move. The headers are excluded: they carry the link timestamp.
+
+        Raw section data as laid out in the file, not the virtual image, so the hash
+        is of bytes that exist on disk and can be re-read by anyone with the file.
+    .OUTPUTS
+        [ordered] section name -> sha256, in file order.
+    #>
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 0x40 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+        throw "'$Path' is not a PE image (no MZ header)."
+    }
+    $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+    if ($peOffset + 24 -gt $bytes.Length -or [BitConverter]::ToUInt32($bytes, $peOffset) -ne 0x00004550) {
+        throw "'$Path' is not a PE image (no PE signature)."
+    }
+    $sectionCount = [BitConverter]::ToUInt16($bytes, $peOffset + 6)
+    $optionalHeaderSize = [BitConverter]::ToUInt16($bytes, $peOffset + 20)
+    $tableOffset = $peOffset + 24 + $optionalHeaderSize
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $sections = [ordered]@{}
+    try {
+        for ($index = 0; $index -lt $sectionCount; $index++) {
+            $entry = $tableOffset + $index * 40
+            $name = [Text.Encoding]::ASCII.GetString($bytes, $entry, 8).TrimEnd([char]0)
+            $rawSize = [BitConverter]::ToUInt32($bytes, $entry + 16)
+            $rawPointer = [BitConverter]::ToUInt32($bytes, $entry + 20)
+            if ($rawPointer + $rawSize -gt $bytes.Length) {
+                throw "'$Path' section '$name' points past the end of the file."
+            }
+            $digest = $sha.ComputeHash($bytes, [int]$rawPointer, [int]$rawSize)
+            $sections[$name] = ([BitConverter]::ToString($digest) -replace '-', '').ToLowerInvariant()
+        }
+    }
+    finally { $sha.Dispose() }
+    return $sections
+}
+
 function Get-ReleaseArtifactFingerprint {
     <#
     .SYNOPSIS

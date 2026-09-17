@@ -290,9 +290,16 @@ add_library(exosnap_engine STATIC
     src/gpu_compositor.cpp
     src/gpu_compositor.h
     src/cursor_sprite.cpp
+    src/device_generation.cpp
     include/exosnap/engine/cursor_sprite.h
     src/gpu_hdr_tonemap.cpp
     include/exosnap/engine/gpu_hdr_tonemap.h
+    src/gpu_frame_luminance.cpp
+    src/gpu_frame_luminance.h
+    src/frame_luminance.h
+    src/display_color_watch.cpp
+    include/exosnap/engine/display_color_watch.h
+    include/exosnap/engine/display_color_recheck.h
     src/gpu_timestamp_profiler.cpp
     include/exosnap/engine/gpu_timestamp_profiler.h
     include/exosnap/engine/gpu_timestamp_math.h
@@ -414,6 +421,7 @@ target_link_libraries(exosnap_engine
         mf.lib
         mfuuid.lib
         wmcodecdspuuid.lib
+        coremessaging.lib # CreateDispatcherQueueController (display_color_watch)
         exosnap::warnings
 )
 
@@ -456,6 +464,16 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 
+# What a running session may adopt from its display without being rebuilt: the
+# scalars every consumer holds as a GPU constant, against the colour-space
+# change none of them can follow. Pure, GPU-free.
+exosnap_add_gtest(
+    NAME test_hdr_session_dynamic
+    TEST_PREFIX engine.
+    SOURCES tests/test_hdr_session_dynamic.cpp
+    LIBRARIES exosnap_engine
+)
+
 # Preview-tap plan: which sessions share their pre-encode surface with the
 # preview and which display transform the consumer applies. Pure, GPU-free.
 exosnap_add_gtest(
@@ -473,6 +491,17 @@ exosnap_add_gtest(
     SOURCES tests/test_cursor_sprite.cpp
     LIBRARIES exosnap_engine
 )
+
+# The per-monitor DPI scope the cursor mapping reads its pair of coordinates in.
+# What is under test is that the scope is local: a leak would make the whole video
+# thread per-monitor aware and move every other Win32 geometry call with it.
+exosnap_add_gtest(
+    NAME test_thread_dpi_scope
+    TEST_PREFIX engine.
+    SOURCES tests/test_thread_dpi_scope.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_thread_dpi_scope PRIVATE src)
 
 exosnap_add_gtest(
     NAME test_multi_track_packet_types
@@ -695,6 +724,7 @@ exosnap_add_gtest(
     NAME test_split_sentinel_policy
     TEST_PREFIX engine.
     SOURCES tests/test_split_sentinel_policy.cpp
+    LIBRARIES exosnap_engine
 )
 target_include_directories(test_split_sentinel_policy PRIVATE src)
 
@@ -736,6 +766,17 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 target_include_directories(test_nvenc_output_ring PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
+# Which pending entry a rejected submission takes back: its own, at the back,
+# not the oldest frame the driver still owns at the front (no GPU needed).
+exosnap_add_gtest(
+    NAME test_nvenc_pending_rollback
+    TEST_PREFIX engine.
+    SOURCES tests/test_nvenc_pending_rollback.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_nvenc_pending_rollback PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
 # test_hdr_bitstream_metadata: byte-exact unit tests for the in-band HDR10
@@ -1004,6 +1045,29 @@ exosnap_add_gtest(
 target_include_directories(test_hdr_tonemap PRIVATE src)
 target_compile_definitions(test_hdr_tonemap PRIVATE NOMINMAX)
 
+# Frame luminance evaluation: histogram percentiles, the stream-wide
+# MaxCLL/MaxFALL accumulator and the asymmetric content-peak smoother that drives
+# the tone-map knee. Pure math -- the compute pass is pinned separately.
+exosnap_add_gtest(
+    NAME test_frame_luminance
+    TEST_PREFIX engine.
+    SOURCES tests/test_frame_luminance.cpp
+    LIBRARIES exosnap_engine d3d11.lib dxgi.lib
+)
+target_include_directories(test_frame_luminance PRIVATE src)
+target_compile_definitions(test_frame_luminance PRIVATE NOMINMAX)
+
+# When a session re-reads its display's colour facts: the backstop cadence and
+# how a change notification shortens it. Pure and clock-injected -- the
+# subscription itself is DisplayColorWatch and needs a real display.
+exosnap_add_gtest(
+    NAME test_display_color_recheck
+    TEST_PREFIX engine.
+    SOURCES tests/test_display_color_recheck.cpp
+    LIBRARIES exosnap_engine
+)
+target_compile_definitions(test_display_color_recheck PRIVATE NOMINMAX)
+
 # OD acquire-failure classifier: pure recording-loss policy (ACCESS_LOST recover
 # vs DEVICE_REMOVED / unexpected HRESULT fail-closed). No GPU.
 exosnap_add_gtest(
@@ -1143,6 +1207,41 @@ exosnap_add_gtest(
 )
 target_include_directories(test_av_epoch_align PRIVATE src)
 
+# The video epoch as a log record (video_epoch_log.h): the field names, the unit
+# and the source marker an analyzer outside the recorder reads to put its own
+# events on the recording's timeline -- pure formatting.
+exosnap_add_gtest(
+    NAME test_video_epoch_log
+    TEST_PREFIX engine.
+    SOURCES tests/test_video_epoch_log.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_video_epoch_log PRIVATE src)
+
+# What the A/V duration skew is allowed to mean. It compared the video end
+# against the audio ENCODER's last PTS -- a different timeline -- so an aligned
+# recording reported its epoch offset as drift. The control case (a real 200 ms
+# loss) is what proves the fix is not just subtracting the offset.
+exosnap_add_gtest(
+    NAME test_duration_skew
+    TEST_PREFIX engine.
+    SOURCES tests/test_duration_skew.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_duration_skew PRIVATE src)
+
+# The two chroma decisions in the HDR10 PQ path: the left-siting shift (derived
+# from the source crop, so correct only at 1:1) and the half-resolution viewport
+# (integer-halved, so an odd content height left its last row colourless). Both
+# are pure functions of the geometry, so no device is needed.
+exosnap_add_gtest(
+    NAME test_hdr_chroma_geometry
+    TEST_PREFIX engine.
+    SOURCES tests/test_hdr_chroma_geometry.cpp
+    LIBRARIES exosnap_engine d3d11.lib dxgi.lib
+)
+target_include_directories(test_hdr_chroma_geometry PRIVATE src)
+
 # Capture drain selection: the frame loop must never drain the backend it does not
 # own. Pins that an OD capture mid-reopen drains nothing rather than the null WGC pool.
 exosnap_add_gtest(
@@ -1153,6 +1252,19 @@ exosnap_add_gtest(
 )
 target_include_directories(test_capture_drain_step PRIVATE src)
 target_compile_definitions(test_capture_drain_step PRIVATE NOMINMAX)
+
+# How long a drain may run. Both drains terminated only because a real source
+# runs out; a source that stays ready starved the encode step, the pacing tick
+# and the stop check below them. The clock is a parameter, so an endlessly ready
+# source is a loop here rather than a machine fast enough to produce one.
+exosnap_add_gtest(
+    NAME test_capture_drain_budget
+    TEST_PREFIX engine.
+    SOURCES tests/test_capture_drain_budget.cpp
+    LIBRARIES exosnap_engine d3d11.lib dxgi.lib
+)
+target_include_directories(test_capture_drain_budget PRIVATE src)
+target_compile_definitions(test_capture_drain_budget PRIVATE NOMINMAX)
 
 # HDR tone-map render pass on the GPU: WARP-backed proof that the shader renders
 # the curve correctly into both the 8-bit (BGRA8) and 10-bit (R10G10B10A2)
@@ -1165,6 +1277,18 @@ exosnap_add_gtest(
 )
 target_include_directories(test_gpu_hdr_tonemap PRIVATE src)
 target_compile_definitions(test_gpu_hdr_tonemap PRIVATE NOMINMAX)
+
+# Per-frame luminance analysis on the GPU: WARP-backed proof that the compute
+# reduction, the histogram and the asynchronous readback agree with a CPU pass
+# over the same pixels, including the PQ sub-path and the bounds guard.
+exosnap_add_gtest(
+    NAME test_gpu_frame_luminance
+    TEST_PREFIX engine.
+    SOURCES tests/test_gpu_frame_luminance.cpp
+    LIBRARIES exosnap_engine d3d11.lib dxgi.lib d3dcompiler.lib
+)
+target_include_directories(test_gpu_frame_luminance PRIVATE src)
+target_compile_definitions(test_gpu_frame_luminance PRIVATE NOMINMAX)
 
 # RGB -> packed AYUV (4:4:4, 8-bit) conversion on the GPU: WARP-backed golden
 # proof that the compute shader emits the exact BT.709 limited/full-range AYUV

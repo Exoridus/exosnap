@@ -247,6 +247,16 @@ void RecoveryAdapter::finish(int index) {
     });
 }
 
+void RecoveryAdapter::finishById(const QString& id) {
+    const QVector<RecoveryCandidate>& candidates = model_.candidates();
+    for (int index = 0; index < candidates.size(); ++index) {
+        if (candidates.at(index).entry.id == id) {
+            finish(index);
+            return;
+        }
+    }
+}
+
 void RecoveryAdapter::onFinishComplete(int index, bool success, const QString& message) {
     model_.setBusy(index, false);
     setBusyIndex(-1);

@@ -34,6 +34,14 @@ WgcSourceProducer::WgcSourceProducer(CaptureSourceKey key, winrt::com_ptr<ID3D11
 
 WgcSourceProducer::~WgcSourceProducer() {
     Close();
+    if (frame_event_ != nullptr)
+        CloseHandle(frame_event_);
+}
+
+HANDLE WgcSourceProducer::FrameSignal() noexcept {
+    if (frame_event_ == nullptr)
+        frame_event_ = CreateEventW(nullptr, /*manual reset*/ FALSE, FALSE, nullptr);
+    return frame_event_;
 }
 
 bool WgcSourceProducer::Open(std::string& err) {
@@ -69,6 +77,9 @@ bool WgcSourceProducer::Open(std::string& err) {
         }
 
         frame_pool_ = wgc::Direct3D11CaptureFramePool::Create(winrt_device_, kPoolFormat, kPoolBuffers, pool_size_);
+        if (frame_event_ != nullptr)
+            frame_token_ = frame_pool_.FrameArrived([this](const auto&, const auto&) { SetEvent(frame_event_); });
+
         session_ = frame_pool_.CreateCaptureSession(item_);
         session_.IsBorderRequired(false);
 
@@ -115,6 +126,10 @@ void WgcSourceProducer::Close() {
     if (item_ != nullptr && closed_token_)
         item_.Closed(closed_token_);
     closed_token_ = {};
+
+    if (frame_pool_ != nullptr && frame_token_)
+        frame_pool_.FrameArrived(frame_token_);
+    frame_token_ = {};
 
     if (session_ != nullptr)
         session_.Close();

@@ -87,6 +87,44 @@ public sealed class EngineTests
     }
 
     [Fact]
+    public async Task AnEvidenceGapOnAResultReachesTheVerdictTheEngineRecords()
+    {
+        // The join between two layers that each look correct on their own. A gate can
+        // report that its evidence never arrived and the promotion contract can refuse
+        // such a pass, and the release still qualifies if the engine drops the fact in
+        // between -- which is how the transport's evidence outcome went unread for
+        // three packages after it started being reported.
+        var catalog = new ScenarioCatalog(
+        [
+            new Scenario(
+                Descriptor("A"),
+                new FixedBody(ScenarioResult.Pass("the product did what it was asked")
+                    with { EvidenceGap = "2 evidence file(s) could not be collected" })),
+        ]);
+
+        var verdicts = await RunAsync(catalog, SetOf());
+
+        Assert.Equal(ScenarioOutcome.Pass, verdicts[0].Outcome);
+        Assert.Equal("2 evidence file(s) could not be collected", verdicts[0].EvidenceGap);
+
+        // And through to the end of the path, on the verdict the engine produced
+        // rather than one written by hand here.
+        Assert.Contains(
+            Qualification.Objections(verdicts, ["A"], []),
+            objection => objection.Contains("did not reach the record", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AResultWithNoEvidenceGapRecordsNone()
+    {
+        var catalog = new ScenarioCatalog([new Scenario(Descriptor("A"), new FixedBody(ScenarioResult.Pass("ok")))]);
+        var verdicts = await RunAsync(catalog, SetOf());
+
+        Assert.Empty(verdicts[0].EvidenceGap);
+        Assert.Empty(Qualification.Objections(verdicts, ["A"], []));
+    }
+
+    [Fact]
     public async Task AnExceptionInAScenarioBodyBecomesAnInfrastructureErrorNotAFailure()
     {
         var catalog = new ScenarioCatalog([new Scenario(Descriptor("A"), new ThrowingBody())]);

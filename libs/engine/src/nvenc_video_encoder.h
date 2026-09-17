@@ -90,6 +90,9 @@ class NvencVideoEncoder : public IVideoEncoder {
     bool ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error,
                        uint32_t wait_head_ms = 0) override;
     bool Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) override;
+    uint64_t PendingFrames() const noexcept override {
+        return m_nvenc.PendingFrames();
+    }
     void RequestKeyframe() override {
         m_nvenc.RequestKeyframe();
     }

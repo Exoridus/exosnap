@@ -118,15 +118,30 @@ Invalid combinations are not offered.
   type 137) and Content Light Level Info (SEI type 144) messages, and AV1 HDR
   MDCV / HDR CLL metadata OBUs — emitted on every keyframe, so players that
   ignore container-level HDR metadata (notably some Apple players) still receive
-  it. Content-light (MaxCLL/MaxFALL) metadata is only emitted when present; the
-  current native path fills mastering-display data but leaves MaxCLL/MaxFALL
-  absent (no per-frame content-light analysis). Current boundaries: no HLG, and
+  it. Content-light metadata (MaxCLL/MaxFALL) is measured per frame and written
+  at the container level only — MKV `MaxCLL`/`MaxFALL`, carried into the `clli`
+  box of a remuxed MP4. It is **not** carried in-band: both values are maxima
+  over the finished stream, and a bitstream message is emitted while the
+  recording is still running, so it could only state the maximum seen so far. A
+  player that reads container metadata gets the measured levels; one that reads
+  only in-band metadata sees none, and tone-maps as it would for any HDR10 file
+  without them. A recording split into several files reports the levels measured
+  up to each part's own boundary, so a later part can name a highlight that
+  occurred in an earlier one. Current boundaries: no HLG, and
   the in-app recording preview shows an approximate SDR tone-map of the HDR
   content. The preview is still WYSIWYG during a native-HDR10 recording: the
   engine shares its pre-encode HDR frame and the preview tone-maps it for
   display — what is shown is the recorded frame, viewed through the same
   roll-off an SDR player would approximate. The exception is the rare
   already-PQ 10-bit desktop (below), which has no shareable frame.
+- **Moving the Windows SDR-content-brightness slider during a recording is followed within a frame on Windows 11 build 22621 and later, and leaves up to about two seconds of wrongly exposed material on every older build.** That level decides the brightness the desktop is composed at, so tone-map, overlays and preview all follow it. Where Windows offers a colour-state notification to a process without a CoreWindow, it raises one for each step of a drag and the exposure tracks the slider as it moves. Where it does not, the level is re-read on a two-second cadence, and everything recorded between a change and the next reading is exposed for the level before it. The recording corrects itself from that reading on; nothing needs restarting.
+- **A recorded window that moves between an HDR and an SDR monitor keeps the
+  colour state of the monitor it started on.** The colour pipeline — the frame
+  pool format, the native-versus-tone-map decision, the bit depth and the colour
+  description written into the file — is committed when the recording starts, and
+  a file whose own metadata describes half its frames would be worse than one
+  exposed for the wrong monitor. Following the move would mean rebuilding the
+  session or starting a new file.
 
 ## Audio processing
 

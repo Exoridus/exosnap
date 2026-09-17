@@ -1,9 +1,12 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <capability/audio_track_preview.h>
@@ -143,6 +146,31 @@ struct UiRecordingResult {
 // RecordViewModel
 // ---------------------------------------------------------------------------
 
+// Whether a capture target is the one an automated caller asked for.
+//
+// The filter applies to both kinds. A monitor's description is its device name
+// (\\.\DISPLAY2), so it is filterable in exactly the same way a window title is
+// -- and while it was ignored there, a caller asking for one display recorded
+// whichever one happened to enumerate first, with nothing in the result to say
+// which. An empty filter still matches everything, so a caller that does not care
+// is unaffected.
+[[nodiscard]] inline bool CaptureTargetMatchesFilter(const exosnap::engine::CaptureTarget& target,
+                                                     exosnap::engine::CaptureTarget::Kind kind,
+                                                     std::string_view filter) {
+    if (target.kind != kind) {
+        return false;
+    }
+    if (filter.empty()) {
+        return true;
+    }
+    const auto lower = [](std::string text) {
+        std::transform(text.begin(), text.end(), text.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return text;
+    };
+    return lower(target.description).find(lower(std::string{filter})) != std::string::npos;
+}
+
 class RecordViewModel {
   public:
     UiRecordingState state = UiRecordingState::LoadingCapabilities;
@@ -255,6 +283,9 @@ class RecordViewModel {
     bool capture_target_user_chosen = false; // user manually re-chose since a miss (sticky)
 
     // Computed predicates
+    // True when a capture target is selected, or -- in region mode -- when any
+    // monitor is available for the coordinator to resolve the region against.
+    bool HasStartableTarget() const noexcept;
     bool CanStart() const noexcept;
     bool CanStop() const noexcept;
     // True only while the device-setup Preparing phase is running, so the UI can

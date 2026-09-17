@@ -11,6 +11,26 @@ namespace exosnap::visual {
 namespace {
 
 const QVector<VisualScenario> kScenarios = {
+    {QStringLiteral("record-no-source"),
+     QStringLiteral("Record / No source"),
+     VisualPage::Record,
+     VisualRecordState::NoSource,
+     VisualSettingsTarget::None,
+     VisualSourcePickerTab::None,
+     VisualWebcamState::None,
+     // Nothing dynamic to mask: with no source there is no live preview, which
+     // is what makes this the one Record capture that is stable pixel for pixel.
+     {}},
+    {QStringLiteral("record-brand"),
+     QStringLiteral("Record / Brand stage"),
+     VisualPage::Record,
+     VisualRecordState::Brand,
+     VisualSettingsTarget::None,
+     VisualSourcePickerTab::None,
+     VisualWebcamState::None,
+     // Stable pixel for pixel for the same reason record-no-source is: with no
+     // source there is no live preview under the brand.
+     {}},
     {QStringLiteral("record-ready"),
      QStringLiteral("Record / Ready"),
      VisualPage::Record,
@@ -2278,6 +2298,10 @@ QString ToString(VisualRecordState state) {
     switch (state) {
     case VisualRecordState::None:
         return QStringLiteral("none");
+    case VisualRecordState::NoSource:
+        return QStringLiteral("no-source");
+    case VisualRecordState::Brand:
+        return QStringLiteral("brand");
     case VisualRecordState::Ready:
         return QStringLiteral("ready");
     case VisualRecordState::Countdown:

@@ -27,6 +27,11 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 
+#include "services/AtomicFileOps.h"
+
+#include <filesystem>
+#include <string>
+
 extern "C" {
 #include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
@@ -339,3 +344,70 @@ TEST(RecoveryDrill, LiveRemuxMp4_CancelLeavesTargetUntouchedAndRemovesTemp) {
 
 } // namespace
 } // namespace exosnap
+
+// ---------------------------------------------------------------------------
+// A staging file that cannot be removed must not disappear from the record
+// ---------------------------------------------------------------------------
+//
+// Every remux path writes to a sibling staging file and removes it when the
+// attempt fails. Twelve call sites wrote `std::filesystem::remove(temp, ec)` and
+// then ignored the ec. A staging file that cannot be deleted -- a scanner or an
+// indexer still holding it -- then stays next to the user's recordings forever
+// with nothing in the log and nothing on the card. The file is harmless; not
+// being able to say it is there is not.
+//
+// The lock is a real open handle with no sharing, which is what a scanner does,
+// so the failure is the operating system's and not a stub's.
+
+TEST(StagingCleanup, ARemovableStagingFileReportsNothing) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const std::filesystem::path staging = std::filesystem::path(dir.path().toStdWString()) / L"out.mp4.tmp";
+    {
+        QFile f(QString::fromStdWString(staging.wstring()));
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("partial", 7);
+    }
+
+    EXPECT_TRUE(exosnap::DescribeFailedStagingRemoval(staging).empty());
+    EXPECT_FALSE(std::filesystem::exists(staging));
+}
+
+TEST(StagingCleanup, AStagingFileThatWasNeverCreatedReportsNothing) {
+    // The normal case on an error path that failed before the output was opened.
+    // A caller cannot always know whether the file exists, and "it was not there"
+    // is not a problem to report.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const std::filesystem::path absent = std::filesystem::path(dir.path().toStdWString()) / L"never-written.tmp";
+    EXPECT_TRUE(exosnap::DescribeFailedStagingRemoval(absent).empty());
+}
+
+TEST(StagingCleanup, AStagingFileHeldOpenIsReportedAndNamed) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const std::filesystem::path staging = std::filesystem::path(dir.path().toStdWString()) / L"locked.mp4.tmp";
+    {
+        QFile f(QString::fromStdWString(staging.wstring()));
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("partial", 7);
+    }
+
+    // No sharing at all: a delete attempt fails the way it does against a
+    // scanner that has the file open.
+    HANDLE lock =
+        CreateFileW(staging.wstring().c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(lock, INVALID_HANDLE_VALUE) << "could not take the lock this test needs";
+
+    const std::string reported = exosnap::DescribeFailedStagingRemoval(staging);
+    CloseHandle(lock);
+
+    ASSERT_FALSE(reported.empty()) << "a staging file left on disk was reported as cleaned up";
+    EXPECT_NE(reported.find("locked.mp4.tmp"), std::string::npos)
+        << "the report has to name the file that is still there: " << reported;
+    EXPECT_NE(reported.find("still on disk"), std::string::npos) << reported;
+
+    // And the file really is still there -- the report is not describing a
+    // removal that happened anyway.
+    EXPECT_TRUE(std::filesystem::exists(staging));
+}

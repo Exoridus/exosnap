@@ -51,6 +51,11 @@
 .PARAMETER SummaryPath
     Markdown summary file to append the verdict to (GITHUB_STEP_SUMMARY).
 
+.PARAMETER RepositoryPath
+    Working tree to answer the source-line question from. It needs the history of
+    the approved refs: a shallow checkout cannot say where a commit came from, and
+    that is refused rather than assumed.
+
 .EXAMPLE
     pwsh scripts/check-release-qualification.ps1 -RecordPath rc/release-verification.json `
         -PublicKeyHex $env:EXOSNAP_UPDATE_PUBLIC_KEY_HEX `
@@ -64,13 +69,18 @@ param(
     [string] $ExpectedCommit,
     [string] $ExpectedRcTag,
     [string] $Sha256Directory,
-    [string] $SummaryPath
+    [string] $SummaryPath,
+    [string] $RepositoryPath = '.'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib/ReleaseQualification.ps1')
+# The catalog and the policy come from the source line being published, never
+# from the record: the record's account of which gates were required is the one
+# claim a signature over the record cannot corroborate.
+. (Join-Path $PSScriptRoot 'lib/ReleaseScenarios.ps1')
 
 function Write-Verdict {
     <#
@@ -170,8 +180,26 @@ catch {
     Write-Verdict -Qualified $false -Reasons @($_.Exception.Message)
 }
 
+try {
+    $policy = Get-ReleaseQualificationPolicy
+}
+catch {
+    Write-Verdict -Qualified $false -Reasons @($_.Exception.Message)
+}
+
+# Where the commit came from, not only what was measured about it. A correctly
+# signed record about a genuinely verified build of a branch nobody reviewed is a
+# valid record and not a releasable one.
+# Collected rather than returned early: a publisher who is told only the first
+# thing wrong fixes it and runs into the second, and a release is the worst place
+# to learn a refusal one reason at a time.
+$sourceLine = Test-ReleaseSourceLine -Commit $ExpectedCommit -Policy $policy -RepositoryPath $RepositoryPath
+
 $verdict = Test-ReleaseQualification -Record $record -ExpectedCommit $ExpectedCommit `
-    -ExpectedRcTag $ExpectedRcTag -ExpectedPackageSha256 $published
+    -ExpectedRcTag $ExpectedRcTag -ExpectedPackageSha256 $published `
+    -SourceCatalog (Get-ReleaseScenarioCatalog) `
+    -SourceCatalogVersion (Get-ReleaseScenarioCatalogVersion) `
+    -Policy $policy
 
 $detail = "RC ``$(Get-ReleaseQualificationField -Object $record -Name 'rcTag')``, commit " +
 "``$(Get-ReleaseQualificationField -Object $record -Name 'sourceCommit')``, campaign " +
@@ -179,4 +207,5 @@ $detail = "RC ``$(Get-ReleaseQualificationField -Object $record -Name 'rcTag')``
 "``$(Get-ReleaseQualificationField -Object (Get-ReleaseQualificationField -Object $record -Name 'harness') -Name 'version')``, " +
 "catalog ``$(Get-ReleaseQualificationField -Object (Get-ReleaseQualificationField -Object $record -Name 'catalog') -Name 'version')``."
 
-Write-Verdict -Qualified $verdict.Qualified -Reasons $verdict.Reasons -Detail $detail
+$reasons = @($sourceLine.Reasons) + @($verdict.Reasons)
+Write-Verdict -Qualified ($verdict.Qualified -and $sourceLine.Allowed) -Reasons $reasons -Detail $detail

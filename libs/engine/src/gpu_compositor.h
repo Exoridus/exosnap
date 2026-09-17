@@ -36,6 +36,16 @@ class GpuCompositor {
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
               DXGI_FORMAT render_format = DXGI_FORMAT_B8G8R8A8_UNORM,
               float overlay_reference_white_nits = kDefaultSdrWhiteLevelNits);
+    // Replace the overlay reference white on an initialised compositor, with the
+    // same bounds Init applies (EffectiveOverlayReferenceWhiteNits) and the same
+    // FP16-only meaning.
+    //
+    // The captured display's SDR content brightness can change while a recording
+    // runs, and from that moment the desktop underneath the overlays is composed
+    // at the new level. An overlay left at the old one is the only thing in the
+    // frame that did not move with it.
+    void SetOverlayReferenceWhiteNits(float overlay_reference_white_nits) noexcept;
+
     bool BeginFrame(ID3D11Texture2D* background, std::string& err);
 
     // opacity: uniform overlay opacity [0,1] multiplied onto the sprite's alpha
@@ -43,6 +53,22 @@ class GpuCompositor {
     bool DrawWebcam(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, bool mirror,
                     const ChromaKeyParams& chroma, std::string& err, float opacity = 1.0f);
     bool DrawCursor(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, std::string& err);
+
+    // The inverting plane of a mask cursor, drawn after DrawCursor and over the
+    // same rectangle. `bgra` is opaque white where the pixel inverts and zero
+    // elsewhere, which the blend turns into "1 - destination" there and leaves
+    // the destination untouched everywhere else -- no pixel is clipped, so a
+    // cursor mixing inverting and ordinary opaque pixels composites correctly.
+    //
+    // On the native HDR10 path this draws the pixels opaque instead; see
+    // MaskCursorComposition, whose value for this compositor MaskComposition()
+    // reports.
+    bool DrawCursorInvert(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, std::string& err);
+
+    // Which inversion semantics this compositor's render format allows.
+    [[nodiscard]] MaskCursorComposition MaskComposition() const noexcept {
+        return SelectMaskCursorComposition(hdr_linear_);
+    }
 
     [[nodiscard]] ID3D11Texture2D* Result() const noexcept {
         return composite_tex_.get();
@@ -59,7 +85,8 @@ class GpuCompositor {
     bool UploadTexture(TextureResource& resource, const uint8_t* bgra, int width, int height, UINT row_pitch,
                        std::string& err);
     bool DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
-                     const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err);
+                     const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err,
+                     ID3D11BlendState* blend = nullptr);
 
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;
@@ -75,10 +102,12 @@ class GpuCompositor {
     winrt::com_ptr<ID3D11PixelShader> pixel_shader_;
     winrt::com_ptr<ID3D11SamplerState> sampler_;
     winrt::com_ptr<ID3D11BlendState> blend_state_;
+    winrt::com_ptr<ID3D11BlendState> invert_blend_state_;
     winrt::com_ptr<ID3D11Buffer> constants_;
 
     TextureResource webcam_tex_;
     TextureResource cursor_tex_;
+    TextureResource cursor_invert_tex_;
 };
 
 } // namespace exosnap::engine

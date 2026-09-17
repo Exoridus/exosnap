@@ -42,6 +42,15 @@ QJsonObject CaptureJson(const exosnap::engine::CaptureDiagnostics& c) {
     json.insert(QStringLiteral("processingFailures"), Count(c.frames_dropped_processing_failure));
 
     json.insert(QStringLiteral("duplicates"), Count(c.frames_duplicated));
+
+    // Both derived from frames_captured, and the only fields here that answer
+    // "is the capture producing anything right now". `actualFps` cannot: it is
+    // derived from EMITTED frames, so the CFR pacer holds it at the target rate
+    // through a total stall. A harness without these two has to difference
+    // `framesCaptured` across samples to learn what the engine already knows.
+    json.insert(QStringLiteral("secondsWithoutCapture"), c.seconds_without_capture);
+    json.insert(QStringLiteral("captureStarved"), c.capture_starved);
+
     json.insert(QStringLiteral("sourceLoss"), c.source_loss);
     json.insert(QStringLiteral("sourceType"), CaptureSourceTypeName(c.source_type));
 
@@ -131,6 +140,9 @@ QJsonObject EncoderJson(const exosnap::engine::EncoderDiagnostics& e) {
     json.insert(QStringLiteral("framesEncoded"), Count(e.frames_encoded));
     json.insert(QStringLiteral("backlog"), Count(e.backlog));
     json.insert(QStringLiteral("forcedKeyframes"), Count(e.forced_keyframes));
+    json.insert(QStringLiteral("flushIncomplete"), e.flush_incomplete);
+    json.insert(QStringLiteral("undrainedFrames"), Count(e.undrained_frames));
+    json.insert(QStringLiteral("audioPacketsTrimmedAtSplit"), Count(e.audio_packets_trimmed_at_split));
     json.insert(QStringLiteral("timestampMismatches"), Count(e.output_ts_mismatches));
     json.insert(QStringLiteral("keyframeMismatches"), Count(e.keyframe_prediction_mismatches));
     json.insert(QStringLiteral("codec"), ui::videoCodecLabel(e.codec));

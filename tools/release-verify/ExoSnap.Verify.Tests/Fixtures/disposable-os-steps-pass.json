@@ -1,8 +1,8 @@
 {
   "steps": [
-    { "name": "install-base", "ok": true, "detail": "installed 0.9.0 from the base MSI" },
-    { "name": "decline-offer", "ok": true, "detail": "update.check reported updateAvailable=true" },
-    { "name": "decline-apply", "ok": true, "detail": "update.apply returned exit code 1" },
-    { "name": "decline-state", "ok": true, "detail": "failureCase=uacDeclined, installState=intact" }
+    { "name": "install-base", "ok": true, "detail": "installed 0.9.0 from the base MSI", "kind": "bootstrap" },
+    { "name": "decline-offer", "ok": true, "detail": "update.check reported updateAvailable=true", "kind": "product" },
+    { "name": "decline-apply", "ok": true, "detail": "update.apply returned exit code 1", "kind": "product" },
+    { "name": "decline-state", "ok": true, "detail": "failureCase=uacDeclined, installState=intact", "kind": "product" }
   ]
 }

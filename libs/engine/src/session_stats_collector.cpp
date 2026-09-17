@@ -282,11 +282,13 @@ void SessionStatsCollector::Run() {
             auto now = std::chrono::steady_clock::now();
             snapshot.elapsed_seconds = CapturedSecondsAt(now);
 
-            if (snapshot.video_duration_ns > 0 && snapshot.audio_duration_ns > 0) {
-                double vd = static_cast<double>(snapshot.video_duration_ns) / 1e6; // ms
-                double ad = static_cast<double>(snapshot.audio_duration_ns) / 1e6; // ms
-                snapshot.duration_skew_ms = (vd > ad) ? (vd - ad) : (ad - vd);
-            }
+            // Against the aligned audio end, not the encoder's raw one: see
+            // ComputeDurationSkew. Left at 0 while there is nothing to compare;
+            // the availability is carried by the snapshot's own metric plumbing.
+            const DurationSkew skew =
+                ComputeDurationSkew(snapshot.video_duration_ns, snapshot.aligned_audio_duration_ns);
+            if (skew.available)
+                snapshot.duration_skew_ms = skew.ms;
 
             if (m_state.stats_callback) {
                 m_state.stats_callback(snapshot);
@@ -313,12 +315,9 @@ void SessionStatsCollector::EmitSessionPerfSummary() {
         std::lock_guard lk(m_state.stats_mutex);
         stats_copy = m_state.stats;
     }
-    double duration_skew_ms = 0.0;
-    if (stats_copy.video_duration_ns > 0 && stats_copy.audio_duration_ns > 0) {
-        const double vd = static_cast<double>(stats_copy.video_duration_ns) / 1e6;
-        const double ad = static_cast<double>(stats_copy.audio_duration_ns) / 1e6;
-        duration_skew_ms = (vd > ad) ? (vd - ad) : (ad - vd);
-    }
+    const DurationSkew skew_result =
+        ComputeDurationSkew(stats_copy.video_duration_ns, stats_copy.aligned_audio_duration_ns);
+    const double duration_skew_ms = skew_result.available ? skew_result.ms : 0.0;
 
     std::string res =
         std::to_string(stats_copy.output_size.width) + "x" + std::to_string(stats_copy.output_size.height) + "@" +

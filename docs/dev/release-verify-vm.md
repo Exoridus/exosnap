@@ -34,8 +34,17 @@ it executes.
 | per-run differencing disk | a few hundred MB to a few GB, deleted after the run | `runs/<runId>/` under the image root |
 | Windows 11 installation ISO | about 6 GB | wherever it was downloaded; not tracked, not copied |
 
-Memory 8 GB static, 4 vCPU, and a tenth of the GPU. None of the image, the ISO or the
-run disks is tracked; the recipe is, and the image is reproducible from it.
+Memory 8 GB static, 4 vCPU, and a GPU partition. The partition triples are in
+Hyper-V's own units, which are documented as a range and not as a proportion of the
+adapter, and the platform may normalise a requested value -- so a run reads the
+applied configuration back from `Get-VMGpuPartitionAdapter` and stops if it is not
+what was asked for. The display driver staged into the guest is the DriverStore
+package whose INF declares the version the host adapter is actually running, not the
+newest directory in the store: an update leaves the previous package behind and a
+rollback leaves the newer one.
+
+None of the image, the ISO or the run disks is tracked; the recipe is, and the image
+is reproducible from it.
 
 ## Building it, once
 
@@ -101,6 +110,7 @@ VMs boot from the installed disk and need no DVD confirmation.
 | gpu | MMIO window, `Add-VMGpuPartitionAdapter`, the partition triples | Hyper-V only attaches a partition to a stopped machine |
 | driver | the host adapter's driver files, one `Copy-VMFile` per file | needs the machine running again |
 | provision | `provision.ps1` over PowerShell Direct | needs a logged-on session |
+| seal | removes what bringing the image up wrote, then refuses to freeze an image that still holds state of its own | runs last, after the probes of step 7 have left their output |
 
 **5. Review the manifest.** The tracked manifest already contains the exact versions
 and hashes used by the recipe. See the next section before intentionally updating a
@@ -126,9 +136,7 @@ mode, and frames arriving rather than only timeouts. Compare both against the sa
 probes run on the host. **Either one failing moves the gates that need it back to the
 host** -- that is a supported outcome, not a broken image.
 
-**8. Freeze the image.** Stop the machine, and treat `golden.vhdx` as read-only from
-then on. Every run takes a differencing disk from it; a run that wrote into the parent
-would end the property the whole design exists for.
+**8. Freeze the image.** The `seal` phase clears what the probes wrote, refuses the freeze if anything else of the product's is still there, and stops the machine. Treat `golden.vhdx` as read-only from then on. Every run takes a differencing disk from it; a run that wrote into the parent would end the property the whole design exists for.
 
 ## Pinned provisioning
 
@@ -167,6 +175,56 @@ image then requires an independently retained copy of the pinned archive.
 
 The pins are the recipe. A guest whose tool set drifts turns every disagreement
 between two campaigns into an investigation of the image rather than of the product.
+
+## Which image a campaign ran on
+
+Two facts decide what an image is. `displayProfile` in the provisioning manifest says which virtual display driver the image is built with; `qualifiedDisplayProfile` says which one the capture work was qualified on. They are the MTT driver today, and they stay two fields even while they agree, because a scenario qualified on one driver must not quietly run on the other.
+
+The qualified profile named SudoVDA until 2026-09-13, on the strength of the 4K120 Graphics Capture runs. The matched control that was run for exactly that question does not support singling it out: 4K120 captured 112.332 FPS with MTT against 112.716 with SudoVDA at the same GPU utilisation, and unattended Desktop Duplication was demonstrated on both once the capture path settles. What SudoVDA offers is a dynamic monitor lifecycle for the test machine -- a harness capability, not a capture-quality claim -- and the image that ran it was ReviOS-derived, which would put a non-stock Windows underneath every release gate. The recording application has never been qualified on SudoVDA. Naming it therefore claimed something nobody measured while making every scenario that requires the qualified profile unrunnable. Moving to it later is an image rebuild on stock Windows with its package pinned the way every package here is, plus qualifying the application on it.
+
+A run measures this rather than trusting it. The guest is asked which virtual display driver it actually runs, by the root-enumerated device that driver binds to, and the answer is compared with the profile the scenario was qualified on. The comparison has three outcomes, not two: **qualified**, **not-qualified**, and **unverifiable** for a profile whose device identity the recipe has not recorded. Unverifiable means the scenario is unrunnable on that image, not failing on it. Nothing substitutes a device identity that was never measured, because a claim of qualification is exactly what an unpinned profile cannot support.
+
+## Sealing an image
+
+The last phase of a build is `seal`, and it exists because bringing an image up leaves state in it. The probes of step 7 and the experiments that drive them write under the product's own name -- `C:\ProgramData\ExoSnap\DxgiDuplicationExperiment` and `C:\ExoSnap-DxgiTest` -- and an image frozen with that in it is not the clean machine the first-start gate is premised on. That is not hypothetical: it is how the image frozen on 2026-09-11 reached a campaign, which reported an environment precondition instead of a product verdict.
+
+Two steps, in this order, and the order is the point:
+
+1. **Clear**, by exact path. Only what the recipe knows it created, listed in `BringUpArtifact`. A parent directory goes when clearing emptied it; a parent that still holds something is left alone. Nothing searches for residue -- deleting what a sweep happened to match would turn an unexplained leftover into a silently clean image.
+2. **Assert**, with the first-start gate's own residue definition, read out of the worker rather than restated. Anything left stops the freeze and is named. Recognise it and add it to `BringUpArtifact`; do not recognise it and find out what put it there.
+
+An unknown leftover is never cleaned automatically. It is the one thing worth finding out about, and each one otherwise costs a full machine build to discover from the other end.
+
+Beside the golden image sits `image-fingerprint.json`: the display profile, the
+monitor mode the gates assert against, a digest over every package pin, the Windows
+build, and the host GPU driver version the guest driver was staged from. The host
+driver is in there because the guest driver is copied from the host -- changing it on
+the host changes the guest without anything in the guest being rebuilt, and the image
+has to be requalified.
+
+A run can pin the image it needs. The check is the first step in the plan, before a
+differencing disk is created, and it names every drifted field at once. A fact the
+image never recorded counts as drift: an older image simply does not carry a field a
+later build of the recipe compares, and the absence of a record is not evidence that
+the two agree.
+
+## What binds a run to the GPU it ran on
+
+A partitioned guest shares no PCI identity with its host, and expecting it to is the mistake this recipe made first. What the guest binds to is the paravirtual device: it reports Microsoft's vendor id and a Microsoft inbox driver version, because the vendor's kernel-mode driver never leaves the host. A rule that required the host's vendor and device ids to appear in the guest refuses every correct campaign and accepts none.
+
+Three independent assertions replace that one, and none of them compares PCI ids across the two operating systems:
+
+| Assertion | Where both sides are measured | What it establishes |
+|---|---|---|
+| partition provenance | the host alone | the partition was created from the physical adapter the host measured. Hyper-V reports the partition's `InstancePath` as that adapter's PnP path with the separators rewritten, so this is the one place a PCI comparison belongs |
+| the adapter | host and guest | the guest is on a paravirtual device that presents the host adapter. The GPU-P device carries the host GPU's friendly name; the Basic Render Driver, which is the same vendor and the fallback worth catching, does not |
+| the driver | host and guest | the DriverStore package staged into the guest is the package the host selected, at the version the host adapter is running. The package is copied in verbatim, so both operating systems can be asked the same question, and a mismatch here is the classic GPU-P failure |
+
+A run asks for all of this with `-ProveGpuBinding`. The host adapter is measured before anything is partitioned, the guest is held to it once the interactive agent has written its receipt, and the identity the run was measured under lands beside its evidence as `campaign-binding.json` -- host adapter and package, the guest's receipt, and the display-profile verdict. Nothing is proven for a run that does not declare it: an install-and-uninstall scenario needs none of this and is not refused for it.
+
+Capability -- that Direct3D and NVENC are actually reachable through the partition -- is not among these. It needs a probe running inside the guest rather than a fact Windows reports about a device, and this recipe does not claim it.
+
+Display readiness is measured per display path, not per adapter. `Win32_VideoController` answers with a mode per adapter, and on a guest carrying an indirect display driver beside the synthetic one both adapters can report a mode that no display path is actually in -- so a gate asking for 2560x1440 at 144 Hz is told it has one while the virtual monitor runs 60 Hz and the primary display runs 1024x768. `EnumDisplayDevices` and `EnumDisplaySettings` read the display device database rather than the calling session's desktop, so they answer from session 0, and one attached path has to be in the requested mode with its own resolution and its own refresh rate.
 
 ## Running one campaign
 

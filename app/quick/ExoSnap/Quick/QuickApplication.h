@@ -65,8 +65,10 @@
 
 class QQuickWindow;
 
+#include <QJsonObject>
 #include <functional>
 #include <memory>
+
 #include <optional>
 #include <string>
 
@@ -125,6 +127,12 @@ class QuickApplication {
     // properties because no surface renders them individually.
     [[nodiscard]] const RecordViewModel& recordViewModel() const noexcept;
     [[nodiscard]] bool prepareRecordingBenchmark(uint32_t frame_rate, QString& error);
+
+    // True when the selected monitor target's display is no longer attached.
+    // Stage 2 of the capture-stall decision only: it reads a Win32 fact, and the
+    // contract is that such a fact is read once per stall episode, never on a
+    // healthy recording.
+    [[nodiscard]] bool capturedDisplayMissing() const;
 
     // Automation only (--auto-record). Picks the first enumerated target of `kind`
     // whose description contains `title_filter` (ignored for monitors) and selects
@@ -559,6 +567,20 @@ class QuickApplication {
     void cancelCountdown();
     void updateCountdown();
     void toggleSource(const QString& key);
+
+  public:
+    // Live overlay fields, applied through the same path the Record page's drag
+    // takes, and reporting what the session actually installed. For the Live
+    // Verify channel: measuring whether an overlay change reaches the encoded
+    // frame needs a change that is acknowledged with the state it produced, and
+    // the drag acknowledges nothing.
+    //
+    // `fields` names only what should change. Returns nothing when no recording
+    // was running to apply it to.
+    std::optional<exosnap::engine::AppliedWebcamOverlay> applyLiveWebcamOverlay(const QJsonObject& fields,
+                                                                                QString* error);
+
+  private:
     void updateWebcamOverlay(const QRectF& normalized_rect);
     void updateMeters();
     void scheduleMeterUpdate();

@@ -270,6 +270,10 @@ RecordingCoordinator::RecordingCoordinator()
 }
 
 RecordingCoordinator::~RecordingCoordinator() {
+    // Before anything else: a disk-space auto-stop already queued on the UI thread
+    // must find this expired rather than run against a half-destroyed coordinator.
+    disk_stop_life_token_.reset();
+
     StopMicMeter();
     StopSysMeter();
     StopAppMeter();
@@ -583,7 +587,12 @@ void RecordingCoordinator::OnDiskSpaceLow(exosnap::engine::RecordRequestId reque
     if (QCoreApplication::instance() != nullptr) {
         QMetaObject::invokeMethod(
             QCoreApplication::instance(),
-            [this, request, free_bytes, threshold_bytes]() {
+            [this, alive = std::weak_ptr<bool>(disk_stop_life_token_), request, free_bytes, threshold_bytes]() {
+                // The coordinator itself may be gone: the context object is the
+                // application, which outlives it, and joining the poller does not
+                // retract a call already sitting in this queue.
+                if (alive.expired())
+                    return;
                 // Re-check on the main thread: the recording may have stopped, or
                 // been replaced by the next one, while this was queued.
                 if (record_request_.load() != request || !is_recording_.load())
@@ -714,7 +723,20 @@ void RecordingCoordinator::SetAudioSourceMuted(exosnap::engine::AudioSourceKind 
     session_.SetAudioSourceMuted(kind, muted, record_request_.load());
 }
 
-void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
+void RecordingCoordinator::UseStaticVerificationWebcam(int width, int height) {
+    static_webcam_source_ = std::make_unique<exosnap::StaticWebcamFrameSource>(width, height);
+    // Applied at once, not at the next state change: whatever asked for the
+    // device before this call must not keep it open alongside the source that
+    // replaced it.
+    SyncWebcamService(/*force_restart=*/false);
+}
+
+QString RecordingCoordinator::VerificationWebcamSourceName() const {
+    return static_webcam_source_ ? QStringLiteral("static-verification") : QString();
+}
+
+std::optional<exosnap::engine::AppliedWebcamOverlay>
+RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
     const WebcamSettings sanitized = SanitizeWebcamSettings(settings);
     const bool device_changed = sanitized.device_id != webcam_settings_.device_id;
     const bool res_changed = sanitized.width != webcam_settings_.width || sanitized.height != webcam_settings_.height;
@@ -722,8 +744,9 @@ void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
     webcam_settings_ = sanitized;
 
     const bool recording = is_recording_.load();
+    std::optional<exosnap::engine::AppliedWebcamOverlay> applied;
     if (recording) {
-        session_.UpdateWebcamOverlay(ToLiveWebcamOverlay(webcam_settings_), record_request_.load());
+        applied = session_.UpdateWebcamOverlay(ToLiveWebcamOverlay(webcam_settings_), record_request_.load());
     }
 
     // A device/resolution/fps change requires re-opening the capture, so do not
@@ -732,6 +755,7 @@ void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
     // fields are pushed above and enable/disable is handled by SyncWebcamService.
     const bool session_owns_device = recording || prepare_in_flight_.load();
     SyncWebcamService((device_changed || res_changed || fps_changed) && !session_owns_device);
+    return applied;
 }
 
 void RecordingCoordinator::SetWebcamPreviewActive(bool active) {
@@ -755,10 +779,11 @@ void RecordingCoordinator::SyncWebcamService(bool force_restart) {
         return;
     // Recording (or an in-flight prepare) always owns the device; while idle the
     // capture runs only when the Record preview asked for it (live Ready PiP) and
-    // webcam is enabled.
-    const bool want_running = webcam_settings_.enabled && !webcam_settings_.device_id.empty() &&
-                              (is_recording_.load() || prepare_in_flight_.load() || webcam_preview_active_ ||
-                               webcam_settings_preview_active_);
+    // webcam is enabled. The verification source, when present, replaces the
+    // device outright -- see ShouldRunWebcamDevice.
+    const bool want_running = ShouldRunWebcamDevice(
+        static_webcam_source_ != nullptr, webcam_settings_.enabled, !webcam_settings_.device_id.empty(),
+        is_recording_.load(), prepare_in_flight_.load(), webcam_preview_active_, webcam_settings_preview_active_);
     if (!want_running) {
         webcam_service_.Stop();
         return;
@@ -1167,8 +1192,15 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     config.output_path_pre_reserved = true;
     config.split = ctx.split_settings;
 
-    config.webcam.enabled = ctx.webcam_settings.enabled && !ctx.webcam_settings.device_id.empty();
-    config.webcam.frame_provider = &webcam_service_;
+    // The unchanging source, when this process was started for a verification run,
+    // needs no device id: it is not a device. Every other field below stays the
+    // product's own, so the overlay and compositing paths under measurement are
+    // the shipping ones.
+    const bool static_webcam = static_webcam_source_ != nullptr;
+    config.webcam.enabled = static_webcam || (ctx.webcam_settings.enabled && !ctx.webcam_settings.device_id.empty());
+    config.webcam.frame_provider = static_webcam
+                                       ? static_cast<exosnap::engine::WebcamFrameProvider*>(static_webcam_source_.get())
+                                       : static_cast<exosnap::engine::WebcamFrameProvider*>(&webcam_service_);
     config.webcam.overlay_x_norm = ctx.webcam_settings.overlay.x_norm;
     config.webcam.overlay_y_norm = ctx.webcam_settings.overlay.y_norm;
     config.webcam.overlay_w_norm = ctx.webcam_settings.overlay.w_norm;
@@ -1314,7 +1346,15 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     // SyncWebcamService early-returns on the UI thread and its want_running includes
     // prepare_in_flight_, so a queued Preparing state-callback cannot Stop() the
     // device we are opening here.
-    if (config.webcam.enabled) {
+    // The same rule the UI thread applies, so the worker cannot open a device the
+    // UI side has just decided to keep closed. It is the verification source that
+    // makes the two disagree: `config.webcam.enabled` is true for it as well --
+    // the overlay is composited either way -- but the pixels come from the
+    // synthetic source, and a camera opened here would deliver samples nothing
+    // reads.
+    if (ShouldRunWebcamDevice(static_webcam_source_ != nullptr, ctx.webcam_settings.enabled,
+                              !ctx.webcam_settings.device_id.empty(), /*recording=*/false, /*preparing=*/true,
+                              /*record_preview_active=*/false, /*settings_preview_active=*/false)) {
         // Keep the already-running shared capture (the live PiP preview) instead of
         // stopping and restarting it, which blanks the webcam for a moment right as
         // recording begins. Settings changes before this point already restarted the
@@ -2283,17 +2323,19 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
                 // The remux produced a complete file but publishing it atomically
                 // failed. The transient MKV is still the trustworthy recording, so
                 // demote this to a remux failure: drop the temp, keep the MKV.
-                std::error_code cleanup_ec;
-                std::filesystem::remove(remux_temp, cleanup_ec);
+                if (const std::string left = DescribeFailedStagingRemoval(remux_temp); !left.empty())
+                    diagnostics::AppLog::warning(QStringLiteral("remux"), QString::fromStdString(left));
                 remux_result = exosnap::engine::RemuxResult::Fail(
                     0, "Atomic move to final output failed (Win32 error " + std::to_string(move_err) + ")");
             }
         } else {
             // Failed or cancelled: the target path was never written. Drop the temp so
             // no half-written ".tmp" lingers. (Cancellation already removes it inside
-            // RemuxToProgressiveMp4 — this is a harmless no-op there.)
-            std::error_code cleanup_ec;
-            std::filesystem::remove(remux_temp, cleanup_ec);
+            // RemuxToProgressiveMp4 — this is a harmless no-op there.) A removal that
+            // fails is logged rather than swallowed: the file then stays next to the
+            // user's recordings and nothing else would say so.
+            if (const std::string left = DescribeFailedStagingRemoval(remux_temp); !left.empty())
+                diagnostics::AppLog::warning(QStringLiteral("remux"), QString::fromStdString(left));
         }
 
         // Back on the recording thread; marshal everything to the Qt main thread.
@@ -2433,15 +2475,15 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
 
     if (result.success) {
         if (const unsigned long move_err = AtomicReplaceInPlace(segment_temp, output_mp4); move_err != 0) {
-            std::error_code cleanup_ec;
-            std::filesystem::remove(segment_temp, cleanup_ec);
+            if (const std::string left = DescribeFailedStagingRemoval(segment_temp); !left.empty())
+                diagnostics::AppLog::warning(QStringLiteral("remux"), QString::fromStdString(left));
             result = exosnap::engine::RemuxResult::Fail(0, "Atomic move to segment output failed (Win32 error " +
                                                                std::to_string(move_err) + ")");
         }
     } else {
         // Failed or cancelled: the segment path was never written. Drop the temp.
-        std::error_code cleanup_ec;
-        std::filesystem::remove(segment_temp, cleanup_ec);
+        if (const std::string left = DescribeFailedStagingRemoval(segment_temp); !left.empty())
+            diagnostics::AppLog::warning(QStringLiteral("remux"), QString::fromStdString(left));
     }
 
     if (result.success) {

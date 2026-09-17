@@ -41,4 +41,21 @@ unsigned long AtomicReplaceInPlace(const std::filesystem::path& from, const std:
     return ::GetLastError();
 }
 
+std::string DescribeFailedStagingRemoval(const std::filesystem::path& staging) {
+    std::error_code ec;
+    // remove() returning false with no error means the file was not there, which
+    // is the normal case on an error path that failed before the output was
+    // opened. Only "it is there and I could not delete it" is worth reporting.
+    std::filesystem::remove(staging, ec);
+    if (!ec)
+        return {};
+
+    std::error_code exists_ec;
+    if (!std::filesystem::exists(staging, exists_ec) && !exists_ec)
+        return {}; // gone by some other means; the remove error is moot.
+
+    return "could not remove the staging file \"" + staging.filename().string() + "\": " + ec.message() +
+           "; it is still on disk next to the recording";
+}
+
 } // namespace exosnap

@@ -112,6 +112,15 @@ else()
     set(EXOSNAP_OFFICIAL_BOOL "false")
 endif()
 
+# The header stores these in 32-byte fields (see the template); a value that
+# does not fit would be a compile error there, with a worse message.
+foreach(_exosnap_field EXOSNAP_VERSION EXOSNAP_BUILD_ID)
+    string(LENGTH "${${_exosnap_field}}" _exosnap_field_length)
+    if(_exosnap_field_length GREATER 31)
+        message(FATAL_ERROR "${_exosnap_field} '${${_exosnap_field}}' is longer than the 31 characters the build-info field holds.")
+    endif()
+endforeach()
+
 configure_file(
     "${EXOSNAP_BUILD_INFO_TEMPLATE}"
     "${EXOSNAP_BUILD_INFO_OUTPUT}"

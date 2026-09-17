@@ -160,7 +160,3 @@ ExoSnap is **GPL-3.0-or-later**. See [LICENSE](LICENSE).
 FFmpeg is distributed as LGPL-2.1-or-later shared libraries; component licenses are listed in
 [Third-party notices](THIRD_PARTY_NOTICES.md). The binaries come from
 [exosnap-ffmpeg-build](https://github.com/Exoridus/exosnap-ffmpeg-build).
-
-Code-signing infrastructure is provided by [SignPath.io](https://signpath.io), with the open-source
-program supported by the [SignPath Foundation](https://signpath.org). Current preview packages remain
-unsigned until the certificate is issued.

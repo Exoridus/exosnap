@@ -35,6 +35,33 @@ public sealed record DisposableOsWorkerRequest(
     /// before the disposable machine and its staging are discarded.
     /// </summary>
     public string? EvidenceDirectory { get; init; }
+
+    /// <summary>
+    /// Whether the worker reaches the network from inside the disposable machine.
+    /// </summary>
+    /// <remarks>
+    /// Declared rather than defaulted, in both directions. A worker that downloads
+    /// an update offer or a Chocolatey package cannot run without it; a gate that
+    /// means to assert offline behaviour proves less than it looks like it does if
+    /// the machine silently had a connection anyway. False is the safe reading of
+    /// silence: a run that needed the network and did not say so fails at the point
+    /// it tries, which names the missing declaration, while the reverse failure is
+    /// silent.
+    /// </remarks>
+    public bool RequiresNetwork { get; init; }
+
+    /// <summary>
+    /// Whether the worker needs a guest whose interactive session has been proven.
+    /// </summary>
+    /// <remarks>
+    /// A worker that captures the desktop, or drives the application's own window,
+    /// needs a process context with a desktop in it -- and needs that context to have
+    /// been measured rather than assumed. Declared here so a run that needs it is
+    /// never handed to a transport that cannot prove it: the failure that produces is
+    /// every file copying, the channel answering, and the capture failing for a reason
+    /// that reads like a product defect.
+    /// </remarks>
+    public bool RequiresInteractiveGuest { get; init; }
 }
 
 /// <summary>How one disposable-OS worker run ended.</summary>
@@ -56,6 +83,19 @@ public enum DisposableOsRunKind
 /// <param name="Result">The worker's result document, present only when <see cref="Kind"/> is Completed.</param>
 public sealed record DisposableOsRun(DisposableOsRunKind Kind, string Detail, DisposableOsRunResult? Result)
 {
+    /// <summary>
+    /// How completely the worker's evidence reached the host, so a record can tell
+    /// a product verdict apart from the question of whether it can be looked into.
+    /// </summary>
+    /// <remarks>
+    /// A gate that is required for promotion and whose evidence could not be
+    /// collected has not produced the evidence the promotion contract asks for, even
+    /// when the product assertions passed. Carried separately for that reason rather
+    /// than folded into the verdict: the two are different facts and only the caller
+    /// knows whether its evidence is contractually required.
+    /// </remarks>
+    public EvidenceOutcome Evidence { get; init; } = EvidenceOutcome.NotRequested;
+
     /// <summary>The worker wrote this result.</summary>
     public static DisposableOsRun Completed(DisposableOsRunResult result) =>
         new(DisposableOsRunKind.Completed, "the worker finished and wrote a result document", result);
@@ -78,6 +118,18 @@ public interface IDisposableOsTransport
 
     /// <summary>Why this transport is not usable here, or an empty string when it is.</summary>
     string UnavailableReason { get; }
+
+    /// <summary>
+    /// Whether this transport measures the session its worker lands in, and so can
+    /// carry a request that declares <see cref="DisposableOsWorkerRequest.RequiresInteractiveGuest"/>.
+    /// </summary>
+    /// <remarks>
+    /// False by default, and false is the honest answer for a transport that simply
+    /// does not look. Claiming it without measuring would be the harness asserting
+    /// something it never checked, on exactly the question that separates a guest
+    /// which can show a picture from one that only answers.
+    /// </remarks>
+    bool ProvesInteractiveGuest => false;
 
     /// <summary>Stages the request and runs it, returning what the worker produced.</summary>
     Task<DisposableOsRun> RunWorkerAsync(DisposableOsWorkerRequest request, CancellationToken cancellationToken);
@@ -117,19 +169,73 @@ public sealed class DisposableOsRunner : IDisposableOsRunner
     public async Task<DisposableOsRun> RunAsync(DisposableOsWorkerRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        foreach (var transport in this.transports)
-        {
-            if (!transport.Available)
-            {
-                continue;
-            }
 
+        // Capability first, availability second. A run that needs a proven interactive
+        // guest must not fall back to a transport that cannot prove one: that fallback
+        // is silent, and what it produces is a capture failure attributed to the
+        // product.
+        var capable = this.transports
+            .Where(transport => !request.RequiresInteractiveGuest || transport.ProvesInteractiveGuest)
+            .ToList();
+
+        foreach (var transport in capable.Where(transport => transport.Available))
+        {
             return await transport.RunWorkerAsync(request, cancellationToken).ConfigureAwait(false);
         }
 
-        var reasons = this.transports.Count == 0
-            ? "no transport is configured"
-            : string.Join("; ", this.transports.Select(transport => $"{transport.Name}: {transport.UnavailableReason}"));
+        if (capable.Count == 0)
+        {
+            var names = this.transports.Count == 0
+                ? "no transport is configured"
+                : string.Join(", ", this.transports.Select(transport => transport.Name));
+            return DisposableOsRun.Unavailable(
+                "this run needs a guest whose interactive session is proven, and no configured transport measures "
+                + $"one ({names})");
+        }
+
+        var reasons = string.Join("; ", capable.Select(transport => $"{transport.Name}: {transport.UnavailableReason}"));
         return DisposableOsRun.Unavailable($"no disposable-OS transport is available on this machine ({reasons})");
     }
+}
+
+/// <summary>How completely a worker's evidence reached the host.</summary>
+public enum EvidenceOutcomeState
+{
+    /// <summary>The request asked for none.</summary>
+    NotRequested,
+
+    /// <summary>Everything the worker wrote was copied back.</summary>
+    Complete,
+
+    /// <summary>Some of it was copied; the rest could not be.</summary>
+    Partial,
+
+    /// <summary>None of it could be copied, though the worker had written it.</summary>
+    Failed,
+
+    /// <summary>The worker declared an evidence directory and wrote none.</summary>
+    Missing,
+}
+
+/// <summary>What collecting a worker's evidence produced.</summary>
+/// <param name="State">How completely it reached the host.</param>
+/// <param name="FilesCollected">How many files were copied back.</param>
+/// <param name="FilesFailed">How many could not be.</param>
+/// <param name="Detail">One sentence naming what was lost, when anything was.</param>
+public sealed record EvidenceOutcome(
+    EvidenceOutcomeState State,
+    int FilesCollected,
+    int FilesFailed,
+    string Detail)
+{
+    /// <summary>The request asked for no evidence.</summary>
+    public static EvidenceOutcome NotRequested { get; } =
+        new(EvidenceOutcomeState.NotRequested, 0, 0, "no evidence was requested");
+
+    /// <summary>
+    /// True when the evidence is as complete as it was going to be. False means a
+    /// caller that needs its evidence cannot treat this run as fully answered.
+    /// </summary>
+    public bool IsComplete =>
+        this.State is EvidenceOutcomeState.NotRequested or EvidenceOutcomeState.Complete;
 }

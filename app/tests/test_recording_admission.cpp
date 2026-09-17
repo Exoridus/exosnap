@@ -740,5 +740,41 @@ TEST(RecoveryProtectionTest, NewMkvSessionCommitsTheValuablePartialAsEngineOutpu
     std::filesystem::remove_all(folder, ec);
 }
 
+// ─── 3. Physical webcam admission ────────────────────────────────────────────
+//
+// The synthetic verification source replaces the camera rather than joining it.
+// Pinned as a pure rule because the alternative needs a device: the defect it
+// guards against was a run in which the overlay composited from the synthetic
+// source while Media Foundation held the real sensor open at its maximum mode
+// for a preview the measurement never looked at.
+
+TEST(WebcamDeviceAdmission, VerificationSourceKeepsThePhysicalDeviceClosed) {
+    EXPECT_FALSE(ShouldRunWebcamDevice(/*has_verification_source=*/true, /*webcam_enabled=*/true,
+                                       /*has_device_id=*/true, /*recording=*/true, /*preparing=*/false,
+                                       /*record_preview_active=*/true, /*settings_preview_active=*/false));
+}
+
+TEST(WebcamDeviceAdmission, VerificationSourceDoesNotDisableTheOverlayItself) {
+    // The rule is about the device, not about the picture-in-picture: the run
+    // exists to measure an enabled overlay, so a caller that read this as "no
+    // webcam" would be measuring nothing.
+    EXPECT_FALSE(ShouldRunWebcamDevice(/*has_verification_source=*/true, /*webcam_enabled=*/true,
+                                       /*has_device_id=*/false, /*recording=*/false, /*preparing=*/false,
+                                       /*record_preview_active=*/false, /*settings_preview_active=*/false));
+}
+
+TEST(WebcamDeviceAdmission, WithoutAVerificationSourceTheExistingRuleHolds) {
+    EXPECT_TRUE(ShouldRunWebcamDevice(false, /*webcam_enabled=*/true, /*has_device_id=*/true, /*recording=*/true, false,
+                                      false, false));
+    EXPECT_TRUE(ShouldRunWebcamDevice(false, true, true, false, /*preparing=*/true, false, false));
+    EXPECT_TRUE(ShouldRunWebcamDevice(false, true, true, false, false, /*record_preview_active=*/true, false));
+    EXPECT_TRUE(ShouldRunWebcamDevice(false, true, true, false, false, false, /*settings_preview_active=*/true));
+    // Nothing asked for it.
+    EXPECT_FALSE(ShouldRunWebcamDevice(false, true, true, false, false, false, false));
+    // Enabled but no device selected, and disabled with one selected.
+    EXPECT_FALSE(ShouldRunWebcamDevice(false, true, /*has_device_id=*/false, true, false, false, false));
+    EXPECT_FALSE(ShouldRunWebcamDevice(false, /*webcam_enabled=*/false, true, true, false, false, false));
+}
+
 } // namespace
 } // namespace exosnap

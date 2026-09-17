@@ -1,12 +1,16 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
+using ExoSnap.Verify.Analysis;
 using ExoSnap.Verify.Capabilities;
 using ExoSnap.Verify.Catalog;
 using ExoSnap.Verify.Cli;
 using ExoSnap.Verify.Engine;
+using ExoSnap.Verify.Gates;
 using ExoSnap.Verify.Json;
 using ExoSnap.Verify.Models;
 using ExoSnap.Verify.Processes;
+using ExoSnap.Verify.Windows;
 
 namespace ExoSnap.Verify;
 
@@ -45,6 +49,7 @@ public static class Program
                 "run" => RunAsync(command).GetAwaiter().GetResult(),
                 "report" => Report(command),
                 "qualify" => Qualify(command),
+                "anchor" => Anchor(command),
                 "" or "help" or "--help" => Usage(ExitOk),
                 _ => Usage(ExitUsage, $"Unknown command '{command.Verb}'."),
             };
@@ -196,6 +201,12 @@ public static class Program
             catalog.ToDocument(),
             VerifyJsonContext.Default.ScenarioDescriptorDocument);
 
+        // What this run will be measuring WITH, recorded next to what it is measuring.
+        // A later run that reads these verdicts back compares the two, so a pass
+        // produced with a different oracle or through a different display driver
+        // cannot qualify a release nobody re-ran.
+        var tooling = MeasureTooling();
+
         run.WriteState(new RunState(
             RunState.CurrentSchemaVersion,
             runId,
@@ -205,9 +216,17 @@ public static class Program
                 Path.GetFileName(binding.ExecutablePath), binding.ExecutableSha256)]),
             catalog.Version,
             DateTimeOffset.UtcNow,
-            []));
+            [])
+        {
+            ToolingFingerprint = tooling.Digest,
+        });
 
         Console.WriteLine($"prepared {runId}");
+        Console.WriteLine(tooling.Digest.Length > 0
+            ? $"tooling  {tooling.Digest} (os {tooling.OsBuild}, gpu {tooling.GpuDriver}, "
+                + $"ffprobe {tooling.Ffprobe}, presentmon {tooling.PresentMon})"
+            : $"tooling  not fully readable, so these verdicts cannot be reused: "
+                + tooling.DescribeMismatch(string.Empty));
         Console.WriteLine($"artifact {binding.ExecutablePath}");
         Console.WriteLine($"version  {binding.ProductVersion} ({binding.ExecutableSha256[..16]})");
         Console.WriteLine($"rc       {binding.RcTag} at {binding.SourceCommit}");
@@ -230,7 +249,7 @@ public static class Program
         }
 
         var catalog = ReleaseCatalog.Create();
-        var reconciliation = Campaign.ReconciliationBlockers(run, campaign, catalog);
+        var reconciliation = Campaign.ReconciliationBlockers(run, campaign, catalog, MeasureTooling());
         if (reconciliation.Count > 0)
         {
             return Usage(ExitInfrastructure, string.Join("; ", reconciliation));
@@ -245,12 +264,19 @@ public static class Program
         var engine = new VerifyEngine(catalog);
         var plan = engine.Plan(selection, capabilities);
 
+        // A redirected stdin means no operator, the same signal the PowerShell catalog
+        // uses: a run piped from CI has nobody to answer a prompt, so the console seam
+        // is null and every operator step reports Unavailable rather than hanging.
+        IOperatorConsole? console = Console.IsInputRedirected ? null : new ConsoleOperatorConsole();
+        var operatorGate = new OperatorGate(console, command.Values("attest"));
+
         await using var services = await CampaignServices.OpenAsync(
             campaign,
             campaign.Binding.RunId,
             Path.Combine(run.Root, "environment"),
             command.Value("journal", Path.Combine(campaign.RepositoryRoot, ".workspace", "env-journal.json")),
             command.Value("alias-profile", string.Empty) is { Length: > 0 } profile ? profile : null,
+            operatorGate,
             CancellationToken.None).ConfigureAwait(false);
 
         var verdicts = await engine
@@ -292,6 +318,45 @@ public static class Program
         Console.WriteLine();
         PrintVerdicts(state.Verdicts);
         return ExitOk;
+    }
+
+    /// <summary>
+    /// Qualifies a stimulus-to-recording timebase from measurements that do not involve
+    /// the thing under test.
+    /// </summary>
+    /// <remarks>
+    /// A separate verb rather than part of a scenario: the analysis that needs it decodes
+    /// frames with tools of its own, and what belongs here is the reconciliation -- which
+    /// estimates corroborate, which contradict, and which are bounds rather than readings.
+    /// Exit 2 for a timebase that could not be established, so a caller cannot mistake an
+    /// unqualified oracle for a measurement.
+    /// </remarks>
+    private static readonly JsonSerializerOptions AnchorInputJson = new() { PropertyNameCaseInsensitive = true };
+
+    private static int Anchor(CommandLine command)
+    {
+        var inputPath = command.Value("input", string.Empty);
+        if (inputPath.Length == 0)
+        {
+            return Usage(ExitUsage, "anchor needs --input <observations.json>.");
+        }
+
+        if (!File.Exists(inputPath))
+        {
+            Console.Error.WriteLine($"INFRA_ERROR there is no observation file at '{inputPath}'.");
+            return ExitInfrastructure;
+        }
+
+        var input = JsonSerializer.Deserialize<CursorTimelineInput>(File.ReadAllText(inputPath), AnchorInputJson);
+        if (input is null)
+        {
+            Console.Error.WriteLine($"INFRA_ERROR '{inputPath}' does not read as observations.");
+            return ExitInfrastructure;
+        }
+
+        var result = CursorTimeline.Qualify(input);
+        Console.WriteLine(result.ToJson());
+        return result.Qualified ? ExitOk : 2;
     }
 
     private static int Qualify(CommandLine command)
@@ -342,7 +407,7 @@ public static class Program
             return Usage(ExitUsage, "qualify needs a completed campaign; use --run-dir, or --dry-run to plan one.");
         }
 
-        var reconciliation = Campaign.ReconciliationBlockers(run, campaign, catalog);
+        var reconciliation = Campaign.ReconciliationBlockers(run, campaign, catalog, MeasureTooling());
         if (reconciliation.Count > 0)
         {
             Console.WriteLine("NOT QUALIFIED");
@@ -451,6 +516,74 @@ public static class Program
     private static string RunsRoot(CommandLine command) =>
         command.Value("runs-root", Path.Combine(RepositoryRoot(command), ".workspace", "release-verify"));
 
+    /// <summary>
+    /// What this machine measures with: the OS, the display driver the capture path
+    /// runs through, and the two independent oracles.
+    /// </summary>
+    /// <remarks>
+    /// The display driver is the user-mode one from the first hardware adapter, which
+    /// is the component the capture and encode paths call into. A machine with no
+    /// hardware adapter leaves it unknown, and an unknown field means these verdicts
+    /// may not be reused -- the safe direction for a question nobody answered.
+    /// </remarks>
+    private static ToolingFingerprint MeasureTooling()
+    {
+        var tools = new ToolResolver();
+        var adapter = GraphicsProbe.TryEnumerateAdapters()?.FirstOrDefault(candidate => !candidate.IsSoftware);
+
+        return ToolingFingerprint.Measure(
+            adapter?.UserModeDriverVersion ?? string.Empty,
+            ToolVersion(tools.Resolve("ffprobe", "EXOSNAP_FFPROBE").Path, "-version"),
+            ToolVersion(tools.Resolve("PresentMon", "EXOSNAP_PRESENTMON").Path, "--version"));
+    }
+
+    /// <summary>
+    /// A tool's version, or <c>absent</c> when it is not on this machine at all.
+    /// </summary>
+    /// <remarks>
+    /// The two are different facts. "Not installed" fully describes the tool set and
+    /// hashes like any other value; "installed and would not say which version" is a
+    /// question nobody answered, and that one refuses reuse.
+    /// </remarks>
+    private static string ToolVersion(string? resolvedPath, string versionFlag)
+    {
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+        {
+            return ToolingFingerprint.Absent;
+        }
+
+        // Asked, not read off the file. ffprobe.exe carries a generic 1.0.0.0 version
+        // resource that is the same across every ffmpeg build, so a fingerprint taken
+        // from it would claim to bind an oracle it does not distinguish at all. The
+        // file version stays as the fallback for a tool that will not answer.
+        using var processes = new ProcessRunner();
+        try
+        {
+            var run = processes
+                .RunAsync(
+                    new ProcessRunRequest(resolvedPath, versionFlag) { Timeout = TimeSpan.FromSeconds(15) },
+                    CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+
+            var first = (run.StandardOutput + run.StandardError)
+                .ReplaceLineEndings("\n")
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(first))
+            {
+                return first;
+            }
+        }
+        catch (ProcessStartFailedException)
+        {
+            // Resolvable and not runnable. The file version below is the better answer
+            // than claiming the tool is absent.
+        }
+
+        return ToolingFingerprint.VersionOf(resolvedPath);
+    }
+
     private static string RepositoryRoot(CommandLine command) =>
         Path.GetFullPath(command.Value("repo", Environment.CurrentDirectory));
 
@@ -484,8 +617,11 @@ public static class Program
         writer.WriteLine("  prepare --exe <path> [--rc <tag>] [--commit <sha>] [--package <path>]...");
         writer.WriteLine("      Bind a campaign to explicit bytes and measure the machine.");
         writer.WriteLine();
-        writer.WriteLine("  run [--id <id>] [--class <c>] [--include-opt-in]");
-        writer.WriteLine("      Run the selected scenarios against the prepared campaign.");
+        writer.WriteLine("  run [--id <id>] [--class <c>] [--include-opt-in] [--attest <id>]...");
+        writer.WriteLine("      Run the selected scenarios against the prepared campaign. --attest names a");
+        writer.WriteLine("      scenario the caller performed the operator step of itself; the runner still");
+        writer.WriteLine("      verifies the consequence. A redirected stdin means no operator at all, and an");
+        writer.WriteLine("      operator step that was neither attested nor answered reports Unavailable.");
         writer.WriteLine();
         writer.WriteLine("  report");
         writer.WriteLine("      Print the verdicts recorded so far.");
@@ -493,5 +629,13 @@ public static class Program
         writer.WriteLine("  qualify [--required <id>]... | qualify --dry-run");
         writer.WriteLine("      Write release-verification.json, or plan a run without touching anything.");
         return exitCode;
+    }
+
+    /// <summary>The real console, for a run with somebody in front of it.</summary>
+    private sealed class ConsoleOperatorConsole : IOperatorConsole
+    {
+        public void Write(string text) => Console.Out.Write(text);
+
+        public string? ReadLine() => Console.ReadLine();
     }
 }

@@ -805,6 +805,12 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
             if (FAILED(buf->Lock(&src, &maxLen, &curLen)))
                 continue;
 
+            // Both branches trust the locked buffer only as far as curLen says it
+            // goes. The media type promises W x H, but a driver can hand back a
+            // shorter sample (partial frame, stride quirk, a renegotiation in
+            // flight), and reading the promised size out of it walks off the end
+            // of MF-owned memory on this thread, every frame, with no recovery.
+            // A short frame keeps the previous one instead.
             if (ctx->is_bgra) {
                 const size_t expected = static_cast<size_t>(W) * H * 4;
                 if (curLen >= expected)
@@ -812,7 +818,9 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
             } else {
                 // YUY2 → BGRA
                 const int srcStride = W * 2;
-                Yuy2ToBgra(src, W, H, srcStride, scratch.data(), W * 4);
+                const size_t expected = static_cast<size_t>(srcStride) * H;
+                if (curLen >= expected)
+                    Yuy2ToBgra(src, W, H, srcStride, scratch.data(), W * 4);
             }
             buf->Unlock();
 

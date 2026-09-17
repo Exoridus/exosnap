@@ -217,7 +217,14 @@ bool RecordViewModelAdapter::canPause() const noexcept {
 }
 
 bool RecordViewModelAdapter::canResume() const noexcept {
-    return source_ != nullptr && source_->CanResume();
+    if (source_ == nullptr)
+        return false;
+    // Resuming an armed recovery session starts a recording rather than
+    // unpausing one, so an undrawn region withholds it exactly as it withholds
+    // a first start. A real pause has a session behind it and is unaffected.
+    if (source_->state == UiRecordingState::ArmedFromRecovery)
+        return source_->CanResume() && !region_selection_needed_;
+    return source_->CanResume();
 }
 
 bool RecordViewModelAdapter::canSelectSource() const noexcept {
@@ -235,15 +242,17 @@ bool RecordViewModelAdapter::canSelectSource() const noexcept {
     case UiRecordingState::RegionSelecting:
     case UiRecordingState::Recording:
     case UiRecordingState::Paused:
-    case UiRecordingState::ArmedFromRecovery:
     case UiRecordingState::Stopping:
     case UiRecordingState::Saving:
         return false;
     // Nothing is in flight: the only question left is whether there is anything
     // to pick. Blocked and Failed are deliberately here — changing the source is
-    // frequently the fix.
+    // frequently the fix. So is ArmedFromRecovery: the recovery manifest does not
+    // record the capture target, so the armed session is waiting for one to be
+    // picked before its next slice can start.
     case UiRecordingState::LoadingCapabilities:
     case UiRecordingState::Ready:
+    case UiRecordingState::ArmedFromRecovery:
     case UiRecordingState::Blocked:
     case UiRecordingState::Completed:
     case UiRecordingState::Failed:
@@ -325,6 +334,17 @@ const QString& RecordViewModelAdapter::selectedTargetIdentity() const noexcept {
 
 bool RecordViewModelAdapter::selectedTargetAvailable() const noexcept {
     return selected_target_available_;
+}
+
+bool RecordViewModelAdapter::harnessBrandStage() const noexcept {
+    return harness_brand_stage_;
+}
+
+void RecordViewModelAdapter::applyBrandStageForHarness() {
+    if (harness_brand_stage_)
+        return;
+    harness_brand_stage_ = true;
+    emit harnessBrandStageChanged();
 }
 
 QVariantList RecordViewModelAdapter::filteredTargetOptions(const QString& kind, const QString& query) const {
@@ -765,6 +785,11 @@ void RecordViewModelAdapter::rebuildPresentation() {
             const QVariantMap option{
                 {QStringLiteral("targetIndex"), index},
                 {QStringLiteral("identity"), identity},
+                // What the operating system calls this target -- a monitor's
+                // device name, a window's title. The identity above is a handle
+                // and the label is for a person to read; neither can be matched
+                // against what an automated caller was told to record.
+                {QStringLiteral("device"), QString::fromStdString(target.description)},
                 {QStringLiteral("label"), QString::fromStdString(presentation.label)},
                 {QStringLiteral("kind"), window ? QStringLiteral("window") : QStringLiteral("display")},
                 {QStringLiteral("regionLabel"), region_label},

@@ -1,0 +1,7 @@
+{
+  "steps": [
+    { "name": "install-base", "ok": true, "detail": "installed 0.9.0 from the base MSI" },
+    { "name": "decline-offer", "ok": true, "detail": "update.check reported updateAvailable=true" },
+    { "name": "decline-apply", "ok": false, "detail": "update.apply returned exit code 0, expected 1" }
+  ]
+}

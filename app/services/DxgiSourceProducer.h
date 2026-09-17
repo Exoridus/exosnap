@@ -28,6 +28,7 @@
 
 #include <winrt/base.h>
 
+#include <exosnap/engine/device_generation.h>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 #include <exosnap/engine/hdr_native.h>
 
@@ -57,10 +58,30 @@ class DxgiSourceProducer final : public HubSourceProducer {
         return context_.get();
     }
 
-    // HDR facts of the duplicated display, sampled at Open (see
-    // DxgiOdCaptureSrc). Feed ResolveRawCaptureTapDesc for FP16 frames.
+    // Which device the two above currently are. Bumped on every (re)open, so a
+    // dependent that cached a resource on the previous device can tell -- the
+    // pointer cannot say, since the allocator may hand back the same address.
+    [[nodiscard]] exosnap::engine::DeviceGeneration DeviceGenerationValue() const noexcept {
+        return device_generation_;
+    }
+
+    // HDR facts of the duplicated display, sampled at Open and whenever
+    // RefreshDisplayFacts() is polled (see DxgiOdCaptureSrc). Feed
+    // ResolveRawCaptureTapDesc for FP16 frames.
     [[nodiscard]] const exosnap::engine::HdrDisplayFacts& DisplayFacts() const noexcept {
         return od_.DisplayFacts();
+    }
+
+    // Re-read the display's facts; true when any of them moved.
+    [[nodiscard]] bool RefreshDisplayFacts() {
+        return od_.RefreshDisplayFacts();
+    }
+
+    // The duplicated display, or null while closed. A monitor that leaves and
+    // re-joins the topology comes back with a new handle, so anything scoped to
+    // the monitor has to re-read this rather than cache it across a reopen.
+    [[nodiscard]] HMONITOR Monitor() const noexcept {
+        return od_.Monitor();
     }
 
   private:
@@ -68,6 +89,7 @@ class DxgiSourceProducer final : public HubSourceProducer {
 
     winrt::com_ptr<ID3D11Device> device_;
     winrt::com_ptr<ID3D11DeviceContext> context_;
+    exosnap::engine::DeviceGeneration device_generation_;
     exosnap::engine::DxgiOdCaptureSrc od_;
 
     // The hub retries a failed reopen on every pump tick (unbounded, no backoff

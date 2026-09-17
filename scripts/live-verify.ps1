@@ -76,8 +76,10 @@ function Resolve-DefaultExe {
     # the fallback so the infrastructure itself can be exercised without a
     # Release build sitting around.
     $candidates = @(
+        'build/windows-x64-ninja-release/app/exosnap.exe',
         'build/windows-x64-release/app/Release/exosnap.exe',
         'build/windows-x64-release/app/exosnap.exe',
+        'build/windows-x64-ninja-debug/app/exosnap.exe',
         'build/windows-x64-debug/app/Debug/exosnap.exe',
         'build/windows-x64-debug/app/exosnap.exe'
     )

@@ -9,6 +9,11 @@ Popup {
 
     required property RecordViewModelAdapter recordViewModel
 
+    // The destination that owns this picker. Required because the picker cannot
+    // derive it: it parents itself into the window overlay, so nothing in its
+    // own scene position says which page put it there.
+    required property Item hostPage
+
     // The pending choice is seeded from the view model when the picker opens
     // and is committed by the footer action, Enter or a double click. Browsing
     // is not committing: the capture keeps its current source until then.
@@ -89,6 +94,22 @@ Popup {
     onCurrentTabChanged: visiblePublishDelay.restart()
     onPickerColumnsChanged: visiblePublishDelay.restart()
     onWindowRowsChanged: visiblePublishDelay.restart()
+
+    // Hiding the Record destination does not take this popup down: it parents
+    // itself into the window overlay (see `parent` above), so it has no view of
+    // the destination it belongs to and `parent.visible` answers for the
+    // overlay instead. The modal veil stops a click on another destination, but
+    // not the keyboard shortcut that reaches the same swap -- which left the
+    // picker on screen over the page behind it.
+    Connections {
+        target: root.hostPage
+        enabled: root.opened
+
+        function onVisibleChanged(): void {
+            if (!root.hostPage.visible)
+                root.close();
+        }
+    }
 
     Timer {
         id: visiblePublishDelay

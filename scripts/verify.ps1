@@ -89,15 +89,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# EXOSNAP_VERIFY_JOBS is the default so a pre-push run can be throttled from the
-# environment rather than by editing the shared hook. A value that does not parse,
-# or a non-positive one, means "no cap" just like the default.
-if ($Jobs -le 0 -and -not [string]::IsNullOrWhiteSpace($env:EXOSNAP_VERIFY_JOBS)) {
-    $parsed = 0
-    if ([int]::TryParse($env:EXOSNAP_VERIFY_JOBS, [ref]$parsed) -and $parsed -gt 0) { $Jobs = $parsed }
-}
-if ($Jobs -lt 0) { $Jobs = 0 }
-$jobsArg = if ($Jobs -gt 0) { @('--parallel', "$Jobs") } else { @() }
+Import-Module (Join-Path $PSScriptRoot 'lib/HostResourceLock.psm1') -Force
+
+# The budget is never "unbounded". Two verify runs on one machine -- a pre-commit in
+# one worktree beside a pre-push in another -- each at full parallelism is several
+# times the core count in compiler processes, timing tests flaking, and every run
+# slower than in sequence. An explicit -Jobs wins, then EXOSNAP_VERIFY_JOBS, then
+# all cores but two so the shell and the editor keep one each.
+if ($Jobs -le 0) { $Jobs = Get-HostJobBudget }
+$jobsArg = @('--parallel', "$Jobs")
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Import-Module (Join-Path $PSScriptRoot 'lib/VerifyPipeline.psm1') -Force -DisableNameChecking
@@ -160,28 +160,6 @@ if (Test-Path -LiteralPath $verifyHarnessSolution -PathType Leaf) {
 $script:LastFailedTests = @()
 $script:MsvcEnvironmentReady = $false
 
-function Test-PresetUsesNinja {
-    <#
-    .SYNOPSIS
-        Whether a configure preset builds with Ninja, following inherits.
-    #>
-    param([Parameter(Mandatory)] [string] $Name)
-
-    $presets = (Get-Content -LiteralPath (Join-Path $repoRoot 'CMakePresets.json') -Raw |
-        ConvertFrom-Json).configurePresets
-    # Bounded rather than while($true): a cycle in inherits is a broken presets
-    # file, and hanging the whole pipeline is a worse way to report it.
-    for ($hop = 0; $hop -lt 16 -and $Name; $hop++) {
-        $preset = $presets | Where-Object { $_.name -eq $Name } | Select-Object -First 1
-        if (-not $preset) { return $false }
-        if ($preset.PSObject.Properties.Name -contains 'generator' -and $preset.generator) {
-            return $preset.generator -eq 'Ninja'
-        }
-        $Name = if ($preset.PSObject.Properties.Name -contains 'inherits') { @($preset.inherits)[0] } else { $null }
-    }
-    return $false
-}
-
 function Initialize-CompilerEnvironment {
     <#
     .SYNOPSIS
@@ -195,7 +173,7 @@ function Initialize-CompilerEnvironment {
     #>
     if ($script:MsvcEnvironmentReady) { return }
     $script:MsvcEnvironmentReady = $true
-    if (-not (Test-PresetUsesNinja -Name $Preset)) { return }
+    if (-not (Test-PresetUsesNinja -Name $Preset -RepoRoot $repoRoot)) { return }
     Enter-MsvcEnvironment | Out-Null
 }
 
@@ -227,7 +205,11 @@ function Invoke-Step {
         # Exit code the step uses to say "the tool I delegate to is not
         # installed". Reported as TOOL_MISSING rather than FAIL, and without the
         # failure tail: there is no diagnostic output to show, only a fact.
-        [int] $ToolMissingExitCode = 0
+        [int] $ToolMissingExitCode = 0,
+        # For steps that run a compiler: print the first error line above the
+        # tail, and carry it into the verdict. The tail of a parallel build is
+        # the cascade, not the cause.
+        [switch] $ReportFirstError
     )
 
     if (-not (Test-Path -LiteralPath $logRoot -PathType Container)) {
@@ -262,12 +244,22 @@ function Invoke-Step {
         return @{ Status = $status.ToolMissing; Detail = $reason.Trim(); Evidence = @{ log = $logPath } }
     }
 
+    $detail = "exit $code"
+    if ($ReportFirstError) {
+        $firstError = Get-FirstBuildError -LogPath $logPath
+        if ($firstError) {
+            Write-Host ""
+            Write-Host "---- $Name first error ----"
+            Write-Host $firstError
+            $detail = "$detail; first error: $firstError"
+        }
+    }
     Write-Host ""
     Write-Host "---- $Name output (last $FailureTailLines lines) ----"
     Get-Content -LiteralPath $logPath -Tail $FailureTailLines -ErrorAction SilentlyContinue |
         ForEach-Object { Write-Host $_ }
     Write-Host "Full log: $logPath"
-    return @{ Status = $status.Fail; Detail = "exit $code"; Evidence = @{ log = $logPath } }
+    return @{ Status = $status.Fail; Detail = $detail; Evidence = @{ log = $logPath } }
 }
 
 $realExecutor = {
@@ -320,6 +312,27 @@ $realExecutor = {
                 '-Base', 'HEAD')
         }
 
+        'commit-policy' {
+            return Invoke-Step -Name 'commit-policy' -FilePath 'pwsh' -Arguments @(
+                '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-commit-policy.ps1'))
+        }
+
+        'lint-canaries' {
+            # A blocking check that stopped firing reports zero findings, exactly
+            # like a clean tree. This is the other half of that contract.
+            return Invoke-Step -Name 'lint-canaries' -FilePath 'pwsh' -Arguments @(
+                '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-lint-canaries.ps1'))
+        }
+
+        'prose-lines' {
+            # -Advisory: the rule is adopted, the tree's backlog is not cleared.
+            # check-prose-lines.ps1 says what has to be true before this loses
+            # the switch.
+            return Invoke-Step -Name 'prose-lines' -FilePath 'pwsh' -Arguments @(
+                '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-prose-lines.ps1'),
+                '-Advisory')
+        }
+
         'format' {
             $formatArgs = @('-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-format.ps1'))
             if ($Staged) { $formatArgs += @('-Staged', '-Fix') }
@@ -358,7 +371,7 @@ $realExecutor = {
 
         'configure' {
             Initialize-CompilerEnvironment
-            return Invoke-Step -Name 'configure' -FilePath 'cmake' -Arguments @('--preset', $Preset)
+            return Invoke-Step -Name 'configure' -FilePath 'cmake' -Arguments @('--preset', $Preset) -ReportFirstError
         }
 
         'qmllint' {
@@ -366,23 +379,33 @@ $realExecutor = {
             # on this repository reports resolution failures the target does not.
             Initialize-CompilerEnvironment
             return Invoke-Step -Name 'qmllint' -FilePath 'cmake' `
-                -Arguments (@('--build', $buildDir, '--target', 'all_qmllint') + $jobsArg)
+                -Arguments (@('--build', $buildDir, '--target', 'all_qmllint') + $jobsArg) -ReportFirstError
         }
 
         'build' {
             # Also here, not only in 'configure': a plan that reuses an existing
             # build directory does not reconfigure, and the compiler is needed
             # either way.
+            #
+            # Under the host build lock: a second worktree's build waits for this
+            # one instead of doubling the compiler processes on the machine. The
+            # parallelism INSIDE the build is already bounded by the budget.
             Initialize-CompilerEnvironment
-            return Invoke-Step -Name 'build' -FilePath 'cmake' `
-                -Arguments (@('--build', '--preset', $Preset) + $jobsArg)
+            return Invoke-WithHostLock -Kind 'build' -Holder "verify $repoRoot" -Body {
+                Invoke-Step -Name 'build' -FilePath 'cmake' `
+                    -Arguments (@('--build', '--preset', $Preset) + $jobsArg) -ReportFirstError
+            }
         }
 
         'tests' {
             $testArgs = @('-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'run-tests.ps1'),
-                '-BuildDir', $buildDir, '-Config', $Config)
-            if ($Jobs -gt 0) { $testArgs += @('-Jobs', "$Jobs") }
+                '-BuildDir', $buildDir, '-Config', $Config, '-Jobs', "$Jobs")
             if ($check.Evidence.filter) { $testArgs += @('-Filter', $check.Evidence.filter) }
+            # run-tests.ps1 takes the host device lock itself, so a bare ctest and a
+            # verify run contend the same way. Not taken here as well: a lock held
+            # twice by the same holder is just a lock, but a second run waiting on
+            # this one would wait on the outer hold for the whole test duration --
+            # which is the intended behaviour and the inner one is sufficient.
             $outcome = Invoke-Step -Name 'tests' -FilePath 'pwsh' -Arguments $testArgs
             if ($outcome.Status -ne $status.Pass) {
                 $script:LastFailedTests = Get-FailedCTestName -LogPath $outcome.Evidence.log
@@ -458,7 +481,11 @@ $realExecutor = {
                 '-CacheDir', (Get-ClangTidyCacheDirectory))
             if ($Jobs -gt 0) { $arguments += @('-Jobs', "$Jobs") }
             if ($check.Evidence.scope -ne 'whole-tree') { $arguments += @('-Base', $Base) }
-            return Invoke-Step -Name 'clang-tidy' -FilePath 'pwsh' -Arguments $arguments
+            # Compiler processes again, so the build lock: clang-tidy at -j next to a
+            # build in another worktree is the same collision.
+            return Invoke-WithHostLock -Kind 'build' -Holder "verify $repoRoot" -Body {
+                Invoke-Step -Name 'clang-tidy' -FilePath 'pwsh' -Arguments $arguments
+            }
         }
 
         default { throw "verify.ps1 has no executor for check kind '$($check.Kind)'." }
@@ -482,8 +509,27 @@ $dryRunExecutor = {
 $diagnosticProvider = {
     param($check, $outcome)
 
-    $commands = Resolve-QmlDiagnosticCommand -BuildDir (Join-Path $repoRoot $buildDir) `
-        -LogDirectory $logRoot -Config $Config -FailedTestNames $script:LastFailedTests
+    $treeDir = Join-Path $repoRoot $buildDir
+    $registration = if ($DryRun) {
+        # The simulated failure names a QuickTest runner; without a registration
+        # to say so the contract would be unreachable on a machine that never
+        # configured the tree, which is exactly where the dry run has to work.
+        @{ 'quick.qml.record_controls' = [pscustomobject]@{
+                FilePath = Join-Path $treeDir 'record_controls_qml_tests.exe'
+                Labels   = @('quick', 'quicktest') } }
+    }
+    else {
+        Get-CTestRegistration -BuildDir $treeDir -Config $Config
+    }
+    if ($registration.Count -eq 0) {
+        # Said out loud, because the alternative is a missing diagnosis that looks
+        # like "the failing test was not a QuickTest".
+        Write-Host ""
+        Write-Host "no CTest registration could be read from $treeDir; the QuickTest re-run is skipped"
+    }
+
+    $commands = Resolve-QmlDiagnosticCommand -BuildDir $treeDir -LogDirectory $logRoot -Config $Config `
+        -FailedTestNames $script:LastFailedTests -Registration $registration
     $produced = @()
     foreach ($command in $commands) {
         if ($DryRun) {
@@ -516,7 +562,7 @@ else {
     Write-Host '  scope: everything (this mode is the full local blocking contract)'
 }
 if ($Jobs -gt 0) {
-    Write-Host "  jobs: $Jobs (cmake --build --parallel, ctest -j, clang-tidy -j)"
+    Write-Host "  jobs: $Jobs of $([Environment]::ProcessorCount) cores (cmake --build --parallel, ctest -j, clang-tidy -j)"
 }
 Write-Host ""
 
@@ -525,6 +571,13 @@ $run = Invoke-VerifyPlan -Plan $plan -Executor $(if ($DryRun) { $dryRunExecutor 
 
 Write-Host ""
 foreach ($line in (New-VerifySummary -Run $run)) { Write-Host $line }
+
+$failureReport = @(New-VerifyFailureReport -Run $run)
+if ($failureReport.Count -gt 0) {
+    Write-Host ""
+    Write-Host 'evidence:'
+    foreach ($line in $failureReport) { Write-Host "  $line" }
+}
 
 if ($run.toolMissing.Count -gt 0) {
     Write-Host ""

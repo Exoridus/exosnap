@@ -50,10 +50,39 @@ Write-Host 'The release-verify wrapper selects the typed harness'
 Test-Case 'list is forwarded to the typed catalog' {
     $result = Invoke-Runner -Arguments @('list', '-Engine', 'DotNet')
     Assert-Equal 0 $result.ExitCode "typed list failed: $($result.Output)"
-    Assert-True ($result.Output -match '27 scenarios') 'the typed catalog was not printed'
+    Assert-True ($result.Output -match '\d+ scenarios') 'the typed catalog was not printed'
     # The exact migrated count moves with every slice; assert the line is printed,
     # not the number, so this wrapper test does not need editing on each migration.
     Assert-True ($result.Output -match '\d+ with a migrated body') 'the migration count was not printed'
+}
+
+Test-Case 'the typed catalog contains every scenario the PowerShell catalog declares' {
+    # The reason the two sizes differ, as an invariant rather than as two numbers
+    # nobody can compare. The PowerShell catalog is the set the legacy orchestrator
+    # runs; while both exist, the typed one may only ever be a superset of it, so the
+    # migration cannot quietly drop a scenario on the way across.
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $legacy = @(Get-ReleaseScenarioCatalog | ForEach-Object { $_.Id })
+
+    # Read off the printed catalog rather than through a --json the wrapper does not
+    # forward: the point here is the set of ids, and adding a wrapper parameter to
+    # make one test tidier would be a contract change for no reason.
+    $result = Invoke-Runner -Arguments @('list', '-Engine', 'DotNet')
+    Assert-Equal 0 $result.ExitCode "typed list failed: $($result.Output)"
+    $typed = @([regex]::Matches($result.Output, '(?m)^(REL-[A-Z0-9-]+)\s') |
+            ForEach-Object { $_.Groups[1].Value })
+    Assert-True ($typed.Count -gt 0) 'no scenario ids could be read out of the typed catalog'
+
+    $missing = @($legacy | Where-Object { $_ -notin $typed })
+    Assert-True ($missing.Count -eq 0) `
+        "the typed catalog is missing $($missing.Count) PowerShell scenario(s): $($missing -join ', ')"
+
+    # And the other direction is named rather than forbidden: the typed catalog is
+    # ahead by exactly the scenarios that were added after the rewrite began, and a
+    # new one has to be added here on purpose.
+    $ahead = @($typed | Where-Object { $_ -notin $legacy } | Sort-Object)
+    Assert-Equal 'REL-INSTALL-CLEAN-001, REL-PRESENT-XCHECK-001' ($ahead -join ', ') `
+        'the typed catalog gained or lost a scenario the PowerShell catalog does not have'
 }
 
 Test-Case 'an explicit opt-in class remains selected after translation' {
@@ -81,7 +110,7 @@ Test-Case 'the typed bootstrap tolerates an inherited MSVC platform' {
         $env:Platform = 'x64'
         $result = Invoke-Runner -Arguments @('list', '-Engine', 'DotNet')
         Assert-Equal 0 $result.ExitCode "the MSVC environment broke the typed bootstrap: $($result.Output)"
-        Assert-True ($result.Output -match '27 scenarios') 'the typed catalog was not printed'
+        Assert-True ($result.Output -match '\d+ scenarios') 'the typed catalog was not printed'
     }
     finally {
         $env:Platform = $priorPlatform

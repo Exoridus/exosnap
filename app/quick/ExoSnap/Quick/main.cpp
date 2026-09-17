@@ -479,6 +479,17 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
                                       Q_ARG(int, destination.page));
             if (ready_immediately)
                 return failNavigationLifecycle("an asynchronous loader was Ready before it had a chance to incubate");
+            // The gap between the request and the page existing is where the
+            // shell has to keep the PREVIOUS page on screen. Switching the stack
+            // at once would show an empty Loader for as long as incubation
+            // takes, which reads as a hang; and the Record preview follows what
+            // is displayed, so a stack that jumped ahead blanked the preview
+            // while the Record page was still visibly there. The stack index is
+            // the one observable that says which of the two the shell did.
+            if (shell->property("stackIndex").toInt() == destination.page)
+                return failNavigationLifecycle("the stack switched to a page that does not exist yet");
+            if (shell->property("currentPage").toInt() != destination.page)
+                return failNavigationLifecycle("the request itself was not recorded immediately");
         }
         // Generous on purpose: this test shares the machine with the rest of a
         // parallel CTest run (-j), and an asynchronous Loader's incubation is
@@ -486,6 +497,11 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
         // longer to observe, when every core is already busy with other tests.
         if (!waitForDestinationReady(shell, destination.page, 20000))
             return failNavigationLifecycle("page did not finish loading");
+        // And once it exists, the stack follows -- through the same event
+        // processing that delivered readiness, not a separate wait.
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        if (shell->property("stackIndex").toInt() != destination.page)
+            return failNavigationLifecycle("the stack did not advance to a page that is ready");
         QObject* page = findShellPage(window, destination.object_name);
         if (page == nullptr)
             return failNavigationLifecycle(destination.object_name);
@@ -1075,6 +1091,16 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<exosnap::quick::QuickLiveVerifySource> live_verify_source;
     std::unique_ptr<exosnap::live_verify::LiveVerifyControlServer> live_verify_server;
     if (live_verify_options.requested) {
+        // Replace the camera before anything can start recording. Only under the
+        // control channel, and never persisted: a measurement of what the PiP
+        // overlay does needs a webcam that cannot itself cause a recomposition,
+        // and every real camera does on every delivered sample. Without the flag
+        // the shipping path is untouched.
+        if (arguments.contains(QStringLiteral("--live-verify-static-webcam"))) {
+            if (auto* coordinator = quick_application.recordingCoordinator(); coordinator != nullptr) {
+                coordinator->UseStaticVerificationWebcam(640, 360);
+            }
+        }
         live_verify_source = std::make_unique<exosnap::quick::QuickLiveVerifySource>(quick_application, root_window);
         live_verify_server = std::make_unique<exosnap::live_verify::LiveVerifyControlServer>(
             live_verify_source.get(), live_verify_options.run_id);

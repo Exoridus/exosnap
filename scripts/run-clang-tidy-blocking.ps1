@@ -62,6 +62,11 @@
     a missing dependency graph, a dependency that no longer exists -- makes the
     unit a miss, never a hit.
 
+.PARAMETER RequireVersion
+    Version the resolved clang-tidy must report, as a full version or a leading
+    part of one ('22' matches 22.1.0). A mismatch fails the run. Omit unless two
+    runs are meant to be compared with each other.
+
 .PARAMETER ListChecks
     Print the blocking check list and exit.
 
@@ -78,6 +83,7 @@ param(
     [string]$ClangTidy,
     [int]$Jobs = 0,
     [string]$CacheDir,
+    [string]$RequireVersion,
     [switch]$ListChecks
 )
 
@@ -142,18 +148,37 @@ if (-not (Test-Path -LiteralPath $compileDb)) {
 # system cache, which would dwarf the run it is preparing.
 if (-not $ClangTidy) {
     $relativeToolPath = 'VC\Tools\Llvm\x64\bin\clang-tidy.exe'
+    $found = [System.Collections.Generic.List[string]]::new()
     foreach ($programFiles in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
         if (-not $programFiles) { continue }
         $vsRoot = Join-Path $programFiles 'Microsoft Visual Studio'
         if (-not (Test-Path -LiteralPath $vsRoot)) { continue }
         # <year>/<edition>, e.g. 2022/BuildTools.
-        $candidates = Get-ChildItem -LiteralPath $vsRoot -Directory -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending |
+        Get-ChildItem -LiteralPath $vsRoot -Directory -ErrorAction SilentlyContinue |
             ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Directory -ErrorAction SilentlyContinue } |
-            ForEach-Object { Join-Path $_.FullName $relativeToolPath }
-        $ClangTidy = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-        if ($ClangTidy) { break }
+            ForEach-Object { Join-Path $_.FullName $relativeToolPath } |
+            Where-Object { Test-Path -LiteralPath $_ } |
+            ForEach-Object { $found.Add($_) }
     }
+
+    # Every installation is asked for its version and the newest one wins. Neither
+    # the order of the program-files roots nor the name of the install directory
+    # tells which toolset is newer: the directories are named by product line
+    # ('2022', '18'), so a plain sort puts a 19.x side installation ahead of the
+    # 22.x toolset of the current Visual Studio, and taking the first root that
+    # matched picked the 32-bit side installation on every such machine. Which
+    # binary ran decides how many checks exist at all, so the choice cannot rest
+    # on directory order.
+    $best = $null
+    foreach ($candidate in $found) {
+        $banner = (& $candidate --version 2>&1 | Out-String)
+        if ($banner -notmatch 'version\s+(\d+\.\d+\.\d+)') { continue }
+        $parsed = [version]$Matches[1]
+        if ($null -eq $best -or $parsed -gt $best.Version) {
+            $best = [pscustomobject]@{ Path = $candidate; Version = $parsed }
+        }
+    }
+    if ($best) { $ClangTidy = $best.Path }
 }
 
 if (-not $ClangTidy) {
@@ -162,6 +187,28 @@ if (-not $ClangTidy) {
 if (-not $ClangTidy) {
     Write-Host "::error::clang-tidy.exe not found (Visual Studio LLVM toolset or PATH)."
     exit 1
+}
+
+# Which binary ran, in the run's own output. The check set is selected by wildcard,
+# so which diagnostics exist at all is a property of the binary: an older clang-tidy
+# enables fewer checks and its run reads as a cleaner tree instead of a smaller one.
+# Two whole-tree inventories weeks apart differed by thousands of findings in files
+# both covered, and neither log named its binary, so the difference could not be
+# attributed afterwards.
+$clangTidyBanner = (& $ClangTidy --version 2>&1 | Out-String)
+$clangTidyVersion = if ($clangTidyBanner -match 'version\s+(\d+\.\d+\.\d+)') { $Matches[1] } else { 'unknown' }
+Write-Host "clang-tidy $clangTidyVersion -- $ClangTidy"
+
+# Pinning is opt-in because the version a runner image ships is not this
+# repository's to choose. A caller that compares two inventories passes the
+# version it expects, and a mismatch stops the run rather than producing numbers
+# that look comparable and are not.
+if ($RequireVersion) {
+    $expected = "$RequireVersion".Trim()
+    if ($clangTidyVersion -ne $expected -and -not $clangTidyVersion.StartsWith("$expected.")) {
+        Write-Host "::error::clang-tidy $clangTidyVersion does not satisfy the required version '$expected' ($ClangTidy)."
+        exit 1
+    }
 }
 
 $normalizedRoot = $repoRoot.Replace('\', '/').TrimEnd('/')
@@ -432,7 +479,7 @@ if ($cacheEnabled) {
     }
 
     $saltParts = [System.Collections.Generic.List[string]]::new()
-    $saltParts.Add((& $ClangTidy --version 2>&1 | Out-String))
+    $saltParts.Add($clangTidyBanner)
     $saltParts.Add($checksArg)
     $saltParts.Add($headerFilter)
     foreach ($f in @((Join-Path $repoRoot '.clang-tidy'), $PSCommandPath)) {

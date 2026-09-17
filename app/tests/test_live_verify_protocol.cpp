@@ -161,6 +161,9 @@ class FakeSource final : public LiveVerifySource {
     }
 
     // --- Settings, profiles, notifications ----------------------------------
+    QJsonObject last_overlay_fields;
+    QJsonObject applied_overlay;
+    quint64 overlay_sequence = 0;
     QString last_settings_key;
     QJsonValue last_settings_value;
 
@@ -181,6 +184,18 @@ class FakeSource final : public LiveVerifySource {
         last_settings_key = key;
         last_settings_value = value;
         return Outcome(error);
+    }
+    bool WebcamOverlaySet(const QJsonObject& fields, QJsonObject* applied, QString* error) override {
+        calls.append(QStringLiteral("webcam.overlay.set"));
+        last_overlay_fields = fields;
+        if (!Outcome(error))
+            return false;
+        // What a real session answers: the state read back after the store, which
+        // is not the request when the engine clamped it.
+        applied->insert(QStringLiteral("appliedSequence"), static_cast<qint64>(++overlay_sequence));
+        applied->insert(QStringLiteral("appliedQpc100ns"), static_cast<qint64>(1234567));
+        applied->insert(QStringLiteral("applied"), applied_overlay);
+        return true;
     }
     bool SettingsReset(QString* error) override {
         calls.append(QStringLiteral("settings.reset"));
@@ -850,9 +865,9 @@ TEST(LiveVerifyDispatcher, TheProtocolOneCommandSurfaceIsExactlyTheOriginalNinet
                                   QStringLiteral("record.snapshot"),     QStringLiteral("record.split"),
                                   QStringLiteral("record.start"),        QStringLiteral("record.stop"),
                                   QStringLiteral("system.capabilities"), QStringLiteral("system.hello"),
-                                  QStringLiteral("system.snapshot"),     QStringLiteral("window.moveToScreen"),
-                                  QStringLiteral("window.snapshot")};
-    EXPECT_EQ(expected.size(), 19);
+                                  QStringLiteral("system.snapshot"),     QStringLiteral("webcam.overlay.set"),
+                                  QStringLiteral("window.moveToScreen"), QStringLiteral("window.snapshot")};
+    EXPECT_EQ(expected.size(), 20);
     EXPECT_EQ(LiveVerifyDispatcher::CommandNames(1), expected);
 }
 
@@ -1021,6 +1036,121 @@ TEST(LiveVerifyDispatcher, SettingsSetAnswersWithTheReconciledValueAndNotTheRequ
     EXPECT_EQ(result.value(QStringLiteral("marker")).toString(), QStringLiteral("settings.get"));
     EXPECT_EQ(result.value(QStringLiteral("requestedKey")).toString(), QStringLiteral("video.container"));
     EXPECT_EQ(result.value(QStringLiteral("requested")).toString(), QStringLiteral("MP4"));
+}
+
+TEST(LiveVerifyDispatcher, WebcamOverlaySetAnswersWithTheAppliedStateAndNotTheRequest) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Recording");
+    // What a session installs after clamping. The request below asks for a
+    // rectangle that runs off the frame; a caller that compared a recording
+    // against what it asked for would read the clamp as a defect.
+    source.applied_overlay.insert(QStringLiteral("x"), 0.5);
+    source.applied_overlay.insert(QStringLiteral("width"), 0.5);
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("x"), 0.9);
+    params.insert(QStringLiteral("width"), 0.5);
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params));
+    ASSERT_TRUE(Ok(response));
+
+    const QJsonObject result = response.value(QStringLiteral("result")).toObject();
+    const QJsonObject applied = result.value(QStringLiteral("applied")).toObject();
+    EXPECT_DOUBLE_EQ(applied.value(QStringLiteral("x")).toDouble(), 0.5);
+    EXPECT_DOUBLE_EQ(result.value(QStringLiteral("requested")).toObject().value(QStringLiteral("x")).toDouble(), 0.9)
+        << "the request stays visible beside the applied state, not in place of it";
+    EXPECT_EQ(result.value(QStringLiteral("appliedSequence")).toInt(), 1);
+    EXPECT_GT(result.value(QStringLiteral("appliedQpc100ns")).toDouble(), 0.0);
+}
+
+TEST(LiveVerifyDispatcher, TheAppliedSequenceAdvancesOnlyForAnUpdateThatReachedTheSession) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Recording");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("x"), 0.1);
+    const QJsonObject first = dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params));
+    ASSERT_TRUE(Ok(first));
+    const QJsonObject second = dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params));
+    ASSERT_TRUE(Ok(second));
+
+    // Two identical requests, two sequences. That is what lets a caller tell a
+    // second request from one that was dropped -- the effect repeats, the answer
+    // does not.
+    EXPECT_EQ(first.value(QStringLiteral("result")).toObject().value(QStringLiteral("appliedSequence")).toInt(), 1);
+    EXPECT_EQ(second.value(QStringLiteral("result")).toObject().value(QStringLiteral("appliedSequence")).toInt(), 2);
+
+    source.allow_intents = false;
+    const QJsonObject refused = dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params));
+    EXPECT_FALSE(Ok(refused));
+    EXPECT_EQ(source.overlay_sequence, 2u) << "a refused apply must not advance the sequence";
+}
+
+TEST(LiveVerifyDispatcher, WebcamOverlaySetIsRefusedWhenThereIsNoRecordingToApplyItTo) {
+    // The mirror image of settings.set: that one is refused DURING a recording,
+    // this one outside it. Answering from a stored setting would report a state
+    // no frame was composited with.
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Ready");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("x"), 0.1);
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params));
+    EXPECT_FALSE(Ok(response));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidState));
+    EXPECT_FALSE(source.calls.contains(QStringLiteral("webcam.overlay.set")))
+        << "refused before the intent ran, not accepted and then ignored";
+}
+
+TEST(LiveVerifyDispatcher, OnlyTheNamedFieldsReachTheSource) {
+    // A caller moving the rectangle must not silently reset an opacity it never
+    // mentioned. The dispatcher passes the parameters through untouched; the
+    // merge against the current state is the source's job, and this pins that the
+    // dispatcher does not invent the absent keys.
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Recording");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("x"), 0.25);
+    params.insert(QStringLiteral("y"), 0.75);
+    ASSERT_TRUE(Ok(dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params))));
+
+    EXPECT_TRUE(source.last_overlay_fields.contains(QStringLiteral("x")));
+    EXPECT_TRUE(source.last_overlay_fields.contains(QStringLiteral("y")));
+    EXPECT_FALSE(source.last_overlay_fields.contains(QStringLiteral("opacity")));
+    EXPECT_FALSE(source.last_overlay_fields.contains(QStringLiteral("mirror")));
+}
+
+TEST(LiveVerifyDispatcher, AnAcknowledgementIsNotEvidenceThatTheRecorderChanged) {
+    // The falsification 091-55 rests on. A control channel that answers
+    // "applied B, sequence N" while nothing reached the recorder is exactly the
+    // false success the whole acknowledgement design exists to make visible, and
+    // the answer alone cannot distinguish the two cases -- which is why the
+    // verdict is decided by the encoded frames and the acknowledgement is only
+    // the lower time bound they are judged against.
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Recording");
+    source.applied_overlay.insert(QStringLiteral("x"), 0.5);
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    QJsonObject params;
+    params.insert(QStringLiteral("x"), 0.5);
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("webcam.overlay.set"), params));
+
+    // The fake never touched a recorder, and the response is indistinguishable
+    // from one that did.
+    ASSERT_TRUE(Ok(response));
+    const QJsonObject result = response.value(QStringLiteral("result")).toObject();
+    EXPECT_EQ(result.value(QStringLiteral("appliedSequence")).toInt(), 1);
+    EXPECT_DOUBLE_EQ(result.value(QStringLiteral("applied")).toObject().value(QStringLiteral("x")).toDouble(), 0.5);
 }
 
 TEST(LiveVerifyDispatcher, SettingsSetIsRefusedWhileARecordingIsInFlight) {
@@ -1778,9 +1908,11 @@ TEST(LiveVerifyDescribe, IdempotencyIsDeclaredAndPlayPauseIsTheExceptionThatIsNo
     // The seven transport intents (six plus record.addMarker -- a second marker
     // is a second marker), edit.playPause, profiles.create (two creates with the
     // same name are two profiles), notification.invokeAction (an action
-    // navigates, opens a folder or relaunches), and notification.raise (two
-    // calls are two notifications).
-    EXPECT_EQ(non_idempotent, 11);
+    // navigates, opens a folder or relaunches), notification.raise (two calls are
+    // two notifications), and webcam.overlay.set, whose effect repeats but whose
+    // answer does not: the applied sequence advances on every accepted call, which
+    // is what lets a caller tell a second identical request from a dropped one.
+    EXPECT_EQ(non_idempotent, 12);
 }
 
 // ---------------------------------------------------------------------------

@@ -49,6 +49,8 @@ class KaxTracks;
 class KaxTrackEntry;
 class KaxCluster;
 class KaxCues;
+class KaxVideoColourMaxCLL;
+class KaxVideoColourMaxFALL;
 } // namespace libmatroska
 
 namespace exosnap::engine {
@@ -145,6 +147,17 @@ struct MatroskaStreamConfig {
     // Color description written into the video track's Colour element (ADR 0032).
     // Defaults to SDR BT.709 limited-range 8-bit.
     ColorMetadata color;
+    // The session measures content light levels per frame and supplies them
+    // through SetContentLightLevels() before Finalize(). MaxCLL and MaxFALL then
+    // describe the whole stream, so they are not known when the track header is
+    // written: the header reserves both elements at a fixed width and Finalize()
+    // patches the two leaves in place.
+    //
+    // Without this the writer keeps its unmeasured behaviour -- a non-zero
+    // color.max_content_light_level / max_frame_average_light_level is written
+    // once, and a zero one omits the element entirely, which is what CTA-861.3
+    // means by an unknown level.
+    bool reserve_content_light_level = false;
     // 4:2:0 chroma is produced left-sited (horizontal) / centred (vertical) by
     // every conversion path; the file says so rather than leaving it implied.
     bool chroma_420 = true;
@@ -197,6 +210,17 @@ class MatroskaStreamWriter {
     // Returns false if a write error occurred (state then becomes failed; further
     // Push/Finalize calls are no-ops returning false).
     bool Push(MuxPacket packet);
+
+    // Hand over the stream's measured content light levels, in cd/m^2. Only has
+    // an effect on an HDR session opened with reserve_content_light_level, where
+    // Finalize() patches them into the reserved track-header elements; a level of
+    // 0 is CTA-861.3's "unknown" and leaves the reservation reading as unknown.
+    // Safe to call repeatedly as the measurement rises; the last value before
+    // Finalize() is the one written.
+    void SetContentLightLevels(uint32_t max_cll_nits, uint32_t max_fall_nits) noexcept {
+        m_measured_max_cll = max_cll_nits;
+        m_measured_max_fall = max_fall_nits;
+    }
 
     // Drain the window, write Cues, patch Duration/SeekHead/Segment size, close.
     // Returns false on any I/O error; the file is closed regardless so a partial
@@ -302,6 +326,12 @@ class MatroskaStreamWriter {
     std::unique_ptr<libmatroska::KaxTracks> m_tracks;
     std::unique_ptr<libmatroska::KaxCues> m_cues;
     std::vector<libmatroska::KaxTrackEntry*> m_track_entries; // owned by m_tracks
+    // The two reserved content-light leaves inside the video track's Colour
+    // element, owned by m_tracks. Non-null only for a session that reserved them.
+    libmatroska::KaxVideoColourMaxCLL* m_max_cll_element = nullptr;
+    libmatroska::KaxVideoColourMaxFALL* m_max_fall_element = nullptr;
+    uint32_t m_measured_max_cll = 0;
+    uint32_t m_measured_max_fall = 0;
 
     uint64_t m_segment_data_start = 0;
 

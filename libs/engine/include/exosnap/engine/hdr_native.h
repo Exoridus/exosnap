@@ -62,8 +62,10 @@ struct HdrDisplayFacts {
 // non-constant-luminance matrix, limited range, 10-bit. Mastering-display
 // metadata (SMPTE ST 2086) is filled from the display's reported primaries and
 // luminance range — the display's capabilities are the usual approximation for
-// the content's mastering values. MaxCLL/MaxFALL are deliberately left absent
-// (no per-frame content-light analysis is performed; 0 = absent is legal).
+// the content's mastering values. MaxCLL/MaxFALL are not part of this
+// description: they are measured while the session records and patched into the
+// container's track header when the file is finalised, so nothing derived from
+// the display can stand in for them here.
 //
 // The facts must come from an HDR-active display (an SDR-mode display reports
 // inflated EDID luminance caps that must not be trusted); callers gate this on
@@ -76,8 +78,9 @@ struct HdrDisplayFacts {
     color.range = ColorRange::Limited; // HDR10 is a narrow-range format
     color.bits_per_channel = 10;       // HDR10 is 10-bit by definition
     color.hdr = true;
-    // No MaxCLL/MaxFALL: absence is legal and no content light-level analysis
-    // is done. They stay 0 (the writer omits them).
+    // MaxCLL/MaxFALL stay 0 here. They are maxima over the finished stream, so
+    // the session measures them per frame and the container writer patches the
+    // final values into the reserved track-header elements.
 
     // Mastering-display metadata is only meaningful with real chromaticity /
     // luminance readings; a degenerate (all-zero) report omits it rather than

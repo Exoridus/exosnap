@@ -36,6 +36,7 @@ TestCase {
                 id: picker
 
                 recordViewModel: recordDriver.adapter
+                hostPage: page
             }
         }
     }
@@ -323,5 +324,19 @@ TestCase {
         tryCompare(presetSpy, "count", 1);
         compare(presetSpy.signalArguments[0][0], "custom");
         tryCompare(page.picker, "opened", false);
+    }
+
+    // The picker is a Popup, so it is reparented into the window's overlay and
+    // does not go down with the scene subtree it was declared in. The shell
+    // swaps destinations by switching a StackLayout child's visibility, and a
+    // keyboard shortcut reaches that swap through the modal veil -- which left
+    // the picker on screen over the destination the user had navigated to.
+    function test_picker_closes_when_its_page_is_swapped_away() {
+        let page = makePage();
+        verify(page.picker.opened, "the picker opens");
+
+        page.visible = false;
+        tryCompare(page.picker, "opened", false,
+                   1000, "the picker must not outlive the destination that owns it");
     }
 }

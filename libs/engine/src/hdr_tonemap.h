@@ -38,9 +38,22 @@ namespace exosnap::engine {
 // scRGB reference white (kHdrReferenceWhiteNits) is defined in
 // hdr_reference_white.h so this header and hdr_pq.h can be included together.
 
-// Fallback display peak used when the capture display's active peak luminance is
-// unknown (the display is not reporting an active HDR colour space). 1000 cd/m^2
-// is a common consumer-HDR peak and errs toward gentler highlight compression.
+// Fallback display peak used when the capture display's reported peak luminance
+// cannot be used (see HdrPeakScale for the two cases). 1000 cd/m^2 is a common
+// consumer-HDR peak and errs toward gentler highlight compression.
+//
+// This value is a choice, not a standard. Microsoft documents how to READ the
+// display's colour volume and says to configure tone mapping from it, but gives
+// no guidance for a reading that turns out to be unusable, and names no default.
+//
+// It also stands in for something it is not. The documented tone-map parameter is
+// the CONTENT's maximum luminance (MaxCLL), with the display's maximum as a
+// separate input; here the target is an SDR file rather than a panel, so what
+// this number actually drives is the content side. The display's peak is only a
+// proxy for it, and a tone-mapped HDR session no longer runs on the proxy: the
+// per-frame luminance pass (frame_luminance.h) measures the content peak and
+// takes over the knee within a few frames. This value is what the session starts
+// on and falls back to while no measurement has landed.
 inline constexpr float kHdrFallbackPeakNits = 1000.0f;
 
 // Knee point in reference-white multiples. Content at or below reference white
@@ -49,13 +62,42 @@ inline constexpr float kHdrFallbackPeakNits = 1000.0f;
 inline constexpr float kHdrToneMapKnee = 0.80f;
 
 // Peak luminance, expressed in reference-white multiples, that maps to output
-// 1.0. The display's reported luminance is only trusted when the display is
-// actively in an HDR colour space: a display in SDR mode still reports its EDID
-// luminance caps (measured: 1499 cd/m^2 on an SDR panel), which must not drive
-// the knee. Result is always >= 1.0.
-inline float HdrPeakScale(bool display_hdr_active, float display_max_luminance_nits) {
+// 1.0. Result is always >= 1.0.
+//
+// Two reported values are refused, both for the same reason -- they describe no
+// display that exists, and driving the knee with them destroys highlights:
+//
+//   * A display that is not actively in an HDR colour space. It still reports
+//     its EDID luminance caps (measured: 1499 cd/m^2 on an SDR panel), which are
+//     a capability claim rather than the active reference.
+//   * A peak at or below the white the OS is currently composing SDR content at.
+//     The roll-off runs AFTER the paper-white normalisation -- the shader divides
+//     both the signal and this peak by paper_white_scale -- so what decides
+//     whether any highlight range survives is peak_nits / sdr_white_nits, never
+//     the peak alone. At or below 1.0 that quotient falls under the knee and
+//     HdrToneMapChannel degenerates into a hard clamp at paper white: every
+//     highlight above it collapses onto white.
+//
+// The second case is not exotic. Measured here: two panels both report 240 cd/m^2
+// through DXGI_OUTPUT_DESC1::MaxLuminance -- documented as "likely only valid for
+// a small area of the panel" -- while Windows places SDR white anywhere up to
+// 480 cd/m^2, so the degenerate range begins around half slider travel, in
+// ordinary use.
+//
+// Nor is the reported peak necessarily the panel's: one of those two declares
+// 400 cd/m^2 in its EDID HDR Static Metadata block and the other declares no
+// luminance at all, yet both arrive as the same 240. DXGI's value is a system
+// answer, not a measurement, and it cannot be assumed to bound what the display
+// does. Which is the second reason not to let it decide alone that there is no
+// highlight range: it may simply be lower than the panel.
+//
+// A genuine HDR panel (1000 cd/m^2 and up) stays far above any reachable white
+// and keeps its reported peak at every slider position.
+inline float HdrPeakScale(bool display_hdr_active, float display_max_luminance_nits, float sdr_white_level_nits) {
+    const float paper_white_nits = EffectiveOverlayReferenceWhiteNits(sdr_white_level_nits);
     float peak_nits = kHdrFallbackPeakNits;
-    if (display_hdr_active && display_max_luminance_nits > kHdrReferenceWhiteNits) {
+    if (display_hdr_active && display_max_luminance_nits > kHdrReferenceWhiteNits &&
+        display_max_luminance_nits > paper_white_nits) {
         peak_nits = display_max_luminance_nits;
     }
     return peak_nits / kHdrReferenceWhiteNits; // >= 1.0

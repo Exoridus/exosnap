@@ -12,12 +12,69 @@
 #include <wrl/client.h>
 
 #include <exosnap/engine/hdr_color_space.h>
+#include <exosnap/engine/sdr_white_level.h>
 
 #include <cstdio>
+#include <cwchar>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
+
+// Mirrors SdrPaperWhiteScale in the engine's private hdr_tonemap.h, which a probe
+// cannot include, so the printed scale is the one the engine derives.
+float SdrPaperWhiteScaleForProbe(float sdr_white_level_nits) {
+    const float nits = exosnap::engine::EffectiveOverlayReferenceWhiteNits(sdr_white_level_nits);
+    const float scale = nits / 80.0f;
+    return scale > 1.0f ? scale : 1.0f;
+}
+
+// The OS "SDR content brightness" of a monitor, in nits. The same query the
+// capture backend makes (DISPLAYCONFIG_SDR_WHITE_LEVEL, raw 1000 == 80 nits);
+// 0 means the monitor could not be matched or the query failed.
+float QuerySdrWhiteLevelNits(HMONITOR hmonitor) {
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(hmonitor, &mi) == FALSE) {
+        return 0.0f;
+    }
+    UINT32 pathCount = 0;
+    UINT32 modeCount = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) {
+        return 0.0f;
+    }
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) !=
+        ERROR_SUCCESS) {
+        return 0.0f;
+    }
+    paths.resize(pathCount);
+    for (const auto& path : paths) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};
+        source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        source.header.size = sizeof(source);
+        source.header.adapterId = path.sourceInfo.adapterId;
+        source.header.id = path.sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&source.header) != ERROR_SUCCESS) {
+            continue;
+        }
+        if (wcscmp(source.viewGdiDeviceName, mi.szDevice) != 0) {
+            continue;
+        }
+        DISPLAYCONFIG_SDR_WHITE_LEVEL white{};
+        white.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL;
+        white.header.size = sizeof(white);
+        white.header.adapterId = path.targetInfo.adapterId;
+        white.header.id = path.targetInfo.id;
+        if (DisplayConfigGetDeviceInfo(&white.header) != ERROR_SUCCESS) {
+            return 0.0f;
+        }
+        return exosnap::engine::SdrWhiteLevelRawToNits(white.SDRWhiteLevel);
+    }
+    return 0.0f;
+}
 
 const char* ColorSpaceName(DXGI_COLOR_SPACE_TYPE cs) {
     switch (cs) {
@@ -69,6 +126,10 @@ void DumpDisplays() {
                 printf("    luminance       = min %.4f / max %.1f / maxFullFrame %.1f nits\n",
                        static_cast<double>(d.MinLuminance), static_cast<double>(d.MaxLuminance),
                        static_cast<double>(d.MaxFullFrameLuminance));
+                const float sdr_white = QuerySdrWhiteLevelNits(d.Monitor);
+                printf("    sdrWhiteLevel   = %.1f nits (paper_white_scale %.3f, effective %.1f nits)\n",
+                       static_cast<double>(sdr_white), static_cast<double>(SdrPaperWhiteScaleForProbe(sdr_white)),
+                       static_cast<double>(exosnap::engine::EffectiveOverlayReferenceWhiteNits(sdr_white)));
                 printf("    primaries  R(%.3f,%.3f) G(%.3f,%.3f) B(%.3f,%.3f) W(%.3f,%.3f)\n",
                        static_cast<double>(d.RedPrimary[0]), static_cast<double>(d.RedPrimary[1]),
                        static_cast<double>(d.GreenPrimary[0]), static_cast<double>(d.GreenPrimary[1]),

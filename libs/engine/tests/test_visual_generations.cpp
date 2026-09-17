@@ -58,3 +58,23 @@ TEST(MakeVisualFrameKeyTest, IsConstexprEvaluable) {
     constexpr VisualFrameKey key = MakeVisualFrameKey(gens);
     static_assert(key.screen_generation == 1);
 }
+
+// The counter that says whether an input moved, as opposed to the decision that
+// says whether the frame must be composited again. Pinned apart because the two
+// differ exactly at the first composite, and a measurement that attributes a
+// recomposition to the overlay depends on the webcam's count being zero on a
+// session where the camera never changed.
+
+TEST(GenerationAdvanced, TheFirstCompositeIsInitialisationAndNotAChange) {
+    EXPECT_FALSE(exosnap::engine::GenerationAdvanced(/*have_last_composited_key=*/false, /*current=*/1,
+                                                     /*last_composited=*/0));
+}
+
+TEST(GenerationAdvanced, AnActualAdvanceCounts) {
+    EXPECT_TRUE(exosnap::engine::GenerationAdvanced(true, /*current=*/1, /*last_composited=*/0));
+}
+
+TEST(GenerationAdvanced, FurtherSamplesAtTheSameGenerationDoNot) {
+    EXPECT_FALSE(exosnap::engine::GenerationAdvanced(true, /*current=*/1, /*last_composited=*/1));
+    EXPECT_FALSE(exosnap::engine::GenerationAdvanced(true, /*current=*/7, /*last_composited=*/7));
+}

@@ -125,8 +125,9 @@ manifest as a GitHub release asset is a mandatory checklist step for every relea
 The full release gate in `release-candidate.yml` only runs on version tags and `release/**`
 branches, so a harvest-fragment regression, a new runtime DLL `windeployqt` fails to stage, or a
 leaked dev-tree file is invisible until the release tag is pushed — often long after the change
-that caused it merged. `ci.yml` gains a `packaging-smoke` job that runs the fastest slice of the
-release gate on every pull request that touches packaging-relevant paths:
+that caused it merged. `ci.yml` runs the fastest slice of the release gate as a step of the
+`build-test (windows-x64-release)` job, on the build that job already made, on every pull request
+that touches packaging-relevant paths:
 
 - `cmake --install` into the same pruned staging tree the release script produces
 - presence / absence / leak / exe-metadata validation of that tree
@@ -136,22 +137,22 @@ release gate on every pull request that touches packaging-relevant paths:
 It runs `-SkipMsi` — the WiX/MSI build, MSI content assertion, and MSI smoke stay exclusive to the
 release gate, since they require installing the WiX Toolset and add several minutes for a package
 format the portable-ZIP path already exercises structurally (same staging tree, same harvest
-source). It builds from the `windows-x64-ninja-release` preset instead of the canonical
-VS-generator `windows-x64-release` preset the release gate uses: the VS/MSBuild generator ignores
-`CMAKE_CXX_COMPILER_LAUNCHER`, so building with it on every PR would mean a from-scratch compile
-each time, whereas the Ninja preset is sccache-cacheable and already used by `build-test`'s release
-leg in the same workflow.
+source). The release gate and the smoke build from the same `windows-x64-ninja-release` preset
+(Ninja + MSVC, sccache as the compiler launcher), so what the smoke exercises is the build path
+that ships. The Visual Studio generator ignores `CMAKE_CXX_COMPILER_LAUNCHER`; it is not used for
+release artifacts, and the toolchain manifest records the generator so a final built with a
+different one from its qualified candidate is refused at publish time.
 
-`build-release-artifacts.ps1` gained a `-Preset` parameter (default `windows-x64-release`, so the
-release gate's invocation is unchanged) and now resolves the built `exosnap.exe` under either a
-multi-config (Visual Studio, `app/Release/exosnap.exe`) or single-config (Ninja, `app/exosnap.exe`)
-generator layout, since that is the only part of the script that assumed the VS-generator directory
-shape.
+`build-release-artifacts.ps1` takes a `-Preset` parameter and resolves the built `exosnap.exe`
+under either a multi-config (Visual Studio, `app/Release/exosnap.exe`) or single-config (Ninja,
+`app/exosnap.exe`) generator layout.
 
-A `changes` job (`dorny/paths-filter`) gates `packaging-smoke` on pull requests that touch
-`packaging/**`, `scripts/build-release-artifacts.ps1`, `cmake/Vendor*`, the install-rule-bearing
-CMake files (root, `app/`, `apps/updater/`, `third_party/`), or `THIRD_PARTY_NOTICES.md`. It does
-not run on push triggers (main, tags) — those stay covered by the release gate.
+A `changes` job (`dorny/paths-filter`) arms the smoke on pull requests that touch `packaging/**`,
+`scripts/build-release-artifacts.ps1`, `cmake/Vendor*`, the install-rule-bearing CMake files
+(root, `app/`, `apps/updater/`, `third_party/`), or `THIRD_PARTY_NOTICES.md`; every one of those
+paths also arms the release leg the smoke runs on, and `ci-required` fails the run if that subset
+relation ever stops holding. It does not run on push triggers (main, tags) — those stay covered by
+the release gate.
 
 ## Consequences
 

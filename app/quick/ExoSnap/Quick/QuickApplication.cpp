@@ -1315,7 +1315,26 @@ void QuickApplication::wireRecordCommands() {
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::pauseRequested, &record_view_model_adapter_,
                      [this]() { recording_coordinator_->PauseRecording(); });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::resumeRequested, &record_view_model_adapter_,
-                     [this]() { recording_coordinator_->ResumeRecording(); });
+                     [this]() {
+                         // Continue arms the coordinator paused with no session
+                         // under it, so there is nothing for ResumeRecording() to
+                         // unpause: Resume is the press that starts the next slice
+                         // (product spec, Crash recovery). The coordinator admits a
+                         // start from the armed state, and the arm is released only
+                         // once that start has been taken — a refused one leaves the
+                         // offer standing rather than dropping it on a press that
+                         // did nothing.
+                         if (recording_coordinator_->IsArmedFromRecovery()) {
+                             if (!record_view_model_adapter_.canResume())
+                                 return;
+                             if (!startRecordingNow())
+                                 return;
+                             if (recording_coordinator_->State() != UiRecordingState::ArmedFromRecovery)
+                                 recording_coordinator_->FinalizeArmedRecovery();
+                             return;
+                         }
+                         recording_coordinator_->ResumeRecording();
+                     });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::captureFrameRequested,
                      &record_view_model_adapter_, [this]() { recording_coordinator_->CaptureFrame(); });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::addMarkerRequested,
@@ -1847,6 +1866,40 @@ void QuickApplication::updateMeters() {
                                 models::MeterDbfsFromRms(microphone));
 }
 
+std::optional<exosnap::engine::AppliedWebcamOverlay> QuickApplication::applyLiveWebcamOverlay(const QJsonObject& fields,
+                                                                                              QString* error) {
+    if (recording_coordinator_ == nullptr) {
+        if (error != nullptr)
+            *error = QStringLiteral("There is no recording coordinator to apply an overlay to");
+        return std::nullopt;
+    }
+
+    // Start from what is live now and change only the named fields, so a caller
+    // moving the rectangle does not silently reset the opacity it never mentioned.
+    WebcamOverlayRect overlay = live_config_.webcam.overlay;
+    const auto number = [&fields](const char* key, float current) {
+        const QJsonValue value = fields.value(QLatin1String(key));
+        return value.isDouble() ? static_cast<float>(value.toDouble()) : current;
+    };
+    overlay.x_norm = number("x", overlay.x_norm);
+    overlay.y_norm = number("y", overlay.y_norm);
+    overlay.w_norm = number("width", overlay.w_norm);
+    overlay.h_norm = number("height", overlay.h_norm);
+    live_config_.webcam.overlay = SanitizeWebcamOverlayRect(overlay);
+    live_config_.webcam.opacity = number("opacity", live_config_.webcam.opacity);
+    if (fields.value(QStringLiteral("mirror")).isBool())
+        live_config_.webcam.mirror = fields.value(QStringLiteral("mirror")).toBool();
+
+    // The production path, not a second one: the same call the drag makes.
+    const std::optional<exosnap::engine::AppliedWebcamOverlay> applied =
+        recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
+    synchronizeRecordState();
+    if (!applied.has_value() && error != nullptr) {
+        *error = QStringLiteral("No running recording accepted the overlay change");
+    }
+    return applied;
+}
+
 void QuickApplication::updateWebcamOverlay(const QRectF& normalized_rect) {
     if (!record_view_model_adapter_.webcamOverlayEditable())
         return;
@@ -1926,7 +1979,10 @@ void QuickApplication::updateMeterServices() {
 }
 
 void QuickApplication::startMeterServices() {
-    const bool visible = record_view_model_adapter_.active();
+    // Same two pages as updateMeterServices(). Reading only the Record page here
+    // let the Settings page arm the debounce and then bail out of its own timer,
+    // so the per-source rows the user was looking at stayed at silence.
+    const bool visible = record_view_model_adapter_.active() || settings_adapter_.active();
     const bool session = record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;
@@ -2316,13 +2372,15 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
         // desktop and stays a log line; the pipeline card still says the source
         // has gone quiet (CaptureDiagnostics::capture_starved).
         const bool display_off = !console_display_on_;
-        const diagnostics::WindowStallVerdict verdict = diagnostics::ClassifyConfirmedDisplayStall(display_off);
+        const bool display_missing = capturedDisplayMissing();
+        const diagnostics::WindowStallVerdict verdict =
+            diagnostics::ClassifyConfirmedDisplayStall(display_off, display_missing);
         capture_stall_monitor_.ApplyVerdict(verdict);
         if (verdict != diagnostics::WindowStallVerdict::Stalled) {
             diagnostics::AppLog::info(
                 QStringLiteral("capture"),
-                QStringLiteral("display capture produced no frame for %1 s; not reported (display is on, a static "
-                               "desktop is indistinguishable from a stall)")
+                QStringLiteral("display capture produced no frame for %1 s; not reported (display is on and still "
+                               "attached, a static desktop is indistinguishable from a stall)")
                     .arg(starved_for, 0, 'f', 1));
             return;
         }
@@ -2330,12 +2388,13 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
             recording_coordinator_->NoteWindowCaptureStall();
         diagnostics::AppLog::warning(
             QStringLiteral("capture"),
-            QStringLiteral("display capture stalled: no frame for %1 s while the console display is off, recording "
+            QStringLiteral("display capture stalled: no frame for %1 s while the captured display is %2, recording "
                            "continues")
-                .arg(starved_for, 0, 'f', 1));
+                .arg(starved_for, 0, 'f', 1)
+                .arg(display_missing ? QStringLiteral("disconnected") : QStringLiteral("off")));
         clearWindowCaptureStallWarning();
         capture_stall_toast_sequence_ = notifications_adapter_.manager().Enqueue(
-            notifications::MakeDisplayCaptureStalledEvent(starved_for, display_off));
+            notifications::MakeDisplayCaptureStalledEvent(starved_for, display_off, display_missing));
         return;
     }
     const diagnostics::WindowTargetFacts facts =
@@ -3923,6 +3982,13 @@ void QuickApplication::initializeRecovery() {
                          info.manifest_entry = entry;
                          info.target_valid = false;
                          if (recording_coordinator_->ArmFromRecovery(info)) {
+                             // The interrupted artefact is the continued session's
+                             // first slice, so it is repaired in the background now.
+                             // Without this the user is given a slice boundary with
+                             // nothing before it: the artefact would stay a
+                             // ".partial" that only a later Finish ever turns into a
+                             // file.
+                             recovery_adapter_.finishById(entry.id);
                              emit shell_adapter_.navigateToPageRequested(ShellAdapter::RecordPage);
                          } else {
                              diagnostics::AppLog::warning(
@@ -5415,9 +5481,20 @@ QuickApplication::captureTargetAdapterFacts(const std::optional<exosnap::engine:
     facts.known = true;
     facts.vendor_id = desc.VendorId;
     facts.adapter_name = QString::fromWCharArray(desc.Description).toStdString();
+    // The display's adapter identity. Reachability evidence is bound to this plus
+    // the encoder's, so a display change or a GPU swap stops an old verdict from
+    // being applied to a setup it was never about.
+    // PackAdapterLuid is the repository's one LUID packing, so the display's
+    // identity and the enumerated adapters' are comparable without a second
+    // convention to keep in step.
+    facts.capture_adapter_luid =
+        static_cast<uint64_t>(capability::PackAdapterLuid(desc.AdapterLuid.HighPart, desc.AdapterLuid.LowPart));
     for (const auto& info : capability::EnumerateAdapters()) {
-        if (info.vendor == capability::AdapterVendor::Nvidia)
+        if (info.vendor == capability::AdapterVendor::Nvidia) {
             facts.nvidia_adapter_present = true;
+            if (facts.encoder_adapter_luid == 0)
+                facts.encoder_adapter_luid = static_cast<uint64_t>(info.luid);
+        }
     }
     return facts;
 }
@@ -5484,14 +5561,27 @@ bool QuickApplication::prepareRecordingBenchmark(uint32_t frame_rate, QString& e
     return true;
 }
 
+bool QuickApplication::capturedDisplayMissing() const {
+    const int index = record_view_model_.selected_target_index;
+    if (index < 0 || static_cast<std::size_t>(index) >= record_view_model_.targets.size())
+        return false;
+    const exosnap::engine::CaptureTarget& target = record_view_model_.targets[static_cast<std::size_t>(index)];
+    if (target.kind != exosnap::engine::CaptureTarget::Kind::Monitor || target.native_id == 0)
+        return false;
+    // The HMONITOR itself, not the GDI device name: names are reassigned on a
+    // topology change, so a reconnected second display can inherit the name of
+    // the one that left and make a missing display look present. GetMonitorInfoW
+    // fails on a handle whose display is gone, which is the question being asked.
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    return GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &info) == FALSE;
+}
+
 bool QuickApplication::selectCaptureTargetForAutomation(exosnap::engine::CaptureTarget::Kind kind,
                                                         const QString& title_filter) {
     for (std::size_t index = 0; index < record_view_model_.targets.size(); ++index) {
         const exosnap::engine::CaptureTarget& target = record_view_model_.targets[index];
-        if (target.kind != kind)
-            continue;
-        if (kind == exosnap::engine::CaptureTarget::Kind::Window &&
-            !QString::fromStdString(target.description).contains(title_filter, Qt::CaseInsensitive))
+        if (!CaptureTargetMatchesFilter(target, kind, title_filter.toStdString()))
             continue;
         const CaptureMode mode =
             kind == exosnap::engine::CaptureTarget::Kind::Window ? CaptureMode::Window : CaptureMode::Monitor;
@@ -5548,7 +5638,19 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     // inherit one from the scenario applied before it.
     clearAudioSourceDegradedWarning();
 
-    if (normalized == QLatin1String(visual::record_state::kReady)) {
+    if (normalized == QLatin1String(visual::record_state::kBrand)) {
+        // The empty stage's own seeding, plus the brand swap: the still is that
+        // page with its instruction block replaced, not a third arrangement
+        // that would drift from what the product draws.
+        selectTarget(-1, CaptureMode::Monitor);
+        record_view_model_adapter_.applyBrandStageForHarness();
+    } else if (normalized == QLatin1String(visual::record_state::kNoSource)) {
+        // Seeded by clearing the selection, not by setting a state behind one:
+        // what the page shows without a source is the product's own answer to
+        // having none, and a state written over a selection that is still there
+        // would be a capture of something the application never reaches.
+        selectTarget(-1, CaptureMode::Monitor);
+    } else if (normalized == QLatin1String(visual::record_state::kReady)) {
         record_view_model_.SetState(UiRecordingState::Ready);
     } else if (normalized == QLatin1String(visual::record_state::kRecording) ||
                normalized == QLatin1String(visual::record_state::kRecordingAudioDegraded)) {

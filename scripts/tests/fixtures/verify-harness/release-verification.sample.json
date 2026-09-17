@@ -32,15 +32,20 @@
     "scenarioCount": 1
   },
   "promotion": {
-    "contract": "exosnap.release-promotion/1",
+    "contract": "exosnap.release-promotion/2",
     "qualifiedVersion": "0.9.1",
-    "policy": "the final tag rebuilds the qualified commit; only the declared entries may differ",
+    "policy": "the final tag rebuilds the qualified commit; only the declared entries may differ, and only in the declared sections",
     "mutableEntries": [
       "exosnap.exe",
       "exosnap-updater.exe",
       "crashpad_handler.exe"
     ],
-    "mutableReason": "compiled from this commit, so each carries the release version string and the build id of the run that produced it"
+    "mutableReason": "compiled from this commit, so each carries the release version string and the build id of the run that produced it",
+    "mutableSections": [
+      ".rdata",
+      ".rsrc"
+    ],
+    "mutableSectionsReason": "the release identity is stored in fixed-width fields in .rdata beside the link debug record, and the VERSIONINFO resource is .rsrc; every other section is the same code laid out the same way"
   },
   "capabilities": {
     "elevated": "false"

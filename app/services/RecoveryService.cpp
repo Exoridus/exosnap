@@ -172,14 +172,14 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
             // possibly-unfinalized MKV) is the only trustworthy recording and
             // must be kept. Remove the abandoned temp so it is never mistaken for a
             // real result; the user-visible target path was never touched.
-            std::error_code cleanup_ec;
-            std::filesystem::remove(temp, cleanup_ec);
+            if (const std::string left = DescribeFailedStagingRemoval(temp); !left.empty())
+                diagnostics::AppLog::warning(QStringLiteral("recovery"), QString::fromStdString(left));
             return {false, result.message};
         }
 
         if (const unsigned long move_err = AtomicReplaceInPlace(temp, repair_target); move_err != 0) {
-            std::error_code cleanup_ec;
-            std::filesystem::remove(temp, cleanup_ec);
+            if (const std::string left = DescribeFailedStagingRemoval(temp); !left.empty())
+                diagnostics::AppLog::warning(QStringLiteral("recovery"), QString::fromStdString(left));
             const std::string msg = "Atomic move to final output failed (Win32 error " + std::to_string(move_err) + ")";
             diagnostics::AppLog::warning(QStringLiteral("recovery"), QString::fromStdString(msg));
             return {false, msg};
@@ -215,14 +215,14 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
         // The remux did not complete cleanly — the artefact (playable MKV) is the
         // only trustworthy recording and must be kept. Remove the abandoned temp; the
         // target path was never touched (any pre-existing stale file stays as it was).
-        std::error_code cleanup_ec;
-        std::filesystem::remove(temp, cleanup_ec);
+        if (const std::string left = DescribeFailedStagingRemoval(temp); !left.empty())
+            diagnostics::AppLog::warning(QStringLiteral("recovery"), QString::fromStdString(left));
         return {false, result.message};
     }
 
     if (const unsigned long move_err = AtomicReplaceInPlace(temp, target); move_err != 0) {
-        std::error_code cleanup_ec;
-        std::filesystem::remove(temp, cleanup_ec);
+        if (const std::string left = DescribeFailedStagingRemoval(temp); !left.empty())
+            diagnostics::AppLog::warning(QStringLiteral("recovery"), QString::fromStdString(left));
         const std::string msg = "Atomic move to final output failed (Win32 error " + std::to_string(move_err) + ")";
         diagnostics::AppLog::warning(QStringLiteral("recovery"), QString::fromStdString(msg));
         return {false, msg};

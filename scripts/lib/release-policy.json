@@ -1,0 +1,33 @@
+{
+  "policyVersion": 1,
+  "releaseLine": "0.9.x",
+  "catalog": {
+    "version": "1.0.0",
+    "digest": "36303d61ac9ac2111b71cb6d5cb46f27c0a8c5a5654a19be2d3389f51b7dbe8a",
+    "scenarioCount": 26
+  },
+  "requiredOptIn": [
+    "REL-AUD-CLOCK-001",
+    "REL-AUD-DEGRADE-001",
+    "REL-AUD-FORMAT-001",
+    "REL-AUD-SILENCE-001",
+    "REL-CAP-FSE-001",
+    "REL-CAP-QUIET-001",
+    "REL-CAP-STALL-001",
+    "REL-DISP-HDR-001",
+    "REL-DISP-MIXED-001",
+    "REL-DISP-REFRESH-001",
+    "REL-PKG-CHOCO-001",
+    "REL-UPD-MSI-001",
+    "REL-UPD-MSI-DECLINE-001",
+    "REL-UPD-PORTABLE-001",
+    "REL-VIS-NOTIFY-001",
+    "REL-VIS-OVERLAY-001"
+  ],
+  "promotion": {
+    "allowedSourceRefs": [
+      "refs/heads/main"
+    ],
+    "requireAncestry": true
+  }
+}
