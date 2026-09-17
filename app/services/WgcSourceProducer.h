@@ -42,6 +42,15 @@ class WgcSourceProducer final : public HubSourceProducer {
     void Close() override;
     ProducerPoll PollFrame(HubFrame& out) override;
 
+    // Opt in BEFORE Open(): the producer then subscribes FrameArrived and sets
+    // the returned event once per delivered frame, so an owner that would
+    // otherwise poll can block until there is something to fetch. The handler is
+    // marshalled to the owning thread like every other WGC callback, so a wait
+    // must still wake on messages; the event only tells a frame apart from any
+    // other wake. Returns nullptr if the event cannot be created, which leaves
+    // the caller on whatever cadence it had.
+    [[nodiscard]] HANDLE FrameSignal() noexcept;
+
     [[nodiscard]] ID3D11Device* Device() const noexcept {
         return device_.get();
     }
@@ -59,6 +68,12 @@ class WgcSourceProducer final : public HubSourceProducer {
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool frame_pool_{nullptr};
     winrt::Windows::Graphics::Capture::GraphicsCaptureSession session_{nullptr};
     winrt::event_token closed_token_{};
+
+    // Non-null only once FrameSignal() has been called. Auto-reset: a wait that
+    // consumed it goes on to fetch the frame, and what matters afterwards is the
+    // next arrival rather than the one already taken.
+    HANDLE frame_event_ = nullptr;
+    winrt::event_token frame_token_{};
     winrt::Windows::Graphics::SizeInt32 pool_size_{};
 
     // Set from the item.Closed callback on the pumping thread, read by PollFrame

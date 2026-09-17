@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <stop_token>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include <windows.h>
@@ -26,6 +28,9 @@ using namespace std::chrono_literals;
 // minimized, cloaked or behind the secure desktop never produces one, and the
 // round robin must not stall on it.
 constexpr auto kFrameWait = 150ms;
+
+// Only used when the producer could not hand out a frame-arrival event. With one
+// the wait blocks until WGC delivers, and this cadence never applies.
 constexpr auto kPollSlice = 5ms;
 constexpr int kFailuresBeforeUnavailable = 2;
 
@@ -223,12 +228,20 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
             continue;
 
         WgcSourceProducer producer(keyFor(request.target), device);
+        // Asked for before Open, which is when the producer can still subscribe.
+        const HANDLE frame_signal = producer.FrameSignal();
+        // A stop request sets the same event, so teardown does not have to sit
+        // out the frame wait a window that never draws would otherwise cost.
+        std::stop_callback wake_on_stop(stop_token, [frame_signal] {
+            if (frame_signal != nullptr)
+                SetEvent(frame_signal);
+        });
         std::string error;
         QImage still;
         bool device_lost = false;
         if (producer.Open(error)) {
             const auto deadline = std::chrono::steady_clock::now() + kFrameWait;
-            while (std::chrono::steady_clock::now() < deadline && !stop_token.stop_requested()) {
+            for (;;) {
                 MSG message{};
                 while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE) {
                     TranslateMessage(&message);
@@ -246,7 +259,23 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
                     device_lost = true;
                     break;
                 }
-                std::this_thread::sleep_for(kPollSlice);
+
+                const auto now = std::chrono::steady_clock::now();
+                if (now >= deadline || stop_token.stop_requested())
+                    break;
+                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+
+                // Wait for WGC to say there is a frame instead of asking again in
+                // a few milliseconds. FrameArrived is marshalled through this
+                // thread's pump like every other WGC callback, so the wait has to
+                // wake on messages as well -- the event only tells a frame apart
+                // from any other wake.
+                if (frame_signal != nullptr) {
+                    MsgWaitForMultipleObjectsEx(1, &frame_signal, static_cast<DWORD>(remaining.count()), QS_ALLINPUT,
+                                                MWMO_INPUTAVAILABLE);
+                } else {
+                    std::this_thread::sleep_for(std::min(kPollSlice, remaining));
+                }
             }
         }
         producer.Close();
