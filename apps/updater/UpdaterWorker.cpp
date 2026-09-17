@@ -657,8 +657,20 @@ bool UpdaterWorker::fetchAndStage() {
     if (portable) {
         plan_ = MakeSwapPlan(args_.install_dir.toStdWString(), manifest_.version);
         QString stage_error;
-        if (!StagePortablePackage(&stage_error)) {
-            emit failed(FailureCase::DownloadFailed, stage_error); // A1 -- retry re-downloads cleanly
+        bool unusable_package = false;
+        if (!StagePortablePackage(&stage_error, &unusable_package)) {
+            if (unusable_package) {
+                // The package itself is wrong, so only a fresh one can help.
+                have_package_ = false;
+                emit failed(FailureCase::DownloadFailed, stage_error); // A1 -> re-download
+            } else {
+                // Staging is filesystem work on a package that arrived complete
+                // and verified. Reporting it as a download failure sends the user
+                // after their network and re-enters the retry at Download, which
+                // fetches bytes that were never the problem. Same split as the
+                // install-step call site below.
+                emit failed(FailureCase::InstallFailed, stage_error); // B2
+            }
             return false;
         }
     }
