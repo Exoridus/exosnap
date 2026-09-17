@@ -2251,6 +2251,36 @@ function Get-ReleaseVmHostGpu {
     return $identity
 }
 
+function Format-ReleaseVmGpuBinding {
+    <#
+    .SYNOPSIS
+        The one line a run prints about the adapter it holds the guest to.
+    .DESCRIPTION
+        Written from the keys that are actually present. An adapter that could not be
+        measured carries none of them, and that is a case every dry run has to
+        survive: the refusal is already recorded as a problem, so this line names the
+        state instead of terminating on a missing key under Set-StrictMode.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $HostGpu,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Display
+    )
+    $mode = "display $($Display['Width'])x$($Display['Height'])@$($Display['RefreshHz'])Hz"
+    if (-not $HostGpu.Contains('Measured') -or -not $HostGpu['Measured']) {
+        $detail = if ($HostGpu.Contains('Detail')) { "$($HostGpu['Detail'])" } else { 'no detail given' }
+        return "not measured ($detail), $mode"
+    }
+    $parts = @()
+    foreach ($key in 'Name', 'Package') {
+        if ($HostGpu.Contains($key) -and -not [string]::IsNullOrWhiteSpace("$($HostGpu[$key])")) {
+            $parts += "$($HostGpu[$key])"
+        }
+    }
+    if ($parts.Count -eq 0) { $parts = @('adapter without a name') }
+    return "$($parts -join ', '), $mode"
+}
+
 function Assert-ReleaseVmGpuPartition {
     <#
     .SYNOPSIS
@@ -2838,6 +2868,7 @@ Export-ModuleMember -Function @(
     'New-ReleaseVmRunPlan'
     'New-ReleaseVmCredential'
     'New-ReleaseVmAnswerIso'
+    'Format-ReleaseVmGpuBinding'
     'Format-ReleaseVmValue'
     'Format-ReleaseVmStep'
     'Write-ReleaseVmPlan'

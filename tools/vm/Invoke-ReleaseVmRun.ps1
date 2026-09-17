@@ -178,7 +178,7 @@ if ($ProveGpuBinding) {
     }
     $readiness = New-ReleaseVmReadinessRequirement -InteractiveAgent -ExpectedUser $defaults.GuestUserName `
         -Display $mode -GpuBoundTo $hostGpu
-    Write-Host "  gpu binding  : $($hostGpu.Name), $($hostGpu.Package), display $($mode.Width)x$($mode.Height)@$($mode.RefreshHz)Hz"
+    Write-Host "  gpu binding  : $(Format-ReleaseVmGpuBinding -HostGpu $hostGpu -Display $mode)"
 }
 
 $plan = New-ReleaseVmRunPlan `

@@ -1678,6 +1678,39 @@ Test-Case 'a run that proves its GPU binding holds the guest to the host adapter
     Assert-Match 'guest-readiness' $result.Output 'and the guest is held to the requirement before the campaign'
 }
 
+Test-Case 'the gpu binding line survives a host with no matching adapter' {
+    # This is what failed in CI while passing on every developer machine: the line
+    # was interpolated from keys an unmeasured adapter does not have, and under
+    # Set-StrictMode a missing key is a terminating error -- so a dry run that should
+    # have printed a named refusal exited 1 instead. A runner has no NVIDIA adapter;
+    # a developer machine does, which is why no local run ever saw it.
+    $display = @{ Width = 2560; Height = 1440; RefreshHz = 60 }
+    $line = Format-ReleaseVmGpuBinding -HostGpu @{ Measured = $false; Detail = 'no display adapter matches X' } `
+        -Display $display
+    Assert-Match 'not measured' $line 'an unmeasured adapter says so'
+    Assert-Match 'no display adapter matches X' $line 'and carries the reason it could not be measured'
+    Assert-Match '2560x1440@60Hz' $line 'the mode is printed either way'
+}
+
+Test-Case 'the gpu binding line names the adapter and the driver package it was measured from' {
+    $line = Format-ReleaseVmGpuBinding -HostGpu @{ Measured = $true; Name = 'NVIDIA RTX 5070 Ti'
+        Package = 'nv_dispi.inf_amd64_1234'
+    } -Display @{ Width = 2560; Height = 1440; RefreshHz = 144 }
+    Assert-Match 'NVIDIA RTX 5070 Ti' $line 'the adapter is named'
+    Assert-Match 'nv_dispi.inf_amd64_1234' $line 'so is the DriverStore package the guest is held to'
+    Assert-Match '2560x1440@144Hz' $line 'and the mode'
+}
+
+Test-Case 'a measured adapter whose driver package is unknown still prints a line' {
+    # Get-ReleaseVmHostGpu only looks up the package when the adapter reported a
+    # driver version. Without one the key is absent, which is the same strict-mode
+    # trap as an unmeasured adapter and is not a reason to stop the run.
+    $line = Format-ReleaseVmGpuBinding -HostGpu @{ Measured = $true; Name = 'Some Adapter' } `
+        -Display @{ Width = 1920; Height = 1080; RefreshHz = 60 }
+    Assert-Match 'Some Adapter' $line 'the adapter is still named'
+    Assert-Match '1920x1080@60Hz' $line 'and the mode is still printed'
+}
+
 Test-Case 'Invoke-ReleaseVmRun -DryRun accepts a network mode per call' {
     $result = Invoke-Script -Path $script:RunScript -Arguments @('-DryRun', '-RunId', 'dry-002',
         '-Root', 'T:\images', '-Network', 'Connected')
