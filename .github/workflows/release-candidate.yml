@@ -1056,7 +1056,7 @@ jobs:
               --target "$GITHUB_SHA" \
               "${kind_args[@]}" \
               --title "$title" \
-              --notes "$notes"
+              --notes-file release-notes.md
           fi
 
       - name: Upload all assets to the release
