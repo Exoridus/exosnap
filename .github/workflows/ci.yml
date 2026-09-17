@@ -7,7 +7,12 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  # `edited` is needed on top of the defaults because the guardrails job checks the
+  # pull request TITLE, which is the subject the squash merge lands on main. A title
+  # correction is not a push, so without this the check keeps the verdict it reached
+  # on the old title, and a rerun replays the same stale event payload.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
 # ---------------------------------------------------------------------------
