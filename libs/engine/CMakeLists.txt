@@ -1038,6 +1038,18 @@ exosnap_add_gtest(
 target_include_directories(test_hdr_tonemap PRIVATE src)
 target_compile_definitions(test_hdr_tonemap PRIVATE NOMINMAX)
 
+# Frame luminance evaluation: histogram percentiles, the stream-wide
+# MaxCLL/MaxFALL accumulator and the asymmetric content-peak smoother that drives
+# the tone-map knee. Pure math -- the compute pass is pinned separately.
+exosnap_add_gtest(
+    NAME test_frame_luminance
+    TEST_PREFIX engine.
+    SOURCES tests/test_frame_luminance.cpp
+    LIBRARIES exosnap_engine d3d11.lib dxgi.lib
+)
+target_include_directories(test_frame_luminance PRIVATE src)
+target_compile_definitions(test_frame_luminance PRIVATE NOMINMAX)
+
 # OD acquire-failure classifier: pure recording-loss policy (ACCESS_LOST recover
 # vs DEVICE_REMOVED / unexpected HRESULT fail-closed). No GPU.
 exosnap_add_gtest(
