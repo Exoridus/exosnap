@@ -5619,7 +5619,13 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     // inherit one from the scenario applied before it.
     clearAudioSourceDegradedWarning();
 
-    if (normalized == QLatin1String(visual::record_state::kReady)) {
+    if (normalized == QLatin1String(visual::record_state::kNoSource)) {
+        // Seeded by clearing the selection, not by setting a state behind one:
+        // what the page shows without a source is the product's own answer to
+        // having none, and a state written over a selection that is still there
+        // would be a capture of something the application never reaches.
+        selectTarget(-1, CaptureMode::Monitor);
+    } else if (normalized == QLatin1String(visual::record_state::kReady)) {
         record_view_model_.SetState(UiRecordingState::Ready);
     } else if (normalized == QLatin1String(visual::record_state::kRecording) ||
                normalized == QLatin1String(visual::record_state::kRecordingAudioDegraded)) {

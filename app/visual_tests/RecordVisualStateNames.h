@@ -16,6 +16,8 @@
 
 namespace exosnap::visual::record_state {
 
+// No capture source selected: the page's empty stage.
+inline constexpr const char* kNoSource = "no-source";
 inline constexpr const char* kReady = "ready";
 inline constexpr const char* kRecording = "recording";
 // Recording, with the standing "an audio source went silent" notification

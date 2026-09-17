@@ -22,6 +22,9 @@ enum class VisualPage {
 
 enum class VisualRecordState {
     None,
+    // No capture source at all -- the page's own empty stage, not a state set
+    // behind a selection that is still there.
+    NoSource,
     Ready,
     Countdown,
     Preparing,

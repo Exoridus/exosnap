@@ -196,6 +196,33 @@ Item {
                         visible: !root.recordViewModel.selectedTargetAvailable
                         anchors.centerIn: parent
 
+                        // The same pair the title band and the About card draw,
+                        // at the one size on this page where identity has room.
+                        // An empty stage is the only moment the product has
+                        // nothing of the user's to show, and a bare instruction
+                        // on black reads as a surface that failed to load.
+                        Row {
+                            spacing: ExoTheme.spacingSm
+                            bottomPadding: ExoTheme.spacingSm
+                            anchors.horizontalCenter: parent.horizontalCenter
+
+                            ExoBrandMark {
+                                width: 44
+                                height: 44
+                                anchors.verticalCenter: parent.verticalCenter
+                                Accessible.ignored: true
+                            }
+
+                            ExoBrandWordmark {
+                                typePixelSize: ExoTheme.fontValueLarge
+                                width: implicitWidth
+                                height: implicitHeight
+                                anchors.verticalCenter: parent.verticalCenter
+                                Accessible.role: Accessible.StaticText
+                                Accessible.name: "exosnap"
+                            }
+                        }
+
                         Label {
                             text: qsTr("Choose what to record")
                             color: ExoTheme.text
