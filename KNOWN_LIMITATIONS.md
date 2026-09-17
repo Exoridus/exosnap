@@ -118,15 +118,37 @@ Invalid combinations are not offered.
   type 137) and Content Light Level Info (SEI type 144) messages, and AV1 HDR
   MDCV / HDR CLL metadata OBUs — emitted on every keyframe, so players that
   ignore container-level HDR metadata (notably some Apple players) still receive
-  it. Content-light (MaxCLL/MaxFALL) metadata is only emitted when present; the
-  current native path fills mastering-display data but leaves MaxCLL/MaxFALL
-  absent (no per-frame content-light analysis). Current boundaries: no HLG, and
+  it. Content-light metadata (MaxCLL/MaxFALL) is measured per frame and written
+  at the container level only — MKV `MaxCLL`/`MaxFALL`, carried into the `clli`
+  box of a remuxed MP4. It is **not** carried in-band: both values are maxima
+  over the finished stream, and a bitstream message is emitted while the
+  recording is still running, so it could only state the maximum seen so far. A
+  player that reads container metadata gets the measured levels; one that reads
+  only in-band metadata sees none, and tone-maps as it would for any HDR10 file
+  without them. A recording split into several files reports the levels measured
+  up to each part's own boundary, so a later part can name a highlight that
+  occurred in an earlier one. Current boundaries: no HLG, and
   the in-app recording preview shows an approximate SDR tone-map of the HDR
   content. The preview is still WYSIWYG during a native-HDR10 recording: the
   engine shares its pre-encode HDR frame and the preview tone-maps it for
   display — what is shown is the recorded frame, viewed through the same
   roll-off an SDR player would approximate. The exception is the rare
   already-PQ 10-bit desktop (below), which has no shareable frame.
+- **Moving the Windows SDR-content-brightness slider during a recording leaves up
+  to about two seconds of wrongly exposed material.** That level decides the
+  brightness the desktop is composed at, so tone-map, overlays and preview all
+  follow it, and the engine re-reads it on a two-second cadence. Windows only
+  commits a new value when the slider is released, and offers no way to read the
+  value being dragged, so nothing can normalise correctly while the drag lasts:
+  the affected span is the drag itself plus up to one poll interval after it. The
+  recording corrects itself from the next poll on; nothing needs restarting.
+- **A recorded window that moves between an HDR and an SDR monitor keeps the
+  colour state of the monitor it started on.** The colour pipeline — the frame
+  pool format, the native-versus-tone-map decision, the bit depth and the colour
+  description written into the file — is committed when the recording starts, and
+  a file whose own metadata describes half its frames would be worse than one
+  exposed for the wrong monitor. Following the move would mean rebuilding the
+  session or starting a new file.
 
 ## Audio processing
 
