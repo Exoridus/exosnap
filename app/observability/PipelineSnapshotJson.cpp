@@ -42,6 +42,15 @@ QJsonObject CaptureJson(const exosnap::engine::CaptureDiagnostics& c) {
     json.insert(QStringLiteral("processingFailures"), Count(c.frames_dropped_processing_failure));
 
     json.insert(QStringLiteral("duplicates"), Count(c.frames_duplicated));
+
+    // Both derived from frames_captured, and the only fields here that answer
+    // "is the capture producing anything right now". `actualFps` cannot: it is
+    // derived from EMITTED frames, so the CFR pacer holds it at the target rate
+    // through a total stall. A harness without these two has to difference
+    // `framesCaptured` across samples to learn what the engine already knows.
+    json.insert(QStringLiteral("secondsWithoutCapture"), c.seconds_without_capture);
+    json.insert(QStringLiteral("captureStarved"), c.capture_starved);
+
     json.insert(QStringLiteral("sourceLoss"), c.source_loss);
     json.insert(QStringLiteral("sourceType"), CaptureSourceTypeName(c.source_type));
 
