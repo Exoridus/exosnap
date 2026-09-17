@@ -229,6 +229,11 @@ $WindowsSystemDllAllowlist = @(
     # is the Event Trace Decode Helper (TdhGetEventInformation / TdhFormatProperty),
     # a Windows system DLL present on every Win10/11 install — not bundled.
     'tdh.dll',
+    # WinRT dispatcher queue: CreateDispatcherQueueController lives in
+    # CoreMessaging.dll, a Windows system DLL since Win10 1709 and well below the
+    # baseline Windows Graphics Capture already requires. The display colour watch
+    # needs a DispatcherQueue on the registering thread, so the engine links it.
+    'coremessaging.dll',
     # Text / internationalization. Qt 6.11's Qt6Core.dll imports icuuc.dll, which
     # Qt 6.9 did not — the Qt build now uses the ICU that Windows itself ships in
     # System32 rather than bundling its own, so there is nothing for the deploy to
