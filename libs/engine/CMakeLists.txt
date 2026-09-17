@@ -294,6 +294,9 @@ add_library(exosnap_engine STATIC
     include/exosnap/engine/cursor_sprite.h
     src/gpu_hdr_tonemap.cpp
     include/exosnap/engine/gpu_hdr_tonemap.h
+    src/gpu_frame_luminance.cpp
+    src/gpu_frame_luminance.h
+    src/frame_luminance.h
     src/gpu_timestamp_profiler.cpp
     include/exosnap/engine/gpu_timestamp_profiler.h
     include/exosnap/engine/gpu_timestamp_math.h
@@ -1259,6 +1262,18 @@ exosnap_add_gtest(
 )
 target_include_directories(test_gpu_hdr_tonemap PRIVATE src)
 target_compile_definitions(test_gpu_hdr_tonemap PRIVATE NOMINMAX)
+
+# Per-frame luminance analysis on the GPU: WARP-backed proof that the compute
+# reduction, the histogram and the asynchronous readback agree with a CPU pass
+# over the same pixels, including the PQ sub-path and the bounds guard.
+exosnap_add_gtest(
+    NAME test_gpu_frame_luminance
+    TEST_PREFIX engine.
+    SOURCES tests/test_gpu_frame_luminance.cpp
+    LIBRARIES exosnap_engine d3d11.lib dxgi.lib d3dcompiler.lib
+)
+target_include_directories(test_gpu_frame_luminance PRIVATE src)
+target_compile_definitions(test_gpu_frame_luminance PRIVATE NOMINMAX)
 
 # RGB -> packed AYUV (4:4:4, 8-bit) conversion on the GPU: WARP-backed golden
 # proof that the compute shader emits the exact BT.709 limited/full-range AYUV
