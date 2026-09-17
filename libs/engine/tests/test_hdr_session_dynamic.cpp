@@ -24,7 +24,7 @@ HdrDisplayFacts HdrDisplay(float sdr_white_nits, float max_luminance_nits = 1000
 TEST(SessionHdrDynamicState, ResolvesEveryConsumerScalarFromOneSetOfFacts) {
     const SessionHdrDynamicState state = ResolveSessionHdrDynamicState(HdrDisplay(280.0f, 1000.0f));
 
-    EXPECT_FLOAT_EQ(state.peak_scale, HdrPeakScale(true, 1000.0f));
+    EXPECT_FLOAT_EQ(state.peak_scale, HdrPeakScale(true, 1000.0f, 280.0f));
     EXPECT_FLOAT_EQ(state.paper_white_scale, 280.0f / 80.0f);
     EXPECT_FLOAT_EQ(state.overlay_reference_white_nits, 280.0f);
 }

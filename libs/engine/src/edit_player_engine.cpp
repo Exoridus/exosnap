@@ -648,7 +648,7 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
     // the highlight roll-off begins, not whether the image is readable at all.
     // Recorded in KNOWN_LIMITATIONS.
     impl_->pq_converter = IsPqTonemapSource(vst->codecpar->color_trc, vst->codecpar->format)
-                              ? std::make_unique<P010PqMonitorConverter>(HdrPeakScale(false, 0.0f))
+                              ? std::make_unique<P010PqMonitorConverter>(HdrPeakScale(false, 0.0f, 0.0f))
                               : nullptr;
 
     for (unsigned int i = 0; i < fmt_ctx->nb_streams; ++i) {

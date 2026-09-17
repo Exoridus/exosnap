@@ -43,7 +43,7 @@ struct SessionHdrDynamicState {
 
 [[nodiscard]] inline SessionHdrDynamicState ResolveSessionHdrDynamicState(const HdrDisplayFacts& facts) noexcept {
     SessionHdrDynamicState state;
-    state.peak_scale = HdrPeakScale(facts.hdr_active, facts.max_luminance_nits);
+    state.peak_scale = HdrPeakScale(facts.hdr_active, facts.max_luminance_nits, facts.sdr_white_level_nits);
     state.paper_white_scale = SdrPaperWhiteScale(facts.sdr_white_level_nits);
     state.overlay_reference_white_nits = EffectiveOverlayReferenceWhiteNits(facts.sdr_white_level_nits);
     return state;

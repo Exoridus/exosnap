@@ -49,13 +49,42 @@ inline constexpr float kHdrFallbackPeakNits = 1000.0f;
 inline constexpr float kHdrToneMapKnee = 0.80f;
 
 // Peak luminance, expressed in reference-white multiples, that maps to output
-// 1.0. The display's reported luminance is only trusted when the display is
-// actively in an HDR colour space: a display in SDR mode still reports its EDID
-// luminance caps (measured: 1499 cd/m^2 on an SDR panel), which must not drive
-// the knee. Result is always >= 1.0.
-inline float HdrPeakScale(bool display_hdr_active, float display_max_luminance_nits) {
+// 1.0. Result is always >= 1.0.
+//
+// Two reported values are refused, both for the same reason -- they describe no
+// display that exists, and driving the knee with them destroys highlights:
+//
+//   * A display that is not actively in an HDR colour space. It still reports
+//     its EDID luminance caps (measured: 1499 cd/m^2 on an SDR panel), which are
+//     a capability claim rather than the active reference.
+//   * A peak at or below the white the OS is currently composing SDR content at.
+//     The roll-off runs AFTER the paper-white normalisation -- the shader divides
+//     both the signal and this peak by paper_white_scale -- so what decides
+//     whether any highlight range survives is peak_nits / sdr_white_nits, never
+//     the peak alone. At or below 1.0 that quotient falls under the knee and
+//     HdrToneMapChannel degenerates into a hard clamp at paper white: every
+//     highlight above it collapses onto white.
+//
+// The second case is not exotic. Measured here: two panels both report 240 cd/m^2
+// through DXGI_OUTPUT_DESC1::MaxLuminance -- documented as "likely only valid for
+// a small area of the panel" -- while Windows places SDR white anywhere up to
+// 480 cd/m^2, so the degenerate range begins around half slider travel, in
+// ordinary use.
+//
+// Nor is the reported peak necessarily the panel's: one of those two declares
+// 400 cd/m^2 in its EDID HDR Static Metadata block and the other declares no
+// luminance at all, yet both arrive as the same 240. DXGI's value is a system
+// answer, not a measurement, and it cannot be assumed to bound what the display
+// does. Which is the second reason not to let it decide alone that there is no
+// highlight range: it may simply be lower than the panel.
+//
+// A genuine HDR panel (1000 cd/m^2 and up) stays far above any reachable white
+// and keeps its reported peak at every slider position.
+inline float HdrPeakScale(bool display_hdr_active, float display_max_luminance_nits, float sdr_white_level_nits) {
+    const float paper_white_nits = EffectiveOverlayReferenceWhiteNits(sdr_white_level_nits);
     float peak_nits = kHdrFallbackPeakNits;
-    if (display_hdr_active && display_max_luminance_nits > kHdrReferenceWhiteNits) {
+    if (display_hdr_active && display_max_luminance_nits > kHdrReferenceWhiteNits &&
+        display_max_luminance_nits > paper_white_nits) {
         peak_nits = display_max_luminance_nits;
     }
     return peak_nits / kHdrReferenceWhiteNits; // >= 1.0

@@ -429,7 +429,7 @@ void VideoThread::Run() {
     // scRGB->SDR tone-map knee, in reference-white multiples. Only an actively-
     // HDR display's reported peak is trusted; otherwise the documented fallback
     // is used (an SDR-mode display still reports inflated EDID luminance caps).
-    float hdrPeakScale = HdrPeakScale(false, 0.0f);
+    float hdrPeakScale = HdrPeakScale(false, 0.0f, 0.0f);
     // The OS SDR reference white, in the same reference-white multiples. An HDR
     // desktop composes SDR content at that level rather than at scRGB's nominal
     // 80 nits, so the tone-map has to divide it back out; 1.0 is the
@@ -447,7 +447,8 @@ void VideoThread::Run() {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "DXGI OD open: " + odErr);
             return;
         }
-        hdrPeakScale = HdrPeakScale(odSrc.HdrActive(), odSrc.MaxLuminanceNits());
+        hdrPeakScale =
+            HdrPeakScale(odSrc.HdrActive(), odSrc.MaxLuminanceNits(), odSrc.DisplayFacts().sdr_white_level_nits);
         hdrPaperWhiteScale = SdrPaperWhiteScale(odSrc.DisplayFacts().sdr_white_level_nits);
         expectNativeHdr =
             IsHdr10NativeEffective(m_state.config.hdr_mode, odSrc.HdrActive(), m_state.config.video_codec);
@@ -482,7 +483,8 @@ void VideoThread::Run() {
         QueryDisplayHdrFacts(wgcMonitor, wgcHdrFacts);
         wgcPlan = ResolveWgcCapturePlan(wgcHdrFacts.hdr_active, m_state.config.hdr_mode,
                                         CodecSupportsHdr10Native(m_state.config.video_codec));
-        hdrPeakScale = HdrPeakScale(wgcHdrFacts.hdr_active, wgcHdrFacts.max_luminance_nits);
+        hdrPeakScale =
+            HdrPeakScale(wgcHdrFacts.hdr_active, wgcHdrFacts.max_luminance_nits, wgcHdrFacts.sdr_white_level_nits);
         hdrPaperWhiteScale = SdrPaperWhiteScale(wgcHdrFacts.sdr_white_level_nits);
         expectNativeHdr =
             IsHdr10NativeEffective(m_state.config.hdr_mode, wgcHdrFacts.hdr_active, m_state.config.video_codec);
@@ -512,6 +514,22 @@ void VideoThread::Run() {
     // by GPU objects that are not built yet at the point the guard is declared.
     bool displayScalarsChanged = false;
     const HMONITOR hdrCheckMonitor = useOdCapture ? reinterpret_cast<HMONITOR>(target.native_id) : wgcMonitor;
+
+    {
+        // The state every later colour-scalar record is a delta FROM. Without it
+        // a log shows only what the session changed to, so "the display moved
+        // from A to B" cannot be read back out of a recording's own evidence --
+        // which is the question any check of this behaviour asks first.
+        const SessionHdrDynamicState initialState = ResolveSessionHdrDynamicState(sessionDisplayFacts);
+        const logging::LogField fields[] = {
+            {"hdr_active", BoolText(sessionDisplayFacts.hdr_active)},
+            {"sdr_white_level_nits", std::to_string(sessionDisplayFacts.sdr_white_level_nits)},
+            {"max_luminance_nits", std::to_string(sessionDisplayFacts.max_luminance_nits)},
+            {"paper_white_scale", std::to_string(initialState.paper_white_scale)},
+            {"peak_scale", std::to_string(initialState.peak_scale)}};
+        logging::log(logging::LogLevel::Info, "video_thread", "captured display colour scalars resolved",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    }
 
     // Capture dimensions
     const int32_t sourceWidthSigned =

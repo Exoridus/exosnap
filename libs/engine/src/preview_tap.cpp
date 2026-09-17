@@ -12,7 +12,7 @@ PreviewTapDesc ResolveRawCaptureTapDesc(DXGI_FORMAT format, bool display_hdr_act
     }
     if (display_hdr_active) {
         desc.transform = PreviewTapTransform::ScrgbHdr;
-        desc.peak_scale = HdrPeakScale(display_hdr_active, display_max_luminance_nits);
+        desc.peak_scale = HdrPeakScale(display_hdr_active, display_max_luminance_nits, sdr_white_level_nits);
         desc.paper_white_scale = SdrPaperWhiteScale(sdr_white_level_nits);
     } else {
         desc.transform = PreviewTapTransform::ScrgbSdr;
