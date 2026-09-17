@@ -199,7 +199,16 @@ try {
     if ($appVersion -like '*-dev') {
         $appArgs += @('--update-base-url', $FeedUrl)
     }
-    $app = Start-Process -FilePath $appFull -PassThru -ArgumentList $appArgs
+    # The updater is a GUI child of this process tree and writes its failure
+    # detail to stderr and nowhere else (apps/updater/main.cpp). Without a
+    # console it has no stderr at all, so a failure arrives as a bare
+    # FailureCase with the one line that says WHY already discarded. Redirecting
+    # here gives the child an inheritable handle, and the file joins the evidence.
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) "exosnap-handoff-$runId.stderr.txt"
+    $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) "exosnap-handoff-$runId.stdout.txt"
+    $app = Start-Process -FilePath $appFull -PassThru -ArgumentList $appArgs `
+        -RedirectStandardError $stderrPath -RedirectStandardOutput $stdoutPath
+    $evidence.processOutput = @{ stderr = $stderrPath; stdout = $stdoutPath }
     Add-Step 'application started' $true @{ pid = $app.Id; path = $appFull; sha256 = $appSha }
 
     # Connecting is the readiness wait: the endpoint is created during startup
