@@ -189,6 +189,55 @@ TEST_F(ToastStackTest, AnActionOnARetiredSequenceIsIgnored) {
     EXPECT_EQ(spy.count(), 0);
 }
 
+TEST_F(ToastStackTest, DismissingAToastMarksItsHubEntryRead) {
+    const int before = adapter_.unreadCount();
+    const quint64 sequence = adapter_.manager().Enqueue(MakeEvent(
+        NotificationType::LowStorage, QStringLiteral("Storage running low"), NotificationAction::ChangeFolder));
+    ASSERT_EQ(adapter_.unreadCount(), before + 1) << "a warning arrives unread";
+
+    adapter_.dismissToast(static_cast<qint64>(sequence));
+
+    // The hub entry is the same notification as the toast, not a second one. A
+    // toast the user closed has been seen; leaving it unread sends the bell after
+    // something they just dismissed.
+    EXPECT_EQ(adapter_.unreadCount(), before);
+}
+
+TEST_F(ToastStackTest, ActingOnAToastMarksItsHubEntryRead) {
+    const int before = adapter_.unreadCount();
+    const quint64 sequence = adapter_.manager().Enqueue(MakeEvent(
+        NotificationType::LowStorage, QStringLiteral("Storage running low"), NotificationAction::ChangeFolder));
+    ASSERT_EQ(adapter_.unreadCount(), before + 1);
+
+    adapter_.triggerToastAction(static_cast<qint64>(sequence), static_cast<int>(NotificationAction::ChangeFolder));
+
+    EXPECT_EQ(adapter_.unreadCount(), before) << "acting on a card is the strongest form of having read it";
+}
+
+TEST_F(ToastStackTest, ASuccessIsRecordedAlreadyRead) {
+    const int before = adapter_.unreadCount();
+
+    adapter_.manager().Enqueue(
+        MakeEvent(NotificationType::Saved, QStringLiteral("Recording saved"), NotificationAction::Edit));
+
+    // The bell summons the user to something that needs attention. A recording
+    // that saved is the outcome they asked for, and lighting the dot for it is
+    // what teaches people to stop looking. The entry is still in the hub.
+    EXPECT_EQ(adapter_.unreadCount(), before) << "a success must not raise the unread count";
+    EXPECT_GT(adapter_.model()->rowCount(), 0) << "the hub still keeps the entry";
+}
+
+TEST_F(ToastStackTest, AWarningStillArrivesUnread) {
+    const int before = adapter_.unreadCount();
+
+    // The counterpart to the success case: everything that is not a success has
+    // to keep summoning, or the change above would have silenced the bell.
+    adapter_.manager().Enqueue(
+        MakeEvent(NotificationType::FramesDropped, QStringLiteral("Frames dropped"), NotificationAction::None));
+
+    EXPECT_EQ(adapter_.unreadCount(), before + 1);
+}
+
 TEST_F(ToastStackTest, AnchorGeometryIsPublishedForTheHostingScreen) {
     QSignalSpy spy(&adapter_, &NotificationsAdapter::toastAnchorChanged);
     const QRect work_area(0, 0, 2560, 1400);

@@ -69,6 +69,10 @@ class NotificationEntryModel : public QAbstractListModel {
     void markAllRead();
     // Marks a single row read. Out-of-range is a no-op.
     void markRead(int row);
+    // Marks the entry carrying this event sequence read, and reports whether one
+    // was found. The toast surface knows a notification only by its sequence, so
+    // this is how a dismissed or acted-on toast reaches its hub entry.
+    bool markReadBySequence(quint64 sequence);
 
     // Removes a single row. Out-of-range is a no-op.
     void removeAt(int row);
