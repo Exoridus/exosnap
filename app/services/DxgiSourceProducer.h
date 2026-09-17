@@ -72,11 +72,16 @@ class DxgiSourceProducer final : public HubSourceProducer {
         return od_.DisplayFacts();
     }
 
-    // Re-read the display's facts; true when any of them moved. See
-    // DxgiOdCaptureSrc::RefreshDisplayFacts for why this is polled rather than
-    // waited on.
+    // Re-read the display's facts; true when any of them moved.
     [[nodiscard]] bool RefreshDisplayFacts() {
         return od_.RefreshDisplayFacts();
+    }
+
+    // The duplicated display, or null while closed. A monitor that leaves and
+    // re-joins the topology comes back with a new handle, so anything scoped to
+    // the monitor has to re-read this rather than cache it across a reopen.
+    [[nodiscard]] HMONITOR Monitor() const noexcept {
+        return od_.Monitor();
     }
 
   private:

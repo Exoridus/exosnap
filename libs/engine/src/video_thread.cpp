@@ -12,6 +12,8 @@
 #include "hdr_session_dynamic.h"
 #include "hdr_tonemap.h"
 #include "thread_dpi_scope.h"
+#include <exosnap/engine/display_color_recheck.h>
+#include <exosnap/engine/display_color_watch.h>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 
 #include "preview_publish_gate.h"
@@ -1997,22 +1999,27 @@ void VideoThread::Run() {
     // duplicated forever with only a one-time WARN log. Cleanly stop instead:
     // RecordFailure() finalizes the file normally (same as any other capture
     // failure) so the user can start a fresh recording with facts resolved anew.
-    // Polled rather than acted on every frame — an interactive HDR toggle doesn't
-    // need sub-second detection, and re-querying DXGI output desc every frame
-    // would be wasted GPU-adjacent work in the hot loop.
-    auto lastHdrCheckAt = std::chrono::steady_clock::now();
-    constexpr auto kHdrCheckPollDelay = std::chrono::seconds{2};
+    // Driven by the OS where it can be (DisplayColorWatch) and by a backstop
+    // re-read everywhere, because the notification is not available on every
+    // Windows build and is scoped to one monitor. Not acted on every frame either
+    // way: re-querying the DXGI output description per frame would be wasted
+    // GPU-adjacent work in the hot loop, and an interactive toggle does not need
+    // sub-frame detection.
+    DisplayColorWatch hdrColorWatch;
+    hdrColorWatch.Watch(ResolveHdrGuardMonitor(useOdCapture, odSrc.Monitor(), hdrCheckMonitor));
+    DisplayColorRecheckGate hdrCheckGate;
+    hdrCheckGate.Start(std::chrono::steady_clock::now(), hdrColorWatch.Notified());
+    // The subscription is established on the watch's own thread, so it is not live
+    // the instant Watch() returns and the cadence has to be re-read rather than
+    // decided once. Tracked so the change is logged when it happens.
+    bool hdrWatchNotified = hdrColorWatch.Notified();
+    HMONITOR hdrWatchMonitor = ResolveHdrGuardMonitor(useOdCapture, odSrc.Monitor(), hdrCheckMonitor);
     // Consecutive failed HDR queries. A streak means the guard has not been able
     // to answer for a while, which is not the same as "unchanged".
     uint32_t hdrCheckFailures = 0;
     constexpr uint32_t kHdrCheckFailureStreak = 5;
 
     const auto CheckHdrStateChanged = [&]() {
-        const auto now = std::chrono::steady_clock::now();
-        if (now - lastHdrCheckAt < kHdrCheckPollDelay) {
-            return;
-        }
-        lastHdrCheckAt = now;
         // The monitor the capture is on RIGHT NOW. A reopen after a hot-plug or an
         // EDID renegotiation re-resolves the output by device name and comes back
         // on a new HMONITOR, so the handle from session start names a monitor that
@@ -2020,6 +2027,27 @@ void VideoThread::Run() {
         // as "nothing changed", and the guard silently stops guarding for the rest
         // of the recording. WGC sessions keep their documented fixed target.
         const HMONITOR currentMonitor = ResolveHdrGuardMonitor(useOdCapture, odSrc.Monitor(), hdrCheckMonitor);
+        // The subscription names a monitor, so it has to follow the same handle the
+        // query does -- otherwise a reopened capture would be watched on a display
+        // it no longer captures, which is worse than not watching at all.
+        if (currentMonitor != hdrWatchMonitor) {
+            hdrWatchMonitor = currentMonitor;
+            hdrColorWatch.Watch(currentMonitor);
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (hdrColorWatch.Notified() != hdrWatchNotified) {
+            hdrWatchNotified = hdrColorWatch.Notified();
+            hdrCheckGate.SetNotified(now, hdrWatchNotified);
+            const logging::LogField fields[] = {{"backstop_ms", std::to_string(hdrCheckGate.Backstop().count())}};
+            logging::log(logging::LogLevel::Info, "video_thread",
+                         hdrWatchNotified
+                             ? "the OS reports this display's colour changes; the periodic re-read is now a backstop"
+                             : "no colour-change notification for this display; the periodic re-read is the mechanism",
+                         std::span<const logging::LogField>(fields, std::size(fields)));
+        }
+        if (!hdrCheckGate.TakeDue(now, hdrColorWatch.TakeSignalled())) {
+            return;
+        }
         HdrDisplayFacts freshFacts;
         if (!QueryDisplayHdrFacts(currentMonitor, freshFacts)) {
             // One failure is transient and must not stop a recording. A run of them
@@ -2029,11 +2057,8 @@ void VideoThread::Run() {
             // still be correct -- and the diagnostics carry that it went unchecked.
             ++hdrCheckFailures;
             if (hdrCheckFailures == kHdrCheckFailureStreak) {
-                const logging::LogField fields[] = {
-                    {"consecutive_failures", std::to_string(hdrCheckFailures)},
-                    {"poll_interval_ms",
-                     std::to_string(
-                         std::chrono::duration_cast<std::chrono::milliseconds>(kHdrCheckPollDelay).count())}};
+                const logging::LogField fields[] = {{"consecutive_failures", std::to_string(hdrCheckFailures)},
+                                                    {"backstop_ms", std::to_string(hdrCheckGate.Backstop().count())}};
                 logging::log(logging::LogLevel::Warn, "video_thread",
                              "cannot read this display's HDR state; the recording continues but a mid-session HDR "
                              "change would not be noticed",

@@ -137,11 +137,10 @@ Invalid combinations are not offered.
 - **Moving the Windows SDR-content-brightness slider during a recording leaves up
   to about two seconds of wrongly exposed material.** That level decides the
   brightness the desktop is composed at, so tone-map, overlays and preview all
-  follow it, and the engine re-reads it on a two-second cadence. Windows only
-  commits a new value when the slider is released, and offers no way to read the
-  value being dragged, so nothing can normalise correctly while the drag lasts:
-  the affected span is the drag itself plus up to one poll interval after it. The
-  recording corrects itself from the next poll on; nothing needs restarting.
+  follow it — but the engine re-reads it on a two-second cadence rather than
+  being notified, so everything recorded between a change and the next reading is
+  exposed for the level before it. The recording corrects itself from that
+  reading on; nothing needs restarting.
 - **A recorded window that moves between an HDR and an SDR monitor keeps the
   colour state of the monitor it started on.** The colour pipeline — the frame
   pool format, the native-versus-tone-map decision, the bit depth and the colour

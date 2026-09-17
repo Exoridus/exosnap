@@ -4,6 +4,8 @@
 #include "CaptureHubRegistry.h"
 #include "DxgiSourceProducer.h"
 
+#include <exosnap/engine/display_color_recheck.h>
+#include <exosnap/engine/display_color_watch.h>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 #include <exosnap/engine/preview_shared_texture.h>
 
@@ -221,11 +223,15 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
     // The display's facts are read when the duplication opens and never again by
     // itself: changing the Windows SDR content brightness triggers no mode
     // change, so nothing reopens and the published tap keeps describing a
-    // desktop that is now composed at a different level. Polled on its own
-    // cadence rather than per frame -- it costs a DXGI and a DisplayConfig query
-    // -- and only the publish comparison decides what to do about a change.
-    auto lastFactsPollAt = std::chrono::steady_clock::now();
-    constexpr std::chrono::seconds kFactsPollDelay{2};
+    // desktop that is now composed at a different level. The OS reports that
+    // change where it can (DisplayColorWatch) and a backstop re-read covers the
+    // builds and moments where it cannot -- the same pair the recording session
+    // uses, on the same gate, so the two cannot drift apart. Never per frame: it
+    // costs a DXGI and a DisplayConfig query.
+    exosnap::engine::DisplayColorWatch color_watch;
+    exosnap::engine::DisplayColorRecheckGate color_gate;
+    color_gate.Start(std::chrono::steady_clock::now(), color_watch.Notified());
+    HMONITOR watched_monitor = nullptr;
 
     while (!stop_token.stop_requested()) {
         commands_.WaitAndDrain(kPumpTick, batch);
@@ -233,14 +239,25 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
             break;
 
         if (producer != nullptr) {
+            // A reopen after a topology change comes back on a new handle, and a
+            // subscription left on the old one would report a display this hub no
+            // longer duplicates.
+            const HMONITOR monitor = producer->Monitor();
+            if (monitor != watched_monitor) {
+                watched_monitor = monitor;
+                color_watch.Watch(monitor);
+            }
             const auto now = std::chrono::steady_clock::now();
-            if (now - lastFactsPollAt >= kFactsPollDelay) {
-                lastFactsPollAt = now;
+            color_gate.SetNotified(now, color_watch.Notified());
+            if (color_gate.TakeDue(now, color_watch.TakeSignalled())) {
                 // The return value is deliberately unused: what the next frame is
                 // published against is the refreshed DisplayFacts(), and
                 // ShouldRepublishCaptureTap owns the decision either way.
                 (void)producer->RefreshDisplayFacts();
             }
+        } else if (watched_monitor != nullptr) {
+            watched_monitor = nullptr;
+            color_watch.Watch(nullptr);
         }
 
         // Every drained command is applied, in post order: nothing is dropped

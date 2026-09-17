@@ -297,6 +297,9 @@ add_library(exosnap_engine STATIC
     src/gpu_frame_luminance.cpp
     src/gpu_frame_luminance.h
     src/frame_luminance.h
+    src/display_color_watch.cpp
+    include/exosnap/engine/display_color_watch.h
+    include/exosnap/engine/display_color_recheck.h
     src/gpu_timestamp_profiler.cpp
     include/exosnap/engine/gpu_timestamp_profiler.h
     include/exosnap/engine/gpu_timestamp_math.h
@@ -418,6 +421,7 @@ target_link_libraries(exosnap_engine
         mf.lib
         mfuuid.lib
         wmcodecdspuuid.lib
+        coremessaging.lib # CreateDispatcherQueueController (display_color_watch)
         exosnap::warnings
 )
 
@@ -1052,6 +1056,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_frame_luminance PRIVATE src)
 target_compile_definitions(test_frame_luminance PRIVATE NOMINMAX)
+
+# When a session re-reads its display's colour facts: the backstop cadence and
+# how a change notification shortens it. Pure and clock-injected -- the
+# subscription itself is DisplayColorWatch and needs a real display.
+exosnap_add_gtest(
+    NAME test_display_color_recheck
+    TEST_PREFIX engine.
+    SOURCES tests/test_display_color_recheck.cpp
+    LIBRARIES exosnap_engine
+)
+target_compile_definitions(test_display_color_recheck PRIVATE NOMINMAX)
 
 # OD acquire-failure classifier: pure recording-loss policy (ACCESS_LOST recover
 # vs DEVICE_REMOVED / unexpected HRESULT fail-closed). No GPU.
