@@ -307,6 +307,29 @@ exit 1
     finally { Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+Test-Case 'a failing test is named in the summary even though it carries labels' {
+    $tree = Join-Path ([IO.Path]::GetTempPath()) "run-tests-contract/$([guid]::NewGuid().ToString('n'))"
+    New-Item -ItemType Directory -Path $tree -Force | Out-Null
+    try {
+        # ctest writes its failure list as "<n> - <name> (Failed)" and appends the
+        # test's LABELS after the status. Every test in this repository declares a
+        # phase, so a summary that expects the line to end at the status names
+        # nothing -- which is what sent a reader to a CI artifact for a single name.
+        $pwshPath = (Get-Process -Id $PID).Path -replace '\\', '/'
+        $body = @(
+            "add_test(fixture.labelled_failure `"$pwshPath`" `"-NoProfile`" `"-Command`" `"exit 1`")"
+            'set_tests_properties(fixture.labelled_failure PROPERTIES LABELS "phase.hermetic;quick")'
+        ) -join "`n"
+        Set-Content -LiteralPath (Join-Path $tree 'CTestTestfile.cmake') -Value $body -Encoding utf8
+
+        $result = Invoke-RunTests -BuildDir $tree
+        Assert-True ($result.ExitCode -ne 0) 'the fixture was supposed to fail'
+        Assert-True ($result.Output -match 'Failed test binaries') 'the summary has to say that something failed'
+        Assert-True ($result.Output -match 'fixture\.labelled_failure') 'and which test it was'
+    }
+    finally { Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 Write-Host ''
 Write-Host "$script:Passed/$($script:Passed + $script:Failed) passed"
 if ($script:Failed -gt 0) { exit 1 }

@@ -428,8 +428,16 @@ try {
 
     if ($ctestExit -ne 0) {
         # Failed binaries, as ctest lists them under "The following tests FAILED:".
+        #
+        # The line does not end at the status: ctest appends the test's LABELS
+        # after it. A pattern anchored at the closing parenthesis therefore named
+        # only tests that carry no label, and every test in this tree declares a
+        # phase -- so the summary named no failure at all, and a reader had to
+        # open the log, or on CI download an artifact, for the one word the
+        # summary exists to print.
         $failedBinaries = $log |
-            Select-String -Pattern '^\s*\d+\s+-\s+(.+?)\s+\(.*(Failed|Timeout).*\)$' |
+            Select-String -Pattern ('^\s*\d+\s+-\s+(.+?)\s+\((Failed|Timeout|Not Run|Exception[^)]*' +
+                '|Subprocess aborted|Child aborted|SEGFAULT|Illegal|Numerical|Other)\)') |
             ForEach-Object { $_.Matches[0].Groups[1].Value }
 
         if ($failedBinaries) {
