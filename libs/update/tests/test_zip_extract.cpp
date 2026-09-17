@@ -65,8 +65,7 @@ TEST(ZipExtract, ExtractsPastMaxPathIntoADeepDestination) {
     // the check has to use the extended form too. A plain `fs::exists` here
     // reports false on a file that is present, which would read as the extraction
     // having silently done nothing.
-    const fs::path extracted =
-        out / "nested" / "plugins" / "networkinformation" / "qnetworklistmanager.dll";
+    const fs::path extracted = out / "nested" / "plugins" / "networkinformation" / "qnetworklistmanager.dll";
     const fs::path extracted_long(LR"(\\?\)" + fs::absolute(extracted).make_preferred().wstring());
     EXPECT_TRUE(fs::exists(extracted_long)) << "extracted file missing at " << extracted.string();
 
