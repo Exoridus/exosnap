@@ -117,11 +117,22 @@ void NotificationsAdapter::triggerToastAction(qint64 sequence, int action) {
     // bookkeeping is what the hub badge and this model both read. Note the
     // payload copy above — Dismiss() invalidates the pointer.
     manager_->Dismiss(static_cast<quint64>(sequence));
+    markToastRead(sequence);
     emit actionTriggered(requested, payload);
 }
 
 void NotificationsAdapter::dismissToast(qint64 sequence) {
     manager_->Dismiss(static_cast<quint64>(sequence));
+    markToastRead(sequence);
+}
+
+void NotificationsAdapter::markToastRead(qint64 sequence) {
+    // A toast the user dismissed or acted on has been seen, and the hub entry is
+    // the same notification rather than a second one. Leaving it unread makes the
+    // bell summon the user to something they just closed. Only a toast that left
+    // on its own stays unread: nobody looked at it on purpose.
+    if (model_.markReadBySequence(static_cast<quint64>(sequence)))
+        emit unreadChanged();
 }
 
 notifications::NotificationManager& NotificationsAdapter::manager() noexcept {

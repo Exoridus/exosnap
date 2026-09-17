@@ -57,8 +57,9 @@ class NotificationManager : public QObject {
     // recovery surface offers itself again at startup.
     //
     // Nothing here is longer than 10 s on purpose. Past that a toast starts reading
-    // as standing, the user learns that toasts get stuck, and the reflex to dismiss
-    // them unread is exactly what costs the real standing notices their effect.
+    // as standing, the user learns that toasts get stuck, and the reflex to swat
+    // them away unread is exactly what costs the real standing notices their
+    // effect -- more so since dismissing a toast also settles its hub entry.
 
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDwellBrief = 5000;

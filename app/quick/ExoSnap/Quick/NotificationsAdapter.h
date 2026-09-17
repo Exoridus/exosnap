@@ -122,6 +122,12 @@ class NotificationsAdapter : public QObject {
     Q_INVOKABLE void triggerToastAction(qint64 sequence, int action);
     Q_INVOKABLE void dismissToast(qint64 sequence);
 
+  private:
+    // Marks the hub entry behind a toast read. Called for a toast the user
+    // dismissed or acted on, never for one that timed out on its own.
+    void markToastRead(qint64 sequence);
+
+  public:
     // Set by the composition root from the app window's screen.
     void setToastAnchorGeometry(const QRect& geometry);
 

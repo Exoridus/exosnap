@@ -1751,6 +1751,18 @@ release (0.11 per ADR 0022).
   a failure (unexpected stop, low storage stopping a recording, a failed settings write, a rejected
   capture action). The exact number is deliberately not shown in the title bar: it is never the thing
   you act on, and the hub states it in full one click away.
+- **What counts as unread.** The dot summons the user to something that still wants attention, so two
+  kinds of entry never light it. A **success** is recorded already read — a saved recording and a
+  captured frame are the outcome that was asked for, they carry no decision, and nothing is lost by
+  never looking at them; a bell that lights up for them is the one that gets ignored when it matters.
+  A notification whose **toast the user dismissed or acted on** is read for the same reason: the hub
+  entry is that same notification rather than a second one, and summoning someone back to a card they
+  just closed is the surest way to teach them the dot means nothing. A toast that **timed out on its
+  own stays unread** — nobody looked at it on purpose, and that is exactly the case the hub exists to
+  catch. Everything else arrives unread, **including every `info` entry**: an available update has to
+  be findable, and a preset switch raises no toast at all, so its hub entry is the only place its Undo
+  lives. The hub keeps every entry in full either way — read is about the summons, never about the
+  history.
 - **Toast notifications** — a transient glance at the hub, anchored bottom-right **of the screen
   hosting the ExoSnap window**. A notification is **timed** when it reports an **event that already
   happened** and **standing** when it reports a **condition that is true right now and will clear
@@ -1765,8 +1777,9 @@ release (0.11 per ADR 0022).
   **10 s** when the card offers a way to act or reports a problem worth noticing — long enough to
   read it, decide and reach the button, including while the user is still coming back from whatever
   was being recorded. **5 s** when a glance is the whole interaction (a repaired setting, an omitted
-  overlay). Nothing is longer than 10 s: past that a toast reads as standing, and the reflex to
-  dismiss toasts unread is what would cost the three real standing notices their effect. At most
+  overlay). Nothing is longer than 10 s: past that a toast reads as standing, and the reflex to swat
+  toasts away without reading them is what would cost the three real standing notices their effect —
+  the more so now that dismissing one settles its hub entry too. At most
   one timed toast is visible — a newer one replaces it; standing toasts stack above it, never
   auto-dismiss, and always carry an explicit action out. A countdown bar appears exactly on the
   toasts that leave on their own. The card grows to fit its content: no reserved space for an absent

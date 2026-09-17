@@ -91,7 +91,12 @@ void NotificationEntryModel::recordEvent(const NotificationEvent& event) {
     entry.key = key;
     entry.event = event;
     entry.received_at_ms = QDateTime::currentMSecsSinceEpoch();
-    entry.unread = true;
+    // A success reports that the thing the user asked for happened. It carries no
+    // decision and nothing is lost by never looking at it, so it is recorded as
+    // already read: the bell's dot exists to say something needs attention, and a
+    // saved recording lighting it up teaches the user to ignore it. The entry is
+    // still kept in full -- the hub is the history, unread is only the summons.
+    entry.unread = notifications::AdvisoryStatusForType(event.type) != QStringLiteral("success");
 
     // Newest-first: a fresh or re-raised entry is always the first thing the
     // user sees when they next open the hub.
@@ -141,6 +146,16 @@ void NotificationEntryModel::markRead(int row) {
     entries_[row].unread = false;
     const QModelIndex idx = index(row);
     emit dataChanged(idx, idx, {UnreadRole});
+}
+
+bool NotificationEntryModel::markReadBySequence(quint64 sequence) {
+    for (int i = 0; i < entries_.size(); ++i) {
+        if (entries_[i].event.sequence != sequence)
+            continue;
+        markRead(i);
+        return true;
+    }
+    return false;
 }
 
 void NotificationEntryModel::removeAt(int row) {
