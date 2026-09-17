@@ -599,6 +599,12 @@ internal sealed class GateFakes
     /// <summary>The one session a gate under test is handed, whichever way it reaches it.</summary>
     public FakeLiveVerifySession Session { get; } = new();
 
+    /// <summary>
+    /// The operator seam. Unattended by default, so a gate that asks without a test
+    /// configuring an answer reports Unavailable rather than hanging.
+    /// </summary>
+    public OperatorGate Operator { get; set; } = new(console: null);
+
     /// <summary>The shared session host.</summary>
     public FakeSessionHost SessionHost { get; }
 
@@ -713,6 +719,7 @@ internal sealed class GateHarness : IDisposable
             fakes.ElevatedWorker,
             fakes.DisposableOs,
             fakes.AudioEndpoints,
+            fakes.Operator,
             fakes.LastPresentConfirmation,
             fakes.PresentCapturePath);
 

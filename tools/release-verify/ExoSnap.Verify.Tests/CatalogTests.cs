@@ -44,12 +44,11 @@ public sealed class CatalogTests
     [Fact]
     public void UnmigratedScenariosAreNamedNotCounted()
     {
-        // REL-AUD-DEGRADE-001 needs an audio endpoint to physically disappear
-        // mid-recording. The envctl catalogue classifies endpoint-state as PHYSICAL
-        // because no API causes it, and the typed harness has no operator gate to ask
-        // a person through -- so faking it would be the harness verifying its own
-        // fake. It is finished when that operator gate exists.
-        string[] expected = ["REL-AUD-DEGRADE-001"];
+        // Every scenario now carries an executable body. REL-AUD-DEGRADE-001 was the
+        // last one: it needs an audio endpoint to physically disappear mid-recording,
+        // which no API causes, and it is migrated through OperatorGate asking a
+        // person to do it rather than the harness faking the unplug.
+        string[] expected = [];
 
         var migrated = ReleaseCatalog.MigratedIds();
         var declared = ReleaseCatalog.Descriptors()

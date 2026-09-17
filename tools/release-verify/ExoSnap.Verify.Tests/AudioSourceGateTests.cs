@@ -1,4 +1,6 @@
+using System.Collections.ObjectModel;
 using System.Text.Json;
+using ExoSnap.Verify.Adapters.Ffprobe;
 using ExoSnap.Verify.Catalog;
 using ExoSnap.Verify.Gates;
 using ExoSnap.Verify.Models;
@@ -197,26 +199,20 @@ public sealed class AudioFormatVerdictTests
 /// Which of the audio scenarios now carry an executable body.
 /// </summary>
 /// <remarks>
-/// REL-AUD-DEGRADE-001 deliberately does not. It needs an audio endpoint to
-/// physically disappear mid-recording, which the envctl catalogue classifies as
-/// PHYSICAL for a reason -- no API causes it -- and the typed harness has no operator
-/// gate to ask a person through. Faking the unplug would be the harness verifying its
-/// own fake.
+/// REL-AUD-DEGRADE-001 needs an audio endpoint to physically disappear mid-recording,
+/// which the envctl catalogue classifies as PHYSICAL for a reason -- no API causes it.
+/// It is migrated through <see cref="OperatorGate"/> asking a person to do it, rather
+/// than the harness faking the unplug.
 /// </remarks>
 public sealed class AudioGateMigrationTests
 {
     [Theory]
+    [InlineData("REL-AUD-DEGRADE-001")]
     [InlineData("REL-AUD-SILENCE-001")]
     [InlineData("REL-AUD-FORMAT-001")]
     public void TheAutomatableAudioScenariosAreMigrated(string id)
     {
         Assert.Contains(id, ReleaseCatalog.MigratedIds());
-    }
-
-    [Fact]
-    public void ThePhysicalUnplugScenarioIsNotClaimedAsMigrated()
-    {
-        Assert.DoesNotContain("REL-AUD-DEGRADE-001", ReleaseCatalog.MigratedIds());
     }
 
     [Fact]
@@ -227,5 +223,180 @@ public sealed class AudioGateMigrationTests
         // without that hardware would block every promotion.
         Assert.DoesNotContain("REL-AUD-SILENCE-001", ReleaseCatalog.RequiredIds());
         Assert.DoesNotContain("REL-AUD-FORMAT-001", ReleaseCatalog.RequiredIds());
+    }
+}
+
+/// <summary>
+/// REL-AUD-DEGRADE-001: losing an audio endpoint mid-recording degrades to honest
+/// silence and recovers.
+/// </summary>
+public sealed class AudioDegradeGateTests
+{
+    private static string Pipeline(string lifecycle, bool degraded)
+    {
+        var degradedText = degraded ? "true" : "false";
+        return $$$"""{"valid":true,"lifecycle":"{{{lifecycle}}}","audio":{"active":true,"sourceDegraded":{{{degradedText}}}}}""";
+    }
+
+    private static void ConfigureAudioEnabledAndRecording(GateFakes fakes)
+    {
+        fakes.Session.SetResult("record.snapshot", """{"systemAudioEnabled":true}""");
+        fakes.Session.ScriptRecordingStates("Recording", "Completed");
+    }
+
+    private static void ConfigurePassingOutput(GateFakes fakes)
+    {
+        fakes.Session.SetResult("record.result", GateJsonSamples.RecordResult(true, "out.mkv"));
+        fakes.Ffprobe.InspectResult = new FfprobeResult(
+            new ReadOnlyCollection<FfprobeTrack>([new FfprobeTrack(0, "audio", "aac", 48000, 2)]),
+            new FfprobeFormat("matroska", 10.0),
+            "{}");
+    }
+
+    private static AudioDegradeGate Gate() =>
+        new(pollFor: TimeSpan.FromMilliseconds(60), pollEvery: TimeSpan.FromMilliseconds(2));
+
+    [Fact]
+    public async Task AConfirmedAnswerObservesTheDegradeAndRecoverCycleAndPasses()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-AUD-DEGRADE-001",
+            fakes =>
+            {
+                ConfigureAudioEnabledAndRecording(fakes);
+                fakes.Session.SetResultSequence(
+                    "pipeline.snapshot",
+                    Pipeline("recording", degraded: false),
+                    Pipeline("recording", degraded: true),
+                    Pipeline("recording", degraded: false));
+                ConfigurePassingOutput(fakes);
+                fakes.Operator = new OperatorGate(new ScriptedOperator(""));
+            },
+            TestContext.Current.CancellationToken);
+
+        var result = await Gate().RunAsync(harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.Pass, result.Outcome);
+        Assert.Contains("recovered", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ADeclinedAnswerFailsWithoutPolling()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-AUD-DEGRADE-001",
+            fakes =>
+            {
+                ConfigureAudioEnabledAndRecording(fakes);
+                fakes.Operator = new OperatorGate(new ScriptedOperator("n"));
+            },
+            TestContext.Current.CancellationToken);
+
+        var result = await Gate().RunAsync(harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.Fail, result.Outcome);
+        Assert.Contains("declined", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("pipeline.snapshot", harness.Fakes.Session.InvokedCommands);
+    }
+
+    [Fact]
+    public async Task AttestationStillVerifiesTheConsequenceAndMarksTheRecord()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-AUD-DEGRADE-001",
+            fakes =>
+            {
+                ConfigureAudioEnabledAndRecording(fakes);
+                fakes.Session.SetResultSequence(
+                    "pipeline.snapshot",
+                    Pipeline("recording", degraded: false),
+                    Pipeline("recording", degraded: true),
+                    Pipeline("recording", degraded: false));
+                ConfigurePassingOutput(fakes);
+                fakes.Operator = new OperatorGate(console: null, attested: ["REL-AUD-DEGRADE-001"]);
+            },
+            TestContext.Current.CancellationToken);
+
+        var result = await Gate().RunAsync(harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.Pass, result.Outcome);
+        Assert.StartsWith("[attested]", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnUnattendedRunIsUnavailableNeverPassOrFail()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-AUD-DEGRADE-001",
+            ConfigureAudioEnabledAndRecording,
+            TestContext.Current.CancellationToken);
+
+        var result = await Gate().RunAsync(harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.Unavailable, result.Outcome);
+        Assert.Contains("nobody is at the machine", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FailsWhenTheRecordingLeavesTheRunningLifecycleDuringThePoll()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-AUD-DEGRADE-001",
+            fakes =>
+            {
+                ConfigureAudioEnabledAndRecording(fakes);
+                fakes.Session.SetResultSequence(
+                    "pipeline.snapshot",
+                    Pipeline("recording", degraded: false),
+                    Pipeline("completed", degraded: false));
+                fakes.Operator = new OperatorGate(new ScriptedOperator(""));
+            },
+            TestContext.Current.CancellationToken);
+
+        var result = await Gate().RunAsync(harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.Fail, result.Outcome);
+        Assert.Contains("ADR 0046", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FailsWhenDegradationIsNeverObserved()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-AUD-DEGRADE-001",
+            fakes =>
+            {
+                ConfigureAudioEnabledAndRecording(fakes);
+                fakes.Session.SetResult("pipeline.snapshot", Pipeline("recording", degraded: false));
+                fakes.Operator = new OperatorGate(new ScriptedOperator(""));
+            },
+            TestContext.Current.CancellationToken);
+
+        var result = await Gate().RunAsync(harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.Fail, result.Outcome);
+        Assert.Contains("no audio-source degradation was observed", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FailsWhenDegradationNeverClears()
+    {
+        using var harness = await GateHarness.CreateAsync(
+            "REL-AUD-DEGRADE-001",
+            fakes =>
+            {
+                ConfigureAudioEnabledAndRecording(fakes);
+                fakes.Session.SetResultSequence(
+                    "pipeline.snapshot",
+                    Pipeline("recording", degraded: false),
+                    Pipeline("recording", degraded: true));
+                fakes.Operator = new OperatorGate(new ScriptedOperator(""));
+            },
+            TestContext.Current.CancellationToken);
+
+        var result = await Gate().RunAsync(harness.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ScenarioOutcome.Fail, result.Outcome);
+        Assert.Contains("never cleared", result.Message, StringComparison.Ordinal);
     }
 }

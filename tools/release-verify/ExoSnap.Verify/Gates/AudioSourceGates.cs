@@ -387,3 +387,220 @@ public sealed class AudioFormatGate : IScenarioBody
             : "the system-audio source did not become enabled after settings.set";
     }
 }
+
+/// <summary>
+/// REL-AUD-DEGRADE-001: losing an audio endpoint mid-recording degrades to honest
+/// silence and recovers.
+/// </summary>
+/// <remarks>
+/// The physical event -- a device disappearing off the bus -- has no documented API
+/// and no harness seam; the unit tests already cover the degrade-and-recover logic
+/// against fake sources. What is left to verify is the real device path, and that can
+/// only be driven by a person, through <see cref="OperatorGate"/>: they remove the
+/// endpoint bound to <c>audio.render.normal</c>, wait, and put it back, while the
+/// recording keeps running underneath them.
+///
+/// ADR 0046 sets the requirement this polls for: the lifecycle never leaves
+/// recording or paused, <c>audio.sourceDegraded</c> becomes true while the device is
+/// gone, and it clears again once it returns. Degradation is a fact about the
+/// snapshot, not about a track -- there is no <c>tracks[]</c> array under
+/// <c>pipeline.audio</c>.
+/// </remarks>
+public sealed class AudioDegradeGate : IScenarioBody
+{
+    /// <summary>How long the runner polls pipeline.snapshot for the degrade-and-recover cycle.</summary>
+    public static readonly TimeSpan PollFor = TimeSpan.FromSeconds(60);
+
+    /// <summary>How often the poll samples pipeline.snapshot.</summary>
+    public static readonly TimeSpan PollEvery = TimeSpan.FromMilliseconds(500);
+
+    private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(60);
+    private static readonly string[] RunningLifecycles = ["recording", "paused"];
+
+    private readonly TimeSpan pollFor;
+    private readonly TimeSpan pollEvery;
+
+    /// <summary>Creates the gate with the release polling window.</summary>
+    public AudioDegradeGate()
+        : this(PollFor, PollEvery)
+    {
+    }
+
+    /// <summary>Creates the gate with an explicit window, so its logic needs no wait.</summary>
+    public AudioDegradeGate(TimeSpan pollFor, TimeSpan pollEvery)
+    {
+        this.pollFor = pollFor;
+        this.pollEvery = pollEvery;
+    }
+
+    /// <inheritdoc/>
+    public async Task<ScenarioResult> RunAsync(ScenarioContext context, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var services = context.RequireServices();
+
+        if (!services.Ffprobe.Available)
+        {
+            return ScenarioResult.Unavailable("ffprobe is not resolvable");
+        }
+
+        var session = await services.Sessions.EnsureAsync(cancellationToken).ConfigureAwait(false);
+
+        // Before the recording, not after: the operator step below tells the person
+        // system audio IS enabled, and that had better be a fact rather than a hope
+        // about whatever settings this machine happened to arrive with.
+        var enabled = await EnableSystemAudioAsync(session, cancellationToken).ConfigureAwait(false);
+        if (enabled is not null)
+        {
+            return ScenarioResult.InfrastructureError(enabled);
+        }
+
+        await session.SelectTargetAsync("monitor", null, cancellationToken).ConfigureAwait(false);
+        var started = await session.StartRecordingAsync(cancellationToken).ConfigureAwait(false);
+        if (!started.Ok)
+        {
+            return ScenarioResult.Fail($"record.start refused: {started.Refusal}");
+        }
+
+        await session.WaitForRecordingStateAsync([RecordingStates.Recording], StartTimeout, cancellationToken)
+            .ConfigureAwait(false);
+
+        var step = new OperatorStep(
+            context.Descriptor.Id,
+            "A recording is running: unplug or disable the playback device bound to "
+                + "audio.render.normal, wait about five seconds, then plug it back in (or re-enable it).",
+            OperatorAction.OperatorActsThenConfirms,
+            Why: "A real endpoint loss is a physical or driver-level event; the unit tests already cover "
+                + "the degrade-and-recover logic with fake sources, and the real device path has no other seam.",
+            Expected: "The recording does not stop. Audio-source degradation is reported while the device is "
+                + "gone, and clears again once it returns.",
+            VerifyDescription: "pipeline.snapshot is polled for up to 60 s. It requires the lifecycle stayed "
+                + "recording, audio.sourceDegraded became true, and it cleared again afterwards; the finished "
+                + "recording is then checked with ffprobe for an audio track.");
+
+        var outcome = services.Operator.Ask(step);
+        if (outcome is OperatorOutcome.NoOperator or OperatorOutcome.Declined)
+        {
+            await session.StopRecordingAsync(cancellationToken).ConfigureAwait(false);
+            await session.WaitForRecordingStateAsync(RecordingStates.Terminal, StopTimeout, cancellationToken)
+                .ConfigureAwait(false);
+            return outcome == OperatorOutcome.NoOperator
+                ? ScenarioResult.Unavailable("nobody is at the machine to remove a physical audio endpoint")
+                : ScenarioResult.Fail("the operator declined to remove the audio endpoint");
+        }
+
+        return await this.ObserveAsync(context, session, outcome, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ScenarioResult> ObserveAsync(
+        ScenarioContext context,
+        ILiveVerifySession session,
+        OperatorOutcome outcome,
+        CancellationToken cancellationToken)
+    {
+        var observedDegraded = false;
+        var recoveredAgain = false;
+        var leftRecording = false;
+        var raw = new List<JsonElement>();
+        var deadline = DateTime.UtcNow + this.pollFor;
+        while (DateTime.UtcNow < deadline)
+        {
+            var pipeline = await session.PipelineSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            raw.Add(pipeline.Result);
+
+            var lifecycle = Snapshots.Text(pipeline.Result, "lifecycle");
+            if (!RunningLifecycles.Contains(lifecycle, StringComparer.Ordinal))
+            {
+                leftRecording = true;
+                break;
+            }
+
+            var degraded = Snapshots.IsTrue(pipeline.Result, "audio.sourceDegraded");
+            if (degraded)
+            {
+                observedDegraded = true;
+            }
+            else if (observedDegraded)
+            {
+                recoveredAgain = true;
+                break;
+            }
+
+            await Task.Delay(this.pollEvery, cancellationToken).ConfigureAwait(false);
+        }
+
+        var evidence = new List<Evidence>
+        {
+            GateEvidence.SaveText(
+                context,
+                "pipeline-samples.json",
+                "[" + string.Join(",", raw.Select(element => element.GetRawText())) + "]"),
+        };
+
+        await session.StopRecordingAsync(cancellationToken).ConfigureAwait(false);
+        await session.WaitForRecordingStateAsync(RecordingStates.Terminal, StopTimeout, cancellationToken)
+            .ConfigureAwait(false);
+
+        var actor = outcome == OperatorOutcome.Attested ? "[attested] " : string.Empty;
+
+        if (leftRecording)
+        {
+            return ScenarioResult.Fail(
+                $"{actor}the recording stopped; ADR 0046 requires it to continue", [.. evidence]);
+        }
+
+        if (!observedDegraded)
+        {
+            return ScenarioResult.Fail(
+                $"{actor}no audio-source degradation was observed within {(int)this.pollFor.TotalSeconds} s",
+                [.. evidence]);
+        }
+
+        if (!recoveredAgain)
+        {
+            return ScenarioResult.Fail(
+                $"{actor}degradation was observed but never cleared after the device returned", [.. evidence]);
+        }
+
+        var result = await session.RecordResultAsync(cancellationToken).ConfigureAwait(false);
+        evidence.Add(GateEvidence.SaveJson(context, "record-result.json", result.Result));
+
+        if (!Snapshots.IsTrue(result.Result, "succeeded"))
+        {
+            return ScenarioResult.Fail(
+                $"{actor}the recording did not succeed after the endpoint recovered", [.. evidence]);
+        }
+
+        var outputPath = Snapshots.Text(result.Result, "outputPath");
+        var probe = await context.RequireServices().Ffprobe.InspectAsync(outputPath, cancellationToken)
+            .ConfigureAwait(false);
+        evidence.Add(GateEvidence.SaveText(context, "ffprobe.json", probe.RawJson));
+
+        if (probe.AudioStreams.Count == 0)
+        {
+            return ScenarioResult.Fail(
+                $"{actor}the recording carries no audio track after the endpoint recovered", [.. evidence]);
+        }
+
+        return ScenarioResult.Pass(
+            $"{actor}degraded during the outage, recovered afterwards, recording never stopped, and the "
+                + "output still carries audio",
+            [.. evidence]);
+    }
+
+    private static async Task<string?> EnableSystemAudioAsync(
+        ILiveVerifySession session, CancellationToken cancellationToken)
+    {
+        var set = await session.SetSettingAsync("audio.systemEnabled", true, cancellationToken).ConfigureAwait(false);
+        if (!set.Ok)
+        {
+            return $"settings.set audio.systemEnabled refused: {set.Refusal}";
+        }
+
+        var record = await session.RecordSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        return Snapshots.IsTrue(record.Result, "systemAudioEnabled")
+            ? null
+            : "the system-audio source did not become enabled after settings.set";
+    }
+}

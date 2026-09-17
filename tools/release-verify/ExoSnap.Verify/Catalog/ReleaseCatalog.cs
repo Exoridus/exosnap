@@ -58,6 +58,7 @@ public static class ReleaseCatalog
         "REL-CAP-QUIET-001" => new QuietStallGate(),
         "REL-CAP-FSE-001" => new ExclusiveFullscreenGate(),
         "REL-AUD-CLOCK-001" => new AudioClockSoakGate(),
+        "REL-AUD-DEGRADE-001" => new AudioDegradeGate(),
         "REL-AUD-SILENCE-001" => new AudioSilenceGate(),
         "REL-AUD-FORMAT-001" => new AudioFormatGate(),
         "REL-DISP-REFRESH-001" => new DisplayRefreshGate(),

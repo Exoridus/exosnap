@@ -75,9 +75,11 @@ public sealed class CampaignServices : IAsyncDisposable
         string journalDirectory,
         string journalPath,
         string? aliasProfile,
+        OperatorGate operatorGate,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(campaign);
+        ArgumentNullException.ThrowIfNull(operatorGate);
 
         var processes = new ProcessRunner();
         var tools = new ToolResolver();
@@ -142,7 +144,8 @@ public sealed class CampaignServices : IAsyncDisposable
             new Windows.WindowsSystemAppearance(),
             new ElevatedWorkerHost(ElevatedWorkerHost.Resolve(campaign.RepositoryRoot)),
             disposableOs,
-            new AudioEndpointControl(processes, tools));
+            new AudioEndpointControl(processes, tools),
+            operatorGate);
 
         return new CampaignServices(processes, sessions, gates);
     }

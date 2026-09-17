@@ -131,6 +131,10 @@ public interface IGateSessionHost : IAsyncDisposable
 /// Runs a worker script on a disposable machine. Which machine is a transport
 /// decision, not a gate's: a gate states what it needs run and reads back a verdict.
 /// </param>
+/// <param name="Operator">
+/// Asks a person for what no documented API reaches, and records what they said. An
+/// unattended run never passes through it; the gate that asked reports Unavailable.
+/// </param>
 /// <param name="LastPresentConfirmation">
 /// What the previous present cross-check confirmed, or null when there has never been
 /// one. Null makes that gate required, which is the correct default: nothing has been
@@ -151,6 +155,7 @@ public sealed record GateServices(
     IElevatedWorkerHost ElevatedWorker,
     IDisposableOsRunner DisposableOs,
     AudioEndpointControl AudioEndpoints,
+    OperatorGate Operator,
     PresentConfirmation? LastPresentConfirmation = null,
     string? PresentCapturePath = null);
 

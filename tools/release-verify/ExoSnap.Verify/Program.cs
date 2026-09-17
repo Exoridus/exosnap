@@ -6,6 +6,7 @@ using ExoSnap.Verify.Capabilities;
 using ExoSnap.Verify.Catalog;
 using ExoSnap.Verify.Cli;
 using ExoSnap.Verify.Engine;
+using ExoSnap.Verify.Gates;
 using ExoSnap.Verify.Json;
 using ExoSnap.Verify.Models;
 using ExoSnap.Verify.Processes;
@@ -263,12 +264,19 @@ public static class Program
         var engine = new VerifyEngine(catalog);
         var plan = engine.Plan(selection, capabilities);
 
+        // A redirected stdin means no operator, the same signal the PowerShell catalog
+        // uses: a run piped from CI has nobody to answer a prompt, so the console seam
+        // is null and every operator step reports Unavailable rather than hanging.
+        IOperatorConsole? console = Console.IsInputRedirected ? null : new ConsoleOperatorConsole();
+        var operatorGate = new OperatorGate(console, command.Values("attest"));
+
         await using var services = await CampaignServices.OpenAsync(
             campaign,
             campaign.Binding.RunId,
             Path.Combine(run.Root, "environment"),
             command.Value("journal", Path.Combine(campaign.RepositoryRoot, ".workspace", "env-journal.json")),
             command.Value("alias-profile", string.Empty) is { Length: > 0 } profile ? profile : null,
+            operatorGate,
             CancellationToken.None).ConfigureAwait(false);
 
         var verdicts = await engine
@@ -609,8 +617,11 @@ public static class Program
         writer.WriteLine("  prepare --exe <path> [--rc <tag>] [--commit <sha>] [--package <path>]...");
         writer.WriteLine("      Bind a campaign to explicit bytes and measure the machine.");
         writer.WriteLine();
-        writer.WriteLine("  run [--id <id>] [--class <c>] [--include-opt-in]");
-        writer.WriteLine("      Run the selected scenarios against the prepared campaign.");
+        writer.WriteLine("  run [--id <id>] [--class <c>] [--include-opt-in] [--attest <id>]...");
+        writer.WriteLine("      Run the selected scenarios against the prepared campaign. --attest names a");
+        writer.WriteLine("      scenario the caller performed the operator step of itself; the runner still");
+        writer.WriteLine("      verifies the consequence. A redirected stdin means no operator at all, and an");
+        writer.WriteLine("      operator step that was neither attested nor answered reports Unavailable.");
         writer.WriteLine();
         writer.WriteLine("  report");
         writer.WriteLine("      Print the verdicts recorded so far.");
@@ -618,5 +629,13 @@ public static class Program
         writer.WriteLine("  qualify [--required <id>]... | qualify --dry-run");
         writer.WriteLine("      Write release-verification.json, or plan a run without touching anything.");
         return exitCode;
+    }
+
+    /// <summary>The real console, for a run with somebody in front of it.</summary>
+    private sealed class ConsoleOperatorConsole : IOperatorConsole
+    {
+        public void Write(string text) => Console.Out.Write(text);
+
+        public string? ReadLine() => Console.ReadLine();
     }
 }
