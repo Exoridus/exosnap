@@ -252,10 +252,17 @@ Test-Case 'a Scoop autoupdate block frozen on one version fails the gate' {
 Test-Case 'the Chocolatey checksum placeholder does not fail the version gate' {
     # Between a bump and the published release there is no MSI to hash. If the gate
     # tripped on the placeholder it would be red for the whole of every release
-    # cycle, and it would be turned off.
+    # cycle, and it would be turned off. The tree is in exactly that state for most
+    # of a cycle, so this asserts the placeholder is present rather than mutating a
+    # real checksum into one: a mutation finds nothing to change on a bumped tree.
     $root = New-FixtureRoot
-    Edit-FixtureFile -Root $root -Relative 'packaging/chocolatey/tools/chocolateyinstall.ps1' `
-        -Pattern "(?m)(^\s*checksum64\s*=\s*')[0-9a-f]{64}(')" -Replacement "`${1}$('0' * 64)`${2}"
+    $relative = 'packaging/chocolatey/tools/chocolateyinstall.ps1'
+    $path = Join-Path $root $relative
+    $text = Get-Content -LiteralPath $path -Raw
+    $updated = [Regex]::Replace($text, "(?m)(^\s*checksum64\s*=\s*')[0-9a-f]{64}(')", "`${1}$('0' * 64)`${2}")
+    Assert-True ($updated -match "(?m)^\s*checksum64\s*=\s*'0{64}'") `
+        "the fixture must carry the checksum placeholder in $relative"
+    Set-Content -LiteralPath $path -Value $updated -NoNewline
     $result = Invoke-Gate -Root $root
     Assert-True ($result.ExitCode -eq 0) "the placeholder must not fail the version gate: $($result.Output)"
 }

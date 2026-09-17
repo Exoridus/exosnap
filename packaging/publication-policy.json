@@ -5,7 +5,7 @@
     "channels": {
         "github": {
             "intent": "publish",
-            "expectedVersion": "0.9.0",
+            "expectedVersion": "0.9.1",
             "feed": "https://api.github.com/repos/Exoridus/exosnap/releases/latest",
             "note": "The GitHub Release is the source every other channel downloads from, so it is the one channel that is never held."
         },

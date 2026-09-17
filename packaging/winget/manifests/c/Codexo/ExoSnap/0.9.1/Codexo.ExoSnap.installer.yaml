@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
 PackageIdentifier: Codexo.ExoSnap
-PackageVersion: 0.9.0
+PackageVersion: 0.9.1
 InstallerType: wix
 Scope: machine
 InstallModes:
@@ -14,14 +14,14 @@ ReleaseDate: 2026-09-07
 MinimumOSVersion: 10.0.17763.0
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/Exoridus/exosnap/releases/download/v0.9.0/ExoSnap-0.9.0-windows-x64.msi
-    InstallerSha256: 'FE7EF40C5C0BFE3048AC2F289F6825E325B4AB7D9EF8316B51EECFABFFE7EE96'
-    ProductCode: '{2C29A877-07FB-4156-A2A0-E9A660E64EFD}'
+    InstallerUrl: https://github.com/Exoridus/exosnap/releases/download/v0.9.1/ExoSnap-0.9.1-windows-x64.msi
+    InstallerSha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    ProductCode: '{00000000-0000-0000-0000-000000000000}'
     AppsAndFeaturesEntries:
       - DisplayName: ExoSnap
         Publisher: Codexo
-        DisplayVersion: 0.9.0
-        ProductCode: '{2C29A877-07FB-4156-A2A0-E9A660E64EFD}'
+        DisplayVersion: 0.9.1
+        ProductCode: '{00000000-0000-0000-0000-000000000000}'
         UpgradeCode: '{8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D}'
         InstallerType: wix
 ManifestType: installer

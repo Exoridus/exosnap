@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
 PackageIdentifier: Codexo.ExoSnap
-PackageVersion: 0.9.0
+PackageVersion: 0.9.1
 PackageLocale: en-US
 Publisher: Codexo
 PublisherUrl: https://github.com/Exoridus
@@ -31,6 +31,6 @@ Tags:
   - webcam
   - diagnostics
   - overlay
-ReleaseNotesUrl: https://github.com/Exoridus/exosnap/releases/tag/v0.9.0
+ReleaseNotesUrl: https://github.com/Exoridus/exosnap/releases/tag/v0.9.1
 ManifestType: defaultLocale
 ManifestVersion: 1.10.0
