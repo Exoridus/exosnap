@@ -191,37 +191,38 @@ Item {
                         anchors.fill: parent
                     }
 
+                    // Harness seam (--visual-test record-brand): the stage
+                    // carrying the brand alone, at a size the empty state has no
+                    // room for. Unreachable in a product run on purpose -- what
+                    // the page owes a user with no source is the instruction,
+                    // not a logo over it.
+                    Row {
+                        spacing: ExoTheme.spacingMd
+                        visible: root.recordViewModel.harnessBrandStage
+                        anchors.centerIn: parent
+
+                        ExoBrandMark {
+                            width: 112
+                            height: 112
+                            anchors.verticalCenter: parent.verticalCenter
+                            Accessible.ignored: true
+                        }
+
+                        ExoBrandWordmark {
+                            typePixelSize: 72
+                            width: implicitWidth
+                            height: implicitHeight
+                            anchors.verticalCenter: parent.verticalCenter
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: "exosnap"
+                        }
+                    }
+
                     Column {
                         spacing: ExoTheme.spacingMd
                         visible: !root.recordViewModel.selectedTargetAvailable
+                                 && !root.recordViewModel.harnessBrandStage
                         anchors.centerIn: parent
-
-                        // The same pair the title band and the About card draw,
-                        // at the one size on this page where identity has room.
-                        // An empty stage is the only moment the product has
-                        // nothing of the user's to show, and a bare instruction
-                        // on black reads as a surface that failed to load.
-                        Row {
-                            spacing: ExoTheme.spacingSm
-                            bottomPadding: ExoTheme.spacingSm
-                            anchors.horizontalCenter: parent.horizontalCenter
-
-                            ExoBrandMark {
-                                width: 44
-                                height: 44
-                                anchors.verticalCenter: parent.verticalCenter
-                                Accessible.ignored: true
-                            }
-
-                            ExoBrandWordmark {
-                                typePixelSize: ExoTheme.fontValueLarge
-                                width: implicitWidth
-                                height: implicitHeight
-                                anchors.verticalCenter: parent.verticalCenter
-                                Accessible.role: Accessible.StaticText
-                                Accessible.name: "exosnap"
-                            }
-                        }
 
                         Label {
                             text: qsTr("Choose what to record")

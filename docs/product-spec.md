@@ -1142,11 +1142,8 @@ admitted, so a blocker holds even if the Diagnostics page was never opened. The 
 the blocker's own reason — never a generic failure.
 
 **No source is not Ready.** When no capture source is selected, the shell and Record status read
-`No source` or `Unavailable`, the preview placeholder carries the brand mark and wordmark above a line
-explaining that a source must be chosen, Record remains visible but disabled, and a separate
-**Choose source** action opens the picker. The brand is there because this is the one moment the page
-has nothing of the user's to show, and an instruction alone on a black stage reads as a surface that
-failed to load. This expected
+`No source` or `Unavailable`, the preview placeholder explains that a source must be chosen, Record
+remains visible but disabled, and a separate **Choose source** action opens the picker. This expected
 empty state raises no first-run toast. A source that disappears is likewise never represented as
 Ready and is never silently replaced.
 

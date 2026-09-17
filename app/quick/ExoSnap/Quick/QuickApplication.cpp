@@ -5619,7 +5619,13 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     // inherit one from the scenario applied before it.
     clearAudioSourceDegradedWarning();
 
-    if (normalized == QLatin1String(visual::record_state::kNoSource)) {
+    if (normalized == QLatin1String(visual::record_state::kBrand)) {
+        // The empty stage's own seeding, plus the brand swap: the still is that
+        // page with its instruction block replaced, not a third arrangement
+        // that would drift from what the product draws.
+        selectTarget(-1, CaptureMode::Monitor);
+        record_view_model_adapter_.applyBrandStageForHarness();
+    } else if (normalized == QLatin1String(visual::record_state::kNoSource)) {
         // Seeded by clearing the selection, not by setting a state behind one:
         // what the page shows without a source is the product's own answer to
         // having none, and a state written over a selection that is still there

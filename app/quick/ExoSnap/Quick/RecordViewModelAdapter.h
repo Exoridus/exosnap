@@ -143,6 +143,13 @@ class RecordViewModelAdapter : public QObject {
     // the user read it in and the frame they pressed it.
     Q_PROPERTY(QVariantList recentRecordingOptions READ recentRecordingOptions NOTIFY recentRecordingsChanged FINAL)
 
+    // Harness seam (--visual-test). Replaces the empty stage's instruction block
+    // with the brand alone, for the still the README ships. Deliberately not
+    // NOTIFY changed: it is set once before the page is shown and never moves,
+    // and putting it in that snapshot would cost a comparison per stats tick for
+    // a value only a capture run ever writes.
+    Q_PROPERTY(bool harnessBrandStage READ harnessBrandStage NOTIFY harnessBrandStageChanged FINAL)
+
   public:
     explicit RecordViewModelAdapter(const RecordViewModel* source = nullptr, QObject* parent = nullptr);
 
@@ -182,6 +189,8 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] int targetCount() const noexcept;
     [[nodiscard]] const QString& selectedTargetIdentity() const noexcept;
     [[nodiscard]] bool selectedTargetAvailable() const noexcept;
+    [[nodiscard]] bool harnessBrandStage() const noexcept;
+    void applyBrandStageForHarness();
     [[nodiscard]] Q_INVOKABLE QVariantList filteredTargetOptions(const QString& kind, const QString& query) const;
     [[nodiscard]] int selectedTargetIndex() const noexcept;
     [[nodiscard]] int captureMode() const noexcept;
@@ -283,6 +292,7 @@ class RecordViewModelAdapter : public QObject {
     void webcamFrameChanged();
     void targetOptionsChanged();
     void recentRecordingsChanged();
+    void harnessBrandStageChanged();
     void visibleTargetIdentitiesChanged(QStringList identities);
     void metersChanged();
     void changed();
@@ -309,6 +319,7 @@ class RecordViewModelAdapter : public QObject {
   private:
     // -1 means "not known", which is the resting value; see the property.
     qreal saving_progress_ = -1.0;
+    bool harness_brand_stage_ = false;
 
     // Reads every property whose NOTIFY is `changed()`, in declaration order.
     [[nodiscard]] QVariantList changedPropertySnapshot() const;

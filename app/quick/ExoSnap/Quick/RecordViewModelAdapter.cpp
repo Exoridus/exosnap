@@ -336,6 +336,17 @@ bool RecordViewModelAdapter::selectedTargetAvailable() const noexcept {
     return selected_target_available_;
 }
 
+bool RecordViewModelAdapter::harnessBrandStage() const noexcept {
+    return harness_brand_stage_;
+}
+
+void RecordViewModelAdapter::applyBrandStageForHarness() {
+    if (harness_brand_stage_)
+        return;
+    harness_brand_stage_ = true;
+    emit harnessBrandStageChanged();
+}
+
 QVariantList RecordViewModelAdapter::filteredTargetOptions(const QString& kind, const QString& query) const {
     QVariantList result;
     const QString normalized_kind = kind.trimmed().toLower();
