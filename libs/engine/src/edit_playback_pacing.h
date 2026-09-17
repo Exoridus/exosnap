@@ -74,6 +74,28 @@ inline constexpr int64_t kUnknownDemuxPositionUs = INT64_MIN;
     return demuxed_through_us < current_media_time_us + read_ahead_us;
 }
 
+// How long the demuxer may wait before that gate can reopen, in microseconds.
+//
+// Nothing notifies the demuxer: the gate is closed by its own read position and
+// reopened only by the clock advancing. The clock runs with real time, so the
+// earliest it can reopen is the surplus the demuxer is already ahead by. A clock
+// that is not moving -- paused, or seeking -- never reaches that point, which is
+// what the cap is for: the wait ends, the gate is evaluated again, and no wait
+// depends on a clock that stopped. The floor keeps a surplus of nearly zero from
+// turning the wait into a spin.
+//
+// Returns 0 while the gate is open, so a caller that asks without testing the
+// gate first does not wait at all.
+[[nodiscard]] constexpr int64_t DemuxReadAheadWaitUs(int64_t demuxed_through_us, int64_t current_media_time_us,
+                                                     int64_t read_ahead_us, int64_t floor_us, int64_t cap_us) noexcept {
+    if (ShouldDemuxMorePackets(demuxed_through_us, current_media_time_us, read_ahead_us))
+        return 0;
+    const int64_t surplus_us = demuxed_through_us - (current_media_time_us + read_ahead_us);
+    if (surplus_us < floor_us)
+        return floor_us;
+    return surplus_us < cap_us ? surplus_us : cap_us;
+}
+
 // ---- Demux thread: per-queue admission -----------------------------------
 //
 // Each stream's packet queue has a SOFT capacity (the normal buffer target)

@@ -180,12 +180,16 @@ constexpr PacketQueueLimits kPacketQueueLimits{
 // demuxer settles about one second ahead of the clock either way.
 constexpr int64_t kDemuxReadAheadUs = 1'000'000;
 
-// Granularity of the demuxer's read-ahead wait. The playback clock is a plain
-// function, not an event source, so there is nothing to be notified by -- the
-// demuxer re-checks it on this interval. Short enough to be invisible next to
-// the one-second read-ahead budget, and every iteration re-reads the cancel
-// flag, so a stop is never delayed by more than this.
-constexpr auto kDemuxReadAheadPollInterval = std::chrono::milliseconds(2);
+// Bounds on the demuxer's read-ahead wait. The playback clock is a plain
+// function, not an event source, so there is nothing to be notified by -- but
+// the gate it closes can only reopen once the clock has advanced by the surplus
+// the demuxer is ahead by, and that is a duration this thread can compute
+// (DemuxReadAheadWaitUs) instead of a cadence it has to guess. The floor keeps a
+// gate that closed by a hair from spinning; the cap is what a clock that stops
+// moving costs before the gate is looked at again. A stop does not wait for
+// either: it wakes the thread through demux_wait_cv.
+constexpr int64_t kDemuxReadAheadWaitFloorUs = 2'000;
+constexpr int64_t kDemuxReadAheadWaitCapUs = 50'000;
 
 // Upper bound on how long a Push waits before re-evaluating its admission
 // rule. That rule depends on the OTHER queue's level, which changes without
@@ -507,6 +511,12 @@ struct EditPlayerEngine::Impl {
     std::atomic<bool> playback_audio_active{false};
     std::mutex playback_mutex; // guards start/stop against concurrent calls
 
+    // The demux thread's read-ahead wait. Its bound comes from the gate's own
+    // arithmetic rather than from a poll interval, so teardown has to wake it
+    // instead of waiting that bound out.
+    std::mutex demux_wait_mutex;
+    std::condition_variable demux_wait_cv;
+
     [[nodiscard]] bool IsOpen() const noexcept {
         return fmt.ctx != nullptr;
     }
@@ -521,6 +531,13 @@ struct EditPlayerEngine::Impl {
     // which is why EditPlayerSession::Pause() calls audio.Stop() and releases
     // its frame queue BEFORE StopPlaybackDecode().
     void JoinPlaybackThreads() {
+        // playback_cancel is already set by the caller, and the waiter tests it
+        // under this mutex, so taking it here cannot slip between that test and
+        // the wait it leads to.
+        {
+            std::lock_guard<std::mutex> lock(demux_wait_mutex);
+            demux_wait_cv.notify_all();
+        }
         if (video_packets)
             video_packets->Abort();
         if (audio_packets)
@@ -1322,10 +1339,17 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                     // stream's delivery -- precisely the coupling this topology
                     // exists to remove. With no clock (throughput probes,
                     // video-only sessions) this never waits.
-                    while (!impl->playback_cancel.load() &&
-                           !ShouldDemuxMorePackets(demuxed_through_us, media_clock_us ? media_clock_us() : -1,
-                                                   kDemuxReadAheadUs)) {
-                        std::this_thread::sleep_for(kDemuxReadAheadPollInterval);
+                    for (;;) {
+                        if (impl->playback_cancel.load())
+                            break;
+                        const int64_t clock_us = media_clock_us ? media_clock_us() : -1;
+                        if (ShouldDemuxMorePackets(demuxed_through_us, clock_us, kDemuxReadAheadUs))
+                            break;
+                        const auto wait_us = std::chrono::microseconds(
+                            DemuxReadAheadWaitUs(demuxed_through_us, clock_us, kDemuxReadAheadUs,
+                                                 kDemuxReadAheadWaitFloorUs, kDemuxReadAheadWaitCapUs));
+                        std::unique_lock<std::mutex> lock(impl->demux_wait_mutex);
+                        impl->demux_wait_cv.wait_for(lock, wait_us, [impl] { return impl->playback_cancel.load(); });
                     }
                     if (impl->playback_cancel.load())
                         break;

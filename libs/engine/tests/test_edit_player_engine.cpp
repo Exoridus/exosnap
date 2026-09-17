@@ -25,6 +25,7 @@ namespace {
 
 using exosnap::engine::AudioTrackDescription;
 using exosnap::engine::DemuxedThroughUs;
+using exosnap::engine::DemuxReadAheadWaitUs;
 using exosnap::engine::EditPlayerEngine;
 using exosnap::engine::ShouldAdmitDemuxedPacket;
 using exosnap::engine::ShouldConvertDecodedFrame;
@@ -495,6 +496,30 @@ TEST(EditPlaybackPacing, ReadAheadResumesAsTheClockAdvances) {
     constexpr int64_t position = 2'000'000;
     EXPECT_FALSE(ShouldDemuxMorePackets(position, 1'000'000, 1'000'000));
     EXPECT_TRUE(ShouldDemuxMorePackets(position, 1'000'001, 1'000'000));
+}
+
+TEST(EditPlaybackPacingWait, AnOpenGateIsNotWaitedOn) {
+    EXPECT_EQ(DemuxReadAheadWaitUs(1'500'000, 1'000'000, 1'000'000, 2'000, 50'000), 0);
+    // No clock: the gate never closes, so there is never anything to wait for.
+    EXPECT_EQ(DemuxReadAheadWaitUs(9'000'000, -1, 1'000'000, 2'000, 50'000), 0);
+}
+
+TEST(EditPlaybackPacingWait, TheWaitIsTheSurplusTheDemuxerIsAheadBy) {
+    // 10 ms past the budget: the clock needs 10 ms of real time to catch up.
+    EXPECT_EQ(DemuxReadAheadWaitUs(2'010'000, 1'000'000, 1'000'000, 2'000, 50'000), 10'000);
+}
+
+TEST(EditPlaybackPacingWait, TheCapBoundsAClockThatMayHaveStopped) {
+    // A second ahead would be a second of not looking at the gate at all.
+    EXPECT_EQ(DemuxReadAheadWaitUs(3'000'000, 1'000'000, 1'000'000, 2'000, 50'000), 50'000);
+}
+
+TEST(EditPlaybackPacingWait, TheFloorKeepsABarelyClosedGateFromSpinning) {
+    // Exactly at the budget closes the gate with a surplus of zero, which
+    // without the floor would be a wait of nothing at all.
+    EXPECT_FALSE(ShouldDemuxMorePackets(2'000'000, 1'000'000, 1'000'000));
+    EXPECT_EQ(DemuxReadAheadWaitUs(2'000'000, 1'000'000, 1'000'000, 2'000, 50'000), 2'000);
+    EXPECT_EQ(DemuxReadAheadWaitUs(2'000'001, 1'000'000, 1'000'000, 2'000, 50'000), 2'000);
 }
 
 TEST(EditPlaybackPacing, NoClockMeansNoReadAheadPacing) {
