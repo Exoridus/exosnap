@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.27)
 # only accepts numeric X.Y.Z, so prerelease identity cannot live here. Every
 # other version form is derived from PROJECT_VERSION plus EXOSNAP_RELEASE_VERSION
 # below — do not duplicate either elsewhere.
-project(exosnap VERSION 0.9.0 LANGUAGES C CXX)
+project(exosnap VERSION 0.9.1 LANGUAGES C CXX)
 
 # Full release identity. Official release builds pass the complete release
 # version (e.g. -DEXOSNAP_RELEASE_VERSION=0.9.0-rc4), derived from the validated

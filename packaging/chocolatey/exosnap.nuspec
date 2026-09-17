@@ -2,13 +2,13 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>exosnap</id>
-    <version>0.9.0</version>
+    <version>0.9.1</version>
     <packageSourceUrl>https://github.com/Exoridus/exosnap/tree/main/packaging/chocolatey</packageSourceUrl>
     <owners>Codexo</owners>
     <title>ExoSnap</title>
     <authors>Codexo</authors>
     <projectUrl>https://github.com/Exoridus/exosnap</projectUrl>
-    <iconUrl>https://cdn.jsdelivr.net/gh/Exoridus/exosnap@v0.9.0/app/assets/brand/exosnap-logo.svg</iconUrl>
+    <iconUrl>https://cdn.jsdelivr.net/gh/Exoridus/exosnap@v0.9.1/app/assets/brand/exosnap-logo.svg</iconUrl>
     <copyright>Copyright 2026 Codexo</copyright>
     <licenseUrl>https://github.com/Exoridus/exosnap/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
@@ -17,14 +17,14 @@
     <bugTrackerUrl>https://github.com/Exoridus/exosnap/issues</bugTrackerUrl>
     <tags>exosnap recorder screen-capture screen-recorder nvenc h264 hevc av1 hdr mkv mp4 webm webcam diagnostics</tags>
     <summary>Windows-native screen, window and region recorder with an NVIDIA NVENC pipeline, multi-track audio, and diagnostics.</summary>
-    <releaseNotes>https://github.com/Exoridus/exosnap/releases/tag/v0.9.0</releaseNotes>
+    <releaseNotes>https://github.com/Exoridus/exosnap/releases/tag/v0.9.1</releaseNotes>
     <description><![CDATA[
 ExoSnap is a Windows-native screen, window and region recorder built around an
 NVIDIA NVENC capture-and-encode pipeline, multi-track audio routing, a webcam
 overlay, and a diagnostics-first workflow that blocks a misconfigured recording
 before it starts.
 
-This package downloads and installs the official ExoSnap 0.9.0 MSI from the
+This package downloads and installs the official ExoSnap 0.9.1 MSI from the
 project's GitHub Release. No binaries are redistributed inside the package.
 
 ## Features
