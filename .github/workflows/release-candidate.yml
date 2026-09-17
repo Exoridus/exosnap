@@ -1031,7 +1031,11 @@ jobs:
           fi
           pwsh -NoProfile -NonInteractive -File repo/scripts/render-release-notes.ps1 "${notes_args[@]}"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            is_draft=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.draft')
+            # `gh release view` and the releases/tags REST endpoint do not agree on
+            # drafts: a draft has no git ref yet, so the REST lookup by tag name 404s
+            # on exactly the release this branch exists to handle. Asking gh for the
+            # field is the only form that answers for both kinds.
+            is_draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
             if [ "$is_draft" != "true" ]; then
               echo "::error::Release $TAG already exists and is already published (not a draft). Refusing to re-upload/overwrite a live release's assets. If this tag genuinely needs to be re-released, delete the existing Release first (a deliberate, manual, human decision) and re-run. For an RC, cutting the next candidate (v0.9.0-rc2) is usually the better answer."
               exit 1
@@ -1059,19 +1063,36 @@ jobs:
               --notes-file release-notes.md
           fi
 
+      # Retried because the two large assets (~160 MB together) upload through an
+      # endpoint that intermittently answers HTTP 400 after minutes of transfer.
+      # That is a transport failure, not a rejected request, and failing the job on
+      # it strands a draft that the rerun path then has to clean up. `--clobber`
+      # makes every attempt idempotent, so a retry re-sends only what is missing or
+      # incomplete.
       - name: Upload all assets to the release
         working-directory: release-assets
         run: |
           set -euo pipefail
-          gh release upload "$TAG" \
-            "ExoSnap-$VERSION-windows-x64-portable.zip" \
-            "ExoSnap-$VERSION-windows-x64-portable.sha256" \
-            "ExoSnap-$VERSION-windows-x64.msi" \
-            "ExoSnap-$VERSION-windows-x64.msi.sha256" \
-            update-manifest.json update-manifest.json.sig \
-            toolchain-manifest.json \
-            artifact-manifest.json \
-            --repo "$GITHUB_REPOSITORY" --clobber
+          for attempt in 1 2 3; do
+            if gh release upload "$TAG" \
+              "ExoSnap-$VERSION-windows-x64-portable.zip" \
+              "ExoSnap-$VERSION-windows-x64-portable.sha256" \
+              "ExoSnap-$VERSION-windows-x64.msi" \
+              "ExoSnap-$VERSION-windows-x64.msi.sha256" \
+              update-manifest.json update-manifest.json.sig \
+              toolchain-manifest.json \
+              artifact-manifest.json \
+              --repo "$GITHUB_REPOSITORY" --clobber; then
+              echo "Upload succeeded on attempt $attempt."
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Asset upload attempt $attempt failed; retrying in $((attempt * 30))s."
+              sleep $((attempt * 30))
+            fi
+          done
+          echo "::error::Asset upload failed three times. The draft is left in place; rerun this job to continue into it."
+          exit 1
 
       # Re-download the assets straight from the Release and re-hash them, so what a
       # user would actually fetch is proven byte-identical to what the gate built and
