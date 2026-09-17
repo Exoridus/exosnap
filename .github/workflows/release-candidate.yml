@@ -973,8 +973,11 @@ jobs:
           name: rc-qualification
           path: rc-qualification
 
+      # Unconditional: the promotion check below is final-only, but the release
+      # notes are rendered from repo/scripts for every kind of tag. Gating this
+      # on `prerelease == 'false'` left an RC with no checkout at all, and the
+      # notes step failed before a draft was ever created.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        if: ${{ needs.resolve-identity.outputs.prerelease == 'false' }}
         with:
           path: repo
 
