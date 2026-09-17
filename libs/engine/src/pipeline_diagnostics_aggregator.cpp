@@ -704,11 +704,34 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     if (present_observed_ && elapsed_seconds >= thresholds_.warmup_seconds) {
         const RollingTimeWindow::Aggregate pres = present_interval_window_.Compute(now);
         const RollingTimeWindow::Aggregate coal = present_coalesce_window_.Compute(now);
-        if (pres.count >= kMinPresentSamples) {
+
+        // An interval this long means the source stopped delivering rather than
+        // delivering unevenly: four output periods is already three frames the
+        // encoder had to fill by other means, and nothing that far apart says
+        // anything about pacing. Those intervals belong to the duplication check.
+        // A source with no known output rate falls back to a 60 fps period so the
+        // ceiling is never zero, which would exclude every sample.
+        const double output_period_ms = (cap.frame_interval_ms > 0.0) ? cap.frame_interval_ms : (1000.0 / 60.0);
+        constexpr double kStallPeriods = 4.0;
+        constexpr double kHighQuantile = 0.95;
+        const RollingTimeWindow::Spread spread =
+            present_interval_window_.ComputeSpread(now, output_period_ms * kStallPeriods, kHighQuantile);
+
+        // The spread needs its own sample count: a window that is mostly stall has
+        // few delivering intervals left, and a jitter figure computed from three of
+        // them is noise wearing a number.
+        if (pres.count >= kMinPresentSamples && spread.count >= kMinPresentSamples) {
             cap.source_present_interval_ms = pres.average;
-            cap.source_present_jitter_ms = (pres.peak > pres.average) ? (pres.peak - pres.average) : 0.0;
+            cap.source_present_jitter_ms = spread.value();
             cap.source_coalesce_ratio = (coal.count > 0) ? coal.average : 1.0;
             cap.present_cadence_availability = MetricAvailability::Available;
+        } else if (pres.count >= kMinPresentSamples) {
+            // Intervals are arriving, but almost all of them are stalls. The
+            // interval average still describes the source honestly; the jitter
+            // does not exist, and reporting 0 would read as perfect pacing.
+            cap.source_present_interval_ms = pres.average;
+            cap.source_coalesce_ratio = (coal.count > 0) ? coal.average : 1.0;
+            cap.present_cadence_availability = MetricAvailability::Unavailable;
         }
     }
 

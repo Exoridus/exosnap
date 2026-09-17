@@ -353,7 +353,7 @@ TEST(PipelineDiagnostics, PresentCadenceUnavailableWithoutSamples) {
     EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Unavailable);
 }
 
-TEST(PipelineDiagnostics, PresentCadenceAvailableAndJitterDerived) {
+TEST(PipelineDiagnostics, PresentCadenceAvailableAndOneLateFrameIsNotJudder) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
     // >= 8 present intervals within the 2 s window: mostly ~8 ms (≈120 Hz) with one spike.
@@ -363,10 +363,62 @@ TEST(PipelineDiagnostics, PresentCadenceAvailableAndJitterDerived) {
     }
     const auto s = agg.BuildSnapshot(At(120), MakeStats(), DiagnosticsLifecycle::Recording, 2.0);
     EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Available);
-    // avg = (11*8 + 20)/12 = 9.0; peak = 20 → jitter = 11 ms (> 4 ms threshold).
+    // The mean still describes the source: (11*8 + 20)/12 = 9.0 ms.
     EXPECT_NEAR(s.capture.source_present_interval_ms, 9.0, 0.001);
-    EXPECT_GT(s.capture.source_present_jitter_ms, 4.0);
+    // The spread does not: eleven of twelve intervals are identical, so both the
+    // median and the p95 are 8 ms. A single late frame is what every source does
+    // occasionally, and reporting it as judder is what made this check unusable
+    // on a high-refresh desktop.
+    EXPECT_NEAR(s.capture.source_present_jitter_ms, 0.0, 0.001);
     EXPECT_NEAR(s.capture.source_coalesce_ratio, 1.0, 0.001);
+}
+
+TEST(PipelineDiagnostics, PresentCadenceReportsSustainedIrregularDelivery) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // Genuinely uneven delivery: half the intervals short, half long, all of them
+    // real deliveries. This is what frame selection at a fixed rate cannot hide,
+    // and it must still be reported.
+    for (int i = 0; i < 16; ++i) {
+        agg.OnSourcePresentInterval(At(i * 12), (i % 2 == 0) ? 4.0 : 22.0, 1);
+    }
+    const auto s = agg.BuildSnapshot(At(200), MakeStats(), DiagnosticsLifecycle::Recording, 2.0);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Available);
+    EXPECT_GT(s.capture.source_present_jitter_ms, 8.0) << "an 18 ms swing has to clear the 8 ms budget";
+}
+
+TEST(PipelineDiagnostics, PresentCadenceIgnoresStalledIntervals) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // A still desktop: steady delivery, then one gap of a second because nothing
+    // changed. At 60 fps the stall ceiling is 4 * 16.67 = 66.7 ms, so the gap is
+    // excluded. Counting it would put the spread near a full second and report the
+    // quietest possible screen as the worst judder of the session.
+    for (int i = 0; i < 12; ++i) {
+        agg.OnSourcePresentInterval(At(i * 8), 8.0, 1);
+    }
+    agg.OnSourcePresentInterval(At(100), 1045.0, 1);
+
+    const auto s = agg.BuildSnapshot(At(120), MakeStats(), DiagnosticsLifecycle::Recording, 2.0);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Available);
+    EXPECT_NEAR(s.capture.source_present_jitter_ms, 0.0, 0.001);
+}
+
+TEST(PipelineDiagnostics, PresentCadenceUnavailableWhenAlmostEverythingIsAStall) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // Enough intervals to pass the sample gate, but nearly all of them stalls: a
+    // paused game, a screen nobody is touching. Too few delivering intervals are
+    // left to say anything about pacing, and reporting 0 ms would read as perfect
+    // pacing rather than as no measurement.
+    for (int i = 0; i < 12; ++i) {
+        agg.OnSourcePresentInterval(At(i * 100), 400.0, 1);
+    }
+    agg.OnSourcePresentInterval(At(1210), 8.0, 1);
+
+    const auto s = agg.BuildSnapshot(At(1220), MakeStats(), DiagnosticsLifecycle::Recording, 2.0);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Unavailable);
+    EXPECT_GT(s.capture.source_present_interval_ms, 0.0) << "the interval mean is still an honest fact";
 }
 
 TEST(PipelineDiagnostics, PresentCadenceGatedByWarmup) {

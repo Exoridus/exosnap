@@ -115,6 +115,73 @@ class RollingTimeWindow {
         return scratch[rank];
     }
 
+    // Spread of the samples that are at most `ceiling`, as a high quantile minus
+    // its mirror at the low end, plus how many were left out for exceeding it.
+    //
+    // Quantile pair rather than peak-minus-anything: judder is how far apart the
+    // intervals lie, and a source alternating short and long is the worst case
+    // there is. Measuring against the median would score exactly that case at
+    // zero, because with half the samples long the median sits in the long mode
+    // with the upper quantile.
+    //
+    // Present intervals carry two unrelated facts in one series. While the source
+    // is delivering, the spread between intervals is pacing. When it delivers
+    // nothing -- a still desktop, a paused game -- the next interval measures how
+    // long that lasted, which is not pacing at all and dwarfs everything else in
+    // the window. Averaging both together turns a motionless screen into the
+    // worst judder ever measured, so a stall is excluded here and reported by the
+    // duplication check, which is the diagnostic that actually means it.
+    //
+    // The quantile, rather than the peak, is what keeps a single late frame from
+    // speaking for a two-second window.
+    struct Spread {
+        std::size_t count = 0;    // samples at or below the ceiling
+        std::size_t excluded = 0; // samples above it
+        double low = 0.0;
+        double high = 0.0;
+        [[nodiscard]] double value() const noexcept {
+            return (high > low) ? (high - low) : 0.0;
+        }
+    };
+
+    [[nodiscard]] Spread ComputeSpread(time_point now, double ceiling, double high_quantile) const noexcept {
+        const time_point cutoff = now - horizon_;
+        std::array<double, 512> scratch;
+        Spread out;
+        std::size_t n = 0;
+        for (std::size_t i = 0; i < size_; ++i) {
+            const std::size_t idx = (head_ + buf_.size() - 1 - i) % buf_.size();
+            const Sample& s = buf_[idx];
+            if (s.t < cutoff) {
+                break;
+            }
+            if (s.v > ceiling) {
+                ++out.excluded;
+                continue;
+            }
+            if (n < scratch.size()) {
+                scratch[n++] = s.v;
+            }
+        }
+        out.count = n;
+        if (n == 0) {
+            return out;
+        }
+        const auto pick = [&](double q) {
+            auto rank = static_cast<std::size_t>(q * static_cast<double>(n - 1) + 0.5);
+            if (rank >= n) {
+                rank = n - 1;
+            }
+            std::nth_element(scratch.begin(), scratch.begin() + rank, scratch.begin() + n);
+            return scratch[rank];
+        };
+        // High end first: nth_element partitions around it, so selecting the low
+        // one afterwards only searches the part below.
+        out.high = pick(high_quantile);
+        out.low = pick(1.0 - high_quantile);
+        return out;
+    }
+
     void Clear() noexcept {
         head_ = 0;
         size_ = 0;

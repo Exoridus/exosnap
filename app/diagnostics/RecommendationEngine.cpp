@@ -140,10 +140,19 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
     // (source presenting faster than the CFR tick) is NORMAL for high-refresh sources and is
     // exactly what the resampler handles — so it is no longer a trigger either.
     //
-    //   kJitterMs = 8.0 ms — peak-minus-average present interval. Raised from the
-    //     pre-resampler 4 ms: the resampler absorbs moderate jitter, so only a sustained
-    //     spread approaching half a 60 fps output interval (~8.3 ms) signals judder it could
-    //     not hide. Conservative + empirically calibratable.
+    //   kJitterMs = 8.0 ms — the spread of the DELIVERING present intervals, p95 minus
+    //     p5. Raised from the pre-resampler 4 ms: the resampler absorbs moderate
+    //     jitter, so only a sustained spread approaching half a 60 fps output interval
+    //     (~8.3 ms) signals judder it could not hide. The threshold belongs to the
+    //     OUTPUT period and does not scale with the source: a faster source is easier
+    //     for frame selection to smooth, not harder.
+    //
+    //     The measurement used to be peak-minus-average over every interval, which
+    //     fired on any source that paused. A 30-minute recording of a mostly still
+    //     144 Hz desktop raised this 203 times, worst "judder" 1045 ms -- one second
+    //     of nothing happening. The aggregator now excludes stalled intervals and
+    //     reports a quantile spread, so this fires on uneven delivery and stays quiet
+    //     on no delivery.
     constexpr double kJitterMs = 8.0;
     const bool live_judder = live_present_available_ && live_cfr_ && live_present_jitter_ms_ > kJitterMs;
     if (!live_judder) {
