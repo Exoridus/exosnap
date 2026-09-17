@@ -145,7 +145,11 @@ Test-Case 'the second run gets the lock when the first releases it, and says it 
                 "waited only $([int]$lock.WaitedFor.TotalMilliseconds) ms; the holder was not really holding"
         }
         finally { Exit-HostLock -Lock $lock }
-        Receive-Job -Job $releaser -Wait -AutoRemoveJob | Out-Null
+        # Removed explicitly rather than with -AutoRemoveJob: that switch can reach for
+        # the child job instead of the one passed in and fail the case on a race that
+        # has nothing to do with the lock under test.
+        Wait-Job -Job $releaser | Out-Null
+        Remove-Job -Job $releaser -Force
     }
     finally { Stop-ForeignHolder -Holder $foreign }
 }
