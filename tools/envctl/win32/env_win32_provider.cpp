@@ -264,6 +264,19 @@ ApplyResult Win32EnvironmentProvider::Apply(const PropertyId& id, const std::str
         return accepted ? ApplyResult{true, {}} : Refuse(error);
     }
 
+    if (id.property == "acm") {
+        bool enable = false;
+        if (!ParseOnOff(value, enable)) {
+            return Refuse("acm takes 'on' or 'off', not '" + value + "'");
+        }
+        std::string error;
+        // Copy the target: the re-enumeration below invalidates `display`.
+        const DisplayTarget snapshot = *display;
+        const bool accepted = SetWcgState(snapshot, enable, error);
+        Refresh();
+        return accepted ? ApplyResult{true, {}} : Refuse(error);
+    }
+
     if (id.property == "refresh-hz") {
         char* end = nullptr;
         const unsigned long hz = std::strtoul(value.c_str(), &end, 10);

@@ -234,6 +234,33 @@ bool SetHdrState(const DisplayTarget& target, bool enable, std::string& error) {
     return false;
 }
 
+bool SetWcgState(const DisplayTarget& target, bool enable, std::string& error) {
+    error.clear();
+
+#if ENVCTL_HAS_ADVANCED_COLOR_2
+    DISPLAYCONFIG_SET_WCG_STATE request{};
+    request.header.type = DISPLAYCONFIG_DEVICE_INFO_SET_WCG_STATE;
+    request.header.size = sizeof(request);
+    request.header.adapterId = target.adapter_id;
+    request.header.id = target.target_id;
+    request.enableWcg = enable ? 1u : 0u;
+    const LONG code = DisplayConfigSetDeviceInfo(&request.header);
+    if (code == ERROR_SUCCESS) {
+        return true;
+    }
+    error = FormatLastError("DisplayConfigSetDeviceInfo(SET_WCG_STATE)", code);
+    return false;
+#else
+    (void)target;
+    (void)enable;
+    // Deliberately not falling back to SET_ADVANCED_COLOR_STATE: that enumerant
+    // writes the HDR toggle, so "close enough" here would silently change a
+    // different property than the caller asked for.
+    error = "SET_WCG_STATE requires a Windows 11 GA SDK/OS; acm is read-only on this build";
+    return false;
+#endif
+}
+
 DisplayMode ReadCurrentMode(const DisplayTarget& target) {
     DisplayMode mode;
     mode.devmode.dmSize = sizeof(DEVMODEW);

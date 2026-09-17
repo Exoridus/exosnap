@@ -38,9 +38,22 @@ namespace exosnap::engine {
 // scRGB reference white (kHdrReferenceWhiteNits) is defined in
 // hdr_reference_white.h so this header and hdr_pq.h can be included together.
 
-// Fallback display peak used when the capture display's active peak luminance is
-// unknown (the display is not reporting an active HDR colour space). 1000 cd/m^2
-// is a common consumer-HDR peak and errs toward gentler highlight compression.
+// Fallback display peak used when the capture display's reported peak luminance
+// cannot be used (see HdrPeakScale for the two cases). 1000 cd/m^2 is a common
+// consumer-HDR peak and errs toward gentler highlight compression.
+//
+// This value is a choice, not a standard. Microsoft documents how to READ the
+// display's colour volume and says to configure tone mapping from it, but gives
+// no guidance for a reading that turns out to be unusable, and names no default.
+//
+// It also stands in for something it is not. The documented tone-map parameter is
+// the CONTENT's maximum luminance (MaxCLL), with the display's maximum as a
+// separate input; here the target is an SDR file rather than a panel, so what
+// this number actually drives is the content side. The display's peak is only a
+// proxy for it. The documented way to obtain the real one is a histogram pass
+// over each frame, which is the same per-frame luminance analysis this product
+// deliberately does not run over a live stream -- the reason its HDR10 metadata
+// carries no MaxCLL either.
 inline constexpr float kHdrFallbackPeakNits = 1000.0f;
 
 // Knee point in reference-white multiples. Content at or below reference white

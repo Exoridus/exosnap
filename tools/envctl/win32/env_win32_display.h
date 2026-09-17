@@ -53,6 +53,16 @@ AdvancedColorInfo ReadAdvancedColor(const DisplayTarget& target);
 // whether the SETTER accepted; verification is the transaction's job.
 bool SetHdrState(const DisplayTarget& target, bool enable, std::string& error);
 
+// SET_WCG_STATE, the automatic-colour-management toggle. A separate enumerant
+// from the HDR one and never a substitute for it: SET_ADVANCED_COLOR_STATE
+// carries `enableAdvancedColor`, which is HDR under its original name, not this.
+//
+// There is no fallback path. The enumerant arrived with the Windows 11 GA SDK,
+// and on anything older this fails rather than reaching for an undocumented
+// mechanism. Returns only whether the SETTER accepted; verification is the
+// transaction's job.
+bool SetWcgState(const DisplayTarget& target, bool enable, std::string& error);
+
 struct DisplayMode {
     bool ok{false};
     DEVMODEW devmode{};

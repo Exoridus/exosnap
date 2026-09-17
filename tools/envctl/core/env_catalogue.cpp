@@ -20,12 +20,16 @@ const std::vector<CatalogueEntry>& Table() {
          "Reported separately from `hdr` and NEVER inferred from it: WCG is an advanced colour mode that is not "
          "HDR, and a panel can be HDR-enabled but not HDR-active."},
 
-        {device_kind::kDisplay, "acm", CapabilityClass::Human, "onoff",
+        {device_kind::kDisplay, "acm", CapabilityClass::MutateSafe, "onoff",
          "DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2::wideColorUserEnabled (UNAVAILABLE when the SDK/OS predates "
          "GET_ADVANCED_COLOR_INFO_2)",
-         "none documented; the Settings toggle has no public API",
-         "Automatic colour management. Read-only by policy. Never inferred from the HDR state -- they are "
-         "independent user toggles that happen to share one Settings page."},
+         "DisplayConfigSetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_SET_WCG_STATE); UNAVAILABLE on an SDK/OS that "
+         "predates Windows 11 GA, where no setter exists and the property stays read-only",
+         "Automatic colour management. Never inferred from the HDR state -- they are independent user toggles "
+         "that happen to share one Settings page, and the setter is a separate enumerant beside SET_HDR_STATE. "
+         "Was read-only until SET_WCG_STATE turned out to be a public SDK enumerant with a documented structure; "
+         "the classification follows the mechanism, so leaving it ENV_HUMAN would have claimed an inability that "
+         "no longer existed."},
 
         {device_kind::kDisplay, "refresh-hz", CapabilityClass::MutateSafe, "hz",
          "EnumDisplaySettingsExW(ENUM_CURRENT_SETTINGS) -- the WHOLE DEVMODE is snapshotted, not just "
