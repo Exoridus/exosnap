@@ -29,6 +29,38 @@ TEST(SessionHdrDynamicState, ResolvesEveryConsumerScalarFromOneSetOfFacts) {
     EXPECT_FLOAT_EQ(state.overlay_reference_white_nits, 280.0f);
 }
 
+// Without a measurement the tone-map knee is the display-derived one, so a
+// session that never runs the luminance pass resolves the state it always did.
+TEST(SessionHdrDynamicState, WithoutAMeasurementTheToneMapKneeIsTheDisplayPeak) {
+    const SessionHdrDynamicState state = ResolveSessionHdrDynamicState(HdrDisplay(280.0f, 1000.0f));
+    EXPECT_FLOAT_EQ(state.tone_map_peak_scale, state.peak_scale);
+
+    const SessionHdrDynamicState explicit_none = ResolveSessionHdrDynamicState(HdrDisplay(280.0f, 1000.0f), 0.0f);
+    EXPECT_FLOAT_EQ(explicit_none.tone_map_peak_scale, explicit_none.peak_scale);
+}
+
+// The point of the whole pass: what the encode rolls off against is the content,
+// and it moves independently of the panel.
+TEST(SessionHdrDynamicState, AMeasuredPeakDrivesOnlyTheToneMapKnee) {
+    const SessionHdrDynamicState state = ResolveSessionHdrDynamicState(HdrDisplay(280.0f, 1000.0f), 640.0f);
+
+    EXPECT_FLOAT_EQ(state.tone_map_peak_scale, ContentPeakScale(640.0f, 280.0f));
+    EXPECT_FLOAT_EQ(state.peak_scale, HdrPeakScale(true, 1000.0f, 280.0f));
+    EXPECT_FLOAT_EQ(state.paper_white_scale, 280.0f / 80.0f);
+    EXPECT_FLOAT_EQ(state.overlay_reference_white_nits, 280.0f);
+    EXPECT_NE(state.tone_map_peak_scale, state.peak_scale);
+}
+
+// A dark scene measures a peak under the white the OS composes SDR content at.
+// That is the ordinary case, and the knee must still clear paper white or the
+// roll-off degenerates into a hard clamp.
+TEST(SessionHdrDynamicState, AMeasuredPeakBelowPaperWhiteStillClearsTheKnee) {
+    const SessionHdrDynamicState state = ResolveSessionHdrDynamicState(HdrDisplay(280.0f, 1000.0f), 40.0f);
+
+    EXPECT_FLOAT_EQ(state.tone_map_peak_scale, 280.0f / 80.0f);
+    EXPECT_GE(state.tone_map_peak_scale, state.paper_white_scale);
+}
+
 TEST(ClassifyDisplayFactsChange, IdenticalFactsObligeNothing) {
     const HdrDisplayFacts facts = HdrDisplay(280.0f);
     EXPECT_EQ(ClassifyDisplayFactsChange(facts, facts), DisplayFactsChange::None);

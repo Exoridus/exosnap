@@ -267,4 +267,27 @@ class ContentPeakSmoother {
     return peak_nits / kHdrReferenceWhiteNits; // >= 1.0
 }
 
+// Relative change in the peak scale below which the tone-map pass keeps the knee
+// it already holds.
+//
+// The smoother produces a slightly different number on every frame it is fed, so
+// without a band the knee would be rewritten at frame rate for changes far under
+// what the roll-off can express: half a percent of the knee moves an 8-bit
+// highlight code by well under one level. The band is on the knee rather than on
+// the measurement so the threshold is stated in the quantity that is acted on.
+inline constexpr float kContentPeakScaleUpdateFraction = 0.005f;
+
+// Whether a newly resolved tone-map peak scale is worth handing to the tone-map
+// pass.
+//
+// `applied` is the knee the pass currently holds, carried as a non-positive
+// scale while it holds no measured one. The band is relative to it, so it is
+// zero in that state and the first measurement always passes.
+[[nodiscard]] inline bool ContentPeakScaleChangedMaterially(float applied, float candidate) noexcept {
+    if (!std::isfinite(candidate)) {
+        return false;
+    }
+    return std::fabs(candidate - applied) > applied * kContentPeakScaleUpdateFraction;
+}
+
 } // namespace exosnap::engine

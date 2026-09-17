@@ -5,6 +5,7 @@
 #include "av_epoch_align.h"
 #include "codec_private.h"
 #include "gpu_compositor.h"
+#include "gpu_frame_luminance.h"
 #include "gpu_hdr_pq.h"
 #include "gpu_rgb_to_ayuv.h"
 #include "hdr_preview.h"
@@ -1063,6 +1064,21 @@ void VideoThread::Run() {
     DXGI_FORMAT hdrPqSrcFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     HdrPqConverter hdrPqConverter;
 
+    // Per-frame content luminance. One compute dispatch over the pre-encode
+    // surface feeds both consumers: the stream's content light levels, which
+    // become the file's HDR10 MaxCLL/MaxFALL, and a smoothed content peak that
+    // replaces the display-derived tone-map knee. Runs on a native HDR10 or a
+    // tone-mapped HDR session only -- plain SDR has nothing to analyse, and an
+    // SDR Advanced-Color desktop (OdCaptureMode::SdrScrgb) has no roll-off to
+    // place. Everything that interprets the numbers lives in frame_luminance.h.
+    FrameLuminanceAnalyzer frameLuminance;
+    ContentPeakSmoother contentPeak;
+    StreamLuminanceAccumulator contentLightLevels;
+    bool frameLuminanceFailedLogged = false;
+    // The knee the tone-map pass currently holds; a non-positive value means it
+    // holds no measured one yet (see ContentPeakScaleChangedMaterially).
+    float hdrToneMapAppliedPeakScale = 0.0f;
+
     // The WGC path decides its HDR handling up front from wgcPlan (the frame
     // pool format is *requested*, not negotiated from frames). A WGC FP16 pool is
     // always scRGB linear — never an already-PQ desktop — so hdrPqInputIsPq stays
@@ -1795,10 +1811,40 @@ void VideoThread::Run() {
     tonemapGpuTimer.Init(d3dDevice.get());
     vpbltGpuTimer.Init(d3dDevice.get());
 
+    // Measure one pre-encode frame. Inert until Init has run, which only happens
+    // for the sessions the analysis is for, so no call site repeats that gate.
+    //
+    // A dispatch failure ends the analysis for the session rather than being
+    // retried: the causes are all structural (a view the device refuses, a lost
+    // device), so retrying would log once per frame and change nothing. The
+    // recording continues on the display-derived knee, which is what it ran on
+    // before this pass existed.
+    auto analyseFrameLuminance = [&](ID3D11Texture2D* source) {
+        if (!frameLuminance.Initialised() || source == nullptr) {
+            return;
+        }
+        std::string lumErr;
+        if (frameLuminance.Dispatch(source, lumErr)) {
+            return;
+        }
+        frameLuminance.Reset();
+        if (!frameLuminanceFailedLogged) {
+            frameLuminanceFailedLogged = true;
+            logging::log(logging::LogLevel::Warn, "video_thread",
+                         "per-frame luminance analysis stopped after a dispatch failure; the tone-map knee keeps its "
+                         "display-derived value and the file carries no measured content light levels: " +
+                             lumErr,
+                         {});
+        }
+    };
+
     auto toneMapIfHdr = [&](ID3D11Texture2D* source) -> ID3D11Texture2D* {
         if (!hdrToneMapActive || source == nullptr) {
             return source;
         }
+        // Before the roll-off, not after: the knee is placed on the luminance the
+        // captured content reaches, and the tone-map output no longer carries it.
+        analyseFrameLuminance(source);
         std::string tmErr;
         tonemapGpuTimer.Begin(d3dContext.get());
         const bool ok = hdrToneMapper.Convert(source, hdrSdrTex.get(), tmErr);
@@ -1818,6 +1864,9 @@ void VideoThread::Run() {
     // tone-map + compositor + VideoProcessor route. Records the failure and
     // returns false on error.
     auto encodeNativeHdrSlot = [&](ID3D11Texture2D* source, int32_t slot) -> bool {
+        // The composited surface, so the content light levels describe what the
+        // file actually contains rather than the desktop before overlays.
+        analyseFrameLuminance(source);
         std::string pqErr;
         if (!hdrPqConverter.Convert(source, nv12Textures[slot].get(), pqErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "HDR10 native convert: " + pqErr);
@@ -2610,6 +2659,32 @@ void VideoThread::Run() {
         gpuCompositorReady = true;
     }
 
+    // --- Per-frame luminance analysis init (deferred: the mode and the source
+    // format are only known once the capture format is negotiated) ---
+    //
+    // Not fatal when it fails. Every consumer has a defined answer without it --
+    // the knee keeps the display-derived value and the file carries no content
+    // light levels, which is what every release before this one shipped -- and
+    // failing a recording over a measurement would trade the footage for it.
+    if (hdrNativeActive || (hdrToneMapActive && !hdrToneMapSdrSource)) {
+        // The pre-encode surface is the composited FP16 frame on the native path
+        // and the raw capture on the tone-mapped one; both are sourceWidth x
+        // sourceHeight (the compositor is sized from the same pair). Only the
+        // encoding differs, and only for the desktops duplication hands out as
+        // PQ R10G10B10A2 instead of linear FP16.
+        const bool luminancePqSource = hdrNativeActive ? hdrPqInputIsPq : hdrToneMapPqSource;
+        std::string lumErr;
+        if (!frameLuminance.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, luminancePqSource,
+                                 lumErr)) {
+            frameLuminanceFailedLogged = true;
+            logging::log(logging::LogLevel::Warn, "video_thread",
+                         "per-frame luminance analysis is unavailable on this device; the tone-map knee keeps its "
+                         "display-derived value and the file carries no measured content light levels: " +
+                             lumErr,
+                         {});
+        }
+    }
+
     // --- Capture + encode loop ---
     bool av1CodecPrivateReady = false;
     bool h264CodecPrivateReady = false;
@@ -3133,12 +3208,19 @@ void VideoThread::Run() {
             return;
         displayScalarsChanged = false;
 
-        const SessionHdrDynamicState state = ResolveSessionHdrDynamicState(sessionDisplayFacts);
+        // Resolved WITH the measurement, because the two are not independent: the
+        // knee is divided by the paper-white scale in the shader, so adopting a
+        // new white while leaving a measured knee behind would place the roll-off
+        // at a luminance neither value describes.
+        const SessionHdrDynamicState state =
+            ResolveSessionHdrDynamicState(sessionDisplayFacts, contentPeak.ValueNits());
         hdrPeakScale = state.peak_scale;
         hdrPaperWhiteScale = state.paper_white_scale;
 
-        if (hdrToneMapActive)
-            hdrToneMapper.SetDisplayScales(state.peak_scale, state.paper_white_scale);
+        if (hdrToneMapActive) {
+            hdrToneMapAppliedPeakScale = state.tone_map_peak_scale;
+            hdrToneMapper.SetDisplayScales(state.tone_map_peak_scale, state.paper_white_scale);
+        }
         if (gpuCompositorReady && hdrNativeActive)
             gpuCompositor.SetOverlayReferenceWhiteNits(state.overlay_reference_white_nits);
 
@@ -3156,10 +3238,44 @@ void VideoThread::Run() {
         const logging::LogField fields[] = {
             {"sdr_white_level_nits", std::to_string(sessionDisplayFacts.sdr_white_level_nits)},
             {"paper_white_scale", std::to_string(state.paper_white_scale)},
-            {"peak_scale", std::to_string(state.peak_scale)}};
+            {"peak_scale", std::to_string(state.peak_scale)},
+            {"tone_map_peak_scale", std::to_string(state.tone_map_peak_scale)}};
         logging::log(logging::LogLevel::Info, "video_thread",
                      "the captured display changed its colour scalars; tone-map, overlays and preview updated",
                      std::span<const logging::LogField>(fields, std::size(fields)));
+    };
+
+    // The other end of the luminance pass: collect every measurement that has
+    // landed since the last tick and let it reach its consumers.
+    //
+    // Every completed result is drained rather than one per tick. The ring is
+    // three deep and a full ring makes Dispatch skip the frame, so leaving
+    // results behind would throttle the measurement down to the tick rate of the
+    // slowest consumer and lose exactly the bright frames MaxCLL is about.
+    //
+    // The knee is only rewritten when it has moved outside the update band; the
+    // overlay reference white and the preview transform are not touched at all,
+    // because what the content reaches says nothing about what the panel in front
+    // of the user can show.
+    const auto pumpFrameLuminance = [&]() {
+        if (!frameLuminance.Initialised())
+            return;
+        const float dt_seconds = static_cast<float>(static_cast<double>(frame_interval_ns) * 1e-9);
+        FrameLuminanceStats stats;
+        bool measured = false;
+        while (frameLuminance.TryTakeResult(&stats)) {
+            contentLightLevels.Accumulate(stats);
+            contentPeak.Update(HistogramPercentileNits(stats.histogram, kContentPeakPercentile), dt_seconds);
+            measured = true;
+        }
+        if (!measured || !hdrToneMapActive)
+            return;
+        const SessionHdrDynamicState state =
+            ResolveSessionHdrDynamicState(sessionDisplayFacts, contentPeak.ValueNits());
+        if (!ContentPeakScaleChangedMaterially(hdrToneMapAppliedPeakScale, state.tone_map_peak_scale))
+            return;
+        hdrToneMapAppliedPeakScale = state.tone_map_peak_scale;
+        hdrToneMapper.SetDisplayScales(state.tone_map_peak_scale, state.paper_white_scale);
     };
 
     auto tapPreviewSource = [&](ID3D11Texture2D* vpInput, uint64_t pts_ns) {
@@ -3407,6 +3523,7 @@ void VideoThread::Run() {
 
             CheckHdrStateChanged();
             applyDisplayScalarChange();
+            pumpFrameLuminance();
             if (m_state.stop_requested.load()) {
                 break;
             }
@@ -4162,6 +4279,7 @@ void VideoThread::Run() {
 
             CheckHdrStateChanged();
             applyDisplayScalarChange();
+            pumpFrameLuminance();
             if (m_state.stop_requested.load()) {
                 break;
             }

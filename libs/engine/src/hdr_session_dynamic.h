@@ -2,6 +2,7 @@
 
 #include <exosnap/engine/hdr_native.h>
 
+#include "frame_luminance.h"
 #include "hdr_tonemap.h"
 
 // ---------------------------------------------------------------------------
@@ -39,13 +40,30 @@ struct SessionHdrDynamicState {
     // The same reference white in cd/m^2, which is the unit the overlay
     // compositor takes (EffectiveOverlayReferenceWhiteNits).
     float overlay_reference_white_nits = kDefaultSdrWhiteLevelNits;
+    // The knee the encode tone-map runs on. Separate from peak_scale because the
+    // two answer different questions: the encode target is an SDR file, so its
+    // roll-off belongs on the luminance the CONTENT actually reaches, while the
+    // preview draws onto the panel in front of the user and keeps rolling off
+    // against what the panel can show. Equal to peak_scale until a measurement
+    // exists.
+    float tone_map_peak_scale = 1.0f;
 };
 
-[[nodiscard]] inline SessionHdrDynamicState ResolveSessionHdrDynamicState(const HdrDisplayFacts& facts) noexcept {
+// `measured_content_peak_nits` is the smoothed content peak from the per-frame
+// luminance pass, or a non-positive value while none has been measured yet --
+// the first frames of every session, and every session that does not run the
+// pass at all. Only the tone-map knee reads it; the display-derived scalars are
+// resolved from the facts either way, so a session without the pass resolves
+// exactly the state it resolved before the pass existed.
+[[nodiscard]] inline SessionHdrDynamicState
+ResolveSessionHdrDynamicState(const HdrDisplayFacts& facts, float measured_content_peak_nits = 0.0f) noexcept {
     SessionHdrDynamicState state;
     state.peak_scale = HdrPeakScale(facts.hdr_active, facts.max_luminance_nits, facts.sdr_white_level_nits);
     state.paper_white_scale = SdrPaperWhiteScale(facts.sdr_white_level_nits);
     state.overlay_reference_white_nits = EffectiveOverlayReferenceWhiteNits(facts.sdr_white_level_nits);
+    state.tone_map_peak_scale = measured_content_peak_nits > 0.0f
+                                    ? ContentPeakScale(measured_content_peak_nits, facts.sdr_white_level_nits)
+                                    : state.peak_scale;
     return state;
 }
 

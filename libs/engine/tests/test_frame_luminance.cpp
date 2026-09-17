@@ -16,6 +16,7 @@ namespace {
 
 using exosnap::engine::ContentLightLevelCode;
 using exosnap::engine::ContentPeakScale;
+using exosnap::engine::ContentPeakScaleChangedMaterially;
 using exosnap::engine::ContentPeakSmoother;
 using exosnap::engine::FrameLuminanceHistogramBin;
 using exosnap::engine::FrameLuminanceHistogramBinCentreNits;
@@ -323,6 +324,34 @@ TEST(FrameLuminanceTest, MeasuredPeakBeatsTheDisplayProxyOnTheMeasuredHardware) 
     EXPECT_FLOAT_EQ(fallback, exosnap::engine::kHdrFallbackPeakNits / 80.0f);
     EXPECT_FLOAT_EQ(measured, kMeasuredContentPeakNits / 80.0f);
     EXPECT_GT(measured, fallback);
+}
+
+// --- knee update band -------------------------------------------------------
+
+TEST(FrameLuminanceTest, TheFirstKneeIsAlwaysWorthApplying) {
+    EXPECT_TRUE(ContentPeakScaleChangedMaterially(0.0f, 12.5f));
+    EXPECT_TRUE(ContentPeakScaleChangedMaterially(-1.0f, 12.5f));
+}
+
+// The smoother returns a slightly different number every frame it is fed. Were
+// every one of them pushed, the tone-map constant buffer would be rewritten at
+// frame rate for changes the roll-off cannot express.
+TEST(FrameLuminanceTest, AKneeInsideTheBandIsNotWorthApplying) {
+    constexpr float kApplied = 20.0f;
+    EXPECT_FALSE(ContentPeakScaleChangedMaterially(kApplied, kApplied));
+    EXPECT_FALSE(ContentPeakScaleChangedMaterially(kApplied, kApplied * 1.004f));
+    EXPECT_FALSE(ContentPeakScaleChangedMaterially(kApplied, kApplied * 0.996f));
+}
+
+TEST(FrameLuminanceTest, AKneeOutsideTheBandIsAppliedInBothDirections) {
+    constexpr float kApplied = 20.0f;
+    EXPECT_TRUE(ContentPeakScaleChangedMaterially(kApplied, kApplied * 1.02f));
+    EXPECT_TRUE(ContentPeakScaleChangedMaterially(kApplied, kApplied * 0.98f));
+}
+
+TEST(FrameLuminanceTest, ANonFiniteKneeIsNeverApplied) {
+    EXPECT_FALSE(ContentPeakScaleChangedMaterially(20.0f, std::numeric_limits<float>::quiet_NaN()));
+    EXPECT_FALSE(ContentPeakScaleChangedMaterially(0.0f, std::numeric_limits<float>::infinity()));
 }
 
 } // namespace
