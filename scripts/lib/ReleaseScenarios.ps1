@@ -34,6 +34,8 @@
     composition that no screenshot of ours can show.
 #>
 
+Import-Module (Join-Path $PSScriptRoot 'BuildArtifacts.psm1') -Force -DisableNameChecking
+
 # ---------------------------------------------------------------------------
 # probe_stall_window -- the capture target that stalls on purpose
 # ---------------------------------------------------------------------------
@@ -52,17 +54,8 @@ function Resolve-StallWindowProbe {
     if ($env:EXOSNAP_STALL_PROBE -and (Test-Path -LiteralPath $env:EXOSNAP_STALL_PROBE)) {
         return (Get-Item -LiteralPath $env:EXOSNAP_STALL_PROBE).FullName
     }
-    $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $candidates = @(
-        'build/windows-x64-release/tools/probes/probe_stall_window/Release/probe_stall_window.exe',
-        'build/windows-x64-debug/tools/probes/probe_stall_window/Debug/probe_stall_window.exe',
-        'build/windows-x64-ninja-release/tools/probes/probe_stall_window/probe_stall_window.exe',
-        'build/windows-x64-ninja-debug/tools/probes/probe_stall_window/probe_stall_window.exe'
-    )
-    foreach ($candidate in $candidates) {
-        $full = Join-Path $root $candidate
-        if (Test-Path -LiteralPath $full) { return (Get-Item -LiteralPath $full).FullName }
-    }
+    $built = Resolve-BuiltArtifact -RelativePath 'tools/probes/probe_stall_window/probe_stall_window.exe'
+    if ($null -ne $built) { return $built.Path }
     return $null
 }
 
@@ -111,17 +104,8 @@ function Resolve-FullscreenProbe {
     if ($env:EXOSNAP_FSE_PROBE -and (Test-Path -LiteralPath $env:EXOSNAP_FSE_PROBE)) {
         return (Get-Item -LiteralPath $env:EXOSNAP_FSE_PROBE).FullName
     }
-    $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $candidates = @(
-        'build/windows-x64-release/tools/probes/probe_fullscreen_present/Release/probe_fullscreen_present.exe',
-        'build/windows-x64-debug/tools/probes/probe_fullscreen_present/Debug/probe_fullscreen_present.exe',
-        'build/windows-x64-ninja-release/tools/probes/probe_fullscreen_present/probe_fullscreen_present.exe',
-        'build/windows-x64-ninja-debug/tools/probes/probe_fullscreen_present/probe_fullscreen_present.exe'
-    )
-    foreach ($candidate in $candidates) {
-        $full = Join-Path $root $candidate
-        if (Test-Path -LiteralPath $full) { return (Get-Item -LiteralPath $full).FullName }
-    }
+    $built = Resolve-BuiltArtifact -RelativePath 'tools/probes/probe_fullscreen_present/probe_fullscreen_present.exe'
+    if ($null -ne $built) { return $built.Path }
     return $null
 }
 

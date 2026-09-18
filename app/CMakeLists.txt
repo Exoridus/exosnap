@@ -1561,6 +1561,15 @@ if(EXOSNAP_PWSH)
     set_tests_properties(pipeline.run_tests_contract PROPERTIES TIMEOUT 300 LABELS "pipeline")
     exosnap_set_test_phase(pipeline.run_tests_contract hermetic)
 
+    # Which build tree a tool resolves out of. Four trees can hold the same binary
+    # and the selection is only ever wrong quietly -- an old copy runs, reports
+    # success and describes a build nobody asked about.
+    add_test(NAME pipeline.build_artifacts
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/build-artifacts.tests.ps1")
+    set_tests_properties(pipeline.build_artifacts PROPERTIES TIMEOUT 120 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.build_artifacts hermetic)
+
     # Holds and contends the real host locks from child processes, so it runs alone:
     # beside run_tests_contract (which runs run-tests.ps1, which takes the device
     # lock) its timing assertions would measure the other test's hold.
