@@ -239,6 +239,21 @@ Test-Case 'an entry links its pull request and marks breaking changes' {
     Assert-True ($line -match '\(\[#392\]\(https://example\.invalid/r/pull/392\)\)') "line was '$line'"
 }
 
+Test-Case 'a title that already carried its number does not print it twice' {
+    $parsed = ConvertFrom-CommitSubject -Subject 'fix: eighteen defects from a source audit (#385) (#385)'
+    Assert-True $parsed.Valid 'a doubled pull request number made the subject unreadable'
+    Assert-True ($parsed.PullRequest -eq 385) "pull request was '$($parsed.PullRequest)'"
+    Assert-True ($parsed.Summary -eq 'eighteen defects from a source audit') "summary was '$($parsed.Summary)'"
+    $line = Format-ChangelogEntry -Commit $parsed -RepositoryUrl 'https://example.invalid/r'
+    Assert-True ($line -notmatch '\(#385\)\s*\(\[#385\]') "line was '$line'"
+}
+
+Test-Case 'a summary citing a different pull request keeps that reference' {
+    $parsed = ConvertFrom-CommitSubject -Subject 'fix: finish what (#370) started (#391)'
+    Assert-True ($parsed.PullRequest -eq 391) "pull request was '$($parsed.PullRequest)'"
+    Assert-True ($parsed.Summary -eq 'finish what (#370) started') "summary was '$($parsed.Summary)'"
+}
+
 Write-Host ''
 Write-Host 'commit-subject rule'
 
