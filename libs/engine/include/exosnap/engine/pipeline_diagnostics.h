@@ -129,8 +129,14 @@ struct CaptureDiagnostics {
     // deltas, a delivery time rather than a present time, so its jitter floor is
     // higher. Unavailable during warm-up / before enough samples accumulate.
     double source_present_interval_ms = 0.0; // mean inter-present interval over the rolling window
-    double source_present_jitter_ms = 0.0;   // peak-minus-average present interval (irregular-pacing proxy)
-    double source_coalesce_ratio = 1.0;      // mean AccumulatedFrames per acquire (>1 == presents coalesced)
+    // Spread of the DELIVERING intervals: p95 minus p5, over the intervals no
+    // longer than four output periods. Intervals past that are the source having
+    // stopped, not pacing unevenly, and belong to the duplication check -- counting
+    // them made a still desktop read as the worst judder of the session. The
+    // quantile pair keeps one late frame from speaking for the whole window.
+    // Unavailable when too few delivering intervals remain to say anything.
+    double source_present_jitter_ms = 0.0;
+    double source_coalesce_ratio = 1.0; // mean AccumulatedFrames per acquire (>1 == presents coalesced)
     MetricAvailability present_cadence_availability = MetricAvailability::Unavailable;
 
     // Present mode + tearing (PresentMon ETW present-diagnostics, ADR 0033). Elevation-
