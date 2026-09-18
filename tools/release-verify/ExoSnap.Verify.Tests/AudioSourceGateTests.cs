@@ -253,8 +253,17 @@ public sealed class AudioDegradeGateTests
             "{}");
     }
 
+    // The sample bound, not the window, is what ends these polls: a 60 ms window took one
+    // sample on a loaded runner and three on an idle one, so the outcome the test asserted
+    // was the machine's speed. The window is long enough that it never decides anything.
+    private const int PollSamples = 3;
+
     private static AudioDegradeGate Gate() =>
-        new(pollFor: TimeSpan.FromMilliseconds(60), pollEvery: TimeSpan.FromMilliseconds(2));
+        new(pollFor: TimeSpan.FromSeconds(30), pollEvery: TimeSpan.Zero, maxSamples: PollSamples);
+
+    private static int SnapshotsTaken(GateHarness harness) =>
+        harness.Fakes.Session.InvokedCommands.Count(
+            command => string.Equals(command, "pipeline.snapshot", StringComparison.Ordinal));
 
     [Fact]
     public async Task AConfirmedAnswerObservesTheDegradeAndRecoverCycleAndPasses()
@@ -376,6 +385,10 @@ public sealed class AudioDegradeGateTests
 
         Assert.Equal(ScenarioOutcome.Fail, result.Outcome);
         Assert.Contains("no audio-source degradation was observed", result.Message, StringComparison.Ordinal);
+
+        // Without this the test passes just as well when the poll never sampled at all,
+        // which is the one way this message can be printed for a reason nobody meant.
+        Assert.Equal(PollSamples, SnapshotsTaken(harness));
     }
 
     [Fact]
@@ -398,5 +411,6 @@ public sealed class AudioDegradeGateTests
 
         Assert.Equal(ScenarioOutcome.Fail, result.Outcome);
         Assert.Contains("never cleared", result.Message, StringComparison.Ordinal);
+        Assert.Equal(PollSamples, SnapshotsTaken(harness));
     }
 }
