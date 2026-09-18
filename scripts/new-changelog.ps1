@@ -80,7 +80,14 @@ function Resolve-Since {
     # --merged, not --sort=-creatordate alone: a tag on a branch that never
     # landed would otherwise cut the range short and hide everything merged
     # since the last tag that actually is an ancestor.
-    $tags = @(Invoke-Git @('tag', '--list', 'v*', '--merged', 'HEAD', '--sort=-version:refname'))
+    #
+    # Released versions only. A release candidate is a prerelease of the very
+    # version being assembled, and git's version sort ranks it ABOVE the release
+    # it precedes, so an unfiltered list hands back the newest RC: cutting 0.9.1
+    # against v0.9.1-rc5 would describe the two commits merged after that tag and
+    # silently drop the release it is the changelog of.
+    $tags = @(Invoke-Git @('tag', '--list', 'v*', '--merged', 'HEAD', '--sort=-version:refname') |
+        Where-Object { $_ -and $_.Trim() -notmatch '-' })
     if ($tags.Count -gt 0 -and $tags[0]) { return $tags[0].Trim() }
     return $null
 }

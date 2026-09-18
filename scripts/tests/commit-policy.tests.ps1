@@ -424,6 +424,30 @@ Test-Case 'the range starts at the last version tag' {
     finally { Remove-Fixture $root }
 }
 
+Test-Case 'a release candidate is not a baseline the range may start at' {
+    # git's version sort ranks v0.9.1-rc5 ABOVE v0.9.0, so an unfiltered tag list
+    # hands back the newest release candidate -- and the release it is a candidate
+    # FOR would then be described by whatever was merged after it.
+    $root = New-FixtureRepo -WithPolicy
+    try {
+        Add-FixtureCommit -Root $root -Subject 'feat(ui): in the release line (#1)'
+        Invoke-IsolatedGit -C $root tag v0.9.0
+        Add-FixtureCommit -Root $root -Subject 'fix(engine): part of the next release (#2)'
+        Invoke-IsolatedGit -C $root tag v0.9.1-rc1
+        Add-FixtureCommit -Root $root -Subject 'fix(ui): merged after the candidate (#3)'
+
+        $result = Invoke-Changelog -Root $root -ExtraArgs @('-Until', 'HEAD', '-Version', '0.9.1')
+        Assert-True ($result.ExitCode -eq 0) "the cut failed:`n$($result.Output)"
+        Assert-True ($result.Output -match 'part of the next release') `
+            "the work the candidate carried was dropped from its own release:`n$($result.Output)"
+        Assert-True ($result.Output -match 'merged after the candidate') `
+            "the post-candidate commit is missing:`n$($result.Output)"
+        Assert-True ($result.Output -notmatch 'in the release line') `
+            "a commit released in v0.9.0 was listed again:`n$($result.Output)"
+    }
+    finally { Remove-Fixture $root }
+}
+
 Test-Case '-Apply writes into Unreleased and -Version opens a new one' {
     $root = New-FixtureRepo -WithPolicy
     try {
