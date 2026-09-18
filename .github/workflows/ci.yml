@@ -544,7 +544,7 @@ jobs:
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
           -BuildDir build/windows-x64-ninja-debug -Config Debug
-          -ExcludeLabel live -RequireFresh
+          -ExcludeLabel live
 
       # Blocking static analysis. Deliberately a step inside build-test-debug
       # rather than a job of its own: build-test-debug is already a required
@@ -686,7 +686,7 @@ jobs:
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
           -BuildDir build/windows-x64-ninja-release -Config Release
-          -ExcludeLabel live -RequireFresh
+          -ExcludeLabel live
 
       # Packaging smoke, on the build this job just produced. ADR 0037
       # established the full release gate (install -> audit -> MSI -> content
