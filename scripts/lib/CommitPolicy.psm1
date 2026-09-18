@@ -128,6 +128,17 @@ function ConvertFrom-CommitSubject {
     $result.Summary = $match.Groups['summary'].Value.Trim()
     $result.PullRequest = if ($match.Groups['pr'].Success) { [int]$match.Groups['pr'].Value } else { $null }
 
+    # The squash append is unconditional, so a pull request title that already
+    # ended in its own number arrives with that number twice. Only the repetition
+    # is redundant: a different number in the same position cites another pull
+    # request and has to survive.
+    if ($result.PullRequest) {
+        $repeated = " (#$($result.PullRequest))"
+        if ($result.Summary.EndsWith($repeated)) {
+            $result.Summary = $result.Summary.Substring(0, $result.Summary.Length - $repeated.Length).Trim()
+        }
+    }
+
     if (-not $result.Summary) {
         $result.Problem = 'the summary is empty'
         return $result
