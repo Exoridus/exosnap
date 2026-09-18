@@ -227,6 +227,15 @@ add_subdirectory(tests)
 # target is defined (correct POST_BUILD scope) and the crashpad_handler target
 # is reachable via $<TARGET_FILE:crashpad_handler>.
 
+# Two probes are release-gate instruments rather than developer tools. Without
+# them REL-CAP-STALL-001, REL-CAP-QUIET-001 and REL-CAP-FSE-001 fall back to
+# asking a person to freeze a window or drive a fullscreen application by hand --
+# work their automated path already does, without synthesising input. Each is a
+# single translation unit against system libraries, so there is nothing here worth
+# gating behind a flag nobody remembers to set.
+add_subdirectory(tools/probes/probe_stall_window)
+add_subdirectory(tools/probes/probe_fullscreen_present)
+
 option(EXOSNAP_BUILD_PROBES "Build ExoSnap developer probe executables" OFF)
 if(EXOSNAP_BUILD_PROBES)
     add_subdirectory(tools/probes)

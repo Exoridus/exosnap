@@ -45,11 +45,11 @@ function Resolve-StallWindowProbe {
     .SYNOPSIS
         Locates probe_stall_window.exe, or returns $null.
     .DESCRIPTION
-        Returns $null rather than throwing, exactly like Resolve-EnvctlPath: the
-        probe is a developer build artifact (-DEXOSNAP_BUILD_PROBES=ON) and a
-        machine without it can still run the scenario -- as the operator gate it
-        has always been. Its absence is a statement about the build tree, never
-        about the product.
+        Returns $null rather than throwing, exactly like Resolve-EnvctlPath. The
+        probe is built unconditionally, so absence means the tree was never built,
+        not that a configure flag was forgotten -- the scenario then falls back to
+        the operator it used to reach for every time. Either way this is a statement
+        about the build tree, never about the product.
     #>
     if ($env:EXOSNAP_STALL_PROBE -and (Test-Path -LiteralPath $env:EXOSNAP_STALL_PROBE)) {
         return (Get-Item -LiteralPath $env:EXOSNAP_STALL_PROBE).FullName
@@ -974,7 +974,7 @@ function Get-ReleaseScenarioCatalog {
             $probe = Resolve-StallWindowProbe
             if ($null -eq $probe) {
                 return @{ Result = 'UNAVAILABLE'
-                    Message      = 'probe_stall_window is not built (-DEXOSNAP_BUILD_PROBES=ON)'
+                    Message      = 'probe_stall_window is missing from every build tree'
                 }
             }
             $session = & $ctx.EnsureSession

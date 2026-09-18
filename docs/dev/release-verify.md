@@ -226,11 +226,13 @@ So the layer is now built from four mechanisms, in this order of preference:
 
 ### What still asks a person, and why
 
+The two capture probes are built unconditionally, so the three gates that measure with them -- `REL-CAP-STALL-001`, `REL-CAP-QUIET-001` and `REL-CAP-FSE-001` -- run themselves on any tree that was built at all. They were reaching for an operator on every normal build because they sat behind `EXOSNAP_BUILD_PROBES`, which defaults to OFF and which nothing turned on. The remaining developer probes still need that flag; these two are release-gate instruments and are not developer tools.
+
 | Scenario | Asked when |
 |---|---|
 | `REL-PRESENT-002` | the runner is not elevated; an elevated one launches the child itself |
-| `REL-CAP-FSE-001` | `probe_fullscreen` is not built (`-DEXOSNAP_BUILD_PROBES=ON`) |
-| `REL-CAP-STALL-001` | `probe_stall_window` is not built |
+| `REL-CAP-FSE-001` | no build tree holds `probe_fullscreen_present` |
+| `REL-CAP-STALL-001` | no build tree holds `probe_stall_window` |
 | `REL-AUD-SILENCE-001` | no virtual cable endpoint, or no SoundVolumeView to route to it |
 | `REL-AUD-FORMAT-001` | no SoundVolumeView |
 | `REL-AUD-DEGRADE-001` | not elevated, or no device instance id resolves |
