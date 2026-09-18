@@ -1,12 +1,11 @@
 param(
     [int]$FailureTailLines = 160,
     [switch]$VerboseOutput,
-    [switch]$StaticOnly,
-    # Which static pass to run. 'all' is the historical behaviour and stays the
-    # default. The single-tool values exist so scripts/verify.ps1 can report
+    # Which static pass to run. 'all' runs both tools and stays the default. The
+    # single-tool values exist so scripts/verify.ps1 can report
     # cppcheck and clang-tidy as separate checks -- one line per tool, so a
     # failure names the tool that failed -- without a second copy of the
-    # invocation living over there. Implies -StaticOnly.
+    # invocation living over there.
     [ValidateSet('all', 'cppcheck', 'clang-tidy')]
     [string]$Only = 'all',
     # The configured tree clang-tidy reads compile_commands.json from. Passing it
@@ -26,8 +25,6 @@ param(
     # advisory job does -- needs the untruncated text as a file.
     [string]$ReportPath = ''
 )
-
-if ($Only -ne 'all') { $StaticOnly = $true }
 
 $ErrorActionPreference = 'Stop'
 
@@ -220,7 +217,7 @@ if ($Base) {
 # clang-tidy step reported success without running for as long as it existed.
 $compDbTree = $BuildDir
 if (-not $compDbTree) {
-    foreach ($candidate in @('build/windows-x64-ninja-debug', 'build/windows-x64-ninja-release', 'build/windows-x64-debug')) {
+    foreach ($candidate in @('build/windows-x64-ninja-debug', 'build/windows-x64-ninja-release')) {
         if (Test-Path -Path (Join-Path $repoRoot "$candidate/compile_commands.json") -PathType Leaf) {
             $compDbTree = $candidate
             break
@@ -368,27 +365,5 @@ if ($script:MissingTools.Count -gt 0) {
     exit $ToolMissingExitCode
 }
 
-if ($StaticOnly) {
-    Write-Host ""
-    Write-Host "Static quality check passed."
-    exit 0
-}
-
-# ---------------------------------------------------------------------------
-# cmake configure + build + test
-#
-# Qt must be on PATH so that gtest_discover_tests POST_BUILD discovery can
-# launch test executables that link Qt (0xc0000135 otherwise in worktrees).
-# ---------------------------------------------------------------------------
-
-# Resolved from .qt-version (see scripts/lib/QtEnvironment.psm1), so a Qt uplift
-# does not leave this script pointing at the previous install.
-Import-Module (Join-Path $PSScriptRoot 'lib/QtEnvironment.psm1') -Force
-Add-QtToPath -RepoRoot $repoRoot | Out-Null
-
-Invoke-QuietNative -Name 'cmake configure' -FilePath 'cmake' -Arguments @('--preset', 'windows-x64-debug')
-Invoke-QuietNative -Name 'cmake build' -FilePath 'cmake' -Arguments @('--build', '--preset', 'windows-x64-debug')
-Invoke-QuietNative -Name 'ctest' -FilePath 'ctest' -Arguments @('--preset', 'windows-x64-debug', '--output-on-failure')
-
 Write-Host ""
-Write-Host "Quality check passed."
+Write-Host "Static quality check passed."
