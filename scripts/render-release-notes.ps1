@@ -80,8 +80,16 @@ if (-not $Commit) {
 if (-not $PreviousTag) {
     # The tag being released is excluded by name: it exists by the time this
     # runs, and a compare link from a tag to itself is empty.
+    #
+    # A final release compares against the previous FINAL release. Git's version
+    # sort ranks v0.9.1-rc5 above v0.9.0, so an unfiltered list would point the
+    # release page's full-changelog link at the release's own candidate and show
+    # the few commits merged after it in place of the release. A candidate's own
+    # notes keep the nearest tag, which is the candidate before it, because that
+    # is the window a candidate is read against.
+    $comparesToPrerelease = $Tag -match '-'
     $tags = @(@(Invoke-Git @('tag', '--list', 'v*', '--merged', 'HEAD', '--sort=-version:refname')) |
-        Where-Object { $_ -and $_.Trim() -ne $Tag })
+        Where-Object { $_ -and $_.Trim() -ne $Tag -and ($comparesToPrerelease -or $_.Trim() -notmatch '-') })
     $PreviousTag = if ($tags.Count -gt 0) { $tags[0].Trim() } else { '' }
 }
 

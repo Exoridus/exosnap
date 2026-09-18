@@ -424,6 +424,30 @@ Test-Case 'the range starts at the last version tag' {
     finally { Remove-Fixture $root }
 }
 
+Test-Case 'a release candidate is not a baseline the range may start at' {
+    # git's version sort ranks v0.9.1-rc5 ABOVE v0.9.0, so an unfiltered tag list
+    # hands back the newest release candidate -- and the release it is a candidate
+    # FOR would then be described by whatever was merged after it.
+    $root = New-FixtureRepo -WithPolicy
+    try {
+        Add-FixtureCommit -Root $root -Subject 'feat(ui): in the release line (#1)'
+        Invoke-IsolatedGit -C $root tag v0.9.0
+        Add-FixtureCommit -Root $root -Subject 'fix(engine): part of the next release (#2)'
+        Invoke-IsolatedGit -C $root tag v0.9.1-rc1
+        Add-FixtureCommit -Root $root -Subject 'fix(ui): merged after the candidate (#3)'
+
+        $result = Invoke-Changelog -Root $root -ExtraArgs @('-Until', 'HEAD', '-Version', '0.9.1')
+        Assert-True ($result.ExitCode -eq 0) "the cut failed:`n$($result.Output)"
+        Assert-True ($result.Output -match 'part of the next release') `
+            "the work the candidate carried was dropped from its own release:`n$($result.Output)"
+        Assert-True ($result.Output -match 'merged after the candidate') `
+            "the post-candidate commit is missing:`n$($result.Output)"
+        Assert-True ($result.Output -notmatch 'in the release line') `
+            "a commit released in v0.9.0 was listed again:`n$($result.Output)"
+    }
+    finally { Remove-Fixture $root }
+}
+
 Test-Case '-Apply writes into Unreleased and -Version opens a new one' {
     $root = New-FixtureRepo -WithPolicy
     try {
@@ -470,6 +494,58 @@ Test-Case 'the notes carry the changelog section and resolve every placeholder' 
         Assert-True ($output -match 'Bound the capture drains') "the changelog section is missing:`n$output"
         Assert-True ($output -notmatch '\$\{') "a placeholder survived:`n$output"
         Assert-True ($output -match 'v0\.9\.0\.\.\.v0\.9\.1') "the compare link is wrong:`n$output"
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'the compare link of a release skips the candidates of that release' {
+    # Git's version sort ranks v0.9.1-rc1 above v0.9.0, so the nearest tag by that
+    # order is the release's own candidate -- and a full-changelog link to it shows
+    # what was merged after the candidate instead of what the release contains.
+    $root = New-FixtureRepo -WithPolicy
+    try {
+        New-Item -ItemType Directory -Path (Join-Path $root '.github/templates') -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $scriptRoot) '.github/templates/release-notes.md') `
+            -Destination (Join-Path $root '.github/templates/release-notes.md') -Force
+        Set-FixtureFile -Root $root -Relative 'CHANGELOG.md' -Content @'
+# Changelog
+
+## [0.9.1] - 2026-09-13
+
+### Fixed
+
+- **Bound the capture drains.** ([#11](https://example.invalid/r/pull/11))
+'@
+        Add-FixtureCommit -Root $root -Subject 'chore(release): stage the notes fixture'
+        Invoke-IsolatedGit -C $root tag v0.9.0
+        Add-FixtureCommit -Root $root -Subject 'fix(engine): bound the capture drains (#11)'
+        Invoke-IsolatedGit -C $root tag v0.9.1-rc1
+
+        $output = & pwsh -NoProfile -NonInteractive -File $notesScript -RepoRoot $root -Version '0.9.1' 2>&1 | Out-String
+        Assert-True ($LASTEXITCODE -eq 0) "rendering failed:`n$output"
+        Assert-True ($output -match 'v0\.9\.0\.\.\.v0\.9\.1') `
+            "the release compares against something other than the previous release:`n$output"
+        Assert-True ($output -notmatch 'rc1\.\.\.') "the release compares against its own candidate:`n$output"
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a candidate still compares against the candidate before it' {
+    $root = New-FixtureRepo -WithPolicy
+    try {
+        New-Item -ItemType Directory -Path (Join-Path $root '.github/templates') -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $scriptRoot) '.github/templates/release-notes-candidate.md') `
+            -Destination (Join-Path $root '.github/templates/release-notes-candidate.md') -Force
+        Add-FixtureCommit -Root $root -Subject 'chore(release): stage the notes fixture'
+        Invoke-IsolatedGit -C $root tag v0.9.0
+        Add-FixtureCommit -Root $root -Subject 'fix(engine): bound the capture drains (#11)'
+        Invoke-IsolatedGit -C $root tag v0.9.1-rc1
+
+        $output = & pwsh -NoProfile -NonInteractive -File $notesScript -RepoRoot $root `
+            -Version '0.9.1-rc2' -Candidate 2>&1 | Out-String
+        Assert-True ($LASTEXITCODE -eq 0) "rendering failed:`n$output"
+        Assert-True ($output -match 'v0\.9\.1-rc1\.\.\.v0\.9\.1-rc2') `
+            "a candidate lost the window it is read against:`n$output"
     }
     finally { Remove-Fixture $root }
 }
