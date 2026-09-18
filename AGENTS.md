@@ -235,6 +235,15 @@ Repository specifics:
 `EXOSNAP_CONFIG_DIR`, `QT_QPA_PLATFORM=offscreen`, `QT_PLUGIN_PATH` and Qt on
 PATH, and prints a compact summary plus the exact failing gtest cases.
 
+It defaults to `build/windows-x64-ninja-debug`, the tree `verify.ps1` configures and
+builds, so the inner loop and the gate judge the same binaries. It builds that tree
+before testing it, because a failed build leaves the previous binaries in place and
+a suite run against those passes exactly like a suite run for the change; the build's
+exit code is what makes the result evidence. An incremental no-op costs about 11 s
+there. `-NoBuild` skips it and then has to infer whether the binaries match, which
+normally ends in a refusal (exit 3) rather than a result -- `-AllowStale` overrides
+that and accepts a result that may describe old binaries.
+
 ```
 pwsh scripts/run-tests.ps1                        # whole suite
 pwsh scripts/run-tests.ps1 -Filter recorder_core. # one binary (not one case)

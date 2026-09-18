@@ -60,6 +60,7 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $runsRoot = Join-Path $repositoryRoot '.workspace/live-verify'
 
+Import-Module (Join-Path $PSScriptRoot 'lib/BuildArtifacts.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'lib/LiveVerifyClient.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'lib/LiveVerifyState.psm1') -Force
 . (Join-Path $PSScriptRoot 'lib/LiveVerifyChecks.ps1')
@@ -85,7 +86,17 @@ function Resolve-DefaultExe {
     )
     foreach ($candidate in $candidates) {
         $path = Join-Path $repositoryRoot $candidate
-        if (Test-Path -LiteralPath $path) { return $path }
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+
+        # The preference above is a decision and stays one, but a Release build from
+        # last week silently outranking a Debug build of the change under test is
+        # not what that decision meant. Said out loud, never overridden.
+        $newer = Test-NewerArtifactExists -ChosenPath $path -RelativePath 'app/exosnap.exe' -RepoRoot $repositoryRoot
+        if ($null -ne $newer) {
+            Write-Host ("  note: {0} is newer ({1:yyyy-MM-dd HH:mm}) than the build selected here ({2:yyyy-MM-dd HH:mm}). Pass -AppPath to use it." -f
+                $newer.Tree, $newer.BuiltAt, (Get-Item -LiteralPath $path).LastWriteTime) -ForegroundColor Yellow
+        }
+        return $path
     }
     return $null
 }

@@ -24,7 +24,10 @@
     e.g. "recorder_core." or "capability.".
 
 .PARAMETER BuildDir
-    CMake build tree to test. Default: build/windows-x64-debug.
+    CMake build tree to test. Default: build/windows-x64-ninja-debug -- the same
+    tree verify.ps1 configures and builds, so the inner loop and the gate judge
+    the same binaries. A Visual Studio tree works, but an incremental build in one
+    takes minutes rather than seconds.
 
 .PARAMETER Config
     Multi-config configuration to run (ctest -C). Default: Debug.
@@ -46,19 +49,23 @@
 .PARAMETER Jobs
     Parallel test jobs (ctest -j). Default: the processor count.
 
-.PARAMETER Build
-    Do a full build of the tree (all targets) before running tests.
+.PARAMETER NoBuild
+    Skip the build and test whatever the tree currently holds. The run then has to
+    infer whether those binaries match the source, which only a Ninja tree can even
+    attempt and which a pending CMake regeneration defeats -- so a skipped build
+    usually ends in the refusal below rather than in a result.
 
-.PARAMETER RequireFresh
-    Fail instead of warning when the build tree was not built from the source
-    currently checked out. Off by default so an inner-loop run stays usable;
-    CI and the pre-push gate turn it on.
+.PARAMETER AllowStale
+    Report a result even though the build tree was not proven to match the source
+    currently checked out. Off by default: an unproven tree is refused with exit 3
+    rather than tested, because a pass from binaries that predate the change reads
+    exactly like a pass from the change. Only reachable together with -NoBuild.
 
 .EXAMPLE
     pwsh scripts/run-tests.ps1
 
 .EXAMPLE
-    pwsh scripts/run-tests.ps1 -Filter recorder_core. -Build
+    pwsh scripts/run-tests.ps1 -Filter recorder_core.
 
 .PARAMETER Phase
     Run only the tests of one execution phase. Every registered test declares
@@ -79,15 +86,15 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$BuildDir = 'build/windows-x64-debug',
+    [string]$BuildDir = 'build/windows-x64-ninja-debug',
     [string]$Config = 'Debug',
     [string]$Filter = '',
     [string]$ExcludeLabel = '',
     [ValidateSet('', 'hermetic', 'cpu', 'gpu', 'desktop', 'vm', 'human')]
     [string]$Phase = '',
     [int]$Jobs = 0,
-    [switch]$Build,
-    [switch]$RequireFresh
+    [switch]$NoBuild,
+    [switch]$AllowStale
 )
 
 $ErrorActionPreference = 'Stop'
@@ -189,8 +196,27 @@ try {
     New-Item -ItemType Directory -Path $configDir -Force | Out-Null
     $env:EXOSNAP_CONFIG_DIR = $configDir
 
-    # --- Optional full build -------------------------------------------------
-    if ($Build) {
+    $generator = ''
+    $cachePath = Join-Path $BuildDir 'CMakeCache.txt'
+    if (Test-Path -LiteralPath $cachePath) {
+        $generatorLine = Select-String -LiteralPath $cachePath -Pattern '^CMAKE_GENERATOR:INTERNAL=(.*)$' | Select-Object -First 1
+        if ($generatorLine) { $generator = $generatorLine.Matches[0].Groups[1].Value }
+    }
+
+    # --- Build, so the run is its own evidence -------------------------------
+    # Default on. No dry-run inference can prove a tree current (see below), and
+    # the failure it would have to catch is silent: a build that fails leaves the
+    # previous binaries in place, and a suite run against those passes and reads
+    # exactly like a pass for the change. An incremental no-op costs seconds on a
+    # Ninja tree and replaces the inference with the build's own exit code.
+    if (-not $NoBuild) {
+        # A Ninja tree invokes cl.exe directly and has no Developer Prompt behind it
+        # unless the caller provided one. The MSBuild generator brings its own, so it
+        # is left alone. Import is a no-op when a compiler already resolves.
+        if ($generator -match 'Ninja') {
+            Import-Module (Join-Path $PSScriptRoot 'lib/MsvcEnvironment.psm1') -Force
+            Enter-MsvcEnvironment -Quiet | Out-Null
+        }
         Write-Host "Building all targets in $BuildDir ($Config)..." -ForegroundColor Cyan
         & cmake --build $BuildDir --config $Config
         if ($LASTEXITCODE -ne 0) {
@@ -205,21 +231,18 @@ try {
     $logFile = Join-Path $logDir 'last-run.log'
 
     # --- Is this build tree actually the source in front of us? --------------
-    $generator = ''
-    $cachePath = Join-Path $BuildDir 'CMakeCache.txt'
-    if (Test-Path -LiteralPath $cachePath) {
-        $generatorLine = Select-String -LiteralPath $cachePath -Pattern '^CMAKE_GENERATOR:INTERNAL=(.*)$' | Select-Object -First 1
-        if ($generatorLine) { $generator = $generatorLine.Matches[0].Groups[1].Value }
-    }
-
-    # Ninja is the only generator here that can answer the question cheaply and
-    # honestly: it replays its own dependency graph and reports whether anything
-    # is out of date. A timestamp comparison would not do -- a copied or restored
-    # tree keeps the mtimes it was created with, so a stale build can look newer
-    # than the source it is missing.
+    # A build by this invocation settles the question: its exit code is the
+    # evidence, and nothing below can improve on it. The inference only has to
+    # carry -NoBuild runs. A timestamp comparison is not among the options -- a
+    # copied or restored tree keeps the mtimes it was created with, so a stale
+    # build can look newer than the source it is missing.
     $freshness = 'unknown'
-    $freshnessDetail = 'generator cannot report staleness without building; pass -Build'
-    if ($generator -match 'Ninja') {
+    $freshnessDetail = 'this generator cannot report staleness without building; drop -NoBuild'
+    if (-not $NoBuild) {
+        $freshness = 'fresh'
+        $freshnessDetail = 'built by this invocation'
+    }
+    elseif ($generator -match 'Ninja') {
         $ninja = ''
         $makeProgramLine = Select-String -LiteralPath $cachePath -Pattern '^CMAKE_MAKE_PROGRAM:\w+=(.*)$' | Select-Object -First 1
         if ($makeProgramLine) { $ninja = $makeProgramLine.Matches[0].Groups[1].Value }
@@ -229,16 +252,22 @@ try {
                 $freshness = 'unknown'
                 $freshnessDetail = 'ninja could not evaluate the graph'
             }
+            elseif ($dryRun -match 'Re-running CMake') {
+                # Everything after a pending regeneration comes out of a build.ninja
+                # that the regeneration would rewrite, so ninja lists the two
+                # regeneration steps and stops. It is not saying there is no compile
+                # work left; it is saying it cannot know yet. CMake's glob check is a
+                # _force target, dirty on every invocation by construction, so this
+                # is the answer on EVERY run of a CONFIGURE_DEPENDS tree -- verified
+                # after a successful build, after touching a compiled source, and
+                # after running the regeneration target: byte-identical listings.
+                # Reading that as "nothing to do" is how this check reported fresh
+                # for binaries a failed build had left behind.
+                $freshness = 'unknown'
+                $freshnessDetail = 'ninja cannot see past the pending CMake regeneration'
+            }
             else {
-                # CMake's glob verification is a _force target: it is dirty on
-                # every build by construction, and the CMake re-run that depends
-                # on it is listed with it, whether or not a glob actually
-                # changed. Both are configuration housekeeping and say nothing
-                # about the binaries. The residual limit: if a glob HAS changed,
-                # the compile steps that would follow the re-run are not in this
-                # listing yet, so a brand-new source file is invisible here --
-                # which is why a gate builds first and only then asks.
-                $housekeeping = 'Re-checking globbed directories|Re-running CMake|Entering directory|no work to do'
+                $housekeeping = 'Re-checking globbed directories|Entering directory|no work to do'
                 $pending = @($dryRun -split "`r?`n" |
                     Where-Object { $_.Trim() -ne '' -and $_ -notmatch $housekeeping })
 
@@ -253,24 +282,24 @@ try {
             }
         }
     }
-    elseif ($Build) {
-        $freshness = 'fresh'
-        $freshnessDetail = 'built by this invocation'
-    }
 
     if ($freshness -eq 'stale') {
         Write-Host "Build tree is STALE: $freshnessDetail" -ForegroundColor Red
         Write-Host "  $BuildDir" -ForegroundColor Red
-        if ($RequireFresh) {
-            Write-Host 'Refusing to report a result for binaries that are not the source in front of us. Re-run with -Build.' -ForegroundColor Red
+        if (-not $AllowStale) {
+            Write-Host 'Refusing to report a result for binaries that are not the source in front of us. Re-run without -NoBuild.' -ForegroundColor Red
             exit 3
         }
-        Write-Host 'Continuing anyway (-RequireFresh would stop here). The result describes the OLD binaries.' -ForegroundColor Yellow
+        Write-Host 'Continuing anyway (-AllowStale was passed). The result describes the OLD binaries.' -ForegroundColor Yellow
     }
-    elseif ($freshness -eq 'unknown' -and $RequireFresh) {
+    elseif ($freshness -eq 'unknown') {
         Write-Host "Cannot prove this build tree matches the source: $freshnessDetail" -ForegroundColor Red
         Write-Host "  $BuildDir" -ForegroundColor Red
-        exit 3
+        if (-not $AllowStale) { exit 3 }
+        # Said out loud on the way past, not only at the refusal: an unproven tree
+        # that is waved through prints a normal green summary, and the reader has
+        # no other signal that it may be the OLD binaries talking.
+        Write-Host 'Continuing anyway (-AllowStale was passed). The result may describe OLD binaries.' -ForegroundColor Yellow
     }
 
     # --- ctest invocation ----------------------------------------------------

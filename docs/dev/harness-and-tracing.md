@@ -16,8 +16,10 @@ chasing a crash whose stack makes no sense — a use-after-free surfaces as an
 unrelated crash somewhere else entirely, and ASan turns that into a report at
 the first invalid access with the allocation and free stacks attached.
 
-- Build + test: `cmake --preset windows-x64-asan && cmake --build --preset windows-x64-asan`,
-  then `pwsh scripts/run-tests.ps1 -BuildDir build/windows-x64-asan -Config Debug`.
+- Build + test: `cmake --preset windows-x64-ninja-asan && cmake --build --preset windows-x64-ninja-asan`,
+  then `pwsh scripts/run-tests.ps1 -BuildDir build/windows-x64-ninja-asan -Config Debug`. The
+  MSBuild preset builds the same thing, but an incremental build in one takes minutes
+  rather than seconds.
 - The sanitizer runtime (`clang_rt.asan*dynamic-*.dll`) ships next to `cl.exe`
   and is never on PATH; the build stages it beside every binary. A missing
   'C++ AddressSanitizer' VS component fails configure with an explicit message

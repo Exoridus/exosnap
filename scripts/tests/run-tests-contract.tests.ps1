@@ -86,14 +86,19 @@ function Invoke-RunTests {
         [string] $ExcludeLabel = '',
         [string] $Filter = '',
         [string] $Phase = '',
-        [switch] $RequireFresh
+        # A fixture tree has no build system behind it, so the default build would
+        # fail before any of these cases reached their subject. Every case that is
+        # not about the build or the freshness refusal therefore skips both.
+        [switch] $Build,
+        [switch] $EnforceFreshness
     )
 
     $arguments = @('-NoProfile', '-NonInteractive', '-File', $runTests, '-BuildDir', $BuildDir, '-Config', 'Debug')
     if ($ExcludeLabel) { $arguments += @('-ExcludeLabel', $ExcludeLabel) }
     if ($Filter)       { $arguments += @('-Filter', $Filter) }
     if ($Phase)        { $arguments += @('-Phase', $Phase) }
-    if ($RequireFresh) { $arguments += '-RequireFresh' }
+    if (-not $Build) { $arguments += '-NoBuild' }
+    if (-not $EnforceFreshness) { $arguments += '-AllowStale' }
 
     $output = (& pwsh @arguments 2>&1 | Out-String)
     $exit = $LASTEXITCODE
@@ -228,12 +233,41 @@ Test-Case 'an empty build tree fails instead of passing' {
     finally { Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-Test-Case 'a tree whose freshness cannot be proven is refused under -RequireFresh' {
+Test-Case 'a failed build stops before the suite runs' {
+    # The failure the default build exists to prevent: a build that fails leaves the
+    # previous binaries in place, and a suite run against them passes. A fixture tree
+    # has no build system, so cmake --build fails here the way a broken compile does.
     $tree = New-FixtureTree
     try {
-        $result = Invoke-RunTests -BuildDir $tree -RequireFresh
+        $result = Invoke-RunTests -BuildDir $tree -Build
+        Assert-True ($result.ExitCode -ne 0) 'a failed build reported success'
+        Assert-True ($null -eq $result.Receipt) `
+            "the suite ran anyway and left a receipt: $($result.Output)"
+    }
+    finally { Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a tree whose freshness cannot be proven is refused under -NoBuild' {
+    # The refusal is the default because the failure it prevents is silent: a build
+    # that failed leaves the previous binaries in place, and a suite run against
+    # them passes and reads exactly like a pass for the change.
+    $tree = New-FixtureTree
+    try {
+        $result = Invoke-RunTests -BuildDir $tree -EnforceFreshness
         Assert-True ($result.ExitCode -eq 3) `
             "expected the freshness refusal (3), got $($result.ExitCode): $($result.Output)"
+    }
+    finally { Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case '-AllowStale reports a result and says which binaries it describes' {
+    $tree = New-FixtureTree
+    try {
+        $result = Invoke-RunTests -BuildDir $tree
+        Assert-True ($result.ExitCode -eq 0) `
+            "-AllowStale did not run the suite: $($result.Output)"
+        Assert-True ($result.Output -match 'OLD binaries') `
+            "-AllowStale ran without saying the result may describe old binaries: $($result.Output)"
     }
     finally { Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue }
 }

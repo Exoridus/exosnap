@@ -1,6 +1,8 @@
 #Requires -Version 7.0
 Set-StrictMode -Version Latest
 
+Import-Module (Join-Path $PSScriptRoot 'BuildArtifacts.psm1') -Force -DisableNameChecking
+
 <#
 .SYNOPSIS
     Transactional Windows environment orchestration for the release runner.
@@ -71,13 +73,6 @@ function Write-EnvctlJsonAtomic {
     Move-Item -LiteralPath $temporary -Destination $Path -Force
 }
 
-$script:EnvctlCandidates = @(
-    'build/windows-x64-release/tools/envctl/Release/exosnap-envctl.exe',
-    'build/windows-x64-debug/tools/envctl/Debug/exosnap-envctl.exe',
-    'build/windows-x64-release/tools/envctl/exosnap-envctl.exe',
-    'build/windows-x64-debug/tools/envctl/exosnap-envctl.exe'
-)
-
 function Resolve-EnvctlPath {
     <#
     .SYNOPSIS
@@ -98,11 +93,8 @@ function Resolve-EnvctlPath {
     if ($env:EXOSNAP_ENVCTL -and (Test-Path -LiteralPath $env:EXOSNAP_ENVCTL)) {
         return (Get-Item -LiteralPath $env:EXOSNAP_ENVCTL).FullName
     }
-    $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    foreach ($candidate in $script:EnvctlCandidates) {
-        $path = Join-Path $root $candidate
-        if (Test-Path -LiteralPath $path) { return (Get-Item -LiteralPath $path).FullName }
-    }
+    $built = Resolve-BuiltArtifact -RelativePath 'tools/envctl/exosnap-envctl.exe'
+    if ($null -ne $built) { return $built.Path }
     $command = Get-Command 'exosnap-envctl' -ErrorAction SilentlyContinue
     if ($null -ne $command) { return $command.Source }
     return $null
