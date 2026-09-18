@@ -420,18 +420,30 @@ public sealed class AudioDegradeGate : IScenarioBody
 
     private readonly TimeSpan pollFor;
     private readonly TimeSpan pollEvery;
+    private readonly int maxSamples;
 
     /// <summary>Creates the gate with the release polling window.</summary>
     public AudioDegradeGate()
-        : this(PollFor, PollEvery)
+        : this(PollFor, PollEvery, int.MaxValue)
     {
     }
 
-    /// <summary>Creates the gate with an explicit window, so its logic needs no wait.</summary>
-    public AudioDegradeGate(TimeSpan pollFor, TimeSpan pollEvery)
+    /// <summary>
+    /// Creates the gate with an explicit window and an upper bound on the samples it takes.
+    /// </summary>
+    /// <remarks>
+    /// Three of this gate's outcomes are decided by how many samples the poll got before it
+    /// ended, so a caller that wants a particular outcome has to bound the samples rather than
+    /// the wall clock: a short window samples a different number of times on a loaded machine
+    /// than on an idle one. The release configuration leaves the bound open and is governed by
+    /// <paramref name="pollFor"/> alone.
+    /// </remarks>
+    public AudioDegradeGate(TimeSpan pollFor, TimeSpan pollEvery, int maxSamples)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxSamples, 1);
         this.pollFor = pollFor;
         this.pollEvery = pollEvery;
+        this.maxSamples = maxSamples;
     }
 
     /// <inheritdoc/>
@@ -504,8 +516,10 @@ public sealed class AudioDegradeGate : IScenarioBody
         var leftRecording = false;
         var raw = new List<JsonElement>();
         var deadline = DateTime.UtcNow + this.pollFor;
-        while (DateTime.UtcNow < deadline)
+        var samples = 0;
+        while (DateTime.UtcNow < deadline && samples < this.maxSamples)
         {
+            samples++;
             var pipeline = await session.PipelineSnapshotAsync(cancellationToken).ConfigureAwait(false);
             raw.Add(pipeline.Result);
 
