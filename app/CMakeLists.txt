@@ -1558,8 +1558,18 @@ if(EXOSNAP_PWSH)
     add_test(NAME pipeline.run_tests_contract
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/run-tests-contract.tests.ps1")
-    set_tests_properties(pipeline.run_tests_contract PROPERTIES TIMEOUT 300 LABELS "pipeline")
+    set_tests_properties(pipeline.run_tests_contract PROPERTIES TIMEOUT 420 LABELS "pipeline")
     exosnap_set_test_phase(pipeline.run_tests_contract hermetic)
+
+    # What a test result is attributed to. Every case builds a throwaway git
+    # repository, because the property under test is that two working trees the
+    # build can tell apart are never given the same identity -- and a green run of
+    # the real suite cannot show that.
+    add_test(NAME pipeline.source_fingerprint
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/source-fingerprint.tests.ps1")
+    set_tests_properties(pipeline.source_fingerprint PROPERTIES TIMEOUT 180 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.source_fingerprint hermetic)
 
     # Which build tree a tool resolves out of. Four trees can hold the same binary
     # and the selection is only ever wrong quietly -- an old copy runs, reports

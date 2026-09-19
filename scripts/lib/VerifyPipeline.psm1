@@ -820,7 +820,7 @@ function Get-VerifyCTestScriptSuite {
     .SYNOPSIS
         The script suites CTest already owns, read from the file that registers them.
     .DESCRIPTION
-        Seven of the suites under scripts/tests are also add_test entries, so a run
+        Some of the suites under scripts/tests are also add_test entries, so a run
         that builds and tests unfiltered executes them twice. CTest is the single
         place they run from: it is the only one that reaches them on a machine
         where the pipeline itself is broken, and running the orchestrator's own

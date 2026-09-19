@@ -244,6 +244,10 @@ there. `-NoBuild` skips it and then has to infer whether the binaries match, whi
 normally ends in a refusal (exit 3) rather than a result -- `-AllowStale` overrides
 that and accepts a result that may describe old binaries.
 
+The build, the suite and the receipt run under one host lock on the build directory, so `verify.ps1` and a second `run-tests.ps1` on the same tree wait instead of rewriting it mid-run; independent trees do not wait for each other.
+
+Every run publishes `<BuildDir>/Testing/last-run-receipt.json`, a failing one included, and `reusable` there is the one field to read: it is true only when the tree was freshly built, the source did not move between the build and the verdict, every registered test declared exactly one phase, the census added up and the evidence was secured. Exit 4 means the run produced no usable verdict for one of those reasons; the raw build and ctest exit codes stay in the receipt beside it.
+
 ```
 pwsh scripts/run-tests.ps1                        # whole suite
 pwsh scripts/run-tests.ps1 -Filter recorder_core. # one binary (not one case)

@@ -15,13 +15,34 @@
       * PATH                 -> Qt bin prepended so Qt/FFmpeg DLLs resolve.
 
     The full ctest output (including every failing gtest `Suite.Case`) is written
-    to <BuildDir>/Testing/last-run.log. Only a compact summary — pass/fail
-    counts, wall-clock, and the failing binaries + their gtest cases — goes to
-    stdout. The script's exit code is ctest's exit code.
+    to <BuildDir>/Testing/last-run.log. Only a compact summary -- pass/fail
+    counts, wall-clock, and the failing binaries + their gtest cases -- goes to
+    stdout.
 
     Each CTest entry is one test BINARY (gtest_main runs all its cases in-process
     and prints the exact failing case), so -R / -Filter matches binary names,
     e.g. "recorder_core." or "capability.".
+
+    WHAT MAKES THE RESULT EVIDENCE. Build, suite and receipt happen under one
+    host lock on the build directory (see lib/HostResourceLock.psm1), so no other
+    cooperating entry point configures or rebuilds the tree while this run is
+    deciding what it holds. The source identity is taken under that lock before
+    the build and re-taken before the receipt is published, so a change made to
+    the working tree mid-run is reported as drift rather than silently attributed
+    to the result. Every run publishes a receipt, including a failing one: a
+    broken run must never leave an older successful receipt standing as its
+    outcome. `reusable` in that receipt is the single field a downstream consumer
+    reads -- it is true only for a run whose source identity, census, phases and
+    evidence all held.
+
+    Exit codes:
+      0   the selected tests passed and the run is valid
+      2   the build directory does not exist
+      3   the tree was not proven to match the source (see -AllowStale)
+      4   the run is not a valid verification: census, phase or source-identity
+          contradiction, or evidence that could not be secured. Raw build and
+          ctest exit codes are preserved in the receipt either way.
+      *   otherwise the build's or ctest's own exit code
 
 .PARAMETER BuildDir
     CMake build tree to test. Default: build/windows-x64-ninja-debug -- the same
@@ -107,12 +128,21 @@ if (-not [System.IO.Path]::IsPathRooted($BuildDir)) {
 }
 
 Import-Module (Join-Path $PSScriptRoot 'lib/HostResourceLock.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'lib/SourceFingerprint.psm1') -Force
 
 # Bounded by the same budget the verify runner uses, never the full core count:
 # a test run at -j<cores> beside a build in another worktree is the contention
 # the host lock below exists for, and the budget keeps the one that got through
 # from taking the machine anyway.
 if ($Jobs -le 0) { $Jobs = Get-HostJobBudget }
+
+$script:KnownPhases = @('hermetic', 'cpu', 'gpu', 'desktop', 'vm', 'human')
+
+# Exit code for a run that produced no trustworthy verdict: the suite may even
+# have passed, but something about the run means its result cannot be read as
+# one. Distinct from a test failure on purpose -- and never the only record,
+# because the receipt carries the raw build and ctest codes beside it.
+$script:ExitInvalidRun = 4
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -128,36 +158,126 @@ function ConvertTo-CTestLabelPattern {
     return $Label
 }
 
-function Get-SourceFingerprint {
+function Get-CTestCatalog {
     <#
     .SYNOPSIS
-        What the tests were built from: HEAD plus every tracked modification.
+        The tests a tree registers, with their labels -- from ctest's machine
+        format, not from the listing written for a human.
     .DESCRIPTION
-        Timestamps are not usable here -- a restored or copied tree keeps the
-        mtimes it was created with, so a stale tree can look newer than its
-        source. The fingerprint is content-derived instead, and deliberately
-        includes the working-tree diff: testing a dirty tree against a build of
-        its clean HEAD is the same stale result with a cleaner alibi.
+        `--show-only=json-v1` is a documented contract with names, labels and the
+        DISABLED property. The human `-N` output has none of that structure: it
+        gives a total and nothing that says WHICH test is missing a phase, so a
+        count check built on it can only ever report an arithmetic difference.
+
+        Returns ok = $false with a reason rather than an empty catalog, so a ctest
+        that could not list the tree is never read as a tree with no tests.
     #>
-    param([Parameter(Mandatory)] [string] $RepoRoot)
+    param(
+        [Parameter(Mandatory)] [string] $BuildDir,
+        [Parameter(Mandatory)] [string] $Config,
+        [string[]] $SelectionArgs = @()
+    )
 
-    $head = (& git -C $RepoRoot rev-parse HEAD 2>$null)
-    if ($LASTEXITCODE -ne 0 -or -not $head) { return $null }
-
-    $diff = (& git -C $RepoRoot diff HEAD 2>$null | Out-String)
-    $untracked = (& git -C $RepoRoot ls-files --others --exclude-standard 2>$null | Out-String)
-
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $bytes = [Text.Encoding]::UTF8.GetBytes("$head`n$diff`n$untracked")
-        $digest = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
+    $raw = (& ctest --test-dir $BuildDir -C $Config --show-only=json-v1 @SelectionArgs 2>$null | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        return [pscustomobject]@{ ok = $false; reason = "ctest --show-only exited $LASTEXITCODE"; tests = @() }
     }
-    finally { $sha.Dispose() }
+
+    try { $parsed = $raw | ConvertFrom-Json }
+    catch { return [pscustomobject]@{ ok = $false; reason = "ctest --show-only output is not JSON: $($_.Exception.Message)"; tests = @() } }
+
+    if (@($parsed.PSObject.Properties.Name) -notcontains 'tests') {
+        return [pscustomobject]@{ ok = $false; reason = 'ctest --show-only output has no test list'; tests = @() }
+    }
+
+    $tests = foreach ($test in @($parsed.tests)) {
+        $labels = @()
+        $disabled = $false
+        foreach ($property in @($test.properties)) {
+            if ($property.name -eq 'LABELS') { $labels = @($property.value) }
+            elseif ($property.name -eq 'DISABLED') { $disabled = [bool]$property.value }
+        }
+        [pscustomobject]@{ name = $test.name; labels = $labels; disabled = $disabled }
+    }
+
+    return [pscustomobject]@{ ok = $true; reason = $null; tests = @($tests) }
+}
+
+function Test-PhaseDeclaration {
+    <#
+    .SYNOPSIS
+        Every registered test declares exactly one known execution phase.
+    .DESCRIPTION
+        Per test, not as a total. Two totals can agree while one test carries no
+        phase and another carries two -- and `-Phase hermetic` would then silently
+        leave the first one out, which is how a CI lane reports a green suite it
+        never ran. Missing, duplicated and misspelled are diagnosed separately
+        because they are three different mistakes in the CMake beside the test.
+    #>
+    param([Parameter(Mandatory)] [object[]] $Tests)
+
+    $missing = [System.Collections.Generic.List[string]]::new()
+    $multiple = [System.Collections.Generic.List[string]]::new()
+    $unknown = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($test in $Tests) {
+        $phases = @($test.labels | Where-Object { $_ -like 'phase.*' })
+        if ($phases.Count -eq 0) { $missing.Add($test.name); continue }
+        if ($phases.Count -gt 1) { $multiple.Add("$($test.name) [$($phases -join ', ')]") }
+        foreach ($phase in $phases) {
+            if ($script:KnownPhases -notcontains $phase.Substring('phase.'.Length)) {
+                $unknown.Add("$($test.name) [$phase]")
+            }
+        }
+    }
 
     return [pscustomobject]@{
-        head        = $head.Trim()
-        dirty       = [bool]($diff.Trim() -ne '')
-        fingerprint = $digest
+        ok       = ($missing.Count + $multiple.Count + $unknown.Count) -eq 0
+        missing  = @($missing)
+        multiple = @($multiple)
+        unknown  = @($unknown)
+    }
+}
+
+function Write-NameList {
+    param([string] $Heading, [string[]] $Names, [int] $Limit = 12)
+    if ($Names.Count -eq 0) { return }
+    Write-Host "      $Heading" -ForegroundColor Red
+    foreach ($name in ($Names | Select-Object -First $Limit)) { Write-Host "        $name" -ForegroundColor Red }
+    if ($Names.Count -gt $Limit) {
+        Write-Host "        ... and $($Names.Count - $Limit) more" -ForegroundColor Red
+    }
+}
+
+function Publish-Receipt {
+    <#
+    .SYNOPSIS
+        Write the receipt for THIS run, atomically, replacing any older one.
+    .DESCRIPTION
+        Written through a temporary file and moved into place, so a reader never
+        sees half a receipt, and published on every path that got far enough to
+        have a log directory -- a failing run that left the previous successful
+        receipt in place would be claiming that run's verdict as its own.
+
+        Returns $true on success. A receipt that could not be written is reported
+        by the caller; it is not allowed to pass silently, because everything
+        downstream reads this file rather than this run's console.
+    #>
+    param([Parameter(Mandatory)] [string] $Path, [Parameter(Mandatory)] $Receipt)
+
+    try {
+        $directory = Split-Path -Parent $Path
+        if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+            New-Item -ItemType Directory -Path $directory -Force -ErrorAction Stop | Out-Null
+        }
+        $temporary = "$Path.$PID.tmp"
+        $Receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $temporary -Encoding utf8 -ErrorAction Stop
+        Move-Item -LiteralPath $temporary -Destination $Path -Force -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Write-Host "Could not publish the run receipt to $Path : $($_.Exception.Message)" -ForegroundColor Red
+        return $false
     }
 }
 
@@ -180,21 +300,92 @@ foreach ($name in @('PATH', 'QT_QPA_PLATFORM', 'QT_PLUGIN_PATH', 'EXOSNAP_CONFIG
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 
-$ctestExit = 0
+$runId = [Guid]::NewGuid().ToString('n')
+$logDir = Join-Path $BuildDir 'Testing'
+$logFile = Join-Path $logDir 'last-run.log'
+$receiptPath = Join-Path $logDir 'last-run-receipt.json'
 $configDir = $null
 
-try {
-    # --- Qt / DLL resolution -------------------------------------------------
-    # Resolved from .qt-version, never spelled out here: a hard-coded path keeps
-    # working after a Qt uplift, against the previous Qt.
-    Import-Module (Join-Path $PSScriptRoot 'lib/QtEnvironment.psm1') -Force
-    Add-QtToPath -RepoRoot $repoRoot -IncludePlugins | Out-Null
-    $env:QT_QPA_PLATFORM = 'offscreen'
+# Filled in as the run learns things, published exactly once at the end. Started
+# as an invalid run: every field below has to be earned before `reusable` can
+# become true.
+$receipt = [ordered]@{
+    run_id             = $runId
+    started_utc        = [DateTime]::UtcNow.ToString('o')
+    finished_utc       = $null
+    build_dir          = $BuildDir
+    generator          = ''
+    config             = $Config
+    jobs               = $Jobs
+    freshness          = 'unknown'
+    freshness_detail   = 'the run did not get far enough to judge the tree'
+    allow_stale        = [bool]$AllowStale
+    no_build           = [bool]$NoBuild
+    build_status       = $(if ($NoBuild) { 'skipped' } else { 'not-started' })
+    build_exit_code    = $null
+    ctest_args         = @()
+    exclude_label      = $ExcludeLabel
+    exclude_pattern    = ''
+    phase              = $Phase
+    filter             = $Filter
+    tests_registered   = 0
+    tests_disabled     = 0
+    tests_selected     = 0
+    tests_accounted    = 0
+    tests_expected     = 0
+    tests_passed       = 0
+    tests_failed       = 0
+    census_mismatch    = $false
+    phase_violations   = $null
+    ctest_exit_code    = $null
+    source_before      = $null
+    source_after       = $null
+    source_drift       = $null
+    log                = $logFile
+    rescued_config_dir = $null
+    rescue_status      = 'not-needed'
+    rescue_detail      = $null
+    invalid_reasons    = @()
+    exit_code          = $script:ExitInvalidRun
+    reusable           = $false
+}
 
-    # --- Isolated, throwaway config dir --------------------------------------
-    $configDir = Join-Path ([System.IO.Path]::GetTempPath()) ("exosnap_runtests_" + [System.Guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
-    $env:EXOSNAP_CONFIG_DIR = $configDir
+function Add-InvalidReason {
+    param([Parameter(Mandatory)] [string] $Reason)
+    $script:receipt.invalid_reasons = @($script:receipt.invalid_reasons) + $Reason
+}
+
+function Invoke-TestRun {
+    <#
+    .SYNOPSIS
+        Build, run and judge, with the build tree locked. Returns the exit code.
+    .DESCRIPTION
+        One function so there is exactly one place the tree lock is released: the
+        caller's finally. Nothing in here exits the process -- an early return is
+        an exit code the caller reports after the receipt has been published.
+    #>
+
+    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+
+    # A receipt from an earlier run is not this run's result. Removed before the
+    # work starts so a crash between here and the publish leaves no verdict at
+    # all, which is honest, rather than the previous one, which is not.
+    if (Test-Path -LiteralPath $receiptPath) {
+        Remove-Item -LiteralPath $receiptPath -Force -ErrorAction SilentlyContinue
+    }
+
+    # --- The source this run is about ----------------------------------------
+    # Taken here, under the lock and before the build, so the build and the
+    # verdict are about the same source. Re-taken before the receipt is
+    # published; see Get-SourceFingerprint for what the pair does and does not
+    # prove.
+    $sourceBefore = Get-SourceFingerprint -RepoRoot $repoRoot
+    $script:receipt.source_before = $sourceBefore
+    if (-not $sourceBefore.ok) {
+        Write-Host "Cannot identify the source this run is about: $($sourceBefore.reason)" -ForegroundColor Red
+        Add-InvalidReason "source identity unavailable: $($sourceBefore.reason)"
+        return $script:ExitInvalidRun
+    }
 
     $generator = ''
     $cachePath = Join-Path $BuildDir 'CMakeCache.txt'
@@ -202,6 +393,7 @@ try {
         $generatorLine = Select-String -LiteralPath $cachePath -Pattern '^CMAKE_GENERATOR:INTERNAL=(.*)$' | Select-Object -First 1
         if ($generatorLine) { $generator = $generatorLine.Matches[0].Groups[1].Value }
     }
+    $script:receipt.generator = $generator
 
     # --- Build, so the run is its own evidence -------------------------------
     # Default on. No dry-run inference can prove a tree current (see below), and
@@ -218,17 +410,28 @@ try {
             Enter-MsvcEnvironment -Quiet | Out-Null
         }
         Write-Host "Building all targets in $BuildDir ($Config)..." -ForegroundColor Cyan
-        & cmake --build $BuildDir --config $Config
-        if ($LASTEXITCODE -ne 0) {
-            $buildExit = $LASTEXITCODE
-            Write-Host "Build failed (exit $buildExit)." -ForegroundColor Red
-            exit $buildExit
+        # Inside the tree lock, so the ordering is tree then build: the host build
+        # lock bounds compiler processes across worktrees, the tree lock owns this
+        # directory. Taken in that order by every entry point, so no two can wait
+        # on each other.
+        #
+        # Out-Host, not the pipeline: this function's output IS its exit code, and
+        # a compiler's chatter returned alongside it would make the caller compare
+        # an array against zero.
+        $buildExit = Invoke-WithHostLock -Kind 'build' -Holder "run-tests $BuildDir" -Body {
+            & cmake --build $BuildDir --config $Config | Out-Host
+            $LASTEXITCODE
         }
+        $script:receipt.build_exit_code = $buildExit
+        if ($buildExit -ne 0) {
+            $script:receipt.build_status = 'failed'
+            Write-Host "Build failed (exit $buildExit)." -ForegroundColor Red
+            return $buildExit
+        }
+        $script:receipt.build_status = 'succeeded'
     }
 
-    $logDir = Join-Path $BuildDir 'Testing'
     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-    $logFile = Join-Path $logDir 'last-run.log'
 
     # --- Is this build tree actually the source in front of us? --------------
     # A build by this invocation settles the question: its exit code is the
@@ -282,20 +485,26 @@ try {
             }
         }
     }
+    $script:receipt.freshness = $freshness
+    $script:receipt.freshness_detail = $freshnessDetail
 
     if ($freshness -eq 'stale') {
         Write-Host "Build tree is STALE: $freshnessDetail" -ForegroundColor Red
         Write-Host "  $BuildDir" -ForegroundColor Red
         if (-not $AllowStale) {
             Write-Host 'Refusing to report a result for binaries that are not the source in front of us. Re-run without -NoBuild.' -ForegroundColor Red
-            exit 3
+            Add-InvalidReason "build tree is stale: $freshnessDetail"
+            return 3
         }
         Write-Host 'Continuing anyway (-AllowStale was passed). The result describes the OLD binaries.' -ForegroundColor Yellow
     }
     elseif ($freshness -eq 'unknown') {
         Write-Host "Cannot prove this build tree matches the source: $freshnessDetail" -ForegroundColor Red
         Write-Host "  $BuildDir" -ForegroundColor Red
-        if (-not $AllowStale) { exit 3 }
+        if (-not $AllowStale) {
+            Add-InvalidReason "build tree freshness unknown: $freshnessDetail"
+            return 3
+        }
         # Said out loud on the way past, not only at the refusal: an unproven tree
         # that is waved through prints a normal green summary, and the reader has
         # no other signal that it may be the OLD binaries talking.
@@ -305,6 +514,12 @@ try {
     # --- ctest invocation ----------------------------------------------------
     $labelPattern = ''
     if ($ExcludeLabel) { $labelPattern = ConvertTo-CTestLabelPattern -Label $ExcludeLabel }
+    $script:receipt.exclude_pattern = $labelPattern
+
+    $selectionArgs = @()
+    if ($Filter)       { $selectionArgs += @('-R', $Filter) }
+    if ($labelPattern) { $selectionArgs += @('-LE', $labelPattern) }
+    if ($Phase)        { $selectionArgs += @('-L', "^phase\.$Phase`$") }
 
     $ctestArgs = @(
         '--test-dir', $BuildDir,
@@ -315,82 +530,130 @@ try {
         # pass. Without this, a renamed binary or a filter typo reports success
         # over zero tests and every gate downstream believes it.
         '--no-tests=error'
-    )
-    if ($Filter)       { $ctestArgs += @('-R', $Filter) }
-    if ($labelPattern) { $ctestArgs += @('-LE', $labelPattern) }
-    if ($Phase)        { $ctestArgs += @('-L', "^phase\.$Phase`$") }
+    ) + $selectionArgs
+    $script:receipt.ctest_args = $ctestArgs
 
-    # The census: how many tests this tree registers at all, independent of what
-    # this run selects. A suite that quietly lost half its cases to a missing
-    # tool at configure time still passes everything it kept.
-    $registeredCount = 0
-    $censusLine = (& ctest --test-dir $BuildDir -C $Config -N 2>&1 |
-        Select-String -Pattern '^Total Tests:\s*(\d+)' | Select-Object -Last 1)
-    if ($censusLine) { $registeredCount = [int]$censusLine.Matches[0].Groups[1].Value }
+    # The census: what this tree registers at all, independent of what this run
+    # selects. A suite that quietly lost half its cases to a missing tool at
+    # configure time still passes everything it kept.
+    $registered = Get-CTestCatalog -BuildDir $BuildDir -Config $Config
+    if (-not $registered.ok) {
+        Write-Host "Cannot read the test catalog of $BuildDir : $($registered.reason)" -ForegroundColor Red
+        Add-InvalidReason "test catalog unavailable: $($registered.reason)"
+        return $script:ExitInvalidRun
+    }
+    $script:receipt.tests_registered = $registered.tests.Count
+    $script:receipt.tests_disabled = @($registered.tests | Where-Object { $_.disabled }).Count
+
+    if ($registered.tests.Count -eq 0) {
+        Write-Host "The build tree registers no tests at all: $BuildDir" -ForegroundColor Red
+        Add-InvalidReason 'the build tree registers no tests'
+        return $script:ExitInvalidRun
+    }
 
     # Every registered test declares exactly one execution phase. A tree where one
     # does not is a tree whose selection means nothing: `-Phase hermetic` would
     # silently leave it out, and a CI lane built on that would report a green suite
-    # it never ran. Checked against the census above rather than by name, so a new
-    # test registered without a phase is caught the first time the suite runs.
-    $phaseTotal = 0
-    foreach ($known in 'hermetic', 'cpu', 'gpu', 'desktop', 'vm', 'human') {
-        $line = (& ctest --test-dir $BuildDir -C $Config -N -L "^phase\.$known`$" 2>&1 |
-            Select-String -Pattern '^Total Tests:\s*(\d+)' | Select-Object -Last 1)
-        if ($line) { $phaseTotal += [int]$line.Matches[0].Groups[1].Value }
+    # it never ran. Checked per test rather than by totals, so one test with no
+    # phase and another with two cannot cancel out.
+    $phases = Test-PhaseDeclaration -Tests $registered.tests
+    $script:receipt.phase_violations = [ordered]@{
+        missing  = $phases.missing
+        multiple = $phases.multiple
+        unknown  = $phases.unknown
     }
-    if ($registeredCount -gt 0 -and $phaseTotal -ne $registeredCount) {
+    if (-not $phases.ok) {
         Write-Host ''
-        Write-Host ("FAIL  $($registeredCount - $phaseTotal) of $registeredCount registered test(s) declare no " +
-            'execution phase, so a phase selection would silently leave them out.') -ForegroundColor Red
-        Write-Host ('      Give each one a PHASE in exosnap_add_gtest, or an exosnap_set_test_phase(...) ' +
-            'beside its add_test.') -ForegroundColor Red
-        exit 1
+        Write-Host 'FAIL  the execution phases this tree declares do not let a phase selection mean anything:' -ForegroundColor Red
+        Write-NameList -Heading "no phase ($($phases.missing.Count)):" -Names $phases.missing
+        Write-NameList -Heading "more than one phase ($($phases.multiple.Count)):" -Names $phases.multiple
+        Write-NameList -Heading "phase outside the vocabulary ($($phases.unknown.Count)):" -Names $phases.unknown
+        Write-Host ('      Give each one exactly one PHASE in exosnap_add_gtest, or an ' +
+            'exosnap_set_test_phase(...) beside its add_test.') -ForegroundColor Red
+        Add-InvalidReason ("phase declarations invalid: $($phases.missing.Count) missing, " +
+            "$($phases.multiple.Count) duplicated, $($phases.unknown.Count) unknown")
+        return $script:ExitInvalidRun
     }
 
-    $selectedCount = 0
-    $selectArgs = @('--test-dir', $BuildDir, '-C', $Config, '-N')
-    if ($Filter)       { $selectArgs += @('-R', $Filter) }
-    if ($labelPattern) { $selectArgs += @('-LE', $labelPattern) }
-    if ($Phase)        { $selectArgs += @('-L', "^phase\.$Phase`$") }
-    $selectedLine = (& ctest @selectArgs 2>&1 |
-        Select-String -Pattern '^Total Tests:\s*(\d+)' | Select-Object -Last 1)
-    if ($selectedLine) { $selectedCount = [int]$selectedLine.Matches[0].Groups[1].Value }
+    $selected = Get-CTestCatalog -BuildDir $BuildDir -Config $Config -SelectionArgs $selectionArgs
+    if (-not $selected.ok) {
+        Write-Host "Cannot read the selected tests of $BuildDir : $($selected.reason)" -ForegroundColor Red
+        Add-InvalidReason "test selection unavailable: $($selected.reason)"
+        return $script:ExitInvalidRun
+    }
+    $script:receipt.tests_selected = $selected.tests.Count
+    # ctest does not count a disabled test in the summary it prints, so the number
+    # that has to be accounted for is the selection minus them. Kept as its own
+    # field: a test that became disabled is a change in what the suite covers, and
+    # a reader should not have to derive that from two other numbers.
+    $expected = @($selected.tests | Where-Object { -not $_.disabled }).Count
+    $script:receipt.tests_expected = $expected
+
+    if ($expected -eq 0) {
+        Write-Host "The selection matches no test that would run (of $($selected.tests.Count) selected)." -ForegroundColor Red
+        Add-InvalidReason 'the selection matches no test that would run'
+        return $script:ExitInvalidRun
+    }
 
     $argLine = ($ctestArgs -join ' ')
     Write-Host "ctest $argLine" -ForegroundColor DarkGray
     Write-Host "Build tree: $BuildDir [$generator] freshness=$freshness" -ForegroundColor DarkGray
-    Write-Host "Selected $selectedCount of $registeredCount registered tests" -ForegroundColor DarkGray
+    Write-Host "Selected $($selected.tests.Count) of $($registered.tests.Count) registered tests" -ForegroundColor DarkGray
     Write-Host "Full log: $logFile" -ForegroundColor DarkGray
     Write-Host ''
 
     # Under the host device lock for the whole run. RESOURCE_LOCK and RUN_SERIAL
     # serialise tests within THIS ctest; a second ctest in another worktree, a
     # live check or a VM campaign shares the GPU and the desktop with it and none
-    # of them can see the others. One test run on the host at a time.
-    $startedUtc = [DateTime]::UtcNow
+    # of them can see the others. One test run on the host at a time. Taken last
+    # in the tree-build-device order, so it can never be the lock someone holds
+    # while waiting for this tree.
     $ctestExit = Invoke-WithHostLock -Kind 'device' -Holder "run-tests $BuildDir" -Body {
         & ctest @ctestArgs 2>&1 | Tee-Object -FilePath $logFile | Out-Null
         $LASTEXITCODE
     }
+    $script:receipt.ctest_exit_code = $ctestExit
 
     # --- Rescue what the tests wrote before the config dir goes --------------
     # The QML and cursor-audit suites write their application logs into
     # EXOSNAP_CONFIG_DIR, and the failure they were run to diagnose is in those
     # logs. Deleting the directory on the way out threw away the only copy.
-    $rescuedTo = $null
+    $rescueFailed = $false
     if ($ctestExit -ne 0 -and $configDir -and (Test-Path -LiteralPath $configDir)) {
-        $leftBehind = Get-ChildItem -LiteralPath $configDir -Recurse -File -ErrorAction SilentlyContinue
-        if ($leftBehind) {
-            $rescuedTo = Join-Path $logDir 'last-run-config-dir'
-            Remove-Item -LiteralPath $rescuedTo -Recurse -Force -ErrorAction SilentlyContinue
-            New-Item -ItemType Directory -Path $rescuedTo -Force | Out-Null
-            Copy-Item -Path (Join-Path $configDir '*') -Destination $rescuedTo -Recurse -Force -ErrorAction SilentlyContinue
+        $leftBehind = @(Get-ChildItem -LiteralPath $configDir -Recurse -File -ErrorAction SilentlyContinue)
+        if ($leftBehind.Count -gt 0) {
+            # One directory per run. A fixed name meant a second run overwrote the
+            # evidence of the first, and two runs finishing at once raced for it.
+            $rescuedTo = Join-Path $logDir "last-run-config-dir/$runId"
+            try {
+                New-Item -ItemType Directory -Path $rescuedTo -Force -ErrorAction Stop | Out-Null
+                Copy-Item -Path (Join-Path $configDir '*') -Destination $rescuedTo -Recurse -Force -ErrorAction Stop
+                $copied = @(Get-ChildItem -LiteralPath $rescuedTo -Recurse -File -ErrorAction Stop)
+                if ($copied.Count -lt $leftBehind.Count) {
+                    throw "copied $($copied.Count) of $($leftBehind.Count) files"
+                }
+                $script:receipt.rescued_config_dir = $rescuedTo
+                $script:receipt.rescue_status = 'rescued'
+                $script:receipt.rescue_detail = "$($copied.Count) file(s)"
+            }
+            catch {
+                # The original is kept: a rescue that failed halfway must not also
+                # be the reason the only copy was deleted. The cleanup below reads
+                # this flag.
+                $rescueFailed = $true
+                $script:receipt.rescued_config_dir = $configDir
+                $script:receipt.rescue_status = 'failed'
+                $script:receipt.rescue_detail = $_.Exception.Message
+                Write-Host ("Could not secure the test logs from $configDir : $($_.Exception.Message)") -ForegroundColor Red
+                Write-Host "The original directory is kept at $configDir" -ForegroundColor Yellow
+                Add-InvalidReason "test evidence could not be secured: $($_.Exception.Message)"
+            }
         }
     }
+    if ($rescueFailed) { $script:KeepConfigDir = $true }
 
     # --- Summary -------------------------------------------------------------
-    $log = Get-Content -LiteralPath $logFile
+    $log = @(Get-Content -LiteralPath $logFile -ErrorAction SilentlyContinue)
 
     # ctest writes two different summary lines: "N% tests passed, M tests failed
     # out of T" when something failed, and "N% tests passed out of T" when
@@ -401,59 +664,31 @@ try {
 
     $passedCount = 0
     $failedCount = 0
+    $summaryParsed = $false
     if ($summaryLine -match '(\d+)%\s+tests passed,\s*(\d+)\s+tests failed out of\s*(\d+)') {
         $failedCount = [int]$Matches[2]
         $passedCount = [int]$Matches[3] - $failedCount
+        $summaryParsed = $true
     }
     elseif ($summaryLine -match '(\d+)%\s+tests passed out of\s*(\d+)') {
         $failedCount = 0
         $passedCount = [int]$Matches[2]
+        $summaryParsed = $true
     }
+    $script:receipt.tests_passed = $passedCount
+    $script:receipt.tests_failed = $failedCount
+    $script:receipt.tests_accounted = $passedCount + $failedCount
 
     # Selected but never accounted for: ctest dropped tests between the listing
     # and the run (a NOT_RUN entry, a missing command). Reporting only the ones
-    # that did run would turn that into a pass.
-    $censusMismatch = ($passedCount + $failedCount) -ne $selectedCount
-
-    # --- Receipt -------------------------------------------------------------
-    # What ran, against which source, in which tree. A test result with no
-    # identity cannot be reused as evidence by anything downstream, and a green
-    # summary quoted out of an old log is indistinguishable from a fresh one.
-    $source = Get-SourceFingerprint -RepoRoot $repoRoot
-    $receipt = [ordered]@{
-        finished_utc       = [DateTime]::UtcNow.ToString('o')
-        started_utc        = $startedUtc.ToString('o')
-        build_dir          = $BuildDir
-        generator          = $generator
-        config             = $Config
-        freshness          = $freshness
-        freshness_detail   = $freshnessDetail
-        ctest_args         = $ctestArgs
-        exclude_label      = $ExcludeLabel
-        phase              = $Phase
-        exclude_pattern    = $labelPattern
-        filter             = $Filter
-        tests_registered   = $registeredCount
-        tests_selected     = $selectedCount
-        tests_passed       = $passedCount
-        tests_failed       = $failedCount
-        census_mismatch    = $censusMismatch
-        exit_code          = $ctestExit
-        source_head        = $(if ($source) { $source.head } else { $null })
-        source_dirty       = $(if ($source) { $source.dirty } else { $null })
-        source_fingerprint = $(if ($source) { $source.fingerprint } else { $null })
-        log                = $logFile
-        rescued_config_dir = $rescuedTo
-    }
-    $receiptPath = Join-Path $logDir 'last-run-receipt.json'
-    $receipt | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $receiptPath -Encoding utf8
+    # that did run would turn that into a pass, so the contradiction is the
+    # verdict -- fail closed, whatever the suite itself reported.
+    $censusMismatch = (-not $summaryParsed) -or (($passedCount + $failedCount) -ne $expected)
+    $script:receipt.census_mismatch = $censusMismatch
 
     Write-Host ('-' * 60)
     if ($summaryLine) { Write-Host $summaryLine.Trim() -ForegroundColor ($ctestExit -eq 0 ? 'Green' : 'Red') }
     if ($timeLine)    { Write-Host $timeLine.Trim() }
-    if ($censusMismatch) {
-        Write-Host "Census mismatch: $selectedCount tests selected, $($passedCount + $failedCount) accounted for." -ForegroundColor Yellow
-    }
 
     if ($ctestExit -ne 0) {
         # Failed binaries, as ctest lists them under "The following tests FAILED:".
@@ -514,13 +749,121 @@ try {
         }
         Write-Host ''
         Write-Host "See $logFile for full output." -ForegroundColor Yellow
-        if ($rescuedTo) { Write-Host "Test application logs rescued to $rescuedTo" -ForegroundColor Yellow }
+        if ($script:receipt.rescue_status -eq 'rescued') {
+            Write-Host "Test application logs rescued to $($script:receipt.rescued_config_dir)" -ForegroundColor Yellow
+        }
     }
-    Write-Host "Receipt: $receiptPath" -ForegroundColor DarkGray
-    Write-Host ('-' * 60)
+
+    if ($censusMismatch) {
+        Write-Host ''
+        if ($summaryParsed) {
+            Write-Host ("Census mismatch: $expected test(s) had to be accounted for, " +
+                "$($passedCount + $failedCount) were.") -ForegroundColor Red
+            Add-InvalidReason "census mismatch: expected $expected accounted tests, got $($passedCount + $failedCount)"
+        }
+        else {
+            Write-Host 'ctest printed no summary this run could read; nothing was accounted for.' -ForegroundColor Red
+            Add-InvalidReason 'ctest printed no parseable summary'
+        }
+        Write-Host 'The suite result cannot be read as a verdict.' -ForegroundColor Red
+    }
+
+    # The raw ctest code wins when tests actually failed -- it is the more specific
+    # answer and every caller already knows it. The wrapper code only covers a run
+    # that produced no usable verdict at all.
+    if ($ctestExit -ne 0) { return $ctestExit }
+    if (@($script:receipt.invalid_reasons).Count -gt 0) { return $script:ExitInvalidRun }
+    return 0
+}
+
+$script:KeepConfigDir = $false
+$exitCode = $script:ExitInvalidRun
+
+try {
+    # --- Qt / DLL resolution -------------------------------------------------
+    # Resolved from .qt-version, never spelled out here: a hard-coded path keeps
+    # working after a Qt uplift, against the previous Qt.
+    Import-Module (Join-Path $PSScriptRoot 'lib/QtEnvironment.psm1') -Force
+    Add-QtToPath -RepoRoot $repoRoot -IncludePlugins | Out-Null
+    $env:QT_QPA_PLATFORM = 'offscreen'
+
+    # --- Isolated, throwaway config dir --------------------------------------
+    $configDir = Join-Path ([System.IO.Path]::GetTempPath()) ("exosnap_runtests_" + $runId)
+    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+    $env:EXOSNAP_CONFIG_DIR = $configDir
+
+    # Everything that reads or writes this build tree happens inside this hold:
+    # the build, the freshness judgement, the census, the suite and the receipt.
+    # A second cooperating entry point -- another run-tests, or verify.ps1's
+    # configure, qmllint or build step -- waits, so no result can describe
+    # binaries a concurrent build replaced underneath it.
+    $exitCode = Invoke-WithHostLock -Kind 'tree' -Path $BuildDir -Holder "run-tests $PID" -Body {
+        Invoke-TestRun
+    }
+}
+catch {
+    Write-Host "The test run did not complete: $($_.Exception.Message)" -ForegroundColor Red
+    Add-InvalidReason "run aborted: $($_.Exception.Message)"
+    $exitCode = $script:ExitInvalidRun
 }
 finally {
-    if ($configDir) { Remove-Item -Recurse -Force $configDir -ErrorAction SilentlyContinue }
+    # --- Publish the receipt -------------------------------------------------
+    # On every path that has a log directory, success or not. Downstream reads
+    # this file, so a run that ended badly has to say so here rather than leave
+    # an older, better-looking receipt in place.
+    $receipt.finished_utc = [DateTime]::UtcNow.ToString('o')
+    $receipt.exit_code = $exitCode
+
+    if ($receipt.source_before -and $receipt.source_before.ok) {
+        $sourceAfter = Get-SourceFingerprint -RepoRoot $repoRoot
+        $receipt.source_after = $sourceAfter
+        if (-not $sourceAfter.ok) {
+            $receipt.source_drift = $null
+            Add-InvalidReason "source identity could not be re-taken: $($sourceAfter.reason)"
+            Write-Host "Cannot confirm the source did not move during the run: $($sourceAfter.reason)" -ForegroundColor Red
+        }
+        else {
+            $receipt.source_drift = ($sourceAfter.fingerprint -ne $receipt.source_before.fingerprint)
+            if ($receipt.source_drift) {
+                Add-InvalidReason 'the working tree changed while the run was in progress'
+                Write-Host 'The source changed while this run was in progress; its result describes neither state.' -ForegroundColor Red
+            }
+        }
+    }
+
+    $receipt.invalid_reasons = @($receipt.invalid_reasons)
+    $receipt.reusable = ($exitCode -eq 0 -and $receipt.invalid_reasons.Count -eq 0 -and
+        $receipt.freshness -eq 'fresh' -and $receipt.source_drift -eq $false -and
+        -not $receipt.census_mismatch)
+
+    # A drift or a failed re-take found after the suite ran still has to change the
+    # verdict, or the receipt would carry a reason nobody acts on.
+    if ($exitCode -eq 0 -and $receipt.invalid_reasons.Count -gt 0) {
+        $exitCode = $script:ExitInvalidRun
+        $receipt.exit_code = $exitCode
+    }
+
+    if (Test-Path -LiteralPath $logDir -PathType Container) {
+        if (-not (Publish-Receipt -Path $receiptPath -Receipt $receipt)) {
+            # The run may have been fine; what failed is the record of it. Nothing
+            # downstream may read this as a pass.
+            if ($exitCode -eq 0) { $exitCode = $script:ExitInvalidRun }
+        }
+        else {
+            Write-Host "Receipt: $receiptPath" -ForegroundColor DarkGray
+        }
+        Write-Host ('-' * 60)
+    }
+
+    if ($configDir -and -not $script:KeepConfigDir) {
+        try { Remove-Item -Recurse -Force $configDir -ErrorAction Stop }
+        catch {
+            # Not fatal, but not silent either: a config dir that survived is a
+            # directory the next reader will find and wonder about.
+            Write-Host "Could not remove the throwaway config dir $configDir : $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
     foreach ($name in $savedEnvironment.Keys) {
         # A variable that was not set has to be removed, not set to an empty
         # string: an empty EXOSNAP_CONFIG_DIR is a value, and the app reads it
@@ -534,4 +877,4 @@ finally {
     }
 }
 
-exit $ctestExit
+exit $exitCode
