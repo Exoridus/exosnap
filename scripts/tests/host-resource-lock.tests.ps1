@@ -58,16 +58,17 @@ function Start-ForeignHolder {
         Signals through a file that the lock is held, so the test does not race the
         child's startup. Returns the process and the release file.
     #>
-    param([Parameter(Mandatory)] [string] $Kind)
+    param([Parameter(Mandatory)] [string] $Kind, [string] $Path = '')
     $dir = Join-Path ([IO.Path]::GetTempPath()) "host-lock-tests/$([guid]::NewGuid().ToString('n'))"
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     $held = Join-Path $dir 'held'
     $release = Join-Path $dir 'release'
     $module = (Join-Path $scriptRoot 'lib/HostResourceLock.psm1') -replace '\\', '/'
+    $pathArgument = if ($Path) { " -Path '$($Path -replace "'", "''")'" } else { '' }
 
     $body = @"
 Import-Module '$module' -Force
-`$lock = Enter-HostLock -Kind '$Kind' -Holder 'foreign'
+`$lock = Enter-HostLock -Kind '$Kind'$pathArgument -Holder 'foreign'
 Set-Content -LiteralPath '$($held -replace '\\', '/')' -Value 'held'
 while (-not (Test-Path -LiteralPath '$($release -replace '\\', '/')')) { Start-Sleep -Milliseconds 50 }
 Exit-HostLock -Lock `$lock
@@ -154,7 +155,7 @@ Test-Case 'the second run gets the lock when the first releases it, and says it 
     finally { Stop-ForeignHolder -Holder $foreign }
 }
 
-Test-Case 'the two locks are independent' {
+Test-Case 'the host-wide locks are independent of each other' {
     # A build in one worktree must not stop a test run in another from starting
     # its OWN wait on the device lock; only the same kind contends.
     $foreign = Start-ForeignHolder -Kind 'build'
@@ -164,6 +165,114 @@ Test-Case 'the two locks are independent' {
         finally { Exit-HostLock -Lock $lock }
     }
     finally { Stop-ForeignHolder -Holder $foreign }
+}
+
+Test-Case 'a tree lock is the same lock for two spellings of one directory' {
+    # The premise the whole protection rests on: verify.ps1 names the tree
+    # "build/windows-x64-ninja-debug" relative to the repo and run-tests.ps1 makes
+    # it absolute. If those were two locks, both would be granted at once.
+    $root = Join-Path ([IO.Path]::GetTempPath()) "host-lock-tests/$([guid]::NewGuid().ToString('n'))"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    try {
+        $spellings = @(
+            $root
+            "$root\"
+            (Join-Path $root 'sub/..')
+            $root.ToUpperInvariant()
+        )
+        $names = @($spellings | ForEach-Object { Get-HostLockName -Kind 'tree' -Path $_ })
+        Assert-True (@($names | Select-Object -Unique).Count -eq 1) `
+            "one directory produced $(@($names | Select-Object -Unique).Count) different lock names: $($names -join ', ')"
+
+        $other = Get-HostLockName -Kind 'tree' -Path (Join-Path $root 'other')
+        Assert-True ($other -ne $names[0]) 'two different directories share one lock name'
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'two runs on one build tree contend, two build trees do not' {
+    # The A1 invariant, from both sides: the tree lock has to stop a second entry
+    # point on the SAME directory without serialising every independent tree on
+    # the machine for the duration of a test run.
+    $one = Join-Path ([IO.Path]::GetTempPath()) "host-lock-tests/$([guid]::NewGuid().ToString('n'))"
+    $two = Join-Path ([IO.Path]::GetTempPath()) "host-lock-tests/$([guid]::NewGuid().ToString('n'))"
+    New-Item -ItemType Directory -Path $one -Force | Out-Null
+    New-Item -ItemType Directory -Path $two -Force | Out-Null
+
+    $foreign = Start-ForeignHolder -Kind 'tree' -Path $one
+    try {
+        Assert-True (Test-HostLockHeld -Kind 'tree' -Path $one) 'a held tree lock looked free'
+        Assert-True (-not (Test-HostLockHeld -Kind 'tree' -Path $two)) 'an unrelated build tree looked locked'
+
+        $threw = $false
+        try { Enter-HostLock -Kind 'tree' -Path $one -Timeout ([TimeSpan]::FromMilliseconds(300)) | Out-Null }
+        catch { $threw = $true }
+        Assert-True $threw 'a second holder took the tree lock of a tree another run owns'
+
+        $lock = Enter-HostLock -Kind 'tree' -Path $two -Timeout ([TimeSpan]::FromSeconds(5))
+        try { Assert-True (-not $lock.Waited) 'an independent build tree waited on an unrelated one' }
+        finally { Exit-HostLock -Lock $lock }
+    }
+    finally {
+        Stop-ForeignHolder -Holder $foreign
+        Remove-Item -LiteralPath $one -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $two -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case 'the tree inheritance mark excuses the tree it was taken for and no other' {
+    # A blanket per-kind mark would let a delegated child skip the lock on a
+    # DIFFERENT build tree -- which is a second unlocked writer, exactly what the
+    # lock exists to stop.
+    $held = Join-Path ([IO.Path]::GetTempPath()) "host-lock-tests/$([guid]::NewGuid().ToString('n'))"
+    $other = Join-Path ([IO.Path]::GetTempPath()) "host-lock-tests/$([guid]::NewGuid().ToString('n'))"
+    New-Item -ItemType Directory -Path $held -Force | Out-Null
+    New-Item -ItemType Directory -Path $other -Force | Out-Null
+
+    $lock = Enter-HostLock -Kind 'tree' -Path $held -Timeout ([TimeSpan]::FromSeconds(5))
+    try {
+        Assert-True (Test-HostLockInherited -Kind 'tree' -Path $held) 'the holder did not mark the tree for its children'
+        Assert-True (-not (Test-HostLockInherited -Kind 'tree' -Path $other)) `
+            'holding one build tree excused a child from locking a different one'
+
+        $module = (Join-Path $scriptRoot 'lib/HostResourceLock.psm1') -replace '\\', '/'
+        $body = "Import-Module '$module' -Force; " +
+            "`$a = Enter-HostLock -Kind 'tree' -Path '$($held -replace '\\', '/')' -Timeout ([TimeSpan]::FromMilliseconds(500)); " +
+            "`$b = Enter-HostLock -Kind 'tree' -Path '$($other -replace '\\', '/')' -Timeout ([TimeSpan]::FromMilliseconds(500)); " +
+            "if (`$a.Inherited -and -not `$b.Inherited) { exit 0 } else { exit 4 }"
+        $child = Start-Process -FilePath 'pwsh' -PassThru -Wait -WindowStyle Hidden `
+            -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $body)
+        Assert-True ($child.ExitCode -eq 0) `
+            "the delegated child did not distinguish the two trees (exit $($child.ExitCode))"
+    }
+    finally {
+        Exit-HostLock -Lock $lock
+        Remove-Item -LiteralPath $held -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $other -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Assert-True (-not (Test-HostLockInherited -Kind 'tree' -Path $held)) 'the tree mark outlived the hold'
+}
+
+Test-Case 'a host-wide lock refuses a path and a tree lock refuses to do without one' {
+    # Both mistakes are silent if they are tolerated: a path passed to the build
+    # lock would read as protection that is not there, and a tree lock without a
+    # path would be one global lock under a per-tree name.
+    $threw = $false
+    try { Get-HostLockName -Kind 'build' -Path 'C:/some/tree' | Out-Null } catch { $threw = $true }
+    Assert-True $threw 'the host-wide build lock accepted a build directory'
+
+    $threw = $false
+    try { Get-HostLockName -Kind 'tree' | Out-Null } catch { $threw = $true }
+    Assert-True $threw 'a tree lock was named without the tree it protects'
+}
+
+Test-Case 'the lock deadline can be bounded from the environment' {
+    # What lets a contention test assert the refusal in seconds. A real run sets
+    # nothing and waits the full default.
+    Assert-True ((Get-HostLockTimeout -Override '').TotalMinutes -eq 30) 'the unset default is not 30 minutes'
+    Assert-True ((Get-HostLockTimeout -Override '2.5').TotalSeconds -eq 2.5) 'a positive override was ignored'
+    Assert-True ((Get-HostLockTimeout -Override '0').TotalMinutes -eq 30) 'zero was not treated as unset'
+    Assert-True ((Get-HostLockTimeout -Override 'soon').TotalMinutes -eq 30) 'an unparseable value was not treated as unset'
 }
 
 Test-Case 'a holder that died releases the lock to the next run' {

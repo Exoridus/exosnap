@@ -15,13 +15,29 @@
     one. This is the layer above it: a named lock on the host, held for the duration
     of one heavy step, so a second run of the same kind waits instead of competing.
 
-    Two locks, because the contention is different:
+    Three lock kinds, because the contention is different:
 
-      build   compiler processes. One build at a time on the host; the parallelism
-              inside it is the build's own business.
+      tree    ONE build directory. Whoever holds it is the only cooperating entry
+              point that may configure, build or judge that tree. Bound to the
+              canonical path, so two independent build trees do not wait for each
+              other. This is the lock that makes a test result evidence: a second
+              entry point that rebuilt the tree between the build and the receipt
+              would leave a result describing binaries nobody can name.
+      build   compiler processes, host-wide. One build at a time on the host; the
+              parallelism inside it is the build's own business. It bounds the
+              machine, not the correctness of a result.
       device  the GPU and the interactive desktop. One test run, one live check or
               one VM campaign at a time -- a GPU test and a recording soak running
               together share an encoder neither of them measures.
+
+    LOCK ORDER, where a step needs more than one: tree, then build, then device.
+    Every caller acquires in that order and releases in reverse, so no two holders
+    can wait on each other. Nothing may take `build` or `device` and then ask for
+    `tree`.
+
+    What the tree lock does NOT cover: a bare `cmake --build` typed into a shell, or
+    any tool that does not use this module. The protection is a protocol between the
+    repository's own entry points, not enforcement by the filesystem.
 
     A lock is a named Mutex in the Global namespace, so it is seen across sessions
     and released by the operating system if its holder dies -- a crashed build does
@@ -33,6 +49,9 @@
     itself forever. The holder therefore marks the environment, and a child that
     finds the mark runs under its parent's hold instead of taking one of its own --
     the parent has the device, and the child is part of what it is doing with it.
+
+    The tree marker is per tree, not per kind: a child that inherited the hold on one
+    build directory is not thereby excused from locking a different one.
 #>
 
 Set-StrictMode -Version Latest
@@ -59,25 +78,90 @@ $script:InheritVariables = @{
     device = 'EXOSNAP_HOST_LOCK_DEVICE'
 }
 
+function Get-HostLockTreeKey {
+    <#
+    .SYNOPSIS
+        The identity of one build tree: a short digest of its canonical path.
+    .DESCRIPTION
+        The directory need not exist yet -- a configure run creates it, and it has to
+        be locked before it does. Case is folded because the paths compared here are
+        Windows paths, where two spellings of one directory are one resource.
+    #>
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [string] $Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { throw 'a tree lock needs the build directory it protects' }
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd([char]'\', [char]'/').ToLowerInvariant()
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($full)))
+    }
+    finally { $sha.Dispose() }
+    return $digest.Replace('-', '').Substring(0, 16).ToLowerInvariant()
+}
+
+function Get-HostLockName {
+    <#
+    .SYNOPSIS
+        The operating-system name of one host lock. A tree lock needs its build directory.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [ValidateSet('build', 'device', 'tree')] [string] $Kind,
+        [string] $Path
+    )
+    if ($Kind -eq 'tree') { return "Global\$script:Namespace.Tree.$(Get-HostLockTreeKey -Path $Path)" }
+    if (-not [string]::IsNullOrWhiteSpace($Path)) { throw "the '$Kind' lock is host-wide and takes no path" }
+    return $script:LockNames[$Kind]
+}
+
+function Get-HostLockInheritVariable {
+    <#
+    .SYNOPSIS
+        The environment variable a holder sets so its own children recognise its hold.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [ValidateSet('build', 'device', 'tree')] [string] $Kind,
+        [string] $Path
+    )
+    if ($Kind -eq 'tree') { return "EXOSNAP_HOST_LOCK_TREE_$(Get-HostLockTreeKey -Path $Path)" }
+    return $script:InheritVariables[$Kind]
+}
+
+function Get-HostLockTimeout {
+    <#
+    .SYNOPSIS
+        How long a caller waits for a lock before giving up.
+    .DESCRIPTION
+        EXOSNAP_HOST_LOCK_TIMEOUT_SECONDS, when set and positive, wins. It exists so a
+        contention test can assert the refusal in seconds instead of half an hour; a
+        real run has no reason to set it.
+    #>
+    [OutputType([TimeSpan])]
+    param([string] $Override = $env:EXOSNAP_HOST_LOCK_TIMEOUT_SECONDS)
+    $parsed = 0.0
+    if (-not [string]::IsNullOrWhiteSpace($Override) -and
+        [double]::TryParse($Override, [Globalization.NumberStyles]::Float,
+            [Globalization.CultureInfo]::InvariantCulture, [ref]$parsed) -and $parsed -gt 0) {
+        return [TimeSpan]::FromSeconds($parsed)
+    }
+    return [TimeSpan]::FromMinutes(30)
+}
+
 function Test-HostLockInherited {
     <#
     .SYNOPSIS
         Whether a process above this one already holds a host lock for it.
     #>
     [OutputType([bool])]
-    param([Parameter(Mandatory)] [ValidateSet('build', 'device')] [string] $Kind)
-    $value = [Environment]::GetEnvironmentVariable($script:InheritVariables[$Kind])
+    param(
+        [Parameter(Mandatory)] [ValidateSet('build', 'device', 'tree')] [string] $Kind,
+        [string] $Path
+    )
+    $value = [Environment]::GetEnvironmentVariable((Get-HostLockInheritVariable -Kind $Kind -Path $Path))
     return -not [string]::IsNullOrWhiteSpace($value)
-}
-
-function Get-HostLockName {
-    <#
-    .SYNOPSIS
-        The operating-system name of one host lock.
-    #>
-    [OutputType([string])]
-    param([Parameter(Mandatory)] [ValidateSet('build', 'device')] [string] $Kind)
-    return $script:LockNames[$Kind]
 }
 
 function Enter-HostLock {
@@ -94,25 +178,33 @@ function Enter-HostLock {
         instead of looking slow.
     #>
     param(
-        [Parameter(Mandatory)] [ValidateSet('build', 'device')] [string] $Kind,
-        [TimeSpan] $Timeout = [TimeSpan]::FromMinutes(30),
+        [Parameter(Mandatory)] [ValidateSet('build', 'device', 'tree')] [string] $Kind,
+        # The build directory a 'tree' lock protects. Rejected for the other kinds.
+        [string] $Path,
+        [TimeSpan] $Timeout = [TimeSpan]::Zero,
         # Who is waiting, for the message. A hook names its worktree; a campaign its run id.
         [string] $Holder = "$PID"
     )
+    if ($Timeout -eq [TimeSpan]::Zero) { $Timeout = Get-HostLockTimeout }
+    $name = Get-HostLockName -Kind $Kind -Path $Path
+    $inheritVariable = Get-HostLockInheritVariable -Kind $Kind -Path $Path
+
     # Already held above this process: this run is part of what the holder is
     # doing with the resource, and waiting on it would be waiting on ourselves.
-    if (Test-HostLockInherited -Kind $Kind) {
+    if (Test-HostLockInherited -Kind $Kind -Path $Path) {
         return [pscustomobject]@{
-            Kind      = $Kind
-            Holder    = $Holder
-            Mutex     = $null
-            Inherited = $true
-            WaitedFor = [TimeSpan]::Zero
-            Waited    = $false
+            Kind            = $Kind
+            Path            = $Path
+            Holder          = $Holder
+            Mutex           = $null
+            InheritVariable = $inheritVariable
+            Inherited       = $true
+            WaitedFor       = [TimeSpan]::Zero
+            Waited          = $false
         }
     }
 
-    $mutex = [System.Threading.Mutex]::new($false, (Get-HostLockName -Kind $Kind))
+    $mutex = [System.Threading.Mutex]::new($false, $name)
     $started = [DateTime]::UtcNow
     $acquired = $false
     try {
@@ -127,22 +219,25 @@ function Enter-HostLock {
 
     if (-not $acquired) {
         $mutex.Dispose()
+        $contended = if ($Kind -eq 'tree') { "build tree '$Path'" } else { "$Kind step on this machine" }
         throw ("host lock '$Kind' is held by another run and was not released within " +
-            "$([int]$Timeout.TotalSeconds) s; a second $Kind step on this machine would compete " +
-            "with it for the same cores or the same device")
+            "$([int]$Timeout.TotalSeconds) s; a second $contended would compete with it " +
+            'for the same cores, the same device or the same binaries')
     }
 
     # Mark it for the children started while it is held.
-    [Environment]::SetEnvironmentVariable($script:InheritVariables[$Kind], $Holder)
+    [Environment]::SetEnvironmentVariable($inheritVariable, $Holder)
 
     $waited = [DateTime]::UtcNow - $started
     return [pscustomobject]@{
-        Kind      = $Kind
-        Holder    = $Holder
-        Mutex     = $mutex
-        Inherited = $false
-        WaitedFor = $waited
-        Waited    = $waited -ge [TimeSpan]::FromSeconds(2)
+        Kind            = $Kind
+        Path            = $Path
+        Holder          = $Holder
+        Mutex           = $mutex
+        InheritVariable = $inheritVariable
+        Inherited       = $false
+        WaitedFor       = $waited
+        Waited          = $waited -ge [TimeSpan]::FromSeconds(2)
     }
 }
 
@@ -153,7 +248,7 @@ function Exit-HostLock {
     #>
     param([Parameter(Mandatory)] $Lock)
     if ($Lock.Inherited) { return }
-    [Environment]::SetEnvironmentVariable($script:InheritVariables[$Lock.Kind], $null)
+    [Environment]::SetEnvironmentVariable($Lock.InheritVariable, $null)
     try { $Lock.Mutex.ReleaseMutex() } catch [System.ApplicationException] { }
     $Lock.Mutex.Dispose()
 }
@@ -171,8 +266,11 @@ function Test-HostLockHeld {
         thread either, so the separate questioner is a child pwsh.
     #>
     [OutputType([bool])]
-    param([Parameter(Mandatory)] [ValidateSet('build', 'device')] [string] $Kind)
-    $name = Get-HostLockName -Kind $Kind
+    param(
+        [Parameter(Mandatory)] [ValidateSet('build', 'device', 'tree')] [string] $Kind,
+        [string] $Path
+    )
+    $name = Get-HostLockName -Kind $Kind -Path $Path
     $probe = @"
 `$m = [System.Threading.Mutex]::new(`$false, '$name')
 try {
@@ -193,15 +291,17 @@ function Invoke-WithHostLock {
         Runs a script block while holding one host lock, and always releases it.
     #>
     param(
-        [Parameter(Mandatory)] [ValidateSet('build', 'device')] [string] $Kind,
+        [Parameter(Mandatory)] [ValidateSet('build', 'device', 'tree')] [string] $Kind,
         [Parameter(Mandatory)] [scriptblock] $Body,
-        [TimeSpan] $Timeout = [TimeSpan]::FromMinutes(30),
+        [string] $Path,
+        [TimeSpan] $Timeout = [TimeSpan]::Zero,
         [string] $Holder = "$PID"
     )
-    $lock = Enter-HostLock -Kind $Kind -Timeout $Timeout -Holder $Holder
+    $lock = Enter-HostLock -Kind $Kind -Path $Path -Timeout $Timeout -Holder $Holder
     try {
         if ($lock.Waited) {
-            Write-Host ("  waited {0:0}s for the host {1} lock held by another run" -f $lock.WaitedFor.TotalSeconds, $Kind) `
+            $what = if ($Kind -eq 'tree') { "tree lock on $Path" } else { "host $Kind lock" }
+            Write-Host ("  waited {0:0}s for the {1} held by another run" -f $lock.WaitedFor.TotalSeconds, $what) `
                 -ForegroundColor DarkYellow
         }
         return & $Body
@@ -229,5 +329,6 @@ function Get-HostJobBudget {
     return [Math]::Max(1, [Environment]::ProcessorCount - 2)
 }
 
-Export-ModuleMember -Function Get-HostLockName, Enter-HostLock, Exit-HostLock, Test-HostLockHeld,
+Export-ModuleMember -Function Get-HostLockName, Get-HostLockTreeKey, Get-HostLockInheritVariable,
+    Get-HostLockTimeout, Enter-HostLock, Exit-HostLock, Test-HostLockHeld,
     Test-HostLockInherited, Invoke-WithHostLock, Get-HostJobBudget

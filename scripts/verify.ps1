@@ -177,6 +177,34 @@ function Initialize-CompilerEnvironment {
     Enter-MsvcEnvironment | Out-Null
 }
 
+function Invoke-BuildTreeStep {
+    <#
+    .SYNOPSIS
+        Runs one step that owns the build tree, under the host locks that keep it
+        to one holder at a time.
+    .DESCRIPTION
+        Configure, qmllint, build and the blocking clang-tidy all read or rewrite
+        the same directory, and run-tests.ps1 judges binaries out of it. Without a
+        lock bound to that directory, a gate in one worktree can regenerate or
+        relink the tree a test run in another is in the middle of measuring, and
+        neither of them notices: the host `build` lock does not help, because it
+        is a different lock from the `device` lock a test run holds.
+
+        Lock order is tree, then build -- the order every entry point in this
+        repository uses, so two holders can never wait on each other. -Compiler
+        adds the host build lock for the steps that start compiler processes.
+    #>
+    param(
+        [Parameter(Mandatory)] [scriptblock] $Body,
+        [switch] $Compiler
+    )
+    $treeRoot = Join-Path $repoRoot $buildDir
+    return Invoke-WithHostLock -Kind 'tree' -Path $treeRoot -Holder "verify $repoRoot" -Body {
+        if ($Compiler) { return Invoke-WithHostLock -Kind 'build' -Holder "verify $repoRoot" -Body $Body }
+        return & $Body
+    }
+}
+
 function Get-ClangTidyCacheDirectory {
     <#
     .SYNOPSIS
@@ -343,7 +371,7 @@ $realExecutor = {
             $tests = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'tests') -Filter '*.tests.ps1' -File |
                     Sort-Object Name)
 
-            # Seven of these suites are also CTest entries. CTest is the single
+            # Some of these suites are also CTest entries. CTest is the single
             # place they run from whenever this plan runs the suite unfiltered:
             # it is the only one that still reaches them when the pipeline itself
             # is broken, and running the orchestrator's own contracts from inside
@@ -371,15 +399,19 @@ $realExecutor = {
 
         'configure' {
             Initialize-CompilerEnvironment
-            return Invoke-Step -Name 'configure' -FilePath 'cmake' -Arguments @('--preset', $Preset) -ReportFirstError
+            return Invoke-BuildTreeStep -Compiler -Body {
+                Invoke-Step -Name 'configure' -FilePath 'cmake' -Arguments @('--preset', $Preset) -ReportFirstError
+            }
         }
 
         'qmllint' {
             # The CMake target, never a bare qmllint call: a hand-rolled invocation
             # on this repository reports resolution failures the target does not.
             Initialize-CompilerEnvironment
-            return Invoke-Step -Name 'qmllint' -FilePath 'cmake' `
-                -Arguments (@('--build', $buildDir, '--target', 'all_qmllint') + $jobsArg) -ReportFirstError
+            return Invoke-BuildTreeStep -Compiler -Body {
+                Invoke-Step -Name 'qmllint' -FilePath 'cmake' `
+                    -Arguments (@('--build', $buildDir, '--target', 'all_qmllint') + $jobsArg) -ReportFirstError
+            }
         }
 
         'build' {
@@ -387,11 +419,12 @@ $realExecutor = {
             # build directory does not reconfigure, and the compiler is needed
             # either way.
             #
-            # Under the host build lock: a second worktree's build waits for this
-            # one instead of doubling the compiler processes on the machine. The
-            # parallelism INSIDE the build is already bounded by the budget.
+            # Under the tree and build locks: a second worktree's build waits for
+            # this one instead of doubling the compiler processes on the machine,
+            # and nothing else rewrites this directory while a run-tests is
+            # judging it. The parallelism INSIDE the build is bounded by the budget.
             Initialize-CompilerEnvironment
-            return Invoke-WithHostLock -Kind 'build' -Holder "verify $repoRoot" -Body {
+            return Invoke-BuildTreeStep -Compiler -Body {
                 Invoke-Step -Name 'build' -FilePath 'cmake' `
                     -Arguments (@('--build', '--preset', $Preset) + $jobsArg) -ReportFirstError
             }
@@ -401,11 +434,11 @@ $realExecutor = {
             $testArgs = @('-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'run-tests.ps1'),
                 '-BuildDir', $buildDir, '-Config', $Config, '-Jobs', "$Jobs")
             if ($check.Evidence.filter) { $testArgs += @('-Filter', $check.Evidence.filter) }
-            # run-tests.ps1 takes the host device lock itself, so a bare ctest and a
-            # verify run contend the same way. Not taken here as well: a lock held
-            # twice by the same holder is just a lock, but a second run waiting on
-            # this one would wait on the outer hold for the whole test duration --
-            # which is the intended behaviour and the inner one is sufficient.
+            # No lock is taken here. run-tests.ps1 takes the tree lock for this
+            # build directory and the host device lock itself, for the whole span
+            # from its build to its receipt, so a bare ctest and a verify run
+            # contend the same way. Holding either one out here as well would only
+            # widen the span; the child's hold is what the result depends on.
             $outcome = Invoke-Step -Name 'tests' -FilePath 'pwsh' -Arguments $testArgs
             if ($outcome.Status -ne $status.Pass) {
                 $script:LastFailedTests = Get-FailedCTestName -LogPath $outcome.Evidence.log
@@ -482,8 +515,10 @@ $realExecutor = {
             if ($Jobs -gt 0) { $arguments += @('-Jobs', "$Jobs") }
             if ($check.Evidence.scope -ne 'whole-tree') { $arguments += @('-Base', $Base) }
             # Compiler processes again, so the build lock: clang-tidy at -j next to a
-            # build in another worktree is the same collision.
-            return Invoke-WithHostLock -Kind 'build' -Holder "verify $repoRoot" -Body {
+            # build in another worktree is the same collision. And the tree lock,
+            # because it analyses this tree's compile_commands.json: a database
+            # being rewritten by a concurrent configure is read as a broken one.
+            return Invoke-BuildTreeStep -Compiler -Body {
                 Invoke-Step -Name 'clang-tidy' -FilePath 'pwsh' -Arguments $arguments
             }
         }
