@@ -48,12 +48,15 @@ on:
 # guardrails. That is a cost gate, not a second policy; the difference that
 # matters is that this workflow does not listen for `edited`.
 #
-# Accepted trade-off: a semantic merge skew — two PRs that are each green alone
-# but broken together — is no longer caught by the main push itself. It surfaces
+# Accepted trade-off: a semantic merge skew -- two PRs that are each green alone
+# but broken together -- is no longer caught by the main push itself. It surfaces
 # on the next PR's build (which branches off the merged main) or on the nightly
-# advisory run, i.e. hours rather than minutes later. That is the same class of
-# delay any merge queue would introduce, and cheap next to running the full
-# suite twice for every change.
+# advisory run, i.e. hours rather than minutes later. A merge queue is not the
+# same trade: it would catch the skew, by testing each candidate against the
+# merge result before it lands, at the cost of serializing merges behind a full
+# suite run each. What is accepted here is later detection, not an equivalent
+# delay -- it is cheap while main is a low-traffic branch, and a merge queue is
+# the answer if that stops being true.
 #
 # The broad advisory static-analysis pass used to live here as
 # `advisory-unused-checks` and ran on every push to main. It now lives in

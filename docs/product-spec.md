@@ -745,7 +745,8 @@ AV1, or for a GPU whose probe reports no YUV444 encode support for the selected 
 shown. When the row is relevant but a 10-bit selection is the sole conflict — a choice the user can
 resolve right there by switching Bit depth back to 8-bit — the row stays visible with the 4:4:4 item
 disabled and an explanatory hint instead of hiding, and an invalid stored selection is reconciled back
-to 4:2:0. **4:2:2 remains unavailable** (the NVENC generation has no 4:2:2 path). While a recording
+to 4:2:0. **4:2:2 remains unavailable** — ExoSnap implements no 4:2:2 path, on any GPU, independently of what a
+given NVENC generation may expose. While a recording
 runs in **4:4:4**, the **live preview stays
 available** (it shares the composited RGB frame with the preview before the AYUV conversion — see
 the live-preview note in Section 7), and **frame snapshots stay available** as in 4:2:0: the
@@ -753,7 +754,10 @@ CaptureFrame hotkey reads back the packed AYUV encode surface and decodes it on 
 exact inverse of the encoder's RGB→AYUV conversion (same BT.709 matrix and Full/Limited range as
 the recording).
 
-**Color range and metadata.** **BT.709 color metadata** is written to every MKV and MP4 output. The
+**Color range and metadata.** A **complete color description** (primaries, transfer, matrix, range and
+bit depth) is written to every MKV and MP4 output, so no recording is color-ambiguous. For SDR output
+that description is **BT.709**; a native HDR10 recording carries its own **PQ / BT.2020** values
+instead (§HDR below). The
 **Y'CbCr color range** (Full or Limited) is selectable behind Expert mode and is valid for every
 codec/container combination (never gated), with **Limited** as the default. Because some players
 (notably VLC) ignore the range flag and always expand limited→full — making Full-range recordings

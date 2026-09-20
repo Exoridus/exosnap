@@ -251,8 +251,8 @@ bool Initialize(const CrashCaptureConfig& config) {
     // Disable log output in release; debug mode only in dev builds
     sentry_options_set_debug(options, config.debug_mode ? 1 : 0);
 
-    // Disable sentry's own logger to avoid log spam (CLAUDE.md: enable_logs(0))
-    // sentry_options_set_logger is not always available; rely on debug=0
+    // sentry_options_set_logger is not available across the supported SDK
+    // versions, so debug=0 above is what silences the SDK's own log output.
 
     // Before-send hook: scrub sensitive data
     sentry_options_set_before_send(options, BeforeSendHook, nullptr);

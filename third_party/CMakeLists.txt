@@ -373,6 +373,16 @@ if(EXOSNAP_WITH_PRESENTMON)
 endif()
 
 # ---------------------------------------------------------------------------
+# Vendored in-tree sources (libs/update/third_party) -- no FetchContent step,
+# so they are registered here rather than next to their add_library() call:
+# _exosnap_license_stage is scoped to this directory.
+# ---------------------------------------------------------------------------
+_exosnap_install_license("miniz 3.1.2 (MIT)"
+    "${CMAKE_SOURCE_DIR}/libs/update/third_party/miniz/LICENSE" "miniz.txt")
+_exosnap_install_license("Monocypher 4.0.2 (BSD-2-Clause OR CC0-1.0)"
+    "${CMAKE_SOURCE_DIR}/libs/update/third_party/monocypher/LICENSE" "monocypher.txt")
+
+# ---------------------------------------------------------------------------
 # Install all staged third-party license files into the install tree.
 # Each shipped dependency registered via _exosnap_install_license above.
 # ---------------------------------------------------------------------------

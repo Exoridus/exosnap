@@ -72,11 +72,7 @@ is subject to the following guarantees:
   they would pass the scrubber if a future change sets them) but are not populated by app code
   today. This table is kept in sync with the code by an automated check
   (`scripts/validate-privacy-allowlist.ps1`, see `docs/privacy-review.md`).
-- **What is not sent in the structured event.** Usernames, file paths (including your chosen output folder and
-  recording filenames), and machine name are stripped from the **structured event** before it
-  leaves the process. Breadcrumb logs are disabled (`enable_logs=0`). Recording content is never
-  captured. Recordings, output files, settings, presets and application logs are not crash-report
-  inputs.
+- **What is not sent in the structured event.** Usernames, file paths (including your chosen output folder and recording filenames), and machine name are stripped from the **structured event** before it leaves the process. ExoSnap never records breadcrumbs, and the scrubber removes the `breadcrumbs` field from every event before it leaves the process, so one cannot appear through a library default either. Recording content is never captured. Recordings, output files, settings, presets and application logs are not crash-report inputs.
 - **The minidump binary is a separate channel from the scrubbed event, and carries module
   paths.** A hard crash uploads (with consent) a Crashpad minidump out-of-process; the
   structured-event scrubber above does not run on it and cannot touch its binary contents. A

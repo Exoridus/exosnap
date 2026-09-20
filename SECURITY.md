@@ -28,15 +28,18 @@ You should receive an acknowledgement within 72 hours. If the issue is confirmed
 ## Scope
 
 Security reports are welcome for:
-- The ExoSnap application binary
-- The installer (MSI)
+- The ExoSnap application binary, and the separate updater executable shipped alongside it
+- Both distribution forms of a release: the MSI installer and the portable ZIP
+- The update path — the release feed the app reads, the signed update manifest, its ed25519 verification, and the file swap the updater performs
+- Crash reporting: the local minidump store, and what the consent-gated upload carries (see [PRIVACY.md](PRIVACY.md))
 - Build and packaging scripts that affect released artifacts
 
 Out of scope:
 - Issues that require physical access to a running session
 - Theoretical attacks with no practical exploit path
-- Third-party library vulnerabilities (please report those upstream)
 - Social engineering or phishing
+
+Third-party library vulnerabilities belong upstream first. Report them to us as well when the component is one ExoSnap ships — the vendored sources under `libs/update/third_party/`, or any dependency listed as bundled in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — since an upstream fix still needs a release here to reach users.
 
 ## Disclosure
 
