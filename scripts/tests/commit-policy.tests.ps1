@@ -232,6 +232,38 @@ Test-Case 'the pull request number is required only when asked for' {
     Assert-True (-not $required.Valid) 'a merge-time subject passed without its pull request number'
 }
 
+Test-Case 'a title carrying its own number is rejected, another number is not' {
+    $own = ConvertFrom-CommitSubject -Subject 'fix: bound the drains (#390)' -OwnPullRequest 390
+    Assert-True (-not $own.Valid) 'a title ending in its own number was accepted'
+    Assert-True ($own.Problem -match 'its own pull request number') "the problem did not name the cause: $($own.Problem)"
+
+    $other = ConvertFrom-CommitSubject -Subject 'fix: bound the drains (#370)' -OwnPullRequest 390
+    Assert-True $other.Valid "a trailing citation of another pull request was rejected: $($other.Problem)"
+
+    $none = ConvertFrom-CommitSubject -Subject 'fix: bound the drains' -OwnPullRequest 390
+    Assert-True $none.Valid "a title with no number at all was rejected: $($none.Problem)"
+}
+
+Test-Case 'the merge subject appends the number exactly once' {
+    $plain = ConvertFrom-CommitSubject -Subject 'fix(engine): bound the drains'
+    Assert-True ((Format-MergeSubject -Commit $plain -PullRequest 390) -eq 'fix(engine): bound the drains (#390)') `
+        'a title without a number did not gain exactly one'
+
+    # The title form this rejects at check time, reconstructed anyway: the helper
+    # is what makes ' (#390) (#390)' unreachable even if one slipped through.
+    $carried = ConvertFrom-CommitSubject -Subject 'fix(engine): bound the drains (#390)'
+    Assert-True ((Format-MergeSubject -Commit $carried -PullRequest 390) -eq 'fix(engine): bound the drains (#390)') `
+        'a title that already carried its number produced it twice'
+
+    $breaking = ConvertFrom-CommitSubject -Subject 'refactor(engine)!: one device generation contract'
+    Assert-True ((Format-MergeSubject -Commit $breaking -PullRequest 391) -eq 'refactor(engine)!: one device generation contract (#391)') `
+        'the scope or the breaking marker was lost'
+
+    $cited = ConvertFrom-CommitSubject -Subject 'fix: finish what (#370) started'
+    Assert-True ((Format-MergeSubject -Commit $cited -PullRequest 391) -eq 'fix: finish what (#370) started (#391)') `
+        'a citation of another pull request did not survive the merge subject'
+}
+
 Test-Case 'an entry links its pull request and marks breaking changes' {
     $parsed = ConvertFrom-CommitSubject -Subject 'feat(ui)!: one settings surface (#392)'
     $line = Format-ChangelogEntry -Commit $parsed -RepositoryUrl 'https://example.invalid/r'
@@ -308,13 +340,37 @@ Test-Case 'a repository without the policy commit has nothing in scope' {
     finally { Remove-Fixture $root }
 }
 
-Test-Case 'a single subject is checked with its pull request number required' {
+Test-Case 'a pull request title is accepted without a number and rejected with its own' {
     $root = New-FixtureRepo -WithPolicy
     try {
-        $accepted = Invoke-PolicyCheck -Root $root -ExtraArgs @('-Subject', 'fix(engine): bound the drains (#390)')
-        Assert-True ($accepted.ExitCode -eq 0) "a well-formed title was rejected:`n$($accepted.Output)"
-        $rejected = Invoke-PolicyCheck -Root $root -ExtraArgs @('-Subject', 'fix(engine): bound the drains')
-        Assert-True ($rejected.ExitCode -ne 0) "a title without its number was accepted:`n$($rejected.Output)"
+        $accepted = Invoke-PolicyCheck -Root $root -ExtraArgs @(
+            '-Subject', 'fix(engine): bound the drains', '-PullRequestNumber', '390')
+        Assert-True ($accepted.ExitCode -eq 0) "a title without its number was rejected:`n$($accepted.Output)"
+
+        $rejected = Invoke-PolicyCheck -Root $root -ExtraArgs @(
+            '-Subject', 'fix(engine): bound the drains (#390)', '-PullRequestNumber', '390')
+        Assert-True ($rejected.ExitCode -ne 0) "a title carrying its own number was accepted:`n$($rejected.Output)"
+        Assert-True ($rejected.Output -match 'its own pull request number') "the reason was not stated:`n$($rejected.Output)"
+
+        # The number is what the squash merge appends. A title citing ANOTHER
+        # pull request at the end is a different statement and has to survive.
+        $cited = Invoke-PolicyCheck -Root $root -ExtraArgs @(
+            '-Subject', 'fix(engine): finish what (#370) started', '-PullRequestNumber', '390')
+        Assert-True ($cited.ExitCode -eq 0) "a citation of another pull request was rejected:`n$($cited.Output)"
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a merged subject still has to carry exactly one number' {
+    $root = New-FixtureRepo -WithPolicy
+    try {
+        $accepted = Invoke-PolicyCheck -Root $root -ExtraArgs @(
+            '-Subject', 'fix(engine): bound the drains (#390)', '-RequirePullRequest')
+        Assert-True ($accepted.ExitCode -eq 0) "a well-formed merged subject was rejected:`n$($accepted.Output)"
+
+        $rejected = Invoke-PolicyCheck -Root $root -ExtraArgs @(
+            '-Subject', 'fix(engine): bound the drains', '-RequirePullRequest')
+        Assert-True ($rejected.ExitCode -ne 0) "a merged subject without its number was accepted:`n$($rejected.Output)"
     }
     finally { Remove-Fixture $root }
 }

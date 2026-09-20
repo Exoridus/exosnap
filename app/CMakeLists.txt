@@ -1526,6 +1526,15 @@ if(EXOSNAP_PWSH)
     set_tests_properties(pipeline.commit_policy PROPERTIES TIMEOUT 300 LABELS "pipeline")
     exosnap_set_test_phase(pipeline.commit_policy hermetic)
 
+    # A cost contract, not a code one: that a pull request title correction
+    # cannot re-trigger the Windows build matrix, and that the metadata verdict
+    # is not the same status context as the code verdict.
+    add_test(NAME pipeline.pr_workflow_contract
+        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
+            "${PROJECT_SOURCE_DIR}/scripts/tests/pr-workflow-contract.tests.ps1")
+    set_tests_properties(pipeline.pr_workflow_contract PROPERTIES TIMEOUT 120 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.pr_workflow_contract hermetic)
+
     add_test(NAME pipeline.prose_lines
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/prose-lines.tests.ps1")

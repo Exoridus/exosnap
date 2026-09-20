@@ -33,17 +33,34 @@ pwsh scripts/run-tests.ps1 -Filter recorder_core.   # one binary
 3. Business and product policy stays in C++. QML owns presentation, layout, and interaction only.
 4. Add or update focused tests for what you changed. `scripts/run-tests.ps1` is the entry point.
 5. Run `pwsh scripts/verify.ps1 -Fast` while iterating and `pwsh scripts/verify.ps1 -Full` before pushing. The git hooks use the same entry point; CI runs the full gate again.
-6. Open a pull request against `main`. Describe what changed, what validates it, and any spec or ADR updates the change required.
+6. Open a pull request against `main` with `scripts/open-pr.ps1`. Describe what changed, what validates it, and any spec or ADR updates the change required.
 
 ## Commit subjects and pull request descriptions
 
 A commit is its Conventional Commits subject: `type(scope): summary`, in English and the imperative mood. The accepted types are `feat`, `fix`, `perf`, `refactor`, `docs`, `ci`, `build`, `test`, `chore` and `style`. A breaking change is marked with `!` before the colon — `refactor(engine)!: ...`.
 
-The repository squash-merges with the pull request title alone, so a merged commit has no body at all, and the squash appends the pull request number: `fix(engine): bound the capture drains (#390)`. Everything the changelog and the release notes ever read comes from that one line. A `BREAKING CHANGE:` footer would have nowhere to survive the squash, which is why the `!` is the marking that counts.
+The repository squash-merges with the pull request title alone, so a merged commit has no body at all, and the merge appends the pull request number: `fix(engine): bound the capture drains (#390)`. Everything the changelog and the release notes ever read comes from that one line. A `BREAKING CHANGE:` footer would have nowhere to survive the squash, which is why the `!` is the marking that counts.
+
+The same subject line passes through three points, and the number belongs to exactly one of them:
+
+| | Form | Number |
+|---|---|---|
+| Local commit | `type(scope): summary` | none |
+| Pull request title | `type(scope): summary` | none |
+| Merged subject on `main` | `type(scope): summary (#N)` | exactly one, appended by `scripts/merge-pr.ps1` |
+
+A title that already ends in its own number is rejected, because the append would land it twice. A citation of a *different* pull request inside the summary — "finish what (#370) started" — is untouched.
 
 A body on a local commit is optional and short. The reasoning belongs in the pull request description — what changed, why, what measured it, what a breaking change breaks and what to do about it. The changelog links to the pull request, so nothing needs saying twice.
 
-`scripts/check-commit-policy.ps1` checks the subjects this branch adds. It applies from the commit that introduced the policy onward; history behind that point was written under different rules and is left alone. The pull request number is not required on a local commit — it does not exist until the pull request is opened — and is checked at merge time against the pull request title instead.
+`scripts/check-commit-policy.ps1` checks the subjects this branch adds. It applies from the commit that introduced the policy onward; history behind that point was written under different rules and is left alone. The pull request title is checked separately, by `.github/workflows/pr-policy.yml`, which is a workflow of its own so that correcting a title costs seconds rather than a full Windows build.
+
+## Opening and merging a pull request
+
+Two scripts own this, and neither the title nor the merge subject is assembled by hand:
+
+- `scripts/open-pr.ps1` derives the title from the branch's newest commit subject (or takes `-Subject`), validates it against the same parser the changelog cut reads, creates the pull request as a draft, reads its stored metadata back, and only then marks it ready for review. A draft does not start the heavy Windows legs, so a title that has to be fixed is fixed before anything expensive runs.
+- `scripts/merge-pr.ps1` builds the merged subject as `title (#N)` from the *parsed* title and passes it with `--subject`, so the number cannot land twice. It prints the subject and merges nothing unless `-Confirm` is given — and it is only ever given when the merge was explicitly asked for.
 
 No machine paths, private workspace references, or agent and session history in commit messages, pull request descriptions, or source comments.
 

@@ -1,0 +1,70 @@
+name: pr-policy
+
+# Pull request METADATA only: the title, which is the subject the squash merge
+# lands on main and the only line the changelog cut will ever read.
+#
+# This is a workflow of its own rather than a job in ci.yml for one reason. The
+# title is not part of the tree, so a title correction is not a push, and the
+# check that reads it has to be re-triggered by `edited`. While that trigger sat
+# on ci.yml, every title correction re-ran the full Windows build and test
+# matrix -- roughly 50 minutes of runner time to re-decide a string. Here the
+# same event costs about twenty seconds, and ci.yml no longer listens for it.
+#
+# The two must stay separate CONTEXTS as well as separate workflows: a shared
+# required context would let a green metadata run stand in for a code run that
+# failed, which is the opposite of what splitting them is for.
+on:
+  pull_request:
+    types: [opened, reopened, edited, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-policy:
+    name: pr-policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: pr-policy-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Pull request title
+        # The title carries NO pull request number: the number does not exist
+        # until the pull request is opened, and scripts/merge-pr.ps1 appends it
+        # exactly once at the squash. Requiring it here would mean a second edit
+        # of the title on every pull request -- the edit this workflow exists to
+        # stop being expensive.
+        #
+        # The number is passed so a title that DID end in its own number is
+        # rejected. A citation of another pull request inside the summary is not
+        # affected; that distinction is the parser's, in scripts/lib/CommitPolicy.psm1.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: >-
+          pwsh -NonInteractive -File scripts/check-commit-policy.ps1
+          -Subject "$PR_TITLE" -PullRequestNumber "$PR_NUMBER" -Only commit-subject
+
+  # Single aggregate context, so the required-check set does not have to change
+  # when a second metadata check is added here. Same shape as ci-required.
+  pr-policy-required:
+    name: pr-policy-required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs: [pr-policy]
+    steps:
+      - name: Evaluate the required set
+        env:
+          R_PR_POLICY: ${{ needs.pr-policy.result }}
+        run: |
+          set -euo pipefail
+          if [ "$R_PR_POLICY" != "success" ]; then
+            echo "FAILED   pr-policy: result=$R_PR_POLICY"
+            echo "::error::The pull request metadata check did not pass."
+            exit 1
+          fi
+          echo "ok       pr-policy"

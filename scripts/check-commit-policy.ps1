@@ -21,11 +21,21 @@
     where the module is not committed yet has nothing in scope at all, which is
     the honest answer during the change that introduces it -- not a pass.
 
-    The trailing pull request number is NOT required of a local commit. It is appended by
-    the squash merge from the pull request title, so requiring it locally would
-    demand a number that does not exist until the pull request is opened. What
-    is checked at merge time is the pull request title, by the CI job that reads
-    it; `-RequirePullRequest` is that mode.
+    One subject line, three points in its life, and the trailing pull request
+    number belongs to exactly one of them:
+
+      local commit         type(scope): summary            no number
+      pull request title   type(scope): summary            no number
+      merged subject       type(scope): summary (#N)       exactly one number
+
+    The number does not exist until the pull request is opened, and the squash
+    merge appends it unconditionally, so requiring it of the title would demand
+    a value that has to be filled in after creation -- which is a second edit of
+    the title for every pull request, and the reason a title correction used to
+    rerun the whole Windows build. `-PullRequestNumber` is the title mode: it
+    rejects a title that already carries its own number, and leaves a citation of
+    another pull request alone. `-RequirePullRequest` is the merged-subject mode,
+    for checking a line that is already on main.
 
 .PARAMETER RepoRoot
     Repository to check. Defaults to the repository this script lives in.
@@ -34,9 +44,15 @@
     Commit to diff and log against. Defaults to the merge base with origin/main.
 
 .PARAMETER Subject
-    Check this single subject instead of the branch's commits, and require the
-    pull request number. This is the merge-time form: CI passes the pull request
-    title.
+    Check this single subject instead of the branch's commits.
+
+.PARAMETER PullRequestNumber
+    The number of the pull request `-Subject` is the title of. Rejects a title
+    that already ends in that number.
+
+.PARAMETER RequirePullRequest
+    Require `-Subject` to end in a pull request number. The merged-subject mode;
+    not for a title.
 
 .PARAMETER Only
     Restrict the run to the named rules.
@@ -45,13 +61,15 @@
     .\scripts\check-commit-policy.ps1
 
 .EXAMPLE
-    .\scripts\check-commit-policy.ps1 -Subject (gh pr view --json title --jq .title)
+    .\scripts\check-commit-policy.ps1 -Subject 'fix(ci): split the title check out' -PullRequestNumber 400
 #>
 
 param(
     [string] $RepoRoot,
     [string] $Base,
     [string] $Subject,
+    [int] $PullRequestNumber = 0,
+    [switch] $RequirePullRequest,
     [string[]] $Only = @()
 )
 
@@ -110,7 +128,8 @@ function Test-RuleEnabled {
 
 if (Test-RuleEnabled 'commit-subject') {
     if ($Subject) {
-        $parsed = ConvertFrom-CommitSubject -Subject $Subject -RequirePullRequest
+        $parsed = ConvertFrom-CommitSubject -Subject $Subject `
+            -RequirePullRequest:$RequirePullRequest -OwnPullRequest $PullRequestNumber
         if (-not $parsed.Valid) {
             [void]$violations.Add("commit-subject: '$Subject' -- $($parsed.Problem)")
         }

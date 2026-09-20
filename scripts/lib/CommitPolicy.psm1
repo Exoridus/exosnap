@@ -81,13 +81,23 @@ function ConvertFrom-CommitSubject {
         The commit subject line, or a pull request title.
 
     .PARAMETER RequirePullRequest
-        Treat a missing trailing pull request number as a violation. Off for a
-        pull request title, written before the squash appends the number.
+        Treat a missing trailing pull request number as a violation. This is the
+        merged-subject form -- the line that is already on main. A pull request
+        TITLE never carries the number: it is written before the number exists,
+        and the squash merge appends it.
+
+    .PARAMETER OwnPullRequest
+        The number of the pull request this subject is the title of. A title that
+        already ends in that number is a violation, because the squash append is
+        unconditional and would land it twice. A trailing number that cites a
+        DIFFERENT pull request is left alone; so is a citation anywhere but at
+        the end.
     #>
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)] [AllowEmptyString()] [string] $Subject,
-        [switch] $RequirePullRequest
+        [switch] $RequirePullRequest,
+        [int] $OwnPullRequest = 0
     )
 
     $result = [pscustomobject]@{
@@ -144,6 +154,11 @@ function ConvertFrom-CommitSubject {
         return $result
     }
 
+    if ($OwnPullRequest -and $result.PullRequest -eq $OwnPullRequest) {
+        $result.Problem = "the title ends in its own pull request number (#$OwnPullRequest); the squash merge appends it, so leave it off"
+        return $result
+    }
+
     if ($RequirePullRequest -and -not $result.PullRequest) {
         $result.Problem = 'the subject does not end in its pull request number, in parentheses after the summary'
         return $result
@@ -154,6 +169,35 @@ function ConvertFrom-CommitSubject {
     $result.Section = if ($result.Breaking) { 'Changed' } else { $script:TypeSection[$type] }
     $result.Valid = $true
     return $result
+}
+
+function Format-MergeSubject {
+    <#
+    .SYNOPSIS
+        The subject a squash merge lands on main: the title with its pull request
+        number appended exactly once.
+
+    .DESCRIPTION
+        Rebuilt from the PARSED fields rather than by concatenating onto the raw
+        title. That is the one form in which the number cannot arrive twice: the
+        parser has already split any trailing number off the summary, so a title
+        that carried its own number produces the same line as one that did not.
+
+    .PARAMETER Commit
+        A ConvertFrom-CommitSubject result with Valid = $true.
+
+    .PARAMETER PullRequest
+        The number to append.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [pscustomobject] $Commit,
+        [Parameter(Mandatory)] [int] $PullRequest
+    )
+
+    $scope = if ($Commit.Scope) { "($($Commit.Scope))" } else { '' }
+    $breaking = if ($Commit.Breaking) { '!' } else { '' }
+    return "$($Commit.Type)$scope$breaking" + ': ' + "$($Commit.Summary) (#$PullRequest)"
 }
 
 function Format-ChangelogEntry {
@@ -190,4 +234,4 @@ function Format-ChangelogEntry {
 }
 
 Export-ModuleMember -Function Get-CommitPolicyType, Get-CommitPolicySectionOrder,
-ConvertFrom-CommitSubject, Format-ChangelogEntry
+ConvertFrom-CommitSubject, Format-MergeSubject, Format-ChangelogEntry

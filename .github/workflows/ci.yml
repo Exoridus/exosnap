@@ -7,12 +7,13 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-  # `edited` is needed on top of the defaults because the guardrails job checks the
-  # pull request TITLE, which is the subject the squash merge lands on main. A title
-  # correction is not a push, so without this the check keeps the verdict it reached
-  # on the old title, and a rerun replays the same stale event payload.
+  # Deliberately NOT `edited`. This workflow decides things about the TREE, and a
+  # title or description edit does not change the tree -- it used to trigger the
+  # full Windows build and test matrix because the pull request title check lived
+  # in the guardrails job below. That check now lives in .github/workflows/pr-policy.yml,
+  # which is where `edited` belongs and where it costs seconds.
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 # ---------------------------------------------------------------------------
@@ -35,6 +36,17 @@ on:
 #   push → v* tag     everything except the packaging smoke, with the Release
 #                     test suite included                   (release gate)
 #   workflow_dispatch everything except the packaging smoke (manual full run)
+#
+# The AUTHORITATIVE verdict on pull request METADATA -- the title, which is the
+# subject the squash merge lands on main -- is NOT this workflow's. It lives in
+# .github/workflows/pr-policy.yml under its own `pr-policy-required` context,
+# because the title is the one input that changes without a push and would
+# otherwise re-run this whole matrix for a string.
+#
+# The guardrails job below still runs the same check as a PREFLIGHT, because the
+# two workflows cannot wait on each other and the Windows legs hang off
+# guardrails. That is a cost gate, not a second policy; the difference that
+# matters is that this workflow does not listen for `edited`.
 #
 # Accepted trade-off: a semantic merge skew — two PRs that are each green alone
 # but broken together — is no longer caught by the main push itself. It surfaces
@@ -221,15 +233,27 @@ jobs:
         continue-on-error: true
         run: pwsh -NonInteractive -File scripts/check-source-hygiene.ps1 -All
 
-      - name: Pull request title
-        # The title, not the branch's commits: this repository squash-merges
-        # with the title alone, so the title IS the commit that lands on main
-        # and the only line the changelog cut will ever read. A well-formed
-        # branch behind a malformed title still produces an unfilable entry.
+      - name: Pull request title (preflight)
+        # The AUTHORITATIVE verdict on the title is pr-policy.yml's, under its own
+        # required context; this step is a cost gate, and the two are not the same
+        # job. The two workflows cannot wait on each other -- there is no
+        # cross-workflow `needs:` -- so without this step a malformed title opened
+        # in a brand-new pull request would fail in pr-policy.yml within seconds
+        # while the Windows legs, which hang off this job, started anyway. Only
+        # the SECOND heavy run (the one after the title correction) would have
+        # been saved, and the first one is the expensive one.
+        #
+        # Not a second implementation of the policy: the same script, the same
+        # arguments, the same parser. What this workflow must NOT have is the
+        # `edited` trigger that would re-run everything below when the title
+        # changes -- see this file's `on:` block.
         if: github.event_name == 'pull_request'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
-        run: pwsh -NonInteractive -File scripts/check-commit-policy.ps1 -Subject "$PR_TITLE"
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: >-
+          pwsh -NonInteractive -File scripts/check-commit-policy.ps1
+          -Subject "$PR_TITLE" -PullRequestNumber "$PR_NUMBER" -Only commit-subject
 
       - name: Prose line lengths over the PR range (advisory)
         # Advisory for the same reason the source-hygiene backlog is: the tree
@@ -471,8 +495,16 @@ jobs:
     #   workflow_dispatch -> second clause
     #   push, refs/tags/v* -> third clause  (release gate: full suite)
     #   push, refs/heads/main -> no clause matches -> skipped
-    # This job has no `needs:`, so there is no skipped-dependency interaction to
-    # worry about here — the condition is the only gate.
+    #
+    # `needs: guardrails` is a cost gate, not a correctness one. guardrails runs
+    # in well under a minute on ubuntu and blocks on things a compiler cannot
+    # see (drift, source hygiene, actionlint, zizmor); without the dependency a
+    # branch that trips one of them still spends ~15 min of Windows runner time
+    # proving a build nobody will merge. A job-level `if:` that names no status
+    # function carries an implicit success() over `needs`, so a failed guardrails
+    # skips this job — and ci-required reads that skip as a failure, because a
+    # pull request is not an event where this leg is allowed to skip.
+    needs: guardrails
     if: >-
       github.event_name == 'pull_request' ||
       github.event_name == 'workflow_dispatch' ||
@@ -606,7 +638,8 @@ jobs:
     # Measured over the last 20 runs: median 7 min at a 98 % sccache hit rate,
     # worst 34 min on a cold cache. About 2x that worst case.
     timeout-minutes: 60
-    needs: changes
+    # guardrails for the same cost reason as build-test-debug; see the comment there.
+    needs: [changes, guardrails]
     # PR-CI tiering: this leg proves the Release configure/build/link still
     # works, so on a PR it runs when the `changes` job flags a C++/build/
     # packaging/tooling-relevant path (see the `changes` job above for the
