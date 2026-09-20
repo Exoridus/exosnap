@@ -198,22 +198,40 @@ public sealed class NotificationSeverityGateTests
             "REL-VIS-NOTIFY-001",
             fakes =>
             {
-                // Empty through the baseline read and the whole first wait; the raised
-                // one only shows up once the second wait starts.
+                // Exactly three reads, and which wait each one falls in is decided by
+                // the gate's control flow rather than by how many polls fit in a
+                // deadline: the baseline, the one read of the first wait, and the
+                // read of the second wait that finally sees the raised entry.
                 fakes.Session.SetResultSequence(
                     "notifications.snapshot",
-                    Empty, Empty, Empty, Empty, Empty, Empty,
+                    Empty,
+                    Empty,
                     HubWith("failure", "Recording stopped unexpectedly"));
                 fakes.Session.SetResult("app.identity", """{"pid":4242}""");
                 fakes.Uia.SeeElements("Failure. Recording stopped unexpectedly.");
             },
             TestContext.Current.CancellationToken);
 
-        var result = await new NotificationSeverityGate(ShortHub).RunAsync(
+        // A zero deadline, not a short one. WaitForFreshAsync reads a snapshot
+        // BEFORE it consults the deadline, so zero still gives each wait exactly
+        // one read -- and the phase separation this case is about stops depending
+        // on how many 250 ms polls the scheduler fits into the window. Under the
+        // parallel suite it fitted a different number than it did alone, which is
+        // why this was the one test here that failed only in company.
+        var result = await new NotificationSeverityGate(TimeSpan.Zero).RunAsync(
             harness.Context, TestContext.Current.CancellationToken);
 
         Assert.Equal(ScenarioOutcome.Deferred, result.Outcome);
         Assert.Contains("[synthetic]", result.Message, StringComparison.Ordinal);
+
+        // The control flow the message alone would not pin: the product published
+        // nothing, the gate raised its own notification, and it read the hub three
+        // times doing it.
+        Assert.Contains("notification.raise", harness.Fakes.Session.InvokedCommands, StringComparer.Ordinal);
+        Assert.Equal(
+            3,
+            harness.Fakes.Session.InvokedCommands.Count(
+                command => string.Equals(command, "notifications.snapshot", StringComparison.Ordinal)));
     }
 
     [Fact]

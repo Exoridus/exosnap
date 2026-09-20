@@ -207,8 +207,16 @@ Repository specifics:
 `CONTRIBUTING.md` is authoritative; the three rules an agent trips over most:
 
 - A commit is its Conventional Commits subject, `type(scope): summary`, with `!` for a breaking
-  change. The squash merge appends the pull request number, so a local commit does not carry one.
-  The reasoning goes in the pull request description, not in a commit body.
+  change. Neither a local commit nor a pull request TITLE carries the pull request number;
+  `scripts/merge-pr.ps1` appends it exactly once at the squash. The reasoning goes in the pull
+  request description, not in a commit body.
+- Pull requests are opened with `scripts/open-pr.ps1` and merged with `scripts/merge-pr.ps1`, not
+  with a hand-assembled `gh pr create`/`gh pr merge`. The scripts validate the subject against the
+  parser the changelog cut reads, and the merge helper is what makes the number land once.
+  `merge-pr.ps1` merges nothing without `-Confirm`. That switch is a mechanical safety catch, not
+  authorization: it may be passed only after the user has explicitly approved merging that exact
+  pull request in the current interaction. Having the switch available is never a reason to use it,
+  and an earlier approval of another merge does not carry forward.
 - `CHANGELOG.md` is never edited on a branch. `scripts/new-changelog.ps1` assembles it at the
   release cut from the merged subjects, and `scripts/check-commit-policy.ps1` fails a branch that
   writes it.
