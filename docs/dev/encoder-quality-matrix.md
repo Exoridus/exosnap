@@ -65,7 +65,7 @@ Per codec, per clip:
 python scripts/dev/encoder_quality_matrix.py \
     --clip desktop-scroll.y4m \
     --vcodec av1 \
-    --output docs/development/quality-results/2026-07-24-rtx5070ti-av1-desktop-scroll
+    --output docs/dev/quality-results/2026-07-24-rtx5070ti-av1-desktop-scroll
 ```
 
 Repeat for `--vcodec h264`/`hevc` and for each clip. Each run sweeps P4 and P7, each under CQ
@@ -118,7 +118,7 @@ one frame — sweep at least 200 frames when the tail is what decides.
 
 ## Result storage
 
-File results under `docs/development/quality-results/<date>-<gpu>-<codec>-<clip>.md` (matching
+File results under `docs/dev/quality-results/<date>-<gpu>-<codec>-<clip>.md` (matching
 the `--output` path above) — tracked in git so results are diffable across runs. The `<gpu>` in
 the filename is manual: the generated report logs the `ffmpeg` version but not the GPU name,
 driver version, or the probe binary's commit hash, so note those in the filename or a line at the

@@ -387,6 +387,8 @@ function New-VerifyPlan {
     $checks.Add((New-VerifyCheck -Name 'diff' -Kind 'diff' -DependsOn @('sanity') -Applicable))
     $checks.Add((New-VerifyCheck -Name 'drift' -Kind 'drift' -DependsOn @('sanity') -Applicable))
     $checks.Add((New-VerifyCheck -Name 'source-hygiene' -Kind 'source-hygiene' -DependsOn @('sanity') -Applicable))
+    $checks.Add((New-VerifyCheck -Name 'docs-superpowers-removed' -Kind 'docs-superpowers-removed' `
+                -DependsOn @('sanity') -Applicable))
     $checks.Add((New-VerifyCheck -Name 'commit-policy' -Kind 'commit-policy' -DependsOn @('sanity') -Applicable))
     # Before 'sanity' finishes is too early and after the build is too late: this
     # asks whether the instrument works, which is worth knowing before a

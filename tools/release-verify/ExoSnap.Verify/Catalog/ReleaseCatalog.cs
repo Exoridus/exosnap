@@ -210,7 +210,7 @@ public static class ReleaseCatalog
             requires: [CapabilityRequirement.Is(CapabilityKeys.GpuD3D11, "true")],
             oracle: ["exosnap", "presentmon"],
             optIn: true,
-            source: "docs/superpowers/specs/2026-07-11-exclusive-fullscreen-capture-spec.md"),
+            source: "ADR 0051"),
 
         Describe(
             id: "REL-AUD-DEGRADE-001",

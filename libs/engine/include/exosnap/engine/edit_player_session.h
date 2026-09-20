@@ -1,7 +1,7 @@
 #pragma once
 
 // EditPlayerSession -- top-level orchestrator for the Edit-page video player
-// (docs/superpowers/specs/2026-07-14-edit-video-player-design.md). Owns one
+// (docs/dev/edit-player-architecture.md). Owns one
 // EditPlayerEngine (decode) and, when the file has an audio stream, one
 // WasapiAudioRenderer (playback + master clock). UI-agnostic per CLAUDE.md.
 //
@@ -61,7 +61,7 @@ class EditPlayerSession {
     // Sets the callback invoked (from an internal thread -- NOT the caller's
     // thread) with each newly decoded RAW video frame, during both continuous
     // playback and single-frame scrub/trim-drag seeks -- the GPU render path
-    // (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md).
+    // (docs/dev/edit-player-architecture.md).
     // Delivered directly, with no intermediate queue: pacing/drop decisions
     // for this path live in EditPlayerRenderer::PresentFrame (present-gated
     // against CurrentPositionMs(), which stays the clock source of truth),

@@ -28,6 +28,17 @@ Agents may consult it when relevant, but it is never a source of truth and must
 never be referenced from committed source or public documentation. If a decision
 becomes a durable contract, promote the conclusion into `docs/` instead.
 
+Agent-generated implementation plans, specs and research live in `.workspace/`,
+never in a tracked `docs/` path. `docs/superpowers/` held that kind of material
+before the documentation architecture cleanup and must not be recreated;
+`scripts/check-docs-superpowers-removed.ps1` (run by `verify.ps1`) fails the
+gate if it is. A durable conclusion (an architecture decision, a rejected
+alternative, a still-open design) is promoted into the matching canonical
+category instead: `docs/decisions/` for ADRs, `docs/dev/` for developer
+reference, `docs/design/` for accepted-but-not-yet-built designs. See
+`docs/README.md` for the full category contract, including where product and
+user-facing documentation lives.
+
 ## Command environment
 
 The primary development environment is Windows 11 x64 with PowerShell 7. Run
@@ -118,21 +129,12 @@ and moving the OS cursor while the developer is moving it causes mis-clicks.
 
 ## Release authority
 
-```
-Version tags and releases are destructive/release-authority operations.
-
-Never:
-- create or push v* tags
-- create/publish GitHub releases
-- submit package-manager releases
-- promote an RC to final
-
-unless the user explicitly requests that exact release operation in the
-current interaction.
-
-Preparing a release, fixing release blockers, or completing verification
-does not constitute permission to publish it.
-```
+Version tags and releases are destructive, release-authority operations. Never
+create or push a `v*` tag, create or publish a GitHub release, submit a
+package-manager release, or promote an RC to final, unless the user explicitly
+requests that exact release operation in the current interaction. Preparing a
+release, fixing release blockers, or completing verification does not
+constitute permission to publish it.
 
 The furthest an agent workflow goes is `release-verify.ps1 qualify`, which prints
 `QUALIFIED FOR PROMOTION` with the commit and the RC tag. Attaching that record to
@@ -158,8 +160,8 @@ commits, issues, pull requests, branches or worktrees, conversation or agent
 history, private workspace references, or machine-specific paths. Keep the
 durable technical rationale, drop how it was discovered.
 
-Developer-facing source documentation is English and uses ASCII punctuation;
-non-ASCII characters are allowed only when technically meaningful. The rule bans
+Developer-facing source documentation is English and uses ASCII punctuation. A
+non-ASCII character is allowed where it is technically meaningful. The rule bans
 typographic variants (em dash, en dash, curly quotes, ellipsis), not characters
 as such. Three kinds stay:
 
@@ -172,8 +174,53 @@ as such. Three kinds stay:
 - **Localized user-facing strings**, which this rule does not reach at all (see
   below).
 
-Identifiers stay ASCII in the other direction - file names, C++ symbols, CMake
-targets, QML ids, CLI flags - because the toolchain and the build depend on it.
+Identifiers stay ASCII in the other direction (file names, C++ symbols, CMake
+targets, QML ids, CLI flags), because the toolchain and the build depend on it.
+
+#### Write the sentence, do not substitute the character
+
+ASCII punctuation here is a property of well-written English, not a
+transliteration step. An em dash that becomes `--`, or an en dash that becomes
+`-`, swaps a typographic mark for a typewriter crutch and leaves the sentence
+exactly as clear, or as unclear, as it already was. Rewrite it instead. A comma,
+a colon, a pair of parentheses, a second sentence, or a different word order
+carries the same meaning and reads better than any dash would have. A semicolon
+falls under the same preference, because in English prose it usually marks the
+spot where two sentences would have served the reader better.
+
+- Avoid: `A semantic merge skew -- two PRs are green alone -- may still fail together.`
+- Prefer: `Two PRs can each be green independently and still fail when combined.`
+- Prefer: `A semantic merge skew can occur when two PRs are green independently but fail when combined.`
+
+This reaches prose only. A `--build` or `--preset` flag, an operator, a range in
+a URL and a semicolon a language requires are syntax, and they keep the
+characters their syntax gives them.
+
+#### The same rule covers Markdown
+
+Everything above applies to Markdown documentation as much as to a source
+comment. `docs/`, the root documents, ADRs and a pull request description are
+developer prose, and a dash crutch reads no better in a rendered page than in a
+header comment.
+
+Markdown adds one failure of its own. A fenced code block is for content whose
+exact literal form, syntax or line structure is the point: a command, a file, a
+log line, a diagnostic. It is not a box to draw around text. Prose in a fence,
+and especially a `text` fence wrapped around a status summary, a decision, a
+list of names or a set of steps, renders as a grey slab that no longer wraps,
+loses its links and emphasis, and tells the reader nothing the surrounding
+paragraph did not. Write those as sentences, a list, or a table.
+
+A short command, path, flag, file name or identifier belongs in inline code. It
+stays part of the sentence that way and keeps the literal form the reader needs.
+
+The rule applies to text being written or revised anyway, so existing prose is
+left alone until something else brings you to it.
+
+There is deliberately no mechanical check for any of this and none is wanted.
+Telling a dash in a sentence from a dash in a command line, or a fence that
+earns its place from one that does not, is a judgement, and a checker that got
+it wrong would cost more than the rule saves. This is a writing and review rule.
 
 ### Language of user-facing content
 

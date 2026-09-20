@@ -623,7 +623,7 @@ is verified automatically before and after your drag.
         Id              = 'LV-EDIT-001'
         Title           = 'Chained Record -> Edit -> Export harness'
         Layer           = 'EXTERNAL_TOOL'
-        Source          = 'docs/superpowers/specs/2026-07-14-auto-record-harness-design.md; ADR 0022'
+        Source          = 'docs/dev/harness-and-tracing.md; ADR 0022'
         ArtifactBound   = $true
         EnvironmentKeys = @('primaryScreen')
         Run             = {

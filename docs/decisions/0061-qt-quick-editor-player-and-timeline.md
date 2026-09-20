@@ -57,8 +57,10 @@ render thread, swap chain, shaders and a GDI placeholder sprite — are **delete
 The placeholder becomes a QML `Text`.
 
 **No child HWND, and it is verified rather than assumed.** `--hwnd-audit` run with the editor overlay
-open reports zero child windows. This matters beyond the editor: the withdrawn native window chrome
-failed because `WM_NCHITTEST` is only asked of the window owning the pixel under the cursor, and a
+open reports zero child windows. This matters beyond the editor: an earlier, later-withdrawn attempt
+to answer `WM_NCHITTEST` on the top-level window itself (handing move, resize, Snap Layouts and
+double-click-to-maximize to Windows instead of the Qt-side emulation) failed on the pre-Quick window
+tree because `WM_NCHITTEST` is only asked of the window owning the pixel under the cursor, and a
 native child was owning the title-bar band. Any `QQuickWidget` or `createWindowContainer` shim for
 the editor player would restore exactly that barrier and is rejected.
 

@@ -24,6 +24,15 @@ Drives a long recording through the **real** `RecorderSession` pipeline (or a
 GPU-free synthetic twin), samples engine + host-process metrics into a JSON-Lines
 timeline, applies the advisory abort budgets live, and writes a report.
 
+**Why a separate host tool, not GUI automation or an extended `probe_record`.**
+Driving the shipping GUI for a 2-hour endurance run is forbidden and brittle
+(CLAUDE.md: no synthesized input) and would mix UI state into a measurement
+that should only be about the engine and the host process. `tools/probes/probe_record`
+stays a narrow, single-shot correctness probe with an `ffprobe`-based
+pass/fail contract; folding an endurance run's metric timeline, advisory-abort
+policy, and leak-slope analysis into it would dilute both the probe's contract
+and this tool's.
+
 ### Build
 
 `exosnap-soak` builds with the normal Debug/Release configure (it links
@@ -94,6 +103,15 @@ override with `--max-drift-ms` / `--max-skew-ms`.
 ## 2. A/V-sync drift — clapper + `av-sync-check.py`
 
 Measures A/V **clock drift** of a finished file from a clapper signal of two or more markers.
+
+**Why a separate Python script against a full system `ffmpeg`, not built into
+`exosnap-soak` itself.** Frame-luma and audio-amplitude marker detection needs
+`avfilter`/`swscale`, and the FFmpeg build this application vendors and ships
+is deliberately mux-only (`cmake/VendorFFmpeg.cmake`) with neither. Building
+the analysis into the C++ soak tool would mean either linking a second,
+full-featured FFmpeg into a developer-only tool or reimplementing frame/amplitude
+decoding by hand; a short script against whatever full `ffmpeg` is already on
+the developer's machine costs neither.
 
 ### Capture (user-live)
 

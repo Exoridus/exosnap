@@ -345,6 +345,12 @@ $realExecutor = {
                 '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'check-commit-policy.ps1'))
         }
 
+        'docs-superpowers-removed' {
+            return Invoke-Step -Name 'docs-superpowers-removed' -FilePath 'pwsh' -Arguments @(
+                '-NoProfile', '-NonInteractive', '-File',
+                (Join-Path $PSScriptRoot 'check-docs-superpowers-removed.ps1'))
+        }
+
         'lint-canaries' {
             # A blocking check that stopped firing reports zero findings, exactly
             # like a clean tree. This is the other half of that contract.

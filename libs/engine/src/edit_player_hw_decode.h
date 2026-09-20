@@ -1,7 +1,7 @@
 #pragma once
 
 // Hardware-decode readback support for EditPlayerEngine's D3D11VA path
-// (docs/superpowers/specs/2026-08-03-editor-playback-hw-decode-design.md).
+// (docs/dev/edit-player-architecture.md).
 //
 // FFmpeg's D3D11VA hwaccel hands decoded frames back (after
 // av_hwframe_transfer_data copies them to system memory) as semi-planar

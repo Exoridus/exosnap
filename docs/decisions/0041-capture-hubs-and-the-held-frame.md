@@ -17,7 +17,6 @@ decided is unaffected and still carries the preview: what changed is which
 consumers exist, not how a hub arbitrates or what a held frame means. The
 `ThumbnailCapture` bullet below is kept as the record of what was built.
 
-Design source: `docs/superpowers/specs/2026-07-10-capture-hubs-design.md`.
 Related: ADR 0013 (OD for monitor capture, format policy), ADR 0040 (WYSIWYG
 preview via engine source-tap).
 

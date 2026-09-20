@@ -1,9 +1,9 @@
 #pragma once
 
 // WasapiAudioRenderer -- the Edit-page video player's audio-out path and
-// playback master clock (docs/superpowers/specs/2026-07-14-edit-video-player-
-// design.md). No WASAPI render path existed anywhere in this codebase before
-// this class; only capture (WasapiCaptureSrc, wasapi_loopback.cpp) did.
+// playback master clock (docs/dev/edit-player-architecture.md). No WASAPI
+// render path existed anywhere in this codebase before this class; only
+// capture (WasapiCaptureSrc, wasapi_loopback.cpp) did.
 //
 // Opens the system default render endpoint (eRender/eConsole -- no in-app
 // device picker, matching the design's scope decision) in shared mode.
@@ -45,13 +45,12 @@ struct SwrContext;
 namespace exosnap::engine {
 
 // Ring capacity used unless a caller overrides it. 200 ms @ 48 kHz stereo is
-// the fixed backpressure point that paces the playback AUDIO decode thread --
-// see docs/superpowers/specs/2026-07-14-edit-video-player-pacing-design.md.
-// Kept deliberately small: it bounds how far ahead of the audio clock that
-// thread can race before PushSamples() blocks it.
+// the fixed backpressure point that paces the playback AUDIO decode thread
+// (docs/dev/edit-player-architecture.md). Kept deliberately small: it bounds
+// how far ahead of the audio clock that thread can race before PushSamples()
+// blocks it.
 //
-// Since 2026-08-01 video decodes on its own thread (docs/superpowers/specs/
-// 2026-08-01-edit-player-decoupled-decode-design.md), so blocking here no
+// Video decodes on its own thread, so blocking here no
 // longer holds video up -- and a video hitch no longer starves this ring,
 // which is the whole point of that split. Video's own decode-ahead bound is
 // the demux thread's clock-based read-ahead gate (ShouldDemuxMorePackets,
