@@ -49,7 +49,10 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'lib/CommitPolicy.psm1') -Force
 
 function Invoke-Gh {
-    param([Parameter(Mandatory)] [string[]] $Arguments)
+    # AllowEmptyString, because Mandatory otherwise rejects an argument LIST that
+    # contains an empty element -- and `gh pr merge --body ""`, which is how the
+    # merge body is cleared, is exactly such a list.
+    param([Parameter(Mandatory)] [AllowEmptyString()] [string[]] $Arguments)
     $output = & gh @Arguments
     if ($LASTEXITCODE -ne 0) { throw "gh $($Arguments -join ' ') failed with exit $LASTEXITCODE" }
     return $output

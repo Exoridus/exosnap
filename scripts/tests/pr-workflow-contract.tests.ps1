@@ -121,6 +121,44 @@ Test-Case 'the expensive legs wait for the cheap guardrails' {
 }
 
 Write-Host ''
+Write-Host 'Pull request helpers'
+
+Test-Case 'every process wrapper accepts an empty argument' {
+    # Found the first time merge-pr.ps1 was used for real: `gh pr merge --body ""`
+    # is how the merge body is cleared, and a [Parameter(Mandatory)] [string[]]
+    # rejects a LIST containing an empty element before the tool is ever reached.
+    # The failure is a parameter binding error at the call site, so nothing short
+    # of invoking the wrapper with such a list catches it.
+    foreach ($name in @('open-pr.ps1', 'merge-pr.ps1')) {
+        $path = Join-Path (Split-Path -Parent $PSScriptRoot) $name
+        Assert-True (Test-Path -LiteralPath $path) "$name is missing"
+
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)
+        $wrappers = @($ast.FindAll({
+                    param($node)
+                    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                    $node.Name -match '^Invoke-(Git|Gh)$'
+                }, $true))
+        Assert-True ($wrappers.Count -gt 0) "$name declares no Invoke-Git/Invoke-Gh wrapper"
+
+        foreach ($wrapper in $wrappers) {
+            # Re-created from the AST rather than dot-sourced: these scripts run
+            # their work at load, so importing one would open or merge something.
+            $probe = [scriptblock]::Create("function $($wrapper.Name) $($wrapper.Body.Extent.Text)`n" +
+                "$($wrapper.Name) -Arguments @('--version', '')")
+            try { & $probe | Out-Null }
+            catch [System.Management.Automation.ParameterBindingException] {
+                throw "$name/$($wrapper.Name) rejects an empty argument: $($_.Exception.Message)"
+            }
+            catch {
+                # Anything else means binding succeeded and the wrapper went on to
+                # run the real tool, which is not what is under test here.
+            }
+        }
+    }
+}
+
+Write-Host ''
 Write-Host "$script:Passed passed, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }
 exit 0

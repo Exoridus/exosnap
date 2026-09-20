@@ -67,14 +67,20 @@ Import-Module (Join-Path $PSScriptRoot 'lib/CommitPolicy.psm1') -Force
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 function Invoke-Git {
-    param([Parameter(Mandatory)] [string[]] $Arguments)
+    # AllowEmptyString, because Mandatory otherwise rejects an argument LIST whose
+    # elements include an empty string, and an empty argument is a legitimate one
+    # to pass a command line tool.
+    param([Parameter(Mandatory)] [AllowEmptyString()] [string[]] $Arguments)
     $output = & git -C $repoRoot @Arguments
     if ($LASTEXITCODE -ne 0) { throw "git $($Arguments -join ' ') failed with exit $LASTEXITCODE" }
     return $output
 }
 
 function Invoke-Gh {
-    param([Parameter(Mandatory)] [string[]] $Arguments)
+    # AllowEmptyString, because Mandatory otherwise rejects an argument LIST whose
+    # elements include an empty string, and an empty argument is a legitimate one
+    # to pass a command line tool.
+    param([Parameter(Mandatory)] [AllowEmptyString()] [string[]] $Arguments)
     $output = & gh @Arguments
     if ($LASTEXITCODE -ne 0) { throw "gh $($Arguments -join ' ') failed with exit $LASTEXITCODE" }
     return $output
