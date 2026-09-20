@@ -1,8 +1,7 @@
 #pragma once
 
 // Timestamp-aligned mix of the Edit-page player's audio tracks
-// (docs/superpowers/specs/2026-08-02-timeline-thumbnails-multitrack-design.md,
-// section 3).
+// (docs/dev/edit-player-architecture.md).
 //
 // Kept here, separate from the FFmpeg-facing engine, so the alignment and the
 // overload behaviour are unit-testable without a real file or a real audio

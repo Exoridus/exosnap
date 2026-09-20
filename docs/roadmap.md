@@ -91,7 +91,7 @@ Encoders must never be forced to present as "CRF" when they don't use it.
 | `0.13.0` | Intel hardware                     | Native oneVPL/QSV, allocator/surface integration, hardware test matrix, diagnostics provider, fallback behavior. |
 | `1.0.0`  | First stable release (cross-vendor RC gate) | Cross-vendor matrix + quality-validation matrix (SSIM/VMAF, A/V-sync, long recordings across all vendors) — the vendor-dependent half of RC stabilization. Ships only once these promises are genuinely validated. |
 
-NVIDIA quality-measurement down payment: see [`docs/development/encoder-quality-matrix.md`](development/encoder-quality-matrix.md).
+NVIDIA quality-measurement down payment: see [`docs/dev/encoder-quality-matrix.md`](dev/encoder-quality-matrix.md).
 
 **Prioritization rationale:** an NVIDIA user benefits immediately from reliable recording, recovery,
 and visible status. Additional vendor support mainly widens the audience; it does not close a
@@ -285,17 +285,18 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
 A wave of 18 implementation-ready specs was written 2026-07-11; 9 shipped within a day (device
 hotswap resilience, display identity, A/V clock slaving, exclusive-fullscreen detection, the
 diagnostics support bundle, the reliability-soak harness, the real Edit-page video preview, the
-privacy-review process, and the Preparing-state UI fix) and their specs now live under
-`docs/superpowers/specs/2026-07-11-*-spec.md` as shipped-feature records. What's left, roughly by
-usefulness:
+privacy-review process, and the Preparing-state UI fix), each covered by its own ADR. What's left,
+roughly by usefulness:
 
-- **Worth doing soon:** an SSIM/VMAF quality-comparison harness (the gate for any future encoder
-  change — dev tooling only), German localization (`tr()` sweep + Qt Linguist, decided for `1.0`),
-  and HLG output + tidying the HDR color-metadata path (HDR10 already ships; the transfer-function
-  enum value already exists, just unused).
+- **Worth doing soon:** German localization (`tr()` sweep + Qt Linguist, decided for `1.0`), and
+  HLG output + tidying the HDR color-metadata path (HDR10 already ships; the transfer-function
+  enum value already exists, just unused). The SSIM/VMAF quality-comparison harness (dev tooling
+  only) has shipped; see [`docs/dev/encoder-quality-matrix.md`](dev/encoder-quality-matrix.md).
 - **Conditional:** an async NVENC pipeline (only if the already-shipped perf-measurement stage
-  shows it's needed) and NVENC B-frames/lookahead/temporal-AQ (needs the SSIM/VMAF harness first
-  to prove the gain — AV1, the shipped default codec, doesn't support B-frames on most hardware).
+  shows it's needed) and NVENC Active Depth beyond 1, B-frames, lookahead and temporal AQ (each
+  needs the now-shipped SSIM/VMAF harness to prove the gain first — AV1, the shipped default
+  codec, doesn't support B-frames on most hardware). `IVideoEncoder`/`VideoEncoderFactory`
+  (ADR 0006) already gives these a seam to land behind without touching `video_thread.cpp`.
   PCM/FLAC-in-MP4 remains a known gap (ADR 0030); 5.1/7.1 audio was deliberately declined, not
   merely deferred.
 - **Reach, no urgency:** AMD AMF (`0.12.0`) and Intel QSV (`0.13.0`) widen hardware support without

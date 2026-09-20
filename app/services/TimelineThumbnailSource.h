@@ -1,7 +1,6 @@
 #pragma once
 
-// TimelineThumbnailSource -- decodes the Edit timeline's tile strip
-// (docs/superpowers/specs/2026-08-02-timeline-thumbnails-multitrack-design.md).
+// TimelineThumbnailSource -- decodes the Edit timeline's tile strip.
 //
 // The strip is the timeline's only real information about the clip, so every
 // tile is a frame the file actually carries. Decoding happens on a worker

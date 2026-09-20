@@ -15,7 +15,7 @@
 // 2026-08-03 update: StartPlaybackDecode now delivers RawDecodedVideoFrame
 // (unconverted decoder planes) instead of a CPU-converted BGRA frame -- the
 // editor playback GPU render path
-// (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md)
+// (docs/dev/edit-player-architecture.md)
 // moved colour conversion out of the engine entirely, onto the caller's own
 // GPU converter. Steps B/B2/H/I below therefore now measure decode+demux
 // throughput WITHOUT the CPU YUV->BGRA conversion cost folded in (that cost
@@ -73,7 +73,7 @@
 //      av_hwdevice_ctx_create() attempts (D3D11VA/DXVA2/CUDA), and the
 //      exact avcodec_configuration()/version strings baked into this build.
 //   H) The actual point of the 2026-08-01 decoupled-decode topology (see
-//      docs/superpowers/specs/2026-08-01-edit-player-decoupled-decode-design.md,
+//      docs/dev/edit-player-architecture.md,
 //      "Testing"): does audio delivery stay continuous while video is
 //      artificially throttled to far below real time? StartPlaybackDecode()
 //      from t=600s with on_video sleeping 120ms/frame (a deliberately

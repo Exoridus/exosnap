@@ -1,6 +1,6 @@
 # Preview frame rate cap
 
-Status: approved 2026-08-07.
+Status: Accepted, not implemented. Approved 2026-08-07.
 
 ## Problem
 

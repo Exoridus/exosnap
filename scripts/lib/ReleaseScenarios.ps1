@@ -1098,7 +1098,7 @@ function Get-ReleaseScenarioCatalog {
         Title               = 'True exclusive fullscreen is detected and explained'
         Class               = 'capture'
         Layer               = 'SEMI_AUTO'
-        Source              = 'docs/superpowers/specs/2026-07-11-exclusive-fullscreen-capture-spec.md'
+        Source              = 'ADR 0051'
         ArtifactBound       = $true
         RequiresInstallTree = $false
         EnvironmentKeys     = @('gpus')

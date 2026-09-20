@@ -38,8 +38,8 @@
 # encoding, if ever offered, is a user-supplied FFmpeg install detected at
 # runtime, never bundled here.
 #
-# r5 -> r7: added the h264/hevc/av1 x d3d11va/d3d11va2/dxva2 hwaccels
-# (docs/superpowers/specs/2026-08-03-editor-playback-hw-decode-design.md).
+# r5 -> r7: added the h264/hevc/av1 x d3d11va/d3d11va2/dxva2 hwaccels for the
+# editor's hardware-accelerated decode path (docs/dev/edit-player-architecture.md).
 # Vendor-neutral (D3D11/DXVA are Windows APIs, not NVIDIA-specific): frames
 # come back as ID3D11Texture2D, no CUDA/vendor SDK linked in. Verified against
 # this codebase's TryAttachD3D11VA/DeinterleaveHwReadbackFrame on real

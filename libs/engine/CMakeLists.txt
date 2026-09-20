@@ -1415,8 +1415,7 @@ target_include_directories(test_edit_player_engine PRIVATE src include)
 target_compile_definitions(test_edit_player_engine PRIVATE EXOSNAP_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # Hardware-decode readback: semi-planar (NV12/P010) -> planar de-interleave,
-# including P010's <<6 left-justification rescale
-# (docs/superpowers/specs/2026-08-03-editor-playback-hw-decode-design.md).
+# including P010's <<6 left-justification rescale (docs/dev/edit-player-architecture.md).
 # Pure logic on hand-built synthetic frames -- no D3D11 adapter, no decoder,
 # no fixture clip needed to run these.
 exosnap_add_gtest(

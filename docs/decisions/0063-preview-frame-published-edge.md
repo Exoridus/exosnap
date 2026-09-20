@@ -28,11 +28,11 @@ partial redraw, so every one of those retries redrew the entire window.
 
 Two alternatives were considered and rejected:
 
-* **A fixed preview frame-rate cap.** The approved-but-unimplemented spec
-  `docs/superpowers/specs/2026-08-07-preview-frame-rate-cap-design.md` describes a *product*
-  setting — a user-visible "Preview frame rate" row that also allows Off. It is a useful feature and
-  is unaffected by this ADR, but it is a ceiling on a poll loop, not a reason to render. Capping the
-  loop at 60 still redraws 60 unchanged pictures a second on a static desktop.
+* **A fixed preview frame-rate cap.** The approved-but-unimplemented design
+  `docs/design/preview-frame-rate-cap.md` describes a *product* setting — a user-visible "Preview
+  frame rate" row that also allows Off. It is a useful feature and is unaffected by this ADR, but it
+  is a ceiling on a poll loop, not a reason to render. Capping the loop at 60 still redraws 60
+  unchanged pictures a second on a static desktop.
 * **Coupling the preview to the recording frame rate.** Recording cadence and preview cadence are
   independent concerns; the idle preview has no recording to take a rate from at all.
 

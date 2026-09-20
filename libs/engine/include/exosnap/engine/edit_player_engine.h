@@ -1,7 +1,7 @@
 #pragma once
 
-// EditPlayerEngine -- demux/decode engine for the Edit-page video player
-// (docs/superpowers/specs/2026-07-14-edit-video-player-design.md).
+// EditPlayerEngine -- demux/decode engine for the Edit-page video player.
+// See docs/dev/edit-player-architecture.md for the thread and decode contracts.
 //
 // UI-agnostic (no Qt types) per CLAUDE.md. Opens the MKV edit master
 // (EditContext::mkv_master_path) and decodes video frames in TWO shapes,
@@ -16,9 +16,8 @@
 // - DecodeFrameAtRaw/StartPlaybackDecode (this class's own scrub-seek and
 //   continuous playback, driven by EditPlayerSession) instead return/deliver
 //   RawDecodedVideoFrame -- unconverted decoder planes -- for the editor
-//   player's GPU render path
-//   (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md),
-//   which does the colour conversion itself, on the GPU.
+//   player's GPU render path (docs/dev/edit-player-architecture.md), which
+//   does the colour conversion itself, on the GPU.
 //
 // Also decodes audio to a fixed 48 kHz stereo interleaved float32 PCM stream
 // (matching the product's own internal mix-bus format). A recording carrying
@@ -191,8 +190,8 @@ class EditPlayerEngine {
 
     // Same contract as DecodeFrameAt, but returns the frame unconverted (raw
     // decoder planes) for the GPU conversion path
-    // (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md)
-    // instead of CPU-converted BGRA -- EditPlayerSession drives this one for
+    // (docs/dev/edit-player-architecture.md) instead of CPU-converted BGRA --
+    // EditPlayerSession drives this one for
     // the editor player's own scrub/trim-handle-drag seeks, so its result can
     // go straight to EditFrameGpuConverter without an extra CPU round trip.
     // DecodeFrameAt above stays the one the timeline thumbnail strip uses
@@ -227,7 +226,7 @@ class EditPlayerEngine {
     //
     // Runs on THREE threads -- demux, video decode+wrap, audio
     // decode+resample+mix -- so that audio never depends on video keeping up
-    // (docs/superpowers/specs/2026-08-01-edit-player-decoupled-decode-design.md).
+    // (docs/dev/edit-player-architecture.md).
     // Every audio track decodes on that one audio thread and is summed there,
     // so the track count changes what a block CONTAINS, never how many arrive.
     // Consequences for callers:
@@ -257,10 +256,9 @@ class EditPlayerEngine {
     // discarded. An empty std::function is treated the same as "no clock".
     //
     // Delivers unconverted (RawDecodedVideoFrame) video for the editor
-    // player's GPU render path
-    // (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md)
-    // -- the caller's own EditFrameGpuConverter does the colour conversion,
-    // not this engine.
+    // player's GPU render path (docs/dev/edit-player-architecture.md) -- the
+    // caller's own EditFrameGpuConverter does the colour conversion, not this
+    // engine.
     void StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
                              std::function<int64_t()> current_media_time_us);
 

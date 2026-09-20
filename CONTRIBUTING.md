@@ -7,6 +7,7 @@ ExoSnap is a Windows-native screen recorder: a C++ recording engine with a Qt 6 
 - **Bugs and feature requests:** open a GitHub issue. For a recording bug, include the app version, GPU and driver version, capture source, and the selected container/codec. Review logs before attaching them.
 - **Security issues:** do not open a public issue. Follow [SECURITY.md](SECURITY.md).
 - **Large or behavioural changes:** open an issue first so the approach can be agreed before you write code. `docs/product-spec.md` is authoritative for user-visible behaviour, defaults, navigation, and terminology; a change that moves any of those updates the spec in the same pull request.
+- **Documentation:** [docs/README.md](docs/README.md) maps what belongs in tracked documentation, in `.workspace/`, and how a temporary finding is promoted into a durable one.
 - [AGENTS.md](AGENTS.md) holds the repository rules (architecture boundaries, source hygiene, commit and validation expectations). It applies to human and automated contributors alike.
 
 ## Development environment

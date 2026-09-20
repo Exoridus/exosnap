@@ -75,8 +75,7 @@ struct DisplayHdrFacts {
 }
 
 // Per-codec NVENC advanced-encode capability facts (B-frames, Lookahead,
-// Temporal-AQ) — see docs/superpowers/plans/2026-07-23-encoder-quality-harness-s1-capability-probe.md.
-// Only meaningful when NvidiaRuntimeFacts::nvenc_codec_probed is true AND the
+// Temporal-AQ). Only meaningful when NvidiaRuntimeFacts::nvenc_codec_probed is true AND the
 // specific codec was advertised; every field defaults to "unsupported" so an
 // unprobed or unadvertised codec never claims a generation-dependent feature.
 struct NvencAdvancedEncodeFacts {
