@@ -26,5 +26,8 @@ archives.
 
 ## License
 
-miniz is MIT-licensed. Upstream license text vendored unmodified as
-`LICENSE` alongside this notice.
+miniz is MIT-licensed. The upstream license text is vendored as `LICENSE`
+alongside this notice, from
+https://raw.githubusercontent.com/richgel999/miniz/3.1.2/LICENSE, with line
+endings normalized to LF by the repository `.gitattributes`. Its wording is
+unchanged.

@@ -143,8 +143,8 @@ per-track/channel bitrate. `RESTRICTED_LOWDELAY` and 2.5/5 ms frames are expert-
 
 Guaranteed for `1.0`: 4:2:0 8-bit for all final codecs; 4:2:0 10-bit for HEVC/AV1 where supported.
 **4:4:4 (8-bit H.264/HEVC, GPU-gated) has already shipped** as an Expert-mode option — see
-`KNOWN_LIMITATIONS.md`. 4:2:2 remains a later expert feature pending real hardware tests; no NVENC
-generation currently exposes a 4:2:2 encode path.
+`KNOWN_LIMITATIONS.md`. 4:2:2 remains a later expert feature: ExoSnap implements no 4:2:2 path today, and
+picking one up means capability probing and real hardware tests on a generation that exposes it.
 
 ### Automatic split (time + size)
 

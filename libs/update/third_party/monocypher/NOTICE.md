@@ -21,7 +21,13 @@ Do NOT use `crypto_eddsa_check` from `monocypher.c` — that uses BLAKE2b and is
 
 ## License
 
-Monocypher is **dual-licensed: CC0-1.0 OR BSD-2-Clause** (your choice).
-Both licences are GPL-compatible.  The upstream licence text is embedded in the
-source file headers (`monocypher.c`, `monocypher.h`, `monocypher-ed25519.c`,
-`monocypher-ed25519.h`).
+Monocypher is **dual-licensed: `BSD-2-Clause OR CC0-1.0`** — a recipient chooses
+either licence. ExoSnap does not relicense it exclusively under one of the two;
+both remain available downstream.
+
+The upstream licence text is vendored unmodified as `LICENSE`, from
+https://raw.githubusercontent.com/LoupVaillant/Monocypher/4.0.2/LICENCE.md
+(SHA-256 `a5781770269d2516e52ba4863f790c10a16da4089a1e81823aee19ff1e9026b0`,
+line endings normalized to LF by the repository `.gitattributes`). The same
+notice is repeated in the header of each vendored source file, naming the
+per-file contributors and years.

@@ -70,8 +70,15 @@ Diagnostics view expose richer logging and a way to open the log folder.
   the home for PCM and FLAC.
 
 Exact availability depends on your GPU generation, driver, and the selected
-container/codec combination. 10-bit output is SDR only (no HDR10); PCM and FLAC
-are MKV-only.
+container/codec combination. PCM and FLAC are MKV-only.
+
+- **HDR:** an HDR-active display can be recorded as **native HDR10** (PQ /
+  BT.2020, 10-bit, limited range) with **AV1 or HEVC**; H.264 cannot carry it.
+  The default on an HDR display is to tone-map to SDR instead, so a recording
+  plays back correctly on an ordinary player. The choice is an expert setting
+  that only appears while an HDR-active display is detected. The separate
+  expert **10-bit** toggle is a precision option for SDR output and is
+  independent of HDR10, which pins 10-bit on its own.
 
 ## Recording split overview
 
@@ -83,8 +90,15 @@ are MKV-only.
 ## Updates and crash reporting
 
 - **Update check:** the official build checks public GitHub Releases for a newer version and notifies
-  you in-app (Stable and Preview channels). It never downloads or restarts on its own — it opens the
-  releases page so you choose when to update. No GitHub token is used.
+  you in-app (Stable and Preview channels). No GitHub token is used.
+- **Applying an update is always your decision, in three separate confirmations** — *Check for
+  updates*, then *Download update*, then *Install now*. Nothing is downloaded or installed until you
+  ask for it, and a download you cancel leaves the installation untouched.
+- **What applying does in a portable copy:** a separate updater window takes over, downloads the
+  package, verifies its ed25519 signature against the signed manifest before trusting any field in
+  it, swaps the files in place (old copy kept as a backup until the new version is verified), and
+  relaunches ExoSnap. If verification fails, the backup is restored. A portable update needs no
+  administrator rights and shows no UAC prompt; only an MSI installation does.
 - **Crash reporting is opt-in.** If ExoSnap crashes, the next launch shows a privacy-scrubbed crash
   dialog. Nothing is sent unless you choose to: either an assisted GitHub issue (Stage 0) or an
   automated upload to Sentry with EU data residency (Stage 1). Recordings, file paths, machine names,

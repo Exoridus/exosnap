@@ -81,7 +81,10 @@ Invalid combinations are not offered.
 
 ## Video color pipeline
 
-- **BT.709 color metadata** is written to all MKV and MP4 outputs.
+- **A complete color description is written to all MKV and MP4 outputs**, so no
+  recording is color-ambiguous. For SDR output that description is **BT.709**
+  (primaries, transfer and matrix); a native HDR10 recording is tagged with its
+  own **PQ / BT.2020** values instead, plus HDR mastering metadata.
 - **Y'CbCr color range** is selectable per preset: Full or Limited, behind Expert mode
   (Settings → Video). Some common players (notably VLC) ignore the range flag and expand
   as Limited, so Full-range recordings can look too dark in those players; Diagnostics surfaces
@@ -96,7 +99,8 @@ Invalid combinations are not offered.
   - **No AV1 4:4:4** — NVENC AV1 is 4:2:0 (Main) only.
   - **No 10-bit 4:4:4** — the 4:4:4 path is 8-bit only in this build.
   - **No 4:4:4 with native HDR10** — HDR10 requires 10-bit, which excludes 4:4:4.
-  - **No 4:2:2** — the NVENC generation has no 4:2:2 encode path.
+  - **No 4:2:2** — ExoSnap has no 4:2:2 capture, conversion or encode path, on any
+    GPU. This is a product limit, not a statement about what NVENC can do.
   - On the 4:4:4 path the **live in-app preview works** (it shares the composited RGB frame
     with the preview before the AYUV conversion) and the **single-frame snapshot works** as well
     (the packed AYUV 4:4:4 encode surface is decoded on the CPU with the exact inverse of the
@@ -113,12 +117,12 @@ Invalid combinations are not offered.
   gets the same tone-map / native-HDR10 handling and the same H.264 blocker. The
   window's hosting display is resolved once at recording start — moving the
   window to a different monitor mid-recording keeps the session's initial HDR
-  decision. HDR10 static metadata is written **both** at the container level
-  **and in-band in the bitstream** — HEVC Mastering Display Colour Volume (SEI
-  type 137) and Content Light Level Info (SEI type 144) messages, and AV1 HDR
-  MDCV / HDR CLL metadata OBUs — emitted on every keyframe, so players that
-  ignore container-level HDR metadata (notably some Apple players) still receive
-  it. Content-light metadata (MaxCLL/MaxFALL) is measured per frame and written
+  decision. Mastering-display metadata is written **both** at the
+  container level **and in-band in the bitstream** — an HEVC Mastering Display
+  Colour Volume message (SEI type 137) or an AV1 HDR MDCV metadata OBU, emitted
+  on every keyframe, so players that ignore container-level HDR metadata
+  (notably some Apple players) still receive it. It is known before the first
+  frame, from the captured display's reported primaries and luminance range. Content-light metadata (MaxCLL/MaxFALL) is measured per frame and written
   at the container level only — MKV `MaxCLL`/`MaxFALL`, carried into the `clli`
   box of a remuxed MP4. It is **not** carried in-band: both values are maxima
   over the finished stream, and a bitstream message is emitted while the
@@ -134,7 +138,7 @@ Invalid combinations are not offered.
   display — what is shown is the recorded frame, viewed through the same
   roll-off an SDR player would approximate. The exception is the rare
   already-PQ 10-bit desktop (below), which has no shareable frame.
-- **Moving the Windows SDR-content-brightness slider during a recording is followed within a frame on Windows 11 build 22621 and later, and leaves up to about two seconds of wrongly exposed material on every older build.** That level decides the brightness the desktop is composed at, so tone-map, overlays and preview all follow it. Where Windows offers a colour-state notification to a process without a CoreWindow, it raises one for each step of a drag and the exposure tracks the slider as it moves. Where it does not, the level is re-read on a two-second cadence, and everything recorded between a change and the next reading is exposed for the level before it. The recording corrects itself from that reading on; nothing needs restarting.
+- **Moving the Windows SDR-content-brightness slider during a recording leaves wrongly exposed material behind: up to about two seconds of it on Windows before 11 build 22621, and a shorter unmeasured amount on 22621 and later.** That level decides the brightness the desktop is composed at, so tone-map, overlays and preview all follow it. Two mechanisms find the change. On Windows 11 build 22621 and later the engine subscribes to the OS colour-state notification for the captured monitor; Windows raises one per step of a drag, the capture loop re-reads the facts on its next frame, and a 30-second re-read stays underneath only to cover a monitor change. Where no such notification exists -- Windows 10, and any process the interop is unavailable to -- the level is re-read on a two-second cadence, and that interval is the whole exposure error. The delay between the user's slider movement and the notification arriving has not been measured, so the notified path is stated as shorter, not as immediate. In both cases the recording corrects itself from the next reading on and nothing needs restarting.
 - **A recorded window that moves between an HDR and an SDR monitor keeps the
   colour state of the monitor it started on.** The colour pipeline — the frame
   pool format, the native-versus-tone-map decision, the bit depth and the colour

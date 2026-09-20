@@ -82,6 +82,37 @@ directory alongside the ExoSnap binary.
 - **Linkage:** static
 - **Bundled license:** `licenses/libmatroska.txt`
 
+### miniz
+
+- **Version:** 3.1.2
+- **Project:** https://github.com/richgel999/miniz
+- **License:** MIT
+- **Linkage:** static (vendored single-file amalgamation in
+  `libs/update/third_party/miniz`, compiled into `exosnap.exe` and
+  `exosnap-updater.exe`)
+- **Bundled license:** `licenses/miniz.txt`
+- **Role:** ZIP reading for the portable update path (`mz_zip_reader_*`). The
+  vendored `miniz.h` is re-formatted to the repository `.clang-format` with no
+  code changes; `miniz.c` is byte-identical to upstream. Per-file hashes are in
+  `libs/update/third_party/miniz/NOTICE.md`.
+
+### Monocypher
+
+- **Version:** 4.0.2
+- **Project:** https://github.com/LoupVaillant/Monocypher
+- **License:** `BSD-2-Clause OR CC0-1.0` — dual-licensed, recipient's choice.
+  Both options remain available downstream; ExoSnap does not relicense the code
+  exclusively under either one.
+- **Linkage:** static (vendored sources in
+  `libs/update/third_party/monocypher`, compiled into `exosnap.exe` and
+  `exosnap-updater.exe`)
+- **Bundled license:** `licenses/monocypher.txt` (the upstream dual-licence
+  text, both licences in full)
+- **Role:** ed25519 signature verification of the update manifest
+  (`crypto_ed25519_check`, the RFC 8032 SHA-512 variant). The sources are
+  vendored unmodified; provenance and per-file hashes are in
+  `libs/update/third_party/monocypher/NOTICE.md`.
+
 ### PresentMon (ETW present-diagnostics consumer)
 
 - **Version:** v1.10.0 (pinned by commit SHA

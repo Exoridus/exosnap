@@ -19,10 +19,10 @@ git clone https://github.com/Exoridus/exosnap.git
 cd exosnap
 git switch -c my-change origin/main
 
-cmake --preset windows-x64-debug
-cmake --build --preset windows-x64-debug-exosnap
+cmake --preset windows-x64-ninja-debug
+cmake --build --preset windows-x64-ninja-debug-exosnap
 
-pwsh scripts/run-tests.ps1                          # whole suite
+pwsh scripts/run-tests.ps1                          # whole suite (builds that tree first)
 pwsh scripts/run-tests.ps1 -Filter recorder_core.   # one binary
 ```
 
