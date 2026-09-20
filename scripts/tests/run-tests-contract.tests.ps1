@@ -642,6 +642,128 @@ set_tests_properties(fixture.waits PROPERTIES LABELS "phase.hermetic")
     }
 }
 
+Test-Case 'the tree lock is still held while the receipt is being written' {
+    # The hold has to outlast the verdict, not just the suite. Released earlier, a
+    # second run takes the tree and starts changing it while this one is still
+    # taking its closing fingerprint and writing the shared receipt -- and the
+    # receipt then describes a tree somebody else already owns.
+    #
+    # Observed by pausing the run at that exact point, not by racing it: a second
+    # process waiting on the mutex loses to wake-up latency and reports a pass
+    # whichever order the code actually uses.
+    $signalDir = New-ScratchPath
+    New-Item -ItemType Directory -Path $signalDir -Force | Out-Null
+    $barrier = Join-Path $signalDir 'go'
+    $reached = "$barrier.reached"
+
+    $tree = New-FixtureTree
+    $receiptPath = Join-Path $tree 'Testing/last-run-receipt.json'
+    $savedPause = $env:EXOSNAP_RUNTESTS_PAUSE
+    $process = $null
+    try {
+        $env:EXOSNAP_RUNTESTS_PAUSE = "beforeReceipt=$barrier"
+        $process = Start-Process -FilePath 'pwsh' -PassThru -WindowStyle Hidden -ArgumentList @(
+            '-NoProfile', '-NonInteractive', '-File', $runTests,
+            '-BuildDir', $tree, '-Config', 'Debug', '-NoBuild', '-AllowStale')
+
+        $deadline = [DateTime]::UtcNow.AddSeconds(90)
+        while (-not (Test-Path -LiteralPath $reached) -and [DateTime]::UtcNow -lt $deadline) {
+            Start-Sleep -Milliseconds 50
+        }
+        Assert-True (Test-Path -LiteralPath $reached) 'the run never reached the receipt step'
+        Assert-True (-not (Test-Path -LiteralPath $receiptPath)) `
+            'the pause point is after the publish, so this case proves nothing'
+        Assert-True (Test-HostLockHeld -Kind 'tree' -Path $tree) `
+            'the receipt is being written and the build tree is already free for another run'
+
+        Set-Content -LiteralPath $barrier -Value 'go'
+        Assert-True ($process.WaitForExit(90000)) 'the run did not finish'
+        Assert-True (Test-Path -LiteralPath $receiptPath) 'the run published no receipt'
+        Assert-True (-not (Test-HostLockHeld -Kind 'tree' -Path $tree)) `
+            'the tree lock outlived the run that took it'
+    }
+    finally {
+        Set-Content -LiteralPath $barrier -Value 'go' -ErrorAction SilentlyContinue
+        if ($null -eq $savedPause) { Remove-Item Env:EXOSNAP_RUNTESTS_PAUSE -ErrorAction SilentlyContinue }
+        else { $env:EXOSNAP_RUNTESTS_PAUSE = $savedPause }
+        if ($process -and -not $process.HasExited) { $process.Kill() }
+        Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $signalDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case 'a run that never got the tree lock leaves the holder"s receipt alone' {
+    # The receipt describes the tree, and the tree belongs to whoever holds it. A
+    # run that timed out waiting has no verdict about those binaries at all, so
+    # overwriting the file would replace someone else's result with this run's
+    # inability to start.
+    $tree = New-FixtureTree
+    $receiptPath = Join-Path $tree 'Testing/last-run-receipt.json'
+    New-Item -ItemType Directory -Path (Join-Path $tree 'Testing') -Force | Out-Null
+    $sentinel = '{"exit_code":0,"reusable":true,"owner":"the run that holds the tree"}'
+    Set-Content -LiteralPath $receiptPath -Value $sentinel -Encoding utf8 -NoNewline
+
+    $holder = Start-TreeLockHolder -Path $tree
+    $savedTimeout = $env:EXOSNAP_HOST_LOCK_TIMEOUT_SECONDS
+    try {
+        $env:EXOSNAP_HOST_LOCK_TIMEOUT_SECONDS = '2'
+        $result = Invoke-RunTests -BuildDir $tree
+        Assert-True ($result.ExitCode -ne 0) 'a run took a build tree another holder owns'
+        Assert-True ((Get-Content -LiteralPath $receiptPath -Raw) -eq $sentinel) `
+            "a run that never acquired the tree lock rewrote the receipt: $(Get-Content -LiteralPath $receiptPath -Raw)"
+    }
+    finally {
+        $env:EXOSNAP_HOST_LOCK_TIMEOUT_SECONDS = $savedTimeout
+        Stop-TreeLockHolder -Holder $holder
+        Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case 'a run that aborts after the suite still secures what the tests wrote' {
+    # The gap the rescue used to have: it sat on the line after the suite call, so
+    # a failure while recording or wrapping that call -- with the tests already run
+    # and their logs already written -- threw straight past it, and the cleanup
+    # then deleted the only copy.
+    #
+    # The fixture test PASSES here on purpose. The rescue must therefore be driven
+    # by the missing verdict alone, not by a failing one, which is the distinction
+    # between the two paths.
+    $pwshPath = (Get-Process -Id $PID).Path -replace '\\', '/'
+    $tree = New-ScratchPath
+    New-Item -ItemType Directory -Path $tree -Force | Out-Null
+    $savedFault = $env:EXOSNAP_RUNTESTS_FAULT
+    try {
+        $writer = Join-Path $tree 'writes-a-log.ps1'
+        Set-Content -LiteralPath $writer -Encoding utf8 -Value @'
+Set-Content -LiteralPath (Join-Path $env:EXOSNAP_CONFIG_DIR 'app.log') -Value 'diagnostic'
+exit 0
+'@
+        $body = @(
+            "add_test(fixture.writes_a_log `"$pwshPath`" `"-NoProfile`" `"-File`" `"$($writer -replace '\\', '/')`")"
+            'set_tests_properties(fixture.writes_a_log PROPERTIES LABELS "phase.hermetic")'
+        ) -join "`n"
+        Set-Content -LiteralPath (Join-Path $tree 'CTestTestfile.cmake') -Value $body -Encoding utf8
+
+        $env:EXOSNAP_RUNTESTS_FAULT = 'afterSuiteBeforeVerdict'
+        $result = Invoke-RunTests -BuildDir $tree
+
+        Assert-True ($result.ExitCode -eq 4) `
+            "expected the invalid-run code 4, got $($result.ExitCode): $($result.Output)"
+        Assert-True ($null -ne $result.Receipt) 'the aborted run wrote no receipt'
+        Assert-True ($result.Receipt.rescue_status -eq 'rescued') `
+            "an aborted run reported rescue status '$($result.Receipt.rescue_status)'"
+        Assert-True (Test-Path -LiteralPath (Join-Path $result.Receipt.rescued_config_dir 'app.log')) `
+            "the log the suite wrote is not under $($result.Receipt.rescued_config_dir)"
+        Assert-True (@($result.Receipt.invalid_reasons) -match 'aborted') `
+            'an aborted run did not say so in the receipt'
+    }
+    finally {
+        if ($null -eq $savedFault) { Remove-Item Env:EXOSNAP_RUNTESTS_FAULT -ErrorAction SilentlyContinue }
+        else { $env:EXOSNAP_RUNTESTS_FAULT = $savedFault }
+        Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Test-Case 'a delegated child runs under the parent hold instead of waiting on itself' {
     # A mutex is recursive for the owning thread and for nothing else. Without the
     # inheritance mark, a test that starts a process needing this same build tree

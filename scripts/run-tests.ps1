@@ -281,6 +281,175 @@ function Publish-Receipt {
     }
 }
 
+function Invoke-RunTestsSeam {
+    <#
+    .SYNOPSIS
+        A named point a test can pause at or fail at. Inert unless one of two
+        variables names this point.
+    .DESCRIPTION
+        Two ordering guarantees of this script cannot be provoked from outside it.
+        The evidence rescue has to survive a run that threw instead of returning a
+        verdict, which needs the suite to have run and written its logs FIRST and
+        the failure to come after. And the tree lock has to still be held while the
+        receipt is written, which needs the run observed mid-publish rather than
+        after it -- a second process racing the release loses that race on wake-up
+        latency alone and reports a pass either way.
+
+        EXOSNAP_RUNTESTS_FAULT=<point>           throws here.
+        EXOSNAP_RUNTESTS_PAUSE=<point>=<barrier> blocks here until <barrier> exists,
+                                                 after creating "<barrier>.reached"
+                                                 so the waiting test never sleeps on
+                                                 a guess. Capped, so a test that
+                                                 died cannot hang a build.
+
+        Unset in every normal run, including CI. The same kind of seam the updater
+        exposes as EXOSNAP_UPDATER_FAULT for the prompts a test cannot answer.
+    #>
+    param([Parameter(Mandatory)] [string] $Point)
+
+    $pause = $env:EXOSNAP_RUNTESTS_PAUSE
+    if ($pause -and $pause.StartsWith("$Point=")) {
+        $barrier = $pause.Substring($Point.Length + 1)
+        Set-Content -LiteralPath "$barrier.reached" -Value $Point -ErrorAction SilentlyContinue
+        $deadline = [DateTime]::UtcNow.AddSeconds(120)
+        while (-not (Test-Path -LiteralPath $barrier) -and [DateTime]::UtcNow -lt $deadline) {
+            Start-Sleep -Milliseconds 50
+        }
+    }
+
+    if ($env:EXOSNAP_RUNTESTS_FAULT -eq $Point) {
+        throw "injected fault '$Point' (EXOSNAP_RUNTESTS_FAULT)"
+    }
+}
+
+function Save-TestEvidence {
+    <#
+    .SYNOPSIS
+        Copy what the suite wrote into EXOSNAP_CONFIG_DIR out before the cleanup deletes it.
+    .DESCRIPTION
+        The QML and cursor-audit suites write their application logs there, and the
+        failure they were run to diagnose is in those logs.
+
+        Called from a finally around the suite, so a run that threw rather than
+        returning a verdict is covered too -- the run whose logs are worth the most
+        and the one that used to lose them. $Verdict is $null for such a run, and
+        that counts as "not evaluated", never as "passed".
+
+        Anything short of a confirmed copy pins the original in place through
+        $script:KeepConfigDir, a source directory that cannot be listed included:
+        an unreadable directory is not an empty one, and treating it as one is how
+        the only copy gets deleted.
+    #>
+    param([AllowNull()] $Verdict)
+
+    if (-not $configDir -or -not (Test-Path -LiteralPath $configDir)) { return }
+    if ($null -ne $Verdict -and $Verdict -eq 0) { return }
+
+    try {
+        $leftBehind = @(Get-ChildItem -LiteralPath $configDir -Recurse -File -ErrorAction Stop)
+    }
+    catch {
+        $script:KeepConfigDir = $true
+        $script:receipt.rescued_config_dir = $configDir
+        $script:receipt.rescue_status = 'failed'
+        $script:receipt.rescue_detail = "the source directory could not be listed: $($_.Exception.Message)"
+        Write-Host ("Could not list $configDir to secure the test logs: $($_.Exception.Message)") -ForegroundColor Red
+        Write-Host "The original directory is kept at $configDir" -ForegroundColor Yellow
+        Add-InvalidReason "test evidence could not be secured: $($_.Exception.Message)"
+        return
+    }
+
+    if ($leftBehind.Count -eq 0) { return }
+
+    # One directory per run. A fixed name meant a second run overwrote the
+    # evidence of the first, and two runs finishing at once raced for it.
+    $rescuedTo = Join-Path $logDir "last-run-config-dir/$runId"
+    try {
+        New-Item -ItemType Directory -Path $rescuedTo -Force -ErrorAction Stop | Out-Null
+        Copy-Item -Path (Join-Path $configDir '*') -Destination $rescuedTo -Recurse -Force -ErrorAction Stop
+        $copied = @(Get-ChildItem -LiteralPath $rescuedTo -Recurse -File -ErrorAction Stop)
+        if ($copied.Count -lt $leftBehind.Count) {
+            throw "copied $($copied.Count) of $($leftBehind.Count) files"
+        }
+        $script:receipt.rescued_config_dir = $rescuedTo
+        $script:receipt.rescue_status = 'rescued'
+        $script:receipt.rescue_detail = "$($copied.Count) file(s)"
+    }
+    catch {
+        # The original is kept: a rescue that failed halfway must not also be the
+        # reason the only copy was deleted. The cleanup reads KeepConfigDir.
+        $script:KeepConfigDir = $true
+        $script:receipt.rescued_config_dir = $configDir
+        $script:receipt.rescue_status = 'failed'
+        $script:receipt.rescue_detail = $_.Exception.Message
+        Write-Host ("Could not secure the test logs from $configDir : $($_.Exception.Message)") -ForegroundColor Red
+        Write-Host "The original directory is kept at $configDir" -ForegroundColor Yellow
+        Add-InvalidReason "test evidence could not be secured: $($_.Exception.Message)"
+    }
+}
+
+function Complete-Run {
+    <#
+    .SYNOPSIS
+        Close the receipt off and publish it. Returns the exit code to report.
+    .DESCRIPTION
+        Runs while the tree lock is still held, and that is the point: released
+        first, a second run takes the tree and starts changing it while this one is
+        still deciding what its result describes and writing the shared receipt.
+        The closing source fingerprint would then be taken against a tree somebody
+        else already owns.
+    #>
+    param([Parameter(Mandatory)] [int] $ExitCode)
+
+    Invoke-RunTestsSeam -Point 'beforeReceipt'
+
+    $script:receipt.finished_utc = [DateTime]::UtcNow.ToString('o')
+    $script:receipt.exit_code = $ExitCode
+
+    if ($script:receipt.source_before -and $script:receipt.source_before.ok) {
+        $sourceAfter = Get-SourceFingerprint -RepoRoot $repoRoot
+        $script:receipt.source_after = $sourceAfter
+        if (-not $sourceAfter.ok) {
+            $script:receipt.source_drift = $null
+            Add-InvalidReason "source identity could not be re-taken: $($sourceAfter.reason)"
+            Write-Host "Cannot confirm the source did not move during the run: $($sourceAfter.reason)" -ForegroundColor Red
+        }
+        else {
+            $script:receipt.source_drift = ($sourceAfter.fingerprint -ne $script:receipt.source_before.fingerprint)
+            if ($script:receipt.source_drift) {
+                Add-InvalidReason 'the working tree changed while the run was in progress'
+                Write-Host 'The source changed while this run was in progress; its result describes neither state.' -ForegroundColor Red
+            }
+        }
+    }
+
+    $script:receipt.invalid_reasons = @($script:receipt.invalid_reasons)
+    $script:receipt.reusable = ($ExitCode -eq 0 -and $script:receipt.invalid_reasons.Count -eq 0 -and
+        $script:receipt.freshness -eq 'fresh' -and $script:receipt.source_drift -eq $false -and
+        -not $script:receipt.census_mismatch)
+
+    # A drift or a failed re-take found after the suite ran still has to change the
+    # verdict, or the receipt would carry a reason nobody acts on.
+    if ($ExitCode -eq 0 -and $script:receipt.invalid_reasons.Count -gt 0) {
+        $ExitCode = $script:ExitInvalidRun
+        $script:receipt.exit_code = $ExitCode
+    }
+
+    if (Test-Path -LiteralPath $logDir -PathType Container) {
+        if (-not (Publish-Receipt -Path $receiptPath -Receipt $script:receipt)) {
+            # The run may have been fine; what failed is the record of it. Nothing
+            # downstream may read this as a pass.
+            if ($ExitCode -eq 0) { $ExitCode = $script:ExitInvalidRun }
+        }
+        else {
+            Write-Host "Receipt: $receiptPath" -ForegroundColor DarkGray
+        }
+        Write-Host ('-' * 60)
+    }
+
+    return $ExitCode
+}
+
 # Write-Host, not Write-Error: with ErrorActionPreference=Stop a Write-Error
 # throws immediately, which would skip the intended exit code (and further down
 # the config-dir cleanup).
@@ -608,49 +777,24 @@ function Invoke-TestRun {
     # of them can see the others. One test run on the host at a time. Taken last
     # in the tree-build-device order, so it can never be the lock someone holds
     # while waiting for this tree.
-    $ctestExit = Invoke-WithHostLock -Kind 'device' -Holder "run-tests $BuildDir" -Body {
-        & ctest @ctestArgs 2>&1 | Tee-Object -FilePath $logFile | Out-Null
-        $LASTEXITCODE
-    }
-    $script:receipt.ctest_exit_code = $ctestExit
-
-    # --- Rescue what the tests wrote before the config dir goes --------------
-    # The QML and cursor-audit suites write their application logs into
-    # EXOSNAP_CONFIG_DIR, and the failure they were run to diagnose is in those
-    # logs. Deleting the directory on the way out threw away the only copy.
-    $rescueFailed = $false
-    if ($ctestExit -ne 0 -and $configDir -and (Test-Path -LiteralPath $configDir)) {
-        $leftBehind = @(Get-ChildItem -LiteralPath $configDir -Recurse -File -ErrorAction SilentlyContinue)
-        if ($leftBehind.Count -gt 0) {
-            # One directory per run. A fixed name meant a second run overwrote the
-            # evidence of the first, and two runs finishing at once raced for it.
-            $rescuedTo = Join-Path $logDir "last-run-config-dir/$runId"
-            try {
-                New-Item -ItemType Directory -Path $rescuedTo -Force -ErrorAction Stop | Out-Null
-                Copy-Item -Path (Join-Path $configDir '*') -Destination $rescuedTo -Recurse -Force -ErrorAction Stop
-                $copied = @(Get-ChildItem -LiteralPath $rescuedTo -Recurse -File -ErrorAction Stop)
-                if ($copied.Count -lt $leftBehind.Count) {
-                    throw "copied $($copied.Count) of $($leftBehind.Count) files"
-                }
-                $script:receipt.rescued_config_dir = $rescuedTo
-                $script:receipt.rescue_status = 'rescued'
-                $script:receipt.rescue_detail = "$($copied.Count) file(s)"
-            }
-            catch {
-                # The original is kept: a rescue that failed halfway must not also
-                # be the reason the only copy was deleted. The cleanup below reads
-                # this flag.
-                $rescueFailed = $true
-                $script:receipt.rescued_config_dir = $configDir
-                $script:receipt.rescue_status = 'failed'
-                $script:receipt.rescue_detail = $_.Exception.Message
-                Write-Host ("Could not secure the test logs from $configDir : $($_.Exception.Message)") -ForegroundColor Red
-                Write-Host "The original directory is kept at $configDir" -ForegroundColor Yellow
-                Add-InvalidReason "test evidence could not be secured: $($_.Exception.Message)"
-            }
+    #
+    # The rescue below runs in a finally, not after the call: recording the output
+    # can fail with the suite already run and its logs already written, and that
+    # threw straight past a rescue placed on the next line. $ctestExit stays $null
+    # on that path, which Save-TestEvidence reads as "no verdict", not as a pass.
+    $ctestExit = $null
+    try {
+        $ctestExit = Invoke-WithHostLock -Kind 'device' -Holder "run-tests $BuildDir" -Body {
+            & ctest @ctestArgs 2>&1 | Tee-Object -FilePath $logFile | Out-Null
+            $code = $LASTEXITCODE
+            Invoke-RunTestsSeam -Point 'afterSuiteBeforeVerdict'
+            $code
         }
+        $script:receipt.ctest_exit_code = $ctestExit
     }
-    if ($rescueFailed) { $script:KeepConfigDir = $true }
+    finally {
+        Save-TestEvidence -Verdict $ctestExit
+    }
 
     # --- Summary -------------------------------------------------------------
     $log = @(Get-Content -LiteralPath $logFile -ErrorAction SilentlyContinue)
@@ -778,6 +922,7 @@ function Invoke-TestRun {
 
 $script:KeepConfigDir = $false
 $exitCode = $script:ExitInvalidRun
+$treeLock = $null
 
 try {
     # --- Qt / DLL resolution -------------------------------------------------
@@ -793,67 +938,50 @@ try {
     $env:EXOSNAP_CONFIG_DIR = $configDir
 
     # Everything that reads or writes this build tree happens inside this hold:
-    # the build, the freshness judgement, the census, the suite and the receipt.
-    # A second cooperating entry point -- another run-tests, or verify.ps1's
-    # configure, qmllint or build step -- waits, so no result can describe
-    # binaries a concurrent build replaced underneath it.
-    $exitCode = Invoke-WithHostLock -Kind 'tree' -Path $BuildDir -Holder "run-tests $PID" -Body {
-        Invoke-TestRun
+    # the build, the freshness judgement, the census, the suite, the closing
+    # source fingerprint and the receipt. A second cooperating entry point --
+    # another run-tests, or verify.ps1's configure, qmllint or build step --
+    # waits, so no result can describe binaries a concurrent build replaced
+    # underneath it.
+    #
+    # Entered by hand rather than through Invoke-WithHostLock because the hold
+    # has to outlast the body: that helper releases the lock as its own body
+    # returns, which left the closing fingerprint and the publish outside it.
+    $treeLock = Enter-HostLock -Kind 'tree' -Path $BuildDir -Holder "run-tests $PID"
+    if ($treeLock.Waited) {
+        Write-Host ("  waited {0:0}s for the tree lock on $BuildDir held by another run" -f `
+                $treeLock.WaitedFor.TotalSeconds) -ForegroundColor DarkYellow
+    }
+    try {
+        $exitCode = Invoke-TestRun
+    }
+    catch {
+        Write-Host "The test run did not complete: $($_.Exception.Message)" -ForegroundColor Red
+        Add-InvalidReason "run aborted: $($_.Exception.Message)"
+        $exitCode = $script:ExitInvalidRun
+    }
+    finally {
+        # --- Publish the receipt, still holding the tree -------------------------
+        # On every path that got the lock, success or not. Downstream reads this
+        # file, so a run that ended badly has to say so here rather than leave an
+        # older, better-looking receipt in place.
+        $exitCode = Complete-Run -ExitCode $exitCode
     }
 }
 catch {
-    Write-Host "The test run did not complete: $($_.Exception.Message)" -ForegroundColor Red
-    Add-InvalidReason "run aborted: $($_.Exception.Message)"
+    # Only a failure before or around the hold itself reaches here -- in practice a
+    # tree lock another run did not release within the deadline. No receipt is
+    # written on this path: the file describes the tree, the tree belongs to the
+    # other run, and publishing would replace ITS verdict with this run's inability
+    # to start.
+    Write-Host "The test run did not start: $($_.Exception.Message)" -ForegroundColor Red
+    if (Test-Path -LiteralPath $receiptPath -PathType Leaf) {
+        Write-Host ("No receipt was written: $receiptPath belongs to the run that holds this tree.") -ForegroundColor Yellow
+    }
     $exitCode = $script:ExitInvalidRun
 }
 finally {
-    # --- Publish the receipt -------------------------------------------------
-    # On every path that has a log directory, success or not. Downstream reads
-    # this file, so a run that ended badly has to say so here rather than leave
-    # an older, better-looking receipt in place.
-    $receipt.finished_utc = [DateTime]::UtcNow.ToString('o')
-    $receipt.exit_code = $exitCode
-
-    if ($receipt.source_before -and $receipt.source_before.ok) {
-        $sourceAfter = Get-SourceFingerprint -RepoRoot $repoRoot
-        $receipt.source_after = $sourceAfter
-        if (-not $sourceAfter.ok) {
-            $receipt.source_drift = $null
-            Add-InvalidReason "source identity could not be re-taken: $($sourceAfter.reason)"
-            Write-Host "Cannot confirm the source did not move during the run: $($sourceAfter.reason)" -ForegroundColor Red
-        }
-        else {
-            $receipt.source_drift = ($sourceAfter.fingerprint -ne $receipt.source_before.fingerprint)
-            if ($receipt.source_drift) {
-                Add-InvalidReason 'the working tree changed while the run was in progress'
-                Write-Host 'The source changed while this run was in progress; its result describes neither state.' -ForegroundColor Red
-            }
-        }
-    }
-
-    $receipt.invalid_reasons = @($receipt.invalid_reasons)
-    $receipt.reusable = ($exitCode -eq 0 -and $receipt.invalid_reasons.Count -eq 0 -and
-        $receipt.freshness -eq 'fresh' -and $receipt.source_drift -eq $false -and
-        -not $receipt.census_mismatch)
-
-    # A drift or a failed re-take found after the suite ran still has to change the
-    # verdict, or the receipt would carry a reason nobody acts on.
-    if ($exitCode -eq 0 -and $receipt.invalid_reasons.Count -gt 0) {
-        $exitCode = $script:ExitInvalidRun
-        $receipt.exit_code = $exitCode
-    }
-
-    if (Test-Path -LiteralPath $logDir -PathType Container) {
-        if (-not (Publish-Receipt -Path $receiptPath -Receipt $receipt)) {
-            # The run may have been fine; what failed is the record of it. Nothing
-            # downstream may read this as a pass.
-            if ($exitCode -eq 0) { $exitCode = $script:ExitInvalidRun }
-        }
-        else {
-            Write-Host "Receipt: $receiptPath" -ForegroundColor DarkGray
-        }
-        Write-Host ('-' * 60)
-    }
+    if ($treeLock) { Exit-HostLock -Lock $treeLock }
 
     if ($configDir -and -not $script:KeepConfigDir) {
         try { Remove-Item -Recurse -Force $configDir -ErrorAction Stop }
