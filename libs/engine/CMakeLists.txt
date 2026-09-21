@@ -1642,6 +1642,7 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine_testutil
 )
 target_compile_definitions(test_session_e2e_real_file PRIVATE NOMINMAX)
+set_tests_properties(engine.test_session_e2e_real_file PROPERTIES PROCESSOR_AFFINITY TRUE PROCESSORS 1)
 
 # Powerloss CI proxy: truncate a genuinely-flushed synthetic MKV at assorted
 # offsets and assert the RemuxToMkv repair path never crashes and salvages up to

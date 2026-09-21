@@ -2233,7 +2233,10 @@ function Get-ReleaseVmHostGpu {
         if ($signed[0].DriverVersion) { $identity['DriverVersion'] = $signed[0].DriverVersion }
     }
 
-    $luid = @(Get-PnpDeviceProperty -InstanceId $adapter.PNPDeviceID -KeyName 'DEVPKEY_Device_LUID' -ErrorAction SilentlyContinue)
+    $luid = @()
+    if (Get-Command Get-PnpDeviceProperty -ErrorAction SilentlyContinue) {
+        $luid = @(Get-PnpDeviceProperty -InstanceId $adapter.PNPDeviceID -KeyName 'DEVPKEY_Device_LUID' -ErrorAction SilentlyContinue)
+    }
     if ($luid.Count -gt 0 -and $null -ne $luid[0].Data) { $identity['AdapterLuid'] = "$($luid[0].Data)" }
 
     # The DriverStore package the running driver came from, by name. This is the half
