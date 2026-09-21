@@ -13,8 +13,7 @@ cmake --preset windows-x64-debug
 cmake --build --preset windows-x64-debug --target probe_wgc_preview
 ```
 
-The executable is produced at:
-`build/windows-x64-debug/tools/probes/probe_wgc_preview/<Configuration>/probe_wgc_preview.exe`
+The executable is produced at: `build/windows-x64-debug/tools/probes/probe_wgc_preview/<Configuration>/probe_wgc_preview.exe`
 
 ## Run
 
@@ -55,7 +54,7 @@ On startup the probe:
 | size     | current captured content size (pixels)            |
 | fps      | source FPS over the last ~1 second interval       |
 | total    | total captured frame count since capture start    |
-| dropped  | `n/a` — drop/skip measurement is not reliable at probe level |
+| dropped  | `n/a`: drop/skip measurement is not reliable at probe level |
 
 ### Run summary (on exit)
 

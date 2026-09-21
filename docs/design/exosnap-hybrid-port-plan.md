@@ -1,13 +1,12 @@
-# ExoSnap Hybrid v3 — Qt Widgets / QSS Port Plan
+# ExoSnap Hybrid v3: Qt Widgets / QSS Port Plan
 
-Source: the Hybrid v3 visual prototype, Section 07 (Qt Widgets / QSS port plan)
-Reference: `docs/design/exosnap-hybrid-target.md`
+Source: the Hybrid v3 visual prototype, Section 07 (Qt Widgets / QSS port plan) Reference: `docs/design/exosnap-hybrid-target.md`
 
 Last refreshed: 2026-06-03
 
 > **Historical.** This plan describes the Qt Widgets / QSS build, which shipped
 > and was then replaced by the Qt Quick frontend (ADR 0064). The classes it names
-> -- `BrandMarkWidget`, `OperationalTitleBar`, `AboutDialog` -- no longer exist.
+> (`BrandMarkWidget`, `OperationalTitleBar`, `AboutDialog`) no longer exist.
 > The mark is `app/assets/brand/marks`, drawn by `ui/brand/ShellIconRenderer`.
 > Kept for the design rationale, not as a description of the code.
 
@@ -15,13 +14,13 @@ Last refreshed: 2026-06-03
 
 ## Overview
 
-This plan sequences the native Qt Widgets + QSS build of the Hybrid v3 design. Each phase is shippable on its own. Phases R1A–R3 land the MVP and resolve current "debug-heavy / oversized / kiosk" feedback. Phases R4–R6 layer on modals, telemetry, and utility-surface polish.
+This plan sequences the native Qt Widgets + QSS build of the Hybrid v3 design. Each phase is shippable on its own. Phases R1A-R3 land the MVP and resolve current "debug-heavy / oversized / kiosk" feedback. Phases R4-R6 layer on modals, telemetry, and utility-surface polish.
 
 The Hybrid v3 HTML prototype is the pixel reference.
 
 ---
 
-## HYBRID-PORT-R1A — Tokens / Fonts / Accent Foundation
+## HYBRID-PORT-R1A: Tokens / Fonts / Accent Foundation
 
 ### Scope
 
@@ -44,16 +43,16 @@ Accent scope note:
 ### Likely files/classes
 
 **New / heavily modified:**
-- `ui/theme/exosnap_dark.qss` — palette replacement (new hybrid tokens: `#0E0E10` bg, `#151517` surf, `#1C1C1F` surf2, `#9BD9D2` accent, etc.).
-- `ui/theme/ExoSnapPalette.h` — new hybrid color tokens.
-- `ui/theme/ExoSnapMetrics.h` — new spacing/radius metrics (8px base grid, 9–16px radii scale).
-- `ui/theme/ExoSnapTheme.h/.cpp` — updated `ApplyExoSnapTheme()` loading the new QSS; font bundle loading.
-- `ui/brand/BrandMarkWidget.h/.cpp` — update to new circular aperture mark logo.
+- `ui/theme/exosnap_dark.qss`: palette replacement (new hybrid tokens: `#0E0E10` bg, `#151517` surf, `#1C1C1F` surf2, `#9BD9D2` accent, etc.).
+- `ui/theme/ExoSnapPalette.h`: new hybrid color tokens.
+- `ui/theme/ExoSnapMetrics.h`: new spacing/radius metrics (8px base grid, 9-16px radii scale).
+- `ui/theme/ExoSnapTheme.h/.cpp`: updated `ApplyExoSnapTheme()` loading the new QSS; font bundle loading.
+- `ui/brand/BrandMarkWidget.h/.cpp`: update to new circular aperture mark logo.
 
 **Not changed (yet):**
-- `MainWindow.h/.cpp` — sidebar and page stack remain unchanged.
-- `ui/chrome/OperationalTitleBar.h/.cpp` — title bar unchanged.
-- `ui/chrome/GlobalRecordingBar.h/.cpp` — global bar unchanged.
+- `MainWindow.h/.cpp`: sidebar and page stack remain unchanged.
+- `ui/chrome/OperationalTitleBar.h/.cpp`: title bar unchanged.
+- `ui/chrome/GlobalRecordingBar.h/.cpp`: global bar unchanged.
 
 ### Risks
 
@@ -63,7 +62,7 @@ Accent scope note:
 
 ### Validation
 
-- Screenshot smoke: every page at default and maximized widths — existing pages still render correctly with new tokens.
+- Screenshot smoke: every page at default and maximized widths, confirming existing pages still render correctly with new tokens.
 - No functional changes.
 - Existing tests green.
 - Verify new tokens produce correct dark-mode look; no leftover amber-gold palette from previous design system.
@@ -79,14 +78,14 @@ Accent scope note:
 
 ### Model recommendation
 
-**Claude Opus xhigh** — token system design, QSS variable mapping, font bundling. The split from shell work reduces risk.
+**Claude Opus xhigh**: token system design, QSS variable mapping, font bundling. The split from shell work reduces risk.
 
-### Implementation status — landed
+### Implementation status: landed
 
 - **Tokens:** `ExoSnapPalette` remapped to the Hybrid v3 roles (neutral cool-dark `#0E0E10`/`#151517`/`#1C1C1F`/`#242428`, white-alpha hairlines, ink/muted/dim text ramp, Studio Mint `#9BD9D2` accent, coral `#E0786C` / green `#84CBA2` / amber `#E6C57C` semantics). Token *names* were preserved so the token-driven QSS keeps resolving without a structural rewrite. New `${accent-ink}` (`#08130F`) token added for text on accent fills.
 - **Accent variants:** the 7 curated accents (mint, amber, coral, azure, violet, lime, graphite) are defined as data only in `ui/theme/ExoSnapAccents.h`. No user-facing switcher (out of scope); a compile-time check keeps the default in sync with the palette.
 - **Metrics:** radius scale softened to the Hybrid range (sm 8 / md 10 / lg 14); spacing and control heights unchanged.
-- **Fonts:** target faces **Hanken Grotesk** (UI) and **IBM Plex Mono** (mono) are *not bundled* — no license-safe files are present in the repo and fonts are never copied from system folders. They sit at the front of the family stacks (`Hanken Grotesk, Inter, Segoe UI, sans-serif` / `IBM Plex Mono, JetBrains Mono, Consolas, monospace`) and are used only if the system provides them. The bundled Inter / JetBrains Mono remain the guaranteed fallback. *This deviates from the "bundled fonts" wording in `exosnap-hybrid-target.md` §10; bundling can be revisited if/when license-safe files are added.*
+- **Fonts:** target faces **Hanken Grotesk** (UI) and **IBM Plex Mono** (mono) are *not bundled*: no license-safe files are present in the repo and fonts are never copied from system folders. They sit at the front of the family stacks (`Hanken Grotesk, Inter, Segoe UI, sans-serif` / `IBM Plex Mono, JetBrains Mono, Consolas, monospace`) and are used only if the system provides them. The bundled Inter / JetBrains Mono remain the guaranteed fallback. *This deviates from the "bundled fonts" wording in `exosnap-hybrid-target.md` §10; bundling can be revisited if/when license-safe files are added.*
 - **BrandMark:** `BrandMarkWidget` now paints the concentric aperture mark programmatically (idle Studio Mint; coral recording variant exposed via `setRecording()`, currently unwired pending R1B title-bar status). `exosnap-logo.svg` updated to the matching aperture.
 - **QSS:** all hard-coded amber-accent/warn/ok/err and warm-neutral literals migrated to the Hybrid palette; on-accent text switched to `${accent-ink}`; Stop-button label darkened for contrast on coral. Object names, widget hierarchy, and test seams unchanged.
 - **Validation:** debug build green; focused + full CTest (544 tests) pass; screenshot smoke across Record/Settings/Hotkeys/Diagnostics/Logs/About/Source Picker shows correct dark-mode look, no leftover amber, no contrast/font/parse regressions.
@@ -94,7 +93,7 @@ Accent scope note:
 
 ---
 
-## HYBRID-PORT-R1B — Shell / Top Nav / Titlebar
+## HYBRID-PORT-R1B: Shell / Top Nav / Titlebar
 
 ### Scope
 
@@ -110,14 +109,14 @@ Accent scope note:
 ### Likely files/classes
 
 **New / heavily modified:**
-- `MainWindow.h/.cpp` — add top nav `QButtonGroup`; sidebar removal only after top nav is functional. Keep `QStackedWidget` behind the nav if it is the safest routing model.
-- `ui/chrome/OperationalTitleBar.h/.cpp` — merge title bar and nav into a single 52px bar hosting logo + nav tabs + status pill + window controls.
-- `ui/chrome/GlobalRecordingBar.h/.cpp` — demoted or absorbed into title-bar status pill once equivalent behavior is verified.
-- `ui/chrome/RecordingStatusGuards.h` — update guards for title-bar status pill.
+- `MainWindow.h/.cpp`: add top nav `QButtonGroup`; sidebar removal only after top nav is functional. Keep `QStackedWidget` behind the nav if it is the safest routing model.
+- `ui/chrome/OperationalTitleBar.h/.cpp`: merge title bar and nav into a single 52px bar hosting logo + nav tabs + status pill + window controls.
+- `ui/chrome/GlobalRecordingBar.h/.cpp`: demoted or absorbed into title-bar status pill once equivalent behavior is verified.
+- `ui/chrome/RecordingStatusGuards.h`: update guards for title-bar status pill.
 
 **Removed / repurposed:**
-- Sidebar `QListWidget` — removed only after top nav is fully functional.
-- `GlobalRecordingBar` — absorbed only when title-bar status pill covers the same states.
+- Sidebar `QListWidget`: removed only after top nav is fully functional.
+- `GlobalRecordingBar`: absorbed only when title-bar status pill covers the same states.
 
 ### Risks
 
@@ -130,7 +129,7 @@ Accent scope note:
 
 - Navigation smoke for all pages: Record, Settings, Hotkeys, Diagnostics, Logs, About.
 - Titlebar states: Ready (green), Recording (red + metrics), Paused (amber).
-- No regression to recording behavior — start/stop/pause/resume all work.
+- No regression to recording behavior: start/stop/pause/resume all work.
 - Screenshot smoke default + maximized.
 - Verify all pages are still accessible and render correctly.
 
@@ -144,9 +143,9 @@ Accent scope note:
 
 ### Model recommendation
 
-**Claude Opus xhigh** — architecturally sensitive (frameless window, nav restructuring, title-bar state pill). The split from token work reduces the blast radius.
+**Claude Opus xhigh**: architecturally sensitive (frameless window, nav restructuring, title-bar state pill). The split from token work reduces the blast radius.
 
-### Implementation status — landed
+### Implementation status: landed
 
 - **Shell:** the left `QListWidget` sidebar (and its footer About button) and the secondary `mainPageHead` title/subtitle/meta strip were removed. `OperationalTitleBar` now hosts the whole shell on one 56px bar: aperture mark + lowercase two-tone `exosnap` wordmark, top-nav tabs, a flexible drag spacer, the status pill, and min/max/close. The existing frameless window / native resize / DWM-border handling was kept as-is (lowest risk).
 - **Navigation:** top nav is **Record · Settings · Hotkeys · Diagnostics · Logs · About**. The five page tabs are checkable buttons in an exclusive `QButtonGroup` that drive the existing `QStackedWidget` (routing model unchanged); the active tab gets a 2px accent underline. About stays a `QDialog` launched from its tab (no stack page added). Advanced/Webcam remain reachable sub-pages and keep the Settings tab lit.
@@ -157,7 +156,7 @@ Accent scope note:
 
 ---
 
-## HYBRID-PORT-R2 — Record Preview + Stable Bottom Dock
+## HYBRID-PORT-R2: Record Preview + Stable Bottom Dock
 
 ### Scope
 
@@ -171,7 +170,7 @@ Accent scope note:
 - Countdown select (Off / 3s / 5s / 10s) on the right side of the dock.
 - Preview overlay elements: REC/PAUSED chip, watermark, source name, "Change source" pill, result playback overlay.
 
-### Webcam PiP — MVP vs Later
+### Webcam PiP: MVP vs Later
 
 **MVP:**
 - PiP visible in Record preview if webcam recording is enabled and a preview path exists.
@@ -188,13 +187,13 @@ Do not present PiP as fake-active if the Qt app cannot support drag/resize yet.
 ### Likely files/classes
 
 **New / heavily modified:**
-- `pages/RecordPage.h/.cpp` — complete restructure: preview-dominant layout, dock integration, remove legacy right-rail transport.
-- `ui/widgets/PreviewSurface.h/.cpp` — preserve existing DXGI/rendering path; update layout and overlay support only.
-- New: `ui/widgets/TransportDock.h/.cpp` — 3-zone grid dock widget with all state layouts.
-- New: `ui/widgets/AudioSourceToggle.h/.cpp` — circular icon toggle (System/Mic/Webcam/App).
-- New: `ui/widgets/StereoMeterWidget.h/.cpp` — custom paintEvent stereo dB meter (L/R bars).
-- New: `ui/widgets/CountdownSelect.h/.cpp` — compact dropdown for recording delay.
-- `ui/widgets/VUMeterWidget.h/.cpp` — update or replace with stereo version.
+- `pages/RecordPage.h/.cpp`: complete restructure: preview-dominant layout, dock integration, remove legacy right-rail transport.
+- `ui/widgets/PreviewSurface.h/.cpp`: preserve existing DXGI/rendering path; update layout and overlay support only.
+- New: `ui/widgets/TransportDock.h/.cpp`: 3-zone grid dock widget with all state layouts.
+- New: `ui/widgets/AudioSourceToggle.h/.cpp`: circular icon toggle (System/Mic/Webcam/App).
+- New: `ui/widgets/StereoMeterWidget.h/.cpp`: custom paintEvent stereo dB meter (L/R bars).
+- New: `ui/widgets/CountdownSelect.h/.cpp`: compact dropdown for recording delay.
+- `ui/widgets/VUMeterWidget.h/.cpp`: update or replace with stereo version.
 
 **Removed / repurposed:**
 - Legacy RecordPage transport controls (the right-rail pause/stop/record buttons).
@@ -210,7 +209,7 @@ Do not present PiP as fake-active if the Qt app cannot support drag/resize yet.
 ### Validation
 
 - Screenshot smoke: all four dock states at default and maximized.
-- Verify dock geometry is stable — no shift between states.
+- Verify dock geometry is stable: no shift between states.
 - Verify audio toggle states reflect actual source on/off and are wired to recording config.
 - Verify countdown works end-to-end for Off / 3s / 5s / 10s, including Cancel and Escape.
 - Verify preview fills available space on window resize.
@@ -229,36 +228,36 @@ Do not present PiP as fake-active if the Qt app cannot support drag/resize yet.
 
 ### Model recommendation
 
-**Claude Opus xhigh/max** — complex state-driven widget with real-time audio meter painting, recording-coordinator integration, and precise pixel alignment to prototype dock.
+**Claude Opus xhigh/max**: complex state-driven widget with real-time audio meter painting, recording-coordinator integration, and precise pixel alignment to prototype dock.
 
-### Implementation status — R2A landed
+### Implementation status: R2A landed
 
-Delivered as **R2A — Record Preview + Dock Skeleton** (the full four-state dock with real data); the genuinely honest-risky pieces (live meters, title-bar health metrics) are deferred to **R2B**.
+Delivered as **R2A: Record Preview + Dock Skeleton** (the full four-state dock with real data). The genuinely honest-risky pieces (live meters, title-bar health metrics) are deferred to **R2B**.
 
-- **Preview-first layout:** `RecordPage` is now a single column — the existing `PreviewSurface` fills the available area above a bottom dock (page gutter 24px, 16px gap). `updatePreviewHeightClamp()` sizes the surface to the largest 16:9 rectangle that fits the host (no rail width reserved); `updateResponsiveLayout()` collapsed to a single-column no-op. The DXGI/preview backend, webcam PiP overlay, and `PreviewSurface` API are untouched. The legacy right rail / kiosk transport is gone from the visible page.
+- **Preview-first layout:** `RecordPage` is now a single column: the existing `PreviewSurface` fills the available area above a bottom dock (page gutter 24px, 16px gap). `updatePreviewHeightClamp()` sizes the surface to the largest 16:9 rectangle that fits the host (no rail width reserved); `updateResponsiveLayout()` collapsed to a single-column no-op. The DXGI/preview backend, webcam PiP overlay, and `PreviewSurface` API are untouched. The legacy right rail / kiosk transport is gone from the visible page.
 - **New widgets:** `ui/widgets/TransportDock` (3-zone `QFrame`: left toggles/result | center duration | right actions, stable geometry across states), `ui/widgets/AudioSourceToggle` (circular self-painted icon pill; SVG icons via `QSvgRenderer`; on/off + interactive/read-only), `ui/widgets/CountdownSelect` (Off/3s/5s/10s compact recording-delay selector).
-- **State behaviour:** Ready `[toggles] · 00:00:00 · countdown + Record]`; Recording `[toggles · timer · Pause + Stop]`; Paused `[toggles · timer(amber) · Resume + Stop]`; Completed `[filename link + Open folder + size · timer(green) · Record again]`. Driven from `updateTransportDock()` off the existing `RecordViewModel`/`RecordingCoordinator` state — no new engine wiring.
+- **State behaviour:** Ready `[toggles] · 00:00:00 · countdown + Record]`; Recording `[toggles · timer · Pause + Stop]`; Paused `[toggles · timer(amber) · Resume + Stop]`; Completed `[filename link + Open folder + size · timer(green) · Record again]`. Driven from `updateTransportDock()` off the existing `RecordViewModel`/`RecordingCoordinator` state: no new engine wiring.
 - **Honesty:** audio toggles edit pre-record `AudioUiState` (System/Mic/App) via the existing `audioSettingsChanged` path and become read-only status pills while the source is locked; the webcam toggle is an honest read-only status pill (configured in Settings); countdown runs as a UI-level delay before backend start and never fabricates a recording session; the dock shows **no** audio meters and **no** fabricated recording-health numbers. Completed uses real result filename/size/duration; the filename opens the file and Open folder reveals it.
 - **Legacy preservation:** the old below-preview sections (audio settings, destination, readiness, target pickers, result panel, right rail) are constructed exactly as before but parked off-screen in a hidden `recordLegacyHost` so every `refresh()`/`updateStats()`/`updateResult()` pointer stays valid and no engine path changed. They are removed for real when Settings absorbs them in **R3**.
 - **Tests:** new `record.TransportDockTest` (11 cases) covers the dock seams/objectNames, per-state visibility (Ready→Record, Recording→Pause+Stop, Paused→Resume+Stop, Completed→Record again + result info), primary-enable gating, interactive vs read-only toggles, the record signal, the timer text/role, and the absence of a kiosk "Start Recording" label. Debug build green; focused (264) + full (561) CTest pass.
 - **Deferred to R2B:** live L/R stereo dB meters in the dock (real per-channel data not yet plumbed; no fakes added), title-bar Completed→"Saved" pill + recording-health metrics, and final pixel polish.
 - **Not touched:** Settings/Source/Webcam/Diagnostics/Logs/Hotkeys/About interiors, R1B shell/top-nav (status pill semantics unchanged), capture/encoder/muxer/audio internals, recording state machine, settings schema, build metadata, `PreviewSurface`/DXGI.
 
-### Implementation status — R2B landed
+### Implementation status: R2B landed
 
-Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, finishing the R2A visual gaps without expanding scope.
+Delivered as **R2B: Record Dock Polish / Completed Status / Source Pill**, finishing the R2A visual gaps without expanding scope.
 
-- **Completed → "Saved" title pill:** `RecordPage::buildChromeStatusLabel()` now returns `SAVED` for a clean saved recording (`Completed` + `HasResult` + `last_succeeded`); `OperationalTitleBar` maps `SAVED` to a green `Saved` pill (same tone as Ready, distinct label), shown while the result dock is visible and reverting to Ready on the next record. No new coordinator/state-machine state was introduced — the label is derived from existing view-model result state. `MainWindow` normalizes `SAVED` → `READY` for the Settings readiness badge so Settings behaviour is unchanged.
-- **Source/change-source pill cleanup:** kept above the preview (the DXGI preview runs a native child HWND that is live in the Ready state, so on-surface Qt overlay pills would be occluded — PreviewSurface/DXGI internals untouched per the sanctioned fallback). Visually compressed: the vestigial empty pre-R2A `preview_context_row_` is collapsed, the column gap tightened (6px) so the source row reads as the preview's context header, and the source chip slimmed to a lighter pill. `Change source` still opens the unchanged Source Picker and stays locked while recording/paused.
+- **Completed → "Saved" title pill:** `RecordPage::buildChromeStatusLabel()` now returns `SAVED` for a clean saved recording (`Completed` + `HasResult` + `last_succeeded`); `OperationalTitleBar` maps `SAVED` to a green `Saved` pill (same tone as Ready, distinct label), shown while the result dock is visible and reverting to Ready on the next record. No new coordinator/state-machine state was introduced: the label is derived from existing view-model result state. `MainWindow` normalizes `SAVED` → `READY` for the Settings readiness badge so Settings behaviour is unchanged.
+- **Source/change-source pill cleanup:** kept above the preview (the DXGI preview runs a native child HWND that is live in the Ready state, so on-surface Qt overlay pills would be occluded: PreviewSurface/DXGI internals untouched per the sanctioned fallback). Visually compressed: the vestigial empty pre-R2A `preview_context_row_` is collapsed, the column gap tightened (6px) so the source row reads as the preview's context header, and the source chip slimmed to a lighter pill. `Change source` still opens the unchanged Source Picker and stays locked while recording/paused.
 - **Dock pixel polish:** countdown select height aligned to the 40px action buttons (Ready-zone alignment), completed-zone Open folder button aligned to 40px. Stable 3-zone geometry preserved.
-- **Meter honesty:** no stereo meters added — no real L/R dBFS feed exists; deferred until the audio pipeline provides per-channel data. No mono RMS duplicated into fake stereo.
-- **Recording-health title metrics:** none added — encoder load is not available at the shell layer, so the simple Recording pill is kept (no generic CPU/GPU/RAM/Disk, no fabricated Drop/Frame/Enc).
+- **Meter honesty:** no stereo meters added: no real L/R dBFS feed exists; deferred until the audio pipeline provides per-channel data. No mono RMS duplicated into fake stereo.
+- **Recording-health title metrics:** none added: encoder load is not available at the shell layer, so the simple Recording pill is kept (no generic CPU/GPU/RAM/Disk, no fabricated Drop/Frame/Enc).
 - **Tests:** new `chrome.OperationalTitleBarTest.StatusPill_ShowsSavedAfterCompletedRecording`; existing `record.TransportDockTest` unchanged and green. Debug build green; focused CTest 265/265; full CTest 562/562.
 - **Not touched:** Settings IA / Source Picker behaviour / Webcam / Diagnostics / Logs / Hotkeys / About, capture/encoder/muxer/audio internals, recording state machine, settings schema, build metadata, `PreviewSurface`/DXGI, right-rail/global-transport (remain absent).
 
 ---
 
-## HYBRID-PORT-R3 — Settings Compact IA
+## HYBRID-PORT-R3: Settings Compact IA
 
 ### Scope
 
@@ -273,28 +272,28 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 - QComboBox selects for codec/container/preset/devices.
 - QSS switch toggles (mirroring prototype `Toggle` component).
 - Output folder + filename pattern row with token reference chips.
-- Preset management (create/rename/export) — marked as Later; UI scaffolding only in this phase.
+- Preset management (create/rename/export): marked as Later; UI scaffolding only in this phase.
 - Compact audio source rows with inline stereo meters.
 - Remove separate Video, Audio, Output, Webcam, Advanced as top-level pages; Advanced becomes a section or detail within Settings.
 
 ### Likely files/classes
 
 **New / heavily modified:**
-- New: `pages/SettingsPage.h/.cpp` — unified settings page with two-column card grid.
-- `pages/ConfigPage.h/.cpp` — absorb or replace; becomes SettingsPage.
-- New: `ui/widgets/SettingsCard.h/.cpp` — card container with title, right accessory, border, radius (shared across cards).
-- `ui/widgets/AudioSourceRow.h/.cpp` — update to compact row style (icon + label + dB readout + toggle + inline stereo meter).
-- `ui/widgets/SegmentedControl.h/.cpp` — new widget for segmented button groups (container, quality, FPS, timing, output resolution).
-- New: `ui/widgets/ChromaKeyPicker.h/.cpp` — color swatch grid for webcam chroma key. **MVP:** UI may show chroma key controls only if the feature exists or is clearly disabled/planned. Do not present chroma key as active if the capture/compositor path does not process it. **Later:** real-time chroma key processing, tolerance pipeline integration, preview parity with final recording output.
+- New: `pages/SettingsPage.h/.cpp`: unified settings page with two-column card grid.
+- `pages/ConfigPage.h/.cpp`: absorb or replace; becomes SettingsPage.
+- New: `ui/widgets/SettingsCard.h/.cpp`: card container with title, right accessory, border, radius (shared across cards).
+- `ui/widgets/AudioSourceRow.h/.cpp`: update to compact row style (icon + label + dB readout + toggle + inline stereo meter).
+- `ui/widgets/SegmentedControl.h/.cpp`: new widget for segmented button groups (container, quality, FPS, timing, output resolution).
+- New: `ui/widgets/ChromaKeyPicker.h/.cpp`: color swatch grid for webcam chroma key. **MVP:** UI may show chroma key controls only if the feature exists or is clearly disabled/planned. Do not present chroma key as active if the capture/compositor path does not process it. **Later:** real-time chroma key processing, tolerance pipeline integration, preview parity with final recording output.
 
 **Removed / repurposed:**
-- `pages/VideoPage.h/.cpp` — absorbed into SettingsPage.
-- `pages/AudioPage.h/.cpp` — absorbed into SettingsPage.
-- `pages/OutputPage.h/.cpp` — profile management absorbed; output settings into SettingsPage.
-- `pages/WebcamPage.h/.cpp` — absorbed into SettingsPage Webcam card.
-- `pages/AdvancedPage.h/.cpp` — collapsed advanced section within Settings.
-- `ui/widgets/CodecCard.h/.cpp` — removed (replaced by segmented + select).
-- Quality card widgets — removed (replaced by segmented control).
+- `pages/VideoPage.h/.cpp`: absorbed into SettingsPage.
+- `pages/AudioPage.h/.cpp`: absorbed into SettingsPage.
+- `pages/OutputPage.h/.cpp`: profile management absorbed; output settings into SettingsPage.
+- `pages/WebcamPage.h/.cpp`: absorbed into SettingsPage Webcam card.
+- `pages/AdvancedPage.h/.cpp`: collapsed advanced section within Settings.
+- `ui/widgets/CodecCard.h/.cpp`: removed (replaced by segmented + select).
+- Quality card widgets: removed (replaced by segmented control).
 
 ### Risks
 
@@ -326,10 +325,10 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 
 **Codex xhigh** if R0 docs are precise and card-by-card specs are clear. **Claude Opus xhigh** if significant widget-creation ambiguity remains or if the consolidation of 5 pages into one requires architectural decisions.
 
-### Implementation status — landed
+### Implementation status: landed
 
-- **Card IA:** `ConfigPage` reflowed into the hybrid compact card grid — full-width **Preset** card, two-column **Format & encoding | Audio** row (collapses to one column below 880px), full-width **Webcam** card, full-width **Output** card, and a collapsed **Advanced / Expert** note. The readiness banner stays at the top. The old "Preset & Format / Capture Quality / Capture Behavior / Audio Sources / Webcam Setup" titles are gone; their controls moved into the new cards with object names, signals, slots, and the single `config_page_` instance preserved.
-- **Consolidation reality:** `VideoPage`/`AudioPage`/`OutputPage` were already not compiled or routed (dead code from earlier slices); only `ConfigPage` is the live Settings surface. R3 reshapes its interior rather than merging five live pages. Advanced and Webcam remain Settings **sub-pages** (reached from the cards), not top-level nav — no shell/routing change was needed.
+- **Card IA:** `ConfigPage` reflowed into the hybrid compact card grid: full-width **Preset** card, two-column **Format & encoding | Audio** row (collapses to one column below 880px), full-width **Webcam** card, full-width **Output** card, and a collapsed **Advanced / Expert** note. The readiness banner stays at the top. The old "Preset & Format / Capture Quality / Capture Behavior / Audio Sources / Webcam Setup" titles are gone; their controls moved into the new cards with object names, signals, slots, and the single `config_page_` instance preserved.
+- **Consolidation reality:** `VideoPage`/`AudioPage`/`OutputPage` were already not compiled or routed (dead code from earlier slices); only `ConfigPage` is the live Settings surface. R3 reshapes its interior rather than merging five live pages. Advanced and Webcam remain Settings **sub-pages** (reached from the cards), not top-level nav: no shell/routing change was needed.
 - **Format & encoding:** compact segmented container control, video/audio codec selects with reconciliation, the compact 3-segment Quality control (hidden `videoQualityCombo` still the single emit seam), real frame-rate select (`frameRateCombo`), CFR/VFR timing, and Capture cursor.
 - **Audio:** hybrid source order System → Application → Microphone; Separate-track toggles + mic device select preserved. **No** meters added in Settings (no real per-source L/R feed); the hint points to the Record dock. No fake gain/volume.
 - **Webcam:** Record webcam + Camera + `Open Webcam Setup` preserved; no placement/PiP in Settings; Mirror honestly stated as not saved (`WebcamSettings` has no field); chroma stays in Webcam Setup where the real `video_thread` chroma pipeline lives.
@@ -348,7 +347,7 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 
 ---
 
-## HYBRID-PORT-R4 — Source Modal + Region UX
+## HYBRID-PORT-R4: Source Modal + Region UX
 
 ### Scope
 
@@ -359,17 +358,17 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 - Region overlay: drag-to-draw, corner resize, move within bounds, Escape to cancel.
 - No search at current list size (add later only if Windows list genuinely needs it).
 - System/helper/tool windows hidden from default Windows grid.
-- Webcam WYSIWYG PiP placement/size/mirror in Record preview — marked as Later.
+- Webcam WYSIWYG PiP placement/size/mirror in Record preview: marked as Later.
 
 ### Likely files/classes
 
 **New / heavily modified:**
-- `ui/dialogs/SourcePickerDialog.h/.cpp` — convert from `QDialog` to in-window overlay widget pattern; restructure tabs as segmented control.
-- New: `ui/widgets/OverlayModal.h/.cpp` — reusable in-window modal base (backdrop + centered frame).
-- `ui/widgets/CaptureTargetCard.h/.cpp` — update to hybrid card style (striped thumbnail, accent border, check badge).
-- New: `ui/widgets/RegionSelectionOverlay.h/.cpp` — or update existing: preset grid + draw/resize interaction.
-- `ui/dialogs/SourcePickerWindowRules.h` — update window filtering rules.
-- New: `ui/widgets/AspectThumbnail.h/.cpp` — aspect-ratio preview card for region presets.
+- `ui/dialogs/SourcePickerDialog.h/.cpp`: convert from `QDialog` to in-window overlay widget pattern; restructure tabs as segmented control.
+- New: `ui/widgets/OverlayModal.h/.cpp`: reusable in-window modal base (backdrop + centered frame).
+- `ui/widgets/CaptureTargetCard.h/.cpp`: update to hybrid card style (striped thumbnail, accent border, check badge).
+- New: `ui/widgets/RegionSelectionOverlay.h/.cpp`: or update existing: preset grid + draw/resize interaction.
+- `ui/dialogs/SourcePickerWindowRules.h`: update window filtering rules.
+- New: `ui/widgets/AspectThumbnail.h/.cpp`: aspect-ratio preview card for region presets.
 
 ### Risks
 
@@ -396,11 +395,11 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 
 ### Model recommendation
 
-**Claude Opus xhigh/max** — modal overlay pattern, region draw/resize interaction, and pointer event handling are architecturally sensitive.
+**Claude Opus xhigh/max**: modal overlay pattern, region draw/resize interaction, and pointer event handling are architecturally sensitive.
 
 ---
 
-## HYBRID-PORT-R5 — Diagnostics Pipeline
+## HYBRID-PORT-R5: Diagnostics Pipeline
 
 ### Scope
 
@@ -411,9 +410,9 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 - Capability matrix (existing backend probes displayed in compact table).
 - Pipeline telemetry sparklines (static gauges first; Qt Charts sparklines as Later).
 - Recommendation card based on detected issues.
-- Telemetry confined to this page — no global CPU/GPU/RAM/Disk stats.
+- Telemetry confined to this page: no global CPU/GPU/RAM/Disk stats.
 
-### Pipeline metrics — MVP vs Later
+### Pipeline metrics: MVP vs Later
 
 **MVP:**
 - Pipeline section can be static/planned if real metrics are not instrumented.
@@ -429,13 +428,13 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 ### Likely files/classes
 
 **New / heavily modified:**
-- `pages/DiagnosticsPage.h/.cpp` — restructure to pipeline-first layout.
-- New: `ui/widgets/PipelineStepCard.h/.cpp` — individual pipeline step with status bar, key-value lines, status pill.
-- New: `ui/widgets/PipelineFlow.h/.cpp` — horizontal flow with cards + arrow connectors.
-- New: `ui/widgets/SparklineWidget.h/.cpp` — custom paintEvent sparkline (or Qt Charts wrapper if already linked).
-- `diagnostics/CapabilitySummary.h/.cpp` — consume existing probes.
-- `diagnostics/RecommendationEngine.h/.cpp` — consume existing recommendations.
-- `diagnostics/DiagnosticsPresentation.h` — update presentation helpers for pipeline format.
+- `pages/DiagnosticsPage.h/.cpp`: restructure to pipeline-first layout.
+- New: `ui/widgets/PipelineStepCard.h/.cpp`: individual pipeline step with status bar, key-value lines, status pill.
+- New: `ui/widgets/PipelineFlow.h/.cpp`: horizontal flow with cards + arrow connectors.
+- New: `ui/widgets/SparklineWidget.h/.cpp`: custom paintEvent sparkline (or Qt Charts wrapper if already linked).
+- `diagnostics/CapabilitySummary.h/.cpp`: consume existing probes.
+- `diagnostics/RecommendationEngine.h/.cpp`: consume existing recommendations.
+- `diagnostics/DiagnosticsPresentation.h`: update presentation helpers for pipeline format.
 
 ### Risks
 
@@ -464,19 +463,19 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 
 **Codex xhigh** if live pipeline metrics exist and the task is primarily UI scaffolding around real data. **Claude Opus xhigh** if metrics are sparse and significant UI-only scaffolding with clear planned-state labeling is required.
 
-### Implementation status — landed
+### Implementation status: landed
 
 - **Pipeline-first IA:** `DiagnosticsPage` reordered to readiness banner → **CAPTURE PIPELINE** (the page's visual center, directly below the banner) → **RECOMMENDATIONS** (the former "Top Issues", actionable cards) → **CAPABILITY MATRIX** (real probes, visible but secondary) → **Active configuration** (collapsed reference) → **Self-Test** → **Logs** redirect. The old "Pipeline · Planned note" strip and the "Technical Details" umbrella were removed.
 - **New widgets:** `ui/widgets/PipelineStepCard` (name + status pill + honest note; status enum `Ok / Hotspot / Over / Planned / Unavailable`, the last two live-only values reserved for future telemetry) and `ui/widgets/PipelineFlow` (the six canonical steps **Source Capture → Frame Queue → Compositor → Encoder → Muxer → Disk** with `→` connectors, fixed order, `setStepStatus(index, status, note)`).
-- **Real vs planned mapping (honest, no fakes):** steps backed by a real probe are static availability checks — **Encoder** = `QueryVideoCodec(active).level` selectable, **Muxer** = `QueryContainer(active).level` selectable, **Disk** = `SelfTestRunner::CheckOutputPathWritable()` temp-dir probe → `Ok`/`Unavailable`. Probe-less internal stages (**Source Capture / Frame Queue / Compositor**) stay `Planned` ("… is not instrumented yet"). **No** card renders numeric latency / queue depth / drops / throughput; the section meta reads `Static checks` and a caption states the status is static, not live timing. No sparklines were drawn (skipped, not faked). No generic CPU/GPU/RAM/Disk dashboard.
+- **Real vs planned mapping (honest, no fakes):** steps backed by a real probe are static availability checks: **Encoder** = `QueryVideoCodec(active).level` selectable, **Muxer** = `QueryContainer(active).level` selectable, **Disk** = `SelfTestRunner::CheckOutputPathWritable()` temp-dir probe → `Ok`/`Unavailable`. Probe-less internal stages (**Source Capture / Frame Queue / Compositor**) stay `Planned` ("… is not instrumented yet"). **No** card renders numeric latency / queue depth / drops / throughput; the section meta reads `Static checks` and a caption states the status is static, not live timing. No sparklines were drawn (skipped, not faked). No generic CPU/GPU/RAM/Disk dashboard.
 - **Capability matrix:** the existing real `CapabilitySummary` table (OS/GPU/NVENC/codecs/containers) was promoted out of the collapsed "Technical Details" into a visible-but-secondary `CAPABILITY MATRIX` panel; the section meta shows the live probe count. Active configuration remains a collapsed reference. All existing diagnostics checks, recommendations, and self-test rows still render.
-- **Honesty fixes:** the **Export Report** button no longer enables to a no-op — it stays disabled with a "planned for a future build" tooltip. The stale "listed in Technical Details below" copy now points to the capability matrix.
-- **Tests:** new `pipeline_flow_tests` (step order/canonical names, default Planned, status→pill/property wiring, no-fake-metric guard) and `diagnostics_page_tests` (page contains the `pipelineFlow` with the six steps in order, real Encoder/Muxer/Disk resolve to `Ok` on the validated baseline while probe-less stages stay `Planned`, capability rows render, Run Check yields READY, Export stays disabled) — both `TEST_PREFIX diagnostic.`. Backend `diagnostics_tests` unchanged. Debug build green; focused CTest 317/317; full CTest 587/587.
+- **Honesty fixes:** the **Export Report** button no longer enables to a no-op: it stays disabled with a "planned for a future build" tooltip. The stale "listed in Technical Details below" copy now points to the capability matrix.
+- **Tests:** new `pipeline_flow_tests` (step order/canonical names, default Planned, status→pill/property wiring, no-fake-metric guard) and `diagnostics_page_tests` (page contains the `pipelineFlow` with the six steps in order, real Encoder/Muxer/Disk resolve to `Ok` on the validated baseline while probe-less stages stay `Planned`, capability rows render, Run Check yields READY, Export stays disabled): both `TEST_PREFIX diagnostic.`. Backend `diagnostics_tests` unchanged. Debug build green; focused CTest 317/317; full CTest 587/587.
 - **Not touched:** diagnostics backend probes (`CapabilitySummary` / `SelfTestRunner` / `ConfigSummary` / `RecommendationEngine` logic), `AppLog`, capture/encoder/muxer/audio internals, recording state machine, settings schema, build metadata, shell/top-nav, Record/PreviewSurface/DXGI, Source picker, Settings IA, Logs, Hotkeys, About.
 
 ---
 
-## HYBRID-PORT-R6 — Hotkeys / About / Logs Polish
+## HYBRID-PORT-R6: Hotkeys / About / Logs Polish
 
 ### Scope
 
@@ -488,11 +487,11 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 ### Likely files/classes
 
 **New / heavily modified:**
-- `pages/HotkeysPage.h/.cpp` — update layout to compact table rows with keycap chips.
-- `pages/LogsPage.h/.cpp` — update to contained log surface with filter controls.
-- `ui/dialogs/AboutDialog.h/.cpp` — update to centered card style with detail table.
-- `ui/widgets/KeycapChip.h/.cpp` — monospace keycap chip widget.
-- `ui/widgets/LogFilterBar.h/.cpp` — segmented filter + Copy button.
+- `pages/HotkeysPage.h/.cpp`: update layout to compact table rows with keycap chips.
+- `pages/LogsPage.h/.cpp`: update to contained log surface with filter controls.
+- `ui/dialogs/AboutDialog.h/.cpp`: update to centered card style with detail table.
+- `ui/widgets/KeycapChip.h/.cpp`: monospace keycap chip widget.
+- `ui/widgets/LogFilterBar.h/.cpp`: segmented filter + Copy button.
 
 ### Risks
 
@@ -517,83 +516,29 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 
 ### Model recommendation
 
-**Codex high/xhigh** — three independent UI surfaces, each well-defined in the prototype, with minimal architectural risk.
+**Codex high/xhigh**: three independent UI surfaces, each well-defined in the prototype, with minimal architectural risk.
 
-### Implementation status — landed
+### Implementation status: landed
 
-- **Hotkeys:** `HotkeysPage` reflowed into compact table-like rows inside two `panel` frames —
-  `ACTIVE HOTKEYS` (Available now) and `PLANNED / UNAVAILABLE` (Not in this build) — with hairline
-  row separators, no oversized cards. Bindings render via the new `ui/widgets/KeycapChip`
-  (IBM-Plex-Mono keycaps, subtle border + bottom-edge shadow, joined by dim `+` labels; muted
-  `Unset` chip when empty). Active rows keep the genuinely-supported Set / Unset rebind
-  (`QKeySequenceEdit`) plus a new `Reset to defaults` button; planned rows expose **no**
-  rebind/keycap controls, only an honest `Not in this build` tag. An honest footnote states
-  shortcuts register globally and that ExoSnap does **not** detect conflicts. Only the four
-  backend-modelled actions are shown — Start/Stop + Pause/Resume are the real WM_HOTKEY-wired
-  ones; Split + Mute Mic are presented as planned (registered but no live handler). No new global
-  hotkey backend, rebinding-where-unsupported, or fake conflict detection was added.
-- **Logs:** `AppLog` publishes structured severity/category/message entries through a bounded
-  in-memory history, and `LogsPage` keeps the contained dark `logViewer` with real All / Info /
-  Issues filters, case-insensitive category/message search, Copy of visible rows, Export of
-  complete history, Clear, and Auto-scroll. The footer still points at
-  `%LOCALAPPDATA%\ExoSnap\logs` for the session log file.
-- **About:** `AboutDialog` rebuilt as a clean centered card — aperture `BrandMarkWidget` +
-  two-tone lowercase `exosnap` wordmark + `Version … · for Windows` line, description, and a
-  metadata table with hairline rows (VERSION / BUILD / COMMIT / AUTHOR) from the generated
-  `ExoSnapBuildInfo.h` / `EXOSNAP_BUILD_CONFIG`. Real actions only: `GitHub` opens the configured
-  repo URL (`https://github.com/Exoridus/exosnap`, from the git remote); `Copy details` copies the
-  real metadata; `Close` (primary). No Release-notes action (no published feed), no fake Encoder
-  capability row, no Copy-diagnostics no-op. QDialog keeps its native title bar but the inner
-  layout is a single clean panel (no debug-card double-frame). About routing from the top nav is
-  unchanged.
-- **QSS:** new `keycap` / `keycap` `[stateRole=muted]` / `keycapPlus` / `hotkeyAction` /
-  `hotkeyActionPlanned` roles and `aboutWordmark` / `aboutVersionLine` roles; existing
-  `plannedTag`, `panel`, `sectionRuleLine`, `note`, button-role styles reused.
-- **Tests:** `test_hotkeys_page` updated (active keycaps render real bindings, unset shows muted
-  keycap, planned rows expose no fake controls, reset restores defaults); new `test_logs_page`
-  (contained read-only no-wrap viewer + Refresh/Copy/Open-folder, no fake level filters, Copy
-  disabled when empty) and `test_about_dialog` (real Version/Build/Commit/Author, GitHub uses the
-  configured repo URL, no fake Release-notes action). Debug build green; focused CTest 329/329;
-  full CTest 596/596.
-- **Not touched:** Record dock / PreviewSurface / DXGI, Source picker / Region model, Settings IA,
-  Diagnostics backend/pipeline, capture/encoder/muxer/audio internals, recording state machine,
-  settings schema, build-metadata generation, shell/top navigation (About routing unchanged),
-  global hotkey registration backend, `AppLog` infrastructure.
+- **Hotkeys:** `HotkeysPage` reflowed into compact table-like rows inside two `panel` frames: `ACTIVE HOTKEYS` (Available now) and `PLANNED / UNAVAILABLE` (Not in this build), with hairline row separators, no oversized cards. Bindings render via the new `ui/widgets/KeycapChip` (IBM-Plex-Mono keycaps, subtle border + bottom-edge shadow, joined by dim `+` labels; muted `Unset` chip when empty). Active rows keep the genuinely-supported Set / Unset rebind (`QKeySequenceEdit`) plus a new `Reset to defaults` button; planned rows expose **no** rebind/keycap controls, only an honest `Not in this build` tag. An honest footnote states shortcuts register globally and that ExoSnap does **not** detect conflicts. Only the four backend-modelled actions are shown: Start/Stop + Pause/Resume are the real WM_HOTKEY-wired ones; Split + Mute Mic are presented as planned (registered but no live handler). No new global hotkey backend, rebinding-where-unsupported, or fake conflict detection was added.
+- **Logs:** `AppLog` publishes structured severity/category/message entries through a bounded in-memory history, and `LogsPage` keeps the contained dark `logViewer` with real All / Info / Issues filters, case-insensitive category/message search, Copy of visible rows, Export of complete history, Clear, and Auto-scroll. The footer still points at `%LOCALAPPDATA%\ExoSnap\logs` for the session log file.
+- **About:** `AboutDialog` rebuilt as a clean centered card: aperture `BrandMarkWidget` + two-tone lowercase `exosnap` wordmark + `Version … · for Windows` line, description, and a metadata table with hairline rows (VERSION / BUILD / COMMIT / AUTHOR) from the generated `ExoSnapBuildInfo.h` / `EXOSNAP_BUILD_CONFIG`. Real actions only: `GitHub` opens the configured repo URL (`https://github.com/Exoridus/exosnap`, from the git remote); `Copy details` copies the real metadata; `Close` (primary). No Release-notes action (no published feed), no fake Encoder capability row, no Copy-diagnostics no-op. QDialog keeps its native title bar but the inner layout is a single clean panel (no debug-card double-frame). About routing from the top nav is unchanged.
+- **QSS:** new `keycap` / `keycap` `[stateRole=muted]` / `keycapPlus` / `hotkeyAction` / `hotkeyActionPlanned` roles and `aboutWordmark` / `aboutVersionLine` roles; existing `plannedTag`, `panel`, `sectionRuleLine`, `note`, button-role styles reused.
+- **Tests:** `test_hotkeys_page` updated (active keycaps render real bindings, unset shows muted keycap, planned rows expose no fake controls, reset restores defaults); new `test_logs_page` (contained read-only no-wrap viewer + Refresh/Copy/Open-folder, no fake level filters, Copy disabled when empty) and `test_about_dialog` (real Version/Build/Commit/Author, GitHub uses the configured repo URL, no fake Release-notes action). Debug build green; focused CTest 329/329; full CTest 596/596.
+- **Not touched:** Record dock / PreviewSurface / DXGI, Source picker / Region model, Settings IA, Diagnostics backend/pipeline, capture/encoder/muxer/audio internals, recording state machine, settings schema, build-metadata generation, shell/top navigation (About routing unchanged), global hotkey registration backend, `AppLog` infrastructure.
 
 ---
 
-## HYBRID-ABOUT-INLINE-R1 — Inline About Overlay + Saved Status Scope
+## HYBRID-ABOUT-INLINE-R1: Inline About Overlay + Saved Status Scope
 
-Follow-up shell/About polish resolving the two HYBRID-VERIFY-R1 findings. Supersedes the
-R6 note that "About `QDialog` keeps its native title bar / About routing is unchanged".
+Follow-up shell/About polish resolving the two HYBRID-VERIFY-R1 findings. Supersedes the R6 note that "About `QDialog` keeps its native title bar / About routing is unchanged".
 
-### Implementation status — landed
+### Implementation status: landed
 
-- **Inline About (Part A):** the separate native About `QDialog` is removed; About is now an
-  in-window overlay (`ui/dialogs/AboutOverlay`) — a translucent backdrop (painted in code) with
-  a centered `#aboutCard`. It is parented to the page **stack**, so the title bar / window
-  controls stay usable and correctly painted (no semi-transparent sibling shine-through on the
-  chrome). Qt manages native-window z-order when the alien overlay is `raise()`d above the native
-  `PreviewSurface`, so it renders cleanly over the Record page (the DXGI preview yields behind the
-  card; `PreviewSurface`/DXGI untouched). The top-nav About action opens it; Close / `Escape` /
-  backdrop-click / any nav switch dismiss it; `navigateToPage()` closes it so it never lingers
-  over an unrelated page. No native title bar, no focus-sticky child window after closing. The R6
-  card content/actions are retained verbatim (aperture mark, two-tone wordmark, Version line,
-  description, real VERSION/BUILD/COMMIT/AUTHOR table, `GitHub` configured-URL-only, `Copy
-  details`, `Close`).
-- **Saved status scope (Part B):** the title-bar `Saved` pill is scoped to the Record page via a
-  pure helper `ui::chrome::ScopeStatusLabelForActivePage(label, on_record_page)` (in
-  `RecordingStatusGuards.h`) applied by `MainWindow::applyTitleBarStatus()` on every page switch
-  and chrome-state change. `SAVED` is normalized to `READY` on any non-Record page; every other
-  status stays global. `record_status_label_` is unchanged, so returning to Record restores
-  `Saved` while the result dock is visible. No recorder coordinator / state-machine change.
-- **Tests:** `about_overlay_tests` (renders in-window not as a `QDialog`, real metadata,
-  configured GitHub URL, no fake Release notes, open/close + `closed()` signal) replaces
-  `about_dialog_tests`; `operational_title_bar_tests` gains the Saved-scope cases. Debug build
-  green; focused CTest 330/330; full CTest 602/602.
-- **Not touched:** Record transport dock layout, `PreviewSurface`/DXGI, Source picker / Region
-  model, Settings IA, Diagnostics pipeline/backend, Logs/Hotkeys content, capture/encoder/muxer/
-  audio internals, recorder state machine, settings schema, build-metadata generation.
+- **Inline About (Part A):** the separate native About `QDialog` is removed; About is now an in-window overlay (`ui/dialogs/AboutOverlay`): a translucent backdrop (painted in code) with a centered `#aboutCard`. It is parented to the page **stack**, so the title bar / window controls stay usable and correctly painted (no semi-transparent sibling shine-through on the chrome). Qt manages native-window z-order when the alien overlay is `raise()`d above the native `PreviewSurface`, so it renders cleanly over the Record page (the DXGI preview yields behind the card; `PreviewSurface`/DXGI untouched). The top-nav About action opens it; Close / `Escape` / backdrop-click / any nav switch dismiss it; `navigateToPage()` closes it so it never lingers over an unrelated page. No native title bar, no focus-sticky child window after closing. The R6 card content/actions are retained verbatim (aperture mark, two-tone wordmark, Version line, description, real VERSION/BUILD/COMMIT/AUTHOR table, `GitHub` configured-URL-only, `Copy details`, `Close`).
+- **Saved status scope (Part B):** the title-bar `Saved` pill is scoped to the Record page via a pure helper `ui::chrome::ScopeStatusLabelForActivePage(label, on_record_page)` (in `RecordingStatusGuards.h`) applied by `MainWindow::applyTitleBarStatus()` on every page switch and chrome-state change. `SAVED` is normalized to `READY` on any non-Record page; every other status stays global. `record_status_label_` is unchanged, so returning to Record restores `Saved` while the result dock is visible. No recorder coordinator / state-machine change.
+- **Tests:** `about_overlay_tests` (renders in-window not as a `QDialog`, real metadata, configured GitHub URL, no fake Release notes, open/close + `closed()` signal) replaces `about_dialog_tests`; `operational_title_bar_tests` gains the Saved-scope cases. Debug build green; focused CTest 330/330; full CTest 602/602.
+- **Not touched:** Record transport dock layout, `PreviewSurface`/DXGI, Source picker / Region model, Settings IA, Diagnostics pipeline/backend, Logs/Hotkeys content, capture/encoder/muxer/ audio internals, recorder state machine, settings schema, build-metadata generation.
 
 ---
 

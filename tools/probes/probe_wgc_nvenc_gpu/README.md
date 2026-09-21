@@ -43,10 +43,10 @@ probe_wgc_nvenc_gpu <index>      # capture target at 0-based index
 | 06 | Confirm `NV_ENC_CODEC_AV1_GUID` and `NV_ENC_BUFFER_FORMAT_NV12` |
 | 07 | Fetch AV1 preset config (P4, HIGH_QUALITY); set `chromaFormatIDC=1` |
 | 08 | `nvEncInitializeEncoder` with `enablePTD=1` |
-| 09 | `nvEncCreateBitstreamBuffer` only — no CPU input buffer |
+| 09 | `nvEncCreateBitstreamBuffer` only: no CPU input buffer |
 | 10 | Create NV12 D3D11 texture (`D3D11_USAGE_DEFAULT`, `BIND_RENDER_TARGET`, `CPUAccessFlags=0`) |
 | 11 | Create `ID3D11VideoProcessorEnumerator`, `ID3D11VideoProcessor`, NV12 output view |
-| 12 | `nvEncRegisterResource` — NV12 texture as `NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX` |
+| 12 | `nvEncRegisterResource`: NV12 texture as `NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX` |
 | 13 | Start WGC frame pool + `StartCapture` |
 | 14 | Wait for first frame (5 s timeout); validate BGRA8 format and dimensions |
 | 15 | Capture/convert/map/encode loop (300 frames or 5 s) |

@@ -6,13 +6,9 @@ Accepted.
 
 ## Context
 
-The MVP Logs page previously read a text tail from the session log file. That made severity
-filtering impossible without parsing rendered strings, prevented live incremental updates, and let
-the UI grow independently from any bounded in-memory model.
+The MVP Logs page previously read a text tail from the session log file. That made severity filtering impossible without parsing rendered strings, prevented live incremental updates, and let the UI grow independently from any bounded in-memory model.
 
-The recorder core already has a separate structured JSON logger for engine internals. The Qt app
-still needs a lightweight UI-facing log model for application lifecycle, preview, target, output,
-and recording coordination events.
+The recorder core already has a separate structured JSON logger for engine internals. The Qt app still needs a lightweight UI-facing log model for application lifecycle, preview, target, output, and recording coordination events.
 
 ## Decision
 
@@ -24,12 +20,9 @@ Use one canonical Qt app log entry:
 - message text
 - immutable sequence for subscriber deduplication
 
-`AppLog` owns a mutex-protected bounded in-memory history with oldest-first eviction. Publication
-from worker threads appends under the mutex, then schedules a queued Qt-thread batch delivery to
-subscribers. Subscribers receive value copies and cannot mutate stored entries.
+`AppLog` owns a mutex-protected bounded in-memory history with oldest-first eviction. Publication from worker threads appends under the mutex, then schedules a queued Qt-thread batch delivery to subscribers. Subscribers receive value copies and cannot mutate stored entries.
 
-The Logs page consumes this model directly, applies severity and text filters against structured
-fields, renders deterministic formatted text, and keeps Copy/Export semantics separate:
+The Logs page consumes this model directly, applies severity and text filters against structured fields, renders deterministic formatted text, and keeps Copy/Export semantics separate:
 
 - Copy uses the currently visible filtered rows.
 - Export writes the complete current in-memory history as UTF-8 text.
@@ -41,12 +34,9 @@ fields, renders deterministic formatted text, and keeps Copy/Export semantics se
 - Burst logging is delivered in batches and appends incrementally in the UI.
 - The in-memory history is bounded and does not depend on file-tail size.
 - The app log remains independent from recorder-core JSON logging.
-- This is not a generic event bus, telemetry service, file rotation service, or third-party logging
-  framework.
+- This is not a generic event bus, telemetry service, file rotation service, or third-party logging framework.
 
 ## Unresolved Issues
 
-- The app session log file is a plain text file with size-based rotation
-  (5 MiB per file, current file plus two backups: `exosnap.log`, `.1`, `.2`);
-  there is no time-based or per-session rotation.
+- The app session log file is a plain text file with size-based rotation (5 MiB per file, current file plus two backups: `exosnap.log`, `.1`, `.2`); there is no time-based or per-session rotation.
 - Engine JSON logs and Qt app logs remain separate surfaces.

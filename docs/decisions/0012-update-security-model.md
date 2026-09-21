@@ -2,13 +2,11 @@
 
 ## Status
 
-Accepted — implementation scheduled for 0.4.0 (see roadmap).
+Accepted. Implementation scheduled for 0.4.0 (see roadmap).
 
 ## Context
 
-ExoSnap runs with user-level privileges and writes media files to user-chosen paths. An update
-mechanism that pulls and executes code must be treated as a security surface, not just a
-convenience feature. Without explicit constraints, auto-update implementations tend to:
+ExoSnap runs with user-level privileges and writes media files to user-chosen paths. An update mechanism that pulls and executes code must be treated as a security surface, not just a convenience feature. Without explicit constraints, auto-update implementations tend to:
 
 - Fetch binaries without hash or signature verification.
 - Store a server token in the client binary.
@@ -20,38 +18,23 @@ convenience feature. Without explicit constraints, auto-update implementations t
 
 ### Signed manifest and package hash
 
-Every update manifest is signed with a private key held exclusively by the ExoSnap release
-pipeline. The client verifies the manifest signature before reading any content from it. Each
-package listed in the manifest includes a cryptographic hash (SHA-256 minimum). The client
-verifies the hash of the downloaded binary before executing it. An update that fails signature
-or hash verification is rejected silently with a structured log entry; no partial binary is
-retained.
+Every update manifest is signed with a private key held exclusively by the ExoSnap release pipeline. The client verifies the manifest signature before reading any content from it. Each package listed in the manifest includes a cryptographic hash (SHA-256 minimum). The client verifies the hash of the downloaded binary before executing it. An update that fails signature or hash verification is rejected silently with a structured log entry. No partial binary is retained.
 
 ### No GitHub token in the client
 
-The client binary contains no API token, OAuth credential, or secret of any kind. Update checks
-use only public, unauthenticated endpoints (e.g., public GitHub Releases API or a public manifest
-URL). Any rate-limiting is handled by respecting standard HTTP retry-after headers.
+The client binary contains no API token, OAuth credential, or secret of any kind. Update checks use only public, unauthenticated endpoints (e.g., public GitHub Releases API or a public manifest URL). Any rate-limiting is handled by respecting standard HTTP retry-after headers.
 
 ### Downgrade and rollback protection
 
-The manifest includes a minimum accepted version field. The client refuses to install a package
-whose version is below this field (downgrade protection). If a user explicitly requests rollback
-to a prior version, that action requires user confirmation and is only permitted if the target
-version is above the minimum accepted version declared in the current manifest.
+The manifest includes a minimum accepted version field. The client refuses to install a package whose version is below this field (downgrade protection). If a user explicitly requests rollback to a prior version, that action requires user confirmation and is only permitted if the target version is above the minimum accepted version declared in the current manifest.
 
 ### No update during recording or finalization
 
-Update download and installation are blocked while a recording session is active or while a
-file is being finalized (muxer flush, moov write, recovery manifest commit). The update UI
-shows a clear reason. The update resumes or retries after the session ends.
+Update download and installation are blocked while a recording session is active or while a file is being finalized (muxer flush, moov write, recovery manifest commit). The update UI shows a clear reason. The update resumes or retries after the session ends.
 
 ### No silent auto-restart
 
-The application never silently restarts itself to apply an update. The user is notified that a
-restart is needed and initiates it explicitly. If the application is closed and reopened normally,
-a pending update may be applied at that point — but only after user confirmation on first launch
-if the update was not explicitly approved.
+The application never silently restarts itself to apply an update. The user is notified that a restart is needed and initiates it explicitly. If the application is closed and reopened normally, a pending update may be applied at that point, but only after user confirmation on first launch if the update was not explicitly approved.
 
 ### Portable vs. installed distinction
 
@@ -60,62 +43,37 @@ The update mechanism behaves differently depending on installation mode:
 | Mode | Update behavior |
 |---|---|
 | Installed (installer) | Standard auto-update flow; installer applies update |
-| Portable ZIP | Update check only — notifies user of a new version; does not modify files in place |
+| Portable ZIP | Update check only - notifies user of a new version; does not modify files in place |
 
-The portable ZIP is extracted to a user-chosen location that the application has no right to
-modify unilaterally. Update notification links to the releases page.
+The portable ZIP is extracted to a user-chosen location that the application has no right to modify unilaterally. Update notification links to the releases page.
 
 ### Updates off by default for self-built binaries
 
-When the build does not define `EXOSNAP_OFFICIAL_BUILD` (or equivalent), the update check is
-disabled at compile time. Self-built binaries do not phone home and do not receive update
-notifications. This is enforced in the build system, not by a runtime flag.
+When the build does not define `EXOSNAP_OFFICIAL_BUILD` (or equivalent), the update check is disabled at compile time. Self-built binaries do not phone home and do not receive update notifications. This is enforced in the build system, not by a runtime flag.
 
 ### Stable and Preview channels
 
-The update system supports two channels: `Stable` and `Preview`. The default is `Stable`. Users
-may opt in to `Preview` in settings. Each channel has its own signed manifest. Channel switching
-requires an explicit user action and a restart.
+The update system supports two channels: `Stable` and `Preview`. The default is `Stable`. Users may opt in to `Preview` in settings. Each channel has its own signed manifest. Channel switching requires an explicit user action and a restart.
 
 ## Clarification (0.4.0 implementation)
 
-The original decision conflates two independent signatures. They are explicitly separated here so
-the 0.4.0 slices and the hosting model are unambiguous.
+The original decision conflates two independent signatures. They are explicitly separated here so the 0.4.0 slices and the hosting model are unambiguous.
 
-### Update-integrity signature (ed25519) — required, self-managed, no cost
+### Update-integrity signature (ed25519): required, self-managed, no cost
 
-The "signed manifest and package hash" requirement above is satisfied by an **ed25519 (minisign-
-style) signature**, not by an Authenticode code-signing certificate. The release pipeline holds the
-private key as a CI secret (e.g. a GitHub Actions secret) and signs the manifest in the release
-step; the corresponding public key is **embedded in the client binary** at build time. This needs
-no certificate authority, no paid certificate, and no server beyond the public release host.
+The "signed manifest and package hash" requirement above is satisfied by an **ed25519 (minisign-style) signature**, not by an Authenticode code-signing certificate. The release pipeline holds the private key as a CI secret (e.g. a GitHub Actions secret) and signs the manifest in the release step. The corresponding public key is **embedded in the client binary** at build time. This needs no certificate authority, no paid certificate, and no server beyond the public release host.
 
-### Hosting over GitHub Releases — no custom infrastructure
+### Hosting over GitHub Releases: no custom infrastructure
 
-Manifests and packages are hosted as **GitHub Release assets**. `Stable` maps to the latest
-non-prerelease, `Preview` to the latest prerelease (each with its own signed manifest). Update
-checks hit the public, unauthenticated GitHub Releases API — consistent with "no GitHub token in
-the client". No ExoSnap-operated server is required for the updater.
+Manifests and packages are hosted as **GitHub Release assets**. `Stable` maps to the latest non-prerelease, `Preview` to the latest prerelease (each with its own signed manifest). Update checks hit the public, unauthenticated GitHub Releases API, consistent with "no GitHub token in the client". No ExoSnap-operated server is required for the updater.
 
-### Authenticode code-signing — separate concern, not gating this wave
+### Authenticode code-signing: separate concern, not gating this wave
 
-Authenticode signing (which addresses Windows Defender SmartScreen reputation and the "unknown
-publisher" prompt) is a **different** mechanism from the update-integrity signature and from
-HTTPS — HTTPS protects the download in transit, Authenticode binds the file to a verified publisher
-at rest and across mirrors (WinGet/Chocolatey/Scoop). It is **not** required for update integrity
-and is **not** a blocker for the 0.4.0 updater. It is wired as an **optional, late-bound CI signing
-step** that activates once an OSS code-signing certificate is available (a SignPath Foundation
-application is pending as of this writing). Until then official builds ship unsigned, exactly as
-0.3.0 did, and the broader installer/reputation work remains a later-version concern per the
-roadmap.
+Authenticode signing (which addresses Windows Defender SmartScreen reputation and the "unknown publisher" prompt) is a **different** mechanism from the update-integrity signature and from HTTPS. HTTPS protects the download in transit, Authenticode binds the file to a verified publisher at rest and across mirrors (WinGet/Chocolatey/Scoop). It is **not** required for update integrity and is **not** a blocker for the 0.4.0 updater. It is wired as an **optional, late-bound CI signing step** that activates once an OSS code-signing certificate is available (a SignPath Foundation application is pending as of this writing). Until then official builds ship unsigned, exactly as 0.3.0 did, and the broader installer/reputation work remains a later-version concern per the roadmap.
 
-## Amendment (0.9.0 — portable in-place swap)
+## Amendment (0.9.0): portable in-place swap
 
-The "Portable vs. installed distinction" table above described the portable ZIP as **update
-check only — notifies user of a new version; does not modify files in place**. That is superseded.
-As of 0.9.0 the portable path performs an **in-place swap via an external sidecar**
-(`exosnap-updater.exe`), not a notify-only link. The distinction between installed and portable is
-now only the *swap agent*, not whether a swap happens:
+The "Portable vs. installed distinction" table above described the portable ZIP as **update check only: notifies user of a new version, does not modify files in place**. That is superseded. As of 0.9.0 the portable path performs an **in-place swap via an external sidecar** (`exosnap-updater.exe`), not a notify-only link. The distinction between installed and portable is now only the *swap agent*, not whether a swap happens:
 
 | Mode | Update behavior (0.9.0) |
 |---|---|
@@ -124,40 +82,18 @@ now only the *swap agent*, not whether a swap happens:
 
 The **security contract is unchanged** and is what makes an unattended portable swap acceptable:
 
-- **Signature before fields.** The updater verifies the manifest ed25519 signature *before reading
-  any field from it* (unchanged from above).
-- **Hash mismatch is a hard stop.** The downloaded package SHA-256 is verified before it is used;
-  a mismatch aborts the swap and retains no partial binary. Nothing is swapped until verification
-  passes.
-- **Verify under lock (no swap between check and use).** The package is downloaded into a per-user
-  temp directory, which any same-user process can write. To keep that from becoming a
-  time-of-check/time-of-use gap — where a verified package is swapped for an unverified one before
-  the (elevated) `msiexec` or the portable extractor reads it — the updater holds an exclusive
-  deny-write / deny-delete file handle on the package from the moment it is hashed until the package
-  is consumed, and computes the SHA-256 *through that same handle*. While the handle is open the OS
-  refuses every write, rename, and delete of the file from any process (a guarantee the file owner
-  cannot revoke, unlike an ACL), and its open child handle pins the parent directories against
-  rename, so the absolute path handed to the elevated installer cannot be repointed. The bytes that
-  verify are therefore the exact bytes that install. `msiexec` still opens the source read-only,
-  which the lock permits.
-- **No silent restart.** The swap+relaunch happens only after the user clicked **Update**; the app
-  never restarts itself unprompted. The recording/finalization block (above) still gates the whole
-  flow, and the swap window disables interruption during Install/Verify/Restart.
-- **Reversible.** A verification failure after the swap restores the previous version (rollback);
-  the failure UI always names the version that is safe to run.
+- **Signature before fields.** The updater verifies the manifest ed25519 signature *before reading any field from it* (unchanged from above).
+- **Hash mismatch is a hard stop.** The downloaded package SHA-256 is verified before it is used; a mismatch aborts the swap and retains no partial binary. Nothing is swapped until verification passes.
+- **Verify under lock (no swap between check and use).** The package is downloaded into a per-user temp directory, which any same-user process can write. To keep that from becoming a time-of-check/time-of-use gap where a verified package is swapped for an unverified one before the (elevated) `msiexec` or the portable extractor reads it, the updater holds an exclusive deny-write / deny-delete file handle on the package from the moment it is hashed until the package is consumed, and computes the SHA-256 *through that same handle*. While the handle is open the OS refuses every write, rename, and delete of the file from any process (a guarantee the file owner cannot revoke, unlike an ACL), and its open child handle pins the parent directories against rename, so the absolute path handed to the elevated installer cannot be repointed. The bytes that verify are therefore the exact bytes that install. `msiexec` still opens the source read-only, which the lock permits.
+- **No silent restart.** The swap+relaunch happens only after the user clicked **Update**; the app never restarts itself unprompted. The recording/finalization block (above) still gates the whole flow, and the swap window disables interruption during Install/Verify/Restart.
+- **Reversible.** A verification failure after the swap restores the previous version (rollback); the failure UI always names the version that is safe to run.
 
-MOTW is stripped only *after* signature+hash verification passes, so self-verification — not
-SmartScreen — is the trust root for the portable path. See [[0034-in-app-update-and-dual-swap]] for
-the full mechanics.
+MOTW is stripped only *after* signature+hash verification passes, so self-verification (not SmartScreen) is the trust root for the portable path. See [[0034-in-app-update-and-dual-swap]] for the full mechanics.
 
 ## Consequences
 
 - No update-related secret is ever present in the client binary or configuration file.
 - A compromised update server cannot push unsigned packages; the client rejects them.
-- As of the 0.9.0 amendment above, portable builds also receive an in-place staged-rename swap
-  (not just version notifications) — but never silently: the swap only runs after the user clicks
-  Update, and every step (Install/Verify/Restart) is visible.
-- Self-built developer builds have no update mechanism, reducing the attack surface for
-  development environments.
-- The 0.4.0 implementation slice must include the signing key infrastructure, manifest format
-  specification, and installer integration before shipping the auto-updater.
+- As of the 0.9.0 amendment above, portable builds also receive an in-place staged-rename swap (not just version notifications), but never silently. The swap only runs after the user clicks Update, and every step (Install/Verify/Restart) is visible.
+- Self-built developer builds have no update mechanism, reducing the attack surface for development environments.
+- The 0.4.0 implementation slice must include the signing key infrastructure, manifest format specification, and installer integration before shipping the auto-updater.

@@ -1,7 +1,6 @@
 # ExoSnap Developer Probes
 
-Standalone C++ programs that exercise individual hardware subsystems
-independently of the full ExoSnap GUI. These are **not** product applications.
+Standalone C++ programs that exercise individual hardware subsystems independently of the full ExoSnap GUI. These are **not** product applications.
 
 ## Build
 
@@ -30,46 +29,26 @@ Individual probe targets are placed under `build/<preset>/tools/probes/`.
 
 ## The two verification-guest probes
 
-`probe_gpup_nvenc` and `probe_idd_duplication` exist to answer the two questions the
-Hyper-V verification guest is built on, before any gate depends on the answers: does
-NVENC work through a GPU partition, and can the virtual monitor be duplicated. Both
-are built on the host and run in the guest; the host result is the reference the guest
-result is compared against, which is why both print JSON rather than prose.
+`probe_gpup_nvenc` and `probe_idd_duplication` exist to answer the two questions the Hyper-V verification guest is built on, before any gate depends on the answers: does NVENC work through a GPU partition, and can the virtual monitor be duplicated. Both are built on the host and run in the guest. The host result is the reference the guest result is compared against, which is why both print JSON rather than prose.
 
-Either one failing in the guest moves the gates that need it back to the host. See
-`docs/dev/release-verify-vm.md`.
+Either one failing in the guest moves the gates that need it back to the host. See `docs/dev/release-verify-vm.md`.
 
-## probe_mf_aac_encode — Legacy/Transitional Note
+## probe_mf_aac_encode: Legacy/Transitional Note
 
-Media Foundation AAC encoding is a transitional path. It is not the preferred
-future encoder architecture for ExoSnap (which uses FFmpeg's native AAC-LC
-encoder for cross-platform portability — see ADR 0052). This probe remains
-only for current compatibility validation and debugging. Remove it when the
-Media Foundation AAC path is retired from the production pipeline.
+Media Foundation AAC encoding is a transitional path. It is not the preferred future encoder architecture for ExoSnap (which uses FFmpeg's native AAC-LC encoder for cross-platform portability, as described in ADR 0052). This probe remains only for current compatibility validation and debugging. Remove it when the Media Foundation AAC path is retired from the production pipeline.
 
 ## Maintenance Value
 
-- **probe_wgc_preview:** Validates WGC frame capture works. Useful when
-  debugging capture failures or checking frame format compatibility.
-- **probe_process_loopback:** Validates WASAPI process loopback audio capture
-  against a specific PID. Critical for debugging app-audio isolation issues.
-- **probe_nvenc:** Tests NVENC encoder init standalone (no capture dependency).
-  First-stop diagnostic for NVENC API or driver problems.
-- **probe_wgc_nvenc:** End-to-end system-memory capture+encode pipeline.
-  Validates the most common recording path used in production.
-- **probe_wgc_nvenc_gpu:** Tests the GPU-texture-sharing NVENC path. This is
-  a distinct code path from probe_wgc_nvenc (D3D11 texture interop vs system
-  memory copy). Validate this if GPU compositor or texture-sharing issues arise.
-- **probe_mf_aac_encode:** Validates Media Foundation AAC encoder
-  initialization and basic encoding. See retirement note above.
+- **probe_wgc_preview:** Validates WGC frame capture works. Useful when debugging capture failures or checking frame format compatibility.
+- **probe_process_loopback:** Validates WASAPI process loopback audio capture against a specific PID. Critical for debugging app-audio isolation issues.
+- **probe_nvenc:** Tests NVENC encoder init standalone (no capture dependency). First-stop diagnostic for NVENC API or driver problems.
+- **probe_wgc_nvenc:** End-to-end system-memory capture+encode pipeline. Validates the most common recording path used in production.
+- **probe_wgc_nvenc_gpu:** Tests the GPU-texture-sharing NVENC path. This is a distinct code path from probe_wgc_nvenc (D3D11 texture interop vs system memory copy). Validate this if GPU compositor or texture-sharing issues arise.
+- **probe_mf_aac_encode:** Validates Media Foundation AAC encoder initialization and basic encoding. See retirement note above.
 
 ## Relationship to Production Architecture
 
-Probes exercise the same low-level Windows APIs (WGC, WASAPI, NVENC, MF) that
-the production recording engine uses, but in isolation. They share no code
-with the production pipeline — each probe has its own self-contained
-implementation. When a production integration test fails, the corresponding
-probe helps isolate whether the issue is in the API layer or the integration.
+Probes exercise the same low-level Windows APIs (WGC, WASAPI, NVENC, MF) that the production recording engine uses, but in isolation. They share no code with the production pipeline. Each probe has its own self-contained implementation. When a production integration test fails, the corresponding probe helps isolate whether the issue is in the API layer or the integration.
 
 ## Retirement Conditions
 
@@ -80,18 +59,15 @@ A probe should be removed when:
 
 ## Usage
 
-Each probe has its own `README.md` with detailed build and run instructions.
-Probes are excluded from normal Release builds, install rules, and CI.
+Each probe has its own `README.md` with detailed build and run instructions. Probes are excluded from normal Release builds, install rules, and CI.
 
 ### probe_idd_duplication diagnostics
 
-For the DXGI deep-research path, the duplication probe supports the following
-options:
+For the DXGI deep-research path, the duplication probe supports the following options:
 
 - `--frames=<n>`: number of frame samples required before exit.
 - `--duration-ms=<ms>`: per-output runtime budget.
 - `--acquire-timeout-ms=<ms>`: timeout in milliseconds for `AcquireNextFrame`.
 - `--nonblocking-acquire`: force `AcquireNextFrame(0)`.
-- `--resource-reset-before-release`: release the `IDXGIResource` before
-  `ReleaseFrame`.
+- `--resource-reset-before-release`: release the `IDXGIResource` before `ReleaseFrame`.
 - `--hold-ms=<ms>`: wait for N ms after successful acquire before release.

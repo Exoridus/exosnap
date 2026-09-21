@@ -2,15 +2,7 @@
 
 ## Status
 
-Accepted. Phase A (in-app check → notify → deep-link → "Update available · vX.Y") shipped as
-low-risk wiring over existing primitives. Phase B (the actual in-place download → verify → swap →
-restart for **both** portable and MSI) has now landed behind the dedicated `exosnap-updater.exe`
-sidecar; see the amendment below for how the shipped flow differs from the original sketch. Builds on
-the existing `UpdateService` (`RequestUpdateCheck`, `RequestDownloadAndVerify`,
-`packageReadyForInstall`, `HandoffToInstaller`, signature verification), `NotificationManager`
-(`NotificationType::UpdateAvailable`, `NotificationAction::OpenUpdate`), the Settings deep-link
-(`ConfigPage::scrollToSection("settings/updates")`), and `UpdateSettingsPanel`/`UpdateUiState`.
-Relates to [[0017-crash-reporting-architecture]] and [[0055-verification-reinstall-mode]].
+Accepted. Phase A (in-app check → notify → deep-link → "Update available · vX.Y") shipped as low-risk wiring over existing primitives. Phase B (the actual in-place download → verify → swap → restart for **both** portable and MSI) has now landed behind the dedicated `exosnap-updater.exe` sidecar. See the amendment below for how the shipped flow differs from the original sketch. Builds on the existing `UpdateService` (`RequestUpdateCheck`, `RequestDownloadAndVerify`, `packageReadyForInstall`, `HandoffToInstaller`, signature verification), `NotificationManager` (`NotificationType::UpdateAvailable`, `NotificationAction::OpenUpdate`), the Settings deep-link (`ConfigPage::scrollToSection("settings/updates")`), and `UpdateSettingsPanel`/`UpdateUiState`. Relates to [[0017-crash-reporting-architecture]] and [[0055-verification-reinstall-mode]].
 
 > **Implementation note (RC4).** `UpdateSettingsPanel` and its `UpdateUiState` no longer exist. The
 > updates card in Settings (`ConfigPage::setUpdateStatus`) is the single UI state model; the panel had
@@ -18,80 +10,39 @@ Relates to [[0017-crash-reporting-architecture]] and [[0055-verification-reinsta
 > `AboutOverlay` that only existed to hold it. Everything else in this ADR still describes the
 > shipped flow.
 
-## Amendment (0.9.0 — shipped dual-swap updater)
+## Amendment (0.9.0: shipped dual-swap updater)
 
-The implemented flow moves **download + verify INTO the updater process**, not the main app. One
-window owns every step end to end, so the main app stays fully usable while the update runs and there
-is a single owner of progress, failure, and rollback state. The canonical step list the updater
-renders is exactly five:
+The implemented flow moves **download + verify INTO the updater process**, not the main app. One window owns every step end to end, so the main app stays fully usable while the update runs and there is a single owner of progress, failure, and rollback state. The canonical step list the updater renders is exactly five:
 
-1. **Downloading update** — fetch the package for the resolved release (determinate %).
-2. **Closing ExoSnap** — wait for the main process (`--app-pid`) to exit; the running image is locked.
-3. **Installing update** — the swap. Portable: staged rename (rename live → backup, move verified new
-   → live). MSI: `msiexec /qn` (elevated, one UAC).
-4. **Verifying installation** — confirm the swapped-in build is the expected version.
-5. **Restarting ExoSnap** — relaunch on the new version; on a healthy start the backup is deleted, on
-   failure it is restored (rollback).
+1. **Downloading update**: fetch the package for the resolved release (determinate %).
+2. **Closing ExoSnap**: wait for the main process (`--app-pid`) to exit; the running image is locked.
+3. **Installing update**: the swap. Portable: staged rename (rename live → backup, move verified new → live). MSI: `msiexec /qn` (elevated, one UAC).
+4. **Verifying installation**: confirm the swapped-in build is the expected version.
+5. **Restarting ExoSnap**: relaunch on the new version; on a healthy start the backup is deleted, on failure it is restored (rollback).
 
-The main app's only remaining role is to **stage** the updater runtime subset (`exosnap-updater.exe`
-plus the shared Qt Core/Gui/Widgets DLLs and the windows platform plugin — see
-`UpdaterStagingFileList`) into a per-user temp copy and launch that copy, then exit. Running the
-updater from a staged copy is what lets the app replace the *original* `exosnap-updater.exe` on a
-future updater-version bump (a running image cannot overwrite itself). A persisted **loop guard**
-("applied version" stamp) ensures a completed update is never re-applied from a stale releases-API
-cache. The **recording guard** is layered: ADR 0012 blocks download/install during an active
-recording or finalization at the service layer, and the updater window itself disables its close
-affordance during Install/Verify/Restart so the swap cannot be interrupted mid-flight.
+The main app's only remaining role is to **stage** the updater runtime subset (`exosnap-updater.exe` plus the shared Qt Core/Gui/Widgets DLLs and the windows platform plugin, see `UpdaterStagingFileList`) into a per-user temp copy and launch that copy, then exit. Running the updater from a staged copy is what lets the app replace the *original* `exosnap-updater.exe` on a future updater-version bump (a running image cannot overwrite itself). A persisted **loop guard** ("applied version" stamp) ensures a completed update is never re-applied from a stale releases-API cache. The **recording guard** is layered: ADR 0012 blocks download/install during an active recording or finalization at the service layer, and the updater window itself disables its close affordance during Install/Verify/Restart so the swap cannot be interrupted mid-flight.
 
-The three terminal failure variants (amber / red / green) each always name the version that is safe
-to run — see product-spec §13 and the failure matrix behind `FailureCase` / `RetryEntryStep`.
+The three terminal failure variants (amber / red / green) each always name the version that is safe to run: see product-spec §13 and the failure matrix behind `FailureCase` / `RetryEntryStep`.
 
-**Lifecycle ownership amendment (2026-07).** Launching the detached updater is not itself a
-restart handoff. While both processes are alive the Settings card says **Updater running** and
-`UpdateService` watches the detached process handle without polling. If it exits before handoff,
-the card becomes actionable again. Only the updater's private, magic-marked Win32 close message
-transitions the app to **ClosingForHandoff** / `Restart pending`; an ordinary close cannot forge
-that state. The normal-mode `applied_version` loop guard is committed immediately before that
-accepted close, never at process launch, and verification-reinstall never writes it. Every fresh
-app process discards a leftover applied stamp and reconstructs its card from the release truth,
-so an abort, failure, forced close or verify run cannot leave a stale pending state.
+**Lifecycle ownership amendment (2026-07).** Launching the detached updater is not itself a restart handoff. While both processes are alive the Settings card says **Updater running** and `UpdateService` watches the detached process handle without polling. If it exits before handoff, the card becomes actionable again. Only the updater's private, magic-marked Win32 close message transitions the app to **ClosingForHandoff** / `Restart pending`. An ordinary close cannot forge that state. The normal-mode `applied_version` loop guard is committed immediately before that accepted close, never at process launch, and verification-reinstall never writes it. Every fresh app process discards a leftover applied stamp and reconstructs its card from the release truth, so an abort, failure, forced close or verify run cannot leave a stale pending state.
 
-Terminal updater failures use a structured result model (headline, detail, safety statement and
-actions) rendered inside one result card. Raw transport/MSI/path details remain log evidence. A
-restore failure has its own hard-stop case and never claims that the previous version was restored.
+Terminal updater failures use a structured result model (headline, detail, safety statement and actions) rendered inside one result card. Raw transport/MSI/path details remain log evidence. A restore failure has its own hard-stop case and never claims that the previous version was restored.
 
 ## Context
 
-The update backend already checks for releases, downloads, and **verifies signatures**, and can hand
-off to an external installer. The shipped UX deliberately stops at "notify + open releases page" — no
-in-place updater (`UpdateUiState` has only UpToDate/Checking/Available/Error). The product design
-wants the full loop: check (manual or auto) → notification (only when not user-initiated) →
-clicking the notification lands in Settings → "Update to vX.Y" → progress with status labels →
-install → restart.
+The update backend already checks for releases, downloads, and **verifies signatures**, and can hand off to an external installer. The shipped UX deliberately stops at "notify + open releases page": no in-place updater (`UpdateUiState` has only UpToDate/Checking/Available/Error). The product design wants the full loop: check (manual or auto) → notification (only when not user-initiated) → clicking the notification lands in Settings → "Update to vX.Y" → progress with status labels → install → restart.
 
 Two hard constraints shape any design:
 
-1. **A running `.exe` is locked.** Windows forbids overwriting/deleting the running image (rename is
-   allowed). This applies to **both** distributions: portable ZIP *and* MSI (an MSI replacing the
-   running `exosnap.exe` hits Windows Installer "files in use"). Therefore the actual file swap can
-   never happen fully in-process — the app must exit and an **external agent** performs the swap and
-   relaunch.
-2. **We are unsigned** (SignPath reputation-gated; see release notes). An auto-launched installer
-   trips SmartScreen/UAC. That is expected for the MSI path. The portable self-swap can avoid
-   SmartScreen entirely because we verify the package signature/hash ourselves and can strip the
-   Mark-of-the-Web before relaunch.
+1. **A running `.exe` is locked.** Windows forbids overwriting/deleting the running image (rename is allowed). This applies to **both** distributions: portable ZIP *and* MSI (an MSI replacing the running `exosnap.exe` hits Windows Installer "files in use"). Therefore the actual file swap can never happen fully in-process. The app must exit and an **external agent** performs the swap and relaunch.
+2. **We are unsigned** (SignPath reputation-gated; see release notes). An auto-launched installer trips SmartScreen/UAC. That is expected for the MSI path. The portable self-swap can avoid SmartScreen entirely because we verify the package signature/hash ourselves and can strip the Mark-of-the-Web before relaunch.
 
-So "completely in-app" is achievable for everything *except* the swap instant: download + verify run
-in-app with a real progress bar; the swap+restart is a brief external step.
+So "completely in-app" is achievable for everything *except* the swap instant: download + verify run in-app with a real progress bar. The swap+restart is a brief external step.
 
 ## Decision
 
 ### Shared in-app frontend
-One progress UI in the Settings "Updates" card, driven by `UpdateService`, used by both
-distributions. New `UpdateUiState` values: `Available` (already exists), `Downloading`
-(determinate %), `Verifying`, `Installing` (indeterminate), `Restarting`. Granular percentage lives
-in the **download/verify** phase (fully in-app); the swap step shows a short indeterminate
-"Updating — the app will restart…".
+One progress UI in the Settings "Updates" card, driven by `UpdateService`, used by both distributions. New `UpdateUiState` values: `Available` (already exists), `Downloading` (determinate %), `Verifying`, `Installing` (indeterminate), `Restarting`. Granular percentage lives in the **download/verify** phase (fully in-app). The swap step shows a short indeterminate "Updating — the app will restart…".
 
 ### Dual swap backends behind one frontend
 | | MSI (`install_mode == Installed`) | Portable |
@@ -102,45 +53,22 @@ in the **download/verify** phase (fully in-app); the swap step shows a short ind
 | SmartScreen | expected (unsigned installer) | avoided: self-verify + strip MOTW |
 | Restart | helper relaunches `exosnap.exe` | swapper relaunches `exosnap.exe` |
 
-`install_mode` is detected at runtime (presence of the MSI ProductCode registration / write-access to
-the install dir). The frontend is identical; only the swap agent differs.
+`install_mode` is detected at runtime (presence of the MSI ProductCode registration / write-access to the install dir). The frontend is identical. Only the swap agent differs.
 
 ### Sidecar swapper (portable) mechanics
-- App stages the verified new build in a temp dir, writes a swap manifest (target dir, version,
-  rollback marker), launches `exosnap-updater.exe`, and exits.
-- Swapper waits for the main process to exit, **atomically** replaces app files (rename old → backup,
-  move new → live), relaunches `exosnap.exe`, and on a successful health-check (new process reports
-  "started vX.Y") deletes the backup. On failure it restores the backup (**rollback**).
-- **Updater-replaces-updater:** the swapper cannot overwrite its own running image, but the *main app*
-  can — so the app replaces `exosnap-updater.exe` (renaming a running image is permitted; on next
-  launch the renamed `*.old` is cleaned). The swapper is kept **minimal and version-stamped** so it is
-  swapped only when its own version actually changes (rare).
-- **Loop guard:** a persisted "applied version" stamp + manifest consumption ensures a completed
-  update is never re-applied.
+- App stages the verified new build in a temp dir, writes a swap manifest (target dir, version, rollback marker), launches `exosnap-updater.exe`, and exits.
+- Swapper waits for the main process to exit, **atomically** replaces app files (rename old → backup, move new → live), relaunches `exosnap.exe`, and on a successful health-check (new process reports "started vX.Y") deletes the backup. On failure it restores the backup (**rollback**).
+- **Updater-replaces-updater:** the swapper cannot overwrite its own running image, but the *main app* can, so the app replaces `exosnap-updater.exe` (renaming a running image is permitted; on next launch the renamed `*.old` is cleaned). The swapper is kept **minimal and version-stamped** so it is swapped only when its own version actually changes (rare).
+- **Loop guard:** a persisted "applied version" stamp + manifest consumption ensures a completed update is never re-applied.
 
 ### Phasing
-- **Phase A (now):** wire the existing primitives — manual "Check now" + auto-check toggle →
-  `RequestUpdateCheck`; on an **auto** check that finds a release, enqueue an `UpdateAvailable`
-  notification (`OpenUpdate` action); the notification/toast action deep-links to
-  `settings/updates`; the card renders `Available · Update to vX.Y` whose action opens the releases
-  page (interim hand-off). No swap. (Fix the stale `"update-view" → About` deep-link to
-  `settings/updates`.)
-- **Phase B:** the dual-swap (download/verify progress UI + msiexec-elevated and sidecar swapper),
-  atomic staging, rollback, MOTW strip, loop guard, and the MSI `UpgradeCode` work below.
+- **Phase A (now):** wire the existing primitives: manual "Check now" + auto-check toggle → `RequestUpdateCheck`; on an **auto** check that finds a release, enqueue an `UpdateAvailable` notification (`OpenUpdate` action); the notification/toast action deep-links to `settings/updates`; the card renders `Available · Update to vX.Y` whose action opens the releases page (interim hand-off). No swap. (Fix the stale `"update-view" → About` deep-link to `settings/updates`.)
+- **Phase B:** the dual-swap (download/verify progress UI + msiexec-elevated and sidecar swapper), atomic staging, rollback, MOTW strip, loop guard, and the MSI `UpgradeCode` work below.
 
 ## Consequences
 
-- **Bricking risk is real.** A faulty swap can leave a broken install. Mitigations are mandatory:
-  atomic staging, keep-old-until-healthy rollback, post-start health-check, and a manual recovery
-  path (re-download). The swapper must be tiny, dependency-free, and heavily tested.
-- **MSI in-place upgrade requires a stable `UpgradeCode`** across versions. **Verified ready:**
-  `packaging/msi/Package.wxs` already uses a permanent `UpgradeCode`
-  (`8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D`) with a per-build auto-generated `ProductCode` (`*`) — the
-  correct major-upgrade setup for in-place MSI replacement. No packaging change needed for Phase B MSI.
-- **Two unavoidable non-in-app moments:** the UAC prompt (MSI only) and the brief window where the app
-  is closed during the swap (both). The transition is kept short and branded; graceful SmartScreen/UAC
-  handling is acceptable per product.
-- **Portable can update without UAC or SmartScreen** when the install dir is user-writable and MOTW is
-  stripped post-verification — the cleaner of the two paths.
-- Phase A delivers the visible designed flow up to "Update to vX.Y" with negligible risk and is
-  independent of the swap work.
+- **Bricking risk is real.** A faulty swap can leave a broken install. Mitigations are mandatory: atomic staging, keep-old-until-healthy rollback, post-start health-check, and a manual recovery path (re-download). The swapper must be tiny, dependency-free, and heavily tested.
+- **MSI in-place upgrade requires a stable `UpgradeCode`** across versions. **Verified ready:** `packaging/msi/Package.wxs` already uses a permanent `UpgradeCode` (`8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D`) with a per-build auto-generated `ProductCode` (`*`), the correct major-upgrade setup for in-place MSI replacement. No packaging change needed for Phase B MSI.
+- **Two unavoidable non-in-app moments:** the UAC prompt (MSI only) and the brief window where the app is closed during the swap (both). The transition is kept short and branded; graceful SmartScreen/UAC handling is acceptable per product.
+- **Portable can update without UAC or SmartScreen** when the install dir is user-writable and MOTW is stripped post-verification: the cleaner of the two paths.
+- Phase A delivers the visible designed flow up to "Update to vX.Y" with negligible risk and is independent of the swap work.

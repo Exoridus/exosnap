@@ -1,4 +1,4 @@
-# Device Discovery R1 — Architecture and Acceptance Guide
+# Device Discovery R1: Architecture and Acceptance Guide
 
 ## Overview
 
@@ -55,7 +55,7 @@ Only explicit user gestures (combo selection, Enable toggle, explicit Rescan →
 
 ## Visual Test Harness Scenarios (DEVICE-DISCOVERY-R1)
 
-Ten new scenarios in `VisualScenario.cpp` (`kDeviceDiscoveryScenarios`) cover the key device states. All are non-persistent: `preset_dirty = false` in every scenario struct; the harness hook `applyVisualDeviceDiscoveryScenario()` (guarded by `EXOSNAP_ENABLE_VISUAL_TEST_HARNESS`) calls only non-persistent page methods.
+Ten new scenarios in `VisualScenario.cpp` (`kDeviceDiscoveryScenarios`) cover the key device states. All are non-persistent: `preset_dirty = false` in every scenario struct. The harness hook `applyVisualDeviceDiscoveryScenario()` (guarded by `EXOSNAP_ENABLE_VISUAL_TEST_HARNESS`) calls only non-persistent page methods.
 
 | Scenario id | Page | State |
 |---|---|---|
@@ -70,8 +70,7 @@ Ten new scenarios in `VisualScenario.cpp` (`kDeviceDiscoveryScenarios`) cover th
 | `record-display-unavailable` | Record | Configured display gone, no stale preview |
 | `record-region-monitor-missing` | Record | Region invalidated (hosting monitor gone) |
 
-The new manifest `device_discovery` JSON object is emitted for every scenario with these fields:
-`audio_input_count`, `audio_output_count`, `selected_mic_stable_id`, `selected_mic_available`, `selected_output_semantic_default`, `webcam_count`, `selected_webcam_stable_id`, `selected_webcam_available`, `display_count`, `selected_display_stable_id`, `selected_display_available`, `current_target_resolved`, `rescan_enabled`, `last_discovery_reason`.
+The new manifest `device_discovery` JSON object is emitted for every scenario with these fields: `audio_input_count`, `audio_output_count`, `selected_mic_stable_id`, `selected_mic_available`, `selected_output_semantic_default`, `webcam_count`, `selected_webcam_stable_id`, `selected_webcam_available`, `display_count`, `selected_display_stable_id`, `selected_display_available`, `current_target_resolved`, `rescan_enabled`, `last_discovery_reason`.
 
 Sentinel values (`-1` for counts, empty string for IDs) indicate "not applicable" for scenarios that do not exercise that device category.
 
@@ -124,7 +123,7 @@ The following scenarios require a real machine with physical hardware and should
 
 Live display discovery still uses `QScreen::name()` = the GDI device name on Windows (e.g. `\\.\DISPLAY1`), which is **not hardware-stable** and can be reassigned on a topology change.
 
-**Persisted** Display/Region targets no longer ride on that name (superseded by ADR 0047). They carry a `StableDisplayId` — `DISPLAYCONFIG_TARGET_DEVICE_NAME.monitorDevicePath` + EDID vendor/product (+ serial when available) — and are resolved with a ranked matcher at restore, so a saved secondary monitor survives reboots and reconnects. The only unresolved case is identical serial-less monitors cable-swapped between ports, which reports an honest "saved display not found" notice instead of guessing.
+**Persisted** Display/Region targets no longer ride on that name (superseded by ADR 0047). They carry a `StableDisplayId`: `DISPLAYCONFIG_TARGET_DEVICE_NAME.monitorDevicePath` + EDID vendor/product (+ serial when available). They are resolved with a ranked matcher at restore, so a saved secondary monitor survives reboots and reconnects. The only unresolved case is identical serial-less monitors cable-swapped between ports, which reports an honest "saved display not found" notice instead of guessing.
 
 ### No active hot-swap during recording
 

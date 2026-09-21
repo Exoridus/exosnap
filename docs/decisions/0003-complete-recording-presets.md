@@ -2,26 +2,18 @@
 
 ## Status
 
-Accepted. **Amended by ADR 0047 (2026-07-12):** the description-based `display_key` /
-`region_display_key` fields and the absolute-pixel `region` described below are superseded by a
-hardware-stable `StableDisplayId` (device path + EDID) and an anchor-relative normalized region.
-The capture sub-struct remains an environment field (excluded from dirty state); only its shape and
-match semantics changed.
+Accepted. **Amended by ADR 0047 (2026-07-12):** the description-based `display_key` / `region_display_key` fields and the absolute-pixel `region` described below are superseded by a hardware-stable `StableDisplayId` (device path + EDID) and an anchor-relative normalized region. The capture sub-struct remains an environment field, excluded from dirty state. Only its shape and match semantics changed.
 
 ## Context
 
-ExoSnap v0 stored partial "profiles" that covered only container, codecs, and quality.  Capture target
-selection, audio source toggles, webcam settings, and countdown were global application state kept
-separately in `AppSettingsStore`.  This led to:
+ExoSnap v0 stored partial "profiles" that covered only container, codecs, and quality.  Capture target selection, audio source toggles, webcam settings, and countdown were global application state kept separately in `AppSettingsStore`.  This led to:
 
 - Settings that were scoped to a "profile" in the UI but not actually persisted as part of it.
 - A misleading hint text ("Sources and audio are saved separately").
 - Webcam state that could not vary between recording setups.
-- No concept of a startup default — the last-used partial profile was restored but other settings
-  floated independently.
+- No concept of a startup default: the last-used partial profile was restored but other settings floated independently.
 
-The MVP requires a coherent "preset = complete setup" model so the user can switch between fully
-configured recording workflows without manually re-adjusting every control.
+The MVP requires a coherent "preset = complete setup" model so the user can switch between fully configured recording workflows without manually re-adjusting every control.
 
 ## Decision
 
@@ -50,8 +42,7 @@ The canonical **built-in default preset** (id `preset.default`) is:
 
 ### `RecordingPresetStore` (persistence)
 
-Presets are serialized to `presets.ini` in the user profile directory using Qt's `QSettings` INI
-format.  The file contains:
+Presets are serialized to `presets.ini` in the user profile directory using Qt's `QSettings` INI format.  The file contains:
 
 ```
 [store]
@@ -65,9 +56,7 @@ capture.kind = display
 ...
 ```
 
-On load, if `schemaVersion < 1` or the key is absent, the store performs a **hard reset** to a
-single factory-default preset.  No migration of v0 partial profiles is performed (pre-v1.0
-breaking changes are acceptable per project policy).
+On load, if `schemaVersion < 1` or the key is absent, the store performs a **hard reset** to a single factory-default preset.  No migration of v0 partial profiles is performed (pre-v1.0 breaking changes are acceptable per project policy).
 
 ### `RecordingPresetRegistry`
 
@@ -77,18 +66,15 @@ breaking changes are acceptable per project policy).
 - `selected_id_` and `default_id_` always point to existing presets.
 - Mutations (Add, Save, Duplicate, Rename, Delete, ResetAll) maintain these invariants.
 
-`IsSelectedDirty` compares the live working config against the selected preset's saved config using
-`ConfigDirtyEquivalent`.
+`IsSelectedDirty` compares the live working config against the selected preset's saved config using `ConfigDirtyEquivalent`.
 
 ### Atomic apply + re-entrancy guard
 
-Applying a preset is handled by `MainWindow::applyPreset` behind a boolean re-entrancy guard
-(`applying_preset_`).  The apply sequence is:
+Applying a preset is handled by `MainWindow::applyPreset` behind a boolean re-entrancy guard (`applying_preset_`).  The apply sequence is:
 
 1. Reject if recording is active.
 2. Set guard.
-3. Call `config_page_->setOutputSettings`, `setVideoSettings`, `setAudioUiState`,
-   `setWebcamSettings`, `setPresetOptions`.
+3. Call `config_page_->setOutputSettings`, `setVideoSettings`, `setAudioUiState`, `setWebcamSettings`, `setPresetOptions`.
 4. Propagate to `RecordPage` via the existing settings-changed signals.
 5. Clear guard.
 
@@ -96,23 +82,15 @@ No UI signal loops can occur because the guard prevents re-entry from settings-c
 
 ### Dirty-state design (`ConfigDirtyEquivalent`)
 
-`ConfigDirtyEquivalent` is identical to `NormalizedConfigEquals` EXCEPT that the capture
-sub-struct (`kind`, `display_key`, `window_key`, `has_region`, `region`, `region_display_key`) is
-**excluded** from comparison.
+`ConfigDirtyEquivalent` is identical to `NormalizedConfigEquals` EXCEPT that the capture sub-struct (`kind`, `display_key`, `window_key`, `has_region`, `region`, `region_display_key`) is **excluded** from comparison.
 
-Rationale: capture identity is transient.  The default preset stores `display_key = ""` (meaning
-"primary/any").  Once applied, the live policy holds a concrete resolved key.  Including capture in
-the dirty comparison would make every preset appear dirty on startup, on monitor replug, and after
-auto-resolution.  This is explicitly a design choice — temporary availability changes must not mark
-the preset dirty.
+Rationale: capture identity is transient. The default preset stores `display_key = ""` (meaning "primary/any"). Once applied, the live policy holds a concrete resolved key. Including capture in the dirty comparison would make every preset appear dirty on startup, on monitor replug, and after auto-resolution. This is explicitly a design choice: temporary availability changes must not mark the preset dirty.
 
 `NormalizedConfigEquals` is preserved for persistence round-trip verification.
 
 ### Startup boots to the default preset
 
-On first show (`showEvent`), `MainWindow` reads the `default_id` from the registry and calls
-`applyPreset` for that preset.  The user sees the complete default setup immediately without
-needing to select anything.
+On first show (`showEvent`), `MainWindow` reads the `default_id` from the registry and calls `applyPreset` for that preset.  The user sees the complete default setup immediately without needing to select anything.
 
 ### `AppSettingsStore` reduction
 
@@ -121,28 +99,20 @@ needing to select anything.
 - Global hotkey bindings.
 - Window geometry (size + position).
 
-All codec, quality, audio, webcam, and output settings are owned by `RecordingPresetStore`.
-`settings.json` version is bumped to **6**; older files are discarded.
+All codec, quality, audio, webcam, and output settings are owned by `RecordingPresetStore`. `settings.json` version is bumped to **6**, and older files are discarded.
 
 ## Consequences
 
-- A user can create named recording presets and switch between them with a single combo-box
-  selection.  Each preset carries the complete setup.
+- A user can create named recording presets and switch between them with a single combo-box selection.  Each preset carries the complete setup.
 - The startup default is explicit and user-controllable ("Set as default preset").
 - Dirty state is meaningful and excludes transient capture identity changes.
-- Old partial profiles (v0) are discarded on first launch — no migration, consistent with the
-  pre-v1.0 breaking-changes policy.
+- Old partial profiles (v0) are discarded on first launch: no migration, consistent with the pre-v1.0 breaking-changes policy.
 - Import/export actions are removed.
 - Webcam settings are now per-preset (previously app-global).
-- The preset card UI exposes: selector, Save (dirty-gated), Save As…, and a Manage overflow menu
-  (New, Duplicate, Rename, Delete, Set as default, Reset changes, Reset all to factory defaults).
-- Visual-test harness scenarios drive the preset card with synthetic `ProfileOption` data only;
-  `RecordingPresetStore` and `RecordingPresetRegistry` are never touched in the harness.
+- The preset card UI exposes: selector, Save (dirty-gated), Save As..., and a Manage overflow menu (New, Duplicate, Rename, Delete, Set as default, Reset changes, Reset all to factory defaults).
+- Visual-test harness scenarios drive the preset card with synthetic `ProfileOption` data only; `RecordingPresetStore` and `RecordingPresetRegistry` are never touched in the harness.
 
 ## Unresolved Issues
 
-- Capture target restore (matching `display_key` / `window_key` at apply time) is best-effort:
-  if the stored key does not match any live target the preset applies but the capture target
-  selection falls back to the first available target.
-- Region geometry is stored in virtual-screen coordinates; multi-monitor layout changes can render
-  a stored region invalid.  The store does not yet detect or warn about this.
+- Capture target restore (matching `display_key` / `window_key` at apply time) is best-effort: if the stored key does not match any live target the preset applies but the capture target selection falls back to the first available target.
+- Region geometry is stored in virtual-screen coordinates; multi-monitor layout changes can render a stored region invalid.  The store does not yet detect or warn about this.

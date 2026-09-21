@@ -2,302 +2,136 @@
 
 ## Project
 
-ExoSnap is a Windows-native recording application: a high-performance C++ engine
-with a Qt 6 / Qt Quick user interface (ADR 0064). `Qt6::Widgets` remains linked
-for `QSystemTrayIcon` alone, and the separate updater executable keeps its own
-Widgets UI; neither is a second frontend.
+ExoSnap is a Windows-native recording application: a high-performance C++ engine with a Qt 6 / Qt Quick user interface (ADR 0064). `Qt6::Widgets` remains linked for `QSystemTrayIcon` alone, and the separate updater executable keeps its own Widgets UI; neither is a second frontend.
 
-Business and product policy stays in C++. QML owns presentation, layout and
-interaction only.
+Business and product policy stays in C++. QML owns presentation, layout and interaction only.
 
 ## Product behavior
 
-`docs/product-spec.md` is authoritative for user-visible product behavior. Read
-it before changing behavior, defaults, navigation, terminology, UX, or product
-policy, and update it in the same change when that behavior moves. Do not
-duplicate product decisions into this file.
+`docs/product-spec.md` is authoritative for user-visible product behavior. Read it before changing behavior, defaults, navigation, terminology, UX, or product policy, and update it in the same change when that behavior moves. Do not duplicate product decisions into this file.
 
 ## Working context
 
-Inspect the code and tests relevant to the task first. Do not read large
-repository documents by default.
+Inspect the code and tests relevant to the task first. Do not read large repository documents by default.
 
-`.workspace/` is private working context, not repository authority. Plans,
-research, reviews, live-verify evidence and release artifacts belong there.
-Agents may consult it when relevant, but it is never a source of truth and must
-never be referenced from committed source or public documentation. If a decision
-becomes a durable contract, promote the conclusion into `docs/` instead.
+`.workspace/` is private working context, not repository authority. Plans, research, reviews, live-verify evidence and release artifacts belong there. Agents may consult it when relevant, but it is never a source of truth and must never be referenced from committed source or public documentation. If a decision becomes a durable contract, promote the conclusion into `docs/` instead.
 
-Agent-generated implementation plans, specs and research live in `.workspace/`,
-never in a tracked `docs/` path. `docs/superpowers/` held that kind of material
-before the documentation architecture cleanup and must not be recreated;
-`scripts/check-docs-superpowers-removed.ps1` (run by `verify.ps1`) fails the
-gate if it is. A durable conclusion (an architecture decision, a rejected
-alternative, a still-open design) is promoted into the matching canonical
-category instead: `docs/decisions/` for ADRs, `docs/dev/` for developer
-reference, `docs/design/` for accepted-but-not-yet-built designs. See
-`docs/README.md` for the full category contract, including where product and
-user-facing documentation lives.
+Agent-generated implementation plans, specs and research live in `.workspace/`, never in a tracked `docs/` path. `docs/superpowers/` held that kind of material before the documentation architecture cleanup and must not be recreated; `scripts/check-docs-superpowers-removed.ps1` (run by `verify.ps1`) fails the gate if it is. A durable conclusion (an architecture decision, a rejected alternative, a still-open design) is promoted into the matching canonical category instead: `docs/decisions/` for ADRs, `docs/dev/` for developer reference, `docs/design/` for accepted-but-not-yet-built designs. See `docs/README.md` for the full category contract, including where product and user-facing documentation lives.
 
 ## Command environment
 
-The primary development environment is Windows 11 x64 with PowerShell 7. Run
-repository commands through `pwsh` and use Windows paths and PowerShell quoting.
-Use `rg` and `rg --files` for repository search, then native PowerShell cmdlets
-such as `Get-ChildItem`, `Select-String`, and `Get-Content` when needed.
-Do not pass shell wildcard expressions as path arguments to native `rg`; PowerShell
-does not reliably expand them. Use an explicit search root with `--glob`, or pass
-explicit file paths instead.
+The primary development environment is Windows 11 x64 with PowerShell 7. Run repository commands through `pwsh` and use Windows paths and PowerShell quoting. Use `rg` and `rg --files` for repository search, then native PowerShell cmdlets such as `Get-ChildItem`, `Select-String`, and `Get-Content` when needed. Do not pass shell wildcard expressions as path arguments to native `rg`; PowerShell does not reliably expand them. Use an explicit search root with `--glob`, or pass explicit file paths instead.
 
-A native Windows Coreutils package may put individual commands such as `grep`,
-`head`, or `tail` on `PATH`. Their presence does not imply a GNU/Linux shell or
-a complete GNU toolset: do not assume `sh`, `sed`, or `awk` exists, and do not
-invoke the Windows `bash.exe` WSL launcher for repository work. Keep filesystem
-operations in PowerShell rather than passing discovered paths between shells.
+A native Windows Coreutils package may put individual commands such as `grep`, `head`, or `tail` on `PATH`. Their presence does not imply a GNU/Linux shell or a complete GNU toolset: do not assume `sh`, `sed`, or `awk` exists, and do not invoke the Windows `bash.exe` WSL launcher for repository work. Keep filesystem operations in PowerShell rather than passing discovered paths between shells.
 
-Media validation tools are installed: MPV Player (`mpv`, not `mvp`), VLC, and
-the FFmpeg tools `ffprobe`, `ffmpeg`, and `ffplay`. The FFmpeg tools resolve on
-`PATH`; a long-lived agent process may predate the MPV/VLC PATH update, so use
-`Get-Command` first and resolve the installed executable when necessary rather
-than declaring the tool unavailable. Prefer `ffprobe` for non-interactive media
-inspection. Do not launch a GUI player or let it take focus without the same-turn
-coordination required for driving any running application.
+Media validation tools are installed: MPV Player (`mpv`, not `mvp`), VLC, and the FFmpeg tools `ffprobe`, `ffmpeg`, and `ffplay`. The FFmpeg tools resolve on `PATH`; a long-lived agent process may predate the MPV/VLC PATH update, so use `Get-Command` first and resolve the installed executable when necessary rather than declaring the tool unavailable. Prefer `ffprobe` for non-interactive media inspection. Do not launch a GUI player or let it take focus without the same-turn coordination required for driving any running application.
 
 ## Architecture
 
-- Keep the recording engine independent from UI concerns, and capture, encode,
-  mux, diagnostics, telemetry and UI separate from each other.
-- The UI submits editable source rows; the engine returns resolved tracks. Track
-  resolution is never duplicated in the UI.
-- Switching containers reconciles the selected audio codec to one the new
-  container allows. That reconciliation is engine logic.
-- A hotkey that starts recording while the window is visible activates the Record
-  view; while minimized it does not restore the window.
-- Prefer explicit state machines for the recording session lifecycle, and
-  structured models over ad hoc UI-bound state.
-- Every live metric has a source, a meaning, an update cadence, a UI consumer and
-  a log consumer.
-- Probe a capability in isolation before integrating it. Do not optimize
-  speculatively; add profiling hooks and measure.
+- Keep the recording engine independent from UI concerns, and capture, encode, mux, diagnostics, telemetry and UI separate from each other.
+- The UI submits editable source rows; the engine returns resolved tracks. Track resolution is never duplicated in the UI.
+- Switching containers reconciles the selected audio codec to one the new container allows. That reconciliation is engine logic.
+- A hotkey that starts recording while the window is visible activates the Record view; while minimized it does not restore the window.
+- Prefer explicit state machines for the recording session lifecycle, and structured models over ad hoc UI-bound state.
+- Every live metric has a source, a meaning, an update cadence, a UI consumer and a log consumer.
+- Probe a capability in isolation before integrating it. Do not optimize speculatively; add profiling hooks and measure.
 
 ## Driving the running application
 
-The developer works on the same machine and may be doing anything else on it at
-the same moment. The failure mode this guards against is *uncoordinated* input:
-taking focus while a controller is in use breaks controller-input recognition,
-and moving the OS cursor while the developer is moving it causes mis-clicks.
+The developer works on the same machine and may be doing anything else on it at the same moment. The failure mode this guards against is *uncoordinated* input: taking focus while a controller is in use breaks controller-input recognition, and moving the OS cursor while the developer is moving it causes mis-clicks.
 
-- Never synthesize mouse or keyboard input, and never take window focus, without
-  asking in the same turn and being told the developer is not using the machine
-  right now. An earlier "go ahead" does not carry forward.
-- UAC and Secure Desktop prompts cannot be scripted at all. Describe what the
-  prompt will ask and what each answer does, then wait — the developer cannot
-  have another window open while answering one.
-- Display and audio state that Windows exposes a documented, restorable setter
-  for -- HDR, refresh rate, the default endpoint -- is automated by
-  `tools/envctl`, not asked of the developer. Check `exosnap-envctl snapshot`
-  before concluding a property is out of reach; anything it reports as
-  `ENV_MUTATE_SAFE` is yours to change inside a transaction. Always pair `begin`
-  with `restore`, and leave the journal `Clean`.
-- The alias profile is machine-local and deliberately untracked, so a fresh
-  clone binds nothing and `snapshot` reports `unbound_alias` rather than a
-  device. That is the tool working, not the property being unreachable: follow
-  the instruction in the error (`resolve-aliases`, then `bind-alias`) once per
-  machine. No device is ever selected automatically.
-- What genuinely stays the developer's own action is what no documented API can
-  reach: unplugging or repowering hardware, and anything behind a UAC or Secure
-  Desktop prompt. `ENV_HUMAN` properties are in this class too, whatever they
-  look like -- envctl reads them so a gate can state its precondition, and
-  refuses to write them on purpose.
-- Prefer structural automation (UI Automation invoke patterns, accessible names)
-  over coordinate-based synthesis: it does not move the real cursor.
-- Starting the app once to confirm it does not crash is always allowed;
-  `--smoke-test` is the cheaper form of the same check.
-- Judge pixels with `--visual-test` and behavior with the adapter and QML tests
-  before reaching for a live run, and say so when nothing else can verify a
-  change. Know what a fixture cannot reach: the Edit surface's decode path needs
-  real media (`--auto-edit`).
-- The five capture-excluded overlays are structurally unobservable —
-  `WDA_EXCLUDEFROMCAPTURE` defeats screenshots, screen recording and
-  `PrintWindow`, and the harness only grabs their scene graph. How they reach the
-  desktop can only be confirmed by the developer looking at the screen. Their
-  `[overlay]` log lines exist for that reason.
-- `--auto-record` is the same class of exception as `--visual-test`: argv- or
-  environment-configured, never input synthesis. Its output goes to a scratch
-  directory (`EXOSNAP_OUTPUT_DIR`, else the system temp directory) and is never
-  committed.
+- Never synthesize mouse or keyboard input, and never take window focus, without asking in the same turn and being told the developer is not using the machine right now. An earlier "go ahead" does not carry forward.
+- UAC and Secure Desktop prompts cannot be scripted at all. Describe what the prompt will ask and what each answer does, then wait. The developer cannot have another window open while answering one.
+- Display and audio state that Windows exposes a documented, restorable setter for -- HDR, refresh rate, the default endpoint -- is automated by `tools/envctl`, not asked of the developer. Check `exosnap-envctl snapshot` before concluding a property is out of reach; anything it reports as `ENV_MUTATE_SAFE` is yours to change inside a transaction. Always pair `begin` with `restore`, and leave the journal `Clean`.
+- The alias profile is machine-local and deliberately untracked, so a fresh clone binds nothing and `snapshot` reports `unbound_alias` rather than a device. That is the tool working, not the property being unreachable: follow the instruction in the error (`resolve-aliases`, then `bind-alias`) once per machine. No device is ever selected automatically.
+- What genuinely stays the developer's own action is what no documented API can reach: unplugging or repowering hardware, and anything behind a UAC or Secure Desktop prompt. `ENV_HUMAN` properties are in this class too, whatever they look like -- envctl reads them so a gate can state its precondition, and refuses to write them on purpose.
+- Prefer structural automation (UI Automation invoke patterns, accessible names) over coordinate-based synthesis: it does not move the real cursor.
+- Starting the app once to confirm it does not crash is always allowed; `--smoke-test` is the cheaper form of the same check.
+- Judge pixels with `--visual-test` and behavior with the adapter and QML tests before reaching for a live run, and say so when nothing else can verify a change. Know what a fixture cannot reach: the Edit surface's decode path needs real media (`--auto-edit`).
+- The five capture-excluded overlays are structurally unobservable — `WDA_EXCLUDEFROMCAPTURE` defeats screenshots, screen recording and `PrintWindow`, and the harness only grabs their scene graph. How they reach the desktop can only be confirmed by the developer looking at the screen. Their `[overlay]` log lines exist for that reason.
+- `--auto-record` is the same class of exception as `--visual-test`: argv- or environment-configured, never input synthesis. Its output goes to a scratch directory (`EXOSNAP_OUTPUT_DIR`, else the system temp directory) and is never committed.
 
 ## Release authority
 
-Version tags and releases are destructive, release-authority operations. Never
-create or push a `v*` tag, create or publish a GitHub release, submit a
-package-manager release, or promote an RC to final, unless the user explicitly
-requests that exact release operation in the current interaction. Preparing a
-release, fixing release blockers, or completing verification does not
-constitute permission to publish it.
+Version tags and releases are destructive, release-authority operations. Never create or push a `v*` tag, create or publish a GitHub release, submit a package-manager release, or promote an RC to final, unless the user explicitly requests that exact release operation in the current interaction. Preparing a release, fixing release blockers, or completing verification does not constitute permission to publish it.
 
-The furthest an agent workflow goes is `release-verify.ps1 qualify`, which prints
-`QUALIFIED FOR PROMOTION` with the commit and the RC tag. Attaching that record to
-the RC release (`qualify -Publish`) and pushing the final tag are the developer's
-acts. The pipeline enforces the same boundary from the other side: a final tag whose
-commit has no qualified record stops before the publish step
-(`scripts/check-release-qualification.ps1`), so even a tag pushed by mistake ships
-nothing.
+The furthest an agent workflow goes is `release-verify.ps1 qualify`, which prints `QUALIFIED FOR PROMOTION` with the commit and the RC tag. Attaching that record to the RC release (`qualify -Publish`) and pushing the final tag are the developer's acts. The pipeline enforces the same boundary from the other side: a final tag whose commit has no qualified record stops before the publish step (`scripts/check-release-qualification.ps1`), so even a tag pushed by mistake ships nothing.
 
 ## Source hygiene
 
-Prefer self-explanatory code. Add comments only for non-obvious correctness,
-safety, invariants, lifecycle or ordering constraints, compatibility workarounds,
-or intentional deviations from normal practice. Explain why the obvious
-implementation would be wrong, not what the code visibly does.
+Prefer self-explanatory code. Add comments only for non-obvious correctness, safety, invariants, lifecycle or ordering constraints, compatibility workarounds, or intentional deviations from normal practice. Explain why the obvious implementation would be wrong, not what the code visibly does.
 
-API documentation (Doxygen, QDoc, JSDoc) is concise and caller-facing. Document
-only behavior, contracts, constraints, important side effects, and non-obvious
-edge cases. Do not restate names, types or signatures.
+API documentation (Doxygen, QDoc, JSDoc) is concise and caller-facing. Document only behavior, contracts, constraints, important side effects, and non-obvious edge cases. Do not restate names, types or signatures.
 
-Never put development provenance in source or API documentation: task IDs,
-commits, issues, pull requests, branches or worktrees, conversation or agent
-history, private workspace references, or machine-specific paths. Keep the
-durable technical rationale, drop how it was discovered.
+Never put development provenance in source or API documentation: task IDs, commits, issues, pull requests, branches or worktrees, conversation or agent history, private workspace references, or machine-specific paths. Keep the durable technical rationale, drop how it was discovered.
 
-Developer-facing source documentation is English and uses ASCII punctuation. A
-non-ASCII character is allowed where it is technically meaningful. The rule bans
-typographic variants (em dash, en dash, curly quotes, ellipsis), not characters
-as such. Three kinds stay:
+Developer-facing source documentation is English and uses ASCII punctuation. A non-ASCII character is allowed where it is technically meaningful. The rule bans typographic variants (em dash, en dash, curly quotes, ellipsis), not characters as such. Three kinds stay:
 
-- **Notation that is the correct notation**: units and quantities (`µs`, `ms`,
-  `m/s²`, `°`), mathematical and physical symbols (`Δ`, `σ`, `ω`, `≤`, `≈`,
-  `×`, `·`, `∑`), and arrows in a diagram or a data-flow comment.
-- **Letters carrying diacritics, in any language.** A letter is not punctuation
-  and is never transliterated: a codec author's name, a cited title, a path a
-  user actually has on disk. Never `ae`/`oe`/`ue` for `ä`/`ö`/`ü`.
-- **Localized user-facing strings**, which this rule does not reach at all (see
-  below).
+- **Notation that is the correct notation**: units and quantities (`µs`, `ms`, `m/s²`, `°`), mathematical and physical symbols (`Δ`, `σ`, `ω`, `≤`, `≈`, `×`, `·`, `∑`), and arrows in a diagram or a data-flow comment.
+- **Letters carrying diacritics, in any language.** A letter is not punctuation and is never transliterated: a codec author's name, a cited title, a path a user actually has on disk. Never `ae`/`oe`/`ue` for `ä`/`ö`/`ü`.
+- **Localized user-facing strings**, which this rule does not reach at all (see below).
 
-Identifiers stay ASCII in the other direction (file names, C++ symbols, CMake
-targets, QML ids, CLI flags), because the toolchain and the build depend on it.
+Identifiers stay ASCII in the other direction (file names, C++ symbols, CMake targets, QML ids, CLI flags), because the toolchain and the build depend on it.
 
 #### Write the sentence, do not substitute the character
 
-ASCII punctuation here is a property of well-written English, not a
-transliteration step. An em dash that becomes `--`, or an en dash that becomes
-`-`, swaps a typographic mark for a typewriter crutch and leaves the sentence
-exactly as clear, or as unclear, as it already was. Rewrite it instead. A comma,
-a colon, a pair of parentheses, a second sentence, or a different word order
-carries the same meaning and reads better than any dash would have. A semicolon
-falls under the same preference, because in English prose it usually marks the
-spot where two sentences would have served the reader better.
+ASCII punctuation here is a property of well-written English, not a transliteration step. An em dash that becomes `--`, or an en dash that becomes `-`, swaps a typographic mark for a typewriter crutch and leaves the sentence exactly as clear, or as unclear, as it already was. Rewrite it instead. A comma, a colon, a pair of parentheses, a second sentence, or a different word order carries the same meaning and reads better than any dash would have. A semicolon falls under the same preference, because in English prose it usually marks the spot where two sentences would have served the reader better.
 
 - Avoid: `A semantic merge skew -- two PRs are green alone -- may still fail together.`
 - Prefer: `Two PRs can each be green independently and still fail when combined.`
 - Prefer: `A semantic merge skew can occur when two PRs are green independently but fail when combined.`
 
-This reaches prose only. A `--build` or `--preset` flag, an operator, a range in
-a URL and a semicolon a language requires are syntax, and they keep the
-characters their syntax gives them.
+This reaches prose only. A `--build` or `--preset` flag, an operator, a range in a URL and a semicolon a language requires are syntax, and they keep the characters their syntax gives them.
 
 #### The same rule covers Markdown
 
-Everything above applies to Markdown documentation as much as to a source
-comment. `docs/`, the root documents, ADRs and a pull request description are
-developer prose, and a dash crutch reads no better in a rendered page than in a
-header comment.
+Everything above applies to Markdown documentation as much as to a source comment. `docs/`, the root documents, ADRs and a pull request description are developer prose, and a dash crutch reads no better in a rendered page than in a header comment.
 
-Markdown adds one failure of its own. A fenced code block is for content whose
-exact literal form, syntax or line structure is the point: a command, a file, a
-log line, a diagnostic. It is not a box to draw around text. Prose in a fence,
-and especially a `text` fence wrapped around a status summary, a decision, a
-list of names or a set of steps, renders as a grey slab that no longer wraps,
-loses its links and emphasis, and tells the reader nothing the surrounding
-paragraph did not. Write those as sentences, a list, or a table.
+Markdown adds one failure of its own. A fenced code block is for content whose exact literal form, syntax or line structure is the point: a command, a file, a log line, a diagnostic. It is not a box to draw around text. Prose in a fence, and especially a `text` fence wrapped around a status summary, a decision, a list of names or a set of steps, renders as a grey slab that no longer wraps, loses its links and emphasis, and tells the reader nothing the surrounding paragraph did not. Write those as sentences, a list, or a table.
 
-A short command, path, flag, file name or identifier belongs in inline code. It
-stays part of the sentence that way and keeps the literal form the reader needs.
+A short command, path, flag, file name or identifier belongs in inline code. It stays part of the sentence that way and keeps the literal form the reader needs.
 
-The rule applies to text being written or revised anyway, so existing prose is
-left alone until something else brings you to it.
+The rule applies to text being written or revised anyway, so existing prose is left alone until something else brings you to it.
 
-There is deliberately no mechanical check for any of this and none is wanted.
-Telling a dash in a sentence from a dash in a command line, or a fence that
-earns its place from one that does not, is a judgement, and a checker that got
-it wrong would cost more than the rule saves. This is a writing and review rule.
+There is deliberately no mechanical check for any of this and none is wanted. Telling a dash in a sentence from a dash in a command line, or a fence that earns its place from one that does not, is a judgement, and a checker that got it wrong would cost more than the rule saves. This is a writing and review rule.
 
 ### Language of user-facing content
 
-The shipped UI is English today. A German localization is planned, through Qt's
-normal path: strings wrapped for translation, per-locale `.ts` sources compiled
-to `.qm`, English as the fallback locale.
+The shipped UI is English today. A German localization is planned, through Qt's normal path: strings wrapped for translation, per-locale `.ts` sources compiled to `.qm`, English as the fallback locale.
 
-Wrap user-visible strings for translation as they are written, rather than
-retrofitting later. German translations use natural orthography with ä, ö, ü and
-ß; an `ae`/`oe`/`ue` spelling in a shipped string is a defect, not a
-compatibility measure. If a surface cannot render the text, fix the font or the
-encoding - do not degrade the words.
+Wrap user-visible strings for translation as they are written, rather than retrofitting later. German translations use natural orthography with ä, ö, ü and ß; an `ae`/`oe`/`ue` spelling in a shipped string is a defect, not a compatibility measure. If a surface cannot render the text, fix the font or the encoding - do not degrade the words.
 
-Developer documentation, code comments, commit messages and `docs/` stay English
-regardless of which locales ship.
+Developer documentation, code comments, commit messages and `docs/` stay English regardless of which locales ship.
 
 Repository specifics:
 
-- `.workspace/` is private planning context. Agents may read it; committed source
-  and public documentation must never point at it.
-- Review findings are tracked as `QCR-###`. They belong in `.workspace/`, not in a
-  source comment - keep the constraint the finding produced, drop the number.
-- Diagnostic identifiers shipped as product data (`ART-001`, `ENV-001`, ...) are
-  code, not tracker references, and are left alone.
-- `scripts/check-source-hygiene.ps1` enforces the mechanical half; `scripts/verify.ps1`
-  runs it. Its default scope is the work in front of you. The branch-wide sweep
-  (`check-source-hygiene.ps1 -All`) currently reports a backlog in older comments.
+- `.workspace/` is private planning context. Agents may read it; committed source and public documentation must never point at it.
+- Review findings are tracked as `QCR-###`. They belong in `.workspace/`, not in a source comment - keep the constraint the finding produced, drop the number.
+- Diagnostic identifiers shipped as product data (`ART-001`, `ENV-001`, ...) are code, not tracker references, and are left alone.
+- `scripts/check-source-hygiene.ps1` enforces the mechanical half; `scripts/verify.ps1` runs it. Its default scope is the work in front of you. The branch-wide sweep (`check-source-hygiene.ps1 -All`) currently reports a backlog in older comments.
 
 ## Commits, changelog and prose
 
 `CONTRIBUTING.md` is authoritative; the three rules an agent trips over most:
 
-- A commit is its Conventional Commits subject, `type(scope): summary`, with `!` for a breaking
-  change. Neither a local commit nor a pull request TITLE carries the pull request number;
-  `scripts/merge-pr.ps1` appends it exactly once at the squash. The reasoning goes in the pull
-  request description, not in a commit body.
-- Pull requests are opened with `scripts/open-pr.ps1` and merged with `scripts/merge-pr.ps1`, not
-  with a hand-assembled `gh pr create`/`gh pr merge`. The scripts validate the subject against the
-  parser the changelog cut reads, and the merge helper is what makes the number land once.
-  `merge-pr.ps1` merges nothing without `-Confirm`. That switch is a mechanical safety catch, not
-  authorization: it may be passed only after the user has explicitly approved merging that exact
-  pull request in the current interaction. Having the switch available is never a reason to use it,
-  and an earlier approval of another merge does not carry forward.
-- `CHANGELOG.md` is never edited on a branch. `scripts/new-changelog.ps1` assembles it at the
-  release cut from the merged subjects, and `scripts/check-commit-policy.ps1` fails a branch that
-  writes it.
-- Prose is written in long lines, broken where a paragraph ends rather than at a column. This
-  applies to new and changed text, not as a sweep of what is already there.
+- A commit is its Conventional Commits subject, `type(scope): summary`, with `!` for a breaking change. Neither a local commit nor a pull request TITLE carries the pull request number; `scripts/merge-pr.ps1` appends it exactly once at the squash. The reasoning goes in the pull request description, not in a commit body.
+- Pull requests are opened with `scripts/open-pr.ps1` and merged with `scripts/merge-pr.ps1`, not with a hand-assembled `gh pr create`/`gh pr merge`. The scripts validate the subject against the parser the changelog cut reads, and the merge helper is what makes the number land once. `merge-pr.ps1` merges nothing without `-Confirm`. That switch is a mechanical safety catch, not authorization: it may be passed only after the user has explicitly approved merging that exact pull request in the current interaction. Having the switch available is never a reason to use it, and an earlier approval of another merge does not carry forward.
+- `CHANGELOG.md` is never edited on a branch. `scripts/new-changelog.ps1` assembles it at the release cut from the merged subjects, and `scripts/check-commit-policy.ps1` fails a branch that writes it.
+- Prose is written in long lines, broken where a paragraph ends rather than at a column. This applies to new and changed text, not as a sweep of what is already there.
 
 ## Iteration
 
-- A normal slice targets one subsystem and 30-60 minutes. Do not broaden scope
-  without a blocking technical need, and do not silently expand the MVP.
-- Record minor polish findings for consolidated review instead of fixing
-  everything on the way past.
-- Run parallel workers only when their file ownership is disjoint. Never let two
-  workers modify the same shared integration file.
-- While implementing, validate with the smallest sufficient check: build the
-  affected target, run the focused tests for that subsystem. Complete validation
-  happens once, at the final gate.
-- Budget roughly 5-15 targeted tests and 2-4 visual scenarios per slice. No
-  exhaustive matrix unless the feature is inherently high-risk.
+- A normal slice targets one subsystem and 30-60 minutes. Do not broaden scope without a blocking technical need, and do not silently expand the MVP.
+- Record minor polish findings for consolidated review instead of fixing everything on the way past.
+- Run parallel workers only when their file ownership is disjoint. Never let two workers modify the same shared integration file.
+- While implementing, validate with the smallest sufficient check: build the affected target, run the focused tests for that subsystem. Complete validation happens once, at the final gate.
+- Budget roughly 5-15 targeted tests and 2-4 visual scenarios per slice. No exhaustive matrix unless the feature is inherently high-risk.
 
 ## Running tests
 
-`scripts/run-tests.ps1` is the entry point — it sets the throwaway
-`EXOSNAP_CONFIG_DIR`, `QT_QPA_PLATFORM=offscreen`, `QT_PLUGIN_PATH` and Qt on
-PATH, and prints a compact summary plus the exact failing gtest cases.
+`scripts/run-tests.ps1` is the entry point — it sets the throwaway `EXOSNAP_CONFIG_DIR`, `QT_QPA_PLATFORM=offscreen`, `QT_PLUGIN_PATH` and Qt on PATH, and prints a compact summary plus the exact failing gtest cases.
 
-It defaults to `build/windows-x64-ninja-debug`, the tree `verify.ps1` configures and
-builds, so the inner loop and the gate judge the same binaries. It builds that tree
-before testing it, because a failed build leaves the previous binaries in place and
-a suite run against those passes exactly like a suite run for the change; the build's
-exit code is what makes the result evidence. An incremental no-op costs about 11 s
-there. `-NoBuild` skips it and then has to infer whether the binaries match, which
-normally ends in a refusal (exit 3) rather than a result -- `-AllowStale` overrides
-that and accepts a result that may describe old binaries.
+It defaults to `build/windows-x64-ninja-debug`, the tree `verify.ps1` configures and builds, so the inner loop and the gate judge the same binaries. It builds that tree before testing it, because a failed build leaves the previous binaries in place and a suite run against those passes exactly like a suite run for the change; the build's exit code is what makes the result evidence. An incremental no-op costs about 11 s there. `-NoBuild` skips it and then has to infer whether the binaries match, which normally ends in a refusal (exit 3) rather than a result -- `-AllowStale` overrides that and accepts a result that may describe old binaries.
 
 The build, the suite and the receipt run under one host lock on the build directory, so `verify.ps1` and a second `run-tests.ps1` on the same tree wait instead of rewriting it mid-run; independent trees do not wait for each other.
 
@@ -311,36 +145,18 @@ pwsh scripts/run-tests.ps1 -ExcludeLabel live     # skip real hardware queries
 
 ## Diagnostics and verification tooling
 
-- Harness modes and tracing (`--hwnd-audit`, `--window-trace`,
-  `EXOSNAP_PREVIEW_TRACE`, AddressSanitizer): `docs/dev/harness-and-tracing.md`.
-- The Live Verify control channel, the updater automation channel and the
-  cross-process update handoff: `docs/dev/live-verify.md` (ADR 0066, ADR 0067,
-  ADR 0068).
+- Harness modes and tracing (`--hwnd-audit`, `--window-trace`, `EXOSNAP_PREVIEW_TRACE`, AddressSanitizer): `docs/dev/harness-and-tracing.md`.
+- The Live Verify control channel, the updater automation channel and the cross-process update handoff: `docs/dev/live-verify.md` (ADR 0066, ADR 0067, ADR 0068).
 - The release acceptance campaign: `docs/dev/release-verify.md`.
-- Machine state for a live check -- display HDR, refresh rate, audio endpoints --
-  through the `exosnap-envctl` transaction model (build with
-  `-DEXOSNAP_BUILD_PROBES=ON` is NOT needed; the tool is its own target). The
-  boundary between what it mutates, what it only reads and what a person must do
-  is the capability column of `snapshot`, and the mechanics are in
-  `docs/dev/release-verify.md`.
-- One-off hardware questions ("is this display actually in HDR right now",
-  "does the VideoProcessor support this conversion") have standing answers in
-  `tools/probes` (`-DEXOSNAP_BUILD_PROBES=ON`); look there before writing a new
-  probe.
+- Machine state for a live check -- display HDR, refresh rate, audio endpoints -- through the `exosnap-envctl` transaction model (build with `-DEXOSNAP_BUILD_PROBES=ON` is NOT needed; the tool is its own target). The boundary between what it mutates, what it only reads and what a person must do is the capability column of `snapshot`, and the mechanics are in `docs/dev/release-verify.md`.
+- One-off hardware questions ("is this display actually in HDR right now", "does the VideoProcessor support this conversion") have standing answers in `tools/probes` (`-DEXOSNAP_BUILD_PROBES=ON`); look there before writing a new probe.
 
 ## Final validation
 
-Once, after the branch is complete: format check, `git diff --check`, full Debug
-build, full CTest, the static quality checks, and a Release build. Do not re-run
-`check-quality.ps1` after an identical configure/build/test sequence unless it
-contributes a check that cannot be invoked separately.
+Once, after the branch is complete: format check, `git diff --check`, full Debug build, full CTest, the static quality checks, and a Release build. Do not re-run `check-quality.ps1` after an identical configure/build/test sequence unless it contributes a check that cannot be invoked separately.
 
-Green automated tests and clean deterministic visual scenarios are sufficient for
-an implementation wave. Physical hardware checks and broad visual review are
-deferred to consolidated review rounds. One or two documented minor limitations
-do not block merge when the core behavior is correct.
+Green automated tests and clean deterministic visual scenarios are sufficient for an implementation wave. Physical hardware checks and broad visual review are deferred to consolidated review rounds. One or two documented minor limitations do not block merge when the core behavior is correct.
 
 ## Reporting
 
-Keep final reports concise: what changed, what validated it, and what remains
-limited. Mention specification or ADR updates when the change required them.
+Keep final reports concise: what changed, what validated it, and what remains limited. Mention specification or ADR updates when the change required them.

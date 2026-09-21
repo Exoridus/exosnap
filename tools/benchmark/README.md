@@ -1,11 +1,6 @@
 # Frontend A/B benchmark tooling
 
-Development-only orchestration for the Qt Widgets vs. Qt Quick frontend
-comparison. Nothing in here ships. The application knows how to record and how
-to report on itself; it does not know what Superposition is, what a run
-identity is, or where artifacts live. That boundary is deliberate — the moment
-`QuickApplication` learns to launch a benchmark, the benchmark stops measuring
-the product.
+Development-only orchestration for the Qt Widgets vs. Qt Quick frontend comparison. Nothing in here ships. The application knows how to record and how to report on itself. It does not know what Superposition is, what a run identity is, or where artifacts live. That boundary is deliberate. Once `QuickApplication` learns to launch a benchmark, the benchmark stops measuring the product.
 
 ## What measures what
 
@@ -15,15 +10,11 @@ the product.
 | External GPU workload | Superposition Benchmark 1.1 Pro CLI | `superposition.csv`, `superposition.txt` |
 | Run identity, topology assertions, artifact layout | the scripts here | `run.json`, `scenario.json` |
 
-`Superposition FPS` is **not** `ExoSnap captured FPS`. The comparison report
-keeps them in separate sections for that reason.
+`Superposition FPS` is **not** `ExoSnap captured FPS`. The comparison report keeps them in separate sections for that reason.
 
 ## Prerequisites
 
-The frontend A/B campaign this tooling was built for is **complete and frozen**
-(`.workspace/benchmark-results*/`). Qt Quick is the shipping frontend (ADR 0064)
-and the Qt Widgets frontend is retired; re-running the comparison is not a normal
-workflow and needs a concrete regression to justify it.
+The frontend A/B campaign this tooling was built for is **complete and frozen** (`.workspace/benchmark-results*/`). Qt Quick is the shipping frontend (ADR 0064) and the Qt Widgets frontend is retired. Re-running the comparison is not a normal workflow and needs a concrete regression to justify it.
 
 A Release configuration with the harness explicitly enabled:
 
@@ -36,15 +27,9 @@ cmake --build build/windows-x64-release-bench --config Release --target exosnap
 
 `-Frontend quick` drives `app/Release/exosnap.exe`, the shipping application.
 
-`-Frontend widgets` no longer has anything to drive: the Qt Widgets frontend was
-removed with the cutover. The runner refuses that argument with an explanation
-rather than measuring the Quick binary and labelling the report `widgets`. To
-reproduce the original comparison, build from the pre-cutover checkpoint.
+`-Frontend widgets` no longer has anything to drive: the Qt Widgets frontend was removed with the cutover. The runner refuses that argument with an explanation rather than measuring the Quick binary and labelling the report `widgets`. To reproduce the original comparison, build from the pre-cutover checkpoint.
 
-`EXOSNAP_BUILD_BENCHMARK_HARNESS` adds the automation code and changes nothing
-else — no optimisation flag, no runtime policy. A Debug binary is rejected by
-`Compare-BenchmarkRuns.ps1`; measuring two unoptimised builds says nothing about
-what users run.
+`EXOSNAP_BUILD_BENCHMARK_HARNESS` adds the automation code and changes nothing else. It adds no optimisation flag and no runtime policy. A Debug binary is rejected by `Compare-BenchmarkRuns.ps1`. Measuring two unoptimised builds says nothing about what users run.
 
 ## Scripts
 
@@ -58,40 +43,20 @@ what users run.
 
 ## Two rules the tooling enforces for you
 
-**Effective configuration, not command lines.** Every report carries
-`effective_recording_config.fingerprint`, a digest over the `RecorderConfig` the
-engine was actually handed (`RecordingCoordinator::LastCommittedRecorderConfig`).
-An earlier campaign compared two runs launched with identical flags that were
-nevertheless recording differently, because one frontend seeded
-`OutputSettingsModel::Defaults()` on its way to `StartRecording`. Comparing flags
-could not have caught it. `Compare-BenchmarkRuns.ps1` diffs the fields and
-aborts.
+**Effective configuration, not command lines.** Every report carries `effective_recording_config.fingerprint`, a digest over the `RecorderConfig` the engine was actually handed (`RecordingCoordinator::LastCommittedRecorderConfig`). An earlier campaign compared two runs launched with identical flags that were nevertheless recording differently, because one frontend seeded `OutputSettingsModel::Defaults()` on its way to `StartRecording`. Comparing flags could not have caught it. `Compare-BenchmarkRuns.ps1` diffs the fields and aborts.
 
-**Comparability classes.** Deltas are computed only for metrics marked
-`identical`. `approximate` metrics are printed side by side with their probe
-text; `frontend_only` metrics are never subtracted. A Widgets preview "frame" is
-one swap-chain Present of a quad; a Quick preview "frame" is a scene-graph render
-of the whole window. Their difference is not a performance result.
+**Comparability classes.** Deltas are computed only for metrics marked `identical`. `approximate` metrics are printed side by side with their probe text. `frontend_only` metrics are never subtracted. A Widgets preview "frame" is one swap-chain Present of a quad. A Quick preview "frame" is a scene-graph render of the whole window. Their difference is not a performance result.
 
 ## Physical setup
 
 The canonical machine has two displays on the RTX 5070 Ti:
 
-* **Display 1 — LG 27GL850**, primary, physically left, 2560×1440 @ 144 Hz,
-  10-bit RGB, SDR. Superposition renders here; ExoSnap captures here.
-* **Display 2 — LG 27GL650F**, physically right, 1920×1080 @ ~144 Hz, 10-bit
-  RGB, SDR. ExoSnap's window lives here, visible and un-minimised, so the
-  application's real cost is measured without the application appearing inside
-  the image it is capturing.
+* **Display 1: LG 27GL850**, primary, physically left, 2560×1440 @ 144 Hz, 10-bit RGB, SDR. Superposition renders here. ExoSnap captures here.
+* **Display 2: LG 27GL650F**, physically right, 1920×1080 @ ~144 Hz, 10-bit RGB, SDR. ExoSnap's window lives here, visible and un-minimised, so the application's real cost is measured without the application appearing inside the image it is capturing.
 
-Window placement is not scripted from the outside: both frontends resolve it
-through `benchmark::ResolveHarnessWindowPlacement()`, so "same logical size,
-equivalent placement" is a property of the binaries rather than of a script that
-could drift.
+Window placement is not scripted from the outside: both frontends resolve it through `benchmark::ResolveHarnessWindowPlacement()`, so "same logical size, equivalent placement" is a property of the binaries rather than of a script that could drift.
 
-Keep the Windows graphics configuration fixed across a campaign: HDR off, SDR on
-both displays, 10-bit desktop signal, hardware-accelerated GPU scheduling on,
-VRR on, optimisations for windowed games on, dynamic refresh rate off.
+Keep the Windows graphics configuration fixed across a campaign: HDR off, SDR on both displays, 10-bit desktop signal, hardware-accelerated GPU scheduling on, VRR on, optimisations for windowed games on, dynamic refresh rate off.
 
 ## Typical sequence
 
@@ -113,13 +78,8 @@ VRR on, optimisations for windowed games on, dynamic refresh rate off.
 .\Compare-BenchmarkRuns.ps1 -Scenario superposition-1440p144-headroom
 ```
 
-Artifacts land under `.workspace/benchmark-results/<scenario>/<frontend>-runNN/`
-and are untracked. They are the historical reference for the Widgets frontend
-once it is removed, so preserve the raw files — not just a summary.
+Artifacts land under `.workspace/benchmark-results/<scenario>/<frontend>-runNN/` and are untracked. They are the historical reference for the Widgets frontend once it is removed, so preserve the raw files, not just a summary.
 
 ## Not part of the A/B
 
-No Y4M or raw-frame dumping during a frontend comparison. It changes disk I/O,
-CPU and memory, and the campaign is supposed to measure normal production-style
-recording. The encoding-corpus workflow is a separate exercise built on top of
-an accepted recording.
+No Y4M or raw-frame dumping during a frontend comparison. It changes disk I/O, CPU and memory, and the campaign is supposed to measure normal production-style recording. The encoding-corpus workflow is a separate exercise built on top of an accepted recording.
