@@ -17,11 +17,11 @@ namespace exosnap::engine::testutil {
 namespace {
 
 // Deterministic mock capture source: a fixed number of non-silent 48 kHz stereo
-// float packets. Sets stop_requested once drained. (Lifted verbatim from
+// float packets. Reports when it is drained. (Lifted verbatim from
 // test_session_e2e_real_file.cpp so behaviour is identical.)
 class MockAudioCaptureSource : public IAudioCaptureSource {
   public:
-    MockAudioCaptureSource(std::atomic<bool>* stop_requested, size_t packet_count) : stop_requested_(stop_requested) {
+    MockAudioCaptureSource(std::atomic<bool>* drained, size_t packet_count) : drained_(drained) {
         packets_.resize(packet_count);
         for (auto& p : packets_)
             p.assign(static_cast<size_t>(kFramesPerPacket) * kChannels, 0.1f);
@@ -37,8 +37,8 @@ class MockAudioCaptureSource : public IAudioCaptureSource {
             return 0;
         if (next_ < packets_.size())
             return kFramesPerPacket;
-        if (stop_requested_)
-            stop_requested_->store(true);
+        if (drained_)
+            drained_->store(true);
         return 0;
     }
     bool AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) override {
@@ -59,8 +59,8 @@ class MockAudioCaptureSource : public IAudioCaptureSource {
             return;
         acquired_ = false;
         ++next_;
-        if (next_ >= packets_.size() && stop_requested_)
-            stop_requested_->store(true);
+        if (next_ >= packets_.size() && drained_)
+            drained_->store(true);
     }
     uint32_t SampleRate() const override {
         return kSampleRate;
@@ -82,7 +82,7 @@ class MockAudioCaptureSource : public IAudioCaptureSource {
     static constexpr uint32_t kChannels = 2;
     static constexpr uint32_t kFramesPerPacket = 960; // 20 ms
 
-    std::atomic<bool>* stop_requested_ = nullptr;
+    std::atomic<bool>* drained_ = nullptr;
     bool initialized_ = false;
     bool acquired_ = false;
     size_t next_ = 0;
@@ -163,7 +163,8 @@ SyntheticSessionResult SyntheticSession::Run() {
     }
 
     const size_t audio_packets = static_cast<size_t>(cfg.target_seconds * 50.0); // 20 ms packets
-    auto source = std::make_unique<MockAudioCaptureSource>(&state.stop_requested, audio_packets);
+    std::atomic<bool> audio_drained{false};
+    auto source = std::make_unique<MockAudioCaptureSource>(&audio_drained, audio_packets);
     auto audio_thread = std::make_shared<AudioThread>(state_ptr, std::move(source), /*track_id=*/0);
     auto mux_thread = std::make_shared<MuxThread>(state_ptr);
 
@@ -246,6 +247,11 @@ SyntheticSessionResult SyntheticSession::Run() {
             if (!route_video(std::move(vp)))
                 break;
         }
+
+        while (!audio_drained.load() && !st.stop_requested.load())
+            std::this_thread::yield();
+        if (!st.stop_requested.load())
+            st.RequestCleanStop();
 
         // Even on an early cooperative stop we still enqueue EOS so the mux thread
         // finalizes what it has (an ordered stop). A "killed mid-recording" partial

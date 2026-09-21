@@ -403,6 +403,17 @@ bool waitForDestinationReady(QObject* shell, int page, int timeout_ms) {
     }
 }
 
+bool waitForCurrentPage(QObject* shell, int page, int timeout_ms) {
+    QElapsedTimer timer;
+    timer.start();
+    while (shell->property("currentPage").toInt() != page) {
+        if (timer.hasExpired(timeout_ms))
+            return false;
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    return true;
+}
+
 // Calls the shell's one navigation edge the way a tab, a shortcut or a
 // notification action does. Resolved through the metaobject rather than by name
 // alone, because a typed QML function (`navigateTo(page: int)`) publishes an
@@ -529,12 +540,12 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     shell->setProperty("currentPage", 2);
     if (!QMetaObject::invokeMethod(diagnostics, "navigateToLogsRequested"))
         return failNavigationLifecycle("navigateToLogsRequested not invokable");
-    if (shell->property("currentPage").toInt() != 3)
+    if (!waitForCurrentPage(shell, 3, 20000))
         return failNavigationLifecycle("navigateToLogsRequested did not navigate");
     shell->setProperty("currentPage", 2);
     if (!QMetaObject::invokeMethod(diagnostics, "navigateToSettingsRequested"))
         return failNavigationLifecycle("navigateToSettingsRequested not invokable");
-    if (shell->property("currentPage").toInt() != 1)
+    if (!waitForCurrentPage(shell, 1, 20000))
         return failNavigationLifecycle("navigateToSettingsRequested did not navigate");
 
     // An edit session is an ephemeral workspace on Record, not a navigation
