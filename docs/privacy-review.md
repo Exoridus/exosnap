@@ -38,7 +38,13 @@ OS/GPU facts are not populated on the Sentry tag path and are not presented as p
 
 ### Minidump module paths (E1 detail)
 
-A hard crash uploads (with consent) a Crashpad minidump out-of-process. The `before_send` scrubber runs only on the structured event, never on the minidump binary. It cannot strip the `MINIDUMP_MODULE_LIST`, which carries the full install path of `exosnap.exe`. For a standard Program-Files-style install this is not personal. For a **portable install run from under `%USERPROFILE%`**, the username segment of that path can appear in the uploaded minidump. This is a real, narrower exception to "paths are stripped" (see `PRIVACY.md`). It applies only to the minidump binary, never to the structured event. The crash dialog discloses this boundary but does not display the binary contents. No code mitigation ships in this slice (see Offene Frage 1 / ADR 0045). The doc precision above is the fix that landed. A forced standard-install-path mitigation remains a possible follow-up, tracked as a known limitation rather than silently promised.
+A hard crash uploads, with consent, a Crashpad minidump out-of-process. The `before_send` scrubber runs only on the structured event, never on the minidump binary, and it cannot strip the `MINIDUMP_MODULE_LIST`, which carries the full install path of `exosnap.exe`.
+
+For a standard Program-Files-style install this is not personal. For a **portable install run from under `%USERPROFILE%`**, the username segment of that path can appear in the uploaded minidump.
+
+This is a real, narrower exception to "paths are stripped" (see `PRIVACY.md`). It applies only to the minidump binary, never to the structured event. The crash dialog discloses this boundary but does not display the binary contents.
+
+No code mitigation ships in this slice (see Offene Frage 1 and ADR 0045). The doc precision above is the fix that landed. A forced standard-install-path mitigation remains a possible follow-up, tracked as a known limitation rather than silently promised.
 
 ### `before_send` defensive backstop
 

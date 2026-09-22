@@ -20,11 +20,21 @@ The implemented flow moves **download + verify INTO the updater process**, not t
 4. **Verifying installation**: confirm the swapped-in build is the expected version.
 5. **Restarting ExoSnap**: relaunch on the new version; on a healthy start the backup is deleted, on failure it is restored (rollback).
 
-The main app's only remaining role is to **stage** the updater runtime subset (`exosnap-updater.exe` plus the shared Qt Core/Gui/Widgets DLLs and the windows platform plugin, see `UpdaterStagingFileList`) into a per-user temp copy and launch that copy, then exit. Running the updater from a staged copy is what lets the app replace the *original* `exosnap-updater.exe` on a future updater-version bump (a running image cannot overwrite itself). A persisted **loop guard** ("applied version" stamp) ensures a completed update is never re-applied from a stale releases-API cache. The **recording guard** is layered: ADR 0012 blocks download/install during an active recording or finalization at the service layer, and the updater window itself disables its close affordance during Install/Verify/Restart so the swap cannot be interrupted mid-flight.
+The main app's only remaining role is to **stage** the updater runtime subset into a per-user temp copy and launch that copy, then exit. The subset is `exosnap-updater.exe` plus the shared Qt Core, Gui and Widgets DLLs and the windows platform plugin; see `UpdaterStagingFileList`.
+
+Running the updater from a staged copy is what lets the app replace the *original* `exosnap-updater.exe` on a future updater-version bump, because a running image cannot overwrite itself.
+
+A persisted **loop guard**, an "applied version" stamp, ensures a completed update is never re-applied from a stale releases-API cache.
+
+The **recording guard** is layered: ADR 0012 blocks download and install during an active recording or finalization at the service layer, and the updater window itself disables its close affordance during Install, Verify and Restart, so the swap cannot be interrupted mid-flight.
 
 The three terminal failure variants (amber / red / green) each always name the version that is safe to run: see product-spec §13 and the failure matrix behind `FailureCase` / `RetryEntryStep`.
 
-**Lifecycle ownership amendment (2026-07).** Launching the detached updater is not itself a restart handoff. While both processes are alive the Settings card says **Updater running** and `UpdateService` watches the detached process handle without polling. If it exits before handoff, the card becomes actionable again. Only the updater's private, magic-marked Win32 close message transitions the app to **ClosingForHandoff** / `Restart pending`. An ordinary close cannot forge that state. The normal-mode `applied_version` loop guard is committed immediately before that accepted close, never at process launch, and verification-reinstall never writes it. Every fresh app process discards a leftover applied stamp and reconstructs its card from the release truth, so an abort, failure, forced close or verify run cannot leave a stale pending state.
+**Lifecycle ownership amendment (2026-07).** Launching the detached updater is not itself a restart handoff. While both processes are alive the Settings card says **Updater running** and `UpdateService` watches the detached process handle without polling. If it exits before handoff, the card becomes actionable again.
+
+Only the updater's private, magic-marked Win32 close message transitions the app to **ClosingForHandoff** and `Restart pending`. An ordinary close cannot forge that state.
+
+The normal-mode `applied_version` loop guard is committed immediately before that accepted close, never at process launch, and verification-reinstall never writes it. Every fresh app process discards a leftover applied stamp and reconstructs its card from the release truth, so an abort, a failure, a forced close or a verify run cannot leave a stale pending state.
 
 Terminal updater failures use a structured result model (headline, detail, safety statement and actions) rendered inside one result card. Raw transport/MSI/path details remain log evidence. A restore failure has its own hard-stop case and never claims that the previous version was restored.
 

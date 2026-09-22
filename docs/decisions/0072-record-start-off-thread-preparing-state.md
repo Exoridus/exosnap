@@ -12,7 +12,13 @@ Related: ADR 0040 (preview source-tap), ADR 0041 (capture hub lease, the release
 
 ## Decision
 
-**Thin gate, fat worker.** The GUI thread does only a cheap, synchronous re-entrancy guard, a startable-state check, and a full **by-value snapshot** of every input and config model the body reads (`PrepareContext`), not just the target/audio/crop fields, but every settings model the worker touches (`output_settings_`, `split_settings_`, `video_settings_`, `webcam_settings_`, `resolved_user_config_`, `output_target_context_`, `caps_`), because all of them remain writable from the GUI thread while a prepare is in flight. It then posts `Preparing` and starts the worker thread. Everything else (disk/FS checks, the DXGI facts refresh, config assembly, `Validate`, webcam start, the recovery-manifest write, and the release handshake) runs on that one worker thread, which then falls straight into `session_.Record()` with no second thread hop. The worker reads only from its own snapshot, never from a mutable coordinator member, except `caps_` for the DXGI-facts refresh, which stays protected by the existing `RevalidateCapabilities` early-return while any of `Preparing`/`Recording`/`Paused`/`Stopping`/`ArmedFromRecovery` holds.
+**Thin gate, fat worker.** The GUI thread does only three cheap things: a synchronous re-entrancy guard, a startable-state check, and a full **by-value snapshot** of every input and config model the body reads (`PrepareContext`). It then posts `Preparing` and starts the worker thread.
+
+The snapshot is not just the target, audio and crop fields. It covers every settings model the worker touches (`output_settings_`, `split_settings_`, `video_settings_`, `webcam_settings_`, `resolved_user_config_`, `output_target_context_`, `caps_`), because all of them remain writable from the GUI thread while a prepare is in flight.
+
+Everything else runs on that one worker thread: the disk and filesystem checks, the DXGI facts refresh, config assembly, `Validate`, the webcam start, the recovery-manifest write, and the release handshake. It then falls straight into `session_.Record()` with no second thread hop.
+
+The worker reads only from its own snapshot, never from a mutable coordinator member. The one exception is `caps_` for the DXGI-facts refresh, which stays protected by the existing `RevalidateCapabilities` early-return while any of `Preparing`, `Recording`, `Paused`, `Stopping` or `ArmedFromRecovery` holds.
 
 ### Alternatives considered
 

@@ -60,7 +60,13 @@ Static analysis tooling is extended to surface stale code for human review. Thes
 
 ### E. Updater smoke (build-release-artifacts.ps1): 0.9.0
 
-The swap-updater (`exosnap-updater.exe`, ADR 0034) is a shipped runtime component, so the packaging gate now proves it loads. `exosnap-updater.exe` is added to the required-files presence list and is covered automatically by the dumpbin import audit (which globs every staged `*.exe`/`*.dll`). Beyond presence, a dedicated smoke reproduces the exact staging the app performs at update time (`UpdaterStagingFileList` + the `[Paths] Plugins = plugins` qt.conf the app writes): it copies that minimal runtime subset from the packaged tree into an isolated temp dir and launches `exosnap-updater.exe --preview-state progress --preview-smoke`. The new `--preview-smoke` flag auto-closes the window after ~2 s, so a clean exit proves the exe and its staged Qt runtime (Core/ Gui/Widgets + the windows platform plugin) load and render. `STATUS_DLL_NOT_FOUND`, a hard-error / platform-plugin dialog (sentinel), or any non-zero exit fails the gate. Gated by the same `-SkipSmoke` switch and reuses the shared `SmokeNative` helpers.
+The swap-updater (`exosnap-updater.exe`, ADR 0034) is a shipped runtime component, so the packaging gate now proves it loads. `exosnap-updater.exe` is added to the required-files presence list and is covered automatically by the dumpbin import audit, which globs every staged `*.exe` and `*.dll`.
+
+Beyond presence, a dedicated smoke reproduces the exact staging the app performs at update time: `UpdaterStagingFileList` plus the `[Paths] Plugins = plugins` qt.conf the app writes. It copies that minimal runtime subset from the packaged tree into an isolated temp dir and launches `exosnap-updater.exe --preview-state progress --preview-smoke`.
+
+The new `--preview-smoke` flag auto-closes the window after about 2 s, so a clean exit proves the exe and its staged Qt runtime (Core, Gui, Widgets and the windows platform plugin) load and render.
+
+The gate fails on `STATUS_DLL_NOT_FOUND`, on a hard-error or platform-plugin dialog caught by the sentinel, or on any non-zero exit. It is gated by the same `-SkipSmoke` switch and reuses the shared `SmokeNative` helpers.
 
 ### F. Signed update manifest as a required release job: 0.9.0
 

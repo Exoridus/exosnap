@@ -20,7 +20,11 @@ This claim is not backed by a citation anywhere in the repository, and, as far a
 
 **This is not a peripheral dependency.** `FdkAacEncoder` (`libs/engine/src/fdk_aac_encoder.{h,cpp}`) is the **only** live AAC encoder in the audio pipeline: `audio_thread.cpp` constructs it directly and nothing else. AAC is not optional in the product: per `docs/product-spec.md` (§4, the container/codec matrix), **MP4 offers only AAC audio**, while Opus, PCM, and FLAC are explicitly `Prohibited`/rejected for MP4 by the compatibility registry (ADR 0010, ADR 0014), independent of this license question. AAC is also the audio codec of the built-in **Compatibility** preset (MP4 + H.264 + AAC). There is no CMake option to omit `fdk-aac` from the build (unlike, e.g., `EXOSNAP_WITH_PRESENTMON`). It is unconditionally fetched, built as a static library, and linked into every configuration, official and self-built alike.
 
-The legacy `MfAacEncoder` (Media Foundation AAC-LC, `libs/engine/src/mf_aac_encoder.{h,cpp}`) is still present in the tree (ADR 0038 records that the live pipeline switched from it to FDK-AAC and that it has been dead code ever since), but **an open PR (#176, "Dead code retires and every theme proves its QSS tokens resolve") currently proposes deleting it** (`MfAacEncoder`, its `IAudioEncoder` adapter `MfAacAudioEncoder`, and its dedicated test binary) as unreachable dead code. That PR is unrelated to licensing. It was not written with this question in mind. If this ADR leads to reviving the MF path, it would need to be restored from git history after (or instead of) that PR merges. This is flagged here so the two efforts do not collide silently.
+The legacy `MfAacEncoder` (Media Foundation AAC-LC, `libs/engine/src/mf_aac_encoder.{h,cpp}`) is still present in the tree. ADR 0038 records that the live pipeline switched from it to FDK-AAC and that it has been dead code ever since.
+
+**An open PR (#176, "Dead code retires and every theme proves its QSS tokens resolve") currently proposes deleting it**: `MfAacEncoder`, its `IAudioEncoder` adapter `MfAacAudioEncoder`, and its dedicated test binary, as unreachable dead code.
+
+That PR is unrelated to licensing and was not written with this question in mind. If this ADR leads to reviving the MF path, it would need to be restored from git history after, or instead of, that PR merging. This is flagged here so the two efforts do not collide silently.
 
 ## Research: what the FDK-AAC license actually says, and how others have treated it
 
@@ -47,7 +51,11 @@ Two further clauses matter for the GPL question and are usually discussed alongs
 
 ### Why this collides with GPLv3
 
-GPLv3 §7 enumerates the *only* additional restrictions a licensor may layer onto GPL-covered code (warranty disclaimers, attribution, non-endorsement, indemnification, etc.). A restriction outside that enumerated list is a "further restriction" under GPLv3 §10, and the license explicitly forbids imposing one on a work conveyed under GPLv3. FDK-AAC's §3 patent non-grant/field-of-use condition, and its no-fee/mandatory-free-source condition, are not among the GPLv3 §7 permitted exceptions. The practical consequence, echoed identically by FFmpeg, Debian, and Fedora below, is that a binary combining unmodified FDK-AAC with GPL-licensed code cannot validly be licensed "as a whole" under GPLv3: the combination is not itself a normal "System Library"/aggregation exception (GPLv3 §1) because ExoSnap links it in, statically, on purpose, as a codec the program is specifically designed to use.
+GPLv3 §7 enumerates the *only* additional restrictions a licensor may layer onto GPL-covered code: warranty disclaimers, attribution, non-endorsement, indemnification and so on. A restriction outside that enumerated list is a "further restriction" under GPLv3 §10, and the license explicitly forbids imposing one on a work conveyed under GPLv3.
+
+FDK-AAC's §3 patent non-grant and field-of-use condition, and its no-fee and mandatory-free-source condition, are not among the GPLv3 §7 permitted exceptions.
+
+The practical consequence, echoed identically by FFmpeg, Debian, and Fedora below, is that a binary combining unmodified FDK-AAC with GPL-licensed code cannot validly be licensed "as a whole" under GPLv3. The combination is not itself a normal "System Library" or aggregation exception (GPLv3 §1), because ExoSnap links it in, statically, on purpose, as a codec the program is specifically designed to use.
 
 ### Positions of record
 
@@ -62,7 +70,13 @@ GPLv3 §7 enumerates the *only* additional restrictions a licensor may layer ont
 
 - **`fdk-aac-free`: the one carve-out both distros lean on.** Fedora has shipped `fdk-aac-free` since 2017 (Red Hat Bugzilla #1501522), not a different license, but a **source-stripped fork** (maintained at
   <https://cgit.freedesktop.org/~wtay/fdk-aac/log/?h=fedora>, the `fedora` branch of Wim
-  Taymans's tree) that removes the SBR/PS (Spectral Band Replication / Parametric Stereo, i.e. HE-AAC) code paths and keeps only plain **LC-AAC** encode/decode. Fedora Legal's argument, recorded in the same bugzilla thread, is fork-specific: with the patent-encumbered techniques physically removed, §3's patent non-grant has nothing live left to disclaim for what remains, so it is "effectively GPL-compatible for this specific implementation" even though the FSF's general "free, but GPL-incompatible" finding about the license *text* itself is unchanged. Both Red Hat Legal and FESCo approved shipping it on that basis. Debian has an `fdk-aac-free` package pending in its NEW queue that has stalled since 2022 (per the same sources), meaning Debian has not yet reached the same conclusion Fedora did. Caveat found during this research and worth stating plainly: `fdk-aac-free` reduces practical patent-clause risk for the LC-AAC-only case. It is **not** a universally agreed clean fix, and a maintainer choosing it is making the same kind of risk-tolerance call Fedora made, not resolving the underlying ambiguity outright.
+  Taymans's tree) that removes the SBR/PS (Spectral Band Replication / Parametric Stereo, that is HE-AAC) code paths and keeps only plain **LC-AAC** encode and decode.
+
+  Fedora Legal's argument, recorded in the same bugzilla thread, is fork-specific: with the patent-encumbered techniques physically removed, §3's patent non-grant has nothing live left to disclaim for what remains, so it is "effectively GPL-compatible for this specific implementation" even though the FSF's general "free, but GPL-incompatible" finding about the license *text* itself is unchanged. Both Red Hat Legal and FESCo approved shipping it on that basis.
+
+  Debian has an `fdk-aac-free` package pending in its NEW queue that has stalled since 2022 (per the same sources), meaning Debian has not yet reached the same conclusion Fedora did.
+
+  Caveat found during this research and worth stating plainly: `fdk-aac-free` reduces practical patent-clause risk for the LC-AAC-only case. It is **not** a universally agreed clean fix, and a maintainer choosing it is making the same kind of risk-tolerance call Fedora made, not resolving the underlying ambiguity outright.
 
 - **How other GPL/LGPL projects handle it:**
   - **FFmpeg** gates `libfdk_aac` (and other GPL-incompatible optional components) behind
@@ -104,13 +118,21 @@ Point the `FetchContent_Declare(fdk-aac …)` at the Fedora/`wtaymans` `fedora` 
 
 Media Foundation's AAC-LC MFT is a Windows **operating-system component**, not something ExoSnap ships or links statically: no third-party redistribution question at all.
 
-- **Consequence:** Removes the FDK-AAC license question entirely for the AAC path. Reintroduces a dependency ADR 0038 says the project deliberately moved away from (no stated reason found in that ADR or the introducing commit beyond "the live pipeline uses FDK-AAC" as an accomplished fact: the original rationale for the FDK switch was not documented in a form this review could locate). Requires either landing this decision before PR #176 merges (keeping `MfAacEncoder` alive and wiring it back into `audio_thread.cpp`) or resurrecting it from git history afterward. Also reintroduces the constraint ADR 0038 flags for Windows N/KN editions: MF DLLs are delay-loaded and probed today only because the *webcam* still needs them; if MF AAC becomes the live encode path again, AAC recording itself would become unavailable (or need its own fallback) on Windows N/KN hosts without the Media Feature Pack, a regression for that subset of users that does not exist today.
+- **Consequence:** Removes the FDK-AAC license question entirely for the AAC path. It reintroduces a dependency ADR 0038 says the project deliberately moved away from, with no stated reason found in that ADR or the introducing commit beyond "the live pipeline uses FDK-AAC" as an accomplished fact: the original rationale for the FDK switch was not documented in a form this review could locate.
+
+  It requires either landing this decision before PR #176 merges, keeping `MfAacEncoder` alive and wiring it back into `audio_thread.cpp`, or resurrecting it from git history afterward.
+
+  It also reintroduces the constraint ADR 0038 flags for Windows N/KN editions. MF DLLs are delay-loaded and probed today only because the *webcam* still needs them. If MF AAC becomes the live encode path again, AAC recording itself would become unavailable on Windows N/KN hosts without the Media Feature Pack, or would need its own fallback, which is a regression for that subset of users that does not exist today.
 
 ### (d) Make AAC/FDK-AAC a dynamically-loaded, optional component (OBS's model)
 
 Split FDK-AAC out of the core `exosnap.exe` binary into a separate DLL loaded only when AAC is actually selected, distinct from the "always statically linked" model today.
 
-- **Consequence:** Moves ExoSnap from "static link, always present" toward the "separate work, opt-in" pattern OBS uses for `obs-libfdk`, a meaningfully different (and generally considered lower-risk) position than today's static link, though, per OBS's own continued treatment of it as optional rather than a settled question, this does not produce a legally certain answer either; it changes the shape of the risk, not the underlying license conflict. This is also the option with the largest engineering footprint: it would require a plugin/DLL boundary that does not exist anywhere else in ExoSnap's architecture today, and AAC is not an optional feature from the product's point of view (it is MP4's only audio codec). Making ExoSnap's most common export path depend on an optional component would need its own product conversation about what happens when the component is absent (no MP4 export at all? fall back to MF AAC on Windows only? forced re-encode?). None of that is scoped here.
+- **Consequence:** Moves ExoSnap from "static link, always present" toward the "separate work, opt-in" pattern OBS uses for `obs-libfdk`, a meaningfully different and generally lower-risk position than today's static link. It does not produce a legally certain answer either, though, as OBS's own continued treatment of it as optional rather than settled shows: it changes the shape of the risk, not the underlying license conflict.
+
+  This is also the option with the largest engineering footprint. It would require a plugin or DLL boundary that does not exist anywhere else in ExoSnap's architecture today, and AAC is not an optional feature from the product's point of view, being MP4's only audio codec.
+
+  Making ExoSnap's most common export path depend on an optional component would need its own product conversation about what happens when the component is absent: no MP4 export at all, a fallback to MF AAC on Windows only, or a forced re-encode. None of that is scoped here.
 
 ### (e) Move MP4 to a different audio codec entirely
 
@@ -118,7 +140,18 @@ Not viable without contradicting existing, deliberate product decisions. `docs/p
 
 ## Recommendation (advisory only, the maintainer decides)
 
-Given that (1) AAC is not optional (MP4's only audio codec), (2) ExoSnap already ships pre-built binaries rather than build-from-source-only, (3) ExoSnap's FDK-AAC usage is LC-AAC-only and therefore squarely inside what `fdk-aac-free` covers, and (4) a citable precedent already exists for treating that specific combination as acceptable (Fedora Legal + FESCo, since 2017): **option (b), switching to `fdk-aac-free`, looks like the best ratio of risk reduction to engineering cost**, with the accurate-comment change from option (a) applied regardless of which option is chosen (the current "compatible... per FSF" wording should not survive this ADR unchanged either way). Option (c) is worth keeping in reserve specifically *because* `MfAacEncoder` still exists in the tree today: reintroducing it later remains cheap as long as PR #176 is coordinated with whatever this ADR decides, but it reopens the Windows N/KN question ADR 0038 closed for the webcam. Option (d) is the most legally conservative shape but is disproportionate engineering relative to (b) unless the maintainer specifically wants to avoid even the `fdk-aac-free` fork-specific argument.
+Given that:
+
+1. AAC is not optional, being MP4's only audio codec
+2. ExoSnap already ships pre-built binaries rather than build-from-source-only
+3. ExoSnap's FDK-AAC usage is LC-AAC-only and therefore squarely inside what `fdk-aac-free` covers
+4. a citable precedent already exists for treating that specific combination as acceptable (Fedora Legal and FESCo, since 2017)
+
+**option (b), switching to `fdk-aac-free`, looks like the best ratio of risk reduction to engineering cost**, with the accurate-comment change from option (a) applied regardless of which option is chosen. The current "compatible... per FSF" wording should not survive this ADR unchanged either way.
+
+Option (c) is worth keeping in reserve specifically *because* `MfAacEncoder` still exists in the tree today. Reintroducing it later remains cheap as long as PR #176 is coordinated with whatever this ADR decides, but it reopens the Windows N/KN question ADR 0038 closed for the webcam.
+
+Option (d) is the most legally conservative shape but is disproportionate engineering relative to (b), unless the maintainer specifically wants to avoid even the `fdk-aac-free` fork-specific argument.
 
 This is a recommendation, not a decision. The maintainer should weigh their own risk tolerance: this ADR's job is to make sure that choice is made knowingly, with sources, rather than resting on an uncited comment.
 

@@ -91,7 +91,11 @@ A document that cannot be accepted produces `FailureCase::HandoffRejected` (phas
 
 ### The retry offer becomes mode-aware
 
-A retry re-enters at Download. In a **manual** run that step fetches the manifest, so re-running it can genuinely produce a different answer. In an **app-handoff** run it re-reads the exact file the application handed over, which cannot change, so `VerifyDownloadFailed` (A2) would be refused identically every time. `RetryOffered()` therefore takes the mode, and the updater's footer reads the same answer the automation channel publishes: `Close`, not a `Re-download` button that provably cannot work. The rule is drawn at the whole case rather than at the sub-case (a corrupt *package* could in principle be re-fetched) because offering nothing is never a false promise. The next attempt starts in ExoSnap, which is still running, and A2 aborts before the parent is asked to close.
+A retry re-enters at Download, and what that means depends on the mode. In a **manual** run that step fetches the manifest, so re-running it can genuinely produce a different answer. In an **app-handoff** run it re-reads the exact file the application handed over, which cannot change, so `VerifyDownloadFailed` (A2) would be refused identically every time.
+
+`RetryOffered()` therefore takes the mode, and the updater's footer reads the same answer the automation channel publishes: `Close`, not a `Re-download` button that provably cannot work.
+
+The rule is drawn at the whole case rather than at the sub-case, even though a corrupt *package* could in principle be re-fetched, because offering nothing is never a false promise. The next attempt starts in ExoSnap, which is still running, and A2 aborts before the parent is asked to close.
 
 ### What was removed
 

@@ -12,13 +12,31 @@ Accepted. UI shell implemented in Production Suite wave, engine implemented in 0
 
 **Amended (2026-08-03): the export card becomes a rail panel, and the surface scales.** The nested export card is gone (`ui::dialogs::ExportOverlay` deleted). Container, save mode, destination, progress and result now live in an **embedded panel in the right rail**, under the details card, and the action bar's button starts the export directly instead of opening anything. The overwrite confirmation is the only modal left in the flow. The rail also stops being a fixed 280 px: it narrows across width breakpoints (but is never hidden: it carries the export controls) and scrolls vertically, and the page recomputes that layout from `resizeEvent` and `showEvent`. See "Surface structure" and "Export panel" below.
 
-**Amended (2026-08-03, second pass): the rail never auto-scrolls, and it densifies instead.** The first pass answered "the status is below the fold at 860 × 700" by scrolling the rail to the panel's bottom edge when a run reported something (`ExportPanel::statusShown` → `EditExportPage::revealExportPanel()`). At the minimum window the panel is taller than the viewport, so that scroll was a jump by construction, it landed each of the three states at a different offset, and it moved the details card along with it. Both the signal and the method are **gone**: the status area now sits at the *top* of the export card, directly under its heading and above the output rows, so there is nothing to scroll to. The rail's scroll position is left to the user in every state. Alongside it the details card gained a **compact density** for the narrow breakpoint only, freeing roughly 50 px for the export card at the minimum window. See "Export panel" and "Surface structure" below.
+**Amended (2026-08-03, second pass): the rail never auto-scrolls, and it densifies instead.** The first pass answered "the status is below the fold at 860 × 700" by scrolling the rail to the panel's bottom edge when a run reported something (`ExportPanel::statusShown` → `EditExportPage::revealExportPanel()`).
 
-**Amended (2026-08-12, final visual polish): workspace presentation, unchanged ownership.** The Qt Quick frontend's `EditOverlay` is still a layer over the Record page and still owns the clip, the decoder session and the export exactly as decided here. **No page migration happened, and none is claimed.** What changed is presentation. The Quick port had regressed the shape this ADR already settled: it covered the *whole* window with a scrim, a 20 px floating gap and a rounded, bordered frame nearly the size of the window, which read as a modal dialog and put the shell's own minimize/maximize/close buttons underneath it. It now occupies the normal page content region below the 40 px title band, the same "title bar stays visible" property the Widgets implementation had, with no scrim, no gap, no outer frame and no outer border.
+At the minimum window the panel is taller than the viewport, so that scroll was a jump by construction: it landed each of the three states at a different offset, and it moved the details card along with it.
+
+Both the signal and the method are **gone**. The status area now sits at the *top* of the export card, directly under its heading and above the output rows, so there is nothing to scroll to, and the rail's scroll position is left to the user in every state.
+
+Alongside it the details card gained a **compact density** for the narrow breakpoint only, freeing roughly 50 px for the export card at the minimum window. See "Export panel" and "Surface structure" below.
+
+**Amended (2026-08-12, final visual polish): workspace presentation, unchanged ownership.** The Qt Quick frontend's `EditOverlay` is still a layer over the Record page and still owns the clip, the decoder session and the export exactly as decided here. **No page migration happened, and none is claimed.**
+
+What changed is presentation. The Quick port had regressed the shape this ADR already settled: it covered the *whole* window with a scrim, a 20 px floating gap and a rounded, bordered frame nearly the size of the window, which read as a modal dialog and put the shell's own minimize, maximize and close buttons underneath it.
+
+It now occupies the normal page content region below the 40 px title band, the same "title bar stays visible" property the Widgets implementation had, with no scrim, no gap, no outer frame and no outer border.
 
 Two behavioural notes, so this file does not stay wrong about the shipped build:
 
-- **Nav tabs stay available while the workspace is open** (corrected 2026-08-16), with Record still marked as the current destination. Three shapes have existed and only the third is shipped: the Widgets shape closed the overlay through the discard guard on nav-away; the Quick port locked the tabs instead; the shipped shape does neither. An open edit session is state of the Record destination: leaving Record hides the workspace without ending the session, and returning shows the same one. Navigation is unconditional and asks nothing; Back is still the only way out of the session, and it still guards unsaved trim points and markers. The nav-away paragraphs under "Decision" below describe the Widgets shape and are kept for history. Normative behaviour: `docs/product-spec.md` §2.
+- **Nav tabs stay available while the workspace is open** (corrected 2026-08-16), with Record still marked as the current destination. Three shapes have existed and only the third is shipped:
+
+  1. the Widgets shape closed the overlay through the discard guard on nav-away
+  2. the Quick port locked the tabs instead
+  3. the shipped shape does neither
+
+  An open edit session is state of the Record destination: leaving Record hides the workspace without ending the session, and returning shows the same one. Navigation is unconditional and asks nothing. Back is still the only way out of the session, and it still guards unsaved trim points and markers.
+
+  The nav-away paragraphs under "Decision" below describe the Widgets shape and are kept for history. Normative behaviour: `docs/product-spec.md` §2.
 - **The Done state offers one folder action.** `Open folder` and `Show in Explorer` were two labels for one user task (the second opens the same folder *and* selects the file); the panel now offers `Show in folder` alone. The "Export panel" section below still describes the pair and is kept for history.
 
 ## Context
@@ -48,7 +66,11 @@ Escape or a click on the backdrop (outside the hosted page's framed panel) close
 
 **Discard guard.** With the title bar and the nav tabs reachable there are more ways to leave the surface, so closing it with trim points or markers set asks first: `Discard edits?`, with `Keep editing` as the default button and `Discard` as the reject-role choice, the same shape as the overwrite confirmation. `EditExportPage::hasUnsavedEdits()` is the gate (a trim range is set, or the clip carries markers). It guards the back arrow, Escape, a backdrop click, and nav-away. On `Keep editing` from nav-away the navigation is cancelled outright rather than deferred.
 
-**Recording start dismisses the overlay.** A capture start (recording or countdown) closes the Edit overlay. On the stack-page shape this happened implicitly via the swap-back to Record. With the overlay it is explicit in `onRecordChromeStateChanged`. This dismissal deliberately applies **during a running export too**: closing the overlay only hides the progress UI. The hosted page and its export worker thread live on, and re-entering the editor after Stop re-shows the running export instead of resetting the page (`navigateToEditExportPage` re-opens without touching the context while `isDismissBlocked()`). It is also the one close that **skips the discard guard**: a modal that blocks a hotkey-triggered recording is worse than a lost trim. Conversely, `navigateToEditExportPage` is a no-op while a recording or countdown is active, so a stale toast's Edit action can never open the editor over a live capture.
+**Recording start dismisses the overlay.** A capture start, whether a recording or a countdown, closes the Edit overlay. On the stack-page shape this happened implicitly via the swap-back to Record; with the overlay it is explicit in `onRecordChromeStateChanged`.
+
+This dismissal deliberately applies **during a running export too**. Closing the overlay only hides the progress UI: the hosted page and its export worker thread live on, and re-entering the editor after Stop re-shows the running export instead of resetting the page (`navigateToEditExportPage` re-opens without touching the context while `isDismissBlocked()`).
+
+It is also the one close that **skips the discard guard**, because a modal that blocks a hotkey-triggered recording is worse than a lost trim. Conversely, `navigateToEditExportPage` is a no-op while a recording or countdown is active, so a stale toast's Edit action can never open the editor over a live capture.
 
 **App close during an export.** `MainWindow::closeEvent` guards a running export the same way it guards the post-stop MP4 remux: a dialog offers "Wait for export to finish" (default) or "Cancel export and close". Cancelling is data-safe: an export never mutates the original recording. At most a partial temp/`_edit` file is abandoned. The close-to-tray path is unaffected (hide-to-tray leaves the export running).
 
@@ -60,7 +82,14 @@ Escape or a click on the backdrop (outside the hosted page's framed panel) close
 
 - **Post-stop "Edit" button** (`RecordPage` result panel), unchanged: builds the full `EditContext` and emits `editExportRequested`.
 - **Notification toast "Edit" action**, unchanged: builds the path-only fallback `EditContext`.
-- **Recent recordings menu** (`RecordPage`'s "Recent" button, next to "Change source"): new in EDIT-OVERLAY-R1. Each recent recording gets two actions: the pre-existing "open externally" behavior (`onRecentItemOpen`, previously present but unwired to any UI) and a new "Edit" action (`onRecentItemEdit`) that builds a fallback `EditContext` from history metadata (shared `MakeEditContext` helper with the result-button path; no live diagnostics) and emits `editExportRequested`. The Edit action uses the same editability gate as the post-stop result button (`CanOpenInEditor`: file exists AND not multi-segment, since split recordings have no single edit master), with a shared explanatory tooltip when disabled. The Recent button itself is disabled while the history is empty and hidden while the source is locked; a menu left open at recording start is closed by the lock update so its actions cannot fire into a live capture.
+- **Recent recordings menu** (`RecordPage`'s "Recent" button, next to "Change source"): new in EDIT-OVERLAY-R1. Each recent recording gets two actions:
+
+  - the pre-existing "open externally" behavior (`onRecentItemOpen`), previously present but unwired to any UI
+  - a new "Edit" action (`onRecentItemEdit`) that builds a fallback `EditContext` from history metadata, through the shared `MakeEditContext` helper with the result-button path and with no live diagnostics, and emits `editExportRequested`
+
+  The Edit action uses the same editability gate as the post-stop result button (`CanOpenInEditor`: the file exists and is not multi-segment, since split recordings have no single edit master), with a shared explanatory tooltip when disabled.
+
+  The Recent button itself is disabled while the history is empty and hidden while the source is locked. A menu left open at recording start is closed by the lock update, so its actions cannot fire into a live capture.
 
 All three entry points call `MainWindow::navigateToEditExportPage()`, which now activates Record (if not already active) and opens `edit_export_overlay_` instead of swapping the main stack.
 
@@ -71,7 +100,13 @@ The surface is **one view**: trimming a clip and writing it out is a single task
 - **Header**: back arrow, title, filename, and the post-flight report at its right end (see below). Always visible.
 - **Player**: decoded video with a centred play/pause toggle. No longer gated behind a step; it is present from the moment the surface opens.
 - **Timeline**: direct manipulation (`app/ui/widgets/EditTimeline`): draggable trim in/out handles (trimmed-away ranges dimmed; keyframe-accurate, see "Trim implementation"), marker verticals, and a scrubbable playhead that follows the preview clock. There is no button row above the strip. Split Chapter deferred to 0.11.
-- **Right rail**: a scrollable column carrying two cards: `app/ui/widgets/EditDetailsRail` (duration / size / resolution / frame rate / video / audio / container as right-aligned mono values) and the export panel below it. It scrolls because the two cards together outgrow the column at the 700 px minimum window height, and a clipped result action would be unreachable. Scrolling is the *user's*: the surface never scrolls the rail on its own (see the 2026-08-03 second-pass amendment). The details card has two densities: `EditDetailsRail::setCompact()`, driven from `updateResponsiveLayout()` and enabled only at the narrow rail breakpoint. Compact trims the card's vertical padding, the fact rows' padding and the title gap, and keeps rule lines only between fact groups (duration/size · resolution/frame rate · video/audio/container). It drops no fact and shrinks no type: the seven facts are worth their space in a tall window and not at the enforced minimum, where they left the export panel with almost no usable height.
+- **Right rail**: a scrollable column carrying two cards, `app/ui/widgets/EditDetailsRail` (duration, size, resolution, frame rate, video, audio and container as right-aligned mono values) and the export panel below it.
+
+  It scrolls because the two cards together outgrow the column at the 700 px minimum window height, and a clipped result action would be unreachable. Scrolling is the *user's*: the surface never scrolls the rail on its own (see the 2026-08-03 second-pass amendment).
+
+  The details card has two densities. `EditDetailsRail::setCompact()` is driven from `updateResponsiveLayout()` and enabled only at the narrow rail breakpoint. Compact trims the card's vertical padding, the fact rows' padding and the title gap, and keeps rule lines only between fact groups (duration and size · resolution and frame rate · video, audio and container).
+
+  It drops no fact and shrinks no type: the seven facts are worth their space in a tall window and not at the enforced minimum, where they left the export panel with almost no usable height.
 - **Action bar**: one button, `Export`, bottom-right like the Record page's transport actions. It starts the export against the panel's current settings; it is disabled while a run is in flight, since a second `runExport()` would block the UI thread joining the first worker.
 
 **Responsive layout.** `EditExportPage::updateResponsiveLayout()` runs from `resizeEvent`, from `showEvent`, and once more deferred by a zero-timer, the same pattern `RecordPage` uses, and for the same reason: a surface that is hidden while the window is resized receives no resize event and would otherwise re-open with a stale layout. The rail width follows the page width (320 px at ≥ 1180, 280 px at ≥ 960, 240 px below), measured against the page, i.e. the client area minus the overlay's 20 px margin band per side. The rail is **never** collapsed away: unlike a purely informational sidebar it carries the export controls, and the surface has to stay fully usable at the enforced 860 × 700 minimum window.
@@ -89,7 +124,15 @@ Options ──(action bar)──> Running ──┬── ok ──> Done
 
 Order inside the card is **title → status → output rows**. The status area is the part that changes, so it sits where the card is anchored: at 860 × 700 it is then readable without scrolling, and the output rows are what scrolls out of view instead. A `QBoxLayout` skips hidden items and the spacing around them, so the resting card reserves no empty band where the status will appear.
 
-- **Output rows**: container combo (MKV / MP4, both stream-copy / lossless), save-mode combo (new file = `<name>_edit.<ext>` / overwrite original = atomic rename), and a two-line destination statement (`Lossless stream copy` + what the selected mode does with the file). It is set in the **muted** text step rather than the dimmest one: it states what pressing Export does to the user's file, which is a different weight of information from ordinary help text, and as a single running sentence it was the one thing in the rail that ran out of column. These rows are present in **every** state and only *disabled* while a run is in flight, so nothing swaps out from under the pointer mid-export and the settings are already in place for the next run.
+- **Output rows**: three of them.
+
+  - a container combo (MKV / MP4, both stream-copy and lossless)
+  - a save-mode combo (new file, `<name>_edit.<ext>`, or overwrite original, an atomic rename)
+  - a two-line destination statement: `Lossless stream copy` plus what the selected mode does with the file
+
+  The statement is set in the **muted** text step rather than the dimmest one. It states what pressing Export does to the user's file, which is a different weight of information from ordinary help text, and as a single running sentence it was the one thing in the rail that ran out of column.
+
+  These rows are present in **every** state and only *disabled* while a run is in flight, so nothing swaps out from under the pointer mid-export and the settings are already in place for the next run.
 - **Running**: status line, real progress from `RemuxProgressCallback`, `Cancel`.
 - **Done**: output filename, `Open folder` / `Show in Explorer`. The two actions stay stacked (a 240 px rail cannot hold them side by side without eliding one away) but at a reduced height and gap, so Done is not conspicuously taller than the other three states.
 - **Failed**: the remuxer's own error text, `Retry`.

@@ -7,7 +7,13 @@
 
 ## Context
 
-The install, update and packaging gates (MSI decline and accept, the Chocolatey rehearsal, clean first start, upgrade from an older build) assert things about a machine, not about a window. They install software, write to the registry, create a user configuration directory, and take a machine-wide single-instance mutex. Running them on the developer's own machine means the machine is a shared mutable fixture, and the rc19 campaign is the evidence: three of its four runner defects were consequences of that and of nothing else. The accept gate removed the installed build the decline gate needed, so the two could only run in one order and only once. A killed soak left a recovery manifest under the user's local application data and both MSI gates refused to start. A declined update left the updater running and holding `exosnap-updater.exe`, so the next launch could not stage its own over it, and that was reported as an MSI failure.
+The install, update and packaging gates (MSI decline and accept, the Chocolatey rehearsal, clean first start, upgrade from an older build) assert things about a machine, not about a window. They install software, write to the registry, create a user configuration directory, and take a machine-wide single-instance mutex.
+
+Running them on the developer's own machine means the machine is a shared mutable fixture, and the rc19 campaign is the evidence: three of its four runner defects were consequences of that and of nothing else.
+
+- The accept gate removed the installed build the decline gate needed, so the two could only run in one order and only once.
+- A killed soak left a recovery manifest under the user's local application data, and both MSI gates refused to start.
+- A declined update left the updater running and holding `exosnap-updater.exe`, so the next launch could not stage its own over it. That was reported as an MSI failure.
 
 Windows Sandbox (`scripts/lib/ReleaseSandbox.ps1`) fixed the starting state and is still the cheapest way to run an install gate. Three things it cannot do:
 
