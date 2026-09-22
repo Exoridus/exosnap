@@ -43,7 +43,13 @@ A grep guard over tracked `app/`, `libs/`, `apps/` sources (excluding `third_par
 
 ### D5: Window-title neutralization at the log source (not only the support bundle)
 
-The one-click support bundle (#194) already redacts a capture-target window title (`RedactCaptureTargets`) when it finds one in a log file being packaged, but the underlying `exosnap.log`/`engine.jsonl` still carried the raw title, because a user can also share those log files manually, outside the bundle. `RecordingCoordinator::StartRecording`'s "start" log line and `RecordPage`'s target-selection/start-request log lines now log a stable `[window]` placeholder instead of the actual title whenever the capture target is a window (`RecordViewModel::LogSafeTargetLabel`). Monitor targets are unaffected (a display description is a technical identifier, never personal). The bundle's `RedactCaptureTargets` pass stays as a defense-in-depth backstop for any log line this fix does not cover and for log content already on disk before an upgrade. UI-facing labels (the target picker, chrome status, notifications) are unaffected: only what reaches the on-disk log changed.
+The one-click support bundle (#194) already redacts a capture-target window title (`RedactCaptureTargets`) when it finds one in a log file being packaged. The underlying `exosnap.log` and `engine.jsonl` still carried the raw title, though, because a user can also share those log files manually, outside the bundle.
+
+`RecordingCoordinator::StartRecording`'s "start" log line, and `RecordPage`'s target-selection and start-request log lines, now log a stable `[window]` placeholder instead of the actual title whenever the capture target is a window (`RecordViewModel::LogSafeTargetLabel`). Monitor targets are unaffected, because a display description is a technical identifier and never personal.
+
+The bundle's `RedactCaptureTargets` pass stays as a defense-in-depth backstop, for any log line this fix does not cover and for log content already on disk before an upgrade.
+
+UI-facing labels, meaning the target picker, the chrome status and notifications, are unaffected. Only what reaches the on-disk log changed.
 
 ### Update-check consent (blocker fix)
 

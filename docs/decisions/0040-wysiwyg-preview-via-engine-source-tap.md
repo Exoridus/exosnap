@@ -24,7 +24,13 @@ During recording, the engine **shares its composited, pre-encode frame** with th
 
 - **Consumer:** `DxgiPreviewRenderer` opens the handle on its own device, copies the shared surface into a private texture under the keyed mutex (also 0 ms, decoupling present cadence from producer cadence), and samples it as the preview background. R10G10B10A2 is sampled straight into the 8-bit swap chain. When pushed mode is active the renderer's OWN webcam overlay is suppressed (the pushed frame already contains the PiP, avoids a double draw).
 
-- **Switch-over:** the engine fires the shared-handle callback once, on the video thread, when the shared texture is ready. The app marshals it to the UI thread (no D3D on the callback thread) and, if a DXGI preview is active, hands the handle to the renderer. The render thread then opens it, **closes the preview's WGC capture graph** (device/swap chain stay alive), and renders the engine frames. Until the first pushed frame arrives the preview **holds its last WGC image** (no black flash on countdown). On stop the renderer **reverts in place**: `EndPushedSource` signals the render thread to release the shared resources and **rebuild its own WGC capture graph** (still no device/swap-chain teardown, the exact inverse of the switch-in). The render loop stays alive throughout, so the revert must be driven from inside it; a caller-side teardown alone would leave the preview frozen on the engine's last frame. `startPreviewIfIdle` then no-ops via its idempotency guard unless the selected target actually changed.
+- **Switch-over:** the engine fires the shared-handle callback once, on the video thread, when the shared texture is ready. The app marshals it to the UI thread, since no D3D runs on the callback thread, and hands the handle to the renderer if a DXGI preview is active.
+
+  The render thread then opens it, **closes the preview's WGC capture graph** while device and swap chain stay alive, and renders the engine frames. Until the first pushed frame arrives the preview **holds its last WGC image**, so there is no black flash on countdown.
+
+  On stop the renderer **reverts in place**. `EndPushedSource` signals the render thread to release the shared resources and **rebuild its own WGC capture graph**, still without a device or swap-chain teardown, the exact inverse of the switch-in.
+
+  The render loop stays alive throughout, so the revert must be driven from inside it: a caller-side teardown alone would leave the preview frozen on the engine's last frame. `startPreviewIfIdle` then no-ops via its idempotency guard unless the selected target actually changed.
 
 ## Consequences
 
@@ -38,4 +44,8 @@ During recording, the engine **shares its composited, pre-encode frame** with th
 
 ## Superseding note (ADR 0041)
 
-The shared-texture transport this ADR introduced (`PreviewSharedTexture` + `PreviewPublishGate`, keyed-mutex producer key 0 / consumer key 1, 0 ms acquire with drop-on-contention) is the transport the capture hubs reuse unchanged (ADR 0041). The DXGI hub is now another producer on this exact seam: the idle display preview is fed by the hub in the renderer's pushed-only mode, and during recording the engine takes over on the same `BeginPushedSource` consumer. The tap here does **not** go away. The hub does not replace it. The one open item this ADR left (native HDR10 preview stayed approximate for want of an SDR intermediate) closed with ADR 0041's Phase 1 (the FP16 capture is shared raw and tone-mapped preview-side by the engine's own `HdrToneMapper`).
+The shared-texture transport this ADR introduced (`PreviewSharedTexture` and `PreviewPublishGate`, keyed-mutex producer key 0 and consumer key 1, 0 ms acquire with drop-on-contention) is the transport the capture hubs reuse unchanged (ADR 0041).
+
+The DXGI hub is now another producer on this exact seam: the idle display preview is fed by the hub in the renderer's pushed-only mode, and during recording the engine takes over on the same `BeginPushedSource` consumer. The tap here does **not** go away, and the hub does not replace it.
+
+The one open item this ADR left, that native HDR10 preview stayed approximate for want of an SDR intermediate, closed with ADR 0041's Phase 1: the FP16 capture is shared raw and tone-mapped preview-side by the engine's own `HdrToneMapper`.

@@ -67,7 +67,15 @@ Both engines write `release-verification.json` in the same shape, and `scripts/c
 
 `ExoSnap.Verify list` prints the same column. A gate whose body has not been written reports `SKIPPED ("not migrated")` and never `PASS`, so an unmigrated gate can never look like a gate that ran.
 
-The C# bodies for `REL-VIS-OVERLAY-001`, `REL-VIS-NOTIFY-001` and `REL-PRESENT-002` do not run the PowerShell engine's interactive operator prompt. They drive the product into the state a person would judge, assert everything a typed surface can (the overlays and the toast text really reached the desktop, through UI Automation, and the elevated present count and mode, through the worker's result file), and then report `DEFERRED` for the part only a person can settle: the fixed-dark colour of a capture-excluded overlay, the severity glyph and tint of a toast, and the one real Secure-Desktop elevation. `REL-PRESENT-002` runs `ExoSnap.Verify.Worker.exe`, which elevates itself through a UAC prompt a person answers and writes its result to a file the unelevated harness reads. The harness never inspects the elevated process, per UIPI. A declined prompt is a `DEFERRED` result in that file, not a failure.
+The C# bodies for `REL-VIS-OVERLAY-001`, `REL-VIS-NOTIFY-001` and `REL-PRESENT-002` do not run the PowerShell engine's interactive operator prompt. They drive the product into the state a person would judge and assert everything a typed surface can: that the overlays and the toast text really reached the desktop, through UI Automation, and the elevated present count and mode, through the worker's result file.
+
+They then report `DEFERRED` for the part only a person can settle:
+
+- the fixed-dark colour of a capture-excluded overlay
+- the severity glyph and tint of a toast
+- the one real Secure-Desktop elevation
+
+`REL-PRESENT-002` runs `ExoSnap.Verify.Worker.exe`, which elevates itself through a UAC prompt a person answers and writes its result to a file the unelevated harness reads. The harness never inspects the elevated process, per UIPI, and a declined prompt is a `DEFERRED` result in that file, not a failure.
 
 ## Running it
 

@@ -11,7 +11,13 @@ The tone here mirrors the app's: calm, factual, one primary fix per problem.
 
 ## Black screen / black recording (or a frozen game)
 
-- **What ExoSnap shows.** When a **window** capture target is a legacy exclusive-fullscreen game, the `rec.capture.exclusive_window` check fires pre-flight (a **Blocker** once capture has demonstrably produced no frames, otherwise a **Notice**). If a **fullscreen-shaped** window stops producing frames *during* a recording, which is what a mid-session switch into exclusive fullscreen looks like, a standing caution appears after 10 seconds without a new capture frame: *"Window capture appears to have stalled… the captured window may be frozen."* The recording keeps running and is never stopped for you. The notice clears by itself when frames return, and the session report records that it happened. ExoSnap names exclusive fullscreen as the cause only when a fullscreen signal corroborates it. An *ordinary* windowed target that goes quiet is **not** reported, because nothing separates it from a window that simply has nothing to redraw.
+- **What ExoSnap shows.** When a **window** capture target is a legacy exclusive-fullscreen game, the `rec.capture.exclusive_window` check fires pre-flight: a **Blocker** once capture has demonstrably produced no frames, otherwise a **Notice**.
+
+  If a **fullscreen-shaped** window stops producing frames *during* a recording, which is what a mid-session switch into exclusive fullscreen looks like, a standing caution appears after 10 seconds without a new capture frame: *"Window capture appears to have stalled… the captured window may be frozen."*
+
+  The recording keeps running and is never stopped for you. The notice clears by itself when frames return, and the session report records that it happened.
+
+  ExoSnap names exclusive fullscreen as the cause only when a fullscreen signal corroborates it. An *ordinary* windowed target that goes quiet is **not** reported, because nothing separates it from a window that simply has nothing to redraw.
 - **What to do.** Use the **"Record the monitor instead"** fix. Monitor capture can record exclusive fullscreen, and you confirm a short summary: the whole monitor is recorded and the per-application audio row drops to System/Microphone. Or switch the game to **borderless / windowed fullscreen** to capture the window directly. For a specific display, confirm you selected the intended monitor.
 
 ## "Encoder unavailable" or the recording will not start

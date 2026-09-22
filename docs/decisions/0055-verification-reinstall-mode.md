@@ -6,7 +6,18 @@ Accepted.
 
 ## Context
 
-Two release candidates shipped with a version identity that did not match the release they were built for. The defect was invisible from inside the running app, and it stayed invisible for a structural reason: the update check only ever offers something *newer* than the running build. For the exact version under test, the update path is unreachable: the check reports "up to date" and stops. The parts of the product that only run on that path (the staged download, the detached signature check over the manifest bytes, the SHA-256 gate on the package, the staged swap, the relaunch handshake, and every version string the updater and the card display along the way) therefore cannot be exercised against the candidate itself.
+Two release candidates shipped with a version identity that did not match the release they were built for. The defect was invisible from inside the running app, and it stayed invisible for a structural reason: the update check only ever offers something *newer* than the running build.
+
+For the exact version under test, the update path is therefore unreachable. The check reports "up to date" and stops.
+
+The parts of the product that only run on that path cannot be exercised against the candidate itself:
+
+- the staged download
+- the detached signature check over the manifest bytes
+- the SHA-256 gate on the package
+- the staged swap
+- the relaunch handshake
+- every version string the updater and the card display along the way
 
 Every prior release was verified by updating *from* an older build *to* the candidate. That proves the previous release can reach the new one. It does not prove the candidate's own identity is what it claims, because the version the candidate reports about itself is never compared against the release feed.
 
@@ -24,7 +35,17 @@ A **verification reinstall** mode, opted into per app run via the CLI flag `--ve
 
 The comparison is exact string equality, not SemVer equality, because SemVer collapses every unrecognised prerelease label onto ordinal 0: `0.9.0-beta1` and `0.9.0-alpha7` compare equal as SemVer and must not satisfy an identity check. The raw release tag and the raw manifest version string are carried through unparsed for this reason.
 
-**App.** The flag is read from argv, held in memory, and handed to `UpdateService`. The Settings card gets its own state, `verify-reinstall`: "Verification reinstall available — <ver>", a `Reinstall <ver>` CTA, and a line stating that it reinstalls the currently running signed version. It is never phrased as an available update, and the hub advisory and the toast stay silent, because nothing new is available. Scoop installs remain notify-only. The recording/finalizing guards apply unchanged to both the check and the launch. The loop-guard `applied_version` stamp is not written in this mode. The mode persists nothing. Updater launch shows a distinct **Updater running** card state. Only the updater's marked close/handoff request may show **Restart pending**. A detached updater that exits before handoff re-arms the reinstall action, and a fresh normal process discards any legacy applied stamp. A support bundle taken during such a run records the mode in its manifest.
+**App.** The flag is read from argv, held in memory, and handed to `UpdateService`.
+
+The Settings card gets its own state, `verify-reinstall`: "Verification reinstall available — <ver>", a `Reinstall <ver>` CTA, and a line stating that it reinstalls the currently running signed version. It is never phrased as an available update, and the hub advisory and the toast stay silent, because nothing new is available.
+
+What is unchanged, and what this mode deliberately does not do:
+
+- Scoop installs remain notify-only.
+- The recording and finalizing guards apply unchanged to both the check and the launch.
+- The loop-guard `applied_version` stamp is not written in this mode, and the mode persists nothing.
+
+Updater launch shows a distinct **Updater running** card state, and only the updater's marked close or handoff request may show **Restart pending**. A detached updater that exits before handoff re-arms the reinstall action, and a fresh normal process discards any legacy applied stamp. A support bundle taken during such a run records the mode in its manifest.
 
 **Updater.** The app passes `--verify-reinstall` alongside `--current-version`. After the signature check and on top of the downgrade guard, the updater requires the signed manifest's version string to equal `--current-version` exactly. A mismatch (including a legitimately newer release) is a terminal, non-installing failure (`VerifyReinstallMismatch`): nothing is downloaded into place, nothing is installed, and no Retry is offered, because re-fetching the same manifest cannot change the answer. The updater window keeps the standard ExoSnap wordmark plus its stable `Updater` role label without a title-bar status badge. Its working lines say "reinstall", so identical from/to version pills cannot read as a stalled upgrade.
 

@@ -39,7 +39,11 @@ RNNoise is strictly **mono**, runs on **exactly 480-sample (10 ms) blocks of 48 
 - one `DenoiseState` (created with `rnnoise_create(NULL)` → the built-in default model; destroyed with `rnnoise_destroy`),
 - an input accumulator and a denoised-output FIFO.
 
-**Buffering / framing.** `Process()` accepts any block size: it de-interleaves each channel's input into the accumulator, processes every whole 480-sample block now available (scale ×32768 → `rnnoise_process_frame` → scale ÷32768 → push to the FIFO), then emits exactly `frames` denoised samples in place. This introduces a fixed **one-block (480 samples / 10 ms) latency**: the first 480 emitted samples per channel are priming silence while the first block fills, after which output is the denoised stream delayed by one block. The invariant `priming(480) + produced ≥ input_total` guarantees the FIFO always has enough to emit. The common case in our pipeline is a 480-frame mic buffer (`MixedAudioSrc kMixFrameCount = 480`), so each call consumes one block and emits the previous one.
+**Buffering and framing.** `Process()` accepts any block size. It de-interleaves each channel's input into the accumulator, processes every whole 480-sample block now available (scale ×32768, `rnnoise_process_frame`, scale ÷32768, push to the FIFO), then emits exactly `frames` denoised samples in place.
+
+This introduces a fixed **one-block latency of 480 samples, or 10 ms**: the first 480 emitted samples per channel are priming silence while the first block fills, after which output is the denoised stream delayed by one block. The invariant `priming(480) + produced ≥ input_total` guarantees the FIFO always has enough to emit.
+
+The common case in our pipeline is a 480-frame mic buffer (`MixedAudioSrc kMixFrameCount = 480`), so each call consumes one block and emits the previous one.
 
 **48 kHz only.** RNNoise supports no other rate, so when `sample_rate != 48000` the stage is a **no-op passthrough** (no states, no buffering). Our capture pipeline is always 48 kHz, so this is never the live path. It just keeps the stage safe under odd configurations.
 

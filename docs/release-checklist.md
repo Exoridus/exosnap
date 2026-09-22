@@ -35,7 +35,16 @@ The canonical steps to cut and publish an official ExoSnap release. The packagin
 
 ## 3. Cut a release candidate (prerelease)
 
-The live checks in §5, §6 and §7 have to run against **real official artifacts**, in particular the updater round-trip in §7 needs a genuinely published GitHub Release to download from. Publishing the final `vX.Y.Z` tag first and testing afterwards is not an option: that tag is the release. So cut an RC first. It is built by the same pipeline, from the same commit, with the same signing key and the same gates as the final release. It differs in which tag it lands on, in being marked as a GitHub **prerelease** (which the in-app update check reads from GitHub's own `prerelease` flag, so only users on the **Preview** channel are ever offered it, and Stable users are unaffected), **and in the embedded release version**: the full version (`0.9.0-rc4` vs `0.9.0`) is derived from the tag and compiled into the binaries, so the RC and the final are **separate builds, not the same bytes**, retagging RC artifacts as final is impossible (the pipeline's embedded-version gate would refuse a binary whose `ProductVersion` does not match the tag).
+The live checks in §5, §6 and §7 have to run against **real official artifacts**. In particular the updater round-trip in §7 needs a genuinely published GitHub Release to download from.
+
+Publishing the final `vX.Y.Z` tag first and testing afterwards is not an option: that tag is the release. So cut an RC first. It is built by the same pipeline, from the same commit, with the same signing key and the same gates as the final release.
+
+It differs in two ways:
+
+- **The tag it lands on**, and being marked as a GitHub **prerelease**. The in-app update check reads GitHub's own `prerelease` flag, so only users on the **Preview** channel are ever offered it, and Stable users are unaffected.
+- **The embedded release version.** The full version (`0.9.0-rc4` against `0.9.0`) is derived from the tag and compiled into the binaries, so the RC and the final are **separate builds, not the same bytes**.
+
+Retagging RC artifacts as final is therefore impossible: the pipeline's embedded-version gate would refuse a binary whose `ProductVersion` does not match the tag.
 
 - [ ] **Push a release-candidate tag yourself**, e.g. `v0.9.0-rc1` (`vX.Y.Z-<suffix>`, `X.Y.Z`
       matching `CMakeLists.txt`, both are validated in seconds, before the build starts). This

@@ -70,7 +70,16 @@ The per-recording **session report** written after each recording (`%LOCALAPPDAT
 
 ## Update channel
 
-The automatic update check is **off by default** (opt-in). First launch never contacts any server. You can turn it on from the Settings update card, or run a manual "Check now" at any time. A manual check is itself an explicit action, so it needs no separate toggle. When enabled, ExoSnap contacts the **public GitHub Releases API** to compare the installed version against the latest release. No authentication token is used. This request transmits your IP address to GitHub (GitHub Inc., USA) and a fixed User-Agent header identifying the checker (`ExoSnap-UpdateChecker/1.0`, which is a protocol version, not your installed app version). **No ExoSnap version number is sent**. The newest-release comparison happens entirely client-side against the already-fetched releases list. No other data is sent. Update channel downloads are hosted as GitHub Release assets. No ExoSnap-operated server is involved.
+The automatic update check is **off by default** (opt-in). First launch never contacts any server. You can turn it on from the Settings update card, or run a manual "Check now" at any time; a manual check is itself an explicit action, so it needs no separate toggle.
+
+When enabled, ExoSnap contacts the **public GitHub Releases API** to compare the installed version against the latest release. No authentication token is used. The request transmits two things to GitHub (GitHub Inc., USA):
+
+- your IP address
+- a fixed User-Agent header identifying the checker, `ExoSnap-UpdateChecker/1.0`, which is a protocol version and not your installed app version
+
+**No ExoSnap version number is sent.** The newest-release comparison happens entirely client-side against the already-fetched releases list, and no other data is sent.
+
+Update channel downloads are hosted as GitHub Release assets. No ExoSnap-operated server is involved.
 
 ## Both network features are off by default
 
