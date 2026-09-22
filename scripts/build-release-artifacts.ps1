@@ -224,6 +224,14 @@ $WindowsSystemDllAllowlist = @(
     # Graphics / media (Direct3D, DXGI, Media Foundation, audio)
     'd3d11.dll', 'd3d9.dll', 'd3d12.dll', 'dxgi.dll', 'dxva2.dll', 'dcomp.dll',
     'dwrite.dll', 'd2d1.dll', 'windowscodecs.dll',
+    # The HLSL compiler, imported because every D3D11 shader in this codebase is
+    # compiled from source at runtime via D3DCompile. Windows ships it in
+    # System32 on every supported target, so it is classified rather than
+    # bundled. Bundling would be the worse choice even though the Windows SDK
+    # offers a redistributable copy: a file next to the executable wins over the
+    # system one, which would pin a serviced OS component to whichever build was
+    # current at package time and keep it there for the life of the release.
+    'd3dcompiler_47.dll',
     'mf.dll', 'mfplat.dll', 'mfreadwrite.dll', 'mfcore.dll',
     'propsys.dll', 'avrt.dll', 'ksuser.dll', 'audioses.dll', 'mmdevapi.dll',
     # Diagnostics / ETW tracing (PresentMon present-event consumer, 0.8.0): tdh.dll
