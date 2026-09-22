@@ -3758,7 +3758,60 @@ function Get-ReleaseAudioDeviceInstanceId {
     }
     catch { return $null }
     if ($devices.Count -ne 1) { return $null }
-    return "$($devices[0].InstanceId)"
+    # The matched node is the endpoint, which is not what a removal has to
+    # address -- see Select-ReleaseOwningAudioDevice.
+    $parent = $null
+    try {
+        $parentId = (Get-PnpDeviceProperty -InstanceId $devices[0].InstanceId -KeyName 'DEVPKEY_Device_Parent' `
+                -ErrorAction Stop).Data
+        if (-not [string]::IsNullOrWhiteSpace("$parentId")) {
+            $parent = Get-PnpDevice -InstanceId "$parentId" -ErrorAction Stop | Select-Object -First 1
+        }
+    }
+    catch { $parent = $null }
+    $owner = Select-ReleaseOwningAudioDevice -Endpoint $devices[0] -Parent $parent
+    return $owner.InstanceId
+}
+
+function Select-ReleaseOwningAudioDevice {
+    <#
+    .SYNOPSIS
+        Which device node a removal has to address for an audio endpoint to
+        actually disappear.
+    .DESCRIPTION
+        An `AudioEndpoint` class node (`SWD\MMDEVAPI\...`) is a software node.
+        Disabling it returns success and leaves the endpoint active for WASAPI --
+        measured in a campaign, where the gate then polled a source that never
+        went away and reported the product as defective for it. The node that
+        owns the endpoint is its PnP parent, the `MEDIA` class device.
+
+        The parent is accepted ONLY when it is that class. An endpoint's ancestor
+        can be a USB hub, and disabling one would take unrelated hardware down
+        with it; refusing is the correct answer there, and the gate then asks a
+        person rather than guessing.
+
+        Returns @{ InstanceId; Detail }, InstanceId $null when nothing may be
+        addressed.
+    #>
+    param($Endpoint, $Parent)
+    if ($null -eq $Endpoint) {
+        return @{ InstanceId = $null; Detail = 'no audio endpoint matched the alias by name' }
+    }
+    if ($null -eq $Parent) {
+        return @{ InstanceId = $null
+            Detail = "the endpoint node '$($Endpoint.InstanceId)' reports no parent device, and disabling the " +
+            'endpoint node itself does not remove the endpoint from WASAPI'
+        }
+    }
+    if ("$($Parent.Class)" -ne 'MEDIA') {
+        return @{ InstanceId = $null
+            Detail = "the endpoint's parent '$($Parent.InstanceId)' is class '$($Parent.Class)', not MEDIA; " +
+            'disabling an ancestor that is not the audio device itself could take unrelated hardware with it'
+        }
+    }
+    return @{ InstanceId = "$($Parent.InstanceId)"
+        Detail = "the endpoint is owned by '$($Parent.FriendlyName)' ($($Parent.InstanceId))"
+    }
 }
 
 function Select-ReleaseStrandedInstances {

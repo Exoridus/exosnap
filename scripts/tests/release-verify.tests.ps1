@@ -2458,6 +2458,32 @@ Test-Case 'REL-AUD-SILENCE-001 puts the default endpoint back, and asks when it 
     Assert-True ($asked.Prompts[0] -match 'wenn erledigt') "and it is the you-have-acted form: $($asked.Prompts[0])"
 }
 
+Test-Case 'an endpoint removal addresses the device that owns it, or nothing' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    # Measured in a campaign: disabling the SWD\MMDEVAPI endpoint node succeeded
+    # and left the endpoint active for WASAPI, so the gate polled a source that
+    # never went away.
+    $endpoint = [pscustomobject]@{ InstanceId = 'SWD\MMDEVAPI\{0.0.0}.{abc}'; FriendlyName = 'OUT 1-2 (UMC)' }
+    $audioDevice = [pscustomobject]@{ InstanceId = 'TUSBAUDIO_ENUM\VID_1397&PID_0508'; Class = 'MEDIA'
+        FriendlyName                            = 'BEHRINGER UMC 204HD 192k'
+    }
+    $owned = Select-ReleaseOwningAudioDevice -Endpoint $endpoint -Parent $audioDevice
+    Assert-Equal 'TUSBAUDIO_ENUM\VID_1397&PID_0508' $owned.InstanceId `
+        "the MEDIA-class parent is what a removal must address: $($owned.Detail)"
+
+    # An ancestor that is not the audio device could be a hub, and taking that
+    # down would remove unrelated hardware. Refusing sends the gate to a person.
+    $hub = [pscustomobject]@{ InstanceId = 'USB\ROOT_HUB30'; Class = 'USB'; FriendlyName = 'USB Root Hub' }
+    $refused = Select-ReleaseOwningAudioDevice -Endpoint $endpoint -Parent $hub
+    Assert-Equal $null $refused.InstanceId "a non-MEDIA ancestor is refused: $($refused.Detail)"
+    Assert-True ($refused.Detail -match 'unrelated hardware') $refused.Detail
+
+    $orphan = Select-ReleaseOwningAudioDevice -Endpoint $endpoint -Parent $null
+    Assert-Equal $null $orphan.InstanceId "an endpoint with no parent is refused: $($orphan.Detail)"
+    Assert-Equal $null (Select-ReleaseOwningAudioDevice -Endpoint $null -Parent $audioDevice).InstanceId `
+        'and so is a name that matched no endpoint'
+}
+
 Test-Case 'a stranded instance is separated from one this campaign may not end' {
     . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
     $exe = 'C:\rc\portable\exosnap.exe'
