@@ -87,7 +87,11 @@ This reaches prose only. A `--build` or `--preset` flag, an operator, a range in
 
 Everything above applies to Markdown documentation as much as to a source comment. `docs/`, the root documents, ADRs and a pull request description are developer prose, and a dash crutch reads no better in a rendered page than in a header comment.
 
-Markdown adds one failure of its own. A fenced code block is for content whose exact literal form, syntax or line structure is the point: a command, a file, a log line, a diagnostic. It is not a box to draw around text. Prose in a fence, and especially a `text` fence wrapped around a status summary, a decision, a list of names or a set of steps, renders as a grey slab that no longer wraps, loses its links and emphasis, and tells the reader nothing the surrounding paragraph did not. Write those as sentences, a list, or a table.
+Markdown adds two failures of its own.
+
+The first is the fence. A fenced code block is for content whose exact literal form, syntax or line structure is the point: a command, a file, a log line, a diagnostic. It is not a box to draw around text. Prose in a fence, and especially a `text` fence wrapped around a status summary, a decision, a list of names or a set of steps, renders as a grey slab that no longer wraps, loses its links and emphasis, and tells the reader nothing the surrounding paragraph did not. Write those as sentences, a list, or a table.
+
+The second is the opposite mistake, and it is the more common one. An enumeration the reader will come back to look something up in belongs in a list or a table, not in a paragraph. There is no word count and no item count at which this starts; the question is what the sentence is for. A sentence that happens to name several things while making a point is prose and stays prose. A sentence whose purpose is the set itself, so that someone will later scan it for one entry, is a list written in the wrong shape, and no fence check will ever catch it because nothing about it is marked up wrongly.
 
 A short command, path, flag, file name or identifier belongs in inline code. It stays part of the sentence that way and keeps the literal form the reader needs.
 
@@ -117,7 +121,7 @@ Repository specifics:
 - A commit is its Conventional Commits subject, `type(scope): summary`, with `!` for a breaking change. Neither a local commit nor a pull request TITLE carries the pull request number; `scripts/merge-pr.ps1` appends it exactly once at the squash. The reasoning goes in the pull request description, not in a commit body.
 - Pull requests are opened with `scripts/open-pr.ps1` and merged with `scripts/merge-pr.ps1`, not with a hand-assembled `gh pr create`/`gh pr merge`. The scripts validate the subject against the parser the changelog cut reads, and the merge helper is what makes the number land once. `merge-pr.ps1` merges nothing without `-Confirm`. That switch is a mechanical safety catch, not authorization: it may be passed only after the user has explicitly approved merging that exact pull request in the current interaction. Having the switch available is never a reason to use it, and an earlier approval of another merge does not carry forward.
 - `CHANGELOG.md` is never edited on a branch. `scripts/new-changelog.ps1` assembles it at the release cut from the merged subjects, and `scripts/check-commit-policy.ps1` fails a branch that writes it.
-- Prose is written in long lines, broken where a paragraph ends rather than at a column. This applies to new and changed text, not as a sweep of what is already there.
+- Prose is written in long lines. A line breaks where a paragraph ends, or where the break carries meaning, and never at a column. The second half is the part that matters: the rule is not "one paragraph, one line", it is that no break is inserted which the text does not ask for. This applies to new and changed text, not as a sweep of what is already there.
 
 ## Iteration
 
