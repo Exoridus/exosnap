@@ -78,7 +78,7 @@ public sealed class AudioSilenceGate : IScenarioBody
     public const string EndpointVariable = "EXOSNAP_SILENT_AUDIO_ENDPOINT";
 
     /// <summary>The endpoint pattern used when the variable is unset.</summary>
-    public const string DefaultEndpointPattern = "CABLE Input*";
+    public const string DefaultEndpointPattern = "CABLE In*";
 
     private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan SampleEvery = TimeSpan.FromMilliseconds(500);

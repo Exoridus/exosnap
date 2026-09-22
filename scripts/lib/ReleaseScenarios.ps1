@@ -1595,16 +1595,23 @@ function Get-ReleaseScenarioCatalog {
             # Restored in a finally block: the default endpoint is the operator's,
             # and a campaign that left their sound on a virtual cable would have
             # broken the machine it was verifying.
-            $cablePattern = if ([string]::IsNullOrWhiteSpace($env:EXOSNAP_SILENT_AUDIO_ENDPOINT)) { 'CABLE Input*' }
+            $cablePattern = if ([string]::IsNullOrWhiteSpace($env:EXOSNAP_SILENT_AUDIO_ENDPOINT)) { 'CABLE In*' }
             else { $env:EXOSNAP_SILENT_AUDIO_ENDPOINT }
             $switcher = Resolve-ReleaseTool -Name 'soundvolumeview'
             $endpoints = @(Get-ReleaseAudioOutputEndpoints -Connection $conn)
             $cable = Find-ReleaseAudioEndpoint -Endpoints $endpoints -Pattern $cablePattern
             $previousDefault = Get-ReleaseDefaultAudioEndpointName -Endpoints $endpoints
+            $resolved = if ($ctx.Orchestrator.Available) { Resolve-EnvironmentAliases -Orchestrator $ctx.Orchestrator } else { $null }
+            $candidates = if ($null -ne $resolved -and $resolved.PSObject.Properties.Name -contains 'candidates') { @($resolved.candidates) } else { @() }
+            $cableId = @($candidates | Where-Object { $_.kind -eq 'audio-render' -and $_.friendlyName -eq $cable } | Select-Object -First 1 -ExpandProperty stableId)
+            $previousDefaultId = @($candidates | Where-Object { $_.kind -eq 'audio-render' -and $_.friendlyName -eq $previousDefault } | Select-Object -First 1 -ExpandProperty stableId)
+            $cableEndpointId = if ($cableId.Count -gt 0) { $cableId[0] } else { $null }
+            $previousEndpointId = if ($previousDefaultId.Count -gt 0) { $previousDefaultId[0] } else { $null }
             $routed = $false
-            if ($switcher.Available -and $null -ne $cable -and $null -ne $previousDefault -and $cable -ne $previousDefault) {
-                [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable -Role 'console')
-                [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable -Role 'multimedia')
+            if ($switcher.Available -and $null -ne $cable -and $null -ne $previousDefault -and
+                $cable -ne $previousDefault) {
+                [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable -EndpointId $cableEndpointId -Role 'console')
+                [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable -EndpointId $cableEndpointId -Role 'multimedia')
                 # Read the default back through the product. Nothing the switch
                 # returned is consulted, deliberately: SoundVolumeView reports no
                 # outcome and exits 0 even when its endpoint argument matched
@@ -1621,8 +1628,8 @@ function Get-ReleaseScenarioCatalog {
                     # Both roles go back whatever happened, because a half-applied
                     # switch is exactly the state that leaves a machine's sound on a
                     # virtual cable after the campaign ends.
-                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'console')
-                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'multimedia')
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -EndpointId $previousEndpointId -Role 'console')
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -EndpointId $previousEndpointId -Role 'multimedia')
                     return @{ Result = 'UNAVAILABLE'
                         Message = "could not route system audio to '$cable': the default endpoint still reads '$routedDefault'"
                     }
@@ -1633,8 +1640,8 @@ function Get-ReleaseScenarioCatalog {
             $started = Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start'
             if (-not $started.ok) {
                 if ($routed) {
-                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'console')
-                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'multimedia')
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -EndpointId $previousEndpointId -Role 'console')
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -EndpointId $previousEndpointId -Role 'multimedia')
                 }
                 return @{ Result = 'FAIL'; Message = "record.start refused: $($started.error.message)" }
             }

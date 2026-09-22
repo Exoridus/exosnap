@@ -391,13 +391,15 @@ function Set-ReleaseDefaultAudioEndpoint {
     param(
         [Parameter(Mandatory)] $Tool,
         [Parameter(Mandatory)] [string] $EndpointName,
+        [string] $EndpointId,
         # Console, Multimedia and Communications are independent on Windows and a
         # machine routinely holds them on different endpoints. A gate that needs
         # one role therefore asks for that role: taking all three is a change the
         # restore then has to undo three times, from three remembered values.
         [ValidateSet('all', 'console', 'multimedia', 'communications')] [string] $Role = 'all'
     )
-    $endpointId = ConvertTo-ReleaseAudioEndpointId -FriendlyName $EndpointName
+    $endpointId = if (-not [string]::IsNullOrWhiteSpace($EndpointId)) { $EndpointId }
+        else { ConvertTo-ReleaseAudioEndpointId -FriendlyName $EndpointName }
     if ($null -eq $endpointId) {
         return @{ Ok = $false; Detail = "'$EndpointName' is not of the form '<name> (<device name>)', so no SoundVolumeView identifier can be built from it" }
     }
