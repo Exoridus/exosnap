@@ -5528,6 +5528,10 @@ unsigned long QuickApplication::presentTargetPidForSelection() const {
     return pid;
 }
 
+unsigned long QuickApplication::presentAttributionPidForDiagnostics() const noexcept {
+    return present_target_pid_;
+}
+
 void QuickApplication::updatePresentAttribution(unsigned long pid, bool force) {
     if (present_provider_ == nullptr)
         return;

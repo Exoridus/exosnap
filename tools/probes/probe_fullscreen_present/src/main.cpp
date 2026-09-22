@@ -98,7 +98,8 @@ int wmain(int argc, wchar_t** argv) {
     wprintf(L"target display %d: %s\n", displayIndex, targetDesc.DeviceName);
 
     const RECT r = targetDesc.DesktopCoordinates;
-    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"ExoSnap FSE probe", WS_OVERLAPPEDWINDOW,
+    const std::wstring windowTitle = L"ExoSnap FSE probe [" + std::to_wstring(GetCurrentProcessId()) + L"]";
+    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, windowTitle.c_str(), WS_OVERLAPPEDWINDOW,
                                 r.left + 40, r.top + 40, 1280, 720, nullptr, nullptr, wc.hInstance, nullptr);
     if (!hwnd) {
         return Fail("CreateWindowExW", HRESULT_FROM_WIN32(GetLastError()));
@@ -122,7 +123,7 @@ int wmain(int argc, wchar_t** argv) {
     scd.OutputWindow = hwnd;
     scd.SampleDesc.Count = 1;
     scd.Windowed = TRUE; // enter fullscreen explicitly below, per DXGI guidance
-    scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    scd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
     scd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
     ID3D11Device* device = nullptr;
@@ -141,15 +142,37 @@ int wmain(int argc, wchar_t** argv) {
         device->Release();
         return Fail("SetFullscreenState", hr);
     }
+    // Flip-model swap chains must be resized after changing fullscreen state and
+    // before their buffers are acquired or presented.
+    hr = swap->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, scd.Flags);
+    if (FAILED(hr)) {
+        swap->SetFullscreenState(FALSE, nullptr);
+        swap->Release();
+        context->Release();
+        device->Release();
+        return Fail("ResizeBuffers after SetFullscreenState", hr);
+    }
     // Asked back, not assumed: SetFullscreenState can succeed and still leave the
     // swap chain composed when the window is not the active one, which is exactly
     // the failure this probe was written with and had to be fixed for.
     BOOL confirmed = FALSE;
-    swap->GetFullscreenState(&confirmed, nullptr);
+    hr = swap->GetFullscreenState(&confirmed, nullptr);
+    if (FAILED(hr)) {
+        swap->SetFullscreenState(FALSE, nullptr);
+        swap->Release();
+        context->Release();
+        device->Release();
+        return Fail("GetFullscreenState", hr);
+    }
     std::printf("exclusive fullscreen entered=%d\n", confirmed ? 1 : 0);
     std::fflush(stdout);
     if (!confirmed) {
         std::fprintf(stderr, "the swap chain did not stay exclusive\n");
+        swap->SetFullscreenState(FALSE, nullptr);
+        swap->Release();
+        context->Release();
+        device->Release();
+        return 2;
     }
 
     ID3D11Texture2D* back = nullptr;
@@ -161,7 +184,8 @@ int wmain(int argc, wchar_t** argv) {
 
     const ULONGLONG deadline = GetTickCount64() + static_cast<ULONGLONG>(seconds) * 1000ull;
     bool quit = false;
-    unsigned frame = 0;
+    unsigned successfulPresents = 0;
+    int exitCode = 0;
     while (!quit && GetTickCount64() < deadline) {
         MSG msg{};
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -174,12 +198,18 @@ int wmain(int argc, wchar_t** argv) {
         if (rtv) {
             // A moving colour, so a capture of this run is visibly a live signal
             // rather than a still frame.
-            const float phase = static_cast<float>(frame % 120) / 120.0f;
+            const float phase = static_cast<float>(successfulPresents % 120) / 120.0f;
             const float clear[4] = {0.10f + 0.60f * phase, 0.05f, 0.35f, 1.0f};
             context->ClearRenderTargetView(rtv, clear);
         }
-        swap->Present(1, 0);
-        ++frame;
+        const HRESULT presentHr = swap->Present(1, 0);
+        if (FAILED(presentHr)) {
+            std::fprintf(stderr, "Present frame %u failed 0x%08lX\n", successfulPresents,
+                         static_cast<unsigned long>(presentHr));
+            exitCode = 2;
+            break;
+        }
+        ++successfulPresents;
     }
 
     // Mandatory: a swap chain released while fullscreen leaves the display in a
@@ -193,6 +223,6 @@ int wmain(int argc, wchar_t** argv) {
     if (adapter) adapter->Release();
     factory->Release();
     DestroyWindow(hwnd);
-    std::printf("exclusive fullscreen released after %u frames\n", frame);
-    return 0;
+    std::printf("exclusive fullscreen released after %u successful presents\n", successfulPresents);
+    return exitCode;
 }

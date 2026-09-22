@@ -502,6 +502,10 @@ QJsonObject QuickLiveVerifySource::RecordSnapshot() const {
         return json;
     }
     json.insert(QStringLiteral("available"), true);
+    json.insert(QStringLiteral("selectedTargetIdentity"), record->selectedTargetIdentity());
+    json.insert(QStringLiteral("selectedTargetIndex"), record->selectedTargetIndex());
+    json.insert(QStringLiteral("presentAttributionPid"),
+                static_cast<qint64>(application_.presentAttributionPidForDiagnostics()));
     // Which webcam the next recording composites from. Present so a run's evidence
     // proves the unchanging source was really in use: a measurement of the overlay
     // against a live camera measures the camera as well, and the two are not

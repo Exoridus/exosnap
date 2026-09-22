@@ -176,6 +176,18 @@ QJsonObject PresentJson(const PresentObservation& present) {
     json.insert(QStringLiteral("presentCount"), Metric(static_cast<double>(sample.present_count), sampled));
     json.insert(QStringLiteral("discardedCount"), Metric(static_cast<double>(sample.discarded_count), sampled));
     json.insert(QStringLiteral("modeFlipCount"), Metric(static_cast<double>(sample.mode_flip_count), sampled));
+    json.insert(QStringLiteral("traceDrainedCount"), static_cast<double>(sample.trace_drained_count));
+    json.insert(QStringLiteral("traceMatchedCount"), static_cast<double>(sample.trace_matched_count));
+    json.insert(QStringLiteral("traceLastProcessId"), static_cast<double>(sample.trace_last_process_id));
+    json.insert(QStringLiteral("traceLastHwnd"), QString::number(sample.trace_last_hwnd));
+    QJsonArray processIds;
+    for (const auto pid : sample.trace_process_ids)
+        processIds.append(static_cast<double>(pid));
+    json.insert(QStringLiteral("traceProcessIds"), processIds);
+    QJsonArray relatedProcessIds;
+    for (const auto pid : sample.trace_related_process_ids)
+        relatedProcessIds.append(static_cast<double>(pid));
+    json.insert(QStringLiteral("traceRelatedProcessIds"), relatedProcessIds);
     return json;
 }
 

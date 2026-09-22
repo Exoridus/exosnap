@@ -2356,15 +2356,15 @@ Test-Case 'REL-PRESENT-002 fails when PresentMon decodes nothing we claim to hav
     Assert-True ($result.Result.Message -match 'not corroborated') $result.Result.Message
 }
 
-Test-Case 'REL-CAP-FSE-001 is red on a composed window and green on a real exclusive one' {
+Test-Case 'REL-CAP-FSE-001 is red on a composed window and green on a real fullscreen flip' {
     $responses = @{ 'environment.snapshot' = (New-DryRunPresentSnapshot -Mode 'composed') }
     $red = Invoke-ReleaseDryRun -ScenarioId 'REL-CAP-FSE-001' -Elevated -FullscreenProbe -Responses $responses
     Assert-Equal 'FAIL' $red.Result.Result "a composed window is not exclusive fullscreen: $($red.Result.Message)"
 
     $green = Invoke-ReleaseDryRun -ScenarioId 'REL-CAP-FSE-001' -Elevated -FullscreenProbe `
         -Tools @{ presentmon = 'C:\tools\PresentMon.exe' } `
-        -ToolInvoker (New-DryRunPresentMonInvoker -Modes @('Hardware: Legacy Flip')) `
-        -Responses @{ 'environment.snapshot' = (New-DryRunPresentSnapshot -Mode 'exclusiveFullscreen') }
+        -ToolInvoker (New-DryRunPresentMonInvoker -Modes @('Hardware: Independent Flip')) `
+        -Responses @{ 'environment.snapshot' = (New-DryRunPresentSnapshot -Mode 'independentFlip') }
     Assert-Equal 'PASS' $green.Result.Result "a real exclusive flip must pass: $($green.Result.Message)"
     Assert-Equal 0 $green.Prompts.Count 'the probe answers this gate; nobody is asked'
     Assert-True ($green.Result.Message -match 'PresentMon agrees') $green.Result.Message

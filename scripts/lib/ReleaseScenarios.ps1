@@ -1156,10 +1156,11 @@ function Get-ReleaseScenarioCatalog {
                 )
                 Expected          = 'The application owns the display exclusively.'
                 VerifyDescription = 'This runner requires present diagnostics to be available (elevated + opt-in) ' +
-                'and then asserts that environment.snapshot reports present mode exclusiveFullscreen. When Intel ' +
-                'PresentMon is installed it captures the same window at the same time and must classify it as a ' +
-                'hardware legacy flip; a disagreement between the two decoders fails the gate. Without a real ' +
-                'present measurement this scenario reports UNAVAILABLE rather than guessing from window shape.'
+                'and then asserts that environment.snapshot reports exclusiveFullscreen or independentFlip for ' +
+                'the real SetFullscreenState probe. Modern Windows can expose that same exclusive probe as an ' +
+                'independent flip. When Intel PresentMon is installed it captures the same window at the same ' +
+                'time and must agree with the measured mode. Without a real present measurement this scenario ' +
+                'reports UNAVAILABLE rather than guessing from window shape.'
                 Verify            = {
                     param($context, $gate)
                     # The elevated session, when there is one, is handed in: it serves
@@ -1180,8 +1181,12 @@ function Get-ReleaseScenarioCatalog {
                         }
                         $conn = $link.Connection
                     }
+                    $selection = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.snapshot').result
                     $present = (Invoke-LiveVerifyCommand -Connection $conn -Command 'environment.snapshot').result.present
-                    $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-CAP-FSE-001' -Name 'present.json' -Value $present)
+                    $evidence = @(
+                        Save-LiveVerifyEvidence -Context $context -CheckId 'REL-CAP-FSE-001' -Name 'record-selection.json' -Value $selection
+                        Save-LiveVerifyEvidence -Context $context -CheckId 'REL-CAP-FSE-001' -Name 'present.json' -Value $present
+                    )
                     if (-not $present.available) {
                         return @{ Ok = $false
                             Detail   = "present diagnostics are unavailable ($($present.availability)); run REL-PRESENT-002 first"
@@ -1201,14 +1206,13 @@ function Get-ReleaseScenarioCatalog {
                             Evidence = $evidence
                         }
                     }
-                    if ($present.mode -ne 'exclusiveFullscreen') {
-                        return @{ Ok = $false; Detail = "present mode is '$($present.mode)', not exclusiveFullscreen"; Evidence = $evidence }
+                    $acceptedModes = @('exclusiveFullscreen', 'independentFlip')
+                    if ($present.mode -notin $acceptedModes) {
+                        return @{ Ok = $false; Detail = "present mode is '$($present.mode)', not a fullscreen flip mode"; Evidence = $evidence }
                     }
-                    # The oracle, on the process this gate started. `exclusiveFullscreen`
-                    # is our name for what Intel calls a hardware legacy flip, and the
-                    # two decoders read the same ETW events -- so a disagreement means
-                    # one of them is wrong about the most consequential capture path
-                    # the product has.
+                    # The oracle runs on the process this gate started. The two decoders
+                    # read the same ETW events, so a disagreement means one of them is
+                    # wrong about the capture path the product has.
                     $oracle = Resolve-ReleaseTool -Name 'presentmon'
                     $oracleDetail = $oracle.Detail
                     $probePid = [int](Get-ReleaseGateStateValue -Gate $gate -Name 'probePid')
@@ -1227,7 +1231,7 @@ function Get-ReleaseScenarioCatalog {
                         }
                     }
                     return @{ Ok = $true
-                        Detail   = "present mode exclusiveFullscreen over $($present.presentCount) presents; $oracleDetail"
+                        Detail   = "present mode $($present.mode) over $($present.presentCount) presents; $oracleDetail"
                         Evidence = $evidence
                     }
                 }
@@ -1240,8 +1244,15 @@ function Get-ReleaseScenarioCatalog {
             # diagnostics, so this only reaches a PASS when the session is elevated.
             $fseProbe = Resolve-FullscreenProbe
             if ($null -ne $fseProbe) {
+                $probeDir = Join-Path $context.RunDirectory 'checks/REL-CAP-FSE-001'
+                New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
+                $stdoutPath = Join-Path $probeDir 'probe.stdout.txt'
+                $stderrPath = Join-Path $probeDir 'probe.stderr.txt'
+                $gate.State.probeStdout = $stdoutPath
+                $gate.State.probeStderr = $stderrPath
                 $fse = Start-Process -FilePath $fseProbe -PassThru `
-                    -ArgumentList @('--display', '0', '--seconds', '45')
+                    -ArgumentList @('--display', '0', '--seconds', '45') `
+                    -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
                 # The oracle needs a process to filter on, and this is the only place
                 # that knows which one it is: the present snapshot reports our
                 # classification, not the pid it attributed it to.
@@ -1256,7 +1267,7 @@ function Get-ReleaseScenarioCatalog {
                     # 'composed' while the probe demonstrably owned the display.
                     $selected = Invoke-LiveVerifyCommand -Connection $session.Connection `
                         -Command 'record.selectTarget' `
-                        -Parameters @{ kind = 'window'; titleFilter = 'ExoSnap FSE probe' }
+                        -Parameters @{ kind = 'window'; titleFilter = "ExoSnap FSE probe [$($fse.Id)]" }
                     if (-not $selected.ok) {
                         return @{ Result = 'UNVERIFIED'
                             Message = "the probe window could not be selected, so present statistics would " +
@@ -1267,6 +1278,23 @@ function Get-ReleaseScenarioCatalog {
                     $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
                 } finally {
                     if ($null -ne $fse -and -not $fse.HasExited) { $fse.Kill() }
+                    if ($null -ne $fse -and $null -ne $fse.PSObject.Methods['WaitForExit']) {
+                        $fse.WaitForExit()
+                    }
+                }
+                $probeEvidence = @()
+                foreach ($item in @(
+                    @{ Name = 'probe.stdout.txt'; State = 'probeStdout' }
+                    @{ Name = 'probe.stderr.txt'; State = 'probeStderr' }
+                )) {
+                    $path = Get-ReleaseGateStateValue -Gate $gate -Name $item.State
+                    if ($path -and (Test-Path -LiteralPath $path)) {
+                        $probeEvidence += Save-LiveVerifyEvidence -Context $context `
+                            -CheckId 'REL-CAP-FSE-001' -Name $item.Name -Raw (Get-Content -Raw -LiteralPath $path)
+                    }
+                }
+                if ($null -ne $verdict -and $probeEvidence.Count -gt 0) {
+                    $verdict.Evidence = @($verdict.Evidence) + $probeEvidence
                 }
                 if ($null -eq $verdict) {
                     return @{ Result = 'UNVERIFIED'; Message = 'the fullscreen verification returned nothing' }
@@ -1358,8 +1386,10 @@ function Get-ReleaseScenarioCatalog {
                 'degraded and the recording continues. When the device returns, the notice clears.'
                 VerifyDescription = 'This runner polls pipeline.snapshot and notifications.snapshot throughout. It ' +
                 'requires: the lifecycle stayed recording; an audio-degradation state became active; and it ' +
-                'cleared again after the device returned. It then stops the recording and validates the output ' +
-                'file with ffprobe -- the file must still contain its audio track.'
+                'lifted again. What lifted the degradation is deliberately not ' +
+                'asserted: ADR 0046 re-resolves the CURRENT Windows default for system audio, and Windows ' +
+                'promotes a replacement default the moment an endpoint disappears, so the source can return ' +
+                'before the device does.'
                 Verify            = {
                     param($context, $gate)
                     $link = Get-ReleaseGateConnection -Context $context `

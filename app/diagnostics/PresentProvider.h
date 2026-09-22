@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 namespace exosnap::diagnostics {
 
@@ -36,6 +37,15 @@ struct PresentSample {
     uint32_t present_count = 0;   // total matched presents observed this session
     uint32_t discarded_count = 0; // presents the compositor discarded (FinalState == Discarded)
     uint32_t mode_flip_count = 0; // classified present-mode transitions (instability proxy)
+
+    // Raw attribution evidence for live verification. These fields explain an
+    // unavailable PID-filtered sample without changing the user-facing verdict.
+    uint32_t trace_drained_count = 0;
+    uint32_t trace_matched_count = 0;
+    unsigned long trace_last_process_id = 0;
+    uint64_t trace_last_hwnd = 0;
+    std::vector<unsigned long> trace_process_ids;
+    std::vector<unsigned long> trace_related_process_ids;
 };
 
 // Injectable interface for present/tearing diagnostics. Production code will use

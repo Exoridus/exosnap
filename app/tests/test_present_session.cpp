@@ -398,6 +398,22 @@ TEST(PresentSession, PresentsFromAnotherProcessNeverEnterTheAttributionWindow) {
     session.Stop();
 }
 
+TEST(PresentSession, AFullscreenDwmPresentCanBeAttributedThroughItsDependentAppPresent) {
+    auto backend = std::make_shared<FakeTraceBackend>();
+    PresentMonEtwSession session(FactoryFor(backend));
+    ASSERT_TRUE(session.Start());
+    ASSERT_TRUE(WaitUntil([&] { return session.IsOpen(); }));
+
+    session.SetTargetProcessId(4242);
+    TracePresentEvent fullscreen = Present(1228, 1'000'000, kModeComposedFlip);
+    fullscreen.related_process_ids.push_back(4242);
+    backend->Publish(fullscreen);
+
+    EXPECT_TRUE(session.Latest().available);
+    EXPECT_EQ(session.AccumulatorForTest().present_count, 1u);
+    session.Stop();
+}
+
 // ---------------------------------------------------------------------------
 // 5. + 6. Process identity and unexpected termination
 // ---------------------------------------------------------------------------

@@ -212,6 +212,8 @@ The dependencies are `DependsOn` in the catalog and are resolved by a stable top
 
 A gate prints its line, waits, **and then checks for itself**. A gate whose `Verify` block returns false is a `FAIL` even when the operator pressed Enter: an operator can be mistaken about what they just did, and a gate that trusts the keystroke instead of the machine is a checkbox with extra steps. A gate that declares no `Verify` block at all is `UNVERIFIED`, not `PASS`.
 
+`REL-CAP-FSE-001` uses a real `SetFullscreenState(TRUE)` probe. On modern Windows, PresentMon may classify that confirmed fullscreen path as `independentFlip` instead of `exclusiveFullscreen`; both fullscreen flip modes are accepted, while composed modes are not. The gate still requires measured presents and agreement from the independent PresentMon oracle when it is installed.
+
 The unanswerable case is checked **before** anything is printed, so nobody performs a two-minute physical action that cannot be confirmed afterwards.
 
 An automation can be the one that acts. `-Attest REL-XXX-000` says the caller has already performed that gate's action: the question is skipped and the `Verify` block runs exactly as it would have. It is not a way to pass a gate. What it cannot buy is a sight check: the question there *is* the verdict, and no caller can perform someone else's looking, so an attested sight check is `DEFERRED`.
