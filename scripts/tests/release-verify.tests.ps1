@@ -2014,7 +2014,12 @@ function Invoke-ReleaseDryRun {
 }
 
 function New-DryRunPresentSnapshot {
-    param([string] $Mode = 'independentFlip', [int] $Count = 1200, [bool] $Available = $true, [bool] $Elevated = $true)
+    # $DefaultOutput models which endpoint the product reports as default. A gate
+    # that switches the default and reads it back needs a fixture that can answer
+    # differently before and after the switch; a single static snapshot would make
+    # the read-back unsatisfiable and the routing unverifiable.
+    param([string] $Mode = 'independentFlip', [int] $Count = 1200, [bool] $Available = $true, [bool] $Elevated = $true,
+        [string] $DefaultOutput = 'Speakers')
     return [pscustomobject]@{
         present = [pscustomobject]@{ optIn = $true; elevated = $Elevated; available = $Available
             availability                   = $(if ($Available) { 'available' } else { 'requiresElevation' })
@@ -2022,8 +2027,10 @@ function New-DryRunPresentSnapshot {
             discardedCount                 = 0; modeFlipCount = 0
         }
         audio   = [pscustomobject]@{ outputs = @(
-                [pscustomobject]@{ name = 'Speakers'; default = $true },
-                [pscustomobject]@{ name = 'CABLE Input (VB-Audio Virtual Cable)'; default = $false }
+                [pscustomobject]@{ name = 'Speakers'; default = ($DefaultOutput -eq 'Speakers') },
+                [pscustomobject]@{ name = 'CABLE Input (VB-Audio Virtual Cable)'
+                    default                = ($DefaultOutput -eq 'CABLE Input (VB-Audio Virtual Cable)')
+                }
             )
         }
     }
@@ -2359,7 +2366,12 @@ Test-Case 'REL-CAP-FSE-001 reuses the elevated session instead of launching a se
 }
 
 Test-Case 'REL-AUD-SILENCE-001 is red when quiet is reported as degraded and green when it is not' {
-    $endpoints = New-DryRunPresentSnapshot
+    # Before the switch the operator's own output is default; afterwards the cable
+    # is, which is what the gate reads back to prove it routed at all.
+    $endpoints = @(
+        (New-DryRunPresentSnapshot),
+        (New-DryRunPresentSnapshot -DefaultOutput 'CABLE Input (VB-Audio Virtual Cable)')
+    )
     $red = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-SILENCE-001' `
         -Tools @{ soundvolumeview = 'C:\tools\SoundVolumeView.exe' } `
         -Responses @{
@@ -2383,7 +2395,10 @@ Test-Case 'REL-AUD-SILENCE-001 is red when quiet is reported as degraded and gre
 }
 
 Test-Case 'REL-AUD-SILENCE-001 puts the default endpoint back, and asks when it cannot route' {
-    $endpoints = New-DryRunPresentSnapshot
+    $endpoints = @(
+        (New-DryRunPresentSnapshot),
+        (New-DryRunPresentSnapshot -DefaultOutput 'CABLE Input (VB-Audio Virtual Cable)')
+    )
     $routed = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-SILENCE-001' `
         -Tools @{ soundvolumeview = 'C:\tools\SoundVolumeView.exe' } `
         -Responses @{
@@ -2392,7 +2407,10 @@ Test-Case 'REL-AUD-SILENCE-001 puts the default endpoint back, and asks when it 
         'pipeline.snapshot'    = (New-DryRunPipelineSnapshot)
     }
     $switches = @($routed.Invocations | Where-Object { $_.Tool -eq 'soundvolumeview' })
-    Assert-Equal 2 $switches.Count 'the default endpoint is switched and switched back'
+    # Console and multimedia, taken and given back: four calls, not two. The
+    # communications role is never touched, because this gate has no remembered
+    # value for it and a machine routinely holds it on a third endpoint.
+    Assert-Equal 4 $switches.Count 'both captured roles are switched and switched back'
     Assert-True ($switches[-1].Arguments -contains 'Speakers') `
         'the operator default must be the LAST thing this gate sets'
 

@@ -1481,14 +1481,38 @@ function Get-ReleaseScenarioCatalog {
             $previousDefault = Get-ReleaseDefaultAudioEndpointName -Endpoints $endpoints
             $routed = $false
             if ($switcher.Available -and $null -ne $cable -and $null -ne $previousDefault -and $cable -ne $previousDefault) {
-                $switched = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable
-                if ($switched.Ok) { $routed = $true }
+                $switchedConsole = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable -Role 'console'
+                $switched = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable -Role 'multimedia'
+                # Read the default back through the product rather than trusting the
+                # switch. SoundVolumeView reports no outcome and exits 0 even when its
+                # endpoint argument matched nothing, so an unrouted run would record
+                # from the operator's own output -- and pass, because that output is
+                # usually silent too. This gate is about a silent source, so the one
+                # thing it must not do is assume which source it got.
+                if ($switchedConsole.Ok -and $switched.Ok) {
+                    $routedDefault = Get-ReleaseDefaultAudioEndpointName -Endpoints @(Get-ReleaseAudioOutputEndpoints -Connection $conn)
+                    $routed = ($routedDefault -eq $cable)
+                    if (-not $routed) {
+                        # Put the operator's default back before leaving, whatever the
+                        # switch did or did not do: an early return that skips the
+                        # restore is how a campaign ends with the machine's sound on a
+                        # virtual cable.
+                        [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'console')
+                        [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'multimedia')
+                        return @{ Result = 'UNAVAILABLE'
+                            Message = "could not route system audio to '$cable': the default endpoint still reads '$routedDefault'"
+                        }
+                    }
+                }
             }
 
             [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' -Parameters @{ kind = 'monitor' })
             $started = Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start'
             if (-not $started.ok) {
-                if ($routed) { [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault) }
+                if ($routed) {
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'console')
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'multimedia')
+                }
                 return @{ Result = 'FAIL'; Message = "record.start refused: $($started.error.message)" }
             }
             [void](Wait-ReleaseRecordingState -Connection $conn -States @('Recording') -TimeoutMs 30000)
@@ -1576,7 +1600,10 @@ function Get-ReleaseScenarioCatalog {
                 return & $ctx.HumanGate $gate
             }
             finally {
-                if ($routed) { [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault) }
+                if ($routed) {
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'console')
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'multimedia')
+                }
             }
         }
     }
@@ -1626,8 +1653,13 @@ function Get-ReleaseScenarioCatalog {
                 if ($null -ne $nameProperty -and -not [string]::IsNullOrWhiteSpace("$($nameProperty.value)")) {
                     $endpointName = "$($nameProperty.value)"
                     $format = Set-ReleaseAudioEndpointFormat -Tool $switcher -EndpointName $endpointName -SampleRate 44100
-                    $role = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $endpointName
-                    if ($format.Ok -and $role.Ok) {
+                    # Console and multimedia only. System audio is captured from
+                    # those two roles, communications is not in the recorded path,
+                    # and a machine routinely holds it on a third endpoint that this
+                    # gate has no remembered value for and therefore must not move.
+                    $console = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $endpointName -Role 'console'
+                    $role = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $endpointName -Role 'multimedia'
+                    if ($format.Ok -and $console.Ok -and $role.Ok) {
                         $prepared = "$($format.Detail); $($role.Detail)"
                         $restore = @{ Name = $endpointName
                             PreviousFormat  = if ($null -ne $formatProperty) { "$($formatProperty.value)" } else { '' }
@@ -3711,7 +3743,12 @@ function Restore-ReleaseAudioEndpointState {
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($Restore.PreviousDefault)) {
-        [void](Set-ReleaseDefaultAudioEndpoint -Tool $Tool -EndpointName $Restore.PreviousDefault)
+        # Exactly the two roles a gate is allowed to take. Restoring `all` here
+        # would hand the communications role to this endpoint as well, from a
+        # remembered value that only ever described console and multimedia, and
+        # a machine holding communications elsewhere would never get it back.
+        [void](Set-ReleaseDefaultAudioEndpoint -Tool $Tool -EndpointName $Restore.PreviousDefault -Role 'console')
+        [void](Set-ReleaseDefaultAudioEndpoint -Tool $Tool -EndpointName $Restore.PreviousDefault -Role 'multimedia')
     }
 }
 

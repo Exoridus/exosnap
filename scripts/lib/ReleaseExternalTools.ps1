@@ -302,6 +302,38 @@ function Test-ReleasePresentModeAgreement {
 # Audio endpoints
 # ---------------------------------------------------------------------------
 
+function ConvertTo-ReleaseAudioEndpointId {
+    <#
+    .SYNOPSIS
+        Translates envctl's endpoint friendly name into the identifier
+        SoundVolumeView accepts on its command line.
+    .DESCRIPTION
+        The two tools name the same endpoint differently, and passing one the
+        other's spelling is silent breakage rather than an error: SoundVolumeView
+        exits 0 when its name argument matches nothing at all, so an unresolved
+        endpoint is indistinguishable from a successful change by exit code.
+
+        envctl composes `<name> (<device name>)`. SoundVolumeView's own
+        command-line identifier is `<device name>\Device\<name>\Render`, which also
+        carries the direction and so cannot select a capture endpoint that happens
+        to share a name with a render one.
+
+        The name is split on the LAST parenthesised group, because an endpoint name
+        may itself contain parentheses.
+
+        A name carrying no device part is returned unchanged: SoundVolumeView also
+        accepts a bare endpoint name, and inventing a device for one would name an
+        endpoint that does not exist.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $FriendlyName,
+        [ValidateSet('Render', 'Capture')] [string] $Direction = 'Render'
+    )
+    $match = [regex]::Match($FriendlyName, '^(?<name>.+)\s+\((?<device>[^()]+)\)\s*$')
+    if (-not $match.Success) { return $FriendlyName }
+    return '{0}\Device\{1}\{2}' -f $match.Groups['device'].Value, $match.Groups['name'].Value, $Direction
+}
+
 function Set-ReleaseDefaultAudioEndpoint {
     <#
     .SYNOPSIS
@@ -317,13 +349,31 @@ function Set-ReleaseDefaultAudioEndpoint {
     #>
     param(
         [Parameter(Mandatory)] $Tool,
-        [Parameter(Mandatory)] [string] $EndpointName
+        [Parameter(Mandatory)] [string] $EndpointName,
+        # Console, Multimedia and Communications are independent on Windows and a
+        # machine routinely holds them on different endpoints. A gate that needs
+        # one role therefore asks for that role: taking all three is a change the
+        # restore then has to undo three times, from three remembered values.
+        [ValidateSet('all', 'console', 'multimedia', 'communications')] [string] $Role = 'all'
     )
-    $run = Invoke-ReleaseTool -Tool $Tool -Arguments @('/SetDefault', $EndpointName, 'all')
-    if ($run.ExitCode -ne 0) {
-        return @{ Ok = $false; Detail = "SoundVolumeView /SetDefault '$EndpointName' exited $($run.ExitCode): $($run.Output)" }
+    $endpointId = ConvertTo-ReleaseAudioEndpointId -FriendlyName $EndpointName
+    if ($null -eq $endpointId) {
+        return @{ Ok = $false; Detail = "'$EndpointName' is not of the form '<name> (<device name>)', so no SoundVolumeView identifier can be built from it" }
     }
-    return @{ Ok = $true; Detail = "'$EndpointName' is the default render endpoint for every role" }
+    $roleArgument = switch ($Role) {
+        'console' { '0' }
+        'multimedia' { '1' }
+        'communications' { '2' }
+        default { 'all' }
+    }
+    $run = Invoke-ReleaseTool -Tool $Tool -Arguments @('/SetDefault', $endpointId, $roleArgument)
+    if ($run.ExitCode -ne 0) {
+        return @{ Ok = $false; Detail = "SoundVolumeView /SetDefault '$endpointId' exited $($run.ExitCode): $($run.Output)" }
+    }
+    # Deliberately phrased as what was requested. SoundVolumeView reports no
+    # outcome, so the evidence that it took effect is the caller's read-back
+    # through envctl, never this sentence.
+    return @{ Ok = $true; Detail = "asked SoundVolumeView to give '$EndpointName' the $Role render role"; EndpointId = $endpointId }
 }
 
 function Set-ReleaseAudioEndpointFormat {
@@ -343,12 +393,17 @@ function Set-ReleaseAudioEndpointFormat {
         [int] $BitDepth = 24,
         [int] $Channels = 2
     )
-    $format = "$Channels Channels, $BitDepth Bit, $SampleRate Hz"
-    $run = Invoke-ReleaseTool -Tool $Tool -Arguments @('/SetDefaultFormat', $EndpointName, $format)
-    if ($run.ExitCode -ne 0) {
-        return @{ Ok = $false; Detail = "SoundVolumeView /SetDefaultFormat '$EndpointName' exited $($run.ExitCode): $($run.Output)" }
+    $endpointId = ConvertTo-ReleaseAudioEndpointId -FriendlyName $EndpointName
+    if ($null -eq $endpointId) {
+        return @{ Ok = $false; Detail = "'$EndpointName' is not of the form '<name> (<device name>)', so no SoundVolumeView identifier can be built from it" }
     }
-    return @{ Ok = $true; Detail = "'$EndpointName' shared-mode format set to $format" }
+    $format = "$Channels Channels, $BitDepth Bit, $SampleRate Hz"
+    $run = Invoke-ReleaseTool -Tool $Tool -Arguments @('/SetDefaultFormat', $endpointId, $format)
+    if ($run.ExitCode -ne 0) {
+        return @{ Ok = $false; Detail = "SoundVolumeView /SetDefaultFormat '$endpointId' exited $($run.ExitCode): $($run.Output)" }
+    }
+    # As above: the request, not the outcome. The read-back is the evidence.
+    return @{ Ok = $true; Detail = "asked SoundVolumeView to set '$EndpointName' to $format"; EndpointId = $endpointId }
 }
 
 function Set-ReleaseDeviceEnabled {
