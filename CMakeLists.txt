@@ -208,7 +208,7 @@ set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
 # Overridable as before: an explicit Qt6_DIR or CMAKE_PREFIX_PATH wins, because this
 # only fills in when nothing else has.
 if(NOT Qt6_DIR)
-    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.11.1/msvc2022_64")
+    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.11.2/msvc2022_64")
 endif()
 
 add_subdirectory(libs/engine)
