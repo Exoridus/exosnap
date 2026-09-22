@@ -1885,7 +1885,21 @@ function Invoke-ReleaseDryRun {
     function Write-Step { param([string] $Text) }
     function Write-Heading { param([string] $Text) }
     function Start-Sleep { param([int] $Seconds, [int] $Milliseconds) }
-    function Get-EnvironmentSnapshot { param($Orchestrator) return [pscustomobject]@{ properties = $envctlProperties } }
+    # A gate that changes machine state and reads it back needs a fixture that can
+    # answer differently before and after the change. A list of property SETS is
+    # walked by successive calls and the last one repeats -- the same shape the
+    # control-channel responder already uses. A flat list keeps its old meaning:
+    # one machine state, answered every time.
+    $envctlCalls = [pscustomobject]@{ Count = 0 }
+    function Get-EnvironmentSnapshot {
+        param($Orchestrator)
+        if ($envctlProperties.Count -gt 0 -and $envctlProperties[0] -is [System.Array]) {
+            $index = [Math]::Min($envctlCalls.Count, $envctlProperties.Count - 1)
+            $envctlCalls.Count = $envctlCalls.Count + 1
+            return [pscustomobject]@{ properties = $envctlProperties[$index] }
+        }
+        return [pscustomobject]@{ properties = $envctlProperties }
+    }
     function Get-Process { param([string] $Name, $ErrorAction) return @() }
     function Get-PnpDevice { param($Class, $Status, $ErrorAction) return @() }
     function Start-Process {
@@ -2014,25 +2028,45 @@ function Invoke-ReleaseDryRun {
 }
 
 function New-DryRunPresentSnapshot {
-    param([string] $Mode = 'independentFlip', [int] $Count = 1200, [bool] $Available = $true, [bool] $Elevated = $true)
+    # $DefaultOutput models which endpoint the product reports as default. A gate
+    # that switches the default and reads it back needs a fixture that can answer
+    # differently before and after the switch; a single static snapshot would make
+    # the read-back unsatisfiable and the routing unverifiable.
+    # $Availability and $Reason are separate from $Available on purpose: the real
+    # snapshot can report available = true (opt-in on, session elevated) while
+    # availability says 'unavailable' because nothing was measured. A fixture that
+    # could not express that combination is why the gate judged a null mode.
+    param([string] $Mode = 'independentFlip', [int] $Count = 1200, [bool] $Available = $true, [bool] $Elevated = $true,
+        [string] $DefaultOutput = 'Speakers', [string] $Availability, [string] $Reason)
     return [pscustomobject]@{
         present = [pscustomobject]@{ optIn = $true; elevated = $Elevated; available = $Available
-            availability                   = $(if ($Available) { 'available' } else { 'requiresElevation' })
-            reason                         = $null; mode = $Mode; tearing = $false; presentCount = $Count
+            availability                   = $(if (-not [string]::IsNullOrWhiteSpace($Availability)) { $Availability }
+                elseif ($Available) { 'available' } else { 'requiresElevation' })
+            reason                         = $Reason; mode = $Mode; tearing = $false; presentCount = $Count
             discardedCount                 = 0; modeFlipCount = 0
         }
         audio   = [pscustomobject]@{ outputs = @(
-                [pscustomobject]@{ name = 'Speakers'; default = $true },
-                [pscustomobject]@{ name = 'CABLE Input (VB-Audio Virtual Cable)'; default = $false }
+                [pscustomobject]@{ name = 'Speakers'; default = ($DefaultOutput -eq 'Speakers') },
+                [pscustomobject]@{ name = 'CABLE Input (VB-Audio Virtual Cable)'
+                    default                = ($DefaultOutput -eq 'CABLE Input (VB-Audio Virtual Cable)')
+                }
             )
         }
     }
 }
 
 function New-DryRunPipelineSnapshot {
-    param([bool] $Degraded = $false, [string] $Lifecycle = 'recording', [bool] $Active = $true)
+    # $Occurred is the product's LATCHED marker, separate from the live one: a
+    # degradation that began and ended before the runner started polling leaves
+    # only that, and a fixture unable to express it cannot describe the operator
+    # path at all. It defaults to the live value so existing fixtures are unchanged.
+    param([bool] $Degraded = $false, [string] $Lifecycle = 'recording', [bool] $Active = $true,
+        [Nullable[bool]] $Occurred = $null)
     return [pscustomobject]@{ lifecycle = $Lifecycle
-        audio                           = [pscustomobject]@{ active = $Active; sourceDegraded = $Degraded; degradedSources = $(if ($Degraded) { 1 } else { 0 }) }
+        audio                           = [pscustomobject]@{ active = $Active; sourceDegraded = $Degraded
+            sourceDegradedOccurred      = $(if ($null -ne $Occurred) { [bool]$Occurred } else { $Degraded })
+            degradedSources             = $(if ($Degraded) { 1 } else { 0 })
+        }
     }
 }
 
@@ -2142,6 +2176,15 @@ Test-Case 'the ordered sequence puts every dependency before the gate that needs
     Assert-True ($position['REL-PRESENT-002'] -lt $position['REL-CAP-FSE-001']) 'present before fullscreen'
     Assert-True ($position['REL-UPD-MSI-DECLINE-001'] -lt $position['REL-UPD-MSI-001']) 'decline before accept'
     Assert-True ($position['REL-UPD-MSI-001'] -lt $position['REL-PKG-CHOCO-001']) 'the MSI gates before Chocolatey'
+}
+
+Test-Case 'a shared elevated dependent gate follows its provider immediately' {
+    . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
+    $present = [pscustomobject]@{ Id = 'P'; DependsOn = @(); UsesElevatedSession = $true }
+    $ordinary = [pscustomobject]@{ Id = 'O'; DependsOn = @() }
+    $dependent = [pscustomobject]@{ Id = 'D'; DependsOn = @('P'); UsesElevatedSession = $true }
+    $ordered = @(Get-ReleaseHumanPlanOrder -Entries @($present, $ordinary, $dependent))
+    Assert-Equal @('P', 'D', 'O') @($ordered.Id) 'shared-session dependent must stay beside its provider'
 }
 
 Test-Case 'a dependency cycle is reported rather than silently broken' {
@@ -2322,18 +2365,31 @@ Test-Case 'REL-PRESENT-002 fails when PresentMon decodes nothing we claim to hav
     Assert-True ($result.Result.Message -match 'not corroborated') $result.Result.Message
 }
 
-Test-Case 'REL-CAP-FSE-001 is red on a composed window and green on a real exclusive one' {
+Test-Case 'REL-CAP-FSE-001 is red on a composed window and green on a real fullscreen flip' {
     $responses = @{ 'environment.snapshot' = (New-DryRunPresentSnapshot -Mode 'composed') }
     $red = Invoke-ReleaseDryRun -ScenarioId 'REL-CAP-FSE-001' -Elevated -FullscreenProbe -Responses $responses
     Assert-Equal 'FAIL' $red.Result.Result "a composed window is not exclusive fullscreen: $($red.Result.Message)"
 
     $green = Invoke-ReleaseDryRun -ScenarioId 'REL-CAP-FSE-001' -Elevated -FullscreenProbe `
         -Tools @{ presentmon = 'C:\tools\PresentMon.exe' } `
-        -ToolInvoker (New-DryRunPresentMonInvoker -Modes @('Hardware: Legacy Flip')) `
-        -Responses @{ 'environment.snapshot' = (New-DryRunPresentSnapshot -Mode 'exclusiveFullscreen') }
+        -ToolInvoker (New-DryRunPresentMonInvoker -Modes @('Hardware: Independent Flip')) `
+        -Responses @{ 'environment.snapshot' = (New-DryRunPresentSnapshot -Mode 'independentFlip') }
     Assert-Equal 'PASS' $green.Result.Result "a real exclusive flip must pass: $($green.Result.Message)"
     Assert-Equal 0 $green.Prompts.Count 'the probe answers this gate; nobody is asked'
     Assert-True ($green.Result.Message -match 'PresentMon agrees') $green.Result.Message
+}
+
+Test-Case 'REL-CAP-FSE-001 does not judge a present mode that was never measured' {
+    # Taken from a real campaign snapshot: available = true (opt-in on, elevated)
+    # while availability says 'unavailable' with reason 'noPresentObserved', so the
+    # mode is null. The gate compared that null to exclusiveFullscreen and reported
+    # the product as defective for a measurement that never happened.
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-CAP-FSE-001' -Elevated -FullscreenProbe `
+        -Responses @{ 'environment.snapshot' = (New-DryRunPresentSnapshot -Mode '' -Availability 'unavailable' -Reason 'noPresentObserved') }
+    Assert-Equal 'UNAVAILABLE' $result.Result.Result `
+        "nothing measured is an unmet precondition, not a product defect: $($result.Result.Message)"
+    Assert-True ($result.Result.Message -match 'noPresentObserved') `
+        "and the reason the product gave is carried through: $($result.Result.Message)"
 }
 
 Test-Case 'REL-CAP-FSE-001 fails when the two present decoders disagree' {
@@ -2359,7 +2415,12 @@ Test-Case 'REL-CAP-FSE-001 reuses the elevated session instead of launching a se
 }
 
 Test-Case 'REL-AUD-SILENCE-001 is red when quiet is reported as degraded and green when it is not' {
-    $endpoints = New-DryRunPresentSnapshot
+    # Before the switch the operator's own output is default; afterwards the cable
+    # is, which is what the gate reads back to prove it routed at all.
+    $endpoints = @(
+        (New-DryRunPresentSnapshot),
+        (New-DryRunPresentSnapshot -DefaultOutput 'CABLE Input (VB-Audio Virtual Cable)')
+    )
     $red = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-SILENCE-001' `
         -Tools @{ soundvolumeview = 'C:\tools\SoundVolumeView.exe' } `
         -Responses @{
@@ -2383,7 +2444,10 @@ Test-Case 'REL-AUD-SILENCE-001 is red when quiet is reported as degraded and gre
 }
 
 Test-Case 'REL-AUD-SILENCE-001 puts the default endpoint back, and asks when it cannot route' {
-    $endpoints = New-DryRunPresentSnapshot
+    $endpoints = @(
+        (New-DryRunPresentSnapshot),
+        (New-DryRunPresentSnapshot -DefaultOutput 'CABLE Input (VB-Audio Virtual Cable)')
+    )
     $routed = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-SILENCE-001' `
         -Tools @{ soundvolumeview = 'C:\tools\SoundVolumeView.exe' } `
         -Responses @{
@@ -2392,7 +2456,10 @@ Test-Case 'REL-AUD-SILENCE-001 puts the default endpoint back, and asks when it 
         'pipeline.snapshot'    = (New-DryRunPipelineSnapshot)
     }
     $switches = @($routed.Invocations | Where-Object { $_.Tool -eq 'soundvolumeview' })
-    Assert-Equal 2 $switches.Count 'the default endpoint is switched and switched back'
+    # Console and multimedia, taken and given back: four calls, not two. The
+    # communications role is never touched, because this gate has no remembered
+    # value for it and a machine routinely holds it on a third endpoint.
+    Assert-Equal 4 $switches.Count 'both captured roles are switched and switched back'
     Assert-True ($switches[-1].Arguments -contains 'Speakers') `
         'the operator default must be the LAST thing this gate sets'
 
@@ -2406,6 +2473,124 @@ Test-Case 'REL-AUD-SILENCE-001 puts the default endpoint back, and asks when it 
     Assert-Equal 'PASS' $asked.Result.Result $asked.Result.Message
     Assert-Equal 1 $asked.Prompts.Count 'exactly one line is shown, not a block of four'
     Assert-True ($asked.Prompts[0] -match 'wenn erledigt') "and it is the you-have-acted form: $($asked.Prompts[0])"
+}
+
+Test-Case 'an endpoint removal addresses the device that owns it, or nothing' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    # Measured in a campaign: disabling the SWD\MMDEVAPI endpoint node succeeded
+    # and left the endpoint active for WASAPI, so the gate polled a source that
+    # never went away.
+    $endpoint = [pscustomobject]@{ InstanceId = 'SWD\MMDEVAPI\{0.0.0}.{abc}'; FriendlyName = 'OUT 1-2 (UMC)' }
+    $audioDevice = [pscustomobject]@{ InstanceId = 'TUSBAUDIO_ENUM\VID_1397&PID_0508'; Class = 'MEDIA'
+        FriendlyName                            = 'BEHRINGER UMC 204HD 192k'
+    }
+    $owned = Select-ReleaseOwningAudioDevice -Endpoint $endpoint -Parent $audioDevice
+    Assert-Equal 'TUSBAUDIO_ENUM\VID_1397&PID_0508' $owned.InstanceId `
+        "the MEDIA-class parent is what a removal must address: $($owned.Detail)"
+
+    # An ancestor that is not the audio device could be a hub, and taking that
+    # down would remove unrelated hardware. Refusing sends the gate to a person.
+    $hub = [pscustomobject]@{ InstanceId = 'USB\ROOT_HUB30'; Class = 'USB'; FriendlyName = 'USB Root Hub' }
+    $refused = Select-ReleaseOwningAudioDevice -Endpoint $endpoint -Parent $hub
+    Assert-Equal $null $refused.InstanceId "a non-MEDIA ancestor is refused: $($refused.Detail)"
+    Assert-True ($refused.Detail -match 'unrelated hardware') $refused.Detail
+
+    $orphan = Select-ReleaseOwningAudioDevice -Endpoint $endpoint -Parent $null
+    Assert-Equal $null $orphan.InstanceId "an endpoint with no parent is refused: $($orphan.Detail)"
+    Assert-Equal $null (Select-ReleaseOwningAudioDevice -Endpoint $null -Parent $audioDevice).InstanceId `
+        'and so is a name that matched no endpoint'
+}
+
+Test-Case 'a stranded instance is separated from one this campaign may not end' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $exe = 'C:\rc\portable\exosnap.exe'
+    $mine = [pscustomobject]@{ Id = 11; Path = $exe }
+    $developers = [pscustomobject]@{ Id = 22; Path = 'C:\Users\dev\build\exosnap.exe' }
+    # A process whose Path throws is what an elevated instance looks like to an
+    # unelevated runner. It counts as foreign: unreadable and someone else's are
+    # the same answer when the alternative is killing on a guess.
+    $elevated = [pscustomobject]@{ Id = 33 }
+    Add-Member -InputObject $elevated -MemberType ScriptProperty -Name 'Path' -Value { throw 'access denied' }
+
+    $split = Select-ReleaseStrandedInstances -ExePath $exe -Processes @($mine, $developers, $elevated)
+    Assert-Equal 1 $split.Owned.Count "only the artifact under test is ours to end: $($split.Detail)"
+    Assert-Equal 11 $split.Owned[0].Id 'and it is the one whose path matches'
+    Assert-Equal 2 $split.Foreign.Count "a foreign build and an unreadable one are both left alone: $($split.Detail)"
+    Assert-True ($split.Detail -match '22') "the report names what it would not touch: $($split.Detail)"
+    Assert-True ($split.Detail -match 'single-instance') "and why that matters: $($split.Detail)"
+
+    # Nothing running is the ordinary case and must say nothing at all, so a clean
+    # campaign does not print a warning about a problem it does not have.
+    $none = Select-ReleaseStrandedInstances -ExePath $exe -Processes @()
+    Assert-Equal 0 $none.Owned.Count 'nothing to end'
+    Assert-Equal '' $none.Detail 'and nothing to report'
+}
+
+Test-Case 'an endpoint name becomes the identifier SoundVolumeView answers to' {
+    . (Join-Path $scriptRoot 'lib/ReleaseExternalTools.ps1')
+    # The defect this exists for: SoundVolumeView exits 0 when its name argument
+    # matches no device, so passing envctl's spelling changed nothing and looked
+    # exactly like success. Only the composed identifier selects the endpoint.
+    Assert-Equal 'NVIDIA High Definition Audio\Device\27GL850\Render' `
+        (ConvertTo-ReleaseAudioEndpointId -FriendlyName '27GL850 (NVIDIA High Definition Audio)') `
+        'the device part becomes the prefix and the name the leaf'
+
+    Assert-Equal 'VB-Audio Virtual Cable\Device\CABLE Input\Capture' `
+        (ConvertTo-ReleaseAudioEndpointId -FriendlyName 'CABLE Input (VB-Audio Virtual Cable)' -Direction 'Capture') `
+        'the direction is carried, so a render request cannot select a capture endpoint of the same name'
+
+    # A bare name is what SoundVolumeView calls the endpoint itself, so it is
+    # passed through. Inventing a device for it would name one that does not exist.
+    Assert-Equal 'Speakers' (ConvertTo-ReleaseAudioEndpointId -FriendlyName 'Speakers') `
+        'a name with no device part is left alone'
+
+    # Nested parentheses cannot be split without guessing which group is the device,
+    # so the name is left alone rather than composed into a wrong one.
+    Assert-Equal 'OUT 1-2 (BEHRINGER (UMC) 204HD)' `
+        (ConvertTo-ReleaseAudioEndpointId -FriendlyName 'OUT 1-2 (BEHRINGER (UMC) 204HD)') `
+        'an ambiguous name is not guessed at'
+}
+
+Test-Case 'PresentMon is called with the switches the installed binary advertises' {
+    . (Join-Path $scriptRoot 'lib/ReleaseExternalTools.ps1')
+    # An unknown option is a hard exit for PresentMon, not a warning, so guessing
+    # the wrong generation does not degrade the oracle -- it removes it, and the
+    # present gates then report only what the product said about itself.
+    $captured = [System.Collections.Generic.List[object]]::new()
+    Set-ReleaseToolInvoker {
+        param($Tool, $Arguments)
+        $captured.Add(@{ Path = "$($Tool.Path)"; Arguments = @($Arguments) })
+        if (@($Arguments) -contains '--help') {
+            $modern = '--output_file --timed --no_console_stats --v1_metrics --process_id'
+            $legacy = '--output_file --timed --no_top --process_id'
+            return @{ ExitCode = 0; Output = $(if ("$($Tool.Path)" -match 'modern') { $modern } else { $legacy }) }
+        }
+        return @{ ExitCode = 0; Output = '' }
+    }.GetNewClosure()
+    $csv = Join-Path ([System.IO.Path]::GetTempPath()) 'exosnap-presentmon-switches.csv'
+    try {
+        $modernTool = @{ Name = 'presentmon'; Path = 'C:\tools\modern\PresentMon.exe'; Available = $true }
+        [void](Get-ReleasePresentMonObservation -Tool $modernTool -ProcessId 42 -CsvPath $csv -Seconds 1)
+        $call = @($captured | Where-Object { $_.Arguments -notcontains '--help' })[0].Arguments
+        Assert-True ($call -contains '--no_console_stats') "the 2.x switch is used: $($call -join ' ')"
+        Assert-True ($call -notcontains '--no_top') "and the 1.x switch is not: $($call -join ' ')"
+        Assert-True ($call -contains '--v1_metrics') `
+            "the 1.x metric set is requested, because the 2.x default CSV carries no PresentMode column: $($call -join ' ')"
+
+        # A binary advertising the older vocabulary keeps it, and gets no switch
+        # that vocabulary does not have.
+        $captured.Clear()
+        $legacyTool = @{ Name = 'presentmon'; Path = 'C:\tools\legacy\PresentMon.exe'; Available = $true }
+        [void](Get-ReleasePresentMonObservation -Tool $legacyTool -ProcessId 42 -CsvPath $csv -Seconds 1)
+        $legacyCall = @($captured | Where-Object { $_.Arguments -notcontains '--help' })[0].Arguments
+        Assert-True ($legacyCall -contains '--no_top') "the 1.x switch is used: $($legacyCall -join ' ')"
+        Assert-True ($legacyCall -notcontains '--v1_metrics') `
+            "and 1.x is not asked for a switch it does not have: $($legacyCall -join ' ')"
+    }
+    finally {
+        Set-ReleaseToolInvoker $null
+        Remove-Item -LiteralPath $csv -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Test-Case 'REL-AUD-FORMAT-001 stops asking a person for a machine-state precondition' {
@@ -2452,7 +2637,20 @@ Test-Case 'REL-AUD-FORMAT-001 is red when the endpoint holds no default role' {
 
 Test-Case 'REL-AUD-DEGRADE-001 is red without a recovery and green with one' {
     $variables = @{ EXOSNAP_AUDIO_DEVICE_INSTANCE_ID = 'SWD\MMDEVAPI\{0.0.0}'; EXOSNAP_ENDPOINT_VISIBILITY_TOOL = '' }
-    $properties = @([pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' })
+    # Two machine states: the endpoint is active, and after the removal it is not.
+    # The gate reads this back through envctl, because pnputil's exit code says
+    # only that the request was accepted.
+    $active = @(
+        [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:default-roles'; value = 'console,multimedia' },
+        [pscustomobject]@{ key = 'audio.render.normal:endpoint-state'; value = 'active' }
+    )
+    $removed = @(
+        [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:default-roles'; value = 'console,multimedia' },
+        [pscustomobject]@{ key = 'audio.render.normal:endpoint-state'; value = 'unplugged' }
+    )
+    $properties = @($active, $removed)
     # RED: the device goes and never comes back, which fails the same assertion as a
     # device that never went.
     $red = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Elevated -Variables $variables `
@@ -2475,6 +2673,99 @@ Test-Case 'REL-AUD-DEGRADE-001 is red without a recovery and green with one' {
     Assert-Equal 'PASS' $green.Result.Result "degraded then recovered is the contract: $($green.Result.Message)"
     Assert-Equal 0 $green.Prompts.Count 'pnputil removes the device, so nobody unplugs anything'
     Assert-True ($green.Result.Message -match '\[pnputil\]') $green.Result.Message
+}
+
+Test-Case 'REL-AUD-DEGRADE-001 refuses to ask for an unplug that cannot matter' {
+    # Measured: one run of this gate moved the default render role to another
+    # endpoint, Windows never handed it back on replug, and the next run asked the
+    # operator to unplug a device nothing was recording from. Nothing degraded,
+    # correctly -- and the gate called the product defective for it.
+    $variables = @{ EXOSNAP_AUDIO_DEVICE_INSTANCE_ID = ''; EXOSNAP_ENDPOINT_VISIBILITY_TOOL = '' }
+    $noRole = @(
+        [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:default-roles'; value = '-' },
+        [pscustomobject]@{ key = 'audio.render.normal:endpoint-state'; value = 'active' }
+    )
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Variables $variables `
+        -EnvctlProperties $noRole -Responses @{
+        'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $false))
+    }
+    Assert-Equal 'UNAVAILABLE' $result.Result.Result `
+        "an endpoint outside the recorded path is an unmet precondition: $($result.Result.Message)"
+    Assert-Equal 0 $result.Prompts.Count 'and nobody is asked to unplug anything for nothing'
+}
+
+Test-Case 'REL-AUD-DEGRADE-001 accepts an outage that ended before the operator answered' {
+    # The operator path cannot observe the live flag: the person unplugs AND
+    # replugs before pressing Enter, and polling starts only after that. Measured
+    # on a real machine -- 118 samples, sourceDegraded false throughout,
+    # sourceDegradedOccurred true in the very first one -- and reported as "no
+    # degradation was observed", which is the opposite of what the product said.
+    $variables = @{ EXOSNAP_AUDIO_DEVICE_INSTANCE_ID = ''; EXOSNAP_ENDPOINT_VISIBILITY_TOOL = '' }
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Variables $variables -Responses @{
+        'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $false -Occurred $true))
+    }
+    Assert-Equal 'PASS' $result.Result.Result `
+        "a degradation the product reports as having occurred, with none standing now, is the contract: $($result.Result.Message)"
+    Assert-True ($result.Result.Message -match 'before the answer') $result.Result.Message
+
+    # And a recording in which nothing ever degraded is still red, so the latched
+    # marker cannot turn the gate into one that passes unconditionally.
+    $quiet = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Variables $variables -Responses @{
+        'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $false -Occurred $false))
+    }
+    Assert-Equal 'FAIL' $quiet.Result.Result "nothing degraded at all is still a defect: $($quiet.Result.Message)"
+}
+
+Test-Case 'REL-AUD-DEGRADE-001 does not blame the product for a removal that never happened' {
+    # The real campaign hit this: pnputil exited 0 for an `AudioEndpoint` node whose
+    # removal never reached WASAPI, the source therefore never degraded, and the
+    # gate reported a correct product as defective. An unmet precondition is
+    # UNAVAILABLE, never FAIL.
+    $variables = @{ EXOSNAP_AUDIO_DEVICE_INSTANCE_ID = 'SWD\MMDEVAPI\{0.0.0}'; EXOSNAP_ENDPOINT_VISIBILITY_TOOL = '' }
+    $stillActive = @(
+        [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:default-roles'; value = 'console,multimedia' },
+        [pscustomobject]@{ key = 'audio.render.normal:endpoint-state'; value = 'active' }
+    )
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Elevated -Variables $variables `
+        -EnvctlProperties $stillActive -Tools @{ pnputil = 'C:\Windows\System32\pnputil.exe' } -Responses @{
+        'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $false))
+    }
+    # The tool could not cause the outage, so the scenario asks the person it was
+    # always allowed to ask. Reporting UNAVAILABLE instead would leave a required
+    # gate unanswerable on every machine whose audio device refuses to be disabled
+    # -- which is what Windows does for a USB interface, with exit 50.
+    Assert-True ($result.Prompts.Count -gt 0) `
+        "a failed automated outage falls through to the operator: $($result.Result.Message)"
+    # The 'wenn erledigt' form, not 'startet jetzt': the operator acts first and
+    # the runner verifies afterwards, which is the only correct shape for an
+    # outage a person causes.
+    Assert-True ($result.Prompts[-1] -match 'wenn erledigt') `
+        "and asks in the form where the person acts first: $($result.Prompts[-1])"
+
+    # And when envctl cannot say anything about the endpoint at all, that is also
+    # not a pass: an unreadable machine and a changed one are opposite answers.
+    $silent = @(
+        [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:default-roles'; value = 'console,multimedia' }
+    )
+    $unknown = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Elevated -Variables $variables `
+        -EnvctlProperties $silent -Tools @{ pnputil = 'C:\Windows\System32\pnputil.exe' } -Responses @{
+        'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $false))
+    }
+    # An unreadable endpoint state is not evidence that the outage happened, so
+    # this too asks the person rather than judging the product on it. What it must
+    # never do is pass silently.
+    Assert-True ($unknown.Prompts.Count -gt 0) `
+        "an endpoint-state nobody can read sends the gate to the operator: $($unknown.Result.Message)"
+    Assert-True ($unknown.Result.Result -ne 'PASS') `
+        "and never passes on an outage nobody confirmed: $($unknown.Result.Message)"
 }
 
 Test-Case 'REL-UPD-MSI-DECLINE-001 runs in a sandbox and is red on a stranded install' {

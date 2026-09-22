@@ -569,6 +569,7 @@ class QuickApplication {
     void toggleSource(const QString& key);
 
   public:
+    [[nodiscard]] unsigned long presentAttributionPidForDiagnostics() const noexcept;
     // Live overlay fields, applied through the same path the Record page's drag
     // takes, and reporting what the session actually installed. For the Live
     // Verify channel: measuring whether an overlay change reaches the encoded

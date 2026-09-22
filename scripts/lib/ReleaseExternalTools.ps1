@@ -46,6 +46,11 @@ function Set-ReleaseToolInvoker {
 # different question from what the tool answers when it runs.
 $script:ReleaseToolOverride = @{}
 
+# Which command-line switches each resolved PresentMon advertises, keyed by path.
+# Declared here rather than created on first use: this file runs under
+# Set-StrictMode, where reading an undeclared script variable is an error.
+$script:ReleasePresentMonOptions = @{}
+
 function Set-ReleaseToolAvailability {
     <#
     .SYNOPSIS
@@ -239,9 +244,19 @@ function Get-ReleasePresentMonObservation {
         '--output_file', $CsvPath,
         '--timed', "$Seconds",
         '--terminate_after_timed',
-        '--stop_existing_session',
-        '--no_top'
+        '--stop_existing_session'
     )
+    # PresentMon renamed the console-output switch between its 1.x and 2.x command
+    # lines, and an unknown option is a hard exit rather than a warning -- so
+    # guessing wrong does not degrade the oracle, it removes it, and the gate then
+    # reports only what the product said about itself. The binary is asked which
+    # vocabulary it speaks. 2.x also defaults to its own metric set, whose CSV does
+    # not carry the PresentMode column this reader needs, so the 1.x metrics are
+    # requested explicitly wherever that switch exists.
+    $advertised = @(Get-ReleasePresentMonOptions -Tool $Tool)
+    if ($advertised -contains '--no_console_stats') { $arguments += '--no_console_stats' }
+    elseif ($advertised -contains '--no_top' -or $advertised.Count -eq 0) { $arguments += '--no_top' }
+    if ($advertised -contains '--v1_metrics') { $arguments += '--v1_metrics' }
     $run = Invoke-ReleaseTool -Tool $Tool -Arguments $arguments -TimeoutSeconds ($Seconds + 60)
     if ($run.ExitCode -ne 0) {
         return @{ Ok = $false; Detail = "PresentMon exited $($run.ExitCode): $($run.Output)"; Frames = 0; PresentModes = @() }
@@ -255,6 +270,32 @@ function Get-ReleasePresentMonObservation {
     return @{ Ok = $true; Frames = $rows.Count; PresentModes = $modes
         Detail          = "$($rows.Count) present(s), mode(s): $(if ($modes.Count -gt 0) { $modes -join ', ' } else { 'none' })"
     }
+}
+
+function Get-ReleasePresentMonOptions {
+    <#
+    .SYNOPSIS
+        The command-line switches the installed PresentMon advertises.
+    .DESCRIPTION
+        Read once per tool path from the binary's own help output, because the two
+        shipped generations differ in the switches this reader depends on and no
+        version string distinguishes them reliably enough to branch on.
+
+        An empty answer is the honest one for a tool that printed no help, and the
+        caller then keeps the older spelling: a dry run replaces the invoker, and a
+        simulated tool must not be pushed down a path its fixtures never described.
+    #>
+    param([Parameter(Mandatory)] $Tool)
+    $key = "$($Tool.Path)"
+    if ($script:ReleasePresentMonOptions.ContainsKey($key)) { return $script:ReleasePresentMonOptions[$key] }
+    $options = @()
+    try {
+        $help = Invoke-ReleaseTool -Tool $Tool -Arguments @('--help') -TimeoutSeconds 30
+        $options = @([regex]::Matches("$($help.Output)", '--[a-z0-9_]+') | ForEach-Object { $_.Value } | Sort-Object -Unique)
+    }
+    catch { $options = @() }
+    $script:ReleasePresentMonOptions[$key] = $options
+    return $options
 }
 
 function Test-ReleasePresentModeAgreement {
@@ -302,6 +343,38 @@ function Test-ReleasePresentModeAgreement {
 # Audio endpoints
 # ---------------------------------------------------------------------------
 
+function ConvertTo-ReleaseAudioEndpointId {
+    <#
+    .SYNOPSIS
+        Translates envctl's endpoint friendly name into the identifier
+        SoundVolumeView accepts on its command line.
+    .DESCRIPTION
+        The two tools name the same endpoint differently, and passing one the
+        other's spelling is silent breakage rather than an error: SoundVolumeView
+        exits 0 when its name argument matches nothing at all, so an unresolved
+        endpoint is indistinguishable from a successful change by exit code.
+
+        envctl composes `<name> (<device name>)`. SoundVolumeView's own
+        command-line identifier is `<device name>\Device\<name>\Render`, which also
+        carries the direction and so cannot select a capture endpoint that happens
+        to share a name with a render one.
+
+        The name is split on the LAST parenthesised group, because an endpoint name
+        may itself contain parentheses.
+
+        A name carrying no device part is returned unchanged: SoundVolumeView also
+        accepts a bare endpoint name, and inventing a device for one would name an
+        endpoint that does not exist.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $FriendlyName,
+        [ValidateSet('Render', 'Capture')] [string] $Direction = 'Render'
+    )
+    $match = [regex]::Match($FriendlyName, '^(?<name>.+)\s+\((?<device>[^()]+)\)\s*$')
+    if (-not $match.Success) { return $FriendlyName }
+    return '{0}\Device\{1}\{2}' -f $match.Groups['device'].Value, $match.Groups['name'].Value, $Direction
+}
+
 function Set-ReleaseDefaultAudioEndpoint {
     <#
     .SYNOPSIS
@@ -317,13 +390,33 @@ function Set-ReleaseDefaultAudioEndpoint {
     #>
     param(
         [Parameter(Mandatory)] $Tool,
-        [Parameter(Mandatory)] [string] $EndpointName
+        [Parameter(Mandatory)] [string] $EndpointName,
+        [string] $EndpointId,
+        # Console, Multimedia and Communications are independent on Windows and a
+        # machine routinely holds them on different endpoints. A gate that needs
+        # one role therefore asks for that role: taking all three is a change the
+        # restore then has to undo three times, from three remembered values.
+        [ValidateSet('all', 'console', 'multimedia', 'communications')] [string] $Role = 'all'
     )
-    $run = Invoke-ReleaseTool -Tool $Tool -Arguments @('/SetDefault', $EndpointName, 'all')
-    if ($run.ExitCode -ne 0) {
-        return @{ Ok = $false; Detail = "SoundVolumeView /SetDefault '$EndpointName' exited $($run.ExitCode): $($run.Output)" }
+    $endpointId = if (-not [string]::IsNullOrWhiteSpace($EndpointId)) { $EndpointId }
+        else { ConvertTo-ReleaseAudioEndpointId -FriendlyName $EndpointName }
+    if ($null -eq $endpointId) {
+        return @{ Ok = $false; Detail = "'$EndpointName' is not of the form '<name> (<device name>)', so no SoundVolumeView identifier can be built from it" }
     }
-    return @{ Ok = $true; Detail = "'$EndpointName' is the default render endpoint for every role" }
+    $roleArgument = switch ($Role) {
+        'console' { '0' }
+        'multimedia' { '1' }
+        'communications' { '2' }
+        default { 'all' }
+    }
+    $run = Invoke-ReleaseTool -Tool $Tool -Arguments @('/SetDefault', $endpointId, $roleArgument)
+    if ($run.ExitCode -ne 0) {
+        return @{ Ok = $false; Detail = "SoundVolumeView /SetDefault '$endpointId' exited $($run.ExitCode): $($run.Output)" }
+    }
+    # Deliberately phrased as what was requested. SoundVolumeView reports no
+    # outcome, so the evidence that it took effect is the caller's read-back
+    # through envctl, never this sentence.
+    return @{ Ok = $true; Detail = "asked SoundVolumeView to give '$EndpointName' the $Role render role"; EndpointId = $endpointId }
 }
 
 function Set-ReleaseAudioEndpointFormat {
@@ -343,12 +436,17 @@ function Set-ReleaseAudioEndpointFormat {
         [int] $BitDepth = 24,
         [int] $Channels = 2
     )
-    $format = "$Channels Channels, $BitDepth Bit, $SampleRate Hz"
-    $run = Invoke-ReleaseTool -Tool $Tool -Arguments @('/SetDefaultFormat', $EndpointName, $format)
-    if ($run.ExitCode -ne 0) {
-        return @{ Ok = $false; Detail = "SoundVolumeView /SetDefaultFormat '$EndpointName' exited $($run.ExitCode): $($run.Output)" }
+    $endpointId = ConvertTo-ReleaseAudioEndpointId -FriendlyName $EndpointName
+    if ($null -eq $endpointId) {
+        return @{ Ok = $false; Detail = "'$EndpointName' is not of the form '<name> (<device name>)', so no SoundVolumeView identifier can be built from it" }
     }
-    return @{ Ok = $true; Detail = "'$EndpointName' shared-mode format set to $format" }
+    $format = "$Channels Channels, $BitDepth Bit, $SampleRate Hz"
+    $run = Invoke-ReleaseTool -Tool $Tool -Arguments @('/SetDefaultFormat', $endpointId, $format)
+    if ($run.ExitCode -ne 0) {
+        return @{ Ok = $false; Detail = "SoundVolumeView /SetDefaultFormat '$endpointId' exited $($run.ExitCode): $($run.Output)" }
+    }
+    # As above: the request, not the outcome. The read-back is the evidence.
+    return @{ Ok = $true; Detail = "asked SoundVolumeView to set '$EndpointName' to $format"; EndpointId = $endpointId }
 }
 
 function Set-ReleaseDeviceEnabled {

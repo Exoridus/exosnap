@@ -62,6 +62,11 @@ class PresentMonTraceBackend final : public IPresentTraceBackend {
                 continue;
             TracePresentEvent event;
             event.process_id = present->ProcessId;
+            event.hwnd = present->Hwnd;
+            for (const auto& dependent : present->DependentPresents) {
+                if (dependent)
+                    event.related_process_ids.push_back(dependent->ProcessId);
+            }
             event.present_qpc = present->PresentStartTime;
             event.present_mode_code = static_cast<int>(present->PresentMode);
             event.sync_interval = present->SyncInterval;

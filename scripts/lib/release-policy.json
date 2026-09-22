@@ -7,10 +7,7 @@
     "scenarioCount": 26
   },
   "requiredOptIn": [
-    "REL-AUD-CLOCK-001",
-    "REL-AUD-DEGRADE-001",
     "REL-AUD-FORMAT-001",
-    "REL-AUD-SILENCE-001",
     "REL-CAP-FSE-001",
     "REL-CAP-QUIET-001",
     "REL-CAP-STALL-001",

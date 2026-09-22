@@ -131,6 +131,16 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $runsRoot = Join-Path $repositoryRoot '.workspace/release-verify'
 
+# The endpoint visibility shim is machine-local and intentionally untracked. Use it
+# by default when this checkout has one, while preserving the environment override
+# for a different tool or a CI machine that supplies its own implementation.
+if ([string]::IsNullOrWhiteSpace($env:EXOSNAP_ENDPOINT_VISIBILITY_TOOL)) {
+    $localVisibilityTool = Join-Path $repositoryRoot '.workspace/tools/endpoint-visibility.ps1'
+    if (Test-Path -LiteralPath $localVisibilityTool) {
+        $env:EXOSNAP_ENDPOINT_VISIBILITY_TOOL = $localVisibilityTool
+    }
+}
+
 Import-Module (Join-Path $PSScriptRoot 'lib/LiveVerifyState.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'lib/LiveVerifyClient.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'lib/EnvironmentOrchestrator.psm1') -Force -DisableNameChecking
@@ -424,9 +434,9 @@ function Start-ReleaseElevatedSession {
         not want it, because an instance left running is the same mutex problem
         pointed the other way.
 
-        Returns $null when this runner is not elevated. An unelevated parent cannot
-        launch an elevated child without a Secure Desktop prompt, and raising one
-        here would be the runner clicking UAC by proxy.
+        An unelevated runner launches the child with RunAs. Windows owns the Secure
+        Desktop prompt, so the only human action is confirming UAC; the runner then
+        connects to the child automatically.
     #>
     param([Parameter(Mandatory)] $Run)
     if ($null -ne $script:ElevatedSession) {
@@ -435,15 +445,20 @@ function Start-ReleaseElevatedSession {
         try { $script:ElevatedSession.Connection.Close() } catch { }
         $script:ElevatedSession = $null
     }
-    if (-not (Test-RunnerElevated)) { return $null }
-
     # The campaign's own unelevated instance holds the same machine-wide mutex.
     Stop-ReleaseSession
 
     $exe = $Run.Artifact.exePath
     $sessionRunId = New-LiveVerifyRunId
-    Write-Step 'launching the shared ELEVATED instance for the present-diagnostics gates'
-    $process = Start-Process -FilePath $exe -PassThru -ArgumentList @('--live-verify-control', $sessionRunId)
+    if (Test-RunnerElevated) {
+        Write-Step 'launching the shared ELEVATED instance for the present-diagnostics gates'
+        $process = Start-Process -FilePath $exe -PassThru -ArgumentList @('--live-verify-control', $sessionRunId)
+    }
+    else {
+        Write-Step 'launching the shared ELEVATED instance; confirm the UAC prompt'
+        $process = Start-Process -FilePath $exe -PassThru -Verb RunAs -WindowStyle Normal `
+            -ArgumentList @('--live-verify-control', $sessionRunId)
+    }
     try { $connection = Connect-LiveVerify -RunId $sessionRunId -ConnectTimeoutMs 30000 }
     catch {
         if (-not $process.HasExited) { $process | Stop-Process -Force -ErrorAction SilentlyContinue }
@@ -489,6 +504,18 @@ function Start-ReleaseSession {
     Stop-ReleaseElevatedSession
 
     $exe = $Run.Artifact.exePath
+    # A campaign that crashed mid-scenario leaves an instance holding the
+    # machine-wide single-instance guard, and every launch after it hands over and
+    # exits without opening a pipe. The symptom is a connect timeout that names
+    # nothing, repeated for every remaining scenario, so this is checked before the
+    # launch rather than guessed at afterwards.
+    $stranded = Select-ReleaseStrandedInstances -ExePath $exe `
+        -Processes @(Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($exe)) -ErrorAction SilentlyContinue)
+    if (-not [string]::IsNullOrWhiteSpace($stranded.Detail)) { Write-Step $stranded.Detail }
+    foreach ($leftover in $stranded.Owned) {
+        $leftover | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+
     $sessionRunId = New-LiveVerifyRunId
     Write-Step "launching $([IO.Path]::GetFileName($exe)) with the control channel armed"
 
@@ -505,6 +532,10 @@ function Start-ReleaseSession {
     try { $connection = Connect-LiveVerify -RunId $sessionRunId -ConnectTimeoutMs 30000 }
     catch {
         if (-not $process.HasExited) { $process | Stop-Process -Force -ErrorAction SilentlyContinue }
+        # An instance this campaign may not end is the likeliest reason the pipe
+        # never appeared, and saying so here is the difference between one look at
+        # the task list and an afternoon of guessing.
+        if ($stranded.Foreign.Count -gt 0) { throw "$($_.Exception.Message) -- $($stranded.Detail)" }
         throw
     }
 

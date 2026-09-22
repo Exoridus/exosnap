@@ -1,4 +1,4 @@
-﻿#Requires -Version 7.0
+#Requires -Version 7.0
 <#
 .SYNOPSIS
     The v0.9 release scenario catalog.
@@ -527,8 +527,7 @@ function Get-ReleaseScenarioCatalog {
                 Id                = 'REL-PRESENT-002'
                 Title             = 'Elevated relaunch for present diagnostics'
                 Kind              = 'Done'
-                Line              = "In an ELEVATED PowerShell run:  & '$exe' --live-verify-control $runId   " +
-                '-- then leave something animating on the primary display.'
+                Line              = 'Confirm the UAC prompt. The runner starts the elevated instance and verifies its control channel automatically.'
                 # Values the Verify block needs travel HERE, not in a closure. A
                 # `.GetNewClosure()` block is bound to a synthetic module that does not
                 # inherit the runner's functions, so it cannot call Connect-LiveVerify
@@ -538,9 +537,8 @@ function Get-ReleaseScenarioCatalog {
                 'elevated process. The elevation prompt runs on the Secure Desktop, where synthetic input is ' +
                 'blocked by design -- not merely discouraged.'
                 Do                = @(
-                    'Close any running ExoSnap.',
-                    'Open PowerShell as administrator. The UAC prompt appears HERE, at the shell; the command below inherits that elevation and raises none of its own.',
-                    "In that elevated shell, run:  & '$exe' --live-verify-control $runId",
+                    'Confirm the UAC prompt when Windows asks.',
+                    'The runner starts ExoSnap elevated with the control channel armed.',
                     'Leave a window presenting on the primary display (a video, a game, any animation).'
                 )
                 Expected          = 'ExoSnap starts elevated with its control channel armed, and something on ' +
@@ -646,9 +644,8 @@ function Get-ReleaseScenarioCatalog {
                     finally { if ($ownsConnection) { try { $conn.Close() } catch { } } }
                 }
             }
-            # An elevated runner needs no operator here: launching an elevated child
-            # raises no prompt when the parent already holds the token, so the gate
-            # becomes a sequence rather than a question.
+            # The runner starts the elevated child itself. An unelevated runner raises
+            # exactly one UAC prompt, then the control channel is verified automatically.
             #
             # The instance is SHARED rather than closed at the end of this gate.
             # REL-CAP-FSE-001 needs the very same elevated session -- present
@@ -674,8 +671,7 @@ function Get-ReleaseScenarioCatalog {
                 }
                 return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
             }
-            [void]$exe
-            return & $ctx.HumanGate $gate
+            return @{ Result = 'FAIL'; Message = 'the elevated present instance could not be started or connected' }
         }
     }
 
@@ -1156,10 +1152,11 @@ function Get-ReleaseScenarioCatalog {
                 )
                 Expected          = 'The application owns the display exclusively.'
                 VerifyDescription = 'This runner requires present diagnostics to be available (elevated + opt-in) ' +
-                'and then asserts that environment.snapshot reports present mode exclusiveFullscreen. When Intel ' +
-                'PresentMon is installed it captures the same window at the same time and must classify it as a ' +
-                'hardware legacy flip; a disagreement between the two decoders fails the gate. Without a real ' +
-                'present measurement this scenario reports UNAVAILABLE rather than guessing from window shape.'
+                'and then asserts that environment.snapshot reports exclusiveFullscreen or independentFlip for ' +
+                'the real SetFullscreenState probe. Modern Windows can expose that same exclusive probe as an ' +
+                'independent flip. When Intel PresentMon is installed it captures the same window at the same ' +
+                'time and must agree with the measured mode. Without a real present measurement this scenario ' +
+                'reports UNAVAILABLE rather than guessing from window shape.'
                 Verify            = {
                     param($context, $gate)
                     # The elevated session, when there is one, is handed in: it serves
@@ -1180,22 +1177,38 @@ function Get-ReleaseScenarioCatalog {
                         }
                         $conn = $link.Connection
                     }
+                    $selection = (Invoke-LiveVerifyCommand -Connection $conn -Command 'record.snapshot').result
                     $present = (Invoke-LiveVerifyCommand -Connection $conn -Command 'environment.snapshot').result.present
-                    $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-CAP-FSE-001' -Name 'present.json' -Value $present)
+                    $evidence = @(
+                        Save-LiveVerifyEvidence -Context $context -CheckId 'REL-CAP-FSE-001' -Name 'record-selection.json' -Value $selection
+                        Save-LiveVerifyEvidence -Context $context -CheckId 'REL-CAP-FSE-001' -Name 'present.json' -Value $present
+                    )
                     if (-not $present.available) {
                         return @{ Ok = $false
                             Detail   = "present diagnostics are unavailable ($($present.availability)); run REL-PRESENT-002 first"
                             Evidence = $evidence
                         }
                     }
-                    if ($present.mode -ne 'exclusiveFullscreen') {
-                        return @{ Ok = $false; Detail = "present mode is '$($present.mode)', not exclusiveFullscreen"; Evidence = $evidence }
+                    # `available` reports only that the opt-in is on and the session
+                    # is elevated. Whether anything was MEASURED is `availability`
+                    # together with `reason`: a snapshot reading availability
+                    # 'unavailable' with reason 'noPresentObserved' carries a null
+                    # mode, and comparing that to exclusiveFullscreen reports the
+                    # product as defective for a measurement that never happened.
+                    if ("$($present.availability)" -ne 'available' -or [string]::IsNullOrWhiteSpace("$($present.mode)")) {
+                        return @{ Ok = $false; Unavailable = $true
+                            Detail   = "present diagnostics measured nothing (availability " +
+                            "'$($present.availability)', reason '$($present.reason)'), so there is no present mode to judge"
+                            Evidence = $evidence
+                        }
                     }
-                    # The oracle, on the process this gate started. `exclusiveFullscreen`
-                    # is our name for what Intel calls a hardware legacy flip, and the
-                    # two decoders read the same ETW events -- so a disagreement means
-                    # one of them is wrong about the most consequential capture path
-                    # the product has.
+                    $acceptedModes = @('exclusiveFullscreen', 'independentFlip')
+                    if ($present.mode -notin $acceptedModes) {
+                        return @{ Ok = $false; Detail = "present mode is '$($present.mode)', not a fullscreen flip mode"; Evidence = $evidence }
+                    }
+                    # The oracle runs on the process this gate started. The two decoders
+                    # read the same ETW events, so a disagreement means one of them is
+                    # wrong about the capture path the product has.
                     $oracle = Resolve-ReleaseTool -Name 'presentmon'
                     $oracleDetail = $oracle.Detail
                     $probePid = [int](Get-ReleaseGateStateValue -Gate $gate -Name 'probePid')
@@ -1214,7 +1227,7 @@ function Get-ReleaseScenarioCatalog {
                         }
                     }
                     return @{ Ok = $true
-                        Detail   = "present mode exclusiveFullscreen over $($present.presentCount) presents; $oracleDetail"
+                        Detail   = "present mode $($present.mode) over $($present.presentCount) presents; $oracleDetail"
                         Evidence = $evidence
                     }
                 }
@@ -1227,8 +1240,15 @@ function Get-ReleaseScenarioCatalog {
             # diagnostics, so this only reaches a PASS when the session is elevated.
             $fseProbe = Resolve-FullscreenProbe
             if ($null -ne $fseProbe) {
+                $probeDir = Join-Path $context.RunDirectory 'checks/REL-CAP-FSE-001'
+                New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
+                $stdoutPath = Join-Path $probeDir 'probe.stdout.txt'
+                $stderrPath = Join-Path $probeDir 'probe.stderr.txt'
+                $gate.State.probeStdout = $stdoutPath
+                $gate.State.probeStderr = $stderrPath
                 $fse = Start-Process -FilePath $fseProbe -PassThru `
-                    -ArgumentList @('--display', '0', '--seconds', '45')
+                    -ArgumentList @('--display', '0', '--seconds', '45') `
+                    -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
                 # The oracle needs a process to filter on, and this is the only place
                 # that knows which one it is: the present snapshot reports our
                 # classification, not the pid it attributed it to.
@@ -1243,7 +1263,7 @@ function Get-ReleaseScenarioCatalog {
                     # 'composed' while the probe demonstrably owned the display.
                     $selected = Invoke-LiveVerifyCommand -Connection $session.Connection `
                         -Command 'record.selectTarget' `
-                        -Parameters @{ kind = 'window'; titleFilter = 'ExoSnap FSE probe' }
+                        -Parameters @{ kind = 'window'; titleFilter = "ExoSnap FSE probe [$($fse.Id)]" }
                     if (-not $selected.ok) {
                         return @{ Result = 'UNVERIFIED'
                             Message = "the probe window could not be selected, so present statistics would " +
@@ -1254,12 +1274,32 @@ function Get-ReleaseScenarioCatalog {
                     $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
                 } finally {
                     if ($null -ne $fse -and -not $fse.HasExited) { $fse.Kill() }
+                    if ($null -ne $fse -and $null -ne $fse.PSObject.Methods['WaitForExit']) {
+                        $fse.WaitForExit()
+                    }
+                }
+                $probeEvidence = @()
+                foreach ($item in @(
+                    @{ Name = 'probe.stdout.txt'; State = 'probeStdout' }
+                    @{ Name = 'probe.stderr.txt'; State = 'probeStderr' }
+                )) {
+                    $path = Get-ReleaseGateStateValue -Gate $gate -Name $item.State
+                    if ($path -and (Test-Path -LiteralPath $path)) {
+                        $probeEvidence += Save-LiveVerifyEvidence -Context $context `
+                            -CheckId 'REL-CAP-FSE-001' -Name $item.Name -Raw (Get-Content -Raw -LiteralPath $path)
+                    }
+                }
+                if ($null -ne $verdict -and $probeEvidence.Count -gt 0) {
+                    $verdict.Evidence = @($verdict.Evidence) + $probeEvidence
                 }
                 if ($null -eq $verdict) {
                     return @{ Result = 'UNVERIFIED'; Message = 'the fullscreen verification returned nothing' }
                 }
                 if ($verdict.Ok) {
                     return @{ Result = 'PASS'; Message = "[probe] $($verdict.Detail)"; Evidence = $verdict.Evidence }
+                }
+                if ($verdict.Unavailable) {
+                    return @{ Result = 'UNAVAILABLE'; Message = "[probe] $($verdict.Detail)"; Evidence = $verdict.Evidence }
                 }
                 return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
             }
@@ -1286,6 +1326,29 @@ function Get-ReleaseScenarioCatalog {
         AsksAPerson         = $true
         Run                 = {
             param($ctx)
+            # System audio is captured from the DEFAULT render endpoint. If the
+            # alias this gate names does not hold that role, removing it cannot
+            # affect the recording, and the verdict would report the product as
+            # defective over a device that was never in the recorded path.
+            #
+            # This is not hypothetical and it does not stay put: Windows promotes a
+            # replacement default the moment an endpoint disappears, and does not
+            # hand the role back when the device returns. One run of this very gate
+            # therefore moves the role somewhere else, and the next one asks the
+            # operator to unplug a device nothing is recording from.
+            if ($ctx.Orchestrator.Available) {
+                $roleSnapshot = Get-EnvironmentSnapshot -Orchestrator $ctx.Orchestrator
+                $roleProperty = @($roleSnapshot.properties |
+                        Where-Object { $_.key -eq 'audio.render.normal:default-roles' }) | Select-Object -First 1
+                $roleValue = if ($null -ne $roleProperty) { "$($roleProperty.value)" } else { '' }
+                if ($roleValue -notmatch 'console|multimedia') {
+                    return @{ Result = 'UNAVAILABLE'
+                        Message = "the endpoint bound to 'audio.render.normal' holds no default render role " +
+                        "(roles: '$roleValue'), so system audio is not captured from it and removing it would " +
+                        'prove nothing'
+                    }
+                }
+            }
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
 
@@ -1319,8 +1382,10 @@ function Get-ReleaseScenarioCatalog {
                 'degraded and the recording continues. When the device returns, the notice clears.'
                 VerifyDescription = 'This runner polls pipeline.snapshot and notifications.snapshot throughout. It ' +
                 'requires: the lifecycle stayed recording; an audio-degradation state became active; and it ' +
-                'cleared again after the device returned. It then stops the recording and validates the output ' +
-                'file with ffprobe -- the file must still contain its audio track.'
+                'lifted again. What lifted the degradation is deliberately not ' +
+                'asserted: ADR 0046 re-resolves the CURRENT Windows default for system audio, and Windows ' +
+                'promotes a replacement default the moment an endpoint disappears, so the source can return ' +
+                'before the device does.'
                 Verify            = {
                     param($context, $gate)
                     $link = Get-ReleaseGateConnection -Context $context `
@@ -1331,6 +1396,7 @@ function Get-ReleaseScenarioCatalog {
                     $observedDegraded = $false
                     $recoveredAgain = $false
                     $leftRecording = $false
+                    $latchedOnly = $false
                     $samples = @()
                     $deadline = Get-ReleaseGateDeadline -Seconds (60)
                     while ([DateTime]::UtcNow -lt $deadline) {
@@ -1344,6 +1410,19 @@ function Get-ReleaseScenarioCatalog {
                         $degraded = [bool](Get-ReleaseSnapshotValue -Object $pipeline -Path 'audio.sourceDegraded')
                         if ($degraded) { $observedDegraded = $true }
                         elseif ($observedDegraded) { $recoveredAgain = $true; break }
+                        elseif ([bool](Get-ReleaseSnapshotValue -Object $pipeline -Path 'audio.sourceDegradedOccurred')) {
+                            # The operator path cannot see the live flag at all. The
+                            # person unplugs AND replugs before answering, and the
+                            # polling below only starts once they have answered, so
+                            # by the first sample the source is back and the live
+                            # flag is false again. The product's own latched marker
+                            # is what remains, and in a recording this gate started
+                            # moments ago nothing else can have set it.
+                            $observedDegraded = $true
+                            $recoveredAgain = $true
+                            $latchedOnly = $true
+                            break
+                        }
                         Start-Sleep -Milliseconds 500
                     }
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-AUD-DEGRADE-001' -Name 'pipeline-samples.json' -Value $samples)
@@ -1353,8 +1432,21 @@ function Get-ReleaseScenarioCatalog {
                     }
                     catch { }
                     if ($leftRecording) { return @{ Ok = $false; Detail = 'the recording stopped; ADR 0046 requires it to continue'; Evidence = $evidence } }
-                    if (-not $observedDegraded) { return @{ Ok = $false; Detail = 'no audio-source degradation was observed within 60 s'; Evidence = $evidence } }
+                    if (-not $observedDegraded) {
+                        return @{ Ok = $false
+                            Detail   = 'no audio-source degradation was observed within 60 s, and the pipeline does ' +
+                            'not report one having occurred earlier either'
+                            Evidence = $evidence
+                        }
+                    }
                     if (-not $recoveredAgain) { return @{ Ok = $false; Detail = 'degradation was observed but never cleared after the device returned'; Evidence = $evidence } }
+                    if ($latchedOnly) {
+                        return @{ Ok = $true
+                            Detail   = 'the pipeline reports a source degradation having occurred and none standing ' +
+                            'now, with the recording still running: the outage ended before the answer'
+                            Evidence = $evidence
+                        }
+                    }
                     return @{ Ok = $true; Detail = 'degraded during the outage, recovered afterwards, recording never stopped'; Evidence = $evidence }
                 }
             }
@@ -1401,10 +1493,31 @@ function Get-ReleaseScenarioCatalog {
                 $outage = Start-ReleaseEndpointOutage -Executable $pnputil.Path `
                     -DisableArguments @('/disable-device', $instanceId) `
                     -EnableArguments @('/enable-device', $instanceId)
-                try { $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate) }
+                $toolOutage = $null
+                try {
+                    # pnputil exits 0 for a device node it removed and for one whose
+                    # removal never reached WASAPI, and Windows refuses outright for
+                    # a device that does not support being disabled (exit 50, seen on
+                    # a USB audio interface). Without this read-back the gate polls a
+                    # pipeline whose source never went away and reports the product
+                    # as defective for it.
+                    $gone = Wait-ReleaseEndpointGone -Orchestrator $ctx.Orchestrator -Alias 'audio.render.normal' -Outage $outage
+                    $toolOutage = $gone
+                    if ($gone.Ok) { $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate) }
+                }
                 finally {
                     Stop-ReleaseEndpointOutage -Job $outage -Executable $pnputil.Path `
                         -EnableArguments @('/enable-device', $instanceId)
+                }
+                # A tool that could not cause the outage is not a reason to give up
+                # on the scenario: this gate exists because a person unplugging a
+                # cable always works, and the tool is only the convenience that
+                # spares them. Falling through to the operator asks for ten seconds;
+                # reporting UNAVAILABLE would leave a required gate unanswerable on
+                # any machine whose audio device refuses to be disabled.
+                if ($null -ne $toolOutage -and -not $toolOutage.Ok) {
+                    Write-Step "the automated outage did not happen, so this asks you instead: $($toolOutage.Detail)"
+                    return & $ctx.HumanGate $gate
                 }
                 if ($null -eq $verdict) {
                     return @{ Result = 'UNVERIFIED'; Message = 'the degradation verification returned nothing' }
@@ -1422,11 +1535,20 @@ function Get-ReleaseScenarioCatalog {
                 $outage = Start-ReleaseEndpointOutage -Executable $visibilityTool `
                     -DisableArguments @('set-visibility', $endpointId, '0') `
                     -EnableArguments @('set-visibility', $endpointId, '1')
+                $toolOutage = $null
                 try {
-                    $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
+                    # Same reason as the pnputil branch: a named tool that reports
+                    # nothing is not evidence that the endpoint went away.
+                    $gone = Wait-ReleaseEndpointGone -Orchestrator $ctx.Orchestrator -Alias 'audio.render.normal' -Outage $outage
+                    $toolOutage = $gone
+                    if ($gone.Ok) { $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate) }
                 } finally {
                     Stop-ReleaseEndpointOutage -Job $outage -Executable $visibilityTool `
                         -EnableArguments @('set-visibility', $endpointId, '1')
+                }
+                if ($null -ne $toolOutage -and -not $toolOutage.Ok) {
+                    Write-Step "the automated outage did not happen, so this asks you instead: $($toolOutage.Detail)"
+                    return & $ctx.HumanGate $gate
                 }
                 if ($null -eq $verdict) {
                     return @{ Result = 'UNVERIFIED'; Message = 'the degradation verification returned nothing' }
@@ -1473,22 +1595,54 @@ function Get-ReleaseScenarioCatalog {
             # Restored in a finally block: the default endpoint is the operator's,
             # and a campaign that left their sound on a virtual cable would have
             # broken the machine it was verifying.
-            $cablePattern = if ([string]::IsNullOrWhiteSpace($env:EXOSNAP_SILENT_AUDIO_ENDPOINT)) { 'CABLE Input*' }
+            $cablePattern = if ([string]::IsNullOrWhiteSpace($env:EXOSNAP_SILENT_AUDIO_ENDPOINT)) { 'CABLE In*' }
             else { $env:EXOSNAP_SILENT_AUDIO_ENDPOINT }
             $switcher = Resolve-ReleaseTool -Name 'soundvolumeview'
             $endpoints = @(Get-ReleaseAudioOutputEndpoints -Connection $conn)
             $cable = Find-ReleaseAudioEndpoint -Endpoints $endpoints -Pattern $cablePattern
             $previousDefault = Get-ReleaseDefaultAudioEndpointName -Endpoints $endpoints
+            $resolved = if ($ctx.Orchestrator.Available) { Resolve-EnvironmentAliases -Orchestrator $ctx.Orchestrator } else { $null }
+            $candidates = if ($null -ne $resolved -and $resolved.PSObject.Properties.Name -contains 'candidates') { @($resolved.candidates) } else { @() }
+            $cableId = @($candidates | Where-Object { $_.kind -eq 'audio-render' -and $_.friendlyName -eq $cable } | Select-Object -First 1 -ExpandProperty stableId)
+            $previousDefaultId = @($candidates | Where-Object { $_.kind -eq 'audio-render' -and $_.friendlyName -eq $previousDefault } | Select-Object -First 1 -ExpandProperty stableId)
+            $cableEndpointId = if ($cableId.Count -gt 0) { $cableId[0] } else { $null }
+            $previousEndpointId = if ($previousDefaultId.Count -gt 0) { $previousDefaultId[0] } else { $null }
             $routed = $false
-            if ($switcher.Available -and $null -ne $cable -and $null -ne $previousDefault -and $cable -ne $previousDefault) {
-                $switched = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable
-                if ($switched.Ok) { $routed = $true }
+            if ($switcher.Available -and $null -ne $cable -and $null -ne $previousDefault -and
+                $cable -ne $previousDefault) {
+                [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable -EndpointId $cableEndpointId -Role 'console')
+                [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable -EndpointId $cableEndpointId -Role 'multimedia')
+                # Read the default back through the product. Nothing the switch
+                # returned is consulted, deliberately: SoundVolumeView reports no
+                # outcome and exits 0 even when its endpoint argument matched
+                # nothing, so a per-call success flag would only say the request was
+                # formed. Branching on it also leaves a third path -- one role taken,
+                # the other refused -- in which the machine is half switched and the
+                # gate would record from whatever ended up default and pass, because
+                # the operator's own output is usually silent too.
+                #
+                # So one question decides: is the cable the default now.
+                $routedDefault = Get-ReleaseDefaultAudioEndpointName -Endpoints @(Get-ReleaseAudioOutputEndpoints -Connection $conn)
+                $routed = ($routedDefault -eq $cable)
+                if (-not $routed) {
+                    # Both roles go back whatever happened, because a half-applied
+                    # switch is exactly the state that leaves a machine's sound on a
+                    # virtual cable after the campaign ends.
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -EndpointId $previousEndpointId -Role 'console')
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -EndpointId $previousEndpointId -Role 'multimedia')
+                    return @{ Result = 'UNAVAILABLE'
+                        Message = "could not route system audio to '$cable': the default endpoint still reads '$routedDefault'"
+                    }
+                }
             }
 
             [void](Invoke-LiveVerifyCommand -Connection $conn -Command 'record.selectTarget' -Parameters @{ kind = 'monitor' })
             $started = Invoke-LiveVerifyCommand -Connection $conn -Command 'record.start'
             if (-not $started.ok) {
-                if ($routed) { [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault) }
+                if ($routed) {
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -EndpointId $previousEndpointId -Role 'console')
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -EndpointId $previousEndpointId -Role 'multimedia')
+                }
                 return @{ Result = 'FAIL'; Message = "record.start refused: $($started.error.message)" }
             }
             [void](Wait-ReleaseRecordingState -Connection $conn -States @('Recording') -TimeoutMs 30000)
@@ -1576,7 +1730,10 @@ function Get-ReleaseScenarioCatalog {
                 return & $ctx.HumanGate $gate
             }
             finally {
-                if ($routed) { [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault) }
+                if ($routed) {
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'console')
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'multimedia')
+                }
             }
         }
     }
@@ -1625,14 +1782,28 @@ function Get-ReleaseScenarioCatalog {
                         Where-Object { $_.key -eq 'audio.render.normal:friendly-name' }) | Select-Object -First 1
                 if ($null -ne $nameProperty -and -not [string]::IsNullOrWhiteSpace("$($nameProperty.value)")) {
                     $endpointName = "$($nameProperty.value)"
+                    # Remembered BEFORE the first change, not after the last one. A
+                    # record written only on full success cannot undo a partial
+                    # change, and a partial change is exactly what a refused second
+                    # call leaves behind: the format moved, the role did not, and
+                    # nothing remains that says what the machine looked like.
+                    $restore = @{ Name = $endpointName
+                        PreviousFormat  = if ($null -ne $formatProperty) { "$($formatProperty.value)" } else { '' }
+                        PreviousDefault = if ($null -ne $defaultBefore) { "$($defaultBefore.value)" } else { '' }
+                    }
                     $format = Set-ReleaseAudioEndpointFormat -Tool $switcher -EndpointName $endpointName -SampleRate 44100
-                    $role = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $endpointName
-                    if ($format.Ok -and $role.Ok) {
+                    # Console and multimedia only. System audio is captured from
+                    # those two roles, communications is not in the recorded path,
+                    # and a machine routinely holds it on a third endpoint that this
+                    # gate has no remembered value for and therefore must not move.
+                    $console = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $endpointName -Role 'console'
+                    $role = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $endpointName -Role 'multimedia'
+                    # A hard refusal from the tool sends this back to the operator.
+                    # Whether the change actually took is not decided here at all --
+                    # the gate re-reads the endpoint through envctl, and that
+                    # read-back is the only evidence either path produces.
+                    if ($format.Ok -and $console.Ok -and $role.Ok) {
                         $prepared = "$($format.Detail); $($role.Detail)"
-                        $restore = @{ Name = $endpointName
-                            PreviousFormat  = if ($null -ne $formatProperty) { "$($formatProperty.value)" } else { '' }
-                            PreviousDefault = if ($null -ne $defaultBefore) { "$($defaultBefore.value)" } else { '' }
-                        }
                     }
                 }
             }
@@ -3327,7 +3498,7 @@ function Get-ReleaseFieldContract {
             Paths = @('sourcePresentation.presentMode', 'sourcePresentation.modeAvailability')
         }
         @{ Command = 'pipeline.snapshot'; Stage = 'recording'; UsedBy = 'REL-AUD-DEGRADE-001, REL-AUD-SILENCE-001'
-            Paths = @('audio.active', 'audio.sourceDegraded', 'audio.degradedSources')
+            Paths = @('audio.active', 'audio.sourceDegraded', 'audio.sourceDegradedOccurred', 'audio.degradedSources')
         }
         @{ Command = 'pipeline.snapshot'; Stage = 'recording'; UsedBy = 'REL-AUD-CLOCK-001'
             Paths = @('avTiming.avDriftMs', 'avTiming.avDriftAvailability')
@@ -3635,10 +3806,40 @@ function Start-ReleaseEndpointOutage {
     return Start-Job -ScriptBlock {
         param($tool, $disable, $enable, $delay, $outage)
         Start-Sleep -Seconds $delay
-        & $tool @disable | Out-Null
+        # Emitted rather than discarded. Windows refuses to disable a device that
+        # is in use, and this one is in use by definition: the gate starts a
+        # recording from it first. Swallowing that refusal left the campaign with
+        # an endpoint that never went away and no way to find out why.
+        $output = & $tool @disable 2>&1 | Out-String
+        [pscustomobject]@{ Stage = 'disable'; ExitCode = $LASTEXITCODE; Output = $output.Trim() }
         Start-Sleep -Seconds $outage
-        & $tool @enable | Out-Null
+        $output = & $tool @enable 2>&1 | Out-String
+        [pscustomobject]@{ Stage = 'enable'; ExitCode = $LASTEXITCODE; Output = $output.Trim() }
     } -ArgumentList $Executable, $DisableArguments, $EnableArguments, $DelaySeconds, $OutageSeconds
+}
+
+function Get-ReleaseOutageFailure {
+    <#
+    .SYNOPSIS
+        What the tool asked to cause an outage actually reported, if it failed.
+    .DESCRIPTION
+        Read from the background job without consuming it, so the caller's own
+        teardown still receives what it expects. Returns an empty string when the
+        removal has not reported yet or reported success: the absence of a tool
+        error is not evidence that the endpoint left, which is what
+        Wait-ReleaseEndpointGone is for.
+    #>
+    param($Job)
+    if ($null -eq $Job) { return '' }
+    $records = @()
+    try { $records = @(Receive-Job -Job $Job -Keep -ErrorAction SilentlyContinue) } catch { return '' }
+    $disable = @($records | Where-Object { $null -ne $_ -and "$($_.Stage)" -eq 'disable' }) | Select-Object -First 1
+    if ($null -eq $disable) { return '' }
+    if ([int]$disable.ExitCode -eq 0) { return '' }
+    # Collapsed to one line: a tool's refusal is several lines of banner and
+    # detail, and a verdict truncated at the first newline shows only the banner.
+    $output = (("$($disable.Output)" -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' | ')
+    return "the removal itself was refused (exit $($disable.ExitCode)): $output"
 }
 
 function Stop-ReleaseEndpointOutage {
@@ -3683,7 +3884,158 @@ function Get-ReleaseAudioDeviceInstanceId {
     }
     catch { return $null }
     if ($devices.Count -ne 1) { return $null }
-    return "$($devices[0].InstanceId)"
+    # The matched node is the endpoint, which is not what a removal has to
+    # address -- see Select-ReleaseOwningAudioDevice.
+    $parent = $null
+    try {
+        $parentId = (Get-PnpDeviceProperty -InstanceId $devices[0].InstanceId -KeyName 'DEVPKEY_Device_Parent' `
+                -ErrorAction Stop).Data
+        if (-not [string]::IsNullOrWhiteSpace("$parentId")) {
+            $parent = Get-PnpDevice -InstanceId "$parentId" -ErrorAction Stop | Select-Object -First 1
+        }
+    }
+    catch { $parent = $null }
+    $owner = Select-ReleaseOwningAudioDevice -Endpoint $devices[0] -Parent $parent
+    return $owner.InstanceId
+}
+
+function Select-ReleaseOwningAudioDevice {
+    <#
+    .SYNOPSIS
+        Which device node a removal has to address for an audio endpoint to
+        actually disappear.
+    .DESCRIPTION
+        An `AudioEndpoint` class node (`SWD\MMDEVAPI\...`) is a software node.
+        Disabling it returns success and leaves the endpoint active for WASAPI --
+        measured in a campaign, where the gate then polled a source that never
+        went away and reported the product as defective for it. The node that
+        owns the endpoint is its PnP parent, the `MEDIA` class device.
+
+        The parent is accepted ONLY when it is that class. An endpoint's ancestor
+        can be a USB hub, and disabling one would take unrelated hardware down
+        with it; refusing is the correct answer there, and the gate then asks a
+        person rather than guessing.
+
+        Returns @{ InstanceId; Detail }, InstanceId $null when nothing may be
+        addressed.
+    #>
+    param($Endpoint, $Parent)
+    if ($null -eq $Endpoint) {
+        return @{ InstanceId = $null; Detail = 'no audio endpoint matched the alias by name' }
+    }
+    if ($null -eq $Parent) {
+        return @{ InstanceId = $null
+            Detail = "the endpoint node '$($Endpoint.InstanceId)' reports no parent device, and disabling the " +
+            'endpoint node itself does not remove the endpoint from WASAPI'
+        }
+    }
+    if ("$($Parent.Class)" -ne 'MEDIA') {
+        return @{ InstanceId = $null
+            Detail = "the endpoint's parent '$($Parent.InstanceId)' is class '$($Parent.Class)', not MEDIA; " +
+            'disabling an ancestor that is not the audio device itself could take unrelated hardware with it'
+        }
+    }
+    return @{ InstanceId = "$($Parent.InstanceId)"
+        Detail = "the endpoint is owned by '$($Parent.FriendlyName)' ($($Parent.InstanceId))"
+    }
+}
+
+function Select-ReleaseStrandedInstances {
+    <#
+    .SYNOPSIS
+        Splits running processes into the ones a new launch may end and the ones
+        it may not, given the artifact under test.
+    .DESCRIPTION
+        The application's single-instance guard is machine-wide. An instance left
+        behind by a crashed campaign therefore does not fail the next scenario --
+        it makes every following launch hand over to itself and exit, so the
+        control channel is never created and the gate reports a connect timeout
+        that names nothing. Three scenarios died that way in one campaign before
+        this existed.
+
+        Ownership is decided by executable PATH, never by process name. A
+        developer's own build of the same name, running from somewhere else, is
+        not this campaign's to end. A process whose path cannot be read at all --
+        an elevated one seen from an unelevated runner -- is reported and left
+        alone for the same reason: an unreadable process and a foreign one are the
+        same answer here, and killing on a guess is worse than a named failure.
+
+        Returns @{ Owned; Foreign; Detail }, where Detail is written for whoever
+        reads the connect failure.
+    #>
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] $Processes,
+        [Parameter(Mandatory)] [string] $ExePath
+    )
+    $owned = [System.Collections.Generic.List[object]]::new()
+    $foreign = [System.Collections.Generic.List[object]]::new()
+    foreach ($process in @($Processes)) {
+        if ($null -eq $process) { continue }
+        $path = $null
+        try { $path = "$($process.Path)" } catch { $path = $null }
+        if (-not [string]::IsNullOrWhiteSpace($path) -and $path -eq $ExePath) { $owned.Add($process) }
+        else { $foreign.Add($process) }
+    }
+    $parts = @()
+    if ($owned.Count -gt 0) {
+        $parts += "$($owned.Count) stranded instance(s) of the artifact under test (pid $((@($owned | ForEach-Object { $_.Id })) -join ', '))"
+    }
+    if ($foreign.Count -gt 0) {
+        $parts += "$($foreign.Count) instance(s) this campaign does not own (pid $((@($foreign | ForEach-Object { $_.Id })) -join ', ')); " +
+        'they hold the machine-wide single-instance guard and have to be closed by hand'
+    }
+    return @{ Owned = @($owned); Foreign = @($foreign); Detail = ($parts -join '; ') }
+}
+
+function Wait-ReleaseEndpointGone {
+    <#
+    .SYNOPSIS
+        Waits until envctl stops reporting one alias's endpoint as active.
+    .DESCRIPTION
+        The independent read-back for an outage a third-party tool was asked to
+        cause. `pnputil` and a visibility tool both report only their own exit
+        code, and an exit code says the request was accepted, never that the
+        endpoint left. Asserting the product's behaviour against an outage that
+        never happened is how a correct product gets reported as defective.
+
+        Returns @{ Ok; Detail }. `Ok` is true only when the endpoint was observed
+        gone. An endpoint whose state envctl does not report at all is NOT treated
+        as gone: an unreadable machine and a changed one are opposite answers, and
+        a check that quietly passes itself is one nobody can rely on.
+    #>
+    param(
+        [Parameter(Mandatory)] $Orchestrator,
+        [Parameter(Mandatory)] [string] $Alias,
+        [int] $TimeoutSeconds = 20,
+        # The background job that was asked to cause the outage. Its own report is
+        # the difference between "the endpoint stayed" and knowing why.
+        $Outage
+    )
+    if ($null -eq $Orchestrator -or -not $Orchestrator.Available) {
+        return @{ Ok = $false; Detail = 'exosnap-envctl is not available, so the endpoint outage cannot be confirmed' }
+    }
+    $deadline = Get-ReleaseGateDeadline -Seconds $TimeoutSeconds
+    $lastSeen = '(never read)'
+    while ($true) {
+        $snapshot = Get-EnvironmentSnapshot -Orchestrator $Orchestrator
+        $state = @($snapshot.properties | Where-Object { $_.key -eq "${Alias}:endpoint-state" }) | Select-Object -First 1
+        if ($null -eq $state) {
+            return @{ Ok = $false
+                Detail = "envctl reports no endpoint-state for '$Alias', so the outage cannot be confirmed"
+            }
+        }
+        $lastSeen = "$($state.value)"
+        if ($lastSeen -ne 'active') { return @{ Ok = $true; Detail = "'$Alias' is no longer active (state '$lastSeen')" } }
+        if ([DateTime]::UtcNow -ge $deadline) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    # States the observation, never a presumed cause: the addressed node being
+    # wrong is only one of the ways this happens, and Windows refusing to disable
+    # a device that is in use is another.
+    $detail = "the endpoint bound to '$Alias' stayed '$lastSeen' for ${TimeoutSeconds}s after the removal was requested"
+    $refusal = Get-ReleaseOutageFailure -Job $Outage
+    if (-not [string]::IsNullOrWhiteSpace($refusal)) { $detail = "$detail -- $refusal" }
+    return @{ Ok = $false; Detail = $detail }
 }
 
 function Restore-ReleaseAudioEndpointState {
@@ -3711,7 +4063,12 @@ function Restore-ReleaseAudioEndpointState {
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($Restore.PreviousDefault)) {
-        [void](Set-ReleaseDefaultAudioEndpoint -Tool $Tool -EndpointName $Restore.PreviousDefault)
+        # Exactly the two roles a gate is allowed to take. Restoring `all` here
+        # would hand the communications role to this endpoint as well, from a
+        # remembered value that only ever described console and multimedia, and
+        # a machine holding communications elsewhere would never get it back.
+        [void](Set-ReleaseDefaultAudioEndpoint -Tool $Tool -EndpointName $Restore.PreviousDefault -Role 'console')
+        [void](Set-ReleaseDefaultAudioEndpoint -Tool $Tool -EndpointName $Restore.PreviousDefault -Role 'multimedia')
     }
 }
 
@@ -3811,6 +4168,12 @@ function Resolve-ReleaseVerdict {
     if (-not $Verdict.ContainsKey('Ok')) { $Verdict['Ok'] = $false }
     if (-not $Verdict.ContainsKey('Detail') -or $null -eq $Verdict['Detail']) { $Verdict['Detail'] = '' }
     if (-not $Verdict.ContainsKey('Evidence') -or $null -eq $Verdict['Evidence']) { $Verdict['Evidence'] = @() }
+    # `Unavailable` lets a Verify block say that its precondition was never met,
+    # which is rule 3 of the runner and a different answer from a failed
+    # assertion. Without it every such block had to return Ok = $false, and the
+    # caller reported the PRODUCT as defective for a measurement that never
+    # happened. Defaulted here so no caller has to test for the key first.
+    if (-not $Verdict.ContainsKey('Unavailable')) { $Verdict['Unavailable'] = $false }
     return $Verdict
 }
 

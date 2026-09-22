@@ -4,6 +4,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h> // OpenProcess / WaitForSingleObject / CloseHandle -- target liveness only.
 
+#include <algorithm>
 #include <utility>
 
 #include <QtCore/QtGlobal> // qWarning -> the installed Qt handler -> exosnap.log
@@ -173,9 +174,26 @@ PresentSample PresentMonEtwSession::Latest() const {
         // its events reached the trace under a different id or never arrived.
         size_t drained = 0;
         size_t attributed = 0;
+        std::vector<unsigned long> process_ids;
+        std::vector<unsigned long> related_process_ids;
         for (const TracePresentEvent& present : backend->Drain()) {
             ++drained;
-            if (want_pid != 0 && present.process_id != want_pid)
+            if (std::find(process_ids.begin(), process_ids.end(), present.process_id) == process_ids.end())
+                process_ids.push_back(present.process_id);
+            for (const unsigned long pid : present.related_process_ids) {
+                if (std::find(related_process_ids.begin(), related_process_ids.end(), pid) == related_process_ids.end())
+                    related_process_ids.push_back(pid);
+            }
+            {
+                std::lock_guard lk(sample_mutex_);
+                latest_.trace_last_process_id = present.process_id;
+                latest_.trace_last_hwnd = present.hwnd;
+            }
+            const bool related_to_target =
+                want_pid == 0 || present.process_id == want_pid ||
+                std::any_of(present.related_process_ids.begin(), present.related_process_ids.end(),
+                            [want_pid](unsigned long pid) { return pid == want_pid; });
+            if (!related_to_target)
                 continue;
             ++attributed;
             RawPresentEvent raw;
@@ -200,6 +218,13 @@ PresentSample PresentMonEtwSession::Latest() const {
             mapped.mode_flip_count = static_cast<uint32_t>(accumulator_.mode_flip_count);
             std::lock_guard lk(sample_mutex_);
             latest_ = mapped;
+        }
+        {
+            std::lock_guard lk(sample_mutex_);
+            latest_.trace_drained_count = static_cast<uint32_t>(drained);
+            latest_.trace_matched_count = static_cast<uint32_t>(attributed);
+            latest_.trace_process_ids = std::move(process_ids);
+            latest_.trace_related_process_ids = std::move(related_process_ids);
         }
         // Logged only when the trace carried presents and NONE of them were the
         // attributed process: the state that is otherwise indistinguishable from a

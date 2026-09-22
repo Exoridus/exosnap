@@ -212,6 +212,8 @@ The dependencies are `DependsOn` in the catalog and are resolved by a stable top
 
 A gate prints its line, waits, **and then checks for itself**. A gate whose `Verify` block returns false is a `FAIL` even when the operator pressed Enter: an operator can be mistaken about what they just did, and a gate that trusts the keystroke instead of the machine is a checkbox with extra steps. A gate that declares no `Verify` block at all is `UNVERIFIED`, not `PASS`.
 
+`REL-CAP-FSE-001` uses a real `SetFullscreenState(TRUE)` probe. On modern Windows, PresentMon may classify that confirmed fullscreen path as `independentFlip` instead of `exclusiveFullscreen`; both fullscreen flip modes are accepted, while composed modes are not. The gate still requires measured presents and agreement from the independent PresentMon oracle when it is installed.
+
 The unanswerable case is checked **before** anything is printed, so nobody performs a two-minute physical action that cannot be confirmed afterwards.
 
 An automation can be the one that acts. `-Attest REL-XXX-000` says the caller has already performed that gate's action: the question is skipped and the `Verify` block runs exactly as it would have. It is not a way to pass a gate. What it cannot buy is a sight check: the question there *is* the verdict, and no caller can perform someone else's looking, so an attested sight check is `DEFERRED`.
@@ -241,7 +243,7 @@ Three rules hold for all of them:
 2. **Nothing is discovered by guessing.** Each tool has one environment variable that names it and one documented default location. A tool found by neither is absent, however many similarly named binaries are on `PATH`.
 3. **Every invocation goes through one seam** (`Invoke-ReleaseTool`), which is what lets the whole human layer be exercised without a machine action.
 
-Two gates keep the older, caller-named tool arrangement, and it works the same way: `REL-UPD-PORTABLE-001` and the MSI gates read `EXOSNAP_UPDATE_FROM` (an older official `exosnap.exe`) or `EXOSNAP_UPDATE_FROM_MSI` (its installer, for the sandbox). `REL-AUD-DEGRADE-001` accepts `EXOSNAP_ENDPOINT_VISIBILITY_TOOL`, called as `<tool> set-visibility <endpointId> 0|1`. `REL-AUD-DEGRADE-001` also takes `EXOSNAP_AUDIO_DEVICE_INSTANCE_ID`, which short-circuits the friendly-name match: a machine with two identically named headsets cannot be resolved by name, and this refuses to guess rather than disabling the wrong device.
+Two gates keep the older, caller-named tool arrangement, and it works the same way: `REL-UPD-PORTABLE-001` and the MSI gates read `EXOSNAP_UPDATE_FROM` (an older official `exosnap.exe`) or `EXOSNAP_UPDATE_FROM_MSI` (its installer, for the sandbox). `REL-AUD-DEGRADE-001` accepts `EXOSNAP_ENDPOINT_VISIBILITY_TOOL`, called as `<tool> set-visibility <endpointId> 0|1`; the runner also discovers the machine-local `.workspace/tools/endpoint-visibility.ps1` when no override is supplied. `REL-AUD-DEGRADE-001` also takes `EXOSNAP_AUDIO_DEVICE_INSTANCE_ID`, which short-circuits the friendly-name match: a machine with two identically named headsets cannot be resolved by name, and this refuses to guess rather than disabling the wrong device.
 
 ### Why the audio properties are not envctl transactions
 

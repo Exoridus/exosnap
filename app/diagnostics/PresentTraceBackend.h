@@ -32,6 +32,8 @@ namespace exosnap::diagnostics {
 // job, so a backend cannot get them subtly different from the shipping path.
 struct TracePresentEvent {
     unsigned long process_id = 0;
+    uint64_t hwnd = 0;
+    std::vector<unsigned long> related_process_ids;
     uint64_t present_qpc = 0;  // QPC ticks, in TimestampFrequency() units
     int present_mode_code = 0; // PresentMon's PresentMode enum, as an integer
     int sync_interval = 1;     // DXGI present sync interval; 0 == tearing-capable
