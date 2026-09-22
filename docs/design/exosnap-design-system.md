@@ -3,9 +3,7 @@
 Last refreshed: 2026-06-01
 
 ## Scope and source of truth
-This design-system contract is refreshed from the v2 visual prototype (HTML,
-CSS and JSX mockups of the design system, handoff sheet, and per-surface
-screens).
+This design-system contract is refreshed from the v2 visual prototype (HTML, CSS and JSX mockups of the design system, handoff sheet, and per-surface screens).
 
 This document is implementation-facing for Qt Widgets and QSS.
 

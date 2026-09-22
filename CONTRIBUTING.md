@@ -50,9 +50,9 @@ The same subject line passes through three points, and the number belongs to exa
 | Pull request title | `type(scope): summary` | none |
 | Merged subject on `main` | `type(scope): summary (#N)` | exactly one, appended by `scripts/merge-pr.ps1` |
 
-A title that already ends in its own number is rejected, because the append would land it twice. A citation of a *different* pull request inside the summary — "finish what (#370) started" — is untouched.
+A title that already ends in its own number is rejected, because the append would land it twice. A citation of a *different* pull request inside the summary is untouched. For example, "finish what (#370) started" remains valid.
 
-A body on a local commit is optional and short. The reasoning belongs in the pull request description — what changed, why, what measured it, what a breaking change breaks and what to do about it. The changelog links to the pull request, so nothing needs saying twice.
+A body on a local commit is optional and short. The pull request description carries the reasoning: what changed, why, what measured it, what a breaking change breaks and what to do about it. The changelog links to the pull request, so nothing needs saying twice.
 
 `scripts/check-commit-policy.ps1` checks the subjects this branch adds. It applies from the commit that introduced the policy onward; history behind that point was written under different rules and is left alone. The pull request title is checked separately, by `.github/workflows/pr-policy.yml`, which is a workflow of its own so that correcting a title costs seconds rather than a full Windows build.
 

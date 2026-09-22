@@ -20,8 +20,7 @@ cmake --preset windows-x64-debug
 cmake --build --preset windows-x64-debug --target probe_process_loopback
 ```
 
-The executable is produced at:
-`build/windows-x64-debug/tools/probes/probe_process_loopback/<Configuration>/probe_process_loopback.exe`
+The executable is produced at: `build/windows-x64-debug/tools/probes/probe_process_loopback/<Configuration>/probe_process_loopback.exe`
 
 ## Run
 
@@ -70,22 +69,22 @@ On startup the probe:
 ### Validation steps
 
 1. **Run the probe** and select the target app from the window list.
-2. **Step A — Only target audio plays:**
+2. **Step A: Only target audio plays:**
    - Play unique audio in the target app (e.g. a specific music track).
    - Ensure no other apps are playing audio.
    - Observe the per-second metrics:
      - `include_target_tree` should show non-silent signal (RMS > 0, peak > 0.005, silence < 100%).
      - `exclude_target_tree` should be silent or near-silent (silence close to 100%, low RMS/peak).
-3. **Step B — Only non-target audio plays:**
+3. **Step B: Only non-target audio plays:**
    - Stop the target app audio.
    - Play different audio in a non-target app (e.g. a different browser tab, different media player).
    - Observe the per-second metrics:
      - `include_target_tree` should be silent or near-silent.
      - `exclude_target_tree` should show non-silent signal.
-4. **Step C — Both play:**
+4. **Step C: Both play:**
    - Play audio in both target and non-target apps simultaneously (if possible).
    - Observe that both streams show non-silent signal simultaneously.
-5. **Step D — Stop both and continue:**
+5. **Step D: Stop both and continue:**
    - Stop all audio playback.
    - Observe both streams approach 100% silence.
 6. **Stop the probe** by pressing `q` or letting it run to completion.

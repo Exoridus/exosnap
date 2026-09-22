@@ -3,8 +3,7 @@
 Last refreshed: 2026-06-01
 
 ## Scope and source of truth
-This UX contract is refreshed from the v2 visual prototype (HTML, CSS and JSX
-mockups of the app shell, design system, handoff sheet, and per-surface screens).
+This UX contract is refreshed from the v2 visual prototype (HTML, CSS and JSX mockups of the app shell, design system, handoff sheet, and per-surface screens).
 
 This is a product and UX contract for Qt implementation slices. It does not change backend capabilities.
 

@@ -1,15 +1,12 @@
 # ExoSnap Release Checklist
 
-The canonical steps to cut and publish an official ExoSnap release. The packaging gate itself is
-automated (`scripts/build-release-artifacts.ps1` + `.github/workflows/release-candidate.yml`, ADR
-0037); this document covers the human-gated steps around it and the live checks that CI cannot run on
-a GPU-less runner.
+The canonical steps to cut and publish an official ExoSnap release. The packaging gate itself is automated (`scripts/build-release-artifacts.ps1` + `.github/workflows/release-candidate.yml`, ADR 0037). This document covers the human-gated steps around it and the live checks that CI cannot run on a GPU-less runner.
 
 > **Running the live checks.** `scripts/live-verify.ps1` (ADR 0066, usage in `docs/dev/live-verify.md`)
-> executes the automatable part of §5–§7 against a prepared artifact, records evidence per check,
+> executes the automatable part of §5 to §7 against a prepared artifact, records evidence per check,
 > binds every PASS to the exact binary and environment it was produced against, and survives an
 > interruption without losing verified progress. It stops only for the bounded human gates that
-> remain. This document stays the authority on *what* must be true; the runner records *whether it
+> remain. This document stays the authority on *what* must be true. The runner records *whether it
 > was proven and against which bytes*. Start with
 > `pwsh scripts/live-verify.ps1 prepare` → `run` → `report`, and check the generated `report.md`
 > into the RC's evidence rather than ticking boxes here from memory.
@@ -20,10 +17,10 @@ a GPU-less runner.
 - [ ] Refresh `KNOWN_LIMITATIONS.md` to the new version and fold in any newly-shipped boundaries
       (the release script asserts the doc names the canonical version).
 - [ ] Full test suite green: `pwsh scripts/run-tests.ps1`.
-- [ ] Cut the changelog. `pwsh scripts/new-changelog.ps1` previews what the release would say; rerun
+- [ ] Cut the changelog. `pwsh scripts/new-changelog.ps1` previews what the release would say. Rerun
       with `-Version x.y.z -Apply` and `EXOSNAP_CHANGELOG_CUT=1` set to write it and open a fresh
       `## [Unreleased]`. A subject the assembler cannot file is reported rather than dropped, and has
-      to be resolved here -- after the tag it cannot be fixed on the merged commit any more.
+      to be resolved here: after the tag it cannot be fixed on the merged commit any more.
 - [ ] Preview the release page: `pwsh scripts/render-release-notes.ps1 -Version x.y.z`. This is the
       exact text the pipeline will publish, from `.github/templates/release-notes.md`.
 
@@ -34,58 +31,48 @@ a GPU-less runner.
       audit, dumpbin runtime-dependency audit, MSI harvest + build + content assertion, MSI smoke,
       portable ZIP smoke, and the **updater smoke** (staged `exosnap-updater.exe` load check).
 - [ ] Confirm both the portable ZIP and the MSI contain `exosnap-updater.exe` (validation report
-      required-files section) — without it the in-app updater is non-functional in packaged builds.
+      required-files section). Without it the in-app updater is non-functional in packaged builds.
 
 ## 3. Cut a release candidate (prerelease)
 
-The live checks in §5, §6 and §7 have to run against **real official artifacts** — in particular the
-updater round-trip in §7 needs a genuinely published GitHub Release to download from. Publishing the
-final `vX.Y.Z` tag first and testing afterwards is not an option: that tag is the release. So cut an
-RC first. It is built by the same pipeline, from the same commit, with the same signing key and the
-same gates as the final release. It differs in which tag it lands on, in being marked as a GitHub
-**prerelease** (which the in-app update check reads from GitHub's own `prerelease` flag — so only
-users on the **Preview** channel are ever offered it, and Stable users are unaffected), **and in
-the embedded release version**: the full version (`0.9.0-rc4` vs `0.9.0`) is derived from the tag
-and compiled into the binaries, so the RC and the final are **separate builds, not the same bytes**
-— retagging RC artifacts as final is impossible (the pipeline's embedded-version gate would refuse
-a binary whose `ProductVersion` does not match the tag).
+The live checks in §5, §6 and §7 have to run against **real official artifacts**, in particular the updater round-trip in §7 needs a genuinely published GitHub Release to download from. Publishing the final `vX.Y.Z` tag first and testing afterwards is not an option: that tag is the release. So cut an RC first. It is built by the same pipeline, from the same commit, with the same signing key and the same gates as the final release. It differs in which tag it lands on, in being marked as a GitHub **prerelease** (which the in-app update check reads from GitHub's own `prerelease` flag, so only users on the **Preview** channel are ever offered it, and Stable users are unaffected), **and in the embedded release version**: the full version (`0.9.0-rc4` vs `0.9.0`) is derived from the tag and compiled into the binaries, so the RC and the final are **separate builds, not the same bytes**, retagging RC artifacts as final is impossible (the pipeline's embedded-version gate would refuse a binary whose `ProductVersion` does not match the tag).
 
 - [ ] **Push a release-candidate tag yourself**, e.g. `v0.9.0-rc1` (`vX.Y.Z-<suffix>`, `X.Y.Z`
-      matching `CMakeLists.txt` — both are validated in seconds, before the build starts). This
+      matching `CMakeLists.txt`, both are validated in seconds, before the build starts). This
       workflow cannot create the tag itself: the repository's "Block version tags" ruleset
       (`refs/tags/v*`) blocks tag creation/update/deletion for the GitHub Actions token, and only
       bypasses for a human pushing over their own credentials. Pushing the tag is what triggers the
-      pipeline — same as the final tag in §4, just with an RC suffix.
-- [ ] **Let the pipeline run and confirm it went green.** It performs exactly the steps listed in §4
-      — fail-closed official build, signed manifest, draft Release, upload, re-download + re-hash +
-      signature re-verification — and then publishes the Release **as a prerelease**. A failure
+      pipeline, same as the final tag in §4, just with an RC suffix.
+- [ ] **Let the pipeline run and confirm it went green.** It performs exactly the steps listed in §4:
+      fail-closed official build, signed manifest, draft Release, upload, re-download + re-hash +
+      signature re-verification, and then publishes the Release **as a prerelease**. A failure
       leaves a hidden draft, same as for a final release.
 - [ ] **Confirm the RC page shows the "Pre-release" badge** and carries `update-manifest.json` +
       `update-manifest.json.sig` + `toolchain-manifest.json` next to the ZIP + MSI.
 - [ ] **Run §5, §6 and §7 against this RC build.** Set the test install's update channel to
-      **Preview** (Settings → Updates card → "Update channel" dropdown) before the updater checks —
+      **Preview** (Settings → Updates card → "Update channel" dropdown) before the updater checks:
       a Stable-channel client will not see a prerelease at all.
 - [ ] **In-app RC→RC update offer.** Natural RC → RC discovery requires the **running** build to
-      embed its full RC version — that is true from `v0.9.0-rc4` on (see the RC2/RC3 defect note
-      below; rc2/rc3 misidentify as `0.9.0` and can never be offered a later `0.9.0`-family tag).
-      Use the **newest already-published RC** (rc4 or later) as the baseline; today that is
+      embed its full RC version, that is true from `v0.9.0-rc4` on (see the RC2/RC3 defect note
+      below. Rc2/rc3 misidentify as `0.9.0` and can never be offered a later `0.9.0`-family tag).
+      Use the **newest already-published RC** (rc4 or later) as the baseline. Today that is
       `v0.9.0-rc10`. Where no newer build exists yet to be offered, prove the full
       app→updater→install→relaunch path against the published artifacts of the RC under test with
       the **verification reinstall mode** (`--verify-update-reinstall`, §7a) instead, and leave the
       natural-discovery line open until the next candidate or the final tag publishes.
 - [ ] **If anything fails:** fix it, and cut the next candidate (`rc_N+1`) from the new commit.
-      A published RC is never re-used or overwritten; the pipeline refuses to re-upload into an
+      A published RC is never re-used or overwritten. The pipeline refuses to re-upload into an
       already-published Release.
-- [ ] **Qualify the RC, then promote it.** A final tag is not an approval — the qualification record
+- [ ] **Qualify the RC, then promote it.** A final tag is not an approval. The qualification record
       is, and the pipeline reads it rather than trusting the tag (§3a below). Work these three steps
       in order and continue with §4.
 
 > The RC prerelease stays on the releases page as a normal, visible prerelease. As of the
 > SemVer prerelease-ordering fix (first shipped in `v0.9.0-rc2`), a running RC correctly detects a
 > later RC or the eventual final release of the same `X.Y.Z` as a newer, available update (`rc1 <
-> rc2 < ... < the final X.Y.Z`) — **but only if the running build itself already contains this fix**.
+> rc2 < ... < the final X.Y.Z`), **but only if the running build itself already contains this fix**.
 > `v0.9.0-rc1` predates it and still compares every `0.9.0`-family tag as equal, so a machine left on
-> rc1 will not be offered rc2/rc3/the final release in-app; install by hand there (or delete the rc1
+> rc1 will not be offered rc2/rc3/the final release in-app. Install by hand there (or delete the rc1
 > prerelease once a newer one is out).
 >
 > **Known RC2/RC3 version-identity defect (fixed in rc4).** Natural RC2 → RC3 discovery failed
@@ -96,27 +83,24 @@ a binary whose `ProductVersion` does not match the tag).
 > download, signature verification, package hash verification, portable swap, relaunch and cleanup
 > all completed successfully. That controlled test does **not** count as a natural discovery test.
 > RC2 and RC3 installs will never be offered rc4 or the final in-app (they believe they already run
-> `0.9.0`); install rc4 by hand there. From rc4 on, the full release version is embedded
+> `0.9.0`). Install rc4 by hand there. From rc4 on, the full release version is embedded
 > (`EXOSNAP_RELEASE_VERSION`, ADR 0054) and RC → RC discovery works naturally.
 >
 > **§5's live checks need the *previous shipped version* to already contain the in-app swap-updater
-> client** (the code that does the actual download/verify/staged-rename — not just the version
+> client** (the code that does the actual download/verify/staged-rename, not just the version
 > *check*). `v0.8.1` does not: the swap updater (`26f7760`) landed six days after the `v0.8.1` tag,
 > so its "Update to X" button unconditionally opens a browser tab and can never exercise §5's UAC/
 > network-fail/close-refusal/temp-cleanup mechanics, no matter which RC it's pointed at. Before
 > relying on "the previous shipped version" for §5, confirm it actually ships `exosnap-updater.exe`
-> (portable ZIP) — if not, cut two RCs from the current cycle instead (rc_N as the swap-capable
+> (portable ZIP), if not, cut two RCs from the current cycle instead (rc_N as the swap-capable
 > baseline, rc_N+1 as the target) to get a real swap test.
 
 ## 3a. Qualify the candidate and promote it
 
-A final tag used to be the approval: a human pushed `vX.Y.Z`, the build and packaging gates were
-green, and the release published. Nothing in the pipeline could tell whether §5–§7 had ever been
-run. `v0.9.0` shipped that way. The approval is now a machine-readable **qualification record**, and
-the workflow refuses to publish without one.
+A final tag used to be the approval: a human pushed `vX.Y.Z`, the build and packaging gates were green, and the release published. Nothing in the pipeline could tell whether §5 to §7 had ever been run. `v0.9.0` shipped that way. The approval is now a machine-readable **qualification record**, and the workflow refuses to publish without one.
 
 - [ ] **Bind the campaign to the published RC.** The campaign must run against the artifacts the
-      release page serves, and it must know which commit they came from — a published portable ZIP
+      release page serves, and it must know which commit they came from. A published portable ZIP
       ships no build manifest, so the commit has to be named:
 
       ```powershell
@@ -133,9 +117,9 @@ the workflow refuses to publish without one.
 - [ ] **Ask for the verdict**: `pwsh scripts/release-verify.ps1 qualify`. It prints either
       `QUALIFIED FOR PROMOTION` with the commit and the RC tag, or every blocking reason. A release
       qualifies only when there is no `FAIL`, no `INFRA_ERROR`, no required gate left unanswered
-      (`UNAVAILABLE`, `DEFERRED`, `PENDING`, `STALE`, …), no environment left unrestored, and no
+      (`UNAVAILABLE`, `DEFERRED`, `PENDING`, `STALE`, ...), no environment left unrestored, and no
       cited evidence file missing. **Required** is every scenario that is not opt-in, plus the
-      opt-in scenarios named for this release with `-Required <ids>` (the soak, the unplug gates —
+      opt-in scenarios named for this release with `-Required <ids>` (the soak, the unplug gates:
       name the ones this release must have answered).
 - [ ] **Attach the record to the RC release**: `pwsh scripts/release-verify.ps1 qualify -RunId <id>
       -Publish`. This signs `release-verification.json` with the release ed25519 key and uploads
@@ -143,7 +127,7 @@ the workflow refuses to publish without one.
       reads them from. **A developer's act, never an agent's** (AGENTS.md, "Release authority").
   - The key is the same one that signs the update manifest. Put the base64 seed in
     `EXOSNAP_UPDATE_SIGNING_KEY` (the value of the repository secret of that name) before running
-    `qualify`; with `EXOSNAP_UPDATE_PUBLIC_KEY_HEX` set as well, signing refuses a key that is not
+    `qualify`. With `EXOSNAP_UPDATE_PUBLIC_KEY_HEX` set as well, signing refuses a key that is not
     the private half of it, which is cheaper than finding out at the tag. Without a key `qualify`
     prints the verdict and says the record is unsigned, and `-Publish` refuses outright: every
     field in a record is publicly readable from the RC release and can therefore be retyped by
@@ -157,18 +141,18 @@ the workflow refuses to publish without one.
 > `release-verification.json`, that record's `.sig`, its `.sha256` sidecars, and its
 > `artifact-manifest.json` and `toolchain-manifest.json`.
 > `scripts/check-release-qualification.ps1` then verifies **the signature first, before it parses a
-> single field**. Four outcomes, four messages, because the fix differs for each: no record at all;
-> a record that is not signed; a signature that does not verify (the record, the key or the
-> signature does not belong to the others -- including a record edited after it was signed); and a
+> single field**. Four outcomes, four messages, because the fix differs for each: no record at all.
+> A record that is not signed. A signature that does not verify (the record, the key or the
+> signature does not belong to the others: including a record edited after it was signed). And a
 > signed record that does not qualify. A missing `EXOSNAP_UPDATE_PUBLIC_KEY_HEX` is its own refusal:
 > nothing can be verified, so nothing is published.
 >
-> Past the signature, publishing stops when: the record cannot be parsed; its schema is unknown; its
-> `sourceCommit` is not the tagged commit; its RC tag is not the one it was downloaded from; its
-> package SHA-256s do not match the sidecars the RC published; the harness, catalog or promotion
-> identity is missing; or the verdicts contain a `FAIL`, an `INFRA_ERROR`, an unanswered required
+> Past the signature, publishing stops when: the record cannot be parsed. Its schema is unknown. Its
+> `sourceCommit` is not the tagged commit. Its RC tag is not the one it was downloaded from. Its
+> package SHA-256s do not match the sidecars the RC published. The harness, catalog or promotion
+> identity is missing. Or the verdicts contain a `FAIL`, an `INFRA_ERROR`, an unanswered required
 > gate, an unrestored environment or absent evidence. The record's own `QUALIFIED` claim is
-> re-derived, never believed. Building still proceeds -- only publishing is blocked, with the reason
+> re-derived, never believed. Building still proceeds: only publishing is blocked, with the reason
 > in the job summary. RC tags keep the path they always had: an RC is the artifact a campaign runs
 > *against* and cannot require its own record.
 
@@ -190,7 +174,7 @@ the workflow refuses to publish without one.
 > CMake, generator and preset, Qt, WiX and vendored FFmpeg. The three executables are not exempt,
 > only compared differently: the manifest carries a hash per PE section for every executable, and
 > a named executable may differ only in `.rdata` (the fixed-width identity fields and the link's
-> debug record) and `.rsrc` (VERSIONINFO) -- `.text`, `.data`, `.pdata` and `.reloc` must be
+> debug record) and `.rsrc` (VERSIONINFO): `.text`, `.data`, `.pdata` and `.reloc` must be
 > byte-identical, which is what makes "the same code, re-labelled" a checked statement rather than
 > an inference from the commit. A candidate cut before the workflow attached that inventory, or
 > whose manifest carries no section hashes, cannot be promoted from at all: cut a new one.
@@ -198,14 +182,14 @@ the workflow refuses to publish without one.
 > **Not covered.** Those three binaries are compared to nothing, because they cannot be. Their
 > correctness rests on the identical commit and the identical toolchain, both checked. A regression
 > the release build introduces into one of them while changing nothing else stays out of reach, and
-> so does the MSI's internal structure -- only the portable install tree is inventoried, and the MSI
+> so does the MSI's internal structure: only the portable install tree is inventoried, and the MSI
 > is covered transitively by the build job's own assertion that its contents equal the staging tree.
 > Closing both needs a true promotion: the RC carrying the final version string from the start, with
 > its candidate-ness living only in the release metadata, so the final tag can ship the qualified
 > bytes unchanged. That is a change to the update client's version ordering as much as to the
 > pipeline, and it is the follow-up this section is written against.
 
-> **`v0.9.0`.** It stays exactly as published — no delete, no retag, no different bytes under the
+> **`v0.9.0`.** It stays exactly as published, no delete, no retag, no different bytes under the
 > same version. It was tagged before this process existed and before its own checklist had been
 > worked through, so it is not a qualified release and must not be treated as one. Package-manager
 > submissions for it are **stopped**: §8 is not to be worked for `v0.9.0`. The next release is
@@ -214,40 +198,38 @@ the workflow refuses to publish without one.
 
 ## 4. Publish the GitHub release
 
-For an **official** version tag (`vX.Y.Z` with the `EXOSNAP_UPDATE_PUBLIC_KEY_HEX` repository
-variable and the `EXOSNAP_UPDATE_SIGNING_KEY` secret provisioned), `release-candidate.yml` now owns
-this deterministically — there is no manual asset upload and no `sign-manifest.yml` re-run dance:
+For an **official** version tag (`vX.Y.Z` with the `EXOSNAP_UPDATE_PUBLIC_KEY_HEX` repository variable and the `EXOSNAP_UPDATE_SIGNING_KEY` secret provisioned), `release-candidate.yml` now owns this deterministically. There is no manual asset upload and no `sign-manifest.yml` re-run dance:
 
 - [ ] **Push the `vX.Y.Z` tag** (this is the *only* manual step, and it triggers everything below),
       from the exact commit named by the qualification record attached in §3a. Do **not** hand-create
-      the GitHub Release first — the workflow creates it. The build job hard-fails if the update key
+      the GitHub Release first. The workflow creates it. The build job hard-fails if the update key
       is missing on a `v*` tag, so a version tag can never produce an unofficial artifact, and
       `require-qualification` refuses to publish a commit no qualified RC record covers.
 - [ ] **Let the pipeline run and confirm it went green.** On the tag push the workflow, in order:
   0. refuses in seconds if the Chocolatey, WinGet or Scoop packaging names a version other than the
-     one the tag and `CMakeLists.txt` declare (`scripts/check-packaging-version.ps1`);
+     one the tag and `CMakeLists.txt` declare (`scripts/check-packaging-version.ps1`).
   1. builds + validates the portable ZIP, MSI, and their `.sha256` sidecars (packaging gate);
   2. generates `update-manifest.json`, signs it (detached ed25519 `.sig`), and **verifies in CI**
      that the signing key is the private half of the embedded public key and that the signature
-     verifies;
+     verifies.
   3. compares this build's install tree and toolchain against the qualified candidate's
-     (`scripts/check-release-promotion.ps1`), then creates a **draft** GitHub Release for the tag;
+     (`scripts/check-release-promotion.ps1`), then creates a **draft** GitHub Release for the tag.
   4. uploads the ZIP, MSI, `.sha256` sidecars, `update-manifest.json`, `update-manifest.json.sig`,
      `toolchain-manifest.json` (the exact runner image, MSVC, CMake, Qt, WiX and pinned FFmpeg
      prebuilt that produced the build) and `artifact-manifest.json` (the per-file inventory of the
      portable install tree). Neither of the last two is signed, and they are not part of the
-     manifest-signature gate -- but they are no longer merely informational: the next release's
-     promotion comparison reads both off this release;
+     manifest-signature gate. But they are no longer merely informational: the next release's
+     promotion comparison reads both off this release.
   5. re-downloads the ZIP, MSI and manifest and re-hashes them, cross-checks the manifest's embedded
      SHA-256s against the shipped bytes, and re-verifies the signature against the embedded public key
      (`toolchain-manifest.json` is uploaded alongside but is informational only and is not part of this
-     re-hash/signature check);
+     re-hash/signature check).
   6. only then **un-drafts (publishes)** the Release.
       If any step fails the Release stays a hidden draft, so it is never visible to users or the
       in-app updater in a half-published state.
 - [ ] **Spot-check the published release page**: both `update-manifest.json` AND
       `update-manifest.json.sig` are present alongside the ZIP + MSI. The detached `.sig` holds the
-      ed25519 signature over the exact bytes of `update-manifest.json`; the in-app update checker
+      ed25519 signature over the exact bytes of `update-manifest.json`. The in-app update checker
       only surfaces a release that carries **both** assets (signature verified against the embedded
       public key before any manifest field is read), so a release missing either is **invisible to
       in-app updates forever**. **MANDATORY for every release from 0.9.0 on.**
@@ -257,44 +239,36 @@ this deterministically — there is no manual asset upload and no `sign-manifest
 > `workflow_dispatch` that signs a manifest from supplied URLs and SHAs. `attach_to_release` now
 > defaults to **false**: the manifest is signed and published as a build artifact, and attaching it
 > to a Release is a separate decision. The update manifest is what installed clients follow, so
-> attaching one to a live release changes what shipping users download next -- and it used to run
+> attaching one to a live release changes what shipping users download next. It used to run
 > with no CI gate, no qualification gate and no check that its hashes described the bytes that
 > release serves.
 >
 > With `attach_to_release` on, the job now refuses unless either the target Release is still a
 > **draft** (invisible to the updater, and `publish-release` re-verifies everything before
-> un-drafting), or the target Release's commit is covered by a signed, qualified record -- the same
+> un-drafting), or the target Release's commit is covered by a signed, qualified record: the same
 > bar a final tag is held to. In both cases the manifest's declared SHA-256s are re-hashed against
 > the assets that Release actually serves. A published **RC** has no record of its own by
 > definition, so re-signing one by hand is refused: cut the next candidate instead.
 
 ## 5. Updater RC live-check (manual, on real hardware)
 
-CI runs on GPU-less runners and cannot exercise a real swap. Run these against the RC prerelease from
-§3, by hand, from the previous shipped version to the RC build — but the last shipped version (0.8.1)
-predates the swap updater (see the §3 note), so the baseline is the **newest already-published RC**
-instead.
+CI runs on GPU-less runners and cannot exercise a real swap. Run these against the RC prerelease from §3, by hand, from the previous shipped version to the RC build, but the last shipped version (0.8.1) predates the swap updater (see the §3 note), so the baseline is the **newest already-published RC** instead.
 
-**Which baseline is valid.** The baseline must embed its own full RC version, which is true from
-`v0.9.0-rc4` on (ADR 0054). rc1–rc3 embed the bare `0.9.0` and can never be offered a later
-`0.9.0`-family build, so they cannot serve as the baseline for any check below that begins with an
-update offer — the offer never appears. At the time of writing the newest published RC is
-`v0.9.0-rc10`; substitute whatever the newest published RC actually is when running this. The test
-install must be on the **Preview** update channel to see the RC at all:
+**Which baseline is valid.** The baseline must embed its own full RC version, which is true from `v0.9.0-rc4` on (ADR 0054). rc1-rc3 embed the bare `0.9.0` and can never be offered a later `0.9.0`-family build, so they cannot serve as the baseline for any check below that begins with an update offer, the offer never appears. At the time of writing the newest published RC is `v0.9.0-rc10`. Substitute whatever the newest published RC actually is when running this. The test install must be on the **Preview** update channel to see the RC at all:
 
 - [ ] **Portable happy-path swap (newest published RC → the RC under test).** From a user-writable
       portable install of the baseline RC on the Preview channel, confirm the new RC is offered, then
-      click Update; the dedicated updater downloads, verifies signature + hash, closes the app, does
+      click Update. The dedicated updater downloads, verifies signature + hash, closes the app, does
       the staged-rename swap, verifies, and relaunches on the RC. No UAC. Backup is discarded on the
       healthy start. (`v0.8.1` does not ship the swap updater, so an 0.8.1 → RC run proves nothing
-      about the swap path — a manual install-over comparison from 0.8.1 may still be done separately,
+      about the swap path, a manual install-over comparison from 0.8.1 may still be done separately,
       but it is not this check.)
       - If this RC is the first candidate of the cycle and no newer build exists to be offered, the
-        mechanics — download, signature, hash, staged swap, relaunch, cleanup — are proven with the
+        mechanics, download, signature, hash, staged swap, relaunch, cleanup, are proven with the
         **verification reinstall mode** (`--verify-update-reinstall`, §7a) instead, and this line
         stays open until a second RC or the final tag makes a natural offer possible.
 - [ ] **MSI happy-path via UAC (newest published RC → the RC under test).** From the baseline RC's
-      MSI-installed build on Preview, click Update; accept the **single** UAC prompt; `msiexec /qn`
+      MSI-installed build on Preview, click Update. Accept the **single** UAC prompt. `msiexec /qn`
       applies the upgrade and the app relaunches on the new RC.
 - [ ] **UAC-decline (case C1).** MSI path, decline the UAC prompt: the current version stays intact
       and the failure card is amber/retryable, naming the current version as safe to run.
@@ -306,27 +280,22 @@ install must be on the **Preview** update channel to see the RC at all:
       the in-place staged rename cannot be torn apart mid-swap. The disabled close button alone was
       insufficient before 0.9.0 (a raw `WM_CLOSE` still quit the app).
 - [ ] **Temp-download cleanup after a successful update.** After a healthy update completes, confirm
-      `%TEMP%\ExoSnapUpdate\<version>\` is gone — the downloaded manifest, `.sig`, and ZIP/MSI are
+      `%TEMP%\ExoSnapUpdate\<version>\` is gone, the downloaded manifest, `.sig`, and ZIP/MSI are
       removed on the success path (they used to accumulate one full copy per version).
 
 ## 6. Privacy review (every release)
 
-ExoSnap promises a telemetry-free product; this is the repeatable step that keeps that promise
-provable rather than assumed. Full detail and rationale: `docs/privacy-review.md` (inventory +
-checklist) and ADR 0045. The **[CI]** items below are already enforced on every PR (`lint` job) —
-this step is a reminder they must be green for the commit being released, not a re-run. The
-**[Live]** items are not automatable (no GPU/Official-build/Sentry DSN on CI runners) and must be
-walked by hand.
+ExoSnap promises a telemetry-free product. This is the repeatable step that keeps that promise provable rather than assumed. Full detail and rationale: `docs/privacy-review.md` (inventory + checklist) and ADR 0045. The **[CI]** items below are already enforced on every PR (`lint` job), this step is a reminder they must be green for the commit being released, not a re-run. The **[Live]** items are not automatable (no GPU/Official-build/Sentry DSN on CI runners) and must be walked by hand.
 
-- [ ] **[CI]** `scripts/validate-privacy-allowlist.ps1` green — the crash-report tag allowlist
+- [ ] **[CI]** `scripts/validate-privacy-allowlist.ps1` green, the crash-report tag allowlist
       matches `PRIVACY.md` and `docs/product-spec.md` §14.
-- [ ] **[CI]** `scripts/validate-network-egress.ps1` green — no network call site outside the
+- [ ] **[CI]** `scripts/validate-network-egress.ps1` green, no network call site outside the
       known GitHub/Sentry allowlist.
 - [ ] **[CI]** Crash-scrubber tests green (Golden-Set + `IsAllowedTagKey`/`ScrubString`) and, if
       this release touches the crash-capture strand, the sentry-linked suite in
       `crash-capture-build.yml` (push-to-main / `crash-capture` label / dispatch).
 - [ ] **[Live]** **Sentry reality check.** On a real Official build, give consent and trigger a
-      test event; in the Sentry EU UI confirm no hostname/path/username and exactly the
+      test event. In the Sentry EU UI confirm no hostname/path/username and exactly the
       allowlisted tags + stack arrived. Couple this to any release that touches the crash-capture
       or Official-build path.
 - [ ] **[Live]** **Minidump module-path check.** Provoke a real hard crash with consent active;
@@ -334,36 +303,35 @@ walked by hand.
       path (relevant for portable/non-standard installs). This is the only real check of the
       minidump binary channel (a test event does not produce one).
 - [ ] **[Live]** **Update-check network trace.** A proxy capture of a real update check shows only
-      the expected `GET api.github.com/.../releases` — no user data in the query.
+      the expected `GET api.github.com/.../releases`, no user data in the query.
 - [ ] **[Manual/Doc]** `PRIVACY.md`'s `Effective date` and `docs/product-spec.md` §14 have been
-      walked against `docs/privacy-review.md`'s inventory for this release; bump `Effective date`
+      walked against `docs/privacy-review.md`'s inventory for this release. Bump `Effective date`
       if any field or recipient changed.
 
-## 7. 0.9 release gate — manual live verifications
+## 7. 0.9 release gate: manual live verifications
 
-0.9 is **not** tagged or released until these manual checks pass, on real hardware, against the RC
-prerelease from §3, in addition to the automated gates and the updater RC live-check above.
+0.9 is **not** tagged or released until these manual checks pass, on real hardware, against the RC prerelease from §3, in addition to the automated gates and the updater RC live-check above.
 
 > **Since Wave D most of this section is driven by a runner rather than performed by hand.**
 > `pwsh scripts/release-verify.ps1` (see `docs/dev/release-verify.md`) prepares the environment,
 > drives ExoSnap through its own semantic automation, validates the output with ffprobe, and asks
 > for a person only at a real physical, secure or visual boundary. Items below carry a
-> `→ REL-…` reference to the scenario that covers them; run the scenario rather than repeating the
+> `→ REL-…` reference to the scenario that covers them. Run the scenario rather than repeating the
 > steps by hand. Where the runner still needs a human it says so, prints exactly what to do, and
-> then verifies the consequence itself — an operator answering "done" is never recorded as a pass.
+> then verifies the consequence itself, an operator answering "done" is never recorded as a pass.
 >
 > The long-term intent for this section is that only genuinely irreducible gates remain: UAC,
 > physical unplug/replug, desktop composition a person has to look at, and hardware this machine
 > does not have.
 
 - [ ] **Window-capture recording with the `APP` audio row.** Record a specific application window
-      with the `APP` row enabled; play the result back and confirm per-app audio is present and
+      with the `APP` row enabled. Play the result back and confirm per-app audio is present and
       audibly correct.
-- [ ] **System-audio recording on a real 44.1 kHz output device.** — `→ REL-AUD-FORMAT-001`
+- [ ] **System-audio recording on a real 44.1 kHz output device.** `→ REL-AUD-FORMAT-001`
       (the runner verifies the endpoint really reads 44100 before it records, and ffprobes the result) Set a physical playback device to
       44.1 kHz, record with `SYS` enabled, and confirm audio is present in the output file.
-- [ ] **Updater round-trip on the RC build.** — `→ REL-UPD-PORTABLE-001` (portable) and
-      `→ REL-UPD-MSI-001` / `REL-UPD-MSI-DECLINE-001` (MSI; UAC stays yours) With the signed manifest and its detached `.sig`
+- [ ] **Updater round-trip on the RC build.** `→ REL-UPD-PORTABLE-001` (portable) and
+      `→ REL-UPD-MSI-001` / `REL-UPD-MSI-DECLINE-001` (MSI. UAC stays yours) With the signed manifest and its detached `.sig`
       published alongside the RC release, confirm the in-app update check finds the release,
       verifies it, and installs it end to end.
 - [ ] **Edit overlay walkthrough.** Open a completed recording in the Edit overlay and click through
@@ -376,30 +344,30 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
       picture through a play/pause/scrub cycle, for a clip that has an audio track. Also open a
       clip recorded with the Expert 4:4:4 chroma option and confirm it now plays decoded video too
       (it used to show a "Preview unavailable" placeholder). 4:4:4 has no hardware decoder on any
-      vendor, so this clip is the software path's worst case — watch specifically for audio holes
+      vendor, so this clip is the software path's worst case, watch specifically for audio holes
       or stutter, not just for a picture appearing.
       Not automatable (real audio-clock pacing and a real decoder, no mock seam).
-- [ ] **Audio-endpoint loss mid-recording degrades to silence and keeps recording (ADR 0046).** —
-      `→ REL-AUD-DEGRADE-001` (you unplug; the runner asserts the degradation, the continued
-      recording and the recovery) and `→ REL-AUD-SILENCE-001` (silence is not degradation)
+- [ ] **Audio-endpoint loss mid-recording degrades to silence and keeps recording (ADR 0046).**
+      `→ REL-AUD-DEGRADE-001` (you unplug, and the runner asserts the degradation, the continued
+      recording and the recovery) and `→ REL-AUD-SILENCE-001` (silence is not degradation).
       During a `SYS`-row recording, remove or switch the playback endpoint device: the recording
       does **not** stop. The affected source falls to honest silence, the engine reactivates the
       same source identity every 500 ms, and a standing notification plus Diagnostics/post-flight
       report surface the degraded state until the source returns (or the recording ends). Other
-      sources keep recording normally; in a merged track only the dead source's contribution goes
-      silent. Confirm this end-to-end on real hardware — unit/integration tests already cover the
+      sources keep recording normally. In a merged track only the dead source's contribution goes
+      silent. Confirm this end-to-end on real hardware: unit/integration tests already cover the
       logic with fake sources, but the real endpoint-unplug path has no test-harness device seam.
-- [ ] **Present-mode diagnostics are per-recording, not per-session.** — `→ REL-PRESENT-001`
-      (unelevated posture) and `→ REL-PRESENT-002` (elevated, real presents; needs your UAC) After some normal desktop use
+- [ ] **Present-mode diagnostics are per-recording, not per-session.** `→ REL-PRESENT-001`
+      (unelevated posture) and `→ REL-PRESENT-002` (elevated, real presents. Needs your UAC) After some normal desktop use
       (window switches, notifications), record one demonstrably stable window, stop, then record a
       second stable window. Neither recording may surface a false "captured source keeps changing
-      present mode" notice — the warning must reflect only the current recording, not accumulated
+      present mode" notice, the warning must reflect only the current recording, not accumulated
       session history.
 - [ ] **Trim keeps the keyframe at or before the cut.** In the Edit overlay, drag the start handle
-      into the middle of a multi-GOP clip and Save; the exported file starts cleanly (no black or
+      into the middle of a multi-GOP clip and Save. The exported file starts cleanly (no black or
       frozen lead-in, no overshoot past the end), with duration matching the trimmed range.
 - [ ] **APP audio row arming across targets (settings rework).** On a display target, enable the
-      receded `APP` row in Settings; switch the capture target to a specific window and record —
+      receded `APP` row in Settings. Switch the capture target to a specific window and record:
       per-app audio is present in the file. Switch back to a display target: the row stays
       configured (rendered receded), and a new recording carries no app track.
 - [ ] **Quality scale reads truthfully.** The Default ladder shows tier names only, with no CQ
@@ -409,8 +377,8 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
 - [ ] **Five-tier quality + free frame rate record/playback.** Record one clip at the `Ultra` tier
       and one with an Expert free frame rate (e.g. 73 fps): both play back correctly and the
       container reports the chosen rate. Leaving Expert keeps the truth visible: the frame-rate
-      combo grows a dynamic `73 fps (Custom)` entry showing the actually configured value — it never
-      snaps to (or claims) a standard value like 60 fps while a custom rate is stored — and the
+      combo grows a dynamic `73 fps (Custom)` entry showing the actually configured value, it never
+      snaps to (or claims) a standard value like 60 fps while a custom rate is stored, and the
       "Current format" footer shows the same stored rate.
 - [ ] **Reworked Settings page visual walkthrough.** One pass in both modes: rebalanced columns
       (left Container/Quality/Webcam/Notifications/Hotkeys, right Output/Audio/Updates/Appearance/
@@ -419,14 +387,11 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
 
 ### RC3 regression live checks
 
-Named after the cycle the defects were **fixed** in, not the build under test: these run against
-every subsequent candidate. Targeted regressions for defects fixed in the rc3 cycle (drop truthfulness, WGC frame copies,
-webcam fps negotiation, audio-timing, VFR epoch clamping). Run against the RC build on real
-hardware:
+Named after the cycle the defects were **fixed** in, not the build under test: these run against every subsequent candidate. Targeted regressions for defects fixed in the rc3 cycle (drop truthfulness, WGC frame copies, webcam fps negotiation, audio-timing, VFR epoch clamping). Run against the RC build on real hardware:
 
 - [ ] **A. Solo-SYS silence + late audio start.** Monitor capture, only `SYS` enabled (`MIC`/`APP`
-      off). Start recording, play **no** system audio for 10–15 s, then start a video/test tone with
-      a visible cue; keep recording a while, stop. In the file: the initial silent stretch is
+      off). Start recording, play **no** system audio for 10-15 s, then start a video/test tone with
+      a visible cue. Keep recording a while, stop. In the file: the initial silent stretch is
       preserved as real silence, the late audio is **not** pulled forward by the silent span, A/V
       sync is correct from the first audible sound on, and there is no doubled silence-fill stretch.
       Repeat once with a pause/resume inside the run.
@@ -438,7 +403,7 @@ hardware:
       partial file survives per the existing recovery policy.
 - [ ] **C. Webcam fps truth.** Pick a webcam mode with a clearly different frame rate than the
       default (e.g. 1080p60 instead of 1080p30) and record. The UI-selected mode is actually
-      handed to Media Foundation — the engine no longer hard-codes 30 fps — and the displayed vs.
+      handed to Media Foundation, the engine no longer hard-codes 30 fps, and the displayed vs.
       actually negotiated rate do not contradict each other (if the camera lacks the exact mode,
       note the nearest native mode chosen). No redundant re-uploads of the same webcam sample at a
       higher CFR output rate.
@@ -455,26 +420,23 @@ hardware:
       pre-recording present timestamp), the first video PTS is at/near 0, the timeline is never
       negative, and audio and video stay aligned.
 - [ ] **F. Processing-failure drop surfaces agree.** A real GPU processing failure is hard to
-      provoke on healthy hardware — unit/integration tests remain the primary gate for the failure
+      provoke on healthy hardware, unit/integration tests remain the primary gate for the failure
       path itself. In the normal RC3 run, verify instead that **all surfaces show the same drop
       numbers** (live drop indicator, Diagnostics, Pipeline Health, Post-Flight Report Card,
       Edit/Review, toast, session report, soak metrics), and that a healthy recording shows
       `processing_failure == 0`, `backpressure == 0`, no real-drop toast, and no warning caused by
-      benign pacing. Use an existing fault-injection path if one is available; do not build new
+      benign pacing. Use an existing fault-injection path if one is available. Do not build new
       debug infrastructure for this right before RC3.
 - [x] **G. Historical rc2 → rc3 updater mechanics.** Natural discovery is a known failed/waived
       gate because rc2 embeds `0.9.0` and therefore cannot consider `0.9.0-rc3` newer. The released
       updater mechanics were exercised separately with the controlled lower `--current-version`
       injection documented in §3 (portable + MSI, UAC decline, network failure, close refusal and
-      cleanup). That proves the mechanics only; it does **not** count as natural discovery. RC4's
+      cleanup). That proves the mechanics only. It does **not** count as natural discovery. RC4's
       current acceptance gate is §7a below.
 
-### §7a — RC acceptance live checks (version identity + verification reinstall)
+### §7a: RC acceptance live checks (version identity + verification reinstall)
 
-The full embedded release version and the verification-reinstall mode landed in rc4
-(ADR 0054/0055); every candidate from rc4 on is checked this way. `<rc>` below is the RC under test
-(`0.9.0-rc10` at the time of writing). Run these against the **published** artifacts of that RC, not
-against a local build:
+The full embedded release version and the verification-reinstall mode landed in rc4 (ADR 0054/0055). Every candidate from rc4 on is checked this way. `<rc>` below is the RC under test (`0.9.0-rc10` at the time of writing). Run these against the **published** artifacts of that RC, not against a local build:
 
 **Identity**
 
@@ -485,20 +447,20 @@ against a local build:
       pastes the full commit SHA, build ID, install mode, channel and the executable SHA-256
       matching the published artifact hash.
 
-**Natural discovery** (rc1–rc3 installs cannot prove this — they misidentify as `0.9.0`, see §3)
+**Natural discovery** (rc1-rc3 installs cannot prove this, they misidentify as `0.9.0`, see §3)
 
 - [ ] A Preview-channel `<rc>` install is **not** offered `<rc>` again in normal mode
       (`✓ Up to date`).
 - [ ] After the next candidate or the final `v0.9.0` publishes: the `<rc>` install **naturally**
-      shows `Update available — <ver>` and `Update to <ver>` launches the updater; complete it end
+      shows `Update available — <ver>` and `Update to <ver>` launches the updater. Complete it end
       to end once for portable and once for MSI. A Stable-channel install never sees an rc.
 
 **Portable (verification reinstall, `--verify-update-reinstall`)**
 
 - [ ] Start `<rc>` portable with the flag: card shows `Verification reinstall available — <rc>` +
-      `Reinstall <rc>`; app log and support bundle record the active mode.
-- [ ] Full path runs: close → swap → verify → relaunch → cleanup; installed EXE hash equals the
-      published `<rc>` hash; backup and temp directory removed afterwards.
+      `Reinstall <rc>`. App log and support bundle record the active mode.
+- [ ] Full path runs: close → swap → verify → relaunch → cleanup. Installed EXE hash equals the
+      published `<rc>` hash. Backup and temp directory removed afterwards.
 - [ ] Interrupt the download once (kill network): old install intact, Retry works.
 - [ ] Updater refuses to close during the swap-critical steps.
 - [ ] Without the flag, the same `<rc>` is **not** offered (up to date); the flag does not survive a
@@ -506,27 +468,25 @@ against a local build:
 
 **MSI (verification reinstall)**
 
-- [ ] Same-version reinstall over MSI: UAC decline leaves a retryable amber state; retry installs;
-      `<rc>` relaunches; installed EXE matches the published hash.
+- [ ] Same-version reinstall over MSI: UAC decline leaves a retryable amber state. Retry installs.
+      `<rc>` relaunches. Installed EXE matches the published hash.
 
 **Guards**
 
 - [ ] With a recording (or finalization) active, both the manual check and the Reinstall/Update
-      action are blocked with the honest message; Scoop-managed installs still show the Scoop card
+      action are blocked with the honest message. Scoop-managed installs still show the Scoop card
       and never launch the swap updater (also in verify mode).
 - [ ] Clicking `Check for updates` with the card scrolled into view does not move the scroll
       position (regression check for the focus-steal fix).
 
 ### Long-duration soak (clock slaving)
 
-Tooling and detailed reference: `docs/dev/soak-and-recovery-drills.md` §§1–2 (`exosnap-soak`,
-`av-sync-check.py`). This checklist adopts one of that runbook's advisory numbers as an explicit
-0.9 gate — see the note in that doc.
+Tooling and detailed reference: `docs/dev/soak-and-recovery-drills.md` §§1-2 (`exosnap-soak`, `av-sync-check.py`). This checklist adopts one of that runbook's advisory numbers as an explicit 0.9 gate, see the note in that doc.
 
-- [ ] **2–3 h soak recording, default profile (MKV + AV1 + Opus, CFR 60), monitor capture, `SYS` +
+- [ ] **2-3 h soak recording, default profile (MKV + AV1 + Opus, CFR 60), monitor capture, `SYS` +
       `MIC` enabled as separate tracks, clock slaving at its default (on).** Continuous real system
-      audio for the whole run (e.g. a music/video playlist). Machine must not sleep; displays stay
-      on; display settings unchanged during the run.
+      audio for the whole run (e.g. a music/video playlist). Machine must not sleep. Displays stay
+      on. Display settings unchanged during the run.
 - [ ] **A/V sync markers at start, middle and end.** Start one process for the planned wall-clock
       recording duration:
       `exosnap-soak --clapper --seconds <duration> --markers 3 --start-margin-seconds 10
@@ -538,27 +498,25 @@ Tooling and detailed reference: `docs/dev/soak-and-recovery-drills.md` §§1–2
       --expected-markers 3 --marker-times-seconds <start,mid,end>`
       (exit `0` = within budget, `2` = over budget, `3` = unmeasurable). The reported absolute
       offsets carry a device-dependent emission skew (flash via display capture vs. beep via SYS
-      loopback, ~10–50 ms) that is not an ExoSnap error and is advisory only — **only start→end
-      drift is the canonical pass/fail**, budgeted at ≤ 20 ms here. Record both segment drifts too;
-      large opposing segments that cancel at the endpoint are a reliability finding, not a clean
+      loopback, ~10-50 ms) that is not an ExoSnap error and is advisory only, **only start→end
+      drift is the canonical pass/fail**, budgeted at ≤ 20 ms here. Record both segment drifts too. Large opposing segments that cancel at the endpoint are a reliability finding, not a clean
       result.
-- [ ] **Second, shorter soak (30–60 min) with a 44.1 kHz endpoint as the only audio source**
+- [ ] **Second, shorter soak (30-60 min) with a 44.1 kHz endpoint as the only audio source**
       (covers the 44.1 kHz gate and exercises the resampler drain path end-to-end).
-- [ ] **Post-checks.** Compare audio vs. video stream durations (ffprobe) on every produced track —
-      real stream durations must be plausible against the wall-clock recording time; spot-listen at
+- [ ] **Post-checks.** Compare audio vs. video stream durations (ffprobe) on every produced track:
+      real stream durations must be plausible against the wall-clock recording time. Spot-listen at
       start/middle/end plus a waveform scan for crackles/discontinuities. Confirm the session report
-      written at stop — `%LOCALAPPDATA%\ExoSnap\logs\reports\session-<recording_session_id>.json`
-      (newest of the last 10 kept) — shows sane `counters.av_drift_ms` / `counters.peak_av_drift_ms`
+      written at stop, located at `%LOCALAPPDATA%\ExoSnap\logs\reports\session-<recording_session_id>.json`
+      (newest of the last 10 kept), shows sane `counters.av_drift_ms` / `counters.peak_av_drift_ms`
       / `counters.duration_skew_ms` and `counters.mux_failures` at 0, and every entry in `segments`
       marked `finalized`.
-
       Audio outages are judged by lost time, not by their count. A machine under real load misses
       capture buffers, and the engine answers each miss with exactly as much silence, so the track
       stays aligned with video and only that much audio is missing. Requiring
       `counters.audio_discontinuities == 0` would therefore fail the product for handling load
       correctly. Assert instead that `counters.audio_discontinuity_ms_total` stays under 0.1 % of
       the recording duration and that `counters.audio_discontinuity_ms_longest` stays at or below
-      120 ms; the count remains informative, never a criterion. Additionally assert:
+      120 ms. The count remains informative, never a criterion. Additionally assert:
   - `audio.resampler_drain[*].undrained_frames == 0` (every track that drained),
   - `audio.degraded_occurred == false`,
   - `counters.frames_dropped.processing_failure == 0`,
@@ -567,17 +525,12 @@ Tooling and detailed reference: `docs/dev/soak-and-recovery-drills.md` §§1–2
 
 ## 8. Downstream package managers
 
-WinGet and Chocolatey each pin an exact version, download URL, and SHA-256 for the release inside
-tracked files; both are easy to forget because nothing fails locally if they go stale. Update them
-by hand, every release — but only for a release that was **qualified and promoted** through §3a. A
-submission is the one step that cannot be withdrawn from users' machines, so it never runs ahead of
-the qualification record. Submissions for `v0.9.0` are stopped for that reason; `0.9.1` is the
-version the package managers move to.
+WinGet and Chocolatey each pin an exact version, download URL, and SHA-256 for the release inside tracked files. Both are easy to forget because nothing fails locally if they go stale. Update them by hand, every release, but only for a release that was **qualified and promoted** through §3a. A submission is the one step that cannot be withdrawn from users' machines, so it never runs ahead of the qualification record. Submissions for `v0.9.0` are stopped for that reason. `0.9.1` is the version the package managers move to.
 
 > **The version axis is a CI gate, and the bump is one command.**
-> `pwsh scripts/bump-version.ps1 -Version <x.y.z>` moves every literal the gate checks -- the CMake
+> `pwsh scripts/bump-version.ps1 -Version <x.y.z>` moves every literal the gate checks. The CMake
 > version, the Chocolatey nuspec and install script, the Scoop manifest, and the three WinGet
-> manifests together with the directory they live in -- and resets the four values only a release
+> manifests together with the directory they live in. And resets the four values only a release
 > can produce (`checksum64`, the Scoop `hash`, `InstallerSha256`, and every `ProductCode`) to their
 > placeholders, so a bumped tree cannot be submitted by accident. It refuses a dirty tree, so the
 > bump is the whole diff, and finishes by running the gate. The per-surface notes below stay as the
@@ -591,34 +544,34 @@ version the package managers move to.
 > The full validators below still check them.
 >
 > **What each channel is serving is written down.** `packaging/publication-policy.json` states the
-> intent per channel -- publish, or held at a version with the reason and the version it resumes at
-> -- and `pwsh scripts/check-feed-drift.ps1` reports what the public feeds actually serve against
+> intent per channel. Publish, or held at a version with the reason and the version it resumes at
+>. And `pwsh scripts/check-feed-drift.ps1` reports what the public feeds actually serve against
 > it. The policy half is checked offline by `pipeline.publication_policy` (a hold that the tree has
 > overtaken, a hold with no reason, or a packaging surface the policy says nothing about all fail).
 > The feed half is advisory and never blocks: the feeds are outside this repository, and nothing
-> here submits or publishes anything -- every submission below is a step a person runs.
+> here submits or publishes anything. Every submission below is a step a person runs.
 
 - [ ] **WinGet.** `packaging/winget/manifests/c/Codexo/ExoSnap/` must contain exactly one version
-      directory (`scripts/validate-winget-manifest.ps1` enforces this) — `git mv` the existing
+      directory (`scripts/validate-winget-manifest.ps1` enforces this), `git mv` the existing
       `<old-version>/` directory to `<new-version>/` rather than adding a second one, then update:
-  - `Codexo.ExoSnap.yaml` — `PackageVersion`.
-  - `Codexo.ExoSnap.installer.yaml` — `PackageVersion`, `ReleaseDate`, `InstallerUrl` (the version
+  - `Codexo.ExoSnap.yaml`, `PackageVersion`.
+  - `Codexo.ExoSnap.installer.yaml`, `PackageVersion`, `ReleaseDate`, `InstallerUrl` (the version
     segment of the path), `InstallerSha256` (uppercase, from the published `.msi.sha256`
     sidecar), and `ProductCode` in both the top-level installer entry and
-    `AppsAndFeaturesEntries` — WiX auto-generates a **new** `ProductCode` on every MSI build (see
+    `AppsAndFeaturesEntries`, WiX auto-generates a **new** `ProductCode` on every MSI build (see
     `packaging/msi/Package.wxs`), so this must be read out of the freshly built MSI, never copied
     from the previous release. `UpgradeCode` is permanent (ADR 0034) and must **not** change.
-  - `Codexo.ExoSnap.locale.en-US.yaml` — `PackageVersion`, `ReleaseNotesUrl`, and the version
+  - `Codexo.ExoSnap.locale.en-US.yaml`, `PackageVersion`, `ReleaseNotesUrl`, and the version
     number/release-specific text inside `Description` if it names one.
   - Run `scripts/validate-winget-manifest.ps1` before submitting per `packaging/winget/README.md`.
 - [ ] **Chocolatey.** The MSI is downloaded at install time, not embedded, so the only
-      release-specific values are the URL and its hash — and the hash does not exist until the
+      release-specific values are the URL and its hash, and the hash does not exist until the
       release is published. `checksum64` therefore carries a placeholder of 64 zeros in the tree
       between a version bump and a release, and
       `scripts/validate-chocolatey-package.ps1` fails on that placeholder unconditionally, with or
-      without `-RequireManifest`. Work the steps in this order; see `packaging/chocolatey/README.md`
+      without `-RequireManifest`. Work the steps in this order. See `packaging/chocolatey/README.md`
       for the submission details.
-  - **Bump.** `packaging/chocolatey/exosnap.nuspec` — `<version>`, the `@vX.Y.Z` tag in
+  - **Bump.** `packaging/chocolatey/exosnap.nuspec`, `<version>`, the `@vX.Y.Z` tag in
     `<iconUrl>`, `<releaseNotes>`, and any version-specific line in `<description>`. Also the
     version segment of `url64bit` in `packaging/chocolatey/tools/chocolateyinstall.ps1`. Leave
     `checksum64` on the placeholder.
@@ -627,14 +580,14 @@ version the package managers move to.
   - **Fill `checksum64`** with the lowercase SHA-256 from that sidecar, the same value WinGet's
     `InstallerSha256` gets in uppercase.
   - **Validate.** `scripts/validate-chocolatey-package.ps1 -Version <x.y.z> -ManifestPath
-    .workspace/release/<x.y.z>/artifact-manifest.json -RequireManifest` — it proves the CMake
+    .workspace/release/<x.y.z>/artifact-manifest.json -RequireManifest`: it proves the CMake
     version, nuspec `<version>`/`<iconUrl>`/`<releaseNotes>`, and `chocolateyinstall.ps1`
     `url64bit` all agree, flags any other stale version reference left in
     `packaging/chocolatey/`, checks `checksum64` against the manifest's `msiSha256`, and enforces
     the mechanical subset of the Chocolatey moderation rules. **`-RequireManifest` is mandatory
-    for a real submission** — without it, a missing manifest silently skips the checksum check
-    instead of failing, which would let an unverified `checksum64` through. Static checks only —
-    it does not run `choco pack` or install/uninstall the package.
+    for a real submission**: without it, a missing manifest silently skips the checksum check
+    instead of failing, which would let an unverified `checksum64` through. Static checks only.
+    It does not run `choco pack` or install/uninstall the package.
   - **Pack.** `choco pack packaging/chocolatey/exosnap.nuspec --output-directory <scratch dir>`.
   - **Push.** `choco push <scratch dir>/exosnap.<x.y.z>.nupkg --source https://push.chocolatey.org/`,
     then watch the moderation review: the package sits in Pending until the validator and the
@@ -642,35 +595,28 @@ version the package managers move to.
     be re-pushed rather than bumped.
 - [ ] **Scoop.** `packaging/scoop/exosnap.json` carries an `autoupdate`/`checkver` block, so the
       *published* bucket entry (`Exoridus/scoop-exosnap`) refreshes its own version/URL/hash once
-      `scoop update` runs against the new GitHub Release — no manual bucket edit needed. Still keep
+      `scoop update` runs against the new GitHub Release, no manual bucket edit needed. Still keep
       this in-repo template's `version`, `architecture.64bit.url`, and `hash` current so a
       first-time copy into the bucket (`packaging/scoop/README.md`) starts from the right values.
 
 ## 9. Repository settings that are not files
 
-Everything else in this document is enforced by something in the repository. These are GitHub
-settings, so they cannot be. Apply them by hand in **Settings -> Rules -> Rulesets**; nothing in
-CI can add them and nothing in CI will notice if they are removed.
+Everything else in this document is enforced by something in the repository. These are GitHub settings, so they cannot be. Apply them by hand in **Settings -> Rules -> Rulesets**. Nothing in CI can add them and nothing in CI will notice if they are removed.
 
-The state below was read from the API and is what is configured today. Two rulesets exist and both
-are `active`; classic branch protection on `main` is off entirely (`404 Branch not protected`), so
-the rulesets are the whole of it.
+The state below was read from the API and is what is configured today. Two rulesets exist and both are `active`. Classic branch protection on `main` is off entirely (`404 Branch not protected`), so the rulesets are the whole of it.
 
-**"Block push on main"** (branch, `~DEFAULT_BRANCH`) -- rules `deletion`, `non_fast_forward`, and
-`required_status_checks` with contexts `lint`, `build-test (windows-x64-debug)` and
-`build-test (windows-x64-release)`. Two `RepositoryRole` bypass actors (ids 2 and 5), both
-`bypass_mode: always`.
+**"Block push on main"** (branch, `~DEFAULT_BRANCH`). Rules `deletion`, `non_fast_forward`, and `required_status_checks` with contexts `lint`, `build-test (windows-x64-debug)` and `build-test (windows-x64-release)`. Two `RepositoryRole` bypass actors (ids 2 and 5), both `bypass_mode: always`.
 
 - [ ] **Set `strict_required_status_checks_policy` to true** ("Require branches to be up to date
       before merging"). It is `false` today, so two independently green pull requests can merge a
-      combination that was never built together -- and because `ci.yml` builds nothing on a plain
+      combination that was never built together. And because `ci.yml` builds nothing on a plain
       push to `main`, nothing rebuilds the result. The next pull request or the nightly advisory run
       finds it, hours later.
 - [ ] **Add `verify-harness` to the required contexts.** It is the typed C# release-verify harness
       that is becoming the release gate, and it is not required today, so a change that breaks it
       can land on `main` and then be tagged.
 - [ ] **Add a `pull_request` rule.** Neither ruleset has one, so nothing requires a pull request
-      before a change reaches `main`; the only thing standing there is `.githooks/pre-commit`, a
+      before a change reaches `main`. The only thing standing there is `.githooks/pre-commit`, a
       local hook with a documented `ALLOW_MAIN_COMMIT=1` escape that `git commit --no-verify` skips
       entirely. Requiring an approving review is not workable for a solo maintainer, but requiring
       a pull request still forces the required checks to run against the merge result rather than
@@ -681,20 +627,12 @@ the rulesets are the whole of it.
 - [ ] **Confirm in the ruleset UI what a skipped required job counts as.**
       `build-test (windows-x64-release)` runs on a pull request only when the paths filter matches.
       Whether GitHub treats the resulting skipped job as satisfying its required context could not
-      be determined from the API; if it does, a pull request that misses the filter merges without
+      be determined from the API. If it does, a pull request that misses the filter merges without
       its required Release build ever having run.
 
-**"Block veresion tags"** (tag, `refs/tags/v*`) -- rules `creation`, `update`, `deletion`,
-`non_fast_forward`, with the same two bypass actors. This is what makes a version tag a human act:
-the Actions token has no bypass, so no workflow can create one. Leave it in place. (The name is
-misspelled in the repository; renaming it is cosmetic and would invalidate nothing.)
+**"Block veresion tags"** (tag, `refs/tags/v*`). Rules `creation`, `update`, `deletion`, `non_fast_forward`, with the same two bypass actors. This is what makes a version tag a human act: the Actions token has no bypass, so no workflow can create one. Leave it in place. (The name is misspelled in the repository. Renaming it is cosmetic and would invalidate nothing.)
 
 - [ ] **Confirm which repository roles ids 2 and 5 are.** The API returns ids, not names. They are
-      assumed to be maintain and admin; if either is write, the tag rule is not the gate it is
+      assumed to be maintain and admin. If either is write, the tag rule is not the gate it is
       described as anywhere in this document.
-
-One guardrail that belongs here and is **not** implemented: nothing asserts that a tagged commit was
-ever an ancestor of `origin/main`. `resolve-identity` validates the tag's shape and its version, and
-`publish-release` validates the tag's commit against the built commit, but a `v*` tag cut from a
-side branch publishes normally as long as `ci.yml` ran on that ref. Combined with the missing
-`pull_request` rule, that is the path by which an unreviewed commit becomes a release.
+One guardrail that belongs here and is **not** implemented: nothing asserts that a tagged commit was ever an ancestor of `origin/main`. `resolve-identity` validates the tag's shape and its version, and `publish-release` validates the tag's commit against the built commit, but a `v*` tag cut from a side branch publishes normally as long as `ci.yml` ran on that ref. Combined with the missing `pull_request` rule, that is the path by which an unreviewed commit becomes a release.
