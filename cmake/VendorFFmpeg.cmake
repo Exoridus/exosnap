@@ -12,9 +12,15 @@
 # Only the mux-only DLL set (avformat, avcodec, avutil, swresample) is shipped.
 # The remaining DLLs (avfilter, swscale, avdevice) are NOT deployed.
 #
-# FFmpeg build: Exoridus/exosnap-ffmpeg-build release r7 (upstream n8.1.1)
-# Release tag:  r7
+# FFmpeg build: Exoridus/exosnap-ffmpeg-build, package n9.0.2-exosnap.1
+# Upstream:     n9.0.2
 # License:      LGPL-2.1-or-later (compatible with ExoSnap GPL-3.0-or-later)
+#
+# The package tag names the upstream ref and our recipe revision, and the
+# archive states the same facts in BUILD-INFO.json. The block below compares the
+# two before it creates a target, so a wrong or stale package is a named
+# configure error instead of a link failure. Earlier releases were numbered r1
+# through r7 and carry no manifest; they cannot be pinned by this file.
 #
 # r1 -> r2: added --enable-muxer=mp4. mp4 and mov share the movenc backend
 # but FFmpeg registers them as separate muxers. r1 only enabled mov, so
@@ -38,6 +44,11 @@
 # encoding, if ever offered, is a user-supplied FFmpeg install detected at
 # runtime, never bundled here.
 #
+# r7 -> n9.0.2-exosnap.1: the same component whitelist against FFmpeg 9.0.2. No
+# configure flag changed; the upstream majors did, from avformat/avcodec 62,
+# avutil 60 and swresample 6 to 63, 63, 61 and 7. Those four numbers are pinned
+# below and checked against the archive, because a major bump renames every DLL.
+#
 # r5 -> r7: added the h264/hevc/av1 x d3d11va/d3d11va2/dxva2 hwaccels for the
 # editor's hardware-accelerated decode path (docs/dev/edit-player-architecture.md).
 # Vendor-neutral (D3D11/DXVA are Windows APIs, not NVIDIA-specific): frames
@@ -50,15 +61,37 @@
 
 include(FetchContent)
 
-set(EXOSNAP_FFMPEG_VERSION "r7-n8.1.1"
-    CACHE STRING "Pinned exosnap-ffmpeg-build release version (informational)")
+# ---------------------------------------------------------------------------
+# The pinned package identity
+#
+# These are the expectation. The archive states the same facts in its own
+# BUILD-INFO.json, and the two are compared below before a single imported
+# target exists. A mismatch is named here rather than surfacing later as a link
+# error against a DLL nobody expected, or at runtime as a missing entry point.
+#
+# The library majors are not decoration: an upstream major bump renames every
+# DLL, and without this check the first sign of it is a build that cannot find
+# `avcodec-63.dll` while the archive happily contains one.
+# ---------------------------------------------------------------------------
+set(EXOSNAP_FFMPEG_PACKAGE_TAG  "n9.0.2-exosnap.1")
+set(EXOSNAP_FFMPEG_UPSTREAM_TAG "n9.0.2")
+set(EXOSNAP_FFMPEG_PROFILE      "lgpl-shared")
 
-# IMPORTANT: pin an immutable release tag (r1, r2, …), never a rolling tag.
-# Assets under a versioned release tag are immutable; the SHA256 pin is stable.
+set(EXOSNAP_FFMPEG_VERSION "${EXOSNAP_FFMPEG_PACKAGE_TAG}"
+    CACHE STRING "Pinned exosnap-ffmpeg-build package tag")
+
+set(EXOSNAP_FFMPEG_LIBRARIES avformat avcodec avutil swresample)
+set(EXOSNAP_FFMPEG_AVFORMAT_MAJOR   63)
+set(EXOSNAP_FFMPEG_AVCODEC_MAJOR    63)
+set(EXOSNAP_FFMPEG_AVUTIL_MAJOR     61)
+set(EXOSNAP_FFMPEG_SWRESAMPLE_MAJOR 7)
+
+# IMPORTANT: pin an immutable release tag, never a rolling one. Assets under a
+# versioned release tag are immutable, so the SHA256 pin is stable.
 FetchContent_Declare(
     ffmpeg_prebuilt
-    URL      "https://github.com/Exoridus/exosnap-ffmpeg-build/releases/download/r7/ffmpeg-win64-lgpl-shared.zip"
-    URL_HASH "SHA256=E895E66FC9CE1871ABC09A09FD9B99B663971ADFDD2BC1F10B119942E656AFCB"
+    URL      "https://github.com/Exoridus/exosnap-ffmpeg-build/releases/download/${EXOSNAP_FFMPEG_PACKAGE_TAG}/ffmpeg-${EXOSNAP_FFMPEG_UPSTREAM_TAG}-win64-lgpl-shared.zip"
+    URL_HASH "SHA256=3E5319F8086D18A09540C1ADDA0E8EEFC1A44CCFE028745B21EA6111E1212125"
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(ffmpeg_prebuilt)
@@ -68,6 +101,92 @@ FetchContent_GetProperties(ffmpeg_prebuilt SOURCE_DIR _ffmpeg_src)
 # is present in the archive (ffmpeg-...-win64-lgpl-shared/).
 # The content lands directly in ffmpeg_prebuilt-src/ so the root IS _ffmpeg_src.
 set(_ffmpeg_root "${_ffmpeg_src}")
+
+# ---------------------------------------------------------------------------
+# Verify the archive is the package that was pinned
+#
+# Everything below runs before any imported target exists, so a wrong package
+# stops the configure instead of producing targets that point at files which are
+# not there. There is deliberately no path that tolerates a missing manifest: a
+# check that quietly skips itself is a check nobody can rely on, and an archive
+# without BUILD-INFO.json is by definition not one of the packages this pin
+# describes.
+# ---------------------------------------------------------------------------
+set(_ffmpeg_manifest "${_ffmpeg_root}/BUILD-INFO.json")
+if(NOT EXISTS "${_ffmpeg_manifest}")
+    message(FATAL_ERROR
+        "FFmpeg package ${EXOSNAP_FFMPEG_PACKAGE_TAG} carries no BUILD-INFO.json.\n"
+        "  Expected: ${_ffmpeg_manifest}\n"
+        "  Releases r1 through r7 predate the manifest and cannot be pinned here.")
+endif()
+file(READ "${_ffmpeg_manifest}" _ffmpeg_manifest_json)
+
+# string(JSON) leaves the output variable untouched on error, so the error
+# variable has to be read. Without it a missing key compares as whatever the
+# variable happened to hold, and the mismatch gets reported against the wrong
+# thing.
+function(_exosnap_ffmpeg_manifest out_var)
+    string(JSON _value ERROR_VARIABLE _err GET "${_ffmpeg_manifest_json}" ${ARGN})
+    if(_err)
+        message(FATAL_ERROR
+            "FFmpeg package manifest is not readable at '${ARGN}': ${_err}\n"
+            "  Manifest: ${_ffmpeg_manifest}")
+    endif()
+    set(${out_var} "${_value}" PARENT_SCOPE)
+endfunction()
+
+function(_exosnap_ffmpeg_expect what expected actual)
+    if(NOT actual STREQUAL expected)
+        message(FATAL_ERROR
+            "FFmpeg package ${what} mismatch.\n"
+            "  Expected: ${expected}\n"
+            "  Archive:  ${actual}\n"
+            "  Manifest: ${_ffmpeg_manifest}")
+    endif()
+endfunction()
+
+_exosnap_ffmpeg_manifest(_ffmpeg_schema schema)
+if(NOT _ffmpeg_schema EQUAL 1)
+    message(FATAL_ERROR
+        "FFmpeg package manifest schema ${_ffmpeg_schema} is not understood; this consumer reads schema 1.")
+endif()
+
+_exosnap_ffmpeg_manifest(_ffmpeg_pkg_tag packageTag)
+_exosnap_ffmpeg_expect("tag" "${EXOSNAP_FFMPEG_PACKAGE_TAG}" "${_ffmpeg_pkg_tag}")
+
+_exosnap_ffmpeg_manifest(_ffmpeg_up_tag upstreamTag)
+_exosnap_ffmpeg_expect("upstream tag" "${EXOSNAP_FFMPEG_UPSTREAM_TAG}" "${_ffmpeg_up_tag}")
+
+_exosnap_ffmpeg_manifest(_ffmpeg_profile profile)
+_exosnap_ffmpeg_expect("profile" "${EXOSNAP_FFMPEG_PROFILE}" "${_ffmpeg_profile}")
+
+foreach(_lib IN LISTS EXOSNAP_FFMPEG_LIBRARIES)
+    string(TOUPPER "${_lib}" _lib_upper)
+    set(_expected_major "${EXOSNAP_FFMPEG_${_lib_upper}_MAJOR}")
+    _exosnap_ffmpeg_manifest(_actual_major libraries ${_lib})
+    _exosnap_ffmpeg_expect("${_lib} soname major" "${_expected_major}" "${_actual_major}")
+
+    # Two-sided, because the manifest and the bin/ directory can disagree. The
+    # declared DLL has to be there, and it has to be the ONLY one of its family:
+    # a leftover from the previous major is exactly what an in-place upgrade
+    # leaves behind, and it would load in preference to nothing at all.
+    set(_expected_dll "${_ffmpeg_root}/bin/${_lib}-${_expected_major}.dll")
+    if(NOT EXISTS "${_expected_dll}")
+        message(FATAL_ERROR "FFmpeg package is missing ${_lib}-${_expected_major}.dll")
+    endif()
+    file(GLOB _family "${_ffmpeg_root}/bin/${_lib}-*.dll")
+    list(LENGTH _family _family_count)
+    if(NOT _family_count EQUAL 1)
+        message(FATAL_ERROR
+            "FFmpeg package carries ${_family_count} ${_lib} DLLs; exactly one is allowed.\n"
+            "  Found: ${_family}")
+    endif()
+endforeach()
+
+message(STATUS
+    "FFmpeg ${_ffmpeg_pkg_tag} (upstream ${_ffmpeg_up_tag}, ${_ffmpeg_profile}): "
+    "avformat-${EXOSNAP_FFMPEG_AVFORMAT_MAJOR} avcodec-${EXOSNAP_FFMPEG_AVCODEC_MAJOR} "
+    "avutil-${EXOSNAP_FFMPEG_AVUTIL_MAJOR} swresample-${EXOSNAP_FFMPEG_SWRESAMPLE_MAJOR}")
 
 # ---------------------------------------------------------------------------
 # Helper: create one SHARED IMPORTED target per library
@@ -90,12 +209,12 @@ function(_exosnap_ffmpeg_target lib_name dll_name)
     target_compile_definitions(${_tgt} INTERFACE _CRT_SECURE_NO_WARNINGS)
 endfunction()
 
-# The versioned DLL names shipped in the exosnap-ffmpeg-build win64-lgpl-shared archive:
-#   avformat-62.dll  avcodec-62.dll  avutil-60.dll  swresample-6.dll
-_exosnap_ffmpeg_target(avformat   avformat-62)
-_exosnap_ffmpeg_target(avcodec    avcodec-62)
-_exosnap_ffmpeg_target(avutil     avutil-60)
-_exosnap_ffmpeg_target(swresample swresample-6)
+# The versioned DLL names come from the verified majors above, so a major bump
+# is a one-line change here and cannot leave a stale literal behind.
+_exosnap_ffmpeg_target(avformat   "avformat-${EXOSNAP_FFMPEG_AVFORMAT_MAJOR}")
+_exosnap_ffmpeg_target(avcodec    "avcodec-${EXOSNAP_FFMPEG_AVCODEC_MAJOR}")
+_exosnap_ffmpeg_target(avutil     "avutil-${EXOSNAP_FFMPEG_AVUTIL_MAJOR}")
+_exosnap_ffmpeg_target(swresample "swresample-${EXOSNAP_FFMPEG_SWRESAMPLE_MAJOR}")
 
 # Inter-library dependencies (avformat needs avcodec + avutil; avcodec needs avutil)
 set_property(TARGET FFmpeg::avformat   APPEND PROPERTY INTERFACE_LINK_LIBRARIES
@@ -131,10 +250,10 @@ endif()
 # for Qt DLLs (QT_DEPLOY_BIN_DIR=".").
 # ---------------------------------------------------------------------------
 set(EXOSNAP_FFMPEG_DLLS
-    "${_ffmpeg_root}/bin/avformat-62.dll"
-    "${_ffmpeg_root}/bin/avcodec-62.dll"
-    "${_ffmpeg_root}/bin/avutil-60.dll"
-    "${_ffmpeg_root}/bin/swresample-6.dll"
+    "${_ffmpeg_root}/bin/avformat-${EXOSNAP_FFMPEG_AVFORMAT_MAJOR}.dll"
+    "${_ffmpeg_root}/bin/avcodec-${EXOSNAP_FFMPEG_AVCODEC_MAJOR}.dll"
+    "${_ffmpeg_root}/bin/avutil-${EXOSNAP_FFMPEG_AVUTIL_MAJOR}.dll"
+    "${_ffmpeg_root}/bin/swresample-${EXOSNAP_FFMPEG_SWRESAMPLE_MAJOR}.dll"
     CACHE INTERNAL "FFmpeg mux-only DLL paths for deployment")
 
 # Install rules: flat next to exosnap.exe (mirrors Qt deploy approach)

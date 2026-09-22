@@ -67,10 +67,15 @@ function New-FixtureRoot {
     Set-Content -LiteralPath (Join-Path $root 'app/assets/fonts/font.txt') -Value 'font' -Encoding utf8
 
     Set-Content -LiteralPath (Join-Path $root 'cmake/VendorFFmpeg.cmake') -Encoding utf8 -Value @'
-set(EXOSNAP_FFMPEG_VERSION "r7-n8.1.1" CACHE STRING "pinned")
+set(EXOSNAP_FFMPEG_PACKAGE_TAG  "n9.0.2-exosnap.1")
+set(EXOSNAP_FFMPEG_UPSTREAM_TAG "n9.0.2")
+set(EXOSNAP_FFMPEG_AVFORMAT_MAJOR   63)
+set(EXOSNAP_FFMPEG_AVCODEC_MAJOR    63)
+set(EXOSNAP_FFMPEG_AVUTIL_MAJOR     61)
+set(EXOSNAP_FFMPEG_SWRESAMPLE_MAJOR 7)
 FetchContent_Declare(
     ffmpeg_prebuilt
-    URL      "https://example.invalid/r7/ffmpeg-win64-lgpl-shared.zip"
+    URL      "https://example.invalid/${EXOSNAP_FFMPEG_PACKAGE_TAG}/ffmpeg-${EXOSNAP_FFMPEG_UPSTREAM_TAG}-win64-lgpl-shared.zip"
     URL_HASH "SHA256=E895E66FC9CE1871ABC09A09FD9B99B663971ADFDD2BC1F10B119942E656AFCB"
 )
 '@
@@ -117,6 +122,46 @@ Test-Case 'the FFmpeg entry carries the archive hash the build verifies against'
     $vendorText = Get-Content -LiteralPath (Join-Path $repoRoot 'cmake/VendorFFmpeg.cmake') -Raw
     Assert-True ($vendorText -match "(?i)$($ffmpeg.archiveSha256)") `
         'the recorded FFmpeg hash is not the one cmake/VendorFFmpeg.cmake pins'
+}
+
+Test-Case 'the FFmpeg source is recorded resolved, never as a CMake placeholder' {
+    # The pin is written with CMake variables, so the URL literal in the file
+    # contains `${...}`. Recording that literal would put a placeholder in the
+    # release manifest where the shipped identity belongs, and a placeholder
+    # looks like an answer.
+    $ffmpeg = (Get-DependencyIdentity -RepoRoot $repoRoot) | Where-Object { $_.name -eq 'FFmpeg' }
+    Assert-True ($ffmpeg.source -notmatch '\$\{') "the recorded URL still carries a placeholder: $($ffmpeg.source)"
+    Assert-True ($ffmpeg.version -notmatch '\$\{') "the recorded version still carries a placeholder: $($ffmpeg.version)"
+    Assert-True ($ffmpeg.source -like "*$($ffmpeg.version)*") `
+        'the resolved URL does not contain the package tag it was built from'
+    Assert-True ($ffmpeg.source -like "*$($ffmpeg.upstreamVersion)*") `
+        'the resolved URL does not contain the upstream tag it was built from'
+}
+
+Test-Case 'a URL whose variables cannot be resolved is refused' {
+    $root = New-FixtureRoot
+    try {
+        $path = Join-Path $root 'cmake/VendorFFmpeg.cmake'
+        $text = (Get-Content -LiteralPath $path -Raw) -replace 'EXOSNAP_FFMPEG_UPSTREAM_TAG\}', 'SOMETHING_ELSE}'
+        Set-Content -LiteralPath $path -Value $text -Encoding utf8
+        Assert-Throws { Get-DependencyIdentity -RepoRoot $root } `
+            'an unresolved variable was written into the recorded URL'
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'a missing pinned library major is refused' {
+    # The four majors are what turns an upstream rename into a named error, so a
+    # pin file that stops declaring one must not produce a manifest at all.
+    $root = New-FixtureRoot
+    try {
+        $path = Join-Path $root 'cmake/VendorFFmpeg.cmake'
+        $text = (Get-Content -LiteralPath $path -Raw) -replace '(?m)^set\(EXOSNAP_FFMPEG_AVCODEC_MAJOR.*$', ''
+        Set-Content -LiteralPath $path -Value $text -Encoding utf8
+        Assert-Throws { Get-DependencyIdentity -RepoRoot $root } `
+            'a pin file with no avcodec major still produced a dependency identity'
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 Test-Case 'a component that disappears from its pin file is refused, not dropped' {
