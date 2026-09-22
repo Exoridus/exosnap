@@ -261,7 +261,7 @@ So the *mechanism* lives outside the release path in a named third-party tool, a
 
 Two workers run in there:
 
-- `sandbox-update-worker.ps1` installs an older release from `EXOSNAP_UPDATE_FROM_MSI`, selects the Preview channel, declines an update (through the fault seam), asserts `failureCase uacDeclined` with the installation intact, **closes the updater**, and then accepts an update and asserts the version changed. Both MSI gates read that one result document, because both describe one sequence.
+- `sandbox-update-worker.ps1` installs the VC++ redistributable shipped with the bound portable artifact, then installs an older release from `EXOSNAP_UPDATE_FROM_MSI`, selects the Preview channel, declines an update (through the fault seam), asserts `failureCase uacDeclined` with the installation intact, **closes the updater**, and then accepts an update and asserts the version changed. Both MSI gates read that one result document, because both describe one sequence.
 - `sandbox-choco-worker.ps1` installs the release MSI, runs the product once so the user configuration directory exists to be judged against, bootstraps Chocolatey and then calls the existing `choco-rehearsal-worker.ps1` unchanged.
 
 `REL-PKG-CHOCO-001` on a real machine is unchanged and still available: it is the one gate that installs software, it raises exactly one prompt, and the reinstall runs from a `finally` block so a rehearsal that threw halfway does not leave the machine without ExoSnap. Three properties of it are worth knowing before running it that way:

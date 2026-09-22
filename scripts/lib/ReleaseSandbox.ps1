@@ -29,11 +29,10 @@
 
 Set-StrictMode -Version Latest
 
-# Where a mapped folder lands INSIDE the sandbox: the sandbox user's desktop,
-# under the host folder's own leaf name. Fixed by Windows, not configurable, and
-# the same on every machine -- which is why the guest paths can be computed here
-# rather than discovered from inside the virtual machine.
-$script:ReleaseSandboxDesktop = 'C:\Users\WDAGUtilityAccount\Desktop'
+# Where mapped folders land inside the sandbox. Explicit destinations avoid the
+# desktop-default mapping, whose path is implicit and unsuitable for a startup
+# command that must address more than one mapped folder.
+$script:ReleaseSandboxRoot = 'C:\ExoSnapSandbox'
 
 function Get-ReleaseSandboxGuestPath {
     <#
@@ -41,7 +40,7 @@ function Get-ReleaseSandboxGuestPath {
         Where a host directory mapped into the sandbox appears inside it.
     #>
     param([Parameter(Mandatory)] [string] $HostDirectory)
-    return Join-Path $script:ReleaseSandboxDesktop (Split-Path -Leaf $HostDirectory)
+    return Join-Path $script:ReleaseSandboxRoot (Split-Path -Leaf $HostDirectory)
 }
 
 function New-ReleaseSandboxStaging {
@@ -120,10 +119,15 @@ function New-ReleaseSandboxConfiguration {
     $guest = Get-ReleaseSandboxGuestPath -HostDirectory $StagingDirectory
     $guestWorker = Join-Path $guest $WorkerFileName
     $guestShell = Join-Path (Get-ReleaseSandboxGuestPath -HostDirectory $PowerShellHome) 'pwsh.exe'
-    # Quoted argument by argument rather than joined once: a staged path contains
-    # the campaign id and, on a machine whose user name has a space, a space.
-    $quoted = @($WorkerArguments | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ' '
-    $command = "cmd.exe /c `"$guestShell`" -ExecutionPolicy Bypass -NoProfile -File `"$guestWorker`" $quoted"
+    $launcherHost = Join-Path $StagingDirectory 'run-worker.cmd'
+    $launcherArguments = @($WorkerArguments | ForEach-Object { '"' + ($_ -replace '"', '""') + '"' }) -join ' '
+    Set-Content -LiteralPath $launcherHost -Value @(
+        '@echo off'
+        ('"{0}" -ExecutionPolicy Bypass -NoProfile -File "{1}" {2}' -f $guestShell, $guestWorker, $launcherArguments)
+    ) -Encoding ascii
+    # The documented pattern maps a script and invokes that script as the one
+    # logon command. The launcher keeps cmd.exe parsing out of the XML command.
+    $command = Join-Path $guest 'run-worker.cmd'
 
     $networking = if ($NoNetwork) { 'Disable' } else { 'Default' }
     $configuration = @"
@@ -133,10 +137,12 @@ function New-ReleaseSandboxConfiguration {
   <MappedFolders>
     <MappedFolder>
       <HostFolder>$StagingDirectory</HostFolder>
+      <SandboxFolder>$guest</SandboxFolder>
       <ReadOnly>false</ReadOnly>
     </MappedFolder>
     <MappedFolder>
       <HostFolder>$PowerShellHome</HostFolder>
+      <SandboxFolder>$(Get-ReleaseSandboxGuestPath -HostDirectory $PowerShellHome)</SandboxFolder>
       <ReadOnly>true</ReadOnly>
     </MappedFolder>
   </MappedFolders>

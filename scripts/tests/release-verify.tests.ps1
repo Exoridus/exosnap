@@ -727,6 +727,25 @@ Test-Case 'the artifact commit comes from the build manifest, and only when it d
     finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+Test-Case 'an explicit source commit cannot contradict the artifact manifest' {
+    $root = New-TestDirectory
+    $exe = Join-Path $root 'exosnap.exe'
+    $manifest = Join-Path $root 'artifact-manifest.json'
+    Set-Content -LiteralPath $exe -Value 'test binary'
+    @{ version = ''; sourceCommit = 'candidate-commit' } | ConvertTo-Json |
+        Set-Content -LiteralPath $manifest
+    try {
+        Assert-Throws { Get-ReleaseArtifactFingerprint -Path $exe -SourceCommit 'annotated-tag-object' } `
+            'the tag object is not the commit recorded for these bytes'
+        $artifact = Get-ReleaseArtifactFingerprint -Path $exe -SourceCommit 'candidate-commit'
+        Assert-Equal 'candidate-commit' $artifact.sourceCommit 'a matching commit remains valid'
+    }
+    finally {
+        Remove-Item -LiteralPath $exe, $manifest -Force
+        Remove-Item -LiteralPath $root -Force
+    }
+}
+
 Test-Case 'the shipped Qt runtime is read from the package, not from the machine' {
     $root = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
     New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -1858,6 +1877,7 @@ function Invoke-ReleaseDryRun {
     )
 
     $root = New-TestDirectory
+    Set-Content -LiteralPath (Join-Path $root 'vc_redist.x64.exe') -Value 'dry-run runtime'
     $prompts = [System.Collections.Generic.List[string]]::new()
     $invocations = [System.Collections.Generic.List[object]]::new()
     $responder = New-DryRunResponder -Responses $Responses
@@ -1995,8 +2015,8 @@ function Invoke-ReleaseDryRun {
         $context = [pscustomobject]@{
             RunDirectory    = $root
             RepositoryRoot  = (Split-Path -Parent $scriptRoot)
-            Artifact        = [pscustomobject]@{ exePath = 'C:\rc\exosnap.exe'; exeSha256 = 'sha-under-test'
-                installTree                             = $true; productVersion = '0.9.0'
+            Artifact        = [pscustomobject]@{ exePath = (Join-Path $root 'exosnap.exe'); exeSha256 = 'sha-under-test'
+                installTree                             = $true; productVersion = '0.9.0'; sourceCommit = 'commit-under-test'
             }
             Environment     = @{}
             Orchestrator    = [pscustomobject]@{ Available = ($envctlProperties.Count -gt 0); Dirty = $false }
@@ -2782,6 +2802,21 @@ Test-Case 'REL-UPD-MSI-DECLINE-001 runs in a sandbox and is red on a stranded in
     Assert-Equal 0 $green.Prompts.Count 'nobody clicks a Secure Desktop prompt in the automated campaign'
 }
 
+Test-Case 'the sandbox update launcher passes every required worker argument' {
+    $run = Invoke-DryRunSandboxUpdateGate -ScenarioId 'REL-UPD-MSI-DECLINE-001' `
+        -Steps @{ 'install-base' = $true; 'select-channel' = $true; 'decline-offer' = $true
+            'decline-apply' = $true; 'decline-state' = $true; 'decline-updater-closed' = $true }
+    $launch = @($run.Invocations | Where-Object { $_.Tool -eq 'sandbox' }) | Select-Object -First 1
+    Assert-True ($null -ne $launch) 'the sandbox must be launched'
+    $staging = Split-Path -Parent $launch.Arguments[0]
+    $launcher = Get-Content -LiteralPath (Join-Path $staging 'run-worker.cmd') -Raw
+    foreach ($argument in @('-RuntimeInstallerPath', '-EvidenceDirectory', '-ExpectedVersion', '-ExpectedCommit', '-ExpectedExeSha256')) {
+        Assert-True ($launcher.Contains($argument)) "$argument must reach the worker"
+    }
+    Assert-True ($launcher.Contains('commit-under-test')) 'the bound source commit must reach the worker'
+    Assert-True ($launcher.Contains('sha-under-test')) 'the bound executable digest must reach the worker'
+}
+
 Test-Case 'REL-UPD-MSI-DECLINE-001 is unverified when the worker never reached a step' {
     # A step the worker never got to must not read as a pass over a shorter list.
     $result = Invoke-DryRunSandboxUpdateGate -ScenarioId 'REL-UPD-MSI-DECLINE-001' `
@@ -2951,6 +2986,12 @@ Set-StrictMode -Version Latest
 `$ErrorActionPreference = 'Stop'
 `$env:LOCALAPPDATA = '$localAppData'
 `$env:ProgramData = '$programData'
+function Get-ChildItem { param(`$LiteralPath, `$ErrorAction) return @() }
+function Test-Path {
+    param(`$LiteralPath)
+    if (`$LiteralPath -like 'HKCU:*') { return `$false }
+    Microsoft.PowerShell.Management\Test-Path -LiteralPath `$LiteralPath
+}
 $($match.Value)
 "count=`$(@(Get-ExoSnapResidue).Count)"
 "@

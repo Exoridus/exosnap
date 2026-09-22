@@ -30,6 +30,7 @@ param(
     # The older release to update FROM, as an installer. It is installed here rather
     # than assumed present: the whole point of the sandbox is that nothing is.
     [Parameter(Mandatory)] [string] $BaseMsiPath,
+    [Parameter(Mandatory)] [string] $RuntimeInstallerPath,
     [Parameter(Mandatory)] [string] $ResultPath,
     [Parameter(Mandatory)] [string] $MarkerPath,
     # Where everything worth reading afterwards goes. The host copies THIS back
@@ -125,9 +126,17 @@ function Write-Result {
 }
 
 function Invoke-Msi {
-    param([Parameter(Mandatory)] [string] $Arguments, [Parameter(Mandatory)] [string] $LogName)
+    param(
+        [Parameter(Mandatory)] [string] $Arguments,
+        [Parameter(Mandatory)] [string] $LogName,
+        [int] $TimeoutSeconds = 180
+    )
     $log = Join-Path $script:LogDirectory $LogName
-    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList "$Arguments /qn /l*v `"$log`"" -Wait -PassThru
+    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList "$Arguments /qn /l*v `"$log`"" -PassThru
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $process.Kill() } catch { }
+        return @{ ExitCode = 1460; Log = $log }
+    }
     return @{ ExitCode = $process.ExitCode; Log = $log }
 }
 
@@ -189,6 +198,22 @@ function Wait-UpdateOffer {
 
 try {
     Import-Module (Join-Path $StagingDirectory 'LiveVerifyClient.psm1') -Force -DisableNameChecking
+
+    $runtimeLog = Join-Path $script:LogDirectory 'install-runtime.log'
+    $runtime = Start-Process -FilePath $RuntimeInstallerPath `
+        -ArgumentList "/install /quiet /norestart /log `"$runtimeLog`"" -PassThru
+    if (-not $runtime.WaitForExit(600000)) {
+        try { $runtime.Kill() } catch { }
+        Add-Step -Name 'install-runtime' -Ok $false -Kind 'bootstrap' -Detail 'VC++ runtime installation timed out'
+        Write-Result -Fatal 'VC++ runtime installation timed out'
+        return
+    }
+    if ($runtime.ExitCode -ne 0) {
+        Add-Step -Name 'install-runtime' -Ok $false -Kind 'bootstrap' -Detail "VC++ runtime installer exited $($runtime.ExitCode)"
+        Write-Result -Fatal 'VC++ runtime installation failed'
+        return
+    }
+    Add-Step -Name 'install-runtime' -Ok $true -Kind 'bootstrap' -Detail 'VC++ runtime installed'
 
     # ---------------------------------------------------------------- base install
     $install = Invoke-Msi -Arguments "/i `"$BaseMsiPath`"" -LogName 'install-base.log'

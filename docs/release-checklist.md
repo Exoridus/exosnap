@@ -133,7 +133,7 @@ A final tag used to be the approval: a human pushed `vX.Y.Z`, the build and pack
 - [ ] **Attach the record to the RC release**: `pwsh scripts/release-verify.ps1 qualify -RunId <id>
       -Publish`. This signs `release-verification.json` with the release ed25519 key and uploads
       both it and its detached `.sig` to the RC's GitHub Release, which is where the publish gate
-      reads them from. **A developer's act, never an agent's** (AGENTS.md, "Release authority").
+      reads them from. **A developer's act, never an agent's.**
   - The key is the same one that signs the update manifest. Put the base64 seed in
     `EXOSNAP_UPDATE_SIGNING_KEY` (the value of the repository secret of that name) before running
     `qualify`. With `EXOSNAP_UPDATE_PUBLIC_KEY_HEX` set as well, signing refuses a key that is not

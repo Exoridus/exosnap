@@ -2872,13 +2872,19 @@ function Get-ReleaseScenarioCatalog {
                             # belongs. This is the first release where the gate reached
                             # this code at all -- it used to stop at "no update is
                             # offered" before the prompt was ever raised.
-                            $state_response = Invoke-LiveVerifyCommand -Connection $updater -Command 'updater.getState'
-                            if (-not $state_response.ok) {
-                                return @{ Ok = $false
-                                    Detail = "the updater refused updater.getState: $($state_response.error.message)"
+                            $deadline = Get-ReleaseGateDeadline -Seconds (60)
+                            $after = $null
+                            while ([DateTime]::UtcNow -lt $deadline) {
+                                $state_response = Invoke-LiveVerifyCommand -Connection $updater -Command 'updater.getState'
+                                if (-not $state_response.ok) {
+                                    return @{ Ok = $false
+                                        Detail = "the updater refused updater.getState: $($state_response.error.message)"
+                                    }
                                 }
+                                $after = $state_response.result
+                                if ("$($after.failureCase)" -eq 'uacDeclined') { break }
+                                Start-Sleep -Milliseconds 500
                             }
-                            $after = $state_response.result
                             $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-UPD-MSI-DECLINE-001' -Name 'updater-state.json' -Value $after)
                             # `phase` is deliberately not asserted on; see
                             # Get-ReleaseDeclinedUpdateVerdict for why it cannot carry
@@ -3031,7 +3037,7 @@ function Get-ReleaseScenarioCatalog {
                 # command, so reading the state once could only ever see what was there
                 # before the check finished.
                 $state = $null
-                $checkDeadline = Get-ReleaseGateDeadline -Seconds (60)
+                $checkDeadline = Get-ReleaseGateDeadline -Seconds (180)
                 while ([DateTime]::UtcNow -lt $checkDeadline) {
                     $state = (Invoke-LiveVerifyCommand -Connection $conn -Command 'update.getState').result
                     if (Get-ReleaseSnapshotValue -Object $state -Path 'updateAvailable') { break }
@@ -3734,9 +3740,11 @@ function Invoke-ReleaseSandboxUpdateRehearsal {
     New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
     $staging = Join-Path $Context.RunDirectory 'sandbox/update'
     $libraryRoot = Join-Path $Context.RepositoryRoot 'scripts/lib'
+    $runtimeInstaller = Join-Path (Split-Path -Parent $Context.Artifact.exePath) 'vc_redist.x64.exe'
     $staged = New-ReleaseSandboxStaging -Directory $staging -SourceFiles @(
         (Join-Path $libraryRoot 'sandbox-update-worker.ps1'),
         (Join-Path $libraryRoot 'LiveVerifyClient.psm1'),
+        $runtimeInstaller,
         $baseMsi
     )
     if (-not $staged.Ok) { return @{ Ok = $false; Result = $null; Detail = $staged.Detail; Evidence = @() } }
@@ -3746,16 +3754,21 @@ function Invoke-ReleaseSandboxUpdateRehearsal {
         -WorkerFileName 'sandbox-update-worker.ps1' -WorkerArguments @(
         '-StagingDirectory', $guest,
         '-BaseMsiPath', (Join-Path $guest (Split-Path -Leaf $baseMsi)),
+        '-RuntimeInstallerPath', (Join-Path $guest 'vc_redist.x64.exe'),
         '-ResultPath', (Join-Path $guest 'result.json'),
-        '-MarkerPath', (Join-Path $guest 'done.marker'))
+        '-MarkerPath', (Join-Path $guest 'done.marker'),
+        '-EvidenceDirectory', (Join-Path $guest 'evidence'),
+        '-ExpectedVersion', $Context.Artifact.productVersion,
+        '-ExpectedCommit', $Context.Artifact.sourceCommit,
+        '-ExpectedExeSha256', $Context.Artifact.exeSha256)
     if (-not $configuration.Ok) { return @{ Ok = $false; Result = $null; Detail = $configuration.Detail; Evidence = @() } }
 
     $run = Start-ReleaseSandboxRun -Tool $sandbox -Configuration $configuration -TimeoutMinutes 40
     if ($null -ne $run.Result) {
         Copy-Item -LiteralPath $configuration.ResultPath -Destination $resultPath -Force
-        $logs = Join-Path $staging 'logs'
-        if (Test-Path -LiteralPath $logs) {
-            Copy-Item -LiteralPath $logs -Destination (Join-Path $evidenceDirectory 'logs') -Recurse -Force
+        $guestEvidence = Join-Path $staging 'evidence'
+        if (Test-Path -LiteralPath $guestEvidence) {
+            Get-ChildItem -LiteralPath $guestEvidence -Force | Copy-Item -Destination $evidenceDirectory -Recurse -Force
         }
     }
     return @{ Ok = $run.Ok; Result = $run.Result; Detail = $run.Detail

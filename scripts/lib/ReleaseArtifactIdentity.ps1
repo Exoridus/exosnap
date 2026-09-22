@@ -188,6 +188,12 @@ function Get-ReleaseArtifactFingerprint {
         throw "No artifact at '$Path'. Release gates bind to an explicit binary; there is no default."
     }
     $item = Get-Item -LiteralPath $Path
+    $manifestCommit = Get-ReleaseArtifactSourceCommit -ExeItem $item
+    if (-not [string]::IsNullOrWhiteSpace($SourceCommit) -and
+        -not [string]::IsNullOrWhiteSpace($manifestCommit) -and
+        -not [string]::Equals($SourceCommit.Trim(), $manifestCommit, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "SourceCommit '$($SourceCommit.Trim())' conflicts with the artifact manifest commit '$manifestCommit'."
+    }
     $facts = @{
         kind             = 'release'
         tag              = $ReleaseTag
@@ -198,7 +204,7 @@ function Get-ReleaseArtifactFingerprint {
         fileVersion      = $item.VersionInfo.FileVersion
         qtRuntimeVersion = (Get-ReleaseArtifactQtRuntimeVersion -ExeItem $item)
         sourceCommit     = if (-not [string]::IsNullOrWhiteSpace($SourceCommit)) { $SourceCommit.Trim() }
-        else { (Get-ReleaseArtifactSourceCommit -ExeItem $item) }
+        else { $manifestCommit }
         builtUtc         = $item.LastWriteTimeUtc.ToString('o')
         # Whether this artifact sits in an installed tree decides which scenarios can
         # run at all: the updater and handoff paths resolve applicationDirPath()-
