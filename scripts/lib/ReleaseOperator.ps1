@@ -239,6 +239,23 @@ function Get-ReleaseHumanPlanOrder {
     }
 
     foreach ($entry in $Entries) { & $place $entry @() }
+
+    # A shared elevated session is deliberately short-lived. If a dependent gate
+    # needs that same session, placing unrelated work between the pair forces the
+    # runner to close it before the dependent gate can observe it.
+    foreach ($entry in @($ordered.ToArray())) {
+        if ($entry.PSObject.Properties.Name -notcontains 'UsesElevatedSession' -or
+            -not $entry.UsesElevatedSession) { continue }
+        $dependency = @(Get-ReleaseScenarioDependency -Entry $entry) |
+            Where-Object { $byId.ContainsKey($_) -and $byId[$_].PSObject.Properties.Name -contains 'UsesElevatedSession' -and $byId[$_].UsesElevatedSession } |
+            Select-Object -First 1
+        if ([string]::IsNullOrWhiteSpace("$dependency")) { continue }
+        $entryIndex = $ordered.IndexOf($entry)
+        $dependencyIndex = $ordered.IndexOf($byId[$dependency])
+        if ($dependencyIndex -lt 0 -or $entryIndex -eq $dependencyIndex + 1) { continue }
+        $ordered.RemoveAt($entryIndex)
+        $ordered.Insert($dependencyIndex + 1, $entry)
+    }
     return [object[]]$ordered.ToArray()
 }
 

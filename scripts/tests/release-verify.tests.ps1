@@ -2178,6 +2178,15 @@ Test-Case 'the ordered sequence puts every dependency before the gate that needs
     Assert-True ($position['REL-UPD-MSI-001'] -lt $position['REL-PKG-CHOCO-001']) 'the MSI gates before Chocolatey'
 }
 
+Test-Case 'a shared elevated dependent gate follows its provider immediately' {
+    . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
+    $present = [pscustomobject]@{ Id = 'P'; DependsOn = @(); UsesElevatedSession = $true }
+    $ordinary = [pscustomobject]@{ Id = 'O'; DependsOn = @() }
+    $dependent = [pscustomobject]@{ Id = 'D'; DependsOn = @('P'); UsesElevatedSession = $true }
+    $ordered = @(Get-ReleaseHumanPlanOrder -Entries @($present, $ordinary, $dependent))
+    Assert-Equal @('P', 'D', 'O') @($ordered.Id) 'shared-session dependent must stay beside its provider'
+}
+
 Test-Case 'a dependency cycle is reported rather than silently broken' {
     . (Join-Path $scriptRoot 'lib/ReleaseOperator.ps1')
     $a = [pscustomobject]@{ Id = 'A'; Title = 'a'; DependsOn = @('B') }
