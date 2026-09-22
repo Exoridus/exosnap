@@ -1347,6 +1347,7 @@ function Get-ReleaseScenarioCatalog {
                     $observedDegraded = $false
                     $recoveredAgain = $false
                     $leftRecording = $false
+                    $latchedOnly = $false
                     $samples = @()
                     $deadline = Get-ReleaseGateDeadline -Seconds (60)
                     while ([DateTime]::UtcNow -lt $deadline) {
@@ -1360,6 +1361,19 @@ function Get-ReleaseScenarioCatalog {
                         $degraded = [bool](Get-ReleaseSnapshotValue -Object $pipeline -Path 'audio.sourceDegraded')
                         if ($degraded) { $observedDegraded = $true }
                         elseif ($observedDegraded) { $recoveredAgain = $true; break }
+                        elseif ([bool](Get-ReleaseSnapshotValue -Object $pipeline -Path 'audio.sourceDegradedOccurred')) {
+                            # The operator path cannot see the live flag at all. The
+                            # person unplugs AND replugs before answering, and the
+                            # polling below only starts once they have answered, so
+                            # by the first sample the source is back and the live
+                            # flag is false again. The product's own latched marker
+                            # is what remains, and in a recording this gate started
+                            # moments ago nothing else can have set it.
+                            $observedDegraded = $true
+                            $recoveredAgain = $true
+                            $latchedOnly = $true
+                            break
+                        }
                         Start-Sleep -Milliseconds 500
                     }
                     $evidence = @(Save-LiveVerifyEvidence -Context $context -CheckId 'REL-AUD-DEGRADE-001' -Name 'pipeline-samples.json' -Value $samples)
@@ -1369,8 +1383,21 @@ function Get-ReleaseScenarioCatalog {
                     }
                     catch { }
                     if ($leftRecording) { return @{ Ok = $false; Detail = 'the recording stopped; ADR 0046 requires it to continue'; Evidence = $evidence } }
-                    if (-not $observedDegraded) { return @{ Ok = $false; Detail = 'no audio-source degradation was observed within 60 s'; Evidence = $evidence } }
+                    if (-not $observedDegraded) {
+                        return @{ Ok = $false
+                            Detail   = 'no audio-source degradation was observed within 60 s, and the pipeline does ' +
+                            'not report one having occurred earlier either'
+                            Evidence = $evidence
+                        }
+                    }
                     if (-not $recoveredAgain) { return @{ Ok = $false; Detail = 'degradation was observed but never cleared after the device returned'; Evidence = $evidence } }
+                    if ($latchedOnly) {
+                        return @{ Ok = $true
+                            Detail   = 'the pipeline reports a source degradation having occurred and none standing ' +
+                            'now, with the recording still running: the outage ended before the answer'
+                            Evidence = $evidence
+                        }
+                    }
                     return @{ Ok = $true; Detail = 'degraded during the outage, recovered afterwards, recording never stopped'; Evidence = $evidence }
                 }
             }
@@ -3415,7 +3442,7 @@ function Get-ReleaseFieldContract {
             Paths = @('sourcePresentation.presentMode', 'sourcePresentation.modeAvailability')
         }
         @{ Command = 'pipeline.snapshot'; Stage = 'recording'; UsedBy = 'REL-AUD-DEGRADE-001, REL-AUD-SILENCE-001'
-            Paths = @('audio.active', 'audio.sourceDegraded', 'audio.degradedSources')
+            Paths = @('audio.active', 'audio.sourceDegraded', 'audio.sourceDegradedOccurred', 'audio.degradedSources')
         }
         @{ Command = 'pipeline.snapshot'; Stage = 'recording'; UsedBy = 'REL-AUD-CLOCK-001'
             Paths = @('avTiming.avDriftMs', 'avTiming.avDriftAvailability')

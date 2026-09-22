@@ -2056,9 +2056,17 @@ function New-DryRunPresentSnapshot {
 }
 
 function New-DryRunPipelineSnapshot {
-    param([bool] $Degraded = $false, [string] $Lifecycle = 'recording', [bool] $Active = $true)
+    # $Occurred is the product's LATCHED marker, separate from the live one: a
+    # degradation that began and ended before the runner started polling leaves
+    # only that, and a fixture unable to express it cannot describe the operator
+    # path at all. It defaults to the live value so existing fixtures are unchanged.
+    param([bool] $Degraded = $false, [string] $Lifecycle = 'recording', [bool] $Active = $true,
+        [Nullable[bool]] $Occurred = $null)
     return [pscustomobject]@{ lifecycle = $Lifecycle
-        audio                           = [pscustomobject]@{ active = $Active; sourceDegraded = $Degraded; degradedSources = $(if ($Degraded) { 1 } else { 0 }) }
+        audio                           = [pscustomobject]@{ active = $Active; sourceDegraded = $Degraded
+            sourceDegradedOccurred      = $(if ($null -ne $Occurred) { [bool]$Occurred } else { $Degraded })
+            degradedSources             = $(if ($Degraded) { 1 } else { 0 })
+        }
     }
 }
 
@@ -2654,6 +2662,30 @@ Test-Case 'REL-AUD-DEGRADE-001 is red without a recovery and green with one' {
     Assert-Equal 'PASS' $green.Result.Result "degraded then recovered is the contract: $($green.Result.Message)"
     Assert-Equal 0 $green.Prompts.Count 'pnputil removes the device, so nobody unplugs anything'
     Assert-True ($green.Result.Message -match '\[pnputil\]') $green.Result.Message
+}
+
+Test-Case 'REL-AUD-DEGRADE-001 accepts an outage that ended before the operator answered' {
+    # The operator path cannot observe the live flag: the person unplugs AND
+    # replugs before pressing Enter, and polling starts only after that. Measured
+    # on a real machine -- 118 samples, sourceDegraded false throughout,
+    # sourceDegradedOccurred true in the very first one -- and reported as "no
+    # degradation was observed", which is the opposite of what the product said.
+    $variables = @{ EXOSNAP_AUDIO_DEVICE_INSTANCE_ID = ''; EXOSNAP_ENDPOINT_VISIBILITY_TOOL = '' }
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Variables $variables -Responses @{
+        'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $false -Occurred $true))
+    }
+    Assert-Equal 'PASS' $result.Result.Result `
+        "a degradation the product reports as having occurred, with none standing now, is the contract: $($result.Result.Message)"
+    Assert-True ($result.Result.Message -match 'before the answer') $result.Result.Message
+
+    # And a recording in which nothing ever degraded is still red, so the latched
+    # marker cannot turn the gate into one that passes unconditionally.
+    $quiet = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Variables $variables -Responses @{
+        'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $false -Occurred $false))
+    }
+    Assert-Equal 'FAIL' $quiet.Result.Result "nothing degraded at all is still a defect: $($quiet.Result.Message)"
 }
 
 Test-Case 'REL-AUD-DEGRADE-001 does not blame the product for a removal that never happened' {
