@@ -2440,6 +2440,31 @@ Test-Case 'REL-AUD-SILENCE-001 puts the default endpoint back, and asks when it 
     Assert-True ($asked.Prompts[0] -match 'wenn erledigt') "and it is the you-have-acted form: $($asked.Prompts[0])"
 }
 
+Test-Case 'a stranded instance is separated from one this campaign may not end' {
+    . (Join-Path $scriptRoot 'lib/ReleaseScenarios.ps1')
+    $exe = 'C:\rc\portable\exosnap.exe'
+    $mine = [pscustomobject]@{ Id = 11; Path = $exe }
+    $developers = [pscustomobject]@{ Id = 22; Path = 'C:\Users\dev\build\exosnap.exe' }
+    # A process whose Path throws is what an elevated instance looks like to an
+    # unelevated runner. It counts as foreign: unreadable and someone else's are
+    # the same answer when the alternative is killing on a guess.
+    $elevated = [pscustomobject]@{ Id = 33 }
+    Add-Member -InputObject $elevated -MemberType ScriptProperty -Name 'Path' -Value { throw 'access denied' }
+
+    $split = Select-ReleaseStrandedInstances -ExePath $exe -Processes @($mine, $developers, $elevated)
+    Assert-Equal 1 $split.Owned.Count "only the artifact under test is ours to end: $($split.Detail)"
+    Assert-Equal 11 $split.Owned[0].Id 'and it is the one whose path matches'
+    Assert-Equal 2 $split.Foreign.Count "a foreign build and an unreadable one are both left alone: $($split.Detail)"
+    Assert-True ($split.Detail -match '22') "the report names what it would not touch: $($split.Detail)"
+    Assert-True ($split.Detail -match 'single-instance') "and why that matters: $($split.Detail)"
+
+    # Nothing running is the ordinary case and must say nothing at all, so a clean
+    # campaign does not print a warning about a problem it does not have.
+    $none = Select-ReleaseStrandedInstances -ExePath $exe -Processes @()
+    Assert-Equal 0 $none.Owned.Count 'nothing to end'
+    Assert-Equal '' $none.Detail 'and nothing to report'
+}
+
 Test-Case 'an endpoint name becomes the identifier SoundVolumeView answers to' {
     . (Join-Path $scriptRoot 'lib/ReleaseExternalTools.ps1')
     # The defect this exists for: SoundVolumeView exits 0 when its name argument

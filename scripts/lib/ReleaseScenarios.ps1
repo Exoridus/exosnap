@@ -3745,6 +3745,53 @@ function Get-ReleaseAudioDeviceInstanceId {
     return "$($devices[0].InstanceId)"
 }
 
+function Select-ReleaseStrandedInstances {
+    <#
+    .SYNOPSIS
+        Splits running processes into the ones a new launch may end and the ones
+        it may not, given the artifact under test.
+    .DESCRIPTION
+        The application's single-instance guard is machine-wide. An instance left
+        behind by a crashed campaign therefore does not fail the next scenario --
+        it makes every following launch hand over to itself and exit, so the
+        control channel is never created and the gate reports a connect timeout
+        that names nothing. Three scenarios died that way in one campaign before
+        this existed.
+
+        Ownership is decided by executable PATH, never by process name. A
+        developer's own build of the same name, running from somewhere else, is
+        not this campaign's to end. A process whose path cannot be read at all --
+        an elevated one seen from an unelevated runner -- is reported and left
+        alone for the same reason: an unreadable process and a foreign one are the
+        same answer here, and killing on a guess is worse than a named failure.
+
+        Returns @{ Owned; Foreign; Detail }, where Detail is written for whoever
+        reads the connect failure.
+    #>
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] $Processes,
+        [Parameter(Mandatory)] [string] $ExePath
+    )
+    $owned = [System.Collections.Generic.List[object]]::new()
+    $foreign = [System.Collections.Generic.List[object]]::new()
+    foreach ($process in @($Processes)) {
+        if ($null -eq $process) { continue }
+        $path = $null
+        try { $path = "$($process.Path)" } catch { $path = $null }
+        if (-not [string]::IsNullOrWhiteSpace($path) -and $path -eq $ExePath) { $owned.Add($process) }
+        else { $foreign.Add($process) }
+    }
+    $parts = @()
+    if ($owned.Count -gt 0) {
+        $parts += "$($owned.Count) stranded instance(s) of the artifact under test (pid $((@($owned | ForEach-Object { $_.Id })) -join ', '))"
+    }
+    if ($foreign.Count -gt 0) {
+        $parts += "$($foreign.Count) instance(s) this campaign does not own (pid $((@($foreign | ForEach-Object { $_.Id })) -join ', ')); " +
+        'they hold the machine-wide single-instance guard and have to be closed by hand'
+    }
+    return @{ Owned = @($owned); Foreign = @($foreign); Detail = ($parts -join '; ') }
+}
+
 function Wait-ReleaseEndpointGone {
     <#
     .SYNOPSIS

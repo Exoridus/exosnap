@@ -489,6 +489,18 @@ function Start-ReleaseSession {
     Stop-ReleaseElevatedSession
 
     $exe = $Run.Artifact.exePath
+    # A campaign that crashed mid-scenario leaves an instance holding the
+    # machine-wide single-instance guard, and every launch after it hands over and
+    # exits without opening a pipe. The symptom is a connect timeout that names
+    # nothing, repeated for every remaining scenario, so this is checked before the
+    # launch rather than guessed at afterwards.
+    $stranded = Select-ReleaseStrandedInstances -ExePath $exe `
+        -Processes @(Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($exe)) -ErrorAction SilentlyContinue)
+    if (-not [string]::IsNullOrWhiteSpace($stranded.Detail)) { Write-Step $stranded.Detail }
+    foreach ($leftover in $stranded.Owned) {
+        $leftover | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+
     $sessionRunId = New-LiveVerifyRunId
     Write-Step "launching $([IO.Path]::GetFileName($exe)) with the control channel armed"
 
@@ -505,6 +517,10 @@ function Start-ReleaseSession {
     try { $connection = Connect-LiveVerify -RunId $sessionRunId -ConnectTimeoutMs 30000 }
     catch {
         if (-not $process.HasExited) { $process | Stop-Process -Force -ErrorAction SilentlyContinue }
+        # An instance this campaign may not end is the likeliest reason the pipe
+        # never appeared, and saying so here is the difference between one look at
+        # the task list and an afternoon of guessing.
+        if ($stranded.Foreign.Count -gt 0) { throw "$($_.Exception.Message) -- $($stranded.Detail)" }
         throw
     }
 
