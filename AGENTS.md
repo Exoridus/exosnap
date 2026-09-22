@@ -51,12 +51,6 @@ The developer works on the same machine and may be doing anything else on it at 
 - The five capture-excluded overlays are structurally unobservable — `WDA_EXCLUDEFROMCAPTURE` defeats screenshots, screen recording and `PrintWindow`, and the harness only grabs their scene graph. How they reach the desktop can only be confirmed by the developer looking at the screen. Their `[overlay]` log lines exist for that reason.
 - `--auto-record` is the same class of exception as `--visual-test`: argv- or environment-configured, never input synthesis. Its output goes to a scratch directory (`EXOSNAP_OUTPUT_DIR`, else the system temp directory) and is never committed.
 
-## Release authority
-
-Version tags and releases are destructive, release-authority operations. Never create or push a `v*` tag, create or publish a GitHub release, submit a package-manager release, or promote an RC to final, unless the user explicitly requests that exact release operation in the current interaction. Preparing a release, fixing release blockers, or completing verification does not constitute permission to publish it.
-
-The furthest an agent workflow goes is `release-verify.ps1 qualify`, which prints `QUALIFIED FOR PROMOTION` with the commit and the RC tag. Attaching that record to the RC release (`qualify -Publish`) and pushing the final tag are the developer's acts. The pipeline enforces the same boundary from the other side: a final tag whose commit has no qualified record stops before the publish step (`scripts/check-release-qualification.ps1`), so even a tag pushed by mistake ships nothing.
-
 ## Source hygiene
 
 Prefer self-explanatory code. Add comments only for non-obvious correctness, safety, invariants, lifecycle or ordering constraints, compatibility workarounds, or intentional deviations from normal practice. Explain why the obvious implementation would be wrong, not what the code visibly does.
