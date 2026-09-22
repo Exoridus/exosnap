@@ -527,8 +527,7 @@ function Get-ReleaseScenarioCatalog {
                 Id                = 'REL-PRESENT-002'
                 Title             = 'Elevated relaunch for present diagnostics'
                 Kind              = 'Done'
-                Line              = "In an ELEVATED PowerShell run:  & '$exe' --live-verify-control $runId   " +
-                '-- then leave something animating on the primary display.'
+                Line              = 'Confirm the UAC prompt. The runner starts the elevated instance and verifies its control channel automatically.'
                 # Values the Verify block needs travel HERE, not in a closure. A
                 # `.GetNewClosure()` block is bound to a synthetic module that does not
                 # inherit the runner's functions, so it cannot call Connect-LiveVerify
@@ -538,9 +537,8 @@ function Get-ReleaseScenarioCatalog {
                 'elevated process. The elevation prompt runs on the Secure Desktop, where synthetic input is ' +
                 'blocked by design -- not merely discouraged.'
                 Do                = @(
-                    'Close any running ExoSnap.',
-                    'Open PowerShell as administrator. The UAC prompt appears HERE, at the shell; the command below inherits that elevation and raises none of its own.',
-                    "In that elevated shell, run:  & '$exe' --live-verify-control $runId",
+                    'Confirm the UAC prompt when Windows asks.',
+                    'The runner starts ExoSnap elevated with the control channel armed.',
                     'Leave a window presenting on the primary display (a video, a game, any animation).'
                 )
                 Expected          = 'ExoSnap starts elevated with its control channel armed, and something on ' +
@@ -646,9 +644,8 @@ function Get-ReleaseScenarioCatalog {
                     finally { if ($ownsConnection) { try { $conn.Close() } catch { } } }
                 }
             }
-            # An elevated runner needs no operator here: launching an elevated child
-            # raises no prompt when the parent already holds the token, so the gate
-            # becomes a sequence rather than a question.
+            # The runner starts the elevated child itself. An unelevated runner raises
+            # exactly one UAC prompt, then the control channel is verified automatically.
             #
             # The instance is SHARED rather than closed at the end of this gate.
             # REL-CAP-FSE-001 needs the very same elevated session -- present
@@ -674,8 +671,7 @@ function Get-ReleaseScenarioCatalog {
                 }
                 return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
             }
-            [void]$exe
-            return & $ctx.HumanGate $gate
+            return @{ Result = 'FAIL'; Message = 'the elevated present instance could not be started or connected' }
         }
     }
 

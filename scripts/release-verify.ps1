@@ -434,9 +434,9 @@ function Start-ReleaseElevatedSession {
         not want it, because an instance left running is the same mutex problem
         pointed the other way.
 
-        Returns $null when this runner is not elevated. An unelevated parent cannot
-        launch an elevated child without a Secure Desktop prompt, and raising one
-        here would be the runner clicking UAC by proxy.
+        An unelevated runner launches the child with RunAs. Windows owns the Secure
+        Desktop prompt, so the only human action is confirming UAC; the runner then
+        connects to the child automatically.
     #>
     param([Parameter(Mandatory)] $Run)
     if ($null -ne $script:ElevatedSession) {
@@ -445,15 +445,20 @@ function Start-ReleaseElevatedSession {
         try { $script:ElevatedSession.Connection.Close() } catch { }
         $script:ElevatedSession = $null
     }
-    if (-not (Test-RunnerElevated)) { return $null }
-
     # The campaign's own unelevated instance holds the same machine-wide mutex.
     Stop-ReleaseSession
 
     $exe = $Run.Artifact.exePath
     $sessionRunId = New-LiveVerifyRunId
-    Write-Step 'launching the shared ELEVATED instance for the present-diagnostics gates'
-    $process = Start-Process -FilePath $exe -PassThru -ArgumentList @('--live-verify-control', $sessionRunId)
+    if (Test-RunnerElevated) {
+        Write-Step 'launching the shared ELEVATED instance for the present-diagnostics gates'
+        $process = Start-Process -FilePath $exe -PassThru -ArgumentList @('--live-verify-control', $sessionRunId)
+    }
+    else {
+        Write-Step 'launching the shared ELEVATED instance; confirm the UAC prompt'
+        $process = Start-Process -FilePath $exe -PassThru -Verb RunAs -WindowStyle Normal `
+            -ArgumentList @('--live-verify-control', $sessionRunId)
+    }
     try { $connection = Connect-LiveVerify -RunId $sessionRunId -ConnectTimeoutMs 30000 }
     catch {
         if (-not $process.HasExited) { $process | Stop-Process -Force -ErrorAction SilentlyContinue }
