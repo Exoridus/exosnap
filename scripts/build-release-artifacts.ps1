@@ -548,7 +548,8 @@ if (-not $SkipBuild) {
     # up already; from a plain shell this is what puts cl.exe on PATH for Ninja.
     if (Test-PresetUsesNinja -Name $Preset -RepoRoot $RepoRoot) { Enter-MsvcEnvironment | Out-Null }
     if (-not $SkipConfigure) {
-        Invoke-Heartbeat -Name 'cmake configure' -FilePath 'cmake' -Arguments @('--preset', $Preset)
+        Invoke-Heartbeat -Name 'cmake configure' -FilePath 'cmake' `
+            -Arguments @('--preset', $Preset, "-DEXOSNAP_RELEASE_VERSION=$Version")
     }
     # Not `--build --preset "$Preset-exosnap"`: that resolved and ran fine on this
     # dev machine (both directly and through this same Invoke-Heartbeat/Start-Process
