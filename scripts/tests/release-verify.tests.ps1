@@ -2633,10 +2633,12 @@ Test-Case 'REL-AUD-DEGRADE-001 is red without a recovery and green with one' {
     # only that the request was accepted.
     $active = @(
         [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:default-roles'; value = 'console,multimedia' },
         [pscustomobject]@{ key = 'audio.render.normal:endpoint-state'; value = 'active' }
     )
     $removed = @(
         [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:default-roles'; value = 'console,multimedia' },
         [pscustomobject]@{ key = 'audio.render.normal:endpoint-state'; value = 'unplugged' }
     )
     $properties = @($active, $removed)
@@ -2662,6 +2664,27 @@ Test-Case 'REL-AUD-DEGRADE-001 is red without a recovery and green with one' {
     Assert-Equal 'PASS' $green.Result.Result "degraded then recovered is the contract: $($green.Result.Message)"
     Assert-Equal 0 $green.Prompts.Count 'pnputil removes the device, so nobody unplugs anything'
     Assert-True ($green.Result.Message -match '\[pnputil\]') $green.Result.Message
+}
+
+Test-Case 'REL-AUD-DEGRADE-001 refuses to ask for an unplug that cannot matter' {
+    # Measured: one run of this gate moved the default render role to another
+    # endpoint, Windows never handed it back on replug, and the next run asked the
+    # operator to unplug a device nothing was recording from. Nothing degraded,
+    # correctly -- and the gate called the product defective for it.
+    $variables = @{ EXOSNAP_AUDIO_DEVICE_INSTANCE_ID = ''; EXOSNAP_ENDPOINT_VISIBILITY_TOOL = '' }
+    $noRole = @(
+        [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:default-roles'; value = '-' },
+        [pscustomobject]@{ key = 'audio.render.normal:endpoint-state'; value = 'active' }
+    )
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Variables $variables `
+        -EnvctlProperties $noRole -Responses @{
+        'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $false))
+    }
+    Assert-Equal 'UNAVAILABLE' $result.Result.Result `
+        "an endpoint outside the recorded path is an unmet precondition: $($result.Result.Message)"
+    Assert-Equal 0 $result.Prompts.Count 'and nobody is asked to unplug anything for nothing'
 }
 
 Test-Case 'REL-AUD-DEGRADE-001 accepts an outage that ended before the operator answered' {
@@ -2696,6 +2719,7 @@ Test-Case 'REL-AUD-DEGRADE-001 does not blame the product for a removal that nev
     $variables = @{ EXOSNAP_AUDIO_DEVICE_INSTANCE_ID = 'SWD\MMDEVAPI\{0.0.0}'; EXOSNAP_ENDPOINT_VISIBILITY_TOOL = '' }
     $stillActive = @(
         [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:default-roles'; value = 'console,multimedia' },
         [pscustomobject]@{ key = 'audio.render.normal:endpoint-state'; value = 'active' }
     )
     $result = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Elevated -Variables $variables `
@@ -2717,7 +2741,10 @@ Test-Case 'REL-AUD-DEGRADE-001 does not blame the product for a removal that nev
 
     # And when envctl cannot say anything about the endpoint at all, that is also
     # not a pass: an unreadable machine and a changed one are opposite answers.
-    $silent = @([pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' })
+    $silent = @(
+        [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:default-roles'; value = 'console,multimedia' }
+    )
     $unknown = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Elevated -Variables $variables `
         -EnvctlProperties $silent -Tools @{ pnputil = 'C:\Windows\System32\pnputil.exe' } -Responses @{
         'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }

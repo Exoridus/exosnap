@@ -1302,6 +1302,29 @@ function Get-ReleaseScenarioCatalog {
         AsksAPerson         = $true
         Run                 = {
             param($ctx)
+            # System audio is captured from the DEFAULT render endpoint. If the
+            # alias this gate names does not hold that role, removing it cannot
+            # affect the recording, and the verdict would report the product as
+            # defective over a device that was never in the recorded path.
+            #
+            # This is not hypothetical and it does not stay put: Windows promotes a
+            # replacement default the moment an endpoint disappears, and does not
+            # hand the role back when the device returns. One run of this very gate
+            # therefore moves the role somewhere else, and the next one asks the
+            # operator to unplug a device nothing is recording from.
+            if ($ctx.Orchestrator.Available) {
+                $roleSnapshot = Get-EnvironmentSnapshot -Orchestrator $ctx.Orchestrator
+                $roleProperty = @($roleSnapshot.properties |
+                        Where-Object { $_.key -eq 'audio.render.normal:default-roles' }) | Select-Object -First 1
+                $roleValue = if ($null -ne $roleProperty) { "$($roleProperty.value)" } else { '' }
+                if ($roleValue -notmatch 'console|multimedia') {
+                    return @{ Result = 'UNAVAILABLE'
+                        Message = "the endpoint bound to 'audio.render.normal' holds no default render role " +
+                        "(roles: '$roleValue'), so system audio is not captured from it and removing it would " +
+                        'prove nothing'
+                    }
+                }
+            }
             $session = & $ctx.EnsureSession
             $conn = $session.Connection
 
