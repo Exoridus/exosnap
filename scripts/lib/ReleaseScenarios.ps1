@@ -1423,7 +1423,7 @@ function Get-ReleaseScenarioCatalog {
                     # is not always the thing that owns the endpoint. Without this
                     # read-back the gate then polls a pipeline whose source never
                     # went away and reports the product as defective for it.
-                    $gone = Wait-ReleaseEndpointGone -Orchestrator $ctx.Orchestrator -Alias 'audio.render.normal'
+                    $gone = Wait-ReleaseEndpointGone -Orchestrator $ctx.Orchestrator -Alias 'audio.render.normal' -Outage $outage
                     if (-not $gone.Ok) {
                         return @{ Result = 'UNAVAILABLE'; Message = "[pnputil] $($gone.Detail)" }
                     }
@@ -1452,7 +1452,7 @@ function Get-ReleaseScenarioCatalog {
                 try {
                     # Same reason as the pnputil branch: a named tool that reports
                     # nothing is not evidence that the endpoint went away.
-                    $gone = Wait-ReleaseEndpointGone -Orchestrator $ctx.Orchestrator -Alias 'audio.render.normal'
+                    $gone = Wait-ReleaseEndpointGone -Orchestrator $ctx.Orchestrator -Alias 'audio.render.normal' -Outage $outage
                     if (-not $gone.Ok) {
                         return @{ Result = 'UNAVAILABLE'; Message = "[tool] $($gone.Detail)" }
                     }
@@ -3710,10 +3710,37 @@ function Start-ReleaseEndpointOutage {
     return Start-Job -ScriptBlock {
         param($tool, $disable, $enable, $delay, $outage)
         Start-Sleep -Seconds $delay
-        & $tool @disable | Out-Null
+        # Emitted rather than discarded. Windows refuses to disable a device that
+        # is in use, and this one is in use by definition: the gate starts a
+        # recording from it first. Swallowing that refusal left the campaign with
+        # an endpoint that never went away and no way to find out why.
+        $output = & $tool @disable 2>&1 | Out-String
+        [pscustomobject]@{ Stage = 'disable'; ExitCode = $LASTEXITCODE; Output = $output.Trim() }
         Start-Sleep -Seconds $outage
-        & $tool @enable | Out-Null
+        $output = & $tool @enable 2>&1 | Out-String
+        [pscustomobject]@{ Stage = 'enable'; ExitCode = $LASTEXITCODE; Output = $output.Trim() }
     } -ArgumentList $Executable, $DisableArguments, $EnableArguments, $DelaySeconds, $OutageSeconds
+}
+
+function Get-ReleaseOutageFailure {
+    <#
+    .SYNOPSIS
+        What the tool asked to cause an outage actually reported, if it failed.
+    .DESCRIPTION
+        Read from the background job without consuming it, so the caller's own
+        teardown still receives what it expects. Returns an empty string when the
+        removal has not reported yet or reported success: the absence of a tool
+        error is not evidence that the endpoint left, which is what
+        Wait-ReleaseEndpointGone is for.
+    #>
+    param($Job)
+    if ($null -eq $Job) { return '' }
+    $records = @()
+    try { $records = @(Receive-Job -Job $Job -Keep -ErrorAction SilentlyContinue) } catch { return '' }
+    $disable = @($records | Where-Object { $null -ne $_ -and "$($_.Stage)" -eq 'disable' }) | Select-Object -First 1
+    if ($null -eq $disable) { return '' }
+    if ([int]$disable.ExitCode -eq 0) { return '' }
+    return "the removal itself was refused (exit $($disable.ExitCode)): $($disable.Output)"
 }
 
 function Stop-ReleaseEndpointOutage {
@@ -3880,7 +3907,10 @@ function Wait-ReleaseEndpointGone {
     param(
         [Parameter(Mandatory)] $Orchestrator,
         [Parameter(Mandatory)] [string] $Alias,
-        [int] $TimeoutSeconds = 20
+        [int] $TimeoutSeconds = 20,
+        # The background job that was asked to cause the outage. Its own report is
+        # the difference between "the endpoint stayed" and knowing why.
+        $Outage
     )
     if ($null -eq $Orchestrator -or -not $Orchestrator.Available) {
         return @{ Ok = $false; Detail = 'exosnap-envctl is not available, so the endpoint outage cannot be confirmed' }
@@ -3900,10 +3930,13 @@ function Wait-ReleaseEndpointGone {
         if ([DateTime]::UtcNow -ge $deadline) { break }
         Start-Sleep -Milliseconds 500
     }
-    return @{ Ok = $false
-        Detail = "the endpoint bound to '$Alias' stayed '$lastSeen' for ${TimeoutSeconds}s after the removal was " +
-        'requested, so the device node that was addressed is not the one that owns the endpoint'
-    }
+    # States the observation, never a presumed cause: the addressed node being
+    # wrong is only one of the ways this happens, and Windows refusing to disable
+    # a device that is in use is another.
+    $detail = "the endpoint bound to '$Alias' stayed '$lastSeen' for ${TimeoutSeconds}s after the removal was requested"
+    $refusal = Get-ReleaseOutageFailure -Job $Outage
+    if (-not [string]::IsNullOrWhiteSpace($refusal)) { $detail = "$detail -- $refusal" }
+    return @{ Ok = $false; Detail = $detail }
 }
 
 function Restore-ReleaseAudioEndpointState {

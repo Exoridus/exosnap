@@ -2674,6 +2674,11 @@ Test-Case 'REL-AUD-DEGRADE-001 does not blame the product for a removal that nev
     Assert-Equal 'UNAVAILABLE' $result.Result.Result `
         "an endpoint that stayed active is an unmet precondition: $($result.Result.Message)"
     Assert-True ($result.Result.Message -match 'stayed') $result.Result.Message
+    # The message states what was observed. Naming a cause would be a guess: a
+    # wrong device node and a Windows refusal to disable a device in use produce
+    # exactly the same observation.
+    Assert-True ($result.Result.Message -notmatch 'not the one that owns') `
+        "the verdict must not assert a cause it did not establish: $($result.Result.Message)"
 
     # And when envctl cannot say anything about the endpoint at all, that is also
     # not a pass: an unreadable machine and a changed one are opposite answers.
