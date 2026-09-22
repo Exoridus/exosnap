@@ -2671,14 +2671,17 @@ Test-Case 'REL-AUD-DEGRADE-001 does not blame the product for a removal that nev
         'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
         'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $false))
     }
-    Assert-Equal 'UNAVAILABLE' $result.Result.Result `
-        "an endpoint that stayed active is an unmet precondition: $($result.Result.Message)"
-    Assert-True ($result.Result.Message -match 'stayed') $result.Result.Message
-    # The message states what was observed. Naming a cause would be a guess: a
-    # wrong device node and a Windows refusal to disable a device in use produce
-    # exactly the same observation.
-    Assert-True ($result.Result.Message -notmatch 'not the one that owns') `
-        "the verdict must not assert a cause it did not establish: $($result.Result.Message)"
+    # The tool could not cause the outage, so the scenario asks the person it was
+    # always allowed to ask. Reporting UNAVAILABLE instead would leave a required
+    # gate unanswerable on every machine whose audio device refuses to be disabled
+    # -- which is what Windows does for a USB interface, with exit 50.
+    Assert-True ($result.Prompts.Count -gt 0) `
+        "a failed automated outage falls through to the operator: $($result.Result.Message)"
+    # The 'wenn erledigt' form, not 'startet jetzt': the operator acts first and
+    # the runner verifies afterwards, which is the only correct shape for an
+    # outage a person causes.
+    Assert-True ($result.Prompts[-1] -match 'wenn erledigt') `
+        "and asks in the form where the person acts first: $($result.Prompts[-1])"
 
     # And when envctl cannot say anything about the endpoint at all, that is also
     # not a pass: an unreadable machine and a changed one are opposite answers.
@@ -2688,8 +2691,13 @@ Test-Case 'REL-AUD-DEGRADE-001 does not blame the product for a removal that nev
         'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
         'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $false))
     }
-    Assert-Equal 'UNAVAILABLE' $unknown.Result.Result `
-        "an endpoint-state nobody can read is not a pass: $($unknown.Result.Message)"
+    # An unreadable endpoint state is not evidence that the outage happened, so
+    # this too asks the person rather than judging the product on it. What it must
+    # never do is pass silently.
+    Assert-True ($unknown.Prompts.Count -gt 0) `
+        "an endpoint-state nobody can read sends the gate to the operator: $($unknown.Result.Message)"
+    Assert-True ($unknown.Result.Result -ne 'PASS') `
+        "and never passes on an outage nobody confirmed: $($unknown.Result.Message)"
 }
 
 Test-Case 'REL-UPD-MSI-DECLINE-001 runs in a sandbox and is red on a stranded install' {

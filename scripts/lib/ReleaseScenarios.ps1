@@ -1417,21 +1417,31 @@ function Get-ReleaseScenarioCatalog {
                 $outage = Start-ReleaseEndpointOutage -Executable $pnputil.Path `
                     -DisableArguments @('/disable-device', $instanceId) `
                     -EnableArguments @('/enable-device', $instanceId)
+                $toolOutage = $null
                 try {
                     # pnputil exits 0 for a device node it removed and for one whose
-                    # removal never reached WASAPI, and an `AudioEndpoint` class node
-                    # is not always the thing that owns the endpoint. Without this
-                    # read-back the gate then polls a pipeline whose source never
-                    # went away and reports the product as defective for it.
+                    # removal never reached WASAPI, and Windows refuses outright for
+                    # a device that does not support being disabled (exit 50, seen on
+                    # a USB audio interface). Without this read-back the gate polls a
+                    # pipeline whose source never went away and reports the product
+                    # as defective for it.
                     $gone = Wait-ReleaseEndpointGone -Orchestrator $ctx.Orchestrator -Alias 'audio.render.normal' -Outage $outage
-                    if (-not $gone.Ok) {
-                        return @{ Result = 'UNAVAILABLE'; Message = "[pnputil] $($gone.Detail)" }
-                    }
-                    $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
+                    $toolOutage = $gone
+                    if ($gone.Ok) { $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate) }
                 }
                 finally {
                     Stop-ReleaseEndpointOutage -Job $outage -Executable $pnputil.Path `
                         -EnableArguments @('/enable-device', $instanceId)
+                }
+                # A tool that could not cause the outage is not a reason to give up
+                # on the scenario: this gate exists because a person unplugging a
+                # cable always works, and the tool is only the convenience that
+                # spares them. Falling through to the operator asks for ten seconds;
+                # reporting UNAVAILABLE would leave a required gate unanswerable on
+                # any machine whose audio device refuses to be disabled.
+                if ($null -ne $toolOutage -and -not $toolOutage.Ok) {
+                    Write-Step "the automated outage did not happen, so this asks you instead: $($toolOutage.Detail)"
+                    return & $ctx.HumanGate $gate
                 }
                 if ($null -eq $verdict) {
                     return @{ Result = 'UNVERIFIED'; Message = 'the degradation verification returned nothing' }
@@ -1449,17 +1459,20 @@ function Get-ReleaseScenarioCatalog {
                 $outage = Start-ReleaseEndpointOutage -Executable $visibilityTool `
                     -DisableArguments @('set-visibility', $endpointId, '0') `
                     -EnableArguments @('set-visibility', $endpointId, '1')
+                $toolOutage = $null
                 try {
                     # Same reason as the pnputil branch: a named tool that reports
                     # nothing is not evidence that the endpoint went away.
                     $gone = Wait-ReleaseEndpointGone -Orchestrator $ctx.Orchestrator -Alias 'audio.render.normal' -Outage $outage
-                    if (-not $gone.Ok) {
-                        return @{ Result = 'UNAVAILABLE'; Message = "[tool] $($gone.Detail)" }
-                    }
-                    $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
+                    $toolOutage = $gone
+                    if ($gone.Ok) { $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate) }
                 } finally {
                     Stop-ReleaseEndpointOutage -Job $outage -Executable $visibilityTool `
                         -EnableArguments @('set-visibility', $endpointId, '1')
+                }
+                if ($null -ne $toolOutage -and -not $toolOutage.Ok) {
+                    Write-Step "the automated outage did not happen, so this asks you instead: $($toolOutage.Detail)"
+                    return & $ctx.HumanGate $gate
                 }
                 if ($null -eq $verdict) {
                     return @{ Result = 'UNVERIFIED'; Message = 'the degradation verification returned nothing' }
@@ -3740,7 +3753,10 @@ function Get-ReleaseOutageFailure {
     $disable = @($records | Where-Object { $null -ne $_ -and "$($_.Stage)" -eq 'disable' }) | Select-Object -First 1
     if ($null -eq $disable) { return '' }
     if ([int]$disable.ExitCode -eq 0) { return '' }
-    return "the removal itself was refused (exit $($disable.ExitCode)): $($disable.Output)"
+    # Collapsed to one line: a tool's refusal is several lines of banner and
+    # detail, and a verdict truncated at the first newline shows only the banner.
+    $output = (("$($disable.Output)" -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' | ')
+    return "the removal itself was refused (exit $($disable.ExitCode)): $output"
 }
 
 function Stop-ReleaseEndpointOutage {
