@@ -138,7 +138,7 @@ option(EXOSNAP_WITH_PRESENTMON "Build the PresentMon ETW present-diagnostics pro
 add_subdirectory(third_party)
 
 # FFmpeg lgpl-shared prebuilt, built and pinned from our own
-# Exoridus/exosnap-ffmpeg-build repository (FFmpeg 8.1.1, LGPL-only, release r5).
+# Exoridus/exosnap-ffmpeg-build repository (FFmpeg 8.1.1, LGPL-only, release r7).
 # Provides FFmpeg::avformat, FFmpeg::avcodec, FFmpeg::avutil, FFmpeg::swresample,
 # and the convenience bundle FFmpeg::mux.
 include(cmake/VendorFFmpeg.cmake)

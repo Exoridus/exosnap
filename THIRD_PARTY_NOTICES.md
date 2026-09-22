@@ -170,7 +170,7 @@ directory alongside the ExoSnap binary.
 
 ### FFmpeg
 
-- **Version:** exosnap-ffmpeg-build release `r5` (upstream FFmpeg `n8.1.1`)
+- **Version:** exosnap-ffmpeg-build release `r7` (upstream FFmpeg `n8.1.1`)
 - **Project:** https://github.com/Exoridus/exosnap-ffmpeg-build (build/packaging
   repository) / https://ffmpeg.org (upstream FFmpeg source)
 - **License:** LGPL-2.1-or-later (no GPL-licensed components; `--enable-gpl` is not set)
@@ -183,7 +183,8 @@ directory alongside the ExoSnap binary.
   native AAC-LC encoder (ADR 0052).
 - **Note:** ExoSnap's own build is deliberately hardware-encoder-only — no software H.264/HEVC
   encoder (`libx264`/`libx265`) is compiled in or shipped (see ADR 0007). An earlier `r6` build
-  briefly added them for a build-capability proof; that was reverted after a patent-licensing
+  briefly added them for a build-capability proof; `r7` continues the LGPL line from `r5` and does
+  not carry them. The `r6` additions were reverted after a patent-licensing
   review concluded that shipping a compiled software encoder in ExoSnap's own binary is a
   materially different risk than calling a hardware vendor's own NVENC/AMF/QSV SDK, with no
   clear budget to resolve it through formal licensing at this stage. Users may replace the
