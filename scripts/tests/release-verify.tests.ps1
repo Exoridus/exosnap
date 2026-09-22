@@ -1885,7 +1885,21 @@ function Invoke-ReleaseDryRun {
     function Write-Step { param([string] $Text) }
     function Write-Heading { param([string] $Text) }
     function Start-Sleep { param([int] $Seconds, [int] $Milliseconds) }
-    function Get-EnvironmentSnapshot { param($Orchestrator) return [pscustomobject]@{ properties = $envctlProperties } }
+    # A gate that changes machine state and reads it back needs a fixture that can
+    # answer differently before and after the change. A list of property SETS is
+    # walked by successive calls and the last one repeats -- the same shape the
+    # control-channel responder already uses. A flat list keeps its old meaning:
+    # one machine state, answered every time.
+    $envctlCalls = [pscustomobject]@{ Count = 0 }
+    function Get-EnvironmentSnapshot {
+        param($Orchestrator)
+        if ($envctlProperties.Count -gt 0 -and $envctlProperties[0] -is [System.Array]) {
+            $index = [Math]::Min($envctlCalls.Count, $envctlProperties.Count - 1)
+            $envctlCalls.Count = $envctlCalls.Count + 1
+            return [pscustomobject]@{ properties = $envctlProperties[$index] }
+        }
+        return [pscustomobject]@{ properties = $envctlProperties }
+    }
     function Get-Process { param([string] $Name, $ErrorAction) return @() }
     function Get-PnpDevice { param($Class, $Status, $ErrorAction) return @() }
     function Start-Process {
@@ -2537,7 +2551,18 @@ Test-Case 'REL-AUD-FORMAT-001 is red when the endpoint holds no default role' {
 
 Test-Case 'REL-AUD-DEGRADE-001 is red without a recovery and green with one' {
     $variables = @{ EXOSNAP_AUDIO_DEVICE_INSTANCE_ID = 'SWD\MMDEVAPI\{0.0.0}'; EXOSNAP_ENDPOINT_VISIBILITY_TOOL = '' }
-    $properties = @([pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' })
+    # Two machine states: the endpoint is active, and after the removal it is not.
+    # The gate reads this back through envctl, because pnputil's exit code says
+    # only that the request was accepted.
+    $active = @(
+        [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:endpoint-state'; value = 'active' }
+    )
+    $removed = @(
+        [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:endpoint-state'; value = 'unplugged' }
+    )
+    $properties = @($active, $removed)
     # RED: the device goes and never comes back, which fails the same assertion as a
     # device that never went.
     $red = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Elevated -Variables $variables `
@@ -2560,6 +2585,37 @@ Test-Case 'REL-AUD-DEGRADE-001 is red without a recovery and green with one' {
     Assert-Equal 'PASS' $green.Result.Result "degraded then recovered is the contract: $($green.Result.Message)"
     Assert-Equal 0 $green.Prompts.Count 'pnputil removes the device, so nobody unplugs anything'
     Assert-True ($green.Result.Message -match '\[pnputil\]') $green.Result.Message
+}
+
+Test-Case 'REL-AUD-DEGRADE-001 does not blame the product for a removal that never happened' {
+    # The real campaign hit this: pnputil exited 0 for an `AudioEndpoint` node whose
+    # removal never reached WASAPI, the source therefore never degraded, and the
+    # gate reported a correct product as defective. An unmet precondition is
+    # UNAVAILABLE, never FAIL.
+    $variables = @{ EXOSNAP_AUDIO_DEVICE_INSTANCE_ID = 'SWD\MMDEVAPI\{0.0.0}'; EXOSNAP_ENDPOINT_VISIBILITY_TOOL = '' }
+    $stillActive = @(
+        [pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' },
+        [pscustomobject]@{ key = 'audio.render.normal:endpoint-state'; value = 'active' }
+    )
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Elevated -Variables $variables `
+        -EnvctlProperties $stillActive -Tools @{ pnputil = 'C:\Windows\System32\pnputil.exe' } -Responses @{
+        'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $false))
+    }
+    Assert-Equal 'UNAVAILABLE' $result.Result.Result `
+        "an endpoint that stayed active is an unmet precondition: $($result.Result.Message)"
+    Assert-True ($result.Result.Message -match 'stayed') $result.Result.Message
+
+    # And when envctl cannot say anything about the endpoint at all, that is also
+    # not a pass: an unreadable machine and a changed one are opposite answers.
+    $silent = @([pscustomobject]@{ key = 'audio.render.normal:friendly-name'; value = 'Speakers' })
+    $unknown = Invoke-ReleaseDryRun -ScenarioId 'REL-AUD-DEGRADE-001' -Elevated -Variables $variables `
+        -EnvctlProperties $silent -Tools @{ pnputil = 'C:\Windows\System32\pnputil.exe' } -Responses @{
+        'record.snapshot'   = [pscustomobject]@{ systemAudioEnabled = $true }
+        'pipeline.snapshot' = @((New-DryRunPipelineSnapshot -Degraded $false))
+    }
+    Assert-Equal 'UNAVAILABLE' $unknown.Result.Result `
+        "an endpoint-state nobody can read is not a pass: $($unknown.Result.Message)"
 }
 
 Test-Case 'REL-UPD-MSI-DECLINE-001 runs in a sandbox and is red on a stranded install' {

@@ -1,4 +1,4 @@
-﻿#Requires -Version 7.0
+#Requires -Version 7.0
 <#
 .SYNOPSIS
     The v0.9 release scenario catalog.
@@ -1401,7 +1401,18 @@ function Get-ReleaseScenarioCatalog {
                 $outage = Start-ReleaseEndpointOutage -Executable $pnputil.Path `
                     -DisableArguments @('/disable-device', $instanceId) `
                     -EnableArguments @('/enable-device', $instanceId)
-                try { $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate) }
+                try {
+                    # pnputil exits 0 for a device node it removed and for one whose
+                    # removal never reached WASAPI, and an `AudioEndpoint` class node
+                    # is not always the thing that owns the endpoint. Without this
+                    # read-back the gate then polls a pipeline whose source never
+                    # went away and reports the product as defective for it.
+                    $gone = Wait-ReleaseEndpointGone -Orchestrator $ctx.Orchestrator -Alias 'audio.render.normal'
+                    if (-not $gone.Ok) {
+                        return @{ Result = 'UNAVAILABLE'; Message = "[pnputil] $($gone.Detail)" }
+                    }
+                    $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
+                }
                 finally {
                     Stop-ReleaseEndpointOutage -Job $outage -Executable $pnputil.Path `
                         -EnableArguments @('/enable-device', $instanceId)
@@ -1423,6 +1434,12 @@ function Get-ReleaseScenarioCatalog {
                     -DisableArguments @('set-visibility', $endpointId, '0') `
                     -EnableArguments @('set-visibility', $endpointId, '1')
                 try {
+                    # Same reason as the pnputil branch: a named tool that reports
+                    # nothing is not evidence that the endpoint went away.
+                    $gone = Wait-ReleaseEndpointGone -Orchestrator $ctx.Orchestrator -Alias 'audio.render.normal'
+                    if (-not $gone.Ok) {
+                        return @{ Result = 'UNAVAILABLE'; Message = "[tool] $($gone.Detail)" }
+                    }
                     $verdict = Resolve-ReleaseVerdict (& $gate.Verify $ctx $gate)
                 } finally {
                     Stop-ReleaseEndpointOutage -Job $outage -Executable $visibilityTool `
@@ -3726,6 +3743,51 @@ function Get-ReleaseAudioDeviceInstanceId {
     catch { return $null }
     if ($devices.Count -ne 1) { return $null }
     return "$($devices[0].InstanceId)"
+}
+
+function Wait-ReleaseEndpointGone {
+    <#
+    .SYNOPSIS
+        Waits until envctl stops reporting one alias's endpoint as active.
+    .DESCRIPTION
+        The independent read-back for an outage a third-party tool was asked to
+        cause. `pnputil` and a visibility tool both report only their own exit
+        code, and an exit code says the request was accepted, never that the
+        endpoint left. Asserting the product's behaviour against an outage that
+        never happened is how a correct product gets reported as defective.
+
+        Returns @{ Ok; Detail }. `Ok` is true only when the endpoint was observed
+        gone. An endpoint whose state envctl does not report at all is NOT treated
+        as gone: an unreadable machine and a changed one are opposite answers, and
+        a check that quietly passes itself is one nobody can rely on.
+    #>
+    param(
+        [Parameter(Mandatory)] $Orchestrator,
+        [Parameter(Mandatory)] [string] $Alias,
+        [int] $TimeoutSeconds = 20
+    )
+    if ($null -eq $Orchestrator -or -not $Orchestrator.Available) {
+        return @{ Ok = $false; Detail = 'exosnap-envctl is not available, so the endpoint outage cannot be confirmed' }
+    }
+    $deadline = Get-ReleaseGateDeadline -Seconds $TimeoutSeconds
+    $lastSeen = '(never read)'
+    while ($true) {
+        $snapshot = Get-EnvironmentSnapshot -Orchestrator $Orchestrator
+        $state = @($snapshot.properties | Where-Object { $_.key -eq "${Alias}:endpoint-state" }) | Select-Object -First 1
+        if ($null -eq $state) {
+            return @{ Ok = $false
+                Detail = "envctl reports no endpoint-state for '$Alias', so the outage cannot be confirmed"
+            }
+        }
+        $lastSeen = "$($state.value)"
+        if ($lastSeen -ne 'active') { return @{ Ok = $true; Detail = "'$Alias' is no longer active (state '$lastSeen')" } }
+        if ([DateTime]::UtcNow -ge $deadline) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    return @{ Ok = $false
+        Detail = "the endpoint bound to '$Alias' stayed '$lastSeen' for ${TimeoutSeconds}s after the removal was " +
+        'requested, so the device node that was addressed is not the one that owns the endpoint'
+    }
 }
 
 function Restore-ReleaseAudioEndpointState {
