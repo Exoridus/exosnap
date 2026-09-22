@@ -152,20 +152,36 @@ if (Test-RuleEnabled 'commit-subject') {
                 # policy covers. A branch older than the epoch contributes
                 # nothing to the first; a branch that predates it contributes
                 # nothing to the second.
-                $range = @('log', '--format=%H %s', "$baseRef..HEAD", "^$epoch")
+                # %P is asked for so a merge commit can be recognised by having
+                # more than one parent. A merge commit's subject is written by
+                # git, not by an author, and `merge-pr.ps1` squashes every pull
+                # request, so it can never become the subject the changelog cut
+                # parses. Rejecting it would fail a branch over a line that is
+                # unreachable from the thing this rule protects, and worse, it
+                # fails every LATER commit on that branch too, because the whole
+                # range is rescanned each time. Counted and reported, not judged.
+                $unit = [char]0x1f
+                $range = @('log', "--format=%H$unit%P$unit%s", "$baseRef..HEAD", "^$epoch")
                 $lines = @(Invoke-Git $range)
                 $checked = 0
+                $merges = 0
                 foreach ($line in $lines) {
                     if (-not $line) { continue }
-                    $hash, $subjectText = $line -split ' ', 2
+                    $hash, $parents, $subjectText = $line -split $unit, 3
                     if (-not $subjectText) { $subjectText = '' }
+                    if (@($parents -split ' ' | Where-Object { $_ }).Count -gt 1) {
+                        $merges++
+                        continue
+                    }
                     $checked++
                     $parsed = ConvertFrom-CommitSubject -Subject $subjectText
                     if (-not $parsed.Valid) {
                         [void]$violations.Add("commit-subject: $($hash.Substring(0, 8)) '$subjectText' -- $($parsed.Problem)")
                     }
                 }
-                [void]$notes.Add("commit-subject: $checked commit(s) in scope since $($epoch.Substring(0, 8))")
+                $scope = "commit-subject: $checked commit(s) in scope since $($epoch.Substring(0, 8))"
+                if ($merges -gt 0) { $scope += "; $merges merge commit(s) not judged" }
+                [void]$notes.Add($scope)
             }
         }
     }

@@ -314,6 +314,47 @@ Test-Case 'a malformed subject on the branch is rejected' {
     finally { Remove-Fixture $root }
 }
 
+Test-Case 'a merge commit on the branch is counted, not judged' {
+    # `gh pr update-branch` merges main into the branch and git writes the
+    # subject. Judging it fails the branch over a line no author wrote, and
+    # `merge-pr.ps1` squashes every pull request, so that line can never reach
+    # the changelog. The failure this guards against is worse than one refusal:
+    # the range is rescanned on every later commit, so one merge commit locks
+    # the branch against all further work.
+    $root = New-FixtureRepo -WithPolicy
+    try {
+        Invoke-IsolatedGit -C $root checkout -q -b work main
+        Add-FixtureCommit -Root $root -Subject 'fix(engine): bound the capture drains'
+        Invoke-IsolatedGit -C $root checkout -q main
+        Add-FixtureCommit -Root $root -Subject 'fix(app): unrelated work on main' -Relative 'on-main.txt'
+        Invoke-IsolatedGit -C $root checkout -q work
+        Invoke-IsolatedGit -C $root merge main --no-ff -m "Merge branch 'main' into work" --quiet
+        $result = Invoke-PolicyCheck -Root $root
+        Assert-True ($result.ExitCode -eq 0) "a merge commit was judged as an authored subject:`n$($result.Output)"
+        Assert-True ($result.Output -match '1 merge commit\(s\) not judged') `
+            "the merge commit was dropped silently instead of reported:`n$($result.Output)"
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a malformed subject is still rejected when a merge commit is present' {
+    # The exemption is for merge commits only. A branch that carries both must
+    # still fail, or the first case above would have bought acceptance for the
+    # whole range.
+    $root = New-FixtureRepo -WithPolicy
+    try {
+        Invoke-IsolatedGit -C $root checkout -q -b work main
+        Add-FixtureCommit -Root $root -Subject 'made the drains better'
+        Invoke-IsolatedGit -C $root checkout -q main
+        Add-FixtureCommit -Root $root -Subject 'fix(app): unrelated work on main' -Relative 'on-main.txt'
+        Invoke-IsolatedGit -C $root checkout -q work
+        Invoke-IsolatedGit -C $root merge main --no-ff -m "Merge branch 'main' into work" --quiet
+        $result = Invoke-PolicyCheck -Root $root
+        Assert-True ($result.ExitCode -ne 0) "the malformed subject was excused by the merge commit:`n$($result.Output)"
+    }
+    finally { Remove-Fixture $root }
+}
+
 Test-Case 'history before the policy commit is grandfathered' {
     # The whole reason the epoch exists: adopting the rule must not turn every
     # existing branch red, or the rule gets switched off instead of obeyed.
