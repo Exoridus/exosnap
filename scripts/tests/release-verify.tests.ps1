@@ -2426,6 +2426,73 @@ Test-Case 'REL-AUD-SILENCE-001 puts the default endpoint back, and asks when it 
     Assert-True ($asked.Prompts[0] -match 'wenn erledigt') "and it is the you-have-acted form: $($asked.Prompts[0])"
 }
 
+Test-Case 'an endpoint name becomes the identifier SoundVolumeView answers to' {
+    . (Join-Path $scriptRoot 'lib/ReleaseExternalTools.ps1')
+    # The defect this exists for: SoundVolumeView exits 0 when its name argument
+    # matches no device, so passing envctl's spelling changed nothing and looked
+    # exactly like success. Only the composed identifier selects the endpoint.
+    Assert-Equal 'NVIDIA High Definition Audio\Device\27GL850\Render' `
+        (ConvertTo-ReleaseAudioEndpointId -FriendlyName '27GL850 (NVIDIA High Definition Audio)') `
+        'the device part becomes the prefix and the name the leaf'
+
+    Assert-Equal 'VB-Audio Virtual Cable\Device\CABLE Input\Capture' `
+        (ConvertTo-ReleaseAudioEndpointId -FriendlyName 'CABLE Input (VB-Audio Virtual Cable)' -Direction 'Capture') `
+        'the direction is carried, so a render request cannot select a capture endpoint of the same name'
+
+    # A bare name is what SoundVolumeView calls the endpoint itself, so it is
+    # passed through. Inventing a device for it would name one that does not exist.
+    Assert-Equal 'Speakers' (ConvertTo-ReleaseAudioEndpointId -FriendlyName 'Speakers') `
+        'a name with no device part is left alone'
+
+    # Nested parentheses cannot be split without guessing which group is the device,
+    # so the name is left alone rather than composed into a wrong one.
+    Assert-Equal 'OUT 1-2 (BEHRINGER (UMC) 204HD)' `
+        (ConvertTo-ReleaseAudioEndpointId -FriendlyName 'OUT 1-2 (BEHRINGER (UMC) 204HD)') `
+        'an ambiguous name is not guessed at'
+}
+
+Test-Case 'PresentMon is called with the switches the installed binary advertises' {
+    . (Join-Path $scriptRoot 'lib/ReleaseExternalTools.ps1')
+    # An unknown option is a hard exit for PresentMon, not a warning, so guessing
+    # the wrong generation does not degrade the oracle -- it removes it, and the
+    # present gates then report only what the product said about itself.
+    $captured = [System.Collections.Generic.List[object]]::new()
+    Set-ReleaseToolInvoker {
+        param($Tool, $Arguments)
+        $captured.Add(@{ Path = "$($Tool.Path)"; Arguments = @($Arguments) })
+        if (@($Arguments) -contains '--help') {
+            $modern = '--output_file --timed --no_console_stats --v1_metrics --process_id'
+            $legacy = '--output_file --timed --no_top --process_id'
+            return @{ ExitCode = 0; Output = $(if ("$($Tool.Path)" -match 'modern') { $modern } else { $legacy }) }
+        }
+        return @{ ExitCode = 0; Output = '' }
+    }.GetNewClosure()
+    $csv = Join-Path ([System.IO.Path]::GetTempPath()) 'exosnap-presentmon-switches.csv'
+    try {
+        $modernTool = @{ Name = 'presentmon'; Path = 'C:\tools\modern\PresentMon.exe'; Available = $true }
+        [void](Get-ReleasePresentMonObservation -Tool $modernTool -ProcessId 42 -CsvPath $csv -Seconds 1)
+        $call = @($captured | Where-Object { $_.Arguments -notcontains '--help' })[0].Arguments
+        Assert-True ($call -contains '--no_console_stats') "the 2.x switch is used: $($call -join ' ')"
+        Assert-True ($call -notcontains '--no_top') "and the 1.x switch is not: $($call -join ' ')"
+        Assert-True ($call -contains '--v1_metrics') `
+            "the 1.x metric set is requested, because the 2.x default CSV carries no PresentMode column: $($call -join ' ')"
+
+        # A binary advertising the older vocabulary keeps it, and gets no switch
+        # that vocabulary does not have.
+        $captured.Clear()
+        $legacyTool = @{ Name = 'presentmon'; Path = 'C:\tools\legacy\PresentMon.exe'; Available = $true }
+        [void](Get-ReleasePresentMonObservation -Tool $legacyTool -ProcessId 42 -CsvPath $csv -Seconds 1)
+        $legacyCall = @($captured | Where-Object { $_.Arguments -notcontains '--help' })[0].Arguments
+        Assert-True ($legacyCall -contains '--no_top') "the 1.x switch is used: $($legacyCall -join ' ')"
+        Assert-True ($legacyCall -notcontains '--v1_metrics') `
+            "and 1.x is not asked for a switch it does not have: $($legacyCall -join ' ')"
+    }
+    finally {
+        Set-ReleaseToolInvoker $null
+        Remove-Item -LiteralPath $csv -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Test-Case 'REL-AUD-FORMAT-001 stops asking a person for a machine-state precondition' {
     # THE rc19 DEFECT. Step 3 of a four-part block was "make it the DEFAULT playback
     # device" -- a machine state, asked of a person, and then reported as a product

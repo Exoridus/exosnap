@@ -1481,27 +1481,28 @@ function Get-ReleaseScenarioCatalog {
             $previousDefault = Get-ReleaseDefaultAudioEndpointName -Endpoints $endpoints
             $routed = $false
             if ($switcher.Available -and $null -ne $cable -and $null -ne $previousDefault -and $cable -ne $previousDefault) {
-                $switchedConsole = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable -Role 'console'
-                $switched = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable -Role 'multimedia'
-                # Read the default back through the product rather than trusting the
-                # switch. SoundVolumeView reports no outcome and exits 0 even when its
-                # endpoint argument matched nothing, so an unrouted run would record
-                # from the operator's own output -- and pass, because that output is
-                # usually silent too. This gate is about a silent source, so the one
-                # thing it must not do is assume which source it got.
-                if ($switchedConsole.Ok -and $switched.Ok) {
-                    $routedDefault = Get-ReleaseDefaultAudioEndpointName -Endpoints @(Get-ReleaseAudioOutputEndpoints -Connection $conn)
-                    $routed = ($routedDefault -eq $cable)
-                    if (-not $routed) {
-                        # Put the operator's default back before leaving, whatever the
-                        # switch did or did not do: an early return that skips the
-                        # restore is how a campaign ends with the machine's sound on a
-                        # virtual cable.
-                        [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'console')
-                        [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'multimedia')
-                        return @{ Result = 'UNAVAILABLE'
-                            Message = "could not route system audio to '$cable': the default endpoint still reads '$routedDefault'"
-                        }
+                [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable -Role 'console')
+                [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $cable -Role 'multimedia')
+                # Read the default back through the product. Nothing the switch
+                # returned is consulted, deliberately: SoundVolumeView reports no
+                # outcome and exits 0 even when its endpoint argument matched
+                # nothing, so a per-call success flag would only say the request was
+                # formed. Branching on it also leaves a third path -- one role taken,
+                # the other refused -- in which the machine is half switched and the
+                # gate would record from whatever ended up default and pass, because
+                # the operator's own output is usually silent too.
+                #
+                # So one question decides: is the cable the default now.
+                $routedDefault = Get-ReleaseDefaultAudioEndpointName -Endpoints @(Get-ReleaseAudioOutputEndpoints -Connection $conn)
+                $routed = ($routedDefault -eq $cable)
+                if (-not $routed) {
+                    # Both roles go back whatever happened, because a half-applied
+                    # switch is exactly the state that leaves a machine's sound on a
+                    # virtual cable after the campaign ends.
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'console')
+                    [void](Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $previousDefault -Role 'multimedia')
+                    return @{ Result = 'UNAVAILABLE'
+                        Message = "could not route system audio to '$cable': the default endpoint still reads '$routedDefault'"
                     }
                 }
             }
@@ -1652,6 +1653,15 @@ function Get-ReleaseScenarioCatalog {
                         Where-Object { $_.key -eq 'audio.render.normal:friendly-name' }) | Select-Object -First 1
                 if ($null -ne $nameProperty -and -not [string]::IsNullOrWhiteSpace("$($nameProperty.value)")) {
                     $endpointName = "$($nameProperty.value)"
+                    # Remembered BEFORE the first change, not after the last one. A
+                    # record written only on full success cannot undo a partial
+                    # change, and a partial change is exactly what a refused second
+                    # call leaves behind: the format moved, the role did not, and
+                    # nothing remains that says what the machine looked like.
+                    $restore = @{ Name = $endpointName
+                        PreviousFormat  = if ($null -ne $formatProperty) { "$($formatProperty.value)" } else { '' }
+                        PreviousDefault = if ($null -ne $defaultBefore) { "$($defaultBefore.value)" } else { '' }
+                    }
                     $format = Set-ReleaseAudioEndpointFormat -Tool $switcher -EndpointName $endpointName -SampleRate 44100
                     # Console and multimedia only. System audio is captured from
                     # those two roles, communications is not in the recorded path,
@@ -1659,12 +1669,12 @@ function Get-ReleaseScenarioCatalog {
                     # gate has no remembered value for and therefore must not move.
                     $console = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $endpointName -Role 'console'
                     $role = Set-ReleaseDefaultAudioEndpoint -Tool $switcher -EndpointName $endpointName -Role 'multimedia'
+                    # A hard refusal from the tool sends this back to the operator.
+                    # Whether the change actually took is not decided here at all --
+                    # the gate re-reads the endpoint through envctl, and that
+                    # read-back is the only evidence either path produces.
                     if ($format.Ok -and $console.Ok -and $role.Ok) {
                         $prepared = "$($format.Detail); $($role.Detail)"
-                        $restore = @{ Name = $endpointName
-                            PreviousFormat  = if ($null -ne $formatProperty) { "$($formatProperty.value)" } else { '' }
-                            PreviousDefault = if ($null -ne $defaultBefore) { "$($defaultBefore.value)" } else { '' }
-                        }
                     }
                 }
             }

@@ -46,6 +46,11 @@ function Set-ReleaseToolInvoker {
 # different question from what the tool answers when it runs.
 $script:ReleaseToolOverride = @{}
 
+# Which command-line switches each resolved PresentMon advertises, keyed by path.
+# Declared here rather than created on first use: this file runs under
+# Set-StrictMode, where reading an undeclared script variable is an error.
+$script:ReleasePresentMonOptions = @{}
+
 function Set-ReleaseToolAvailability {
     <#
     .SYNOPSIS
@@ -239,9 +244,19 @@ function Get-ReleasePresentMonObservation {
         '--output_file', $CsvPath,
         '--timed', "$Seconds",
         '--terminate_after_timed',
-        '--stop_existing_session',
-        '--no_top'
+        '--stop_existing_session'
     )
+    # PresentMon renamed the console-output switch between its 1.x and 2.x command
+    # lines, and an unknown option is a hard exit rather than a warning -- so
+    # guessing wrong does not degrade the oracle, it removes it, and the gate then
+    # reports only what the product said about itself. The binary is asked which
+    # vocabulary it speaks. 2.x also defaults to its own metric set, whose CSV does
+    # not carry the PresentMode column this reader needs, so the 1.x metrics are
+    # requested explicitly wherever that switch exists.
+    $advertised = @(Get-ReleasePresentMonOptions -Tool $Tool)
+    if ($advertised -contains '--no_console_stats') { $arguments += '--no_console_stats' }
+    elseif ($advertised -contains '--no_top' -or $advertised.Count -eq 0) { $arguments += '--no_top' }
+    if ($advertised -contains '--v1_metrics') { $arguments += '--v1_metrics' }
     $run = Invoke-ReleaseTool -Tool $Tool -Arguments $arguments -TimeoutSeconds ($Seconds + 60)
     if ($run.ExitCode -ne 0) {
         return @{ Ok = $false; Detail = "PresentMon exited $($run.ExitCode): $($run.Output)"; Frames = 0; PresentModes = @() }
@@ -255,6 +270,32 @@ function Get-ReleasePresentMonObservation {
     return @{ Ok = $true; Frames = $rows.Count; PresentModes = $modes
         Detail          = "$($rows.Count) present(s), mode(s): $(if ($modes.Count -gt 0) { $modes -join ', ' } else { 'none' })"
     }
+}
+
+function Get-ReleasePresentMonOptions {
+    <#
+    .SYNOPSIS
+        The command-line switches the installed PresentMon advertises.
+    .DESCRIPTION
+        Read once per tool path from the binary's own help output, because the two
+        shipped generations differ in the switches this reader depends on and no
+        version string distinguishes them reliably enough to branch on.
+
+        An empty answer is the honest one for a tool that printed no help, and the
+        caller then keeps the older spelling: a dry run replaces the invoker, and a
+        simulated tool must not be pushed down a path its fixtures never described.
+    #>
+    param([Parameter(Mandatory)] $Tool)
+    $key = "$($Tool.Path)"
+    if ($script:ReleasePresentMonOptions.ContainsKey($key)) { return $script:ReleasePresentMonOptions[$key] }
+    $options = @()
+    try {
+        $help = Invoke-ReleaseTool -Tool $Tool -Arguments @('--help') -TimeoutSeconds 30
+        $options = @([regex]::Matches("$($help.Output)", '--[a-z0-9_]+') | ForEach-Object { $_.Value } | Sort-Object -Unique)
+    }
+    catch { $options = @() }
+    $script:ReleasePresentMonOptions[$key] = $options
+    return $options
 }
 
 function Test-ReleasePresentModeAgreement {
