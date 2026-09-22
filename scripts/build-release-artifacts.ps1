@@ -92,6 +92,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot 'lib/MsvcEnvironment.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot 'lib/DependencyIdentity.psm1') -Force -DisableNameChecking
 . (Join-Path $PSScriptRoot 'lib/ReleaseArtifactIdentity.ps1')
 
 # ---------------------------------------------------------------------------
@@ -1174,6 +1175,10 @@ $manifest = [ordered]@{
     portableSha256  = $sha
     fileCount       = $allFiles.Count
     files           = $fileEntries
+    # The file list says which bytes shipped; it cannot say what they were built
+    # from, and a statically linked library leaves no file behind at all. Read
+    # from the pin files themselves, so this is the same authority the build used.
+    dependencies    = Get-DependencyIdentity -RepoRoot $RepoRoot
 }
 if ($msiBuilt) {
     $manifest['msiPackage'] = "$MsiPackageName.msi"
