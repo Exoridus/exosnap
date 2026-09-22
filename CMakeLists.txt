@@ -138,7 +138,7 @@ option(EXOSNAP_WITH_PRESENTMON "Build the PresentMon ETW present-diagnostics pro
 add_subdirectory(third_party)
 
 # FFmpeg lgpl-shared prebuilt, built and pinned from our own
-# Exoridus/exosnap-ffmpeg-build repository (FFmpeg 8.1.1, LGPL-only, release r5).
+# Exoridus/exosnap-ffmpeg-build repository (FFmpeg 8.1.1, LGPL-only, release r7).
 # Provides FFmpeg::avformat, FFmpeg::avcodec, FFmpeg::avutil, FFmpeg::swresample,
 # and the convenience bundle FFmpeg::mux.
 include(cmake/VendorFFmpeg.cmake)
@@ -208,7 +208,7 @@ set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
 # Overridable as before: an explicit Qt6_DIR or CMAKE_PREFIX_PATH wins, because this
 # only fills in when nothing else has.
 if(NOT Qt6_DIR)
-    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.11.1/msvc2022_64")
+    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.11.2/msvc2022_64")
 endif()
 
 add_subdirectory(libs/engine)
