@@ -136,18 +136,44 @@ function Get-DependencyIdentity {
         })
 
     $ffmpegText = Get-Content -LiteralPath $ffmpegPath -Raw
-    $ffmpegVersion = [regex]::Match($ffmpegText, '(?i)set\(\s*EXOSNAP_FFMPEG_VERSION\s+"([^"]+)"')
+
+    # The pin is expressed through CMake variables, so the URL literal in the
+    # file still contains `${...}` references. Reading the literal would record a
+    # placeholder as the shipped identity, which is worse than recording nothing:
+    # it looks like an answer. Resolve the two variables the URL is built from,
+    # then substitute them.
+    $ffmpegTag = [regex]::Match($ffmpegText, '(?i)set\(\s*EXOSNAP_FFMPEG_PACKAGE_TAG\s+"([^"$]+)"')
+    $ffmpegUpstream = [regex]::Match($ffmpegText, '(?i)set\(\s*EXOSNAP_FFMPEG_UPSTREAM_TAG\s+"([^"$]+)"')
     $ffmpegUrl = [regex]::Match($ffmpegText, '(?im)^\s*URL\s+"([^"]+)"')
     $ffmpegHash = [regex]::Match($ffmpegText, '(?i)URL_HASH\s+"?SHA256=([0-9a-fA-F]{64})"?')
-    if (-not ($ffmpegVersion.Success -and $ffmpegUrl.Success -and $ffmpegHash.Success)) {
-        throw 'Dependency identity: cannot read the FFmpeg version, URL and SHA-256 from cmake/VendorFFmpeg.cmake.'
+    if (-not ($ffmpegTag.Success -and $ffmpegUpstream.Success -and $ffmpegUrl.Success -and $ffmpegHash.Success)) {
+        throw 'Dependency identity: cannot read the FFmpeg package tag, upstream tag, URL and SHA-256 from cmake/VendorFFmpeg.cmake.'
     }
+
+    $resolvedUrl = $ffmpegUrl.Groups[1].Value.
+        Replace('${EXOSNAP_FFMPEG_PACKAGE_TAG}', $ffmpegTag.Groups[1].Value).
+        Replace('${EXOSNAP_FFMPEG_UPSTREAM_TAG}', $ffmpegUpstream.Groups[1].Value)
+    if ($resolvedUrl -match '\$\{') {
+        throw "Dependency identity: the FFmpeg URL still contains an unresolved variable after substitution: $resolvedUrl"
+    }
+
+    $ffmpegMajors = [ordered]@{}
+    foreach ($lib in @('AVFORMAT', 'AVCODEC', 'AVUTIL', 'SWRESAMPLE')) {
+        $major = [regex]::Match($ffmpegText, "(?i)set\(\s*EXOSNAP_FFMPEG_${lib}_MAJOR\s+(\d+)\s*\)")
+        if (-not $major.Success) {
+            throw "Dependency identity: cmake/VendorFFmpeg.cmake declares no pinned major for $lib."
+        }
+        $ffmpegMajors[$lib.ToLowerInvariant()] = [int]$major.Groups[1].Value
+    }
+
     $entries.Add([ordered]@{
-            name          = 'FFmpeg'
-            linkage       = 'dynamic'
-            version       = $ffmpegVersion.Groups[1].Value
-            source        = $ffmpegUrl.Groups[1].Value
-            archiveSha256 = $ffmpegHash.Groups[1].Value.ToLowerInvariant()
+            name             = 'FFmpeg'
+            linkage          = 'dynamic'
+            version          = $ffmpegTag.Groups[1].Value
+            upstreamVersion  = $ffmpegUpstream.Groups[1].Value
+            source           = $resolvedUrl
+            archiveSha256    = $ffmpegHash.Groups[1].Value.ToLowerInvariant()
+            libraryMajors    = $ffmpegMajors
         })
 
     $thirdPartyText = Get-Content -LiteralPath $thirdPartyPath -Raw
