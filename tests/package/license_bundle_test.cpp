@@ -140,11 +140,29 @@ TEST(LicenseBundle, NoticesHasNoWorkspaceRefs) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Root LICENSE has SPDX identifier
+// 6. Root LICENSE is the license text and nothing else
 // ---------------------------------------------------------------------------
-TEST(LicenseBundle, RootLicenseHasSPDX) {
+// GitHub identifies a repository's license by matching LICENSE against the known
+// license texts, so anything prepended to it defeats the match: an
+// SPDX-License-Identifier line at the top left the repository reporting
+// NOASSERTION and the README badge reading "not identifiable". The
+// machine-readable identifier belongs where a consumer reads it instead, which is
+// what the second half of this test pins.
+TEST(LicenseBundle, RootLicenseIsUnadornedGpl3) {
     auto content = read_file(project_root() / "LICENSE");
-    EXPECT_NE(content.find("SPDX-License-Identifier"), std::string::npos);
+    EXPECT_EQ(content.find("SPDX-License-Identifier"), std::string::npos)
+        << "LICENSE must carry the license text alone, or GitHub cannot identify it";
+    EXPECT_NE(content.find("GNU GENERAL PUBLIC LICENSE"), std::string::npos);
+    EXPECT_NE(content.find("Version 3, 29 June 2007"), std::string::npos);
+}
+
+TEST(LicenseBundle, PackageMetadataDeclaresTheSpdxIdentifier) {
+    for (const auto& relative :
+         {"packaging/scoop/exosnap.json", "app/exosnap_version.rc.in", "apps/updater/updater.rc.in"}) {
+        auto content = read_file(project_root() / relative);
+        EXPECT_NE(content.find("GPL-3.0-or-later"), std::string::npos)
+            << relative << " must declare the SPDX license identifier";
+    }
 }
 
 // ---------------------------------------------------------------------------

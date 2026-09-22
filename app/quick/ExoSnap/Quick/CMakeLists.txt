@@ -923,6 +923,12 @@ qt_add_qml_module(record_controls_qml_tests
         # glyph a tone resolves to, and what the accessible name says.
         ExoInfoButton.qml
         ExoNotice.qml
+        # The settings row's three-way explanation contract: `hint` and `info`
+        # exclude each other, `readout` excludes neither. Which of the three a
+        # row carries decides what its secondary line says, and the guard that
+        # rejects the illegal pair only writes to the log, so nothing but an
+        # assertion catches a row that trips it.
+        ExoSettingRow.qml
         # The suffix formatting (textFromValue) and its inverse (valueFromText)
         # only matter together -- a test module built without the paired parser
         # would exercise a SpinBox that never showed the bug.
