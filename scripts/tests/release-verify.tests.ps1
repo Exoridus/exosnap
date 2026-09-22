@@ -2032,12 +2032,17 @@ function New-DryRunPresentSnapshot {
     # that switches the default and reads it back needs a fixture that can answer
     # differently before and after the switch; a single static snapshot would make
     # the read-back unsatisfiable and the routing unverifiable.
+    # $Availability and $Reason are separate from $Available on purpose: the real
+    # snapshot can report available = true (opt-in on, session elevated) while
+    # availability says 'unavailable' because nothing was measured. A fixture that
+    # could not express that combination is why the gate judged a null mode.
     param([string] $Mode = 'independentFlip', [int] $Count = 1200, [bool] $Available = $true, [bool] $Elevated = $true,
-        [string] $DefaultOutput = 'Speakers')
+        [string] $DefaultOutput = 'Speakers', [string] $Availability, [string] $Reason)
     return [pscustomobject]@{
         present = [pscustomobject]@{ optIn = $true; elevated = $Elevated; available = $Available
-            availability                   = $(if ($Available) { 'available' } else { 'requiresElevation' })
-            reason                         = $null; mode = $Mode; tearing = $false; presentCount = $Count
+            availability                   = $(if (-not [string]::IsNullOrWhiteSpace($Availability)) { $Availability }
+                elseif ($Available) { 'available' } else { 'requiresElevation' })
+            reason                         = $Reason; mode = $Mode; tearing = $false; presentCount = $Count
             discardedCount                 = 0; modeFlipCount = 0
         }
         audio   = [pscustomobject]@{ outputs = @(
@@ -2355,6 +2360,19 @@ Test-Case 'REL-CAP-FSE-001 is red on a composed window and green on a real exclu
     Assert-Equal 'PASS' $green.Result.Result "a real exclusive flip must pass: $($green.Result.Message)"
     Assert-Equal 0 $green.Prompts.Count 'the probe answers this gate; nobody is asked'
     Assert-True ($green.Result.Message -match 'PresentMon agrees') $green.Result.Message
+}
+
+Test-Case 'REL-CAP-FSE-001 does not judge a present mode that was never measured' {
+    # Taken from a real campaign snapshot: available = true (opt-in on, elevated)
+    # while availability says 'unavailable' with reason 'noPresentObserved', so the
+    # mode is null. The gate compared that null to exclusiveFullscreen and reported
+    # the product as defective for a measurement that never happened.
+    $result = Invoke-ReleaseDryRun -ScenarioId 'REL-CAP-FSE-001' -Elevated -FullscreenProbe `
+        -Responses @{ 'environment.snapshot' = (New-DryRunPresentSnapshot -Mode '' -Availability 'unavailable' -Reason 'noPresentObserved') }
+    Assert-Equal 'UNAVAILABLE' $result.Result.Result `
+        "nothing measured is an unmet precondition, not a product defect: $($result.Result.Message)"
+    Assert-True ($result.Result.Message -match 'noPresentObserved') `
+        "and the reason the product gave is carried through: $($result.Result.Message)"
 }
 
 Test-Case 'REL-CAP-FSE-001 fails when the two present decoders disagree' {

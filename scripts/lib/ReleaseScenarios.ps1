@@ -1188,6 +1188,19 @@ function Get-ReleaseScenarioCatalog {
                             Evidence = $evidence
                         }
                     }
+                    # `available` reports only that the opt-in is on and the session
+                    # is elevated. Whether anything was MEASURED is `availability`
+                    # together with `reason`: a snapshot reading availability
+                    # 'unavailable' with reason 'noPresentObserved' carries a null
+                    # mode, and comparing that to exclusiveFullscreen reports the
+                    # product as defective for a measurement that never happened.
+                    if ("$($present.availability)" -ne 'available' -or [string]::IsNullOrWhiteSpace("$($present.mode)")) {
+                        return @{ Ok = $false; Unavailable = $true
+                            Detail   = "present diagnostics measured nothing (availability " +
+                            "'$($present.availability)', reason '$($present.reason)'), so there is no present mode to judge"
+                            Evidence = $evidence
+                        }
+                    }
                     if ($present.mode -ne 'exclusiveFullscreen') {
                         return @{ Ok = $false; Detail = "present mode is '$($present.mode)', not exclusiveFullscreen"; Evidence = $evidence }
                     }
@@ -1260,6 +1273,9 @@ function Get-ReleaseScenarioCatalog {
                 }
                 if ($verdict.Ok) {
                     return @{ Result = 'PASS'; Message = "[probe] $($verdict.Detail)"; Evidence = $verdict.Evidence }
+                }
+                if ($verdict.Unavailable) {
+                    return @{ Result = 'UNAVAILABLE'; Message = "[probe] $($verdict.Detail)"; Evidence = $verdict.Evidence }
                 }
                 return @{ Result = 'FAIL'; Message = $verdict.Detail; Evidence = $verdict.Evidence }
             }
@@ -3967,6 +3983,12 @@ function Resolve-ReleaseVerdict {
     if (-not $Verdict.ContainsKey('Ok')) { $Verdict['Ok'] = $false }
     if (-not $Verdict.ContainsKey('Detail') -or $null -eq $Verdict['Detail']) { $Verdict['Detail'] = '' }
     if (-not $Verdict.ContainsKey('Evidence') -or $null -eq $Verdict['Evidence']) { $Verdict['Evidence'] = @() }
+    # `Unavailable` lets a Verify block say that its precondition was never met,
+    # which is rule 3 of the runner and a different answer from a failed
+    # assertion. Without it every such block had to return Ok = $false, and the
+    # caller reported the PRODUCT as defective for a measurement that never
+    # happened. Defaulted here so no caller has to test for the key first.
+    if (-not $Verdict.ContainsKey('Unavailable')) { $Verdict['Unavailable'] = $false }
     return $Verdict
 }
 
