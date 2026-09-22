@@ -56,7 +56,7 @@ Expert mode replaces this ladder with the rate-control mode and ExoSnap's qualit
         info: qsTr("ExoSnap's own quality scale, 1 to 51, where lower is better. It is not the number handed to the encoder: each codec is given a quantizer calibrated to that point on the scale, shown under the field. The scale is H.264's quantizer exactly, HEVC runs a little finer, and AV1 uses its own 0 to 255 qindex domain.
 
 Screen content with small text degrades earlier than video does, so the useful range for recording a desktop is narrower than the scale suggests.")
-        hint: root.settings.nativeQuantizerHint
+        readout: root.settings.nativeQuantizerHint
         stacked: root.stacked
         visible: root.settings.expertMode
         Layout.fillWidth: true
