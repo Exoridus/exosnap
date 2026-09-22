@@ -131,6 +131,16 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $runsRoot = Join-Path $repositoryRoot '.workspace/release-verify'
 
+# The endpoint visibility shim is machine-local and intentionally untracked. Use it
+# by default when this checkout has one, while preserving the environment override
+# for a different tool or a CI machine that supplies its own implementation.
+if ([string]::IsNullOrWhiteSpace($env:EXOSNAP_ENDPOINT_VISIBILITY_TOOL)) {
+    $localVisibilityTool = Join-Path $repositoryRoot '.workspace/tools/endpoint-visibility.ps1'
+    if (Test-Path -LiteralPath $localVisibilityTool) {
+        $env:EXOSNAP_ENDPOINT_VISIBILITY_TOOL = $localVisibilityTool
+    }
+}
+
 Import-Module (Join-Path $PSScriptRoot 'lib/LiveVerifyState.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'lib/LiveVerifyClient.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'lib/EnvironmentOrchestrator.psm1') -Force -DisableNameChecking
