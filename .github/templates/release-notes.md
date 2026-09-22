@@ -14,7 +14,7 @@ ${CHANGELOG_SECTION}
 | Chocolatey | `choco install exosnap` |
 | Scoop | `scoop install exosnap` |
 
-Windows 10 21H2 or newer, x64. Recording needs an NVIDIA GPU with NVENC; everything else runs without one. An existing install updates itself from the Stable channel.
+Windows 10 21H2 or newer, x64. Recording needs an NVIDIA GPU with NVENC. Everything else runs without one. An existing install updates itself from the Stable channel.
 
 Every artifact and the signed update manifest were built and verified by CI from ${COMMIT}.
 

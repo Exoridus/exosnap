@@ -1,4 +1,4 @@
-# ExoSnap Hybrid v3 — Canonical Design Target
+# ExoSnap Hybrid v3: Canonical Design Target
 
 Source: the Hybrid v3 visual prototype (per-surface JSX mockups and the design-spec HTML)
 
@@ -23,7 +23,7 @@ Hybrid v3 is the approved design target direction.
 
 ### App icon
 
-A quiet aperture mark — concentric rings reducing to a single dot:
+A quiet aperture mark: concentric rings reducing to a single dot:
 
 - Outer ring: accent color, 0.45 opacity, 1.5px stroke.
 - Inner ring: accent (or coral while recording), 1.6px stroke.
@@ -33,11 +33,7 @@ Recording state: inner ring and dot turn coral. Taskbar icon shows a live record
 
 ### Wordmark
 
-Lowercase Hanken Grotesk, weight 600, letter-spacing -0.4:
-
-```
-exosnap
-```
+Lowercase Hanken Grotesk, weight 600, letter-spacing -0.4: `exosnap`.
 
 - `exo`: neutral (ink color, `#F1F1EF` on dark).
 - `snap`: accent color (mint-cyan default `#9BD9D2`).
@@ -81,10 +77,10 @@ Semantic colors are always separate from the primary accent:
 
 | State | Pill | Details shown |
 |---|---|---|
-| Ready | Green dot + "Ready" | — |
+| Ready | Green dot + "Ready" | N/A |
 | Recording | Red pulsing dot + "Recording" | Drop count, Frame time (ms), Encoder load (%) |
-| Paused | Amber dot + "Paused" | — |
-| Completed | Green dot + "Saved" | — |
+| Paused | Amber dot + "Paused" | N/A |
+| Completed | Green dot + "Saved" | N/A |
 
 Metrics shown during recording are recording-health only: dropped frames, frame time, encoder load. No generic CPU / GPU / RAM / Disk global stats.
 
@@ -94,12 +90,12 @@ Metrics shown during recording are recording-health only: dropped frames, frame 
 
 ### Layout
 
-- Preview-first: the preview fills available space, 16:9 ratio. Use the existing `PreviewSurface` / DXGI preview integration where possible. The design target is visual/layout behavior — preserve the existing preview backend unless a later dedicated capture/preview slice requires replacement.
+- Preview-first: the preview fills available space, 16:9 ratio. Use the existing `PreviewSurface` / DXGI preview integration where possible. The design target is visual/layout behavior: preserve the existing preview backend unless a later dedicated capture/preview slice requires replacement.
 - Stable bottom transport dock (`QFrame`, 3-zone grid: left | duration | action).
 - WYSIWYG webcam PiP overlay in Record only.
 - Page padding: 20px around preview and dock.
 
-### Webcam PiP — MVP vs Later
+### Webcam PiP: MVP vs Later
 
 **MVP:**
 - PiP visible in Record preview if webcam recording is enabled and a preview path exists.
@@ -111,7 +107,7 @@ Metrics shown during recording are recording-health only: dropped frames, frame 
 - Advanced PiP styling/borders/shapes.
 - Real-time chroma processing if not already implemented.
 
-### Transport dock — state layouts
+### Transport dock: state layouts
 
 **Ready:**
 ```
@@ -136,9 +132,9 @@ Metrics shown during recording are recording-health only: dropped frames, frame 
 Rules:
 
 - Left zone: circular icon toggles (System, Mic, Webcam, App). On = accent-dim fill + accent border; Off = transparent + muted icon.
-- Center: monospace timer, 30px, 600 weight, tabular-nums, always in the same position. **The countdown digit during pre-roll uses the same font size and weight as the recording timecode** — it is the primary user focus signal during the 3-second countdown (DF-03).
+- Center: monospace timer, 30px, 600 weight, tabular-nums, always in the same position. **The countdown digit during pre-roll uses the same font size and weight as the recording timecode**: it is the primary user focus signal during the 3-second countdown (DF-03).
 - Right zone: countdown select (Off / 3s / 5s / 10s) + Record button (ready); Pause + Stop (recording); Resume + Stop (paused); Record again (completed).
-- Completed: filename is a clickable link, underlined in accent; **Open Folder is an icon-only 38×38 ghost button with border-radius 10, tooltip "Open folder"** (DF-04). File size readout is owned by the metadata bar (D4) — the dock does NOT show a size label.
+- Completed: filename is a clickable link, underlined in accent; **Open Folder is an icon-only 38×38 ghost button with border-radius 10, tooltip "Open folder"** (DF-04). File size readout is owned by the metadata bar (D4): the dock does NOT show a size label.
 - Stable geometry: all zones maintain position across state transitions. No layout shift.
 
 ### Preview overlay elements
@@ -160,16 +156,16 @@ The preset card represents a complete recording setup stored and selected by nam
 | Control | Type |
 |---|---|
 | Preset dropdown | Select (profileCombo) |
-| Save | Ghost button — visible and enabled only when dirty |
+| Save | Ghost button: visible and enabled only when dirty |
 | Save As… | Ghost button — always enabled |
 | Manage | QToolButton with overflow menu (presetManageButton) |
-| Dirty indicator | Amber "● Unsaved" label (presetDirtyIndicator) — visible only when dirty |
-| Default badge | "Default" label (presetDefaultBadge) — visible when selected == startup default |
+| Dirty indicator | Amber "● Unsaved" label (presetDirtyIndicator): visible only when dirty |
+| Default badge | "Default" label (presetDefaultBadge): visible when selected == startup default |
 | Hint text | "A preset stores the complete recording setup: source, video, audio, webcam, countdown & output." |
 
 The Manage overflow menu contains: Save preset, Save as new preset…, New preset from default…, Duplicate preset, Rename preset…, Delete preset, Set as default preset, Reset changes, Reset all presets to factory defaults….
 
-Nothing in the preset card is "saved separately": the entire setup — capture target, format, audio, webcam, countdown — is the preset. The old hint ("Sources and audio are saved separately") is incorrect and has been removed.
+Nothing in the preset card is "saved separately": the entire setup (capture target, format, audio, webcam, countdown) is the preset. The old hint ("Sources and audio are saved separately") is incorrect and has been removed.
 
 ### Format & Encoding card
 
@@ -205,11 +201,11 @@ Meters are live when source is on, idle (-∞) when off. Gain/volume controls ar
 | Resolution / FPS | Select |
 | Mirror image | Toggle (row) |
 | Chroma key | Color swatch picker: Off / Green / Blue / Magenta |
-| Chroma tolerance | Slider (0–100%) |
+| Chroma tolerance | Slider (0-100%) |
 
 No placement controls. Hint: "Position & size are set directly in the Record preview."
 
-**Chroma key — MVP vs Later:**
+**Chroma key: MVP vs Later:**
 - **MVP:** UI may show chroma key controls only if the feature exists or is clearly disabled/planned. Do not present chroma key as active if the capture/compositor path does not process it.
 - **Later:** Real-time chroma key processing, tolerance pipeline integration, preview parity with final recording output.
 
@@ -265,7 +261,7 @@ The dirty indicator compares the **live working config** against the **selected 
 
 ### Breaking changes vs partial profiles (v0)
 
-Old partial profiles (pre-schema-v1) stored only codec/quality. When `schemaVersion` is absent or less than 1, the store resets all presets to the factory default rather than migrating. Import/export actions are removed. Webcam settings are now per-preset (previously app-global). `AppSettingsStore` is reduced to hotkeys and window geometry; settings file version is 6.
+Old partial profiles (pre-schema-v1) stored only codec/quality. When `schemaVersion` is absent or less than 1, the store resets all presets to the factory default rather than migrating. Import/export actions are removed. Webcam settings are now per-preset (previously app-global). `AppSettingsStore` is reduced to hotkeys and window geometry. Settings file version is 6.
 
 ---
 
@@ -276,7 +272,7 @@ Source picker is an in-window overlay modal (translucent backdrop + centered `QF
 **Overlay modal behavior:**
 
 - The overlay widget covers the entire central area (including title bar) so navigation is not accessible while the modal is open (DF-A11Y).
-- Backdrop scrim: `rgba(8, 8, 10, 0.62)` — the overlay paints this over its full rect so the page behind is visibly dimmed (DF-02).
+- Backdrop scrim: `rgba(8, 8, 10, 0.62)`: the overlay paints this over its full rect so the page behind is visibly dimmed (DF-02).
 - Backdrop click (outside the picker panel) dismisses the overlay with cancel semantics (emits `closed()` signal identical to Escape).
 - Both `SourcePickerOverlay` and `AboutOverlay` are parented to the QMainWindow central widget, not to the page `QStackedWidget`, so their subtrees are always reachable by UI Automation regardless of which stack page is current (DF-A11Y).
 
@@ -302,7 +298,7 @@ Region presets:
 
 | Name | Resolution | Aspect |
 |---|---|---|
-| Draw custom | select an area | — |
+| Draw custom | select an area | N/A |
 | 16:9 Landscape | 1920 × 1080 | 16:9 |
 | 16:9 HD | 1280 × 720 | 16:9 |
 | 9:16 Vertical | 1080 × 1920 | 9:16 |
@@ -370,7 +366,7 @@ Sparkline charts for:
 
 Actionable guidance based on detected issues (e.g., "Application audio isolation unavailable for this target — use System audio or Window mode").
 
-### Pipeline metrics — MVP vs Later
+### Pipeline metrics: MVP vs Later
 
 **MVP:**
 - Pipeline section can be static/planned if real metrics are not instrumented.
@@ -473,110 +469,110 @@ Default bindings:
 
 Tracked here so the design-tracking file reflects the actual shipped behavior.
 
-### DF-07 — Source row chrome (FIXED 2026-06-11)
+### DF-07: Source row chrome (FIXED 2026-06-11)
 
 `QFrame#recordSourceChip` border and background removed. The source row is now a slim borderless strip that reads as preview context metadata without competing with the preview surface border. The locked state (`sourceLocked="true"`) retains no visual chrome.
 
-### DF-08 — TransportDock icon toggles: integrated audio meters (INTENTIONAL DEVIATION)
+### DF-08: TransportDock icon toggles: integrated audio meters (INTENTIONAL DEVIATION)
 
-The design spec shows plain icon toggles in the transport dock left zone. The implemented toggles include live 3-pixel RMS meter strips rendered below each circle icon, wired to real ~30 Hz audio callbacks (see AUDIO-METER-R3A). This is an intentional product feature — richer than the plain `IconToggle` in the spec.
+The design spec shows plain icon toggles in the transport dock left zone. The implemented toggles include live 3-pixel RMS meter strips rendered below each circle icon, wired to real ~30 Hz audio callbacks (see AUDIO-METER-R3A). This is an intentional product feature: richer than the plain `IconToggle` in the spec.
 
-### DF-09 — Recent recordings filename column (FIXED 2026-06-11)
+### DF-09: Recent recordings filename column (FIXED 2026-06-11)
 
 The recent-recordings filename button is now a fixed-width 260px column with middle-ellipsis elision via `QFontMetrics::elidedText`. Full file path is in the tooltip.
 
-### DF-11 — Recording pill drop count (FIXED 2026-06-11)
+### DF-11: Recording pill drop count (FIXED 2026-06-11)
 
 When dropped frames > 0 during recording, the titlebar Recording pill shows `"Recording · N↓"`. The drop count is reset when recording stops. Connected via `chromeRuntimeMetricsChanged` signal in MainWindow → `OperationalTitleBar::setRecordingDropCount()`.
 
-### DF-12 — Settings Audio "Separate track" control (FIXED 2026-06-11)
+### DF-12: Settings Audio "Separate track" control (FIXED 2026-06-11)
 
 The `QCheckBox "Separate track"` for each audio source (sys/app/mic) has been replaced with an `ExoToggle` pill toggle + "Separate track" `QLabel`. This aligns with the design spec toggle style for boolean rows. Signal is `QAbstractButton::toggled`.
 
-### DF-13 — Log viewer font size (FIXED 2026-06-11)
+### DF-13: Log viewer font size (FIXED 2026-06-11)
 
-`QPlainTextEdit#logViewer font-size` updated from `12px` to `12.5px`, matching the spec value of `12.5px / 1.7 line-height`. IBM Plex Mono is not bundled (deferred as OOS-05, `${font-mono}` falls back to JetBrains Mono); the size fix is applied regardless.
+`QPlainTextEdit#logViewer font-size` updated from `12px` to `12.5px`, matching the spec value of `12.5px / 1.7 line-height`. IBM Plex Mono is not bundled (deferred as OOS-05, `${font-mono}` falls back to JetBrains Mono). The size fix is applied regardless.
 
-### DF-14 — Hotkeys unset row dimming (SKIPPED-INVALID 2026-06-11)
+### DF-14: Hotkeys unset row dimming (SKIPPED-INVALID 2026-06-11)
 
-The "Unset" keycap chip already uses `stateRole="muted"` with `color: ${text3}; background: ${bg2}; border-color: ${line1}`. This is the lowest visible text tone — additional dimming would approach invisible. The existing QSS is the correct implementation.
+The "Unset" keycap chip already uses `stateRole="muted"` with `color: ${text3}; background: ${bg2}; border-color: ${line1}`. This is the lowest visible text tone: additional dimming would approach invisible. The existing QSS is the correct implementation.
 
-### DF-15 — Countdown pill color (FIXED 2026-06-11)
+### DF-15: Countdown pill color (FIXED 2026-06-11)
 
 Added `StatusPill::Tone::Info` (azure `#7FBEE8`). `COUNTDOWN` and `STARTING` states now use `Tone::Info` instead of `Tone::Warn` (amber). This makes Countdown/Starting visually distinct from Paused (amber). Paused remains on `Tone::Warn`.
 
-### DF-16 — Settings preset "Default" badge (SKIPPED-PRODUCT-DECISION 2026-06-11)
+### DF-16: Settings preset "Default" badge (SKIPPED-PRODUCT-DECISION 2026-06-11)
 
-The `presetDefaultBadge` is an intentional indicator that the selected preset is the startup default — it is NOT a dirty-state indicator. Changing it would remove a tested meaningful feature. Kept as-is.
+The `presetDefaultBadge` is an intentional indicator that the selected preset is the startup default: it is NOT a dirty-state indicator. Changing it would remove a tested meaningful feature. Kept as-is.
 
-### DF-17 — AboutOverlay scrim opacity (SKIPPED-INVALID 2026-06-11)
+### DF-17: AboutOverlay scrim opacity (SKIPPED-INVALID 2026-06-11)
 
 `kBackdropAlpha = 158 = 0.62 × 255`, exactly matching the design spec scrim of `rgba(8, 8, 10, 0.62)`. Already correct.
 
-### DF-18 — Hotkeys "Not in this build" section header subtitle (FIXED 2026-06-11)
+### DF-18: Hotkeys "Not in this build" section header subtitle (FIXED 2026-06-11)
 
-`planned_header->setMeta("Not in this build")` removed from HotkeysPage.cpp. The section is titled "PLANNED / UNAVAILABLE" which is self-explanatory. Each individual planned row already shows a "Not in this build" badge — the section-level repetition was redundant noise.
+`planned_header->setMeta("Not in this build")` removed from HotkeysPage.cpp. The section is titled "PLANNED / UNAVAILABLE" which is self-explanatory. Each individual planned row already shows a "Not in this build" badge: the section-level repetition was redundant noise.
 
-### D3 — Logs page toolbar (FIXED 2026-06-11)
+### D3: Logs page toolbar (FIXED 2026-06-11)
 
 Cut Refresh, Clear, and Open Log Folder from the toolbar. Redesigned as single-row toolbar: LEFT cluster = segmented All/Info/Issues + search field (flex) + Auto-scroll; 16px gap; RIGHT cluster = Copy + Export… ghost-sm buttons (h32, radius 999, border line2). Footer path is a clickable folder link (mono 12, accent color, underline) that opens the log folder. Copy operates on the currently filtered view. Removed buttons are absent from the DOM (EQ null in tests).
 
-### D4 — Saved-state metadata bar (FIXED 2026-06-11)
+### D4: Saved-state metadata bar (FIXED 2026-06-11)
 
-(1) Metadata bar buttons (Copy path, Rename, Delete) styled ghost-sm (h32, radius 999); Delete gets coral hover tint only.
-(2) TransportDock: size readout (`size_label_`) hidden immediately after creation — the metadata bar owns file size. Label still exists as a C++ member for API compatibility but is never added to layout and never made visible.
-(3) Recent rows: per-row "Folder" button removed. Filename chip uses `setMinimumWidth(280)` + `Qt::ElideMiddle` elision instead of the old fixed 260px width.
-(4) Audio codec display casing: "OPUS" corrected to "Opus" in both `audioCodecLabel` overloads in RecordPage.cpp.
+1. Metadata bar buttons (Copy path, Rename, Delete) styled ghost-sm (h32, radius 999); Delete gets coral hover tint only.
+2. TransportDock: size readout (`size_label_`) hidden immediately after creation: the metadata bar owns file size. Label still exists as a C++ member for API compatibility but is never added to layout and never made visible.
+3. Recent rows: per-row "Folder" button removed. Filename chip uses `setMinimumWidth(280)` + `Qt::ElideMiddle` elision instead of the old fixed 260px width.
+4. Audio codec display casing: "OPUS" corrected to "Opus" in both `audioCodecLabel` overloads in RecordPage.cpp.
 
-### D3/D4 — RescanSVG icon (FIXED 2026-06-11)
+### D3/D4: RescanSVG icon (FIXED 2026-06-11)
 
-The ↺ (U+21BA) character was not rendering in IBM Plex Mono / Segoe UI — displayed as "!". Replaced with `:/theme/icons/rescan.svg` (16×16 SVG, currentColor fill) in both `WebcamSetupPanel` and `ConfigPage` audio rescan buttons. SVG registered in `exosnap_theme.qrc`. Text fallback preserved if SVG loads as null.
+The ↺ (U+21BA) character was not rendering in IBM Plex Mono / Segoe UI: displayed as "!". Replaced with `:/theme/icons/rescan.svg` (16×16 SVG, currentColor fill) in both `WebcamSetupPanel` and `ConfigPage` audio rescan buttons. SVG registered in `exosnap_theme.qrc`. Text fallback preserved if SVG loads as null.
 
-### Polish #01 — AboutOverlay build table (FIXED 2026-06-11)
+### Polish #01: AboutOverlay build table (FIXED 2026-06-11)
 
-Fixed clipped rows in the About overlay build metadata table. Removed fixed row height; set `min-height: 28px` via `setContentsMargins(0, 6, 0, 6)` per row, and `4px` bottom padding on the container.
+Fixed clipped rows in the About overlay build metadata table. Removed fixed row height. Set `min-height: 28px` via `setContentsMargins(0, 6, 0, 6)` per row, and `4px` bottom padding on the container.
 
-### Polish #02 — Recent-row filename chip (FIXED 2026-06-11)
+### Polish #02: Recent-row filename chip (FIXED 2026-06-11)
 
 Changed from `setFixedWidth(260)` + `Qt::ElideMiddle` at 236px to `setMinimumWidth(280)` (no fixed cap) + `Qt::ElideMiddle` at `minimumWidth()-24`. Chip can grow with available space.
 
-### Polish #04 — Diagnostics summary tiles zero-count (FIXED 2026-06-11)
+### Polish #04: Diagnostics summary tiles zero-count (FIXED 2026-06-11)
 
 Tile tinting is now conditional: count==0 → `statTone="zero"` (neutral bg2, line2 border, text3 numeral and label). Count>0 → active tone (blocker/notice/pass). Both QSS rules and C++ `setTileActive()` lambda added.
 
-### Polish #05 — Diagnostics pipeline card dimming (FIXED 2026-06-11)
+### Polish #05: Diagnostics pipeline card dimming (FIXED 2026-06-11)
 
 Planned pipeline step title color changed from `${text1}` (slightly dim) to `${text2}` (mut) in QSS, so Planned cards are visually quieter than OK cards whose title stays at `${text0}` (ink).
 
-### Polish #06 — Hotkeys "Unset" → "Clear" + "Not set" chip (FIXED 2026-06-11)
+### Polish #06: Hotkeys "Unset" → "Clear" + "Not set" chip (FIXED 2026-06-11)
 
 Unset button text: `"Unset"` → `"Clear"`. KeycapChip empty_text: `"Unset"` → `"Not set"`. Object names unchanged (tests still find `hotkeyUnsetBtn_N`).
 
-### Polish #08 — Settings webcam: disabled selects when no camera (FIXED 2026-06-11)
+### Polish #08: Settings webcam: disabled selects when no camera (FIXED 2026-06-11)
 
 When no webcam device is selected, resolution and FPS combos now show a `"(no camera)"` placeholder item and are disabled (`setEnabled(false)`).
 
-### Polish #09 — Rescan button SVG icon (FIXED 2026-06-11)
+### Polish #09: Rescan button SVG icon (FIXED 2026-06-11)
 
-See D3/D4 — RescanSVG icon entry above.
+See D3/D4: RescanSVG icon entry above.
 
-### Polish #10 — Diagnostics pluralization (FIXED 2026-06-11)
+### Polish #10: Diagnostics pluralization (FIXED 2026-06-11)
 
 `"NOTICE(S)"` → `"NOTICE"` / `"NOTICES"` based on count. `"blocker(s)"` → `"blocker"` / `"blockers"`. `"item(s)"` → `"item"` / `"items"`.
 
-### Polish #11 — Logs meta line path truncation (FIXED 2026-06-11)
+### Polish #11: Logs meta line path truncation (FIXED 2026-06-11)
 
 `folder_link_` in LogsPage shows `parentDir/filename` elided to 320px width via `QFontMetrics::elidedText(Qt::ElideMiddle)`. Full path is in the tooltip.
 
-### Polish #12 — Countdown select timer glyph (FIXED 2026-06-11)
+### Polish #12: Countdown select timer glyph (FIXED 2026-06-11)
 
 `CountdownSelect` items now use `addItem(timer_icon, text, data)` with a 14×14 `:/theme/icons/timer.svg` icon. Fallback to icon-less items if SVG not found. SVG registered in `exosnap_theme.qrc`.
 
-### Polish #13 — Countdown disabled during countdown (VERIFIED 2026-06-11)
+### Polish #13: Countdown disabled during countdown (VERIFIED 2026-06-11)
 
 `CountdownSelect::setInteractive(false)` is called when `state_ == Countdown` (ready=false in `setReady(false && primary_enabled_)`). `Countdown_StateShowsCancelAndLocksSelector` test already passes, confirming correct behavior.
 
-### Polish #14 — Diagnostics "Active configuration" caption inside card (FIXED 2026-06-11)
+### Polish #14: Diagnostics "Active configuration" caption inside card (FIXED 2026-06-11)
 
 `makeCollapsibleSection` now places the subtitle label inside the `body` widget (collapses with it) instead of the outer `wrap` layout. The caption "Recording settings as currently configured in the app." is now hidden until the collapsible is opened.
 

@@ -18,6 +18,12 @@ GridLayout {
     // loudly rather than rendering two greys that summarise each other.
     property string hint: ""
     property string info: ""
+    // A resolved value the control does not itself show, such as the quantizer a
+    // CQ point maps to on the selected codec. It occupies the hint's line and is
+    // NOT an explanation mode: a row may carry a readout beside an `info`, because
+    // the two cannot restate each other -- one is what the setting means, the
+    // other is what it currently resolves to.
+    property string readout: ""
     property string warning: ""
     property bool stacked: false
     property int controlWidth: ExoTheme.controlSlot
@@ -124,10 +130,11 @@ GridLayout {
         }
 
         Label {
-            text: root.hint
+            objectName: "secondaryLine"
+            text: root.hint !== "" ? root.hint : root.readout
             textFormat: Text.PlainText
             elide: Text.ElideRight
-            visible: root.hint !== ""
+            visible: root.hint !== "" || root.readout !== ""
             color: root.controlEnabled ? ExoTheme.textMuted : ExoTheme.textDim
             Layout.fillWidth: true
             font {

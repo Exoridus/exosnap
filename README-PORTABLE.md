@@ -1,135 +1,85 @@
-# ExoSnap 0.9.1 — Portable Release
+# ExoSnap 0.9.1: Portable Release
 
-Thanks for trying ExoSnap. This file is the quick-start guide for the portable
-Windows build.
+Thanks for trying ExoSnap. This file is the quick-start guide for the portable Windows build.
 
 ## What ExoSnap is
 
-ExoSnap is a Windows-native screen / application / region recorder with a
-high-performance NVIDIA NVENC pipeline, flexible container/codec profiles,
-multi-track audio routing, a webcam overlay, and built-in diagnostics.
+ExoSnap is a Windows-native screen / application / region recorder with a high-performance NVIDIA NVENC pipeline, flexible container/codec profiles, multi-track audio routing, a webcam overlay, and built-in diagnostics.
 
 ## Release status
 
-This is **ExoSnap 0.9.1**, a **pre-v1 Windows preview**. It is not the final
-1.0 release. Settings, presets, and recording-history file formats may change in
-incompatible ways before 1.0.0. See `KNOWN_LIMITATIONS.md` for the full current
-support boundary.
+This is **ExoSnap 0.9.1**, a **pre-v1 Windows preview**. It is not the final 1.0 release. Settings, presets, and recording-history file formats may change in incompatible ways before 1.0.0. See `KNOWN_LIMITATIONS.md` for the full current support boundary.
 
 ## System requirements
 
 - Windows 10 or 11, 64-bit (Windows 11 recommended).
-- An **NVIDIA GPU with supported NVENC** capability (RTX 20-series or newer
-  recommended) and a current NVIDIA display driver. ExoSnap 0.9.1 requires
-  NVIDIA NVENC for video encoding; AMD, Intel, and software encoding are not
-  supported in this release.
-- Microsoft Visual C++ 2022 x64 runtime (usually already installed). If the app
-  fails to start with a missing-DLL error, install it from
+- An **NVIDIA GPU with supported NVENC** capability (RTX 20-series or newer recommended) and a current NVIDIA display driver. ExoSnap 0.9.1 requires NVIDIA NVENC for video encoding; AMD, Intel, and software encoding are not supported in this release.
+- Microsoft Visual C++ 2022 x64 runtime (usually already installed). If the app fails to start with a missing-DLL error, install it from
   <https://aka.ms/vs/17/release/vc_redist.x64.exe>.
 
 ## How to launch
 
-1. Extract the entire `ExoSnap-0.9.1-windows-x64-portable` folder from the ZIP to a
-   location of your choice.
+1. Extract the entire `ExoSnap-0.9.1-windows-x64-portable` folder from the ZIP to a location of your choice.
 2. Run `exosnap.exe` from the extracted folder.
 
-There is no installer. Keep the folder intact — `exosnap.exe` depends on the Qt
-runtime DLLs and the `plugins/` directory shipped alongside it. Windows
-SmartScreen may warn on first launch because this build is not code-signed.
+There is no installer. Keep the folder intact. `exosnap.exe` depends on the Qt runtime DLLs and the `plugins/` directory shipped alongside it. Windows SmartScreen may warn on first launch because this build is not code-signed.
 
 ## Default Start/Stop hotkey
 
-- **Alt+F9** starts and stops recording (global hotkey). Hotkeys are
-  reconfigurable in the in-app Hotkeys view.
+- **Alt+F9** starts and stops recording (global hotkey). Hotkeys are reconfigurable in the in-app Hotkeys view.
 
 ## Default output location
 
-- Recordings are written to `%USERPROFILE%\Videos\ExoSnap` by default. You can
-  change the output folder and filename pattern in the app.
+- Recordings are written to `%USERPROFILE%\Videos\ExoSnap` by default. You can change the output folder and filename pattern in the app.
 
 ## Where settings and history are stored
 
 ExoSnap stores its configuration under your local application data directory:
 
-- `%LOCALAPPDATA%\ExoSnap\settings.ini` — application settings
-- `%LOCALAPPDATA%\ExoSnap\presets.toml` — recording presets
-- `%LOCALAPPDATA%\ExoSnap\recording-history.json` — recording history
+- `%LOCALAPPDATA%\ExoSnap\settings.ini`: application settings
+- `%LOCALAPPDATA%\ExoSnap\presets.toml`: recording presets
+- `%LOCALAPPDATA%\ExoSnap\recording-history.json`: recording history
 
-A best-effort startup diagnostics log is written to
-`%TEMP%\exosnap-recorder-app-startup.log`. The in-app Logs view and the
-Diagnostics view expose richer logging and a way to open the log folder.
+A best-effort startup diagnostics log is written to `%TEMP%\exosnap-recorder-app-startup.log`. The in-app Logs view and the Diagnostics view expose richer logging and a way to open the log folder.
 
 ## Supported output overview
 
 - **Containers:** MKV, WebM, MP4.
-- **Video:** H.264 (NVENC), AV1 (NVENC, where your GPU/driver expose it), and
-  HEVC (NVENC), including a 10-bit (P010) SDR path for HEVC Main10 and AV1.
+- **Video:** H.264 (NVENC), AV1 (NVENC, where your GPU/driver expose it), and HEVC (NVENC), including a 10-bit (P010) SDR path for HEVC Main10 and AV1.
 - **Audio:** AAC-LC (`AAC`), Opus, and lossless **PCM** and **FLAC** (MKV only).
-- **Container rules:** MP4 uses H.264 or HEVC (`hvc1`) + AAC (Opus, PCM, and FLAC
-  are not offered for MP4); WebM uses AV1 + Opus; MKV is the flexible default and
-  the home for PCM and FLAC.
+- **Container rules:** MP4 uses H.264 or HEVC (`hvc1`) + AAC (Opus, PCM, and FLAC are not offered for MP4); WebM uses AV1 + Opus; MKV is the flexible default and the home for PCM and FLAC.
 
-Exact availability depends on your GPU generation, driver, and the selected
-container/codec combination. PCM and FLAC are MKV-only.
+Exact availability depends on your GPU generation, driver, and the selected container/codec combination. PCM and FLAC are MKV-only.
 
-- **HDR:** an HDR-active display can be recorded as **native HDR10** (PQ /
-  BT.2020, 10-bit, limited range) with **AV1 or HEVC**; H.264 cannot carry it.
-  The default on an HDR display is to tone-map to SDR instead, so a recording
-  plays back correctly on an ordinary player. The choice is an expert setting
-  that only appears while an HDR-active display is detected. The separate
-  expert **10-bit** toggle is a precision option for SDR output and is
-  independent of HDR10, which pins 10-bit on its own.
+- **HDR:** an HDR-active display can be recorded as **native HDR10** (PQ / BT.2020, 10-bit, limited range) with **AV1 or HEVC**; H.264 cannot carry it. The default on an HDR display is to tone-map to SDR instead, so a recording plays back correctly on an ordinary player. The choice is an expert setting that only appears while an HDR-active display is detected. The separate expert **10-bit** toggle is a precision option for SDR output and is independent of HDR10, which pins 10-bit on its own.
 
 ## Recording split overview
 
 - Split is supported for **MKV, WebM, and MP4** recordings (0.2.0).
-- For MP4 sessions, each completed segment is remuxed to progressive MP4 in the
-  background while recording continues. "Saved" is shown only when all remuxes
-  complete. See `KNOWN_LIMITATIONS.md`.
+- For MP4 sessions, each completed segment is remuxed to progressive MP4 in the background while recording continues. "Saved" is shown only when all remuxes complete. See `KNOWN_LIMITATIONS.md`.
 
 ## Updates and crash reporting
 
-- **Update check:** the official build checks public GitHub Releases for a newer version and notifies
-  you in-app (Stable and Preview channels). No GitHub token is used.
-- **Applying an update is always your decision, in three separate confirmations** — *Check for
-  updates*, then *Download update*, then *Install now*. Nothing is downloaded or installed until you
-  ask for it, and a download you cancel leaves the installation untouched.
-- **What applying does in a portable copy:** a separate updater window takes over, downloads the
-  package, verifies its ed25519 signature against the signed manifest before trusting any field in
-  it, swaps the files in place (old copy kept as a backup until the new version is verified), and
-  relaunches ExoSnap. If verification fails, the backup is restored. A portable update needs no
-  administrator rights and shows no UAC prompt; only an MSI installation does.
-- **Crash reporting is opt-in.** If ExoSnap crashes, the next launch shows a privacy-scrubbed crash
-  dialog. Nothing is sent unless you choose to: either an assisted GitHub issue (Stage 0) or an
-  automated upload to Sentry with EU data residency (Stage 1). Recordings, file paths, machine names,
-  and similar identifying data are scrubbed. See `PRIVACY.md` for the exact fields.
+- **Update check:** the official build checks public GitHub Releases for a newer version and notifies you in-app (Stable and Preview channels). No GitHub token is used.
+- **Applying an update is always your decision, in three separate confirmations**: *Check for updates*, then *Download update*, then *Install now*. Nothing is downloaded or installed until you ask for it, and a download you cancel leaves the installation untouched.
+- **What applying does in a portable copy:** a separate updater window takes over, downloads the package, verifies its ed25519 signature against the signed manifest before trusting any field in it, swaps the files in place (old copy kept as a backup until the new version is verified), and relaunches ExoSnap. If verification fails, the backup is restored. A portable update needs no administrator rights and shows no UAC prompt; only an MSI installation does.
+- **Crash reporting is opt-in.** If ExoSnap crashes, the next launch shows a privacy-scrubbed crash dialog. Nothing is sent unless you choose to: either an assisted GitHub issue (Stage 0) or an automated upload to Sentry with EU data residency (Stage 1). Recordings, file paths, machine names, and similar identifying data are scrubbed. See `PRIVACY.md` for the exact fields.
 
 ## Verifying your download
 
-A SHA-256 checksum is published next to the ZIP as
-`ExoSnap-0.9.1-windows-x64-portable.sha256`. To verify integrity in PowerShell:
+A SHA-256 checksum is published next to the ZIP as `ExoSnap-0.9.1-windows-x64-portable.sha256`. To verify integrity in PowerShell: `Get-FileHash .\ExoSnap-0.9.1-windows-x64-portable.zip -Algorithm SHA256`.
 
-```powershell
-Get-FileHash .\ExoSnap-0.9.1-windows-x64-portable.zip -Algorithm SHA256
-```
-
-The printed hash must match the value in the `.sha256` file. The checksum
-verifies download integrity only; it is not a publisher signature. Code signing
-is planned for a later release.
+The printed hash must match the value in the `.sha256` file. The checksum verifies download integrity only. It is not a publisher signature. Code signing is planned for a later release.
 
 ## Reporting a problem
 
-Please open an issue at <https://github.com/Exoridus/exosnap/issues>. Including
-your Windows version, GPU model, NVIDIA driver version, and the startup log helps
-a lot.
+Please open an issue at <https://github.com/Exoridus/exosnap/issues>. Including your Windows version, GPU model, NVIDIA driver version, and the startup log helps a lot.
 
 ## Licenses
 
 - ExoSnap is licensed under **GPL-3.0-or-later**; see `LICENSE`.
-- Third-party component licenses are listed in `THIRD_PARTY_NOTICES.md`, with the
-  full license texts under the `licenses/` directory.
+- Third-party component licenses are listed in `THIRD_PARTY_NOTICES.md`, with the full license texts under the `licenses/` directory.
 
 ## More information
 
-For the complete current support boundary and known issues, read
-`KNOWN_LIMITATIONS.md` (shipped in this folder).
+For the complete current support boundary and known issues, read `KNOWN_LIMITATIONS.md` (shipped in this folder).
