@@ -4,7 +4,7 @@
     ExoSnap MSI Installer
     =====================
     Package identity: Codexo.ExoSnap
-    UpgradeCode: 8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D (permanent — ADR 0034, NEVER CHANGE)
+    UpgradeCode: 8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D (permanent; do not change between product releases)
     ProductCode is auto-generated per build (*).
 
     File list is NOT hand-maintained here. The release script
@@ -47,7 +47,7 @@
       </Directory>
     </StandardDirectory>
 
-    <!-- Start Menu shortcut (all-users, per-machine) — stable Guid per ADR 0034 -->
+    <!-- Start Menu shortcut (all-users, per-machine) — stable component GUID across releases -->
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="StartMenuShortcut" Guid="{C1D2E3F4-A5B6-7890-CDEF-1234567890AB}" KeyPath="yes">
         <Shortcut Id="StartMenuExoSnap"

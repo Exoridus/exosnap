@@ -65,7 +65,7 @@ struct BundleInputs {
     // Human-readable settings summary (ConfigSummary). Scrubbed before inclusion.
     QString settings_summary;
 
-    // Startup milestones for startup-trace.txt (ADR 0044). Passed in rather than
+    // Startup milestones for startup-trace.txt. Passed in rather than
     // read from StartupTrace::instance() here so the collector stays pure and the
     // bundle tests can assert an exact table. Empty in a process that recorded no
     // milestones, in which case the entry is omitted rather than shipped blank.
@@ -79,7 +79,7 @@ struct BundleInputs {
     QString scrubber_version;
     QString created_at; // ISO 8601; a fixed value keeps tests deterministic
 
-    // ADR 0055: the app run was started with --verify-update-reinstall. Recorded
+    // the app run was started with --verify-update-reinstall. Recorded
     // in the manifest (and ONLY while it is on) so a bundle taken during such a
     // run is never mistaken for one from a normal session.
     bool verify_update_reinstall = false;

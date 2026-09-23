@@ -482,7 +482,7 @@ TEST(LiveVerifyUpdatePolicy, ApplyNeedsAnOfferedUpdate) {
 }
 
 TEST(LiveVerifyUpdatePolicy, AVerificationReinstallIsAlsoAnOffer) {
-    // ADR 0055: the offered version IS the running one, on purpose, and its
+    // the offered version IS the running one, on purpose, and its
     // button launches the updater exactly like a normal update's.
     AutomationState state = UpdateOffered();
     state.update_state = QStringLiteral("verify-reinstall");

@@ -557,7 +557,7 @@ void QuickApplication::initializeCrashSession() {
     // Reconcile the SDK-wide persisted consent with the explicit app policy
     // before any report path is reachable in this process.
     applyCrashReportPolicy();
-    // ADR 0017. crash_capture::Initialize() already ran in the bootstrap; this
+    // crash_capture::Initialize() already ran in the bootstrap; this
     // owns the session sidecar.
     //
     // ORDER IS CRITICAL: read the previous session's crash context BEFORE
@@ -730,11 +730,11 @@ void QuickApplication::initializeRecordWorkflow() {
             // neither the latch nor a leftover toast may cross into this one.
             capture_stall_monitor_.Reset();
             clearWindowCaptureStallWarning();
-            // ADR 0046: same reason. A previous recording's audio outage may not
+            // same reason. A previous recording's audio outage may not
             // arrive standing over this one.
             audio_degradation_monitor_.Reset();
             clearAudioSourceDegradedWarning();
-            // ADR 0033: same reason, one class further. Present / discarded / mode-flip
+            // same reason, one class further. Present / discarded / mode-flip
             // totals are per-recording, and a Display or Region recording shares pid 0
             // with the idle desktop -- so this boundary is announced unconditionally,
             // or every present counted while the user was still picking a target would
@@ -749,7 +749,7 @@ void QuickApplication::initializeRecordWorkflow() {
         if (state != UiRecordingState::Recording && state != UiRecordingState::Paused) {
             clearWindowCaptureStallWarning();
             clearAudioSourceDegradedWarning();
-            // ADR 0033: the OTHER half of the attribution boundary, on the edge OUT of
+            // the OTHER half of the attribution boundary, on the edge OUT of
             // a session. Both PresentMonEtwSession and PresentAccumulator document the
             // reset as happening at "recording start/stop"; only start was ever wired,
             // so a finished recording's present, discard and mode-flip totals stayed on
@@ -786,7 +786,7 @@ void QuickApplication::initializeRecordWorkflow() {
     });
     recording_coordinator_->SetDiagnosticsCallback(
         [this](const exosnap::engine::RecordingDiagnosticsSnapshot& measured) {
-            // ADR 0033 / Wave D. The engine measures no presentation, so the present
+            // The engine measures no presentation, so the present
             // fields arrive Unavailable on every snapshot; the elevation- and opt-in-gated
             // ETW consumer is the only producer and it lives here. Overlaying ONCE at the
             // single fan-out point is what makes the Diagnostics surface, the
@@ -2093,7 +2093,7 @@ void QuickApplication::initializeDiagnosticsArea() {
     const bool elevated = elevation_provider_.IsElevated();
     diagnostics_adapter_.setElevated(elevated);
 
-    // ADR 0033 / Wave D: the present-diagnostics provider. Constructing it is free --
+    // the present-diagnostics provider. Constructing it is free --
     // the constructor opens nothing. SetOptIn() is what evaluates the gate
     // (opt-in AND elevation) and starts the ETW session, so an unelevated process or
     // one with the opt-in off holds a provider that reports `available: false` and
@@ -2107,7 +2107,7 @@ void QuickApplication::initializeDiagnosticsArea() {
                                   .arg(elevated ? 1 : 0)
                                   .arg(present_provider_->IsAvailable() ? 1 : 0));
 
-    // ADR 0033 DPC/ISR latency. The producer existed in this tree since the ETW slice
+    // DPC/ISR latency. The producer existed in this tree since the ETW slice
     // landed but was compiled by no target at all and driven by nobody, so
     // RecommendationEngine::checkDpcLatency evaluated an absent reading forever while
     // the spec promised the check. The adapter samples this on every evaluation; the
@@ -2250,7 +2250,7 @@ void QuickApplication::updateCaptureEvidenceTarget() {
         pushed_selected_target_ = target;
         diagnostics_adapter_.setSelectedCaptureTarget(target);
         diagnostics_adapter_.setCaptureTargetAdapter(captureTargetAdapterFacts(target));
-        // Idle attribution boundary (ADR 0033): present statistics follow the
+        // Idle attribution boundary: present statistics follow the
         // selection, so the Diagnostics page describes the source the user is
         // looking at rather than whatever presented last.
         updatePresentAttribution(presentTargetPidForSelection(), /*force=*/false);
@@ -2472,7 +2472,7 @@ void QuickApplication::clearWindowCaptureStallWarning() {
     capture_stall_toast_sequence_ = 0;
 }
 
-// ADR 0046. The mid-recording audio-degradation notice, driven entirely by the
+// The mid-recording audio-degradation notice, driven entirely by the
 // AudioDiagnostics health facts the pipeline already publishes at ~5 Hz.
 //
 // This is a restored producer, not a new feature. The Widgets frontend raised
@@ -3368,7 +3368,7 @@ void QuickApplication::initializeEditArea() {
 }
 
 // ---------------------------------------------------------------------------
-// Updates (ADR 0012)
+// Updates
 // ---------------------------------------------------------------------------
 //
 // Before this existed the Settings updates card was the worst kind of unfinished
@@ -3445,7 +3445,7 @@ void QuickApplication::initializeUpdates() {
 // card, because "Update available — <ver>" was an answer about the feed the user
 // just left. The card returns to the same "unchecked" state a fresh launch
 // shows; no automatic network check is started, since a check is the user's
-// explicit action (ADR 0045) and the card's own button is right there.
+// explicit action and the card's own button is right there.
 void QuickApplication::applyUpdateChannel() {
     if (!update_service_)
         return;
@@ -3500,7 +3500,7 @@ void QuickApplication::closeForUpdaterHandoff() {
 QuickApplication::EffectiveRecordingConfig QuickApplication::resolveEffectiveConfig() const {
     EffectiveRecordingConfig effective;
     // Step one is the product's own sanitizer: container x codec reconciliation
-    // (ADR 0010), the 10-bit demotion (ADR 0032), the 4:4:4 snap, the MP4 CFR
+    // the 10-bit demotion, the 4:4:4 snap, the MP4 CFR
     // constraint, and the split clamps. It is the same call persistLiveConfig()
     // makes on the way to disk.
     effective.config = SanitizePresetConfig(live_config_);
@@ -3735,7 +3735,7 @@ void QuickApplication::presentPostUpdateWhatsNew(const QVector<WhatsNewNote>& no
 
 namespace {
 
-// ADR 0033. The nav labels the elevated relaunch hands across, in both
+// The nav labels the elevated relaunch hands across, in both
 // directions. One table, so the page a relaunch is asked for and the page it
 // lands on cannot drift apart.
 constexpr std::array<std::pair<const char*, ShellAdapter::Page>, 5> kRelaunchNavLabels{{
@@ -3761,7 +3761,7 @@ void QuickApplication::setElevatedRelaunchHandler(std::function<void(const QStri
 }
 
 void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, bool arm_in_depth_diagnostics) {
-    // ADR 0033. Land on the page the pre-elevation instance was showing.
+    // Land on the page the pre-elevation instance was showing.
     for (const auto& [label, page] : kRelaunchNavLabels) {
         if (page_name.compare(QLatin1StringView(label), Qt::CaseInsensitive) == 0) {
             pending_landing_page_ = page;
@@ -4183,7 +4183,7 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
 
         // The quick-control pill is opt-in and off by default, so the variant
         // that photographs it has to turn it on. It is the one capture-excluded
-        // overlay that takes mouse input (ADR 0016), which is exactly why its
+        // overlay that takes mouse input, which is exactly why its
         // appearance has to be checkable like the others'.
         const bool all_overlays = variant == QLatin1String("all");
         settings_.show_quick_controls = variant == QLatin1String("controls") || all_overlays;
@@ -5197,7 +5197,7 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("shellPresence"), QVariant::fromValue(&shell_presence_)},
         {QStringLiteral("trayAdapter"), QVariant::fromValue(&tray_adapter_)},
         {QStringLiteral("noActivate"), no_activate},
-        // ADR 0033, and deliberately an initial property rather than a
+        // Deliberately an initial property rather than a
         // navigation emitted once the engine has loaded. By that point a
         // recovery surface or a crash prompt raised during startup is already
         // up, and the single navigation edge (QCR-001) refuses a navigation

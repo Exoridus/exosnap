@@ -255,7 +255,7 @@ TEST(PcmAudioEncoder, Flush_ProducesNoPackets) {
 }
 
 // ---------------------------------------------------------------------------
-// ADR 0030: SetBitDepth — 24-bit output
+// SetBitDepth — 24-bit output
 // ---------------------------------------------------------------------------
 
 TEST(PcmAudioEncoder, SetBitDepth24_PacketSizeIs3BytesPerSample) {
@@ -315,7 +315,7 @@ TEST(PcmAudioEncoder, SetBitDepth24_FullScaleNegativeLE) {
 }
 
 // ---------------------------------------------------------------------------
-// ADR 0030: SetBitDepth — 32-bit output
+// SetBitDepth — 32-bit output
 // ---------------------------------------------------------------------------
 
 TEST(PcmAudioEncoder, SetBitDepth32_PacketSizeIs4BytesPerSample) {
@@ -374,7 +374,7 @@ TEST(PcmAudioEncoder, SetBitDepth32_Silence_IsZero) {
 }
 
 // ---------------------------------------------------------------------------
-// ADR 0030: SetBitDepth — default is 16-bit (backward-compatible)
+// SetBitDepth — default is 16-bit (backward-compatible)
 // ---------------------------------------------------------------------------
 
 TEST(PcmAudioEncoder, DefaultBitDepth_Is16) {

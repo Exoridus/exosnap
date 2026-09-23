@@ -1241,7 +1241,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     config.mic_channel_mode = plan.mic_channel_mode;
     config.mic_device_id = plan.mic_device_id;
     config.mic_gain_linear = plan.mic_gain_linear;
-    // Audio encoding parameters (ADR 0019).
+    // Audio encoding parameters.
     config.audio_bitrate_kbps = plan.audio_bitrate_kbps;
     config.opus_frame_duration = plan.opus_frame_duration;
     config.opus_complexity = plan.opus_complexity;
@@ -1261,7 +1261,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     config.mic_agc_target_db = plan.mic_agc_target_db;
     // Microphone RNNoise neural noise suppression (Audio v2).
     config.mic_rnnoise_enabled = plan.mic_rnnoise_enabled;
-    // Channel / sample-format model (ADR 0030 — 0.6.0).
+    // Channel / sample-format model.
     config.audio_sample_rate = plan.audio_sample_rate;
     config.audio_channels = plan.audio_channels;
     config.audio_bit_depth = plan.audio_bit_depth;
@@ -1467,7 +1467,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         const bool is_monitor = (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor);
         const QString backend =
             QString::fromLatin1(exosnap::engine::CaptureBackendName(exosnap::engine::ResolveCaptureBackend(config)));
-        // Privacy (ADR 0045): a window's title must not reach the on-disk log at
+        // Privacy: a window's title must not reach the on-disk log at
         // the source. Monitor descriptions are technical device identifiers
         // (never personal) and are logged verbatim; window targets log a stable
         // placeholder instead of the title.
@@ -1491,7 +1491,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
 }
 
 // ---------------------------------------------------------------------------
-// ADR-0015: armed-from-recovery state
+// armed-from-recovery state
 // ---------------------------------------------------------------------------
 
 bool RecordingCoordinator::ArmFromRecovery(const RecoverySessionInfo& info) {
@@ -2095,7 +2095,7 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
                                             QString::fromStdWString(ui_result.error_detail)));
     }
 
-    // ADR-0014 + MP4-SPLIT-REMUX-R1: remux-on-stop for MP4 sessions.
+    // MP4 output: remux-on-stop for MP4 sessions.
     //
     // For single-file recordings (no splits or MKV/WebM): use RunRemuxJob as before.
     // For split recordings: one or more intermediate segment remux jobs may already
@@ -2314,7 +2314,7 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
 
         // Remux to a sibling ".tmp" staging file on the target's own volume, then atomically
         // rename it onto the final path. A kill/powerloss mid-remux leaves only the
-        // temp — the user-visible output path never holds a half-written MP4 (ADR-0014).
+        // temp — the user-visible output path never holds a half-written MP4.
         const std::filesystem::path remux_temp = MakeSiblingTempPath(final_mp4);
         auto remux_result = exosnap::engine::RemuxToProgressiveMp4(transient_mkv, remux_temp, progress_cb);
 
@@ -2469,7 +2469,7 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
 
     // Remux to a sibling ".tmp" staging file on the segment output's own volume, then
     // atomically rename it onto the segment path. A kill mid-remux leaves only the
-    // temp — the segment output path never holds a half-written MP4 (ADR-0014).
+    // temp — the segment output path never holds a half-written MP4.
     const std::filesystem::path segment_temp = MakeSiblingTempPath(output_mp4);
     auto result = exosnap::engine::RemuxToProgressiveMp4(transient_mkv, segment_temp, progress_cb);
 
@@ -2779,7 +2779,7 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
     ApplyOutputSettingsToUserConfig(resolved_user_config_, output_settings_);
 
     // Translate the UI split policy into the engine settings applied at start.
-    // Both duration_ms and size_bytes are independent thresholds (ADR 0021);
+    // Both duration_ms and size_bytes are independent thresholds;
     // 0 means that dimension is disabled. Whichever is hit first triggers the split.
     SanitizeSplitSettings(output_settings_.split);
     split_settings_.duration_ms = SplitDurationMs(output_settings_.split);

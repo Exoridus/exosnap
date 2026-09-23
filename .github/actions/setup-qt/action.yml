@@ -21,7 +21,7 @@ inputs:
 
       quick — qtbase, qtsvg, qtdeclarative plus the qtshadertools module. Every
               job that has to produce or analyse the shipping application: the
-              ExoSnap frontend IS a Qt Quick program (ADR 0064), so without
+              ExoSnap frontend IS a Qt Quick program, so without
               these find_package(Qt6 ... Quick) fails and app/CMakeLists.txt
               falls back to its "exosnap skipped" stub.
 

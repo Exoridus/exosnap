@@ -26,7 +26,7 @@ public static class CatalogStatusPage
     private const char LineFeed = '\n';
 
     /// <summary>
-    /// Renders the page for a catalog and its migration and promotion state.
+    /// Renders the page for a catalog and its body coverage and promotion requirements.
     /// </summary>
     /// <param name="catalog">The scenario catalog to describe.</param>
     /// <param name="migratedIds">Ids whose scenario body has been written.</param>
@@ -58,19 +58,19 @@ public static class CatalogStatusPage
             page,
             "Every release gate the typed harness knows, in catalog order. " +
             "`docs/dev/release-verify-harness.md` is how to work on the harness and " +
-            "`docs/dev/release-verify.md` owns what each gate requires; this page only lays the " +
+            "`docs/release-checklist.md` owns what each gate requires; this page only lays the " +
             "declarations side by side.");
         Line(page);
         Line(
             page,
             $"Catalog version `{catalog.Version}`. " +
-            $"{Count(descriptors.Count)} scenarios, {Count(migratedCount)} with a migrated body, " +
+            $"{Count(descriptors.Count)} scenarios, {Count(migratedCount)} with an implemented body, " +
             $"{Count(required.Count)} required for promotion.");
         Line(page);
         Line(
             page,
             "| ID | Class | Tier | Layer | Isolation | Privilege | Interaction | Requires | Oracle | " +
-            "Migrated | Required | Source |");
+            "Implemented | Required | Source |");
         Line(
             page,
             "|----|-------|------|-------|-----------|-----------|-------------|----------|--------|" +

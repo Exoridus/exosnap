@@ -123,7 +123,7 @@ PersistedAppSettings AppSettingsStore::Load() const {
 
     settings.beginGroup(QStringLiteral("update"));
     // UPDATE-WIRE-R1: update channel (default "Stable") + auto-check-on-start.
-    // ADR 0045: auto-check-on-start defaults to false (opt-in) so a first launch
+    // auto-check-on-start defaults to false (opt-in) so a first launch
     // never contacts api.github.com without explicit consent.
     // Pre-1.0: no migration; missing keys default to Stable / false.
     persisted.update_channel = settings.value(QStringLiteral("channel"), QStringLiteral("Stable")).toString();

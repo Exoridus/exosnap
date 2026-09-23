@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-// FixAction routing (ADR 0033), extracted from MainWindow's if/else chain.
+// FixAction routing, extracted from MainWindow's if/else chain.
 //
 // A FixAction is declared by the check that raised the diagnosis; the app only
 // decides what applying it MEANS. That decision is pure: given a fix id and the

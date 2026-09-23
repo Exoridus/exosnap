@@ -551,7 +551,7 @@ bool UpdaterWorker::fetchAndStage() {
     }
 
     // Verify the detached signature over the EXACT manifest bytes -- BEFORE any
-    // field is parsed or acted upon (ADR 0012). No re-serialisation is involved.
+    // field is parsed or acted upon. No re-serialisation is involved.
     if (VerifyManifestSignature(manifest_json, signature_hex) != VerifyResult::Ok) {
         emit failed(FailureCase::VerifyDownloadFailed, QStringLiteral("Manifest signature invalid.")); // A2
         return false;
@@ -593,7 +593,7 @@ bool UpdaterWorker::fetchAndStage() {
         return false;
     }
 
-    // Verification reinstall gate (ADR 0055), AFTER the signature check and ON TOP
+    // Verification reinstall gate, AFTER the signature check and ON TOP
     // of the downgrade guard: this run was started to reinstall one exact version,
     // so anything else -- including a legitimately newer release -- is refused
     // before a single package byte is fetched. Nothing is installed here.

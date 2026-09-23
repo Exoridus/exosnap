@@ -6,7 +6,7 @@ import QtQuick
 // Ported from app/ui/overlay/QuickControlPillWindow.cpp.
 //
 // This is the one capture-excluded overlay that is NOT click-through: it is
-// interactive by design (ADR 0016), so it deliberately omits
+// interactive by design, so it deliberately omits
 // Qt.WindowTransparentForInput. Capture exclusion still applies unchanged — the
 // controls must not burn into the recording either.
 Window {

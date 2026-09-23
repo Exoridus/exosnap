@@ -400,7 +400,7 @@ public sealed class AudioFormatGate : IScenarioBody
 /// endpoint bound to <c>audio.render.normal</c>, wait, and put it back, while the
 /// recording keeps running underneath them.
 ///
-/// ADR 0046 sets the requirement this polls for: the lifecycle never leaves
+/// The required source-loss behavior is: the lifecycle never leaves
 /// recording or paused, <c>audio.sourceDegraded</c> becomes true while the device is
 /// gone, and it clears again once it returns. Degradation is a fact about the
 /// snapshot, not about a track -- there is no <c>tracks[]</c> array under
@@ -561,7 +561,7 @@ public sealed class AudioDegradeGate : IScenarioBody
         if (leftRecording)
         {
             return ScenarioResult.Fail(
-                $"{actor}the recording stopped; ADR 0046 requires it to continue", [.. evidence]);
+                $"{actor}the recording stopped; audio source loss must not stop the recording", [.. evidence]);
         }
 
         if (!observedDegraded)

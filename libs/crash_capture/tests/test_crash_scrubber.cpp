@@ -143,7 +143,7 @@ TEST(GenerateCorrelationIdTest, UniquePerCall) {
 }
 
 // ---------------------------------------------------------------------------
-// Allowlist Golden-Set test (ADR 0045 / D2).
+// Allowlist Golden-Set test.
 //
 // kAllowedTagKeys now lives ONCE, in crash_scrubber.h (previously it was also
 // hand-repeated as a literal brace-list inside crash_capture.cpp's

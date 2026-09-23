@@ -112,7 +112,7 @@ std::vector<BundleEntry> CollectBundleEntries(const BundleInputs& inputs) {
         }
     }
 
-    // startup-trace.txt (ADR 0044). Milestone labels and millisecond readings
+    // startup-trace.txt. Milestone labels and millisecond readings
     // only — no paths, no identifiers — so it needs no scrubbing. Omitted rather
     // than written empty when the process recorded nothing, because an empty
     // table reads as "startup produced no milestones" instead of "this build

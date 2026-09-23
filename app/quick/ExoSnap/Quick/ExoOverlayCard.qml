@@ -105,7 +105,7 @@ Item {
     // Two zero-sized sentinels bracket the card's own chain and fold that step
     // back inside. Deliberately not a QQuickPopup: these surfaces are in-window
     // layers by construction (the shell keeps its own title band above them, and
-    // ADR 0022's editor shares the region), so swapping the component to inherit
+    // the editor shares the region), so swapping the component to inherit
     // one behaviour would change what they ARE. Deliberately not `enabled: false`
     // on the shell either — that would paint the whole application behind the
     // scrim in its disabled rung.

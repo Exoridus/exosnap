@@ -352,7 +352,7 @@ TEST_F(ShellAdapterTest, APromptLeftOverFromAnAbandonedAttemptDoesNotSurviveTheN
 // ── Navigation model ────────────────────────────────────────────────────────
 //
 // These indices are not private bookkeeping: AppShell's StackLayout, the
-// elevated-relaunch landing page (ADR 0033), every notification action that
+// elevated-relaunch landing page, every notification action that
 // navigates, and the --visual-page harness flag all address pages by this
 // number. A silent renumbering points all four somewhere else.
 

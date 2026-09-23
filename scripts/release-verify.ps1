@@ -561,7 +561,7 @@ function Stop-ReleaseSession {
     $script:Session = $null
     # The channel closes first and the event queue is deliberately NOT drained: a
     # runner waiting for the process to exit is, by definition, not reading events.
-    # That is the shape of the regression this invariant guards (ADR 0067), and
+    # That is the shape of the regression this invariant guards, and
     # REL-SHUTDOWN-001 asserts it explicitly rather than relying on this teardown.
     try { $session.Connection.Close() } catch { }
     $session.Process.Refresh()
@@ -1153,7 +1153,7 @@ function Select-Entries {
 }
 
 # ---------------------------------------------------------------------------
-# The typed harness (ADR 0070)
+# The typed harness
 # ---------------------------------------------------------------------------
 
 function Invoke-DotNetVerifyHarness {

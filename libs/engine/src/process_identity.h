@@ -1,6 +1,6 @@
 #pragma once
 
-// Process-identity guard for PID-keyed audio sources (ADR 0046).
+// Process-identity guard for PID-keyed audio sources.
 //
 // The APP (include-process-tree) and window-target SYS (exclude-process-tree)
 // loopback flavors capture audio keyed on a target process id. Windows recycles

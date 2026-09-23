@@ -423,7 +423,7 @@ struct AudioTrack {
 };
 
 // get_format callback for a codec context with hw_device_ctx set to a
-// D3D11VA device (docs/dev/edit-player-architecture.md).
+// D3D11VA device (docs/architecture/edit-and-export.md).
 // Prefers AV_PIX_FMT_D3D11 when the decoder offers it -- meaning D3D11VA
 // negotiation accepted this stream's exact profile/chroma/bit-depth -- and
 // otherwise falls back to the LAST format libavcodec itself offered (never
@@ -486,7 +486,7 @@ struct EditPlayerEngine::Impl {
     AVRational frame_rate{0, 1}; // the opened clip's own rate; {0,1} when unknown
 
     // Playback runs on three threads with strictly separate ownership (see
-    // docs/dev/edit-player-architecture.md):
+    // docs/architecture/edit-and-export.md):
     // demux owns `fmt`, video owns `video_codec`, audio owns every entry of
     // `audio_tracks`. No context is touched by two threads, which keeps the
     // engine's single-writer contract intact instead of covering it with locks.
@@ -659,7 +659,7 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
     // leave the tone-mapper standing.
     //
     // Same reference tone-map curve as the capture preview and snapshot path
-    // (ADR 0040: one colour truth, no second invented tone-map). Display peak:
+    // (the shared reference curve, not an independent tone-map). Display peak:
     // the engine is UI-agnostic and has no screen to ask, so this is the
     // reference-peak fallback (kHdrFallbackPeakNits) -- that shifts only where
     // the highlight roll-off begins, not whether the image is readable at all.
@@ -774,7 +774,7 @@ bool IsConvertibleFrame(const AVFrame* frame) noexcept {
 // Normalizes a D3D11 hardware-decode readback frame in place, so every call
 // site below can call IsConvertibleFrame/WrapRawDecodedFrame/
 // ConvertToDecodedFrame exactly as before regardless of which decode path
-// produced `frame` (docs/dev/edit-player-architecture.md).
+// produced `frame` (docs/architecture/edit-and-export.md).
 // A no-op unless frame->format == AV_PIX_FMT_D3D11. Transfers the hardware
 // surface to system memory (av_hwframe_transfer_data) and de-interleaves it
 // via edit_player_hw_decode.h. On any failure -- including a 4:4:4 hardware
@@ -868,7 +868,7 @@ DecodedVideoFrame ConvertToDecodedFrame(const AVFrame* frame, int64_t pts_us, Ma
 // AVFrame*, av_frame_ref it to `frame` -- bumps the buffer refcount, no pixel
 // copy) rather than color-converting into a new BGRA allocation. This is the
 // entire reason RawDecodedVideoFrame exists for the GPU conversion path
-// (docs/dev/edit-player-architecture.md):
+// (docs/architecture/edit-and-export.md):
 // ConvertToDecodedFrame's `new uint8_t[bgra_bytes]` per frame above is gone
 // on this path, replaced by an AVFrame struct allocation (a few hundred
 // bytes), not a multi-megabyte pixel buffer.
@@ -1224,7 +1224,7 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                                            std::function<int64_t()> current_media_time_us) {
     // Same demux/video/audio thread topology, same clock-gated skip decision,
     // same PacketQueue backpressure as DecodeFrameAtRaw's single-frame
-    // sibling above -- docs/dev/edit-player-architecture.md.
+    // sibling above -- docs/architecture/edit-and-export.md.
     // The video thread calls WrapRawDecodedFrame (ref-counts the decoder's
     // own buffer) rather than ConvertToDecodedFrame (a fresh BGRA allocation
     // + CPU colour conversion): this is the editor player's own continuous

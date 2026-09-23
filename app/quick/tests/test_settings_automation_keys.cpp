@@ -129,7 +129,7 @@ TEST(SettingsAutomationKeys, AWriteGoesThroughTheProductAndTheReadBackShowsWhatI
     QString error;
 
     // MKV + AV1 + Opus is the default. Switching the container to MP4 is a
-    // request the product reconciles: ADR 0010 says MP4 carries neither AV1 nor
+    // request the product reconciles: MP4 carries neither AV1 nor
     // Opus, so both codecs move -- and the write is still a success.
     ASSERT_TRUE(WriteKey(*adapter, QStringLiteral("video.container"), QStringLiteral("MP4"), &error))
         << error.toStdString();

@@ -301,7 +301,7 @@ Rectangle {
             onClicked: root.recordViewModel.requestStop()
         }
 
-        // The one recommended action of the Completed state (ADR 0022). It takes
+        // The one recommended action of the Completed state. It takes
         // the accent pill that Record otherwise holds — after a recording
         // finishes, editing it is what the product is for, and starting the next
         // one is not. Record is not removed, only stepped down to a plain pill

@@ -1,7 +1,7 @@
 #pragma once
 
 // Mid-recording honesty for an audio capture source that lost its endpoint
-// (ADR 0046, product-spec "Audio source"). The engine already survives the loss:
+// (product-spec "Audio source"). The engine already survives the loss:
 // the affected source degrades to honest silence, the recording keeps running,
 // and the source is reactivated with the same identity every 500 ms. What the
 // user has to be told is that the gap exists while it is happening.

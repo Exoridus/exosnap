@@ -17,7 +17,7 @@ import QtQuick.Layouts
 // prompt and the recording-error report: same ExoOverlayCard, same scrim, same
 // focus ring, same `contentTopInset` keeping it out of the shell's title band.
 // It is deliberately NOT a nav destination and NOT a second window — the same
-// argument ADR 0022 makes for the Edit surface.
+// layout rule as the Edit surface.
 ExoOverlayCard {
     id: root
 

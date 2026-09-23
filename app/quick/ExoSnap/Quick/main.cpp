@@ -949,13 +949,13 @@ int main(int argc, char* argv[]) {
         installPseudoLocalization(app);
 
     exosnap::quick::QuickApplication quick_application;
-    // ADR 0033: the handoff a prior elevated self-relaunch put in our own argv.
+    // the handoff a prior elevated self-relaunch put in our own argv.
     // Applied before load() so the shell's landing page is decided once, rather
-    // than navigating away from Record after the first frame. ADR 0055: the
+    // than navigating away from Record after the first frame. Verification reinstall: the
     // verification-reinstall arming is argv-only and never persisted.
     const exosnap::services::RelaunchHandoff startup_handoff = exosnap::services::ParseRelaunchArgs(arguments);
     quick_application.applyStartupRelaunchHandoff(startup_handoff.page_name, startup_handoff.reenable_present_diag);
-    // ADR 0033, the outbound half. The frontend decides WHETHER to restart (it
+    // Elevation handoff. The frontend decides WHETHER to restart (it
     // owns the close guards) and WHAT to carry across; the bootstrap owns WHEN,
     // which is after exec() returns -- the successor cannot take the
     // single-instance mutex or the log file while this process still holds them.
@@ -967,7 +967,7 @@ int main(int argc, char* argv[]) {
     quick_application.applyVerifyUpdateReinstallMode(exosnap::services::HasVerifyUpdateReinstallRequest(arguments));
     quick_application.applyUpdateFeedOverride(update_feed_override.base_url);
     // The child updater gets an automation endpoint ONLY when this process has
-    // one. Same run id, different role in the pipe name (ADR 0067), so a runner
+    // one. Same run id, different role in the pipe name, so a runner
     // that is already driving this process can reach the updater it starts
     // without discovering anything.
     quick_application.applyUpdaterAutomationRunId(live_verify_options.requested ? live_verify_options.run_id

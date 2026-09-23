@@ -612,7 +612,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TargetLabelFromCaptureTarget_Uses
     EXPECT_EQ(RecordViewModel::TargetLabelFromCaptureTarget(window_target), "Brave - Claude Design");
 }
 
-// Privacy (ADR 0045): LogSafeTargetLabel is the label used at AppLog callsites
+// Privacy: LogSafeTargetLabel is the label used at AppLog callsites
 // (RecordingCoordinator::StartRecording, RecordPage's target-selection/start
 // logs). A window's title must never reach the log, even scrubbed by name --
 // the whole title text is replaced with a stable placeholder. A monitor's

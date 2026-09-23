@@ -175,7 +175,7 @@ TEST(UpdaterController, MsiFailedEmbedsCodeAndHasNoSecondary) {
     EXPECT_TRUE(s.detail_text.contains(QStringLiteral("1603")));
 }
 
-// ── Verification reinstall (ADR 0055) ───────────────────────────────────────
+// ── Verification reinstall ───────────────────────────────────────
 
 TEST(UpdaterController, VerificationReinstallIsOffByDefault) {
     UpdaterController c = MakeController();

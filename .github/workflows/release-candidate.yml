@@ -43,7 +43,7 @@ on:
 # released, whether the run is official, and whether it is a prerelease (purely
 # from the pushed tag's own shape — no dispatch input involved).
 #
-# VERSION IDENTITY (ADR 0054). The tag is the sole source of the release version, and
+# VERSION IDENTITY. The tag is the sole source of the release version, and
 # the FULL version — suffix included — is carried end to end: resolve-identity exports
 # it, the configure step compiles it into the binaries via -DEXOSNAP_RELEASE_VERSION,
 # a dedicated step reads it back out of the built executables and fails the job if it
@@ -51,11 +51,9 @@ on:
 # update manifest announces it. So tag == embedded == package name == manifest, proven
 # rather than assumed.
 #
-# The practical consequence, and it is intentional: pushing v0.9.0 after v0.9.0-rc4
-# rebuilds the same commit rather than re-labelling the RC's binaries, because those
-# bytes say "0.9.0-rc4" and the embedded-version check would reject them under the
-# final tag. Same source, different artifacts — see ADR 0054 for why that trade is the
-# right one.
+# A candidate and its final are separate builds because their full identity is
+# compiled into the executable. The promotion gate compares the allowed binary
+# sections and the remaining install tree against the qualified candidate.
 #
 # Fail-closed: an official release build (either shape) with the update key MISSING
 # hard-fails the build job (see "Configure Release tree") rather than silently
@@ -98,7 +96,7 @@ jobs:
   # Deriving both HERE, once, is the point: before this job owned them, four separate
   # places re-parsed project(VERSION) out of CMakeLists.txt with four copies of the same
   # regex, and every one of them produced the BASE version — which is exactly how an RC
-  # ended up publishing artifacts named, and binaries stamped, "0.9.0" (see ADR 0054).
+  # ended up publishing artifacts named, and binaries stamped, "0.9.0".
   #
   # Runs on every trigger (it is seconds of work) so the branch/PR path keeps building
   # UNOFFICIAL artifacts exactly as before, just with release_tag = '' and the honest
@@ -233,7 +231,7 @@ jobs:
     timeout-minutes: 90
     # The version is NOT a build-job output: resolve-identity owns it, and every step
     # here (and every downstream job) reads it from there. Re-exporting it would just
-    # recreate the duplicate-source problem ADR 0054 removed.
+    # recreate the risk of independently re-deriving version identity.
     outputs:
       portable_sha256: ${{ steps.shas.outputs.portable_sha256 }}
       msi_sha256: ${{ steps.shas.outputs.msi_sha256 }}
@@ -267,7 +265,7 @@ jobs:
           echo "SOURCE_DATE_EPOCH=$epoch (commit $GITHUB_SHA)"
 
       # 'quick' is MANDATORY for the shipped artifact: the ExoSnap application is a
-      # Qt Quick program (ADR 0064), and the 'base' profile does not produce a
+      # Qt Quick program, and the 'base' profile does not produce a
       # Widgets fallback -- it produces no application at all.
       - name: Install Qt 6
         uses: ./.github/actions/setup-qt
@@ -505,14 +503,14 @@ jobs:
           RELEASE_TAG: ${{ needs.resolve-identity.outputs.release_tag }}
 
       # Archive the Release PDBs for offline symbolication of crash minidumps
-      # (ADR 0017 § Symbol pipeline). Keyed by version + run id so a given build's
+      # (release symbol pipeline). Keyed by version + run id so a given build's
       # symbols are uniquely retrievable. This is the local/offline path; it does
       # NOT push symbols to a crash service.
       #
       # TODO(Crash-C): once a Sentry auth token is provisioned, add a step that
       # runs `sentry-cli debug-files upload --org <org> --project exosnap <pdbs>`
       # (and the matching crashpad_handler.pdb) so uploaded minidumps symbolicate
-      # server-side. Deferred per ADR 0017 — needs a CI secret (auth token).
+      # server-side. Needs an explicitly provisioned CI authentication token.
       - name: Collect Release PDBs
         id: pdbs
         env:
@@ -553,7 +551,7 @@ jobs:
 
       # Only the output directory is resolved here; the version comes from
       # resolve-identity. build-release-artifacts.ps1 keys its output directory on the
-      # FULL version for exactly the reason ADR 0054 exists: an RC and the final build
+      # FULL version to distinguish candidate and final identity: an RC and the final build
       # of the same commit are different artifacts and must not share a staging tree.
       - name: Resolve artifact paths
         id: artifact
@@ -689,7 +687,7 @@ jobs:
   # the base version there, 0.9.0-rc4's manifest announced plain "0.9.0", so a client
   # already on 0.9.0-rc4 saw no newer version and could never discover 0.9.0-rc5 —
   # RC-to-RC updating, the one thing an RC exists to exercise, was untestable
-  # (ADR 0054). It also makes the manifest agree with what the binaries report about
+  # It also makes the manifest agree with what the binaries report about
   # themselves, which the "Verify embedded release version" step above has proven.
   sign-manifest:
     name: Sign Update Manifest

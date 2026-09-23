@@ -35,13 +35,13 @@ enum class UiRecordingState {
     RegionSelecting, // overlay shown; user drawing selection rectangle
     Recording,
     Paused,
-    // ADR-0015: armed-from-recovery. The user chose "Continue" for a crash
+    // armed-from-recovery. The user chose "Continue" for a crash
     // artefact. The artefact is being repair-remuxed in the background as the
     // first slice of the session. The session is paused; Resume starts the next
     // slice. Visually equivalent to Paused from the TransportDock's perspective.
     ArmedFromRecovery,
     Stopping,
-    // ADR-0014: MP4 remux-on-stop. After the recording engine stops for an MP4
+    // MP4 remux-on-stop. After the recording engine stops for an MP4
     // session, the background remux job runs before the result is ready.
     // The UI shows "Saving…" with a progress indicator during this phase.
     Saving,
@@ -65,7 +65,7 @@ enum class UiRecordingState {
            state == UiRecordingState::Failed;
 }
 
-// The Edit surface opens *over* Record (ADR 0022), so a live capture that owns
+// The Edit surface opens *over* Record, so a live capture that owns
 // the Record surface must keep it: opening the editor over a running recording
 // or a countdown makes no sense, and the automatic "open when finished" open
 // would otherwise fire on a split session's segment boundary while it is still

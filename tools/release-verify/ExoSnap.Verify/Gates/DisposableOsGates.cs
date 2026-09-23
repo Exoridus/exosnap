@@ -13,7 +13,7 @@ namespace ExoSnap.Verify.Gates;
 /// administrative, so no UAC prompt is ever raised there; the decline is produced
 /// by the updater's own fault-injection seam inside the worker script, which
 /// returns ERROR_CANCELLED from the elevation call the way a declined prompt
-/// would. Per ADR 0067 ("cancel is not failure") the product assertion is
+/// would. For an intentional cancellation the product assertion is
 /// <c>failureCase == uacDeclined</c> with the installation intact, and this gate
 /// deliberately never asserts on <c>phase</c>: a decline legitimately reports
 /// <c>phase: failed</c>.

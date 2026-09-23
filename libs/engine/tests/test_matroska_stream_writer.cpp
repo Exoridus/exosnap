@@ -870,7 +870,7 @@ TEST_F(StreamWriterTest, EmptySession_FinalizesValidContainer) {
     EXPECT_EQ(CountCuePoints(d), 0);
 }
 
-// Color metadata (ADR 0032; default flipped Full->Limited by
+// Color metadata (Limited is the default for player compatibility;
 // fix/color-range-signaling): the video track carries an SDR BT.709
 // limited-range 8-bit Colour element by default, so the file is no longer
 // color-ambiguous and no HDR sub-elements are emitted. Limited is the default
@@ -1320,7 +1320,7 @@ TEST_F(StreamWriterTest, PushAfterFinalize_NoOp) {
     EXPECT_EQ(std::filesystem::file_size(tmp_), before);
 }
 
-// ADR 0030: audio_sample_rate/channels/bit_depth fields are threaded into the
+// audio_sample_rate/channels/bit_depth fields are threaded into the
 // container header. We verify the file opens cleanly with non-default values;
 // byte-level parsing of KaxAudioSamplingFreq/KaxAudioChannels/KaxAudioBitDepth
 // is deferred to the full AV-verification round (requires an EBML node walker
@@ -1337,7 +1337,7 @@ TEST_F(StreamWriterTest, NonDefaultAudioFormat_OpensAndFinalizes) {
     c.audio_codec = StreamAudioCodec::Pcm;
     c.audio_track_count = 1;
     c.audio_tracks[0].codec_private = {}; // PCM has no CodecPrivate
-    // Non-default audio format (ADR 0030).
+    // Non-default audio format.
     c.audio_sample_rate = 44100;
     c.audio_channels = 1;
     c.audio_bit_depth = 24;

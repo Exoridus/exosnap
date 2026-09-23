@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.27)
+cmake_minimum_required(VERSION 3.27)
 
 # The local Qt install hint lives in the ROOT CMakeLists.txt, because libs/control
 # calls find_package(Qt6) before this directory is even added. Repeating it here
@@ -200,7 +200,7 @@ exosnap_add_app_test_support(exosnap_app_log_test_support
 )
 target_link_libraries(exosnap_app_log_test_support PUBLIC Qt6::Core)
 
-# Live Verify control channel (ADR 0066) -- the APPLICATION's half of it: the
+# Live Verify control channel -- the APPLICATION's half of it: the
 # command table, its preconditions, the state it publishes, the intents it
 # executes, and the argv option this executable answers to. The wire format, the
 # policy mechanics, the session state machine and the named-pipe transport are
@@ -282,7 +282,7 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     # frontend drives it from the live diagnostics callback, so it belongs in the
     # library and not only in its own test target.
     diagnostics/WindowCaptureStall.cpp
-    # ADR 0046: the mid-recording audio-degradation latch. Same reason as the two
+    # the mid-recording audio-degradation latch. Same reason as the two
     # above — the shipping frontend drives it from the live diagnostics callback.
     diagnostics/AudioSourceDegradation.cpp
     diagnostics/SelfTestRunner.cpp
@@ -395,7 +395,7 @@ target_include_directories(window_capture_stall_tests PRIVATE ${CMAKE_CURRENT_SO
 target_link_libraries(window_capture_stall_tests PRIVATE dwmapi.lib shell32.lib)
 
 # Mid-recording audio-source degradation: the standing-notification latch over the
-# pipeline's existing AudioDiagnostics health facts (ADR 0046, pure).
+# pipeline's existing AudioDiagnostics health facts (pure).
 exosnap_add_gtest(
     NAME audio_source_degradation_tests
     TEST_PREFIX audio_degraded.
@@ -406,7 +406,7 @@ exosnap_add_gtest(
 )
 target_include_directories(audio_source_degradation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# 0.5.0 video rate-control tests (ADR 0009): ComputeNvencRcParams mapping,
+# Video rate-control tests: ComputeNvencRcParams mapping,
 # preset round-trip, dirty-tracking, sanitize, and capability queries.
 exosnap_add_gtest(
     NAME video_rate_control_tests
@@ -420,7 +420,7 @@ exosnap_add_gtest(
 target_include_directories(video_rate_control_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(video_rate_control_tests PRIVATE ole32.lib shell32.lib)
 
-# 0.5.0 audio encoding param tests (ADR 0019): preset round-trip, dirty-tracking, sanitize bounds.
+# Audio encoding parameter tests: preset round-trip, dirty-tracking, sanitize bounds.
 exosnap_add_gtest(
     NAME audio_encoding_preset_tests
     TEST_PREFIX audio_enc.
@@ -616,7 +616,7 @@ exosnap_add_gtest(
         Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-# ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
+# mfreadwrite.lib removed (MF/SinkWriter path deleted).
 target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
 set_target_properties(output_settings_tests PROPERTIES AUTOMOC ON)
 
@@ -821,7 +821,7 @@ exosnap_add_gtest(
 )
 target_include_directories(codec_labels_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# ELEVATION-FOUNDATION-R1 (ADR 0033): elevation provider stub + relaunch handoff
+# ELEVATION-FOUNDATION-R1: elevation provider stub + relaunch handoff
 # arg builder/parser + RelaunchResult contract. Pure logic; no Win32 invocation.
 exosnap_add_gtest(
     NAME elevation_tests
@@ -834,20 +834,12 @@ exosnap_add_gtest(
 target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
 
-# ADR 0033: present-diagnostics provider. PresentMonProvider owns a
+# present-diagnostics provider. PresentMonProvider owns a
 # PresentMonEtwSession and gates on elevation && opt-in before starting it.
 #
-# This target used to leave EXOSNAP_HAS_PRESENTMON undefined so that
-# PresentMonEtwSession.cpp compiled to a no-op twin -- which meant every contract the
-# session owns (attribution boundaries, accumulator resets, the held process handle,
-# what `available` means) was verified against an implementation that did nothing,
-# while the shipping one was verified by nobody. That is the same shape as the original
-# defect this ADR's Wave D slice fixed, so the session no longer has an ifdef at all:
-# the trace itself lives behind IPresentTraceBackend, and these tests inject a fake one.
-#
-# The define and the vendored consumer are carried anyway, so the REAL backend compiles
-# and links here too. A production translation unit that only ever built inside
-# app/quick is exactly what went unnoticed the first time.
+# Attribution, state and lifetime tests exercise the production session with a
+# fake IPresentTraceBackend. The real ETW backend is compiled and linked as well,
+# so this target cannot pass against a separate no-op session implementation.
 exosnap_add_gtest(
     NAME present_provider_tests
     TEST_PREFIX present.
@@ -1267,7 +1259,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     target_include_directories(capture_frame_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(capture_frame_tests PRIVATE
         NOMINMAX EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
-    # ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
+    # mfreadwrite.lib removed (MF/SinkWriter path deleted).
     target_link_libraries(capture_frame_tests PRIVATE
         mfplat.lib mf.lib mfuuid.lib ole32.lib)
     set_target_properties(capture_frame_tests PROPERTIES AUTOMOC ON)
@@ -1391,7 +1383,7 @@ exosnap_add_gtest(
 target_include_directories(recording_error_detail_text_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(recording_error_detail_text_tests PROPERTIES AUTOMOC ON)
 
-# The Live Verify runner's own state machine (ADR 0066). Registered here rather
+# The Live Verify runner's own state machine. Registered here rather
 # than left as a script somebody remembers to run: "an interruption is never
 # mistaken for success" and "a PASS is bound to the artifact it was produced
 # against" are the runner's whole value, and the only way to test them by hand is

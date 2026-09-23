@@ -1,4 +1,4 @@
-// Mid-recording audio-source degradation (ADR 0046, pure): the latch that decides
+// Mid-recording audio-source degradation (pure): the latch that decides
 // WHEN the standing "audio source went silent" notice is raised, replaced and
 // cleared from the AudioDiagnostics health facts the pipeline already publishes.
 //

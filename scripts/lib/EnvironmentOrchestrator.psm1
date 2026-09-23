@@ -116,7 +116,7 @@ function Resolve-EnvironmentJournalPath {
         a machine left with HDR on would be called clean forever, and the campaign
         that crashed would have covered its own tracks.
 
-        The whole point of ADR 0069's journal is that it outlives the process that
+        The persistent journal outlives the process that
         wrote it, and a per-campaign path silently narrows that to "outlives the
         process, but not the campaign". One machine has one environment, so it has
         exactly one journal: envctl's own default, `.workspace/env-journal.json`.

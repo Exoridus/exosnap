@@ -1,4 +1,4 @@
-// ADR 0033: unit tests for the present-diagnostics GATE.
+// unit tests for the present-diagnostics GATE.
 //
 // This file covers the pre-session decision only -- opt-in AND elevation -- and the
 // graceful-degrade contract when no trace can be opened. The session's own lifecycle

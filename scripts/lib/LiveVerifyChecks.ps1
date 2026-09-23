@@ -36,7 +36,7 @@ function Get-LiveVerifyCatalog {
         Id              = 'LV-ART-001'
         Title           = 'Artifact identity is resolved and recorded'
         Layer           = 'FULL_AUTO'
-        Source          = 'docs/release-checklist.md §4 (spot-check), §7a (Identity)'
+        Source          = 'docs/release-checklist.md §4 (spot-check), §5a (Identity)'
         ArtifactBound   = $true
         EnvironmentKeys = @()
         Run             = {
@@ -67,7 +67,7 @@ function Get-LiveVerifyCatalog {
         Id              = 'LV-APP-001'
         Title           = 'A normal launch exposes no Live Verify endpoint'
         Layer           = 'FULL_AUTO'
-        Source          = 'ADR 0066 (security boundary)'
+        Source          = 'docs/architecture/verification-boundaries.md (security boundary)'
         ArtifactBound   = $true
         EnvironmentKeys = @()
         Run             = {
@@ -106,7 +106,7 @@ function Get-LiveVerifyCatalog {
         Id              = 'LV-APP-002'
         Title           = 'Explicit Live Verify launch handshakes with the expected artifact'
         Layer           = 'CONTROL_CHANNEL'
-        Source          = 'ADR 0066 (handshake)'
+        Source          = 'docs/architecture/verification-boundaries.md (handshake)'
         ArtifactBound   = $true
         EnvironmentKeys = @()
         Run             = {
@@ -141,7 +141,7 @@ function Get-LiveVerifyCatalog {
         Id              = 'LV-APP-003'
         Title           = 'The endpoint is gone once the application exits'
         Layer           = 'FULL_AUTO'
-        Source          = 'ADR 0066 (lifetime)'
+        Source          = 'docs/architecture/verification-boundaries.md (lifetime)'
         ArtifactBound   = $true
         EnvironmentKeys = @()
         Run             = {
@@ -505,7 +505,7 @@ is verified automatically before and after your drag.
         Id              = 'LV-NAV-002'
         Title           = 'An open edit session survives a navigation round trip'
         Layer           = 'CONTROL_CHANNEL'
-        Source          = 'QCR-001; docs/product-spec.md (Edit/Output/Save is an overlay over Record, ADR 0022)'
+        Source          = 'docs/product-spec.md (Edit/Output/Save is an overlay over Record, docs/architecture/edit-and-export.md)'
         ArtifactBound   = $true
         EnvironmentKeys = @('primaryScreen')
         # No DependsOn, and deliberately so. The editor opens on a recording THIS
@@ -623,7 +623,7 @@ is verified automatically before and after your drag.
         Id              = 'LV-EDIT-001'
         Title           = 'Chained Record -> Edit -> Export harness'
         Layer           = 'EXTERNAL_TOOL'
-        Source          = 'docs/dev/harness-and-tracing.md; ADR 0022'
+        Source          = 'docs/dev/harness-and-tracing.md; docs/architecture/edit-and-export.md'
         ArtifactBound   = $true
         EnvironmentKeys = @('primaryScreen')
         Run             = {
@@ -753,7 +753,7 @@ is verified automatically before and after your drag.
         Id              = 'LV-OVL-001'
         Title           = 'Overlay native composition invariants'
         Layer           = 'CONTROL_CHANNEL'
-        Source          = '.workspace/visual-reference/main-app/quick-hardening/LIVE-VERIFY.md §2; ADR 0016'
+        Source          = 'docs/product-spec.md (capture-excluded overlays)'
         ArtifactBound   = $true
         EnvironmentKeys = @()
         Run             = {
@@ -891,7 +891,7 @@ composition is already asserted by LV-OVL-001.
         Id              = 'LV-UIA-001'
         Title           = 'The visible transport control is wired to the recording state'
         Layer           = 'UI_AUTOMATION'
-        Source          = 'ADR 0066 (dual-path verification)'
+        Source          = 'docs/architecture/verification-boundaries.md (dual-path verification)'
         ArtifactBound   = $true
         EnvironmentKeys = @()
         Run             = {
@@ -1006,7 +1006,7 @@ judge what you see, not an older Light screenshot.
         Id              = 'LV-IPC-001'
         Title           = 'Protocol 1 is still answered unchanged beside protocol 2'
         Layer           = 'CONTROL_CHANNEL'
-        Source          = 'ADR 0066 (versioned envelope)'
+        Source          = 'docs/architecture/verification-boundaries.md (versioned envelope)'
         ArtifactBound   = $true
         EnvironmentKeys = @()
         Run             = {
@@ -1139,7 +1139,7 @@ judge what you see, not an older Light screenshot.
             $unknown = Invoke-LiveVerifyCommand -Connection $connection -Command 'ui.navigate' `
                 -Parameters @{ page = 'edit' }
             if ($unknown.ok -or $unknown.error.code -ne 'invalid_params') {
-                # Edit is an overlay over Record, never a destination (ADR 0022).
+                # Edit is an overlay over Record, never a destination.
                 $problems += 'ui.navigate accepted "edit" as a destination'
             }
 
@@ -1377,7 +1377,7 @@ judge what you see, not an older Light screenshot.
         Id              = 'LV-UPD-001'
         Title           = 'Updater round-trip on a published RC'
         Layer           = 'SEMI_AUTO'
-        Source          = 'docs/release-checklist.md §5, §7a'
+        Source          = 'docs/release-checklist.md §5, §5a'
         ArtifactBound   = $true
         EnvironmentKeys = @()
         Run             = {
@@ -1387,7 +1387,7 @@ judge what you see, not an older Light screenshot.
                     Message = 'Needs a published, immutable RC; a local Release build cannot prove the updater path' }
             }
             return @{ Result = 'MANUAL_REQUIRED'
-                Message = 'Run docs/release-checklist.md §5 and §7a against this RC; process observation is wired, the swap itself is not yet driven from here' }
+                Message = 'Run docs/release-checklist.md §5 and §5a against this RC; process observation is wired, the swap itself is not yet driven from here' }
         }
     }
 

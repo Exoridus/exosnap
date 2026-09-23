@@ -1,24 +1,13 @@
 #pragma once
 
-// The non-deterministic Windows boundary of the present session -- and nothing else.
-//
-// This seam exists because of a specific failure. PresentMonEtwSession used to be one
-// translation unit split by `#ifdef EXOSNAP_HAS_PRESENTMON`: the real ETW consumer on
-// one side, a no-op on the other. `present_provider_tests` compiled the no-op side, so
-// every contract the session owns -- attribution boundaries, accumulator resets, the
-// process handle, what `available` means -- was verified against an implementation that
-// did nothing, while the shipping side was verified by nobody. That is the same shape
-// as the original ADR 0033 defect (the sources were compiled ONLY by a test target and
-// the product carried the no-op), and finding it twice is what turned it into a seam.
-//
-// The split is deliberately drawn at what a test genuinely cannot reproduce -- opening
-// a real-time ETW session needs elevation, and `ProcessTrace` blocks on the kernel --
-// and NOT one line further. Everything above this interface is ordinary logic and lives
-// in PresentMonEtwSession, compiled identically for the product and for the tests.
-//
-// This is not a second PresentMon. `MakePresentTraceBackend()` has exactly one real
-// implementation; without the vendored consumer it returns nullptr, which is the same
-// graceful degrade the old no-op branch provided.
+// The native ETW boundary of the present session.
+// Opening a real-time session requires elevation and ProcessTrace blocks on
+// the kernel. Keep only those operations behind this interface. Attribution,
+// lifetime, reset and availability logic stay in PresentMonEtwSession and are
+// compiled identically for product and tests. Testing a no-op substitute for
+// that logic would not verify the shipped implementation.
+// MakePresentTraceBackend has one real implementation; without the vendored
+// consumer it returns nullptr and the caller reports unavailable.
 
 #include <cstdint>
 #include <memory>

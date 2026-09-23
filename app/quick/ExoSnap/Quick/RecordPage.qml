@@ -692,7 +692,7 @@ Item {
             }
         }
 
-        // The entry into the Edit surface (ADR 0022) lives IN the transport dock,
+        // The entry into the Edit surface lives IN the transport dock,
         // as that state's one recommended action — see RecordTransportDock. It
         // used to be a detached button in a row of its own between the Preview
         // Surface and the dock, which broke the page's composition (one Preview

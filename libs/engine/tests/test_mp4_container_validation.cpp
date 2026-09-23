@@ -35,7 +35,7 @@ TEST(Mp4ValidationTest, AcceptsMp4H264Aac) {
     EXPECT_TRUE(result.succeeded);
 }
 
-// ADR 0030 (narrowed): MP4 + PCM is back to Experimental — Validate must reject it.
+// MP4 + PCM is Experimental — Validate must reject it.
 // libavformat emits ipcm (ISO/IEC 23003-5) for pcm_s16le/s24le/s32le in MP4; limited
 // player support. Deferred until a broadly-compatible sample-entry mapping is validated.
 TEST(Mp4ValidationTest, RejectsMp4H264Pcm) {

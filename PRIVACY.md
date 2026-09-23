@@ -8,7 +8,7 @@ ExoSnap is a local, Windows-native screen/application/region recorder. This docu
 
 ## Summary
 
-ExoSnap collects **no** telemetry or analytics, has **no** account system, and never transmits your recordings. By default it makes **no network connections**. As of 0.4.0, two strictly **opt-in** features can contact external services, and only when you act: an **update check** (public GitHub Releases) and **crash reporting** (consent-gated, to Sentry with EU data residency). Both are detailed below. Everything else stays on your computer.
+ExoSnap collects **no** telemetry or analytics, has **no** account system, and never transmits your recordings. By default it makes **no network connections**. Two strictly **opt-in** features can contact external services, and only when you act: an **update check** (public GitHub Releases) and **crash reporting** (consent-gated, to Sentry with EU data residency). Both are detailed below. Everything else stays on your computer.
 
 ## Data stored locally (never transmitted)
 
@@ -25,10 +25,10 @@ None of this leaves your device. You can delete any of it at any time.
 
 ## Crash reporting
 
-ExoSnap 0.4.0 introduces opt-in crash reporting powered by **Sentry** (data processor) with **EU data residency**. A Data Processing Agreement governs this relationship. Crash reporting is subject to the following guarantees:
+ExoSnap provides opt-in crash reporting powered by **Sentry** (data processor) with **EU data residency**. A Data Processing Agreement governs this relationship. Crash reporting is subject to the following guarantees:
 
 - **Opt-in and consent-gated.** Nothing is transmitted without your explicit consent. Upload is off by default. The next-launch dialog summarizes the local facts ExoSnap actually knows and separately explains the structured-event and native-minidump channels.
-- **Three revisitable choices.** **Settings → Developer → Crash reports** offers `Ask every time` (default), `Send automatically`, and `Never send`. `Never send` suppresses future report prompts but never hides local recording recovery. The dialog's unchecked **Remember this choice for future crashes** checkbox commits a policy only after Send report or Don't send is clicked; closing or pressing Escape changes nothing.
+- **Three revisitable choices.** **Settings → Support & diagnostics → Crash reports** offers `Ask every time` (default), `Send automatically`, and `Never send`. `Never send` suppresses future report prompts but never hides local recording recovery. The dialog's unchecked **Remember this choice for future crashes** checkbox commits a policy only after Send report or Don't send is clicked; closing or pressing Escape changes nothing.
 - **One-shot means one report.** Send report without Remember temporarily releases the pending report, waits for sentry-native's transport flush, and then resets SDK consent to the unknown/ask state. It does not silently authorize later reports in the same app session.
 - **Self-builds never upload.** Official builds compile in the Sentry ingest key (`EXOSNAP_OFFICIAL_BUILD`); self-built binaries do not include it and never phone home.
 - **What is sent (allowlist).** If you choose to send a report, only the structured tag keys below can ever survive the scrubber (`crash_scrubber.h`, `kAllowedTagKeys`). Any other tag is dropped. The crash stack and minidump are also sent:
@@ -63,7 +63,7 @@ ExoSnap can package its diagnostics into a single `.zip` **support bundle** that
 
 - **No transmission.** The bundle is written to a location you pick (save dialog) and then revealed in the file manager. ExoSnap never uploads it anywhere, which is consistent with having no telemetry.
 - **What it contains.** The rotated application and engine logs, the most recent per-recording session reports, and structured facts about your GPU, adapters, displays and current settings.
-- **Scrubbing.** Every text entry is scrubbed before it is written: user paths, username and machine name are stripped. A capture-target **window title** is neutralized twice. The app no longer writes a window's title into `exosnap.log`/`engine.jsonl` in the first place. Instead, a stable `[window]` placeholder is logged. Only "window vs monitor capture" is retained, never *which* window. The bundle step additionally redacts any `target="…"` value it still finds to `[capture-target]` as a defense-in-depth backstop. Structured files include only a fixed allowlist of known-safe fields, never a raw dump of your settings file.
+- **Scrubbing.** Every text entry is scrubbed before it is written: user paths, username and machine name are stripped. A capture-target **window title** is neutralized twice. The app does not write a window's title into `exosnap.log`/`engine.jsonl` in the first place. Instead, a stable `[window]` placeholder is logged. Only "window vs monitor capture" is retained, never *which* window. The bundle step additionally redacts any `target="…"` value it still finds to `[capture-target]` as a defense-in-depth backstop. Structured files include only a fixed allowlist of known-safe fields, never a raw dump of your settings file.
 - **What it never contains.** Your recordings, raw settings/preset/history files, absolute paths, username, machine name, or crash dumps (crash reporting is a separate, consent-gated channel).
 
 The per-recording **session report** written after each recording (`%LOCALAPPDATA%\ExoSnap\logs\reports\`) follows the same principle: it holds byte counts, codecs, and diagnostic counters plus a scrubbed output *file name*, and never an absolute path.

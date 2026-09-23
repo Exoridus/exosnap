@@ -8,15 +8,12 @@ namespace exosnap {
 // ---------------------------------------------------------------------------
 // StableDisplayId
 //
-// A hardware-stable identity for a physical display, persisted alongside a
-// capture target so a saved monitor/region selection survives topology changes
-// (unplug/replug, driver restart, reboot in a different port order) instead of
-// riding on the unstable GDI device name ("\\.\DISPLAYn").
-//
-// This is a PERSISTENCE/RESTORE concern only. The runtime capture machinery
-// (hub keying, preview, HDR) still keys on the live GDI device name and is not
-// affected. At restore time a ranked matcher (DisplayIdentityResolver) turns a
-// saved StableDisplayId back into a concrete current display.
+// Persisted connector and panel facts used to restore a display/region target.
+// The ranked matcher prefers an exact connector path, even when the panel on
+// that connector has changed. This is not proof of physical-panel identity.
+// Serial/model fallbacks can resolve a panel at another connector when the
+// original path is absent. Runtime capture still keys on the resolved live
+// display name rather than this persistence record.
 //
 // Field sources (see DisplayIdentityEnumerator):
 //   device_path   — DISPLAYCONFIG_TARGET_DEVICE_NAME.monitorDevicePath (primary,

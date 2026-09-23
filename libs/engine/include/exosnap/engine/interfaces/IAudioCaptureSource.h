@@ -52,7 +52,7 @@ class IAudioCaptureSource {
     // Initialize and start the capture stream.
     virtual bool Init(std::string& out_error) = 0;
 
-    // Re-open the stream in place after a mid-recording device loss (ADR 0046).
+    // Re-open the stream in place after a mid-recording device loss.
     // The default tears the stream down and Init()s a fresh one with the SAME
     // identity the source was constructed with — a fixed device_id re-opens that
     // id; a default (nullopt) mic / the system-output endpoint re-resolves the
@@ -66,7 +66,7 @@ class IAudioCaptureSource {
         return Init(out_error);
     }
 
-    // Composite health for the device-loss diagnostics (ADR 0046). A single
+    // Composite health for the device-loss diagnostics. A single
     // source reports {1, degraded?1:0}; a mixed/merged source reports the real
     // per-inner-source counts so a partly-degraded merged track (one dead inner,
     // the rest still mixing) is distinguishable from a fully-silent one.

@@ -81,7 +81,7 @@ public sealed class AudioEndpointTests
 /// What a window of samples says about a connected but silent source.
 /// </summary>
 /// <remarks>
-/// ADR 0046: degradation means the device is gone, not that it is quiet. The second
+/// degradation means the device is gone, not that it is quiet. The second
 /// answer this has to give is the one the PowerShell scenario got wrong -- a window
 /// in which no source was ever active proves nothing about how a silent one is
 /// treated, the way an empty list satisfies any assertion over it, and calling that a
@@ -365,7 +365,7 @@ public sealed class AudioDegradeGateTests
         var result = await Gate().RunAsync(harness.Context, TestContext.Current.CancellationToken);
 
         Assert.Equal(ScenarioOutcome.Fail, result.Outcome);
-        Assert.Contains("ADR 0046", result.Message, StringComparison.Ordinal);
+        Assert.Contains("audio source loss must not stop the recording", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]

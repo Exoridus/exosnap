@@ -10,7 +10,7 @@
 // working, warning, error and success states.
 //
 // The title bar's role label is the same word in EVERY state -- including an
-// ADR 0055 verification reinstall and every terminal failure. What the run IS
+// Verification reinstall and every terminal failure. What the run IS
 // gets said in the content, by the eyebrow above the version pills; a title bar
 // that renames itself under the user is exactly the instability this window was
 // built to avoid.

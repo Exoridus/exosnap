@@ -393,7 +393,7 @@ bool WasapiProcessLoopbackSrc::Init(std::string& out_error) {
     last_capture_hr_ = 0;
 
     // Capture the target's recycle-proof identity once, on the first successful
-    // init (ADR 0046). Reinit re-checks this before reacquiring so a dead/reused
+    // init. Reinit re-checks this before reacquiring so a dead/reused
     // PID is never grabbed. Captured even if the query returns 0 (unqueryable):
     // ProcessIdentityMatches then fails closed on any later Reinit.
     if (!identity_captured_) {

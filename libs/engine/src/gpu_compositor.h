@@ -14,7 +14,7 @@ namespace exosnap::engine {
 
 // D3D11 shader compositor for webcam and cursor overlays.
 //
-// Threading: all methods are VideoThread-exclusive per ADR-0009. The class does
+// Threading: all methods are VideoThread-exclusive. The class does
 // not take ownership of the device/context and must not be used from UI code.
 class GpuCompositor {
   public:

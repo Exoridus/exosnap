@@ -45,7 +45,7 @@ on:
           which the client compares by SemVer precedence, and it is what the asset file
           names are built from. Announcing '0.9.0' for an rc4 build made every RC look
           identical to the client, so no RC could ever discover its successor
-          (ADR 0054). release-candidate.yml passes resolve-identity's tag-derived
+          release-candidate.yml passes resolve-identity's tag-derived
           full_version, which its build job has proven matches the ProductVersion
           string embedded in the shipped executables.
         required: true
@@ -180,7 +180,7 @@ jobs:
               # client orders releases by SemVer precedence, under which 0.9.0-rc4 < 0.9.0
               # and 0.9.0-rc4 < 0.9.0-rc5, so an RC correctly sees both its successor RC
               # and the eventual final as newer. Using the base version here collapsed
-              # every candidate of a base onto one indistinguishable value (ADR 0054).
+              # every candidate of a base onto one indistinguishable value.
               "version":                  version,
               "minimum_accepted_version": version,
               "packages": [
@@ -384,5 +384,5 @@ jobs:
   #   steps:
   #     - name: Sign installer (SignPath)
   #       # Uncomment and configure once SignPath certificate is provisioned.
-  #       # See docs/decisions/0012-update-security-model.md for context.
+  #       # See docs/architecture/update-and-security.md for context.
   #       run: echo "Authenticode signing dormant -- awaiting cert"

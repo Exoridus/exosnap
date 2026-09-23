@@ -5,28 +5,28 @@
     "channels": {
         "github": {
             "intent": "publish",
-            "expectedVersion": "0.9.1",
+            "expectedVersion": "0.10.0",
             "feed": "https://api.github.com/repos/Exoridus/exosnap/releases/latest",
             "note": "The GitHub Release is the source every other channel downloads from, so it is the one channel that is never held."
         },
         "chocolatey": {
             "intent": "hold",
             "expectedVersion": "0.6.0",
-            "resumeAt": "0.9.1",
+            "resumeAt": "0.10.0",
             "feed": "https://community.chocolatey.org/api/v2/package/exosnap",
-            "reason": "0.7.0 and 0.8.0 shipped an MSI without the FFmpeg runtime DLLs, and 0.9.0 was tagged before its release gates were met. The next submission is 0.9.1, qualified through the campaign."
+            "reason": "0.7.0 and 0.8.0 shipped an MSI without the FFmpeg runtime DLLs, and 0.9.0 was tagged before its release gates were met. The next submission is 0.10.0, published from the same qualified bytes as its GitHub Release."
         },
         "winget": {
             "intent": "hold",
             "expectedVersion": "0.8.1",
-            "resumeAt": "0.9.1",
+            "resumeAt": "0.10.0",
             "feed": "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/c/Codexo/ExoSnap",
-            "reason": "Same as Chocolatey: 0.9.0 is not a version to move users onto. The manifests in packaging/winget are kept current so the 0.9.1 submission is a validate-and-submit, not a rewrite."
+            "reason": "Same as Chocolatey: 0.9.0 is not a version to move users onto. The manifests in packaging/winget are kept current so the 0.10.0 submission is a validate-and-submit, not a rewrite."
         },
         "scoop": {
             "intent": "hold",
             "expectedVersion": "0.8.1",
-            "resumeAt": "0.9.1",
+            "resumeAt": "0.10.0",
             "feed": "https://raw.githubusercontent.com/Exoridus/scoop-exosnap/master/bucket/exosnap.json",
             "reason": "The published bucket entry autoupdates from the newest GitHub Release once someone runs scoop update against it, so this hold is a statement about what the bucket has been seen serving rather than something the repository enforces."
         }

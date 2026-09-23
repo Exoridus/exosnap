@@ -209,7 +209,7 @@ PresentSample PresentMonEtwSession::Latest() const {
                                   : 0.0;
             last_present_qpc_ = present.present_qpc;
             PresentSample mapped = MapPresentEvent(raw);
-            // ADR 0033 extra-checks: fold into the per-recording aggregates. The accumulator
+            // fold into the per-recording aggregates. The accumulator
             // counts flips on the CLASSIFIED mode so sub-variant changes (e.g. Composed_Flip
             // -> Composed_Copy) do not register as a present-mode flip.
             accumulator_.Observe(mapped.mode, present.discarded);

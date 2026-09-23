@@ -442,7 +442,7 @@ TEST_F(NotificationManagerTest, Enqueue_ReturnsSequenceEvenWhenToastsDisabled) {
 }
 
 // ---------------------------------------------------------------------------
-// AudioSourceDegraded (ADR 0046 follow-up): a live device-loss condition, exactly
+// AudioSourceDegraded : a live device-loss condition, exactly
 // like LowStorage/UnexpectedStop/RecoveryAvailable — standing, never auto-dismisses.
 // ---------------------------------------------------------------------------
 

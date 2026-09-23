@@ -223,7 +223,7 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         // NLEs. 'hvc1' carries the parameter sets out-of-band in the hvcC box —
         // exactly how the transient MKV already stores them (hvcC codec-private),
         // so a plain stream-copy yields a conformant Apple-compatible file
-        // (ADR 0010 / ADR 0014). MKV output ignores codec_tag (it maps tracks by
+        // MKV output ignores codec_tag (it maps tracks by
         // CodecID string), so this is gated to the MP4 muxer only.
         if (out_is_mp4 && out_st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
             out_st->codecpar->codec_id == AV_CODEC_ID_HEVC) {
@@ -234,7 +234,7 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         // identity, not a hardcoded SDR one. avcodec_parameters_copy copies the
         // color_primaries / color_trc / color_space / color_range CICP fields
         // AND the coded_side_data array from the input AVCodecParameters. So a
-        // source MKV written with KaxVideoColour tags (ADR 0032) — SDR BT.709 or
+        // source MKV written with KaxVideoColour tags — SDR BT.709 or
         // HDR10 BT.2020/PQ — round-trips verbatim: the mov muxer emits the colr
         // (nclx) box from the CICP fields and, for HDR sources that carry
         // KaxVideoColourMasterMeta, the mdcv (mastering-display) box from the

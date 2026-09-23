@@ -580,7 +580,7 @@ void SettingsAdapter::setUpdateStatus(const QString& state, const QString& avail
         update_action_text_ = tr("Check for updates");
         update_action_enabled_ = true;
     } else if (state == QLatin1String("verify-reinstall")) {
-        // ADR 0055: the offered version IS the running one, on purpose.
+        // the offered version IS the running one, on purpose.
         update_status_text_ = tr("Verification reinstall of %1 is ready.").arg(available_version);
         update_action_text_ = tr("Reinstall %1").arg(available_version);
         update_action_enabled_ = true;

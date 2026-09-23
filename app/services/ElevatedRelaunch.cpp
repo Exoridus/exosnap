@@ -63,7 +63,7 @@ RelaunchResult RelaunchAsAdmin(const QString& exe_path, const QStringList& args)
         return RelaunchResult::Launched;
     }
 
-    // UAC decline is the expected, graceful path (ADR 0033): stay non-elevated.
+    // UAC decline is the expected, graceful path: stay non-elevated.
     if (::GetLastError() == ERROR_CANCELLED) {
         return RelaunchResult::UserDeclined;
     }

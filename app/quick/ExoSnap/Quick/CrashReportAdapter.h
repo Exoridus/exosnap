@@ -22,7 +22,7 @@ struct CrashReportContext {
     QString encoder; // e.g. "NVENC AV1 → MKV"
 };
 
-// Narrow QML boundary for the next-launch crash report (ADR 0017).
+// Narrow QML boundary for the next-launch crash report.
 //
 // The crash surface is an in-window overlay of the main application, not a
 // separate reporter executable — so it belongs to this cutover rather than to a

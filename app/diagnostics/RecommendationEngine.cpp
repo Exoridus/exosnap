@@ -68,7 +68,7 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
         live_disk_write_available_ = true;
         live_disk_peak_write_ms_ = live_snapshot->disk.peak_write_ms;
     }
-    // Consume live audio health + format (ADR 0046). Available only while an audio
+    // Consume live audio health + format. Available only while an audio
     // track is actually capturing; idle/no-audio recordings leave it neutral.
     if (live_snapshot != nullptr && live_snapshot->valid &&
         live_snapshot->lifecycle == exosnap::engine::DiagnosticsLifecycle::Recording) {
@@ -133,7 +133,7 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
 
 void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checklist) const {
     // Measured-symptom only — NO static config nag. The Smooth phase-correct frame selection
-    // (default pacing, ADR 0035) already absorbs the common high-refresh / VRR → CFR case, so
+    // (default pacing) already absorbs the common high-refresh / VRR → CFR case, so
     // a static "144 Hz + 60 fps" warning would just nag on a setup that records fine. We fire
     // ONLY on measured residual present-time jitter: irregular source delivery that even
     // best-frame selection at a fixed output rate cannot fully smooth. Sustained coalescing
@@ -176,7 +176,7 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
     r.budget_value = kJitterMs;
     r.value_unit = "ms";
 
-    // Present-mode attribution (PresentMon, ADR 0033): when available, name *how* the source
+    // Present-mode attribution (PresentMon): when available, name *how* the source
     // presents so the diagnosis reads as a root cause, not just a number.
     if (present_.has_value()) {
         switch (present_->mode) {
@@ -204,7 +204,7 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
 
-    // ADR 0035 / Task 6: when judder fires AND the user is on Newest pacing, offer a second
+    // when judder fires AND the user is on Newest pacing, offer a second
     // result (one primary fix_action per result) to switch to Smooth (phase-correct) pacing.
     // Smooth is the default and already eliminates this class of judder, so no fix is needed
     // when the user is already on Smooth.
@@ -920,7 +920,7 @@ void RecommendationEngine::checkUnresolvedSavedDisplay(DiagnosticChecklist& chec
 }
 
 // ---------------------------------------------------------------------------
-// Audio device loss — calm Tier-2 measured problem (ADR 0046). Fires ONLY while
+// Audio device loss — calm Tier-2 measured problem. Fires ONLY while
 // recording and at least one audio capture source is currently degraded (endpoint
 // lost, contributing honest silence). NEVER a blocker: the recording keeps running
 // and the source auto-reactivates when the device returns. The verdict must stay

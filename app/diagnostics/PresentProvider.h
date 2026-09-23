@@ -6,7 +6,7 @@
 namespace exosnap::diagnostics {
 
 // Presentation mode of the captured source as reported by the present-diagnostics
-// provider (PresentMon ETW, ADR 0033). Composed == DWM-composited window;
+// provider (PresentMon ETW). Composed == DWM-composited window;
 // IndependentFlip == flip-model presentation (overlay plane); ExclusiveFullscreen ==
 // legacy exclusive fullscreen. Unknown until a present is observed.
 enum class PresentMode {
@@ -33,7 +33,7 @@ struct PresentSample {
 
     // Session-cumulative aggregates, accumulated by PresentMonEtwSession across the drain
     // (NOT per-event — the drain otherwise keeps only the latest present). `present_count`
-    // gates the discarded-ratio check against warm-up noise. ADR 0033 extra-checks.
+    // gates the discarded-ratio check against warm-up noise.
     uint32_t present_count = 0;   // total matched presents observed this session
     uint32_t discarded_count = 0; // presents the compositor discarded (FinalState == Discarded)
     uint32_t mode_flip_count = 0; // classified present-mode transitions (instability proxy)

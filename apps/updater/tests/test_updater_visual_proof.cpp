@@ -444,7 +444,7 @@ TEST_F(UpdaterVisualProofTest, FinalV09BaselineMatrix) {
         // Green soft success and the pending-restart terminal success.
         {"18-green-launch-failed-dpr100.png", FailureState(FailureCase::LaunchFailed)},
         {"19-reboot-required-dpr100.png", FailureState(FailureCase::MsiRebootRequired)},
-        // ADR 0055 verification reinstall: same layout, different wording, and no
+        // Verification reinstall: same layout, different wording, and no
         // version change to announce.
         {"20-reinstall-downloading-dpr100.png", baseline::ReinstallWorkingState(UpStep::Download)},
         {"21-reinstall-installing-dpr100.png", baseline::ReinstallWorkingState(UpStep::Install)},

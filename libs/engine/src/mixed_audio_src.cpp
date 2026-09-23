@@ -149,7 +149,7 @@ void MixedAudioSrc::PumpOnePacketPerSource(bool& any_discontinuity) {
 
     for (size_t i = 0; i < num; ++i) {
         // A degraded inner (endpoint lost) is not polled — it would only fail
-        // again. The survivors keep mixing; Reinit reacquires it (ADR 0046).
+        // again. The survivors keep mixing; Reinit reacquires it.
         if (source_degraded_[i]) {
             continue;
         }

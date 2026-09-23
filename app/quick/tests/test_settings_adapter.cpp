@@ -86,7 +86,7 @@ TEST_F(SettingsAdapterTest, SwitchingToMp4ReconcilesAudioCodec) {
 
     adapter.setContainer(static_cast<int>(Container::Mp4));
 
-    // Opus is prohibited in MP4 (ADR 0010); ReconcileContainerCodecs owns that
+    // Opus is prohibited in MP4; ReconcileContainerCodecs owns that
     // rule, so the adapter must surface AAC without deciding it itself.
     EXPECT_EQ(adapter.container(), static_cast<int>(Container::Mp4));
     EXPECT_EQ(adapter.audioCodec(), static_cast<int>(AudioCodec::Aac));

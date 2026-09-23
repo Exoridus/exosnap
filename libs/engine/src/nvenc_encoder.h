@@ -607,16 +607,12 @@ class NvencEncoder {
     RateControlMode m_rateControlMode = RateControlMode::ConstantQuality;
     uint32_t m_bitrate_kbps = 20000;
     ColorMetadata m_color = ColorMetadata::Sdr709();
-    float m_keyframeIntervalSecs = 2.0f; // default 2 s — matches pre-0.9.0 hardcoded value
+    float m_keyframeIntervalSecs = 2.0f; // default 2 s
     bool m_constantFrameRate = true;     // submission regime; see ComputeNvencGopBackstop
 
-    // NVENC speed/quality preset (P1..P7), user-selectable expert setting.
-    // Default P4 — matches the prior hardcoded AV1/HEVC default; H.264 previously
-    // used P6 (visible default change, expert-overridable — see ADR 0039). P6 on
-    // AV1/HEVC has internal pipeline depth that causes NV_ENC_ERR_NEED_MORE_INPUT
-    // on every frame even with lookahead disabled; EncodeFrame already buffers/
-    // drains this case via the m_pending FIFO, so higher presets are not
-    // fatal, but they increase encode latency and 8-slot input-ring pressure.
+    // Higher presets can buffer input internally even without lookahead.
+    // NEED_MORE_INPUT is not fatal: retain pending ownership and drain output.
+    // Buffering increases latency and input-slot pressure.
     NvencPreset m_preset = NvencPreset::P4;
     // Resolved via NvencPresetToGuid(m_preset) in FetchPresetConfig(); the member
     // initializer here is only the value before FetchPresetConfig() first runs.

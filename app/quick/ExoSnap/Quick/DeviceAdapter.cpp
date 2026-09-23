@@ -514,7 +514,7 @@ void DeviceAdapter::renderCapabilityMatrix() {
          {}});
 
     if (!cap.backend_label.empty()) {
-        // Static declaration from the global CapabilitySet (ADR 0009), not a
+        // Static declaration from the global CapabilitySet, not a
         // per-adapter probe result.
         QStringList modes;
         if (capability::IsSelectable(caps_.QueryRateControlMode(exosnap::engine::RateControlMode::ConstantQuality)))

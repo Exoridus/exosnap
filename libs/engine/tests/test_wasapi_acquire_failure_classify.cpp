@@ -14,7 +14,7 @@
 //   AUDCLNT_E_SERVICE_NOT_RUNNING  -> Fail (audio service down)
 //   any other unexpected HRESULT   -> Fail (fail closed, never loop silently)
 //
-// What `Fail` MEANS at the session level changed in ADR 0046: it no longer ends
+// A source acquire failure does not by itself end
 // the recording. The audio thread now maps a reported acquire failure through
 // ClassifyAudioSourceLoss (audio_device_loss_policy.h, pinned in
 // test_audio_device_loss_policy.cpp) to DegradeSource — the affected source goes

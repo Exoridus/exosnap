@@ -401,7 +401,7 @@ TEST(SettingsSnapshotJson, RequestedAndEffectiveDifferencesAreReportedFieldByFie
     inputs.requested.output.video_codec = capability::VideoCodec::Av1;
     inputs.requested.output.audio_codec = capability::AudioCodec::Opus;
 
-    // What MP4 reconciliation actually produces (ADR 0010).
+    // What MP4 reconciliation actually produces.
     inputs.effective = inputs.requested;
     inputs.effective.output.video_codec = capability::VideoCodec::H264;
     inputs.effective.output.audio_codec = capability::AudioCodec::Aac;

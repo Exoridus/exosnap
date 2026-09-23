@@ -115,7 +115,7 @@ struct PersistedAppSettings {
     // successfully, open the Edit overlay directly instead of showing the
     // "Recording saved" toast with Edit/Show-in-folder actions. Default ON
     // (the product's post-record path is editing, not the toast). Was
-    // previously an ADR-0031 debug-only roadmap-dummy toggle with no engine
+    // previously a debug-only roadmap-dummy toggle with no engine
     // setting behind it at all.
     bool open_editor_when_finished = true;
 
@@ -138,20 +138,20 @@ struct PersistedAppSettings {
     // opt-in feature gated here.
     bool show_quick_controls = false;
 
-    // CRASH-POLICY-R2 (ADR 0017): explicit persisted report policy. AskEveryTime
+    // CRASH-POLICY-R2: explicit persisted report policy. AskEveryTime
     // is the privacy-by-default state; NeverSend is an explicit refusal and
     // suppresses only the report-consent prompt, never local recovery UI.
     CrashReportPolicy crash_report_policy = CrashReportPolicy::AskEveryTime;
 
-    // UPDATE-WIRE-R1 (ADR 0012): the selected update channel — "Stable" | "Preview".
+    // UPDATE-WIRE-R1: the selected update channel — "Stable" | "Preview".
     // Applied immediately on change: persisted, pushed into UpdateService, and
     // the previous channel's answer is dropped from the card. No automatic
-    // re-check — a network check stays the user's explicit action (ADR 0045).
+    // re-check — a network check stays the user's explicit action.
     // Default Stable.
     QString update_channel = QStringLiteral("Stable");
 
-    // UPDATE-WIRE-R1 (ADR 0012): whether to run a guarded update check on startup.
-    // Default OFF (ADR 0045): the update check contacts api.github.com, so it must
+    // UPDATE-WIRE-R1: whether to run a guarded update check on startup.
+    // Default OFF: the update check contacts api.github.com, so it must
     // not run before the user has explicitly opted in — matching the "no network
     // connections by default" promise in PRIVACY.md / product-spec §13-14. The
     // user can turn this on from the Settings update card.

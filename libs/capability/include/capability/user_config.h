@@ -28,7 +28,7 @@ struct UserRecorderConfig {
     uint32_t output_height = 0;
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;
-    // CFR frame pacing mode (ADR 0035). Smooth = phase-correct (default); Newest = lowest-latency.
+    // CFR frame pacing mode. Smooth = phase-correct (default); Newest = lowest-latency.
     exosnap::engine::FramePacingMode frame_pacing = exosnap::engine::FramePacingMode::Smooth;
     // HDR handling mode (config plumbing only for now). Default TonemapSdr —
     // see exosnap::engine::HdrMode for full semantics. Passed straight through

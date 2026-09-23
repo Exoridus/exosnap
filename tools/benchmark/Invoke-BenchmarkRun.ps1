@@ -56,7 +56,7 @@ if (-not (Test-Path $scenarioPath)) {
 }
 $definition = Get-Content -Raw -Path $scenarioPath | ConvertFrom-Json
 
-# `exosnap` is the shipping Qt Quick application (ADR 0064) and owns
+# `exosnap` is the shipping Qt Quick application and owns
 # app/<config>/exosnap.exe. There is no Widgets executable any more: the frontend
 # A/B campaign it existed for is complete, its results are archived under
 # .workspace/benchmark-results*/, and the frontend itself was removed with the
@@ -66,7 +66,7 @@ if (-not $QuickExe) {
     $QuickExe = Join-Path $repoRoot 'build\windows-x64-release-bench\app\Release\exosnap.exe'
 }
 if ($Frontend -eq 'widgets' -and -not $WidgetsExe) {
-    throw ("The Qt Widgets frontend was removed with the Qt Quick cutover (ADR 0064), so there is no " +
+    throw ("The Qt Widgets frontend was removed with the Qt Quick cutover, so there is no " +
            "executable to measure. The archived A/B results under .workspace/benchmark-results*/ are the " +
            "record of that comparison. To re-run it, check out the pre-cutover checkpoint and build there, " +
            "or pass -WidgetsExe with a binary you built yourself.")

@@ -330,7 +330,7 @@ TEST(SessionReport, OutputTsMismatchesAreNotReportedUnderAnyName) {
         EXPECT_FALSE(it.key().contains(QStringLiteral("output_ts"), Qt::CaseInsensitive))
             << "counters key '" << it.key().toStdString()
             << "' reports the outputTimeStamp mismatch counter, which can never be non-zero "
-               "(the mismatch aborts the encode). See ADR 0053.";
+               "(the mismatch aborts the encode).";
     }
 }
 

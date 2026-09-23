@@ -21,7 +21,7 @@ enum class VideoCodec {
 };
 
 enum class AudioCodec {
-    Aac,  // FFmpeg native AAC-LC (ADR 0052) — valid for Matroska and MP4
+    Aac,  // FFmpeg native AAC-LC — valid for Matroska and MP4
     Opus, // libopus — valid for WebM and Matroska
     Pcm,  // uncompressed S16LE — valid for Matroska only (A_PCM/INT/LIT)
     Flac, // libFLAC lossless — valid for Matroska only (A_FLAC)
@@ -175,14 +175,9 @@ inline constexpr uint32_t NvencNativeQuantizer(VideoCodec codec, uint32_t cq) no
     return kAv1[kCount - 1].native;
 }
 
-// NVENC encoder speed/quality preset (SDK presets P1-P7). P1 is fastest with the
-// lowest quality/highest throughput; P7 is slowest with the best quality. This is
-// independent of QualityPreset (which only tunes CQP QP values) and of
-// RateControlMode (which selects CQP/VBR/CBR) — the preset instead selects the
-// NVENC internal encoding pipeline/algorithm tradeoff. Applies uniformly across
-// all three NVENC codecs (H.264, HEVC, AV1); never capability-gated. Default P4
-// (balanced) — matches the prior hardcoded AV1/HEVC default; H.264 previously
-// used P6 (visible default change, expert-overridable — see ADR 0039).
+// NVENC P1-P7 speed/quality trade-off, independent of the quantizer and rate
+// control. P4 is the default for H.264, HEVC and AV1. Driver support and latency
+// remain separate from whether a preset is listed by the UI.
 enum class NvencPreset {
     P1, // fastest, lowest quality
     P2,
@@ -193,7 +188,7 @@ enum class NvencPreset {
     P7, // slowest, best quality
 };
 
-// Canonical rate-control modes (ADR 0009). Encoders map from this model to
+// Canonical rate-control modes. Encoders map from this model to
 // their native parameters internally. The UI never uses per-vendor terminology.
 enum class RateControlMode {
     ConstantQuality, // NVENC: CQP — quality-target, encoder chooses bitrate

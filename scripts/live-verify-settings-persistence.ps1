@@ -35,7 +35,7 @@ param(
 
     One assertion is the point of the exercise and is easy to lose: a write is
     reconciled by the PRODUCT. Asking for MP4 while the codecs are AV1 + Opus
-    moves both codecs (ADR 0010), and the run asserts that it did -- because a
+    moves both codecs, and the run asserts that it did -- because a
     settings path that accepted the container without reconciling would be a
     path no user takes.
 
@@ -153,7 +153,7 @@ try {
     # which only happens if the write really went through the product's own
     # intake rather than into the model behind it.
     $codecAfter = Get-SettingValue $conn 'video.videoCodec'
-    Add-Step 'the container write was reconciled by the product (ADR 0010)' `
+    Add-Step 'the container write was reconciled by the product' `
         ($codecBefore -eq 'AV1' -and $codecAfter -ne 'AV1') `
         @{ before = $codecBefore; after = $codecAfter }
     $evidence.reconciliation = @{ videoCodecBefore = $codecBefore; videoCodecAfter = $codecAfter }

@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-// Shared atomic-publish primitives for remux output (ADR-0014 durability).
+// Shared atomic-publish primitives for remux output.
 //
 // A remux writes to a sibling ".tmp" staging file on the target's own volume and then
 // atomically renames it onto the final path. A kill/powerloss mid-remux then

@@ -4,7 +4,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// The previous session did not shut down normally (ADR 0017). Shown once at the
+// The previous session did not shut down normally. Shown once at the
 // next launch, and only when the persisted policy is "ask every time".
 //
 // This is a consent surface: the two committing actions are equally weighted and

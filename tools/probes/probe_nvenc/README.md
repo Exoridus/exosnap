@@ -78,7 +78,7 @@ The `probe_nvenc` target is **optional**. If `third_party/nvidia/nvEncodeAPI.h` 
 ## Build
 
 ```pwsh
-cmake --preset windows-x64-debug
+cmake --preset windows-x64-debug -DEXOSNAP_BUILD_PROBES=ON
 cmake --build --preset windows-x64-debug --target probe_nvenc
 ```
 
@@ -87,7 +87,7 @@ The executable is produced at: `build/windows-x64-debug/tools/probes/probe_nvenc
 ## Run
 
 ```pwsh
-.\build\windows-x64-debug\apps\probes\probe_nvenc\Debug\probe_nvenc.exe
+.\build\windows-x64-debug\tools\probes\probe_nvenc\Debug\probe_nvenc.exe
 ```
 
 Exit code `0` means all phases passed. Exit code `1` means the first failing phase stopped the run. The failing phase number, label, and NVENC status are printed on that line.

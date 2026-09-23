@@ -361,7 +361,7 @@ int main(int argc, char** argv) {
     const bool manual = args.mode == exosnap::update::UpdaterMode::Manual;
 
     if (args.verify_reinstall) {
-        // ADR 0055: a same-version reinstall over the full production path. Log it
+        // a same-version reinstall over the full production path. Log it
         // so an updater run in this mode is never mistaken for a real upgrade.
         std::fprintf(stderr, "exosnap-updater: verification reinstall mode — only version \"%s\" is accepted\n",
                      qPrintable(args.current_version));

@@ -127,7 +127,7 @@ TEST(RetryEntryStep, DownloadFailuresReenterDownload) {
 }
 
 // ---------------------------------------------------------------------------
-// VerificationReinstallAccepts -- ADR 0055 same-version gate
+// VerificationReinstallAccepts -- exact same-version gate
 // ---------------------------------------------------------------------------
 
 TEST(VerificationReinstallAccepts, WithoutTheFlagEveryVersionPasses) {

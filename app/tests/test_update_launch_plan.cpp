@@ -149,7 +149,7 @@ TEST(BuildUpdateHandoff, PassesTheReleaseTagVerbatimNotAReSpelling) {
 }
 
 TEST(BuildUpdateHandoff, VerificationReinstallPinsTheIdenticalVersion) {
-    // Both gates then agree by construction: the target gate and the ADR 0055
+    // Both gates then agree by construction: the target gate and the verification-reinstall
     // gate compare the same string against the same manifest field.
     upd::UpdateState st;
     st.install_mode = upd::InstallMode::Portable;
@@ -449,7 +449,7 @@ TEST(ResolveUpdateCardState, RearmsToAvailableAfterManualCheckClearsStamp) {
               QStringLiteral("available"));
 }
 
-// -- ResolveUpdateCardState: verification reinstall (ADR 0055) --------------
+// -- ResolveUpdateCardState: verification reinstall --------------
 
 TEST(ResolveUpdateCardState, VerifyReinstallWhenModeIsOnAndTheOfferIsTheRunningVersion) {
     EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),

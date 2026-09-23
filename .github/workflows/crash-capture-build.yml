@@ -103,7 +103,7 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
-      # 'quick': exosnap IS the Qt Quick application (ADR 0064). Under 'base' this
+      # 'quick': exosnap IS the Qt Quick application. Under 'base' this
       # job would build everything EXCEPT the binary it exists to check.
       - name: Install Qt 6
         uses: ./.github/actions/setup-qt
@@ -171,7 +171,7 @@ jobs:
           }
           Write-Host "crashpad_handler.exe present: $((Get-Item $exe).Length) bytes"
 
-      # Privacy review (ADR 0045, docs/privacy-review.md): build the test
+      # Privacy review (docs/privacy-review.md): build the test
       # targets and run the crash_capture suite against the REAL sentry-native
       # link (EXOSNAP_CRASH_CAPTURE_AVAILABLE=1). Previously this job only
       # built --target exosnap and never ran ctest at all, so the crash_capture

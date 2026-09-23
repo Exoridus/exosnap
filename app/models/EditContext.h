@@ -1,6 +1,6 @@
 #pragma once
 
-// Context handed to the Edit/Output/Save surface when it opens (ADR 0022).
+// Context handed to the Edit/Output/Save surface when it opens.
 // Framework-independent: it names files and carries the completed recording's
 // post-flight numbers, and knows nothing about how either frontend renders it.
 //

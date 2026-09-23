@@ -1,5 +1,5 @@
 // test_mp4_remux_pipeline_flow.cpp — integration-logic tests for the MP4
-// remux-on-stop pipeline (ADR-0014).
+// remux-on-stop pipeline.
 //
 // These tests focus on the pure-logic layer that does NOT require a live
 // encoder or display capture device:
@@ -102,7 +102,7 @@ TEST(Mp4RemuxPipelineFlowTest, DeriveValuablePartialPath_DistinguishesFinalNames
 // ---------------------------------------------------------------------------
 
 TEST(Mp4RemuxPipelineFlowTest, OpusMp4GatingAfterMfRemoval) {
-    // ADR-0014 / gating rule: Opus is never valid with Container::Mp4.
+    // Opus is never valid with Container::Mp4.
     // This test guards against the MF path removal accidentally relaxing the
     // codec-container gate in Validate().
     RecorderSession session;
@@ -146,7 +146,7 @@ TEST(Mp4RemuxPipelineFlowTest, WebMWithH264RemainsRejected) {
 }
 
 TEST(Mp4RemuxPipelineFlowTest, MatroskaWithH264AacIsValid) {
-    // Sanity: Matroska is unaffected by ADR-0014 changes.
+    // Matroska accepts this combination independently of MP4 restrictions.
     RecorderSession session;
     auto cfg = MakeMp4Config();
     cfg.container = Container::Matroska;

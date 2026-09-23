@@ -1,4 +1,4 @@
-# libs/control/CMakeLists.txt -- the shared control-channel layer (ADR 0066).
+# libs/control/CMakeLists.txt -- the shared control-channel layer.
 #
 # Everything an ExoSnap process needs to expose a local automation endpoint,
 # minus the process itself: the NDJSON envelope and error taxonomy, the

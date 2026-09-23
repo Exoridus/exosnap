@@ -68,7 +68,7 @@ exosnap::update_handoff::UpdateHandoff BuildUpdateHandoff(const exosnap::update:
     handoff.install_mode = st.install_mode;
     handoff.install_dir = install_dir;
     handoff.app_pid = pid;
-    // ADR 0055: the updater's own same-version gate. Only ever set for a run the
+    // the updater's own same-version gate. Only ever set for a run the
     // user explicitly started with --verify-update-reinstall.
     handoff.verify_reinstall = verify_reinstall;
     return handoff;
@@ -102,7 +102,7 @@ QString ResolveUpdateCardState(bool update_available, bool is_scoop, const QStri
         return QStringLiteral("uptodate");
     if (is_scoop)
         return QStringLiteral("scoop");
-    // Verification reinstall (ADR 0055): the offered version IS the running one.
+    // Verification reinstall: the offered version IS the running one.
     // Exact string equality — the engine granted the offer on the same basis.
     if (verify_reinstall_mode && !available_version.isEmpty() && available_version == current_version)
         return QStringLiteral("verify-reinstall");

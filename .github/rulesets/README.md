@@ -16,10 +16,10 @@ Applying is a deliberate, separately authorised act. The checker never writes.
 
 `ci-required` and `crash-capture-required` are aggregate jobs: they always run, they always report, and they decide per job whether a non-success result is the documented behaviour for that event or a failure being waved through.
 
-Naming the heavy jobs directly is what the repository did before, and it is weaker than it looks in both directions:
+Requiring the heavy jobs directly has two failure modes:
 
 - A job that skips itself reports conclusion `skipped`, and GitHub counts a skipped required check as satisfied. `build-test (windows-x64-release)` skips on any pull request whose diff misses the `build` filter, so the rule it was listed under could be satisfied by a job that never ran.
-- A conditional job that reports nothing at all leaves the rule permanently unsatisfiable, which is the mistake usually made while fixing the first one.
+- A conditional job that reports nothing at all leaves the rule permanently unsatisfiable.
 
 Keeping the decision in the workflow means it is reviewed with the code that makes it true, and changing it requires a commit.
 

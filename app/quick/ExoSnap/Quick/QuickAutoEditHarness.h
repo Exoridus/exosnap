@@ -6,7 +6,7 @@
 // visual harness proves the Editor RENDERS. Neither proves the Editor WORKS —
 // that real media decodes, that seeking lands, that a trim is applied, and that
 // an export writes a file a decoder will accept. The Qt Quick cutover made that
-// gap load-bearing (ADR 0064): the whole edit surface was reimplemented, and a
+// gap load-bearing: the whole edit surface was reimplemented, and a
 // synthetic fixture cannot tell a working decode path from a broken one.
 //
 // What it drives: the same QObject adapters the QML binds to

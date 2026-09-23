@@ -64,9 +64,10 @@ struct DisplayMatch {
 // ---------------------------------------------------------------------------
 // ResolveStableDisplay
 //
-// Pure ranked matcher. Returns the best match or nullopt (UNRESOLVED). Never
-// guesses among ambiguous twins (same model, no distinct serial). An empty()
-// saved id returns nullopt — the caller treats that as "no preference".
+// Pure ranked matcher. An exact device path wins before panel facts are checked.
+// Model-only fallback refuses multiple candidates. A connector match therefore
+// does not prove that the same physical panel is attached. An empty saved ID
+// returns nullopt; the caller treats that as no stored preference.
 //
 // Ranking (first hit wins):
 //   1. device_path exact                         -> DevicePath
@@ -76,8 +77,7 @@ struct DisplayMatch {
 //      friendly_name matches (when saved)         -> FriendlyName
 //      (two or more displays of the same model without a serial -> no match)
 //   4. gdi_name exact, ONLY when the saved id never carried a device_path
-//      (a degraded save) — never worse than the historical GDI-name match, and
-//      never a silent mismatch for a rich saved identity  -> GdiName
+//      (a degraded save)                         -> GdiName
 // ---------------------------------------------------------------------------
 [[nodiscard]] std::optional<DisplayMatch>
 ResolveStableDisplay(const StableDisplayId& saved, const std::vector<EnumeratedDisplayIdentity>& enumerated);

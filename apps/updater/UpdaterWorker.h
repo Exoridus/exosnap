@@ -55,7 +55,7 @@ namespace exosnap::updater {
 // "0.9.0-beta1" pass for "0.9.0-alpha7".
 [[nodiscard]] bool VersionsMatchExactly(const QString& a, const QString& b);
 
-// ADR 0055 verification reinstall gate. With --verify-reinstall the run may only
+// Verification reinstall gate. With --verify-reinstall the run may only
 // proceed when the signed manifest names EXACTLY the version the app handed over
 // in --current-version. Returns true when the pipeline may continue. Without the
 // flag it is always true (this gate is additive; the downgrade guard and every

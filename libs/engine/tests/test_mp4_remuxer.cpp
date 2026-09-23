@@ -1,4 +1,4 @@
-// test_mp4_remuxer.cpp — unit tests for the MP4 remux engine (ADR-0014)
+// test_mp4_remuxer.cpp — unit tests for the MP4 remux engine
 //
 // Fixture strategy: generate a minimal MKV at test time using MatroskaStreamWriter
 // with the existing synthetic packet helpers from test_matroska_stream_writer.cpp.
@@ -744,7 +744,7 @@ TEST_F(RemuxerTest, Mp4ColorTagsFallbackWhenMkvUntagged) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 8: HEVC-in-MP4 carries the 'hvc1' sample-entry FourCC (0.7.0, ADR 0014).
+// Test 8: HEVC-in-MP4 carries the 'hvc1' sample-entry FourCC.
 //         A source MKV with a V_MPEGH/ISO/HEVC track (hvcC codec-private) must
 //         remux to an MP4 whose video stream is tagged 'hvc1' — NOT the libav
 //         default 'hev1', which QuickTime/Apple devices refuse. The hvc1 tag

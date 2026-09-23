@@ -172,7 +172,7 @@ TEST(RetryOfferedTable, RecoverableFailuresOfferOne) {
     }
 }
 
-// A2 is the one case whose answer depends on the mode, and ADR 0068 is why: a
+// A2 is the one case whose answer depends on the mode, because a
 // manual run downloads the manifest itself, so a retry can genuinely fetch it
 // again; a handoff run re-reads the exact file the application handed over, so
 // the same refusal is guaranteed. Offering nothing is never a false promise --

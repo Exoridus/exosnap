@@ -1,6 +1,6 @@
 #pragma once
 
-// Builds the EditContext that the Edit/Output/Save surface opens on (ADR 0022).
+// Builds the EditContext that the Edit/Output/Save surface opens on.
 //
 // This used to live in an anonymous namespace inside `pages/RecordPage.cpp`,
 // which made it reachable only from the Widgets frontend. The mapping is pure

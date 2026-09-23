@@ -96,7 +96,7 @@ public static class ReleaseCatalog
             isolation: ScenarioIsolation.Desktop,
             interaction: ScenarioInteraction.Automated,
             oracle: ["envctl"],
-            source: "ADR 0069 (environment orchestration)"),
+            source: "docs/architecture/verification-boundaries.md (environment orchestration)"),
 
         Describe(
             id: "REL-ENV-002",
@@ -106,7 +106,7 @@ public static class ReleaseCatalog
             isolation: ScenarioIsolation.Desktop,
             interaction: ScenarioInteraction.Automated,
             oracle: ["envctl"],
-            source: "ADR 0069",
+            source: "docs/architecture/verification-boundaries.md",
             dependsOn: ["REL-ENV-001"]),
 
         Describe(
@@ -119,7 +119,7 @@ public static class ReleaseCatalog
             requires: [Device("display.main-hdr")],
             mutates: ["display.main-hdr:refresh-hz"],
             oracle: ["envctl"],
-            source: "ADR 0069 (write, read back, compare; exact restore)",
+            source: "docs/architecture/verification-boundaries.md (write, read back, compare; exact restore)",
             dependsOn: ["REL-ENV-002"]),
 
         Describe(
@@ -130,7 +130,7 @@ public static class ReleaseCatalog
             isolation: ScenarioIsolation.Hermetic,
             interaction: ScenarioInteraction.Automated,
             oracle: ["exosnap"],
-            source: "Wave D review: scenarios that read fields no emitter emits"),
+            source: "docs/dev/release-verify.md (field contract)"),
 
         Describe(
             id: "REL-PRESENT-001",
@@ -141,7 +141,7 @@ public static class ReleaseCatalog
             interaction: ScenarioInteraction.Automated,
             requires: [CapabilityRequirement.Is(CapabilityKeys.Elevated, "false")],
             oracle: ["exosnap"],
-            source: "ADR 0033"),
+            source: "docs/architecture/diagnostics.md"),
 
         Describe(
             id: "REL-PRESENT-002",
@@ -153,7 +153,7 @@ public static class ReleaseCatalog
             interaction: ScenarioInteraction.OperatorAssisted,
             requires: [CapabilityRequirement.Is(CapabilityKeys.GpuD3D11, "true")],
             oracle: ["exosnap", "presentmon"],
-            source: "ADR 0033; docs/release-checklist.md section 7 (present-mode diagnostics)"),
+            source: "docs/architecture/diagnostics.md; docs/release-checklist.md section 7 (present-mode diagnostics)"),
 
         Describe(
             id: "REL-PRESENT-XCHECK-001",
@@ -164,7 +164,7 @@ public static class ReleaseCatalog
             interaction: ScenarioInteraction.Automated,
             requires: [CapabilityRequirement.Is(CapabilityKeys.PresentMonAvailable, "true")],
             oracle: ["exosnap", "presentmon"],
-            source: "ADR 0070 (PresentMon as an independent oracle; required only when the " +
+            source: "docs/architecture/verification-boundaries.md (PresentMon as an independent oracle; required only when the " +
                     "present-diagnostics code or the Windows major version has moved)"),
 
         Describe(
@@ -210,7 +210,7 @@ public static class ReleaseCatalog
             requires: [CapabilityRequirement.Is(CapabilityKeys.GpuD3D11, "true")],
             oracle: ["exosnap", "presentmon"],
             optIn: true,
-            source: "ADR 0051"),
+            source: "docs/architecture/capture-and-preview.md"),
 
         Describe(
             id: "REL-AUD-DEGRADE-001",
@@ -223,7 +223,7 @@ public static class ReleaseCatalog
             mutates: ["audio.render.normal:endpoint-state"],
             oracle: ["exosnap", "wasapi", "ffprobe"],
             optIn: true,
-            source: "ADR 0046; docs/release-checklist.md section 7"),
+            source: "docs/architecture/audio.md; docs/release-checklist.md section 7"),
 
         Describe(
             id: "REL-AUD-SILENCE-001",
@@ -234,7 +234,7 @@ public static class ReleaseCatalog
             interaction: ScenarioInteraction.OperatorAssisted,
             oracle: ["exosnap", "ffprobe"],
             optIn: true,
-            source: "ADR 0046 (degradation is device loss, not quiet)"),
+            source: "docs/architecture/audio.md (degradation is device loss, not quiet)"),
 
         Describe(
             id: "REL-AUD-FORMAT-001",
@@ -351,7 +351,7 @@ public static class ReleaseCatalog
             interaction: ScenarioInteraction.Automated,
             oracle: ["exosnap", "filesystem"],
             optIn: true,
-            source: "ADR 0068; docs/release-checklist.md section 5"),
+            source: "docs/architecture/update-and-security.md; docs/release-checklist.md section 5"),
 
         Describe(
             id: "REL-UPD-MSI-DECLINE-001",
@@ -363,7 +363,7 @@ public static class ReleaseCatalog
             interaction: ScenarioInteraction.OperatorAssisted,
             oracle: ["exosnap", "filesystem"],
             optIn: true,
-            source: "ADR 0067 (cancel is not failure)"),
+            source: "docs/architecture/verification-boundaries.md (cancel is not failure)"),
 
         Describe(
             id: "REL-UPD-MSI-001",
@@ -375,7 +375,7 @@ public static class ReleaseCatalog
             interaction: ScenarioInteraction.OperatorAssisted,
             oracle: ["exosnap", "msi", "filesystem"],
             optIn: true,
-            source: "docs/release-checklist.md sections 5 and 7a",
+            source: "docs/release-checklist.md sections 5 and 5a",
             dependsOn: ["REL-UPD-MSI-DECLINE-001"]),
 
         Describe(
@@ -413,7 +413,7 @@ public static class ReleaseCatalog
             interaction: ScenarioInteraction.Automated,
             requires: [CapabilityRequirement.Is(CapabilityKeys.FfprobeAvailable, "true")],
             oracle: ["exosnap", "ffprobe"],
-            source: "Wave C product journey"),
+            source: "docs/product-spec.md (recording lifecycle and navigation)"),
 
         Describe(
             id: "REL-SHUTDOWN-001",
@@ -423,7 +423,7 @@ public static class ReleaseCatalog
             isolation: ScenarioIsolation.Desktop,
             interaction: ScenarioInteraction.Automated,
             oracle: ["exosnap"],
-            source: "ADR 0067 (no flush-on-stop dependency)"),
+            source: "docs/architecture/verification-boundaries.md (no flush-on-stop dependency)"),
     ]);
 
     private static CapabilityRequirement Device(string alias) =>

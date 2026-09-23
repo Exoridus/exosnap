@@ -1,101 +1,41 @@
-# Static analysis: how the blocking clang-tidy set was chosen
+# Static analysis
 
-`.clang-tidy` carries the rules and the durable reasons for them. This file carries the measurement they rest on, so that extending the blocking set is a decision with evidence rather than a guess.
+`.clang-tidy`, `cmake/exosnap_warnings.cmake` and the quality scripts own the enabled rules. This guide explains how to run and extend them. Historical scan counts are not current baselines.
 
-clang-tidy only runs under the Ninja generator. The Visual Studio generator silently ignores `CMAKE_CXX_CLANG_TIDY`. The CI lint job and the `windows-x64-ninja-lint` preset run it. `scripts/run-clang-tidy-blocking.ps1` enforces the blocking subset and, with `-Base <ref>`, restricts the pass to the translation units a change actually touches.
+## Blocking and advisory paths
 
-## The blocking set
-
-```
-bugprone-use-after-move
-bugprone-dangling-handle
-readability-misleading-indentation
-clang-analyzer-core.CallAndMessage
-clang-analyzer-core.uninitialized.*
-clang-analyzer-cplusplus.NewDelete*
-```
-
-A check may fail a build only after a full pass over every project translation unit reports zero findings in repository-owned files. The other five were measured that way across 509 translation units. Do not extend the list without repeating that pass and recording the result here.
-
-**That is half a rule.** A check that does not run also reports zero findings, and nothing in the report tells the two apart. So every blocking check also owns a canary under `scripts/tests/fixtures/lint-canaries` (a few lines written to violate exactly that check) and `scripts/check-lint-canaries.ps1` fails when a check does not reject its own. The zero-findings pass says the tree is clean. The canary says the instrument is not broken, and neither statement substitutes for the other.
-
-The reason this exists is measured, not hypothetical. On 2026-09-13 the whole-tree advisory pass reported no `bugprone-unchecked-optional-access` findings at all, against 299 in the pass six days earlier. A single-file run with the same check configuration and the same compile database reported four findings in `libs/update/src/update_checker.cpp` (a file the whole-tree pass had covered and reported three other checks from). The cause was not isolated. What matters is that a promotion decision resting on that pass would have been resting on silence, and that the number a report carries cannot distinguish a clean tree from an absent check.
-
-`readability-misleading-indentation` qualified on the whole-tree pass recorded below: zero findings across all 1012 tracked sources. It is the direct form of the risk brace-less single statements are usually argued about: Apple's CVE-2014-1266, where a duplicated `goto fail;` sat outside a brace-less `if`, ran unconditionally and skipped a TLS signature check. Braces are a proxy for that. This check is the thing itself, and MSVC has no equivalent at any warning level, so clang-tidy is the only place it can be caught in this build. It cost no churn to adopt: the code was already clean.
-
-`bugprone-use-after-move` was the one entry that did not start clean: three findings on the qualifying pass, all resolved at the source rather than suppressed wholesale. Two were loop-carried handles in `VideoThread::Run`, now cleared explicitly after the move. The third was a deliberate moved-from assertion in a test, which carries a `NOLINT` naming its reason.
-
-## Candidates that did not qualify
-
-Finding counts are from the same pass.
-
-| Check | Findings | Why it stayed out |
+| Pass | Status | Entry point |
 |---|---|---|
-| `bugprone-narrowing-conversions`, `cppcoreguidelines-narrowing-conversions` | 156 | `qsizetype` to `int` at Qt call sites, tree-wide |
-| `bugprone-integer-division` | 5 | deliberate integer pixel math (4:2:0 chroma viewport, Matroska timescale) |
-| `clang-diagnostic-switch` (enum exhaustiveness) | 2 | resolved at the compiler instead, see below |
+| Selected clang-tidy checks | Blocking | `scripts/run-clang-tidy-blocking.ps1`, included in `verify.ps1` |
+| cppcheck warning/performance/portability | Blocking | `scripts/check-quality.ps1`, included in `verify.ps1` |
+| Broad clang-tidy advisory set | Advisory | `advisory-checks.yml` |
+| cppcheck unused-function analysis | Advisory | `advisory-checks.yml` |
 
-Enum-switch exhaustiveness is now the compiler's job. The build uses `/W4 /WX`, but MSVC keeps C4062 (unhandled enumerator, no default label) and C4061 (unhandled enumerator, default label present) off at every warning level. They need an explicit `/w44062` / `/w44061`. `cmake/exosnap_warnings.cmake` raises C4062, which makes /WX enforce it on every translation unit rather than only where clang-tidy runs. It turned up exactly the two sites the clang-tidy pass had found: `ToString(PipelineBottleneck)` had no case for `Gpu` and reported the newest bottleneck classification as "Unknown", and the updater's visual-proof scenario builder had no case for `FailureCase::TargetVersionMismatch`.
+clang-tidy compilation integration requires Ninja; the Visual Studio generator does not run `CMAKE_CXX_CLANG_TIDY`. Use the lint preset or the explicit compile-database runner rather than interpreting a Visual Studio build as a tidy pass.
 
-C4061 stays off. A `switch` that carries a `default:` has already said what happens to the enumerators it does not name.
+The blocking set includes use-after-move, dangling handles, misleading indentation and the selected analyzer call/uninitialized/allocation checks. Read `.clang-tidy` and the blocking runner for exact patterns. Qt meta-object use and registered OS callbacks require special care when triaging apparent unused symbols; broad automated removal is unsafe.
 
-## The advisory volume, measured
+MSVC `/W4 /WX` is supplemented by explicit unhandled-enumerator C4062 enablement. C4061 for switches with a `default` stays separate. Keep exhaustive policy switches genuinely exhaustive rather than adding a default that hides a new enum case.
 
-The whole-tree advisory pass had only ever been reported as a count of diagnostic LINES. That number is not a count of code: a finding in a widely included header is repeated once per translation unit that includes it, and a macro expansion adds context lines of its own.
+## Add a blocking check only with two proofs
 
-Measured properly: one pass over every tracked `.cpp`/`.h` under `app/`, `apps/`, `libs/`, `tests/` and `tools/` (1012 files, 29 min wall clock, clang-tidy 22.1.0, `--checks=-clang-analyzer-*`, the invocation `scripts/check-quality.ps1` uses for its whole-tree form), counting each distinct (file, line, column, check) tuple in a repository-owned file once:
+First run it over all relevant project translation units and triage every repository-owned finding. A blocking check must have a clean actionable baseline, not a tree-wide suppression that hides its subject.
 
-| | sites |
-|---|---|
-| diagnostic lines | 20987 |
-| **distinct sites** | **21486** |
+Second add a deliberate violation under `scripts/tests/fixtures/lint-canaries` and prove `scripts/check-lint-canaries.ps1` rejects it. Zero findings can mean either clean code or a check that never executed. A canary proves the instrument runs; the tree scan proves the repository satisfies it. Neither replaces the other.
 
-Distinct sites exceed diagnostic lines because one diagnostic can name several checks (`modernize-avoid-c-arrays` and `cppcoreguidelines-avoid-c-arrays` are the same finding under two names), and each is a rule that would have to be answered separately.
+Record run-specific counts, commands and analysis with review evidence. Promote only the rule and durable rationale into configuration or this guide. Count distinct `(file, line, column, check)` sites rather than raw diagnostic lines, and compare runs only when their input sets and tool versions match.
 
-Four rules accounted for four fifths of it: `misc-include-cleaner` (9444), `readability-braces-around-statements` (3958), `cppcoreguidelines-pro-bounds-avoid-unchecked-container-access` (2862) and the `avoid-c-arrays` pair (1120). The rest of this file records what happened to each.
+## Missing tools and caches
 
-A second measurement on 2026-09-13, over `compile_commands.json` rather than the tracked source list, counted 14715 distinct sites with the same four rules dominating. The two numbers are **not** a before and after: the passes cover different sets, and the second one is the pass whose completeness the finding above puts in question. Treat both as orders of magnitude, and the per-check counts below as the shape of the backlog rather than as a baseline anything is measured against.
+A requested but missing analysis tool yields exit 3 from the quality runner. `verify.ps1` reports `TOOL_MISSING`; Full fails, Fast can report the gap and continue. Install the missing tool rather than interpreting absence as success.
 
-What the second pass does establish is how small the genuinely bug-shaped backlog in shipping code is. Outside tests: `bugprone-incorrect-roundings` 16, `bugprone-branch-clone` 11, `bugprone-multi-level-implicit-pointer-conversion` 9, `bugprone-empty-catch` 5 (two of which already carry the reason in a comment), `bugprone-move-forwarding-reference` 5, `bugprone-assignment-in-if-condition` 2. The large counts are all style or interop: `performance-enum-size` 159 and `performance-no-int-to-ptr` 61 are Win32 and COM shapes, and `clang-diagnostic-pragma-once-outside-header` 370 is an artefact of scanning headers as their own translation units, not a defect in any of them.
+clang-tidy caches by the translation unit's recorded input set. cppcheck uses its build-directory cache. Shared tool caches live under `%LOCALAPPDATA%\ExoSnap\tool-cache`, outside source/build trees. Delete that directory for a deliberate cold run. Full runs the whole tree; Fast scopes the pass to affected translation units where supported.
 
-## Advisory checks
-
-`misc-include-cleaner`, `misc-unused-using-decls`, `misc-unused-parameters`, `misc-unused-alias-decls` and `readability-redundant-declaration` are enabled but excluded from `WarningsAsErrors`. All five produce Qt meta-object and moc false-positives. Promote one only after a human triage pass over its findings.
-
-`cppcheck --enable=unusedFunction` is advisory for the same reason: its findings are dominated by Qt slots reached through `QMetaObject` and by callbacks Windows registers. It also needs a whole-program pass that cannot share the per-check analysis the blocking gate does.
-
-Both advisory passes run nightly in `.github/workflows/advisory-checks.yml` and nowhere else. Neither can fail anything, and a finding list that moves on the scale of weeks does not earn a place in a pre-commit hook.
-
-## What runs where, and what it costs
-
-| Pass | Blocking | Where |
-|---|---|---|
-| `run-clang-tidy-blocking.ps1` (the five checks above) | yes | `verify.ps1`, CI `build-test-debug` |
-| `cppcheck --enable=warning,performance,portability` | yes | `verify.ps1` |
-| broad clang-tidy (`.clang-tidy` minus the analyser) | no | `advisory-checks.yml`, nightly |
-| `cppcheck --enable=unusedFunction` | no | `advisory-checks.yml`, nightly |
-
-Two properties of the blocking passes are worth knowing before changing them.
-
-**A missing tool is not a pass.** `check-quality.ps1` exits `3` when a tool it was asked to run is not installed, `verify.ps1` reports that as `TOOL_MISSING`, and `-Full` (the contract that claims every local gate ran) fails on it. `-Fast` reports the gap and continues, so a machine that is still being set up stays usable. Install what is missing: `winget install Cppcheck.Cppcheck`.
-
-**Both passes replay results.** clang-tidy caches per translation unit, keyed on that unit's whole recorded input set. cppcheck uses `--cppcheck-build-dir`, keyed on its own version. Both caches live under `%LOCALAPPDATA%\ExoSnap\tool-cache`, outside the repository and outside every build tree, because a fresh configure or a `git clean` is exactly the moment a replay would have paid the most. Every worktree of the repository shares them. Delete the directory to force a cold run.
-
-`-Full` runs clang-tidy over the whole tree, `-Fast` over the translation units the change reaches. The scoped pass is a subset, so `-Full` does not run both.
-
-## Local machine settings this repository does not set
-
-**Size the sccache cache to the history you switch across.** sccache defaults to a 10 GiB cap, and this is a machine setting, not a repository one: nothing here changes it for you. Measured on one worktree building both Ninja presets: one Debug plus Release set of objects is about 4.5 GiB (2900 units), a week of ordinary edits accumulates about 25000 entries (every header change re-keys every unit it reaches), and at the cap the oldest surviving entry was six days old. So 10 GiB holds roughly a week of one worktree's history: a `git checkout` to a branch built within that window replays, an older one recompiles.
-
-Every additional worktree divides that window, and a preprocessed unit embeds its absolute source path, so two worktrees never share an entry for the same source. Size accordingly, about 1.5 GiB per worktree per day of history you want to keep:
+Compiler caching is distinct. Use `sccache --show-stats` after a build to inspect the active server. Size its cache for the number of build configurations and worktrees in use; a fixed historical hit rate is not a guarantee. A changed absolute source path can change cache identity. Do not enable path rewriting merely for hits until crash symbolication against the resulting PDB has been verified.
 
 ```powershell
 [Environment]::SetEnvironmentVariable('SCCACHE_CACHE_SIZE', '20G', 'User')
-sccache --stop-server    # the running server keeps the old cap until restarted
+sccache --stop-server
 ```
 
-`sccache --show-stats` reports the cap in effect and the hit rate, of the current server only, which exits after ten idle minutes, so read it right after a build. The size on disk is `%LOCALAPPDATA%\Mozilla\sccache\cache`.
-
-`SCCACHE_BASEDIR` would let worktrees share entries by rewriting the path prefix, at the cost of that rewritten path in every object's debug information. It stays unset until a crash from such a build has been symbolicated against its PDB. A faster cache that breaks the crash-report pipeline is a net loss.
-
-**CI.** The GitHub Actions cache backend hits 97-98 % on `build-test` with 20-30 misses per run (the units that include the generated build-info header, which carries the run id by design) and the repository sits at about two thirds of its 10 GB cache budget with `cache-cleanup.yml` evicting stale scopes. The clang-tidy result cache in `build-test-debug` is restored by key prefix and saved under a run-unique key: entries are kilobytes, each push of a review cycle replays the units the previous push analysed, and a new pull request starts cold because no push to `main` writes that scope. Neither is a bottleneck today. The numbers above are what to compare against when one is suspected.
+That changes a machine preference, not repository policy. The next server reads it. Preserve embedded `/Z7` object debug information and the release linker's PDB generation; a faster cache that prevents diagnosing crashes is not an improvement.

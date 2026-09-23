@@ -185,7 +185,7 @@ class ProductionBootstrap {
     [[nodiscard]] SingleInstanceOutcome AcquireSingleInstance();
 
     // Resolves + creates the crash directory and starts the capture engine
-    // (ADR 0017). BeginSession is deliberately NOT called here: the frontend
+    // BeginSession is deliberately NOT called here: the frontend
     // must first read the previous session's crash context, which starting a
     // new session would overwrite.
     void InitializeCrashCapture();
@@ -201,7 +201,7 @@ class ProductionBootstrap {
     // build without a compiled-in DSN.
     [[nodiscard]] SentryTestEventOutcome RunSentryTestEventIfRequested();
 
-    // ADR 0033: arm an elevated relaunch to run once the event loop has ended.
+    // arm an elevated relaunch to run once the event loop has ended.
     // Doing it at shutdown rather than on the spot means the current instance
     // has already released its files and its single-instance claim before the
     // successor asks for them.
@@ -213,7 +213,7 @@ class ProductionBootstrap {
     // Releases the single-instance mutex and relaunches via ShellExecuteEx
     // ("runas", UAC). A UAC decline is a normal, graceful outcome -- no retry
     // loop, and the process withdraws the present-diagnostics opt-in that
-    // triggered the relaunch (ADR 0033) before coming back non-elevated with the
+    // triggered the relaunch before coming back non-elevated with the
     // same handoff, so the user is never left with no ExoSnap running and the
     // switch reads Off again. A ShellExecuteEx failure is handled the same way.
     // No-op when nothing was requested.

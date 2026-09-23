@@ -619,7 +619,7 @@ $relPaths = $allFiles | ForEach-Object { $_.FullName.Substring($PackageRoot.Leng
 
 # Presence — required runtime files and docs.
 #
-# ExoSnap is a Qt Quick application (ADR 0064). Qt6Qml/Quick/QuickControls2/
+# ExoSnap is a Qt Quick application. Qt6Qml/Quick/QuickControls2/
 # QuickTemplates2 and the qml/ import tree are load-bearing, not optional extras:
 # without them the process starts and then dies at QQmlApplicationEngine::load,
 # which no compile or link step can catch. Qt6Widgets stays required for exactly
@@ -660,7 +660,7 @@ foreach ($lic in $requiredLicenses) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot "licenses/$lic") -PathType Leaf)) { Add-Error "Missing third-party license: licenses/$lic" }
 }
 
-# Crash-capture (ADR 0017) is an optional build: crashpad_handler.exe is only in
+# Crash-capture is an optional build: crashpad_handler.exe is only in
 # the install tree when EXOSNAP_ENABLE_CRASH_CAPTURE=ON. When present, the Sentry/
 # Crashpad/mini_chromium license texts MUST ship alongside it (VendorSentry stages
 # them into licenses/). When absent (OFF build), neither is required, so packaging

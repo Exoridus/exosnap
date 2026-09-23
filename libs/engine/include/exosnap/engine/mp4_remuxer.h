@@ -2,7 +2,7 @@
 
 // mp4_remuxer.h — stream-copy MKV → progressive MP4 with faststart
 //
-// Implements the first step of ExoSnap's "remux-first" architecture (ADR-0014):
+// Implements the first step of ExoSnap's "remux-first" architecture:
 // after a recording session ends, the transient MKV is remuxed to a progressive
 // MP4 (moov-before-mdat) for broad compatibility and streaming support.
 //
@@ -132,7 +132,7 @@ RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const
 //
 // Behaviour matches RemuxToProgressiveMp4 (cancel deletes output, progress
 // callback semantics identical). Use for the "Keep as MKV" recovery path
-// (ADR-0014) when the artefact is not finalized=true.
+// when the artefact is not finalized=true.
 RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
                        RemuxProgressCallback progress_cb = RemuxNoopCallback());
 

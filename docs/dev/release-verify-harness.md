@@ -1,209 +1,85 @@
-# The release-verify harness (ExoSnap.Verify)
+# Typed release-verification harness
 
-The typed harness that will decide whether a release candidate may be promoted. ADR 0070 records why it is a .NET program rather than a PowerShell orchestrator. This document is how to work on it.
+`tools/release-verify` contains `ExoSnap.Verify`, a typed Windows verification program. It owns scenario execution, external-tool contracts, evidence and local qualification records. It does not tag or publish releases. [Campaign operation](release-verify.md) and [release acceptance](../release-checklist.md) are separate authorities.
 
-`docs/dev/release-verify.md` describes the PowerShell campaign that is still the running system. Until a gate is migrated, that document is the one to follow.
+## Build and test
 
-## Layout
+Run from `tools/release-verify` so `global.json` selects the pinned SDK and Microsoft.Testing.Platform configuration:
 
-```
-tools/release-verify/
-    global.json                  SDK pin, and the Microsoft.Testing.Platform opt-in
-    Directory.Build.props        net10.0-windows, nullable, warnings as errors, analyzers
-    Directory.Packages.props     central package versions
-    ExoSnap.Verify.slnx          the solution every command below takes
-
-    ExoSnap.Verify/              CLI, engine, models
-        Models/                  outcomes, results, evidence, descriptors, qualification record
-        Json/                    source-generated contracts for every document written
-        Capabilities/            machine probes, capability set, tool resolution
-        Processes/               the process runner and the tool-output contract
-        Adapters/                ffprobe, envctl, the Live Verify session, PresentMon
-        Gates/                   the migrated scenario bodies and the logic they share
-        Engine/                  catalog, plan, run directory, run state, campaign, qualification
-        LiveVerify/              the control-channel client
-        Catalog/                 the release scenario catalog
-        Cli/                     argument parsing
-
-    ExoSnap.Verify.Windows/      Win32, COM, WASAPI, DXGI, job objects, elevated worker boundary
-    ExoSnap.Verify.Tests/        unit, contract and hostile-input tests
-    ExoSnap.Verify.Fixtures/     a child process that misbehaves on request
-```
-
-`bin/` and `obj/` are ignored. No build output is ever committed.
-
-## Running it
-
-Every command runs from `tools/release-verify`, because `global.json` selects both the SDK and the test runner.
-
-```
+```powershell
 dotnet restore ExoSnap.Verify.slnx --locked-mode
-dotnet build   ExoSnap.Verify.slnx --no-restore -warnaserror
-dotnet test    ExoSnap.Verify.slnx --no-restore
+dotnet build ExoSnap.Verify.slnx --no-restore -warnaserror
+dotnet test ExoSnap.Verify.slnx --no-restore
+dotnet publish ExoSnap.Verify/ExoSnap.Verify.csproj -p:PublishProfile=win-x64
 ```
 
-`pwsh scripts/verify.ps1 -Full` runs exactly that as its `verify-harness` stage, and CI runs it as the `verify-harness` job. A locked restore is deliberate: a package that moved underneath the harness must fail here rather than upgrade quietly on the machine that decides whether a release ships.
+The self-contained publish is suitable for a release machine without a matching installed runtime. Full verification and CI include the harness tests. A changed NuGet dependency must update the deliberate lock/pin, not be accepted by a floating restore.
 
-For the release machine, publish self-contained so no matching runtime is needed: `dotnet publish ExoSnap.Verify/ExoSnap.Verify.csproj -p:PublishProfile=win-x64`.
+| Area | Ownership |
+|---|---|
+| Models / JSON contracts | Typed outcomes, capabilities, descriptors, run state, qualification and evidence serialization |
+| Engine / Catalog | Selection, dependency ordering, campaign binding, result persistence and eligibility |
+| Adapters / Processes / LiveVerify | ffprobe, envctl, PresentMon parsing, process lifetime and product protocol |
+| Gates / Analysis | Scenario bodies and shared media/timebase analysis |
+| Windows / Worker | Native APIs, job objects, COM and separate elevated execution |
+| Tests / Fixtures | Pure gate tests, tool-contract fixtures, adversarial child processes and targeted platform smoke |
 
-## Commands
+Build output stays untracked. Runtime source names and catalog IDs are product/test contracts, not places for development-provenance identifiers.
 
-```
-ExoSnap.Verify capabilities [--out <path>]
-```
+## CLI
 
-Measures this machine, read-only, and writes `machine-capabilities.json`. Each key carries the mechanism that produced it, so a value can be audited rather than believed. A key the probes could not answer is written as `unknown`.
+| Command | Contract |
+|---|---|
+| `capabilities [--out <path>]` | Read-only machine capability document, unknown when unmeasured |
+| `list [--json]` | Current descriptors and available bodies |
+| `catalog [--out <path>] [--check]` | Deterministic Markdown rendering, or exact checked-copy comparison |
+| `prepare --exe <path> [--rc <tag>] [--commit <sha>] [--package <path>]...` | Explicit artifact/package binding and machine measurement |
+| `run [--id <id>] [--class <class>] [--include-opt-in]` | Execute selected scenarios and record distinct verdicts |
+| `report` | Report recorded outcomes without inventing missing results |
+| `qualify [--required <id>]...` | Revalidate bindings/evidence and export the local eligibility record |
+| `qualify --dry-run [--rc <tag>] [--include-opt-in] [--class <class>] [--id <id>]` | Capability/selection preview only; never a successful qualification |
 
-```
-ExoSnap.Verify list [--json]
-```
+Unknown scenario IDs are errors, not empty selections. Run and qualify revalidate executable hash and prepared catalog identity. Changed bytes/catalog require a new valid binding; old results must not be silently attributed to them.
 
-The scenario catalog: id, class, isolation, interaction, whether it is opt-in, its requirements and its title. `--json` emits the same catalog as the document a run records beside its verdicts.
+## Generated catalog
 
-```
-ExoSnap.Verify catalog [--out <path>] [--check]
-```
+The [catalog page](release-verify-catalog.md) is generated from `Catalog/ReleaseCatalog.cs` and `CatalogStatusPage.cs`. Requirement Source fields point to current documents; changing prose in the generated page alone is not sufficient.
 
-Renders the catalog as one Markdown table: id, class, tier, layer, isolation, privilege, interaction, requirements, oracle, migrated, required and source. With no `--out` it writes to standard output, with `--out` it writes that file, and with `--check` it compares the file against the current catalog and exits non-zero when they differ.
-
-`docs/dev/release-verify-catalog.md` is that table checked in. It is generated, so it carries a "do not edit" banner and the exact regenerate command. After any catalog change, regenerate it with
-
-```
+```powershell
 cd tools/release-verify
 dotnet run --project ExoSnap.Verify -- catalog --out ../../docs/dev/release-verify-catalog.md
 ```
 
-`CatalogStatusPageTests.TheCommittedCatalogPageMatchesTheCatalog` fails the `verify-harness` stage when the committed copy has drifted. `EXOSNAP_WRITE_VERIFY_FIXTURES=1` makes that test rewrite it, the same knob that regenerates the sample qualification record.
+`CatalogStatusPageTests.TheCommittedCatalogPageMatchesTheCatalog` enforces byte parity. The explicit fixture-writing environment switch can regenerate approved fixtures during a deliberate change, but never hides an unexplained failure. The catalog version is derived from serialized descriptors, so even a documentation-source change invalidates an older prepared catalog. This is intentional evidence binding, not a version to manually preserve.
 
-```
-ExoSnap.Verify prepare --exe <path> [--rc <tag>] [--commit <sha>] [--package <path>]...
-```
+All current catalog declarations have bodies. That says nothing about successful execution: a body can require an unavailable instrument, candidate binding, elevated worker, physical action or visual judgment. A future declaration without a body must remain nonpassing. The PowerShell wrapper and publisher use their own source catalog/policy; do not assume this catalog's count or default required set replaces them.
 
-Binds a campaign to explicit bytes. There is deliberately no default artifact: a release verdict says "these bytes behaved correctly", so the executable is named and hashed, each published package is hashed, and the machine is measured once before anything runs. The run directory then holds `campaign.json`, `machine-capabilities.json`, `scenario-catalog.json` and `state.json`.
+## Outcome and qualification rules
 
-```
-ExoSnap.Verify run [--id <id>] [--class <c>] [--include-opt-in]
-```
+Pass means the scenario proved the expected product behavior. Fail means the product did not satisfy it. InfrastructureError means the measurement could not be carried out correctly. Blocked/Unavailable, Deferred, Skipped and Stale remain separate nonpassing outcomes. Exceptions are caught at the engine boundary as infrastructure failures; individual gates should not convert parser/process failures into product defects.
 
-Runs the selected scenarios against the prepared campaign and records one verdict per scenario. Exits non-zero when anything failed or could not be carried out.
+Required scenarios need exactly one passing verdict. Any recorded product failure or infrastructure error disqualifies even when the scenario was opt-in. Evidence gaps on a nominal PASS and unrestored environment state also block. Requalification removes an obsolete exported record before evaluating a new result.
 
-Both `run` and `qualify` revalidate the executable hash, campaign/state identity and prepared catalog before using recorded results. Changed bytes or a changed catalog require a new campaign. Results cannot be attributed to the old binding.
+A local qualification record still needs to satisfy the final publisher's signed-record schema, canonical release policy, candidate/package identity and promotion contract. Exercise that integration explicitly. The PowerShell publication checker is not obligated to accept a smaller required set merely because a typed run called itself qualified.
 
-```
-ExoSnap.Verify report
-```
+## Capabilities and adapters
 
-Prints the verdicts recorded so far, with a count per state.
+Requirements name measured capability keys, not device model names. A missing/unknown value satisfies nothing. `display.hdr` means currently active HDR, not panel marketing capability. Device aliases must be bound unambiguously. Tool overrides include `EXOSNAP_FFPROBE`, `EXOSNAP_PRESENTMON` and `EXOSNAP_SOUNDVOLUMEVIEW`; retain executable identity when parsing version-dependent output.
 
-```
-ExoSnap.Verify qualify [--required <id>]...
-ExoSnap.Verify qualify --dry-run [--rc <tag>] [--include-opt-in] [--class <c>] [--id <id>]
-```
+`IFfprobe`, `IEnvctl`, `ILiveVerifySession` and `IPresentMon` isolate external mechanisms. Gates test through those contracts. ffprobe stream duration is measured from packet spans where needed, not assumed from optional duration tags. PresentMon CSV columns are matched by header; absent optional columns remain null rather than shifting positional interpretation.
 
-`qualify` writes `release-verification.json` and prints either `QUALIFIED FOR PROMOTION` with the commit and RC it qualifies, or `NOT QUALIFIED` followed by every reason. `--required` names an opt-in gate this release must also have answered. An unknown id is an error rather than an empty set, because a typo that quietly required nothing is the exact failure the lock exists to prevent.
+Process execution preserves exit code, stdout/stderr, deadlines, cancellation and descendant cleanup. Paths with spaces, ampersands or non-ASCII characters must be passed as arguments, not shell-concatenated commands. Bounded output prevents a child that floods a stream from exhausting the harness. Malformed/empty JSON and locale-incompatible numeric output are contract failures, not silently coerced values.
 
-Every required ID must have exactly one passing verdict, and evidence files must still match their recorded SHA-256 digests. A requalification removes the previous export first, so a failed attempt cannot leave an old successful record to promote.
+## Windows and isolation
 
-`--dry-run` evaluates the catalog against this machine and prints what each scenario would do, without running anything and without touching the machine beyond the capability probes. It exits non-zero and prints `NOT QUALIFIED`: a dry run produces no qualification record, and nothing should be able to mistake its output for one.
+Hermetic tests need no device/UI/registry. Desktop scenarios need a real application context. Disposable OS scenarios own install/update/registry footprint. HardwareLab scenarios declare real capture/encoder/HDR/clock requirements. Tier labels summarize those boundaries rather than granting capabilities.
 
-Nothing here tags, publishes or promotes. The most a run produces is a record saying promotion is permitted. Who acts on that is a decision outside this program.
+Application sessions use isolated configuration and job-object ownership. Offscreen mode avoids taking focus for tests that need no visible desktop, but cannot satisfy native-window shutdown, capture or overlay requirements. A shutdown request that cannot be sent is `NotRequestable`, not a timed-out close and not success.
 
-The record is written in the shape `scripts/check-release-qualification.ps1` reads, so either producer can be checked by the one lock, and `scripts/tests/verify-harness-record.tests.ps1` feeds a record this harness actually wrote through that lock. Two fields the PowerShell producer carries are deliberately absent here rather than invented: `startedUtc` and `finishedUtc`, because the engine measures how long a body ran (`durationMs`) and never recorded wall-clock boundaries. Nothing reads them, and a timestamp nobody measured would be worse than a missing one.
+Environment mutations always restore in `finally`, with independent readback. Elevation uses a separate worker/result document; no cross-integrity UI inspection. UI Automation can read existence/text, while actual capture-excluded color/alpha remains an operator judgment. Neither a synthetic CSV fixture nor a stub tool establishes real ETW delivery.
 
-## The outcome taxonomy
+## Test strategy
 
-| Outcome | Means |
-|---|---|
-| `Pass` | The product behaved as the scenario requires. |
-| `Fail` | The product did not. Reserved for exactly that. |
-| `InfrastructureError` | The scenario could not be carried out; nothing was learned about the product. |
-| `Blocked` | A harness precondition was not met, so the scenario never started. |
-| `Unavailable` | This machine does not satisfy a capability the scenario requires. |
-| `Deferred` | Postponed by decision rather than by machine state. |
-| `Skipped` | Not selected for this run. |
-| `Stale` | A recorded verdict that no longer describes the artifacts or catalog in front of it. |
+Test gate decisions against fakes, adapters against declared captured/synthetic fixtures, and narrowly scoped platform behavior against the actual mechanism. Label synthetic evidence as synthetic. Use the hostile fixture child instead of a shell whose quoting rules would become the subject of the test.
 
-An exception escaping a scenario body becomes `InfrastructureError` in the engine, never `Fail`. A scenario body therefore does not need to catch its own infrastructure failures, and there is one place fewer for it to get that wrong.
-
-Missing or malformed recording counters and coarse delegated-script failures are infrastructure errors, not evidence of a product defect.
-
-Every required gate must report `Pass`. An optional gate that was not selected is harmless, but any recorded `Fail` or `InfrastructureError` disqualifies regardless of whether the gate was required. A product defect cannot become releasable by making its gate opt-in, and an infrastructure error means the run did not measure what it claims.
-
-## The capability model
-
-A scenario declares requirements as capability keys, and the machine is measured once before anything runs.
-
-- `os.windows`, `os.version`
-- `elevated`, `interactiveDesktop`, `sandbox.available`
-- `presentmon.available`, `soundvolumeview.available`, `ffprobe.available` (`EXOSNAP_PRESENTMON`, `EXOSNAP_SOUNDVOLUMEVIEW`, `EXOSNAP_FFPROBE` win over PATH, so a run can pin the exact build of a tool whose output it parses)
-- `gpu.vendor`, `gpu.d3d11`
-- `display.hdr`, `display.refresh.<hz>`
-- `audio.endpoint.<sampleRate>`
-- `device.<alias>`, which is `bound` or `unbound`
-
-Two rules the whole model rests on.
-
-A capability that could not be determined is `unknown`, and `unknown` satisfies nothing. A requirement that cannot be checked has not been met, and the scenario is reported `Unavailable` rather than run against a guess.
-
-`display.hdr` is what an output is presenting **right now**, not what a panel could do if somebody switched it. A scenario that needs HDR needs the desktop to be in HDR.
-
-An unsatisfied requirement is reported verbatim as `capability <key>=<value> not satisfied`.
-
-## Tiers
-
-| Tier | Isolation | What runs there |
-|---|---|---|
-| 0 | `Hermetic` | No device, no real UI, no registry. Algorithms, state machines, parsers, protocols, scenario logic. Runs in CI. |
-| 1 | `Desktop` | The real binary on a real desktop, no special hardware. Process lifetime, window lifecycle, control channel, file creation, ffprobe. |
-| 2 | `DisposableOs` | Windows Sandbox or a throwaway VM. Installs, upgrades, package managers, registry footprint, rollback. |
-| 3 | `HardwareLab` | Declared hardware. Encoders, HDR, refresh rates, present modes, audio endpoints, soaks. |
-
-Tier 3 is selected from the capability document, never from the accident of an RTX or an HDR panel being present.
-
-## The adapters
-
-Each external mechanism is an interface the engine consumes, so a gate's logic can be exercised without the mechanism behind it.
-
-| Interface | Drives | Notes |
-|---|---|---|
-| `IFfprobe` | `ffprobe` | typed streams and container facts, plus the first-to-last packet span per stream |
-| `IEnvctl` | `exosnap-envctl` | one JSON document per subcommand, with the exit code kept because several subcommands answer a verdict with it |
-| `ILiveVerifySession` | `exosnap.exe` | launched with its own run id under a throwaway config directory inside a job object |
-| `IPresentMon` | a PresentMon capture | a header-driven CSV reader; nothing here starts PresentMon |
-
-Three properties are worth stating out loud.
-
-**The packet span is measured from packets, not from a duration tag.** A live-muxed MKV carries no per-stream `DURATION`, so a reader that took the tag would see every track as full length whatever it actually contains.
-
-**Every envctl mutation is a transaction, and the restore is in a `finally`.** It has to survive an assertion failure, a product failure, a harness bug, a timeout and cancellation, because a human gate sits inside a transaction and an operator who walks away must not leave the machine reconfigured. The product verdict and the restore verdict stay separate: a scenario can prove the product correct and still leave a display in the wrong mode, and one field cannot say both.
-
-**A session never reaches the visible desktop by default.** The launcher sets the offscreen Qt platform unless the caller overrides it, so a campaign cannot take focus from whoever is using the machine.
-
-PresentMon columns are matched by header rather than by position: PresentMon 2.x changes which optional metrics it emits with its command line, so a positional reader is correct for exactly one invocation and silently wrong for every other. Only `ProcessID` and `PresentMode` are required. Everything else is read when present and reported as null when it is not.
-
-## Testing the harness
-
-The harness decides whether a release ships, so it is itself tested at three levels: scenario logic against a fake, adapter contracts against captured real fixtures, and platform smoke against the real mechanism. The ffprobe and envctl fixtures were captured from those tools with machine-specific paths sanitized. The PresentMon CSV is synthetic and identified as such in its contract test because starting its ETW session requires the disposable VM.
-
-The hostile inputs are explicit cases in `ProcessRunnerTests`, because each is a way a gate has been made to report the wrong thing by a tool, a path or a locale rather than by the product: (a) a path with spaces, an ampersand or non-ASCII characters, (b) a tool that writes to standard error, (c) a tool that floods a stream, (d) a tool that hangs, (e) a tool that exits without output, (f) malformed JSON, (g) a child that spawns a child, and (h) a tool reporting a decimal comma. The last is refused as a contract violation rather than misread, which is the difference between a gate and a guess.
-
-`ExoSnap.Verify.Fixtures` is the child process those tests drive. A shell would not do: its own quoting rules would be what the tests measured. The tests copy the whole fixture directory to a hostile path, because a framework-dependent executable needs its assembly beside it.
-
-Exactly one test starts ExoSnap: the Live Verify smoke, which launches the Debug build with the offscreen Qt platform under a throwaway configuration directory inside a job object, completes the handshake, reads `app.identity`, and asserts the session tears down without leaving the process or that directory behind. It skips when the Debug build or the pinned Qt is not installed. A missing build is a statement about the tree, not about the product, and a suite that went red for it would be red on every fresh clone.
-
-Offscreen is also why `ShutdownAsync` has three answers rather than two. A windowless process owns no window a close request can reach, so it reports `NotRequestable` instead of waiting out a deadline nobody was asked to meet. `REL-SHUTDOWN-001` declares `Desktop` isolation for exactly that reason, and treats `NotRequestable` as an infrastructure error: a gate that ran against a windowless instance measured the harness, not the product.
-
-Nothing else in the suite starts an installer, a sandbox, PresentMon against a real target, or any GUI, and nothing mutates machine state: the envctl smoke is `snapshot`, which only reads.
-
-## What is not migrated yet
-
-The gate-by-gate table lives in `docs/dev/release-verify.md`, next to the campaign it describes, and `ExoSnap.Verify list` prints the same column. A scenario whose body has not been written carries `NotMigratedBody` and reports `Skipped ("not migrated")`. A gate that has not been written must never look like a gate that ran, so nothing here can report `Pass` until its body exists.
-
-`scripts/lib/ReleaseScenarios.ps1` remains the running system meanwhile, and `scripts/release-verify.ps1 -Engine DotNet` is how a campaign opts into this one. The remaining migration order is UI Automation and the elevated worker, then Windows Sandbox and MSI, then audio and device state.
-
-Also not built yet, and deliberately so:
-
-- The elevated worker executable. `ElevatedWorker` defines the boundary - a separate elevated process, a result document, no cross-integrity UI inspection - and refuses to run, because an entry point that returned success without doing anything would be indistinguishable from one that had.
-- UI Automation. FlaUI arrives with the first scenario that needs it.
-- Candidate-bound portable updates. `REL-UPD-PORTABLE-001` reports `Unavailable` until the handoff can prove that the installed bytes match the prepared candidate; a successful update to an arbitrary version offered by the live feed is insufficient.
-- Starting PresentMon. That needs an elevated ETW session on a machine presenting something worth measuring, so the capture is produced in the disposable guest and this side only reads it. `REL-PRESENT-XCHECK-001` reports `Unavailable` with that reason rather than pretending otherwise, and its CSV fixture is synthetic, written against the documented PresentMon 2.5.1 column contract.
+A skipped smoke because a local executable/tool is absent is a statement about environment reach. Keep it visible. A full green unit suite does not mean every scenario ran on a real release candidate or that the final publish lock accepted its record.

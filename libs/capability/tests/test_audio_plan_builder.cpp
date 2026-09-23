@@ -155,7 +155,7 @@ TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesMicRnnoiseSetting) {
 }
 
 // ---------------------------------------------------------------------------
-// Channel / sample-format model (ADR 0030 — 0.6.0)
+// Channel / sample-format model
 // ---------------------------------------------------------------------------
 
 TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultFormatModel) {

@@ -782,7 +782,7 @@ void VideoThread::Run() {
     }
 
     // --- NV12 / P010 texture ring + video processor ---
-    // For 10-bit recording (HEVC Main10 / AV1 10-bit, ADR 0032 SDR BT.709) the
+    // For 10-bit recording (HEVC Main10 / AV1 10-bit, SDR BT.709) the
     // VideoProcessor converts RGB → P010 instead of NV12, and the encode ring +
     // reference texture use DXGI_FORMAT_P010. The output color space stays studio
     // BT.709 (no HDR/BT.2020 here — that is a later slice).
@@ -939,7 +939,7 @@ void VideoThread::Run() {
         background.RGBA.A = 1.0f;
         videoContext->VideoProcessorSetOutputBackgroundColor(videoProcessor.get(), FALSE, &background);
 
-        // Make the RGB->NV12/P010 conversion deterministic (ADR 0032). Without an
+        // Make the RGB->NV12/P010 conversion deterministic. Without an
         // explicit color space the driver picks an implementation-defined
         // matrix/range (BT.601 vs BT.709, full vs studio), so the same desktop
         // could encode to subtly different colors on different GPUs and the
@@ -978,7 +978,7 @@ void VideoThread::Run() {
             // full-range BT.709 RGB; output is BT.709 YUV in the selected range.
             // Drivers honour the quantization range here, so the encoded NV12/P010
             // genuinely carries the chosen range and matches the container tag
-            // (ADR 0032) — no full-vs-limited mismatch, no crushed/washed levels.
+            // — no full-vs-limited mismatch, no crushed/washed levels.
             videoContext1->VideoProcessorSetStreamColorSpace1(videoProcessor.get(), 0,
                                                               DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
             videoContext1->VideoProcessorSetOutputColorSpace1(videoProcessor.get(),
@@ -2187,7 +2187,7 @@ void VideoThread::Run() {
     // released, WGC renders future frames into the same texture. Anything the
     // encode loop keeps beyond the lifetime of the frame object must therefore
     // be a copy into an engine-owned texture — the same invariant the preview
-    // producer follows (WgcSourceProducer, ADR 0041). One persistent texture is
+    // producer follows (WgcSourceProducer). One persistent texture is
     // enough for seed/pending/held alike: they only ever mean "the latest
     // captured frame", exactly like the OD path's persistent odCapturedTex.
     // Sized from the SESSION's source size (the pool was created at exactly that
@@ -3484,7 +3484,7 @@ void VideoThread::Run() {
         // Present-cadence tap state (DXGI OD only): previous frame's LastPresentTime (QPC).
         uint64_t cfrLastPresentQpc = 0;
 
-        // --- Phase-correct CFR pacing (DXGI-OD + Smooth mode only, ADR 0035) ---
+        // --- Phase-correct CFR pacing (DXGI-OD + Smooth mode only) ---
         // Ring of captured frames (negotiated capture format) keyed by their source present-QPC. Each CFR
         // slot then encodes the frame whose present time is nearest the slot's ideal
         // present time, instead of newest-at-tick. WGC capture and Newest mode keep

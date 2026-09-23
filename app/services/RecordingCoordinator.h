@@ -108,7 +108,7 @@ class RecordingCoordinator {
     // Qt main thread.
     using SplitFeedbackCallback = std::function<void(bool accepted, const QString& message)>;
     // Remux progress: called on the Qt main thread with fraction in [0,1] during
-    // the MP4 remux phase (ADR-0014). fraction is -1 when remux starts (indeterminate).
+    // the MP4 remux phase. fraction is -1 when remux starts (indeterminate).
     using RemuxProgressCallback = std::function<void(float fraction)>;
 
     RecordingCoordinator();
@@ -170,7 +170,7 @@ class RecordingCoordinator {
     // previous one's.
     [[nodiscard]] std::shared_ptr<SessionLedgerSink> FrozenLedgerSink() const;
 
-    // ADR-0015: armed-from-recovery state.
+    // armed-from-recovery state.
     // Enter the armed-from-recovery (paused) state for the given candidate.
     // The artefact is repaired/remuxed in the background as the first slice;
     // resume starts the next slice (same session naming). If another candidate
@@ -629,7 +629,7 @@ class RecordingCoordinator {
     // constant across a split recording. Overwritten only at the next StartRecording.
     QString recording_session_id_;
 
-    // ADR-0015: armed-from-recovery state.
+    // armed-from-recovery state.
     bool is_armed_from_recovery_ = false;
     RecoverySessionInfo armed_recovery_session_{};
     // Placeholder for future: slice count for the recovery session.
@@ -754,7 +754,7 @@ class RecordingCoordinator {
     void PostSplitFeedback(bool accepted, QString message);
     void OnSegmentCompleted(const exosnap::engine::CompletedSegment& segment);
 
-    // ADR-0014: remux-on-stop state.
+    // remux-on-stop state.
     std::jthread remux_thread_;
     std::atomic<bool> is_remuxing_{false};
     std::atomic<bool> remux_cancel_requested_{false};

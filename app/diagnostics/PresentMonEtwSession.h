@@ -123,7 +123,7 @@ class PresentMonEtwSession {
     mutable PresentSample latest_;          // guarded by sample_mutex_
     mutable uint64_t last_present_qpc_ = 0; // reader-side drain state (Latest())
     mutable int64_t qpc_freq_ = 0;
-    // ADR 0033 extra-checks: per-recording present aggregates, accumulated on the reader
+    // per-recording present aggregates, accumulated on the reader
     // side across the drain (same single-threaded Latest() access as last_present_qpc_) and
     // Reset() at every attribution boundary via SetTargetProcessId so the statistics measure
     // only the current recording, never the whole session.

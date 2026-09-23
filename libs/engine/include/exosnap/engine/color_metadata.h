@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-// Color-management foundation (v0.7.0, ADR 0032).
+// Color-management foundation.
 //
 // Until this model existed the engine left the RGB->NV12 conversion to the
 // D3D11 VideoProcessor's driver default (implementation-defined matrix/range)
@@ -49,20 +49,13 @@ enum class MatrixCoefficients : uint8_t {
 // 0 = unspecified, 1 = broadcast/studio (16-235), 2 = full (0-255).
 enum class ColorRange : uint8_t {
     Unspecified = 0,
-    Limited = 1, // studio range (16-235) — broadcast standard; the SDR default
-                 // (fix/color-range-signaling: player-compatibility, see ADR 0032)
+    Limited = 1, // studio range (16-235); the compatible SDR default
     Full = 2,    // full range (0-255) — native screen precision; opt-in
 };
 
-// Complete color description attached to the video track. The defaults describe
-// SDR Rec.709 limited-range 8-bit. Limited (16-235, broadcast/studio) is the
-// default (fix/color-range-signaling): a controlled comparison showed common
-// consumer players (VLC) ignore the range flag entirely and always apply
-// limited->full expansion, so a Full-range recording is permanently
-// crushed/dark there regardless of correct tagging — the same reason OBS and
-// the rest of the consumer-video ecosystem encode limited by default. The
-// range is user-selectable; Full (0-255, native screen precision) remains
-// available as an opt-in for pipelines known to honour the range flag.
+// The same resolved description drives conversion, bitstream and container
+// metadata. Limited is the compatible SDR default; Full requires playback that
+// honors range signaling. Container tags cannot correct a mismatched conversion.
 struct ColorMetadata {
     ColorPrimaries primaries = ColorPrimaries::Bt709;
     TransferCharacteristics transfer = TransferCharacteristics::Bt709;

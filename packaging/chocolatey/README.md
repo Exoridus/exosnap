@@ -26,7 +26,7 @@ A submission is reviewed by a human moderator after two automated services have 
 
 ## Uninstall
 
-The MSI owns everything it installed and removes all of it: the Add/Remove Programs entry, `HKLM\SOFTWARE\Codexo`, the install tree, and the Start Menu shortcut. `tools/chocolateyuninstall.ps1` therefore only resolves the ProductCode and delegates. It deletes nothing itself. User configuration under `%LOCALAPPDATA%\ExoSnap` is not installed by the MSI and deliberately survives an uninstall.
+The MSI owns the ExoSnap installation, Add/Remove Programs entry and Start Menu shortcut. Empty shared parent directories/registry keys are not necessarily owned or removed by that product. `tools/chocolateyuninstall.ps1` therefore only resolves the ProductCode and delegates. It deletes nothing itself. User configuration under `%LOCALAPPDATA%\ExoSnap` is not installed by the MSI and deliberately survives an uninstall.
 
 ## Runtime dependency
 
@@ -34,11 +34,4 @@ ExoSnap (`exosnap.exe` and the shipped Qt6 DLLs) links the dynamic MSVC runtime 
 
 Its version is a floor, not a preference: the redistributable must be at least as new as the MSVC toolset that built the release binaries, because a newer toolset may emit calls to runtime exports an older redistributable does not export. Release MSIs are built by the GitHub Actions `windows-2022` image, so the floor tracks that image's MSVC toolset and has to be re-checked whenever the image moves.
 
-## Status
-
-No version of this package has reached the community feed yet.
-
-- **0.9.0** - the first version intended to be pushed there.
-- **0.8.1** - prepared and version-bumped in this repository, never pushed.
-- **0.6.0 / 0.7.0** - manifests existed, but their MSIs shipped without the FFmpeg runtime DLLs and crashed on launch, so neither was submitted.
-- Earlier versions carried manifests here from 0.1.0 onward; none was submitted.
+Publication follows the current [publication policy](../publication-policy.json) and [release checklist](../../docs/release-checklist.md#8-package-manager-publication). A package source file is not evidence that the community feed has published it.

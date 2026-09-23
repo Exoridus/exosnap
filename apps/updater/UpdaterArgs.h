@@ -74,7 +74,7 @@ struct UpdaterArgs {
     QString handoff_path;
     QString base_url;      // manual-mode dev feed override
     QString preview_state; // dev-only render short-circuit
-    // ADR 0055 -- verification reinstall: the app asked for the IDENTICAL
+    // Verification reinstall: the app asked for the IDENTICAL
     // version to be reinstalled through the full production path. Adds a hard
     // gate; relaxes nothing.
     bool verify_reinstall = false;
