@@ -294,9 +294,12 @@ pub fn named_pipes(prefix: &str) -> Vec<String> {
         return out;
     };
     loop {
-        let name = String::from_utf16_lossy(&data.cFileName)
-            .trim_end_matches('\0')
-            .to_string();
+        let end = data
+            .cFileName
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(data.cFileName.len());
+        let name = String::from_utf16_lossy(&data.cFileName[..end]);
         if name.starts_with(prefix) {
             out.push(name);
         }
@@ -308,6 +311,38 @@ pub fn named_pipes(prefix: &str) -> Vec<String> {
         let _ = FindClose(handle);
     }
     out
+}
+
+#[cfg(test)]
+mod named_pipe_tests {
+    use super::*;
+    use std::io::BufRead;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn enumerates_a_live_named_pipe() {
+        let name = format!(
+            "ExoSnap.LiveVerify.{}",
+            crate::control::new_run_id("pipe-test")
+        );
+        let script = format!(
+            "$pipe=[System.IO.Pipes.NamedPipeServerStream]::new('{name}'); Write-Output ready; Start-Sleep -Seconds 5; $pipe.Dispose()"
+        );
+        let mut child = Command::new("pwsh")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        let names = named_pipes("ExoSnap.LiveVerify.");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(names.contains(&name), "{name} was absent from {names:?}");
+    }
 }
 
 /// Visible top-level windows of a process.

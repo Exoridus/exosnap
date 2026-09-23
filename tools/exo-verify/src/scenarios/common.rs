@@ -1,7 +1,7 @@
 //! Shared scenario machinery: the stimulus process, the recording lifecycle
 //! driven over the control endpoint, and the recording oracles.
 
-use anyhow::{Context as _, anyhow};
+use anyhow::Context as _;
 use serde_json::{Value, json};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -201,7 +201,7 @@ impl Stimulus {
         Ok((frames.len() - 1) as f64 / span.max(1e-6))
     }
 
-    pub fn stop(mut self) {
+    pub fn stop(&mut self) {
         let _ = self.command("quit");
         let _ = crate::tools::wait(&mut self.child, secs(3.0));
         let _ = self.child.kill();

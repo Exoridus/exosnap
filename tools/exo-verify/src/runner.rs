@@ -55,8 +55,8 @@ pub fn run_one(scenario: &Scenario, ctx: &mut Context) -> ScenarioResult {
     }
 
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| (scenario.run)(ctx)));
-    ctx.job.terminate();
-    let (verdict, detail) = match outcome {
+    let cleanup = ctx.job.terminate();
+    let (mut verdict, mut detail) = match outcome {
         Ok(Ok(())) => (Verdict::Pass, scenario.claim.to_string()),
         Ok(Err(Stop::Fail(m))) => (Verdict::Fail, m),
         Ok(Err(Stop::Unavailable(m))) => (Verdict::Unavailable, m),
@@ -70,6 +70,11 @@ pub fn run_one(scenario: &Scenario, ctx: &mut Context) -> ScenarioResult {
             (Verdict::InfraError, format!("runner panic: {message}"))
         }
     };
+    if let Err(error) = cleanup {
+        ctx.cleanup_failed = true;
+        detail = format!("scenario ended {verdict}: {detail}; process cleanup failed: {error:#}");
+        verdict = Verdict::InfraError;
+    }
     let elapsed = started.elapsed();
     result.verdict = verdict;
     result.detail = detail;
@@ -120,6 +125,19 @@ pub fn run_lane(
     let started_at = now_rfc3339();
     let mut scenarios = Vec::new();
     for scenario in selected(registry, selection) {
+        if ctx.cleanup_failed {
+            scenarios.push(ScenarioResult {
+                id: scenario.id.into(),
+                scenario_revision: scenario.revision,
+                verdict: Verdict::Skipped,
+                detail: "prior scenario process cleanup failed".into(),
+                duration_ms: 0,
+                missing_capabilities: vec![],
+                evidence: BTreeMap::new(),
+                artifacts: vec![],
+            });
+            continue;
+        }
         if selection.skip.iter().any(|s| s == scenario.id) {
             scenarios.push(ScenarioResult {
                 id: scenario.id.into(),

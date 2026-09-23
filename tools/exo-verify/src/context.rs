@@ -79,6 +79,7 @@ pub struct Context {
     pub artifacts: Vec<String>,
     pub job: Job,
     pub keep_media: bool,
+    pub cleanup_failed: bool,
 }
 
 impl Context {
@@ -101,6 +102,7 @@ impl Context {
             artifacts: Vec::new(),
             job: Job::new()?,
             keep_media: false,
+            cleanup_failed: false,
         })
     }
 

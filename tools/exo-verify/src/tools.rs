@@ -66,7 +66,7 @@ pub fn run(command: &mut Command, timeout: Duration) -> Result<Output> {
         .with_context(|| format!("start {description}"))?;
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
-    let status = wait(&mut child, timeout).with_context(|| format!("{description}"))?;
+    let status = wait(&mut child, timeout).with_context(|| description.clone())?;
     Ok(Output {
         status,
         stdout: stdout.join().unwrap_or_default(),

@@ -49,7 +49,8 @@ pub type Step<T = ()> = Result<T, Stop>;
 #[macro_export]
 macro_rules! product_ensure {
     ($cond:expr, $($arg:tt)+) => {
-        if !$cond {
+        if $cond {
+        } else {
             return Err($crate::scenario::Stop::Fail(format!($($arg)+)));
         }
     };
@@ -60,7 +61,8 @@ macro_rules! product_ensure {
 #[macro_export]
 macro_rules! infra_ensure {
     ($cond:expr, $($arg:tt)+) => {
-        if !$cond {
+        if $cond {
+        } else {
             return Err($crate::scenario::Stop::Infra(anyhow::anyhow!($($arg)+)));
         }
     };

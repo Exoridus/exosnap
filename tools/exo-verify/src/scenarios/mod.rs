@@ -4,6 +4,7 @@ pub mod app;
 pub mod common;
 pub mod dist;
 pub mod install;
+pub mod record;
 
 use crate::scenario::Scenario;
 
@@ -12,6 +13,7 @@ pub fn registry() -> Vec<Scenario> {
     all.extend(dist::scenarios());
     all.extend(app::scenarios());
     all.extend(install::scenarios());
+    all.extend(record::scenarios());
     all
 }
 
@@ -74,5 +76,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn gpu_lane_has_a_recording_oracle() {
+        let scenario = registry()
+            .into_iter()
+            .find(|s| s.id == "record.ddx-h264-mkv")
+            .expect("the GPU lane needs a decoded recording scenario");
+        assert_eq!(scenario.lane, crate::scenario::Lane::Gpu);
+        assert_eq!(scenario.tier, crate::plan::Tier::Required);
+        for capability in [
+            crate::capability::Capability::DxgiDuplication,
+            crate::capability::Capability::Nvenc,
+            crate::capability::Capability::Ffprobe,
+            crate::capability::Capability::Ffmpeg,
+        ] {
+            assert!(scenario.requires.contains(&capability));
+        }
+        let window = registry()
+            .into_iter()
+            .find(|s| s.id == "record.wgc-hevc-mp4")
+            .expect("the GPU lane needs a WGC window scenario");
+        assert_eq!(window.lane, crate::scenario::Lane::Gpu);
+        assert!(
+            window
+                .requires
+                .contains(&crate::capability::Capability::Wgc)
+        );
     }
 }

@@ -532,7 +532,7 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
         .captures(&version)
         .with_context(|| format!("'{version}' is not X.Y.Z or X.Y.Z-label"))?;
     ensure!(
-        &caps[1] == base,
+        caps[1] == base,
         "version '{version}' has base '{}', but CMakeLists.txt declares {base}",
         &caps[1]
     );
