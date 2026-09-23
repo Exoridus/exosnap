@@ -8,7 +8,7 @@
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use crate::model::{LaneResult, ScenarioResult, Verdict};
@@ -38,6 +38,7 @@ pub struct ReportEntry {
     /// Effective verdict over all runs of the planned revision; `None` when no
     /// run of that revision was reported.
     pub verdict: Option<Verdict>,
+    pub status: String,
     pub detail: String,
     pub runs: Vec<Run>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -108,6 +109,16 @@ pub fn merge(
                 result.finished_at
             ),
         }
+        let mut seen = BTreeSet::new();
+        for scenario in &result.scenarios {
+            if !seen.insert(&scenario.id) {
+                bail!(
+                    "lane '{}' reports scenario '{}' twice in one result",
+                    result.lane,
+                    scenario.id
+                );
+            }
+        }
     }
     if let Some(decisions) = decisions
         && decisions.bundle_sha256 != plan.bundle_sha256
@@ -118,12 +129,25 @@ pub fn merge(
             plan.bundle_sha256
         );
     }
+    if let Some(decisions) = decisions {
+        for decision in &decisions.decisions {
+            if plan.entry(&decision.scenario).is_none() {
+                bail!(
+                    "decision for '{}' is not in the candidate plan",
+                    decision.scenario
+                );
+            }
+        }
+    }
 
     let mut entries = Vec::new();
     let mut blocking = Vec::new();
     for planned in &plan.scenarios {
         let mut runs = Vec::new();
         for result in results {
+            if result.lane != planned.lane {
+                continue;
+            }
             for scenario in result.scenarios.iter().filter(|s| s.id == planned.id) {
                 runs.push(Run {
                     lane: result.lane.clone(),
@@ -154,6 +178,9 @@ pub fn merge(
                     .join(", "),
                 planned.scenario_revision
             ),
+            None if matches!(planned.lane.as_str(), "release-gpu" | "release-hardware") => {
+                "pending external lane".to_string()
+            }
             None => "not run".to_string(),
         };
         let decision = decisions.and_then(|d| d.for_scenario(&planned.id)).cloned();
@@ -179,6 +206,13 @@ pub fn merge(
             tier: planned.tier,
             planned_revision: planned.scenario_revision,
             verdict,
+            status: match verdict {
+                Some(value) => value.to_string(),
+                None if matches!(planned.lane.as_str(), "release-gpu" | "release-hardware") => {
+                    "PENDING_EXTERNAL_LANE".into()
+                }
+                None => "NOT_RUN".into(),
+            },
             detail,
             runs,
             decision,
@@ -233,11 +267,24 @@ pub fn merge(
     })
 }
 
-fn verdict_cell(entry: &ReportEntry) -> String {
-    match entry.verdict {
-        Some(v) => v.to_string(),
-        None => "NOT RUN".into(),
+/// Recomputes a supplied report from the bound plan, decisions and lane results.
+/// A stored readiness flag is never publication evidence by itself.
+pub fn verify(
+    stored: &Report,
+    plan: &ReleasePlan,
+    results: &[LaneResult],
+    decisions: Option<&Decisions>,
+) -> Result<()> {
+    let mut expected = merge(plan, results, decisions)?;
+    expected.generated_at.clone_from(&stored.generated_at);
+    if stored != &expected {
+        bail!("report differs from the bound plan, decisions or lane results");
     }
+    Ok(())
+}
+
+fn verdict_cell(entry: &ReportEntry) -> String {
+    entry.status.replace('_', " ")
 }
 
 fn one_line(text: &str) -> String {
@@ -459,7 +506,11 @@ pub fn junit(report: &Report) -> String {
                     let _ = writeln!(xml, "      <skipped message=\"{}: {message}\"/>", v);
                 }
                 None => {
-                    let _ = writeln!(xml, "      <skipped message=\"NOT RUN\"/>");
+                    let _ = writeln!(
+                        xml,
+                        "      <skipped message=\"{}\"/>",
+                        xml_escape(&e.status)
+                    );
                 }
             }
             let _ = writeln!(xml, "    </testcase>");
@@ -547,6 +598,22 @@ mod tests {
     }
 
     #[test]
+    fn a_ready_bit_cannot_replace_the_underlying_lane_evidence() {
+        let results = [lane(Some(SHA), &[("a", Verdict::Pass)])];
+        let mut forged = merge(&plan(), &results, None).unwrap();
+        forged.ready_for_approval = true;
+        forged.blocking.clear();
+        assert!(verify(&forged, &plan(), &results, None).is_err());
+    }
+
+    #[test]
+    fn decisions_for_scenarios_outside_the_plan_are_rejected() {
+        let decisions = decision("outside", DecisionKind::Accepted);
+        let error = merge(&plan(), &[lane(Some(SHA), &[])], Some(&decisions)).unwrap_err();
+        assert!(error.to_string().contains("not in the candidate plan"));
+    }
+
+    #[test]
     fn results_for_another_bundle_cannot_be_merged() {
         let error =
             merge(&plan(), &[lane(Some(OTHER), &[("a", Verdict::Pass)])], None).unwrap_err();
@@ -592,6 +659,18 @@ mod tests {
         let r = merge(&plan(), &[lane(Some(SHA), &[("a", Verdict::Pass)])], None).unwrap();
         assert!(!r.ready_for_approval);
         assert_eq!(r.blocking, vec!["b (not run)".to_string()]);
+    }
+
+    #[test]
+    fn absent_external_lane_is_explicitly_pending() {
+        let mut plan = plan();
+        plan.scenarios[0].lane = "release-gpu".into();
+        let report = merge(&plan, &[], None).unwrap();
+        let entry = &report.scenarios[0];
+        assert_eq!(entry.status, "PENDING_EXTERNAL_LANE");
+        assert_eq!(entry.verdict, None);
+        assert!(!entry.satisfied);
+        assert!(markdown(&report).contains("PENDING EXTERNAL LANE"));
     }
 
     #[test]
@@ -684,5 +763,21 @@ mod tests {
         let r = merge(&plan(), &[result], None).unwrap();
         assert!(!r.ready_for_approval);
         assert!(r.scenarios[0].detail.contains("requires revision 1"));
+    }
+
+    #[test]
+    fn a_pass_from_the_wrong_lane_cannot_satisfy_a_required_scenario() {
+        let mut result = lane(Some(SHA), &[("a", Verdict::Pass), ("b", Verdict::Pass)]);
+        result.lane = "release-gpu".into();
+        let report = merge(&plan(), &[result], None).unwrap();
+        assert!(!report.ready_for_approval);
+        assert_eq!(report.blocking.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_results_in_one_lane_document_are_rejected() {
+        let result = lane(Some(SHA), &[("a", Verdict::Pass), ("a", Verdict::Pass)]);
+        let error = merge(&plan(), &[result], None).unwrap_err();
+        assert!(error.to_string().contains("twice"), "{error}");
     }
 }

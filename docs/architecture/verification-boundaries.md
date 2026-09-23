@@ -1,6 +1,6 @@
 # Verification and release trust boundaries
 
-This document owns what each verifier can establish and what a release qualification means. Commands belong to the [release runbook](../dev/release-verify.md); the required product/release checks belong to the [release checklist](../release-checklist.md).
+This document owns what each verifier can establish and what release readiness means. Commands belong to the [release runbook](../dev/release-verify.md); the required product/release checks belong to the [release checklist](../release-checklist.md).
 
 ## Different owners of truth
 
@@ -43,7 +43,7 @@ Device aliases bind to stable identifiers. Display journals use monitor device p
 
 ## Campaign isolation and outcomes
 
-The typed .NET harness contains process lifetimes with argument-list invocation, concurrent stdout/stderr draining, deadlines and kill-on-close job objects. Elevated work runs in a separate worker and returns a result document. A standard process does not inspect elevated UI, and no test automates Secure Desktop.
+The Rust verifier contains process lifetimes with argument-list invocation, output capture and deadlines. Elevated work runs in a separate process with a result-file boundary. A standard process does not inspect elevated UI, and no test automates Secure Desktop.
 
 Tier 0 is hermetic. Tier 1 exercises an ordinary desktop. Tier 2 uses a disposable OS for installation/registry/package state. Tier 3 needs declared physical hardware. Hyper-V GPU-partitioned guests can provide a clean console and GPU access, but are not proof of host-independent performance, physical HDR behavior, device clocks or unplug semantics. Sandbox remains a supported disposable transport where suitable.
 
@@ -51,20 +51,14 @@ A golden VM is never written by a campaign. A differencing disk contains its cha
 
 `Fail` means an observed product failure. Infrastructure error means the harness could not establish the observation. Unavailable, blocked, deferred, skipped and stale are not passes. Product outcome and environment-restore outcome are separate: a successful product test can still leave an unacceptable machine state. Operator attestation can state that an action occurred, but it cannot manufacture the verifying consequence or substitute for another person's visual judgment.
 
-## Qualification and promotion
+## Candidate readiness and publication
 
-A qualification binds a campaign to an exact executable, packages, source commit, environment, harness/catalog/policy and evidence digests. Required IDs are re-derived from the source catalogue and release policy, not trusted from the record's own claim. Missing/duplicate required results, nonpassing required gates, any product/infrastructure failure, incomplete restore or missing evidence disqualifies.
+The official candidate build compiles the final release identity once. Its bundle inventories the exact executable, MSI, portable ZIP and verifier bytes. The frozen plan binds the source registry and required scenario revisions to that bundle. Lane results carry the bundle hash, and report verification re-derives required results from the plan and source registry. Missing, duplicated or mismatched evidence cannot establish readiness. A maintainer may explicitly accept an unavailable scenario or an observed product failure, with a reason and author visible in the report. An infrastructure error is not a product judgment.
 
-The detached Ed25519 signature is checked before reading record fields. It authenticates the release-key holder's authorization; it does not cryptographically prove that physical observations occurred. Protecting that key and reviewing the evidence remain trust assumptions. A signed record cannot widen its own promotion difference budget.
+The production Ed25519 update signature authenticates the update-key holder and binds the downloadable package hashes. It does not prove physical observations. The disposable test feed is signed in a separate CI job whose runner never executes candidate-controlled build code with the signing secret. The candidate workflow does not publish a release.
 
-The full release identity is compiled into runtime data and executable `ProductVersion` strings. Numeric Windows Installer version fields contain the base version only. Therefore a candidate and final built from the same source are different artifacts, and a final is not a renamed candidate ZIP.
-
-The current promotion contract compares the install-tree file inventory and toolchain. Files outside its named executable set must be byte-identical. For `exosnap.exe`, `exosnap-updater.exe` and `crashpad_handler.exe`, differing files must provide matching PE-section inventories; only `.rdata` and `.rsrc` may differ. Other sections, including code and relocation sections, must match. Fixed-width identity fields reduce incidental layout movement.
-
-This is stronger than "same commit" but weaker than exact-byte reuse. **Entire permitted sections** can differ, not only semantically identified version strings. The MSI's internal structure is covered by its own packaging/content assertions rather than exact candidate-to-final MSI replay. Source, runtime dependencies, build manifests, signer and release workflow remain part of the trust chain.
-
-Release preparation/qualification authorizes no publication by itself. Creating version tags, attaching a signed qualification or promoting a final requires the maintainer's explicit release authorization. Repository-host rules and service settings are external configuration; a checkout cannot prove they are currently enabled.
+Publication remains blocked until a reviewed workflow independently verifies the frozen report and reuses the exact candidate MSI and ZIP bytes behind the `release` environment. Release preparation and a ready report authorize no tag, GitHub Release or package submission by themselves. Repository-host rules and service settings are external configuration; a checkout cannot prove they are currently enabled.
 
 ## Implementation and tests
 
-See [shared control](../../libs/control), [application control](../../app/live_verify), [typed verifier](../../tools/release-verify), [environment tool](../../tools/envctl), [VM recipe](../../tools/vm), [qualification policy](../../scripts/lib/ReleaseQualification.ps1), and [promotion comparison](../../scripts/check-release-promotion.ps1). Hostile-input, refusal and fake-provider tests are essential because a real device cannot reliably reproduce every dishonest-success or failed-restore case.
+See [shared control](../../libs/control), [application control](../../app/live_verify), [verifier](../../tools/exo-verify), [environment tool](../../tools/envctl), and [VM recipe](../../tools/vm). Hostile-input, refusal and fake-provider tests are essential because a real device cannot reliably reproduce every dishonest-success or failed-restore case.

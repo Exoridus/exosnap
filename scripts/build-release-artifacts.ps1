@@ -93,7 +93,6 @@ $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot 'lib/MsvcEnvironment.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'lib/DependencyIdentity.psm1') -Force -DisableNameChecking
-. (Join-Path $PSScriptRoot 'lib/ReleaseArtifactIdentity.ps1')
 
 # ---------------------------------------------------------------------------
 # Paths (resolved from the script location, independent of the caller's CWD)

@@ -2,7 +2,7 @@
 
 GitHub stores branch and tag protection server-side, where it is invisible to review and drifts without a commit. The files next to this one are the intended state, and `scripts/check-github-rulesets.ps1` reports the difference between them and what the repository actually has.
 
-`next-branch.json` protects the development default. `main-branch.json` protects the latest Stable commit. The `main` payload allows the GitHub Actions integration to fast-forward `main` during an approved publish job. The integration ID is 15368. This bypass applies to every workflow token with write permission, so workflows that receive such tokens must be reviewed as release authority.
+`next-branch.json` protects the development default. `main-branch.json` protects the latest Stable commit. The `main` payload contains a GitHub Actions integration bypass intended for an approved publish job. The integration ID is 15368. This bypass applies to every workflow token with write permission, so workflows that receive such tokens must be reviewed as release authority. No publish workflow is currently enabled.
 
 Each file is a ruleset payload in the shape the REST API accepts, so updating an existing one is:
 
@@ -27,4 +27,4 @@ Keeping the decision in the workflow means it is reviewed with the code that mak
 
 ## Why the tag ruleset is not the release authorisation
 
-`version-tags.json` blocks `v*` tags except for a repository admin or the GitHub Actions integration. Publication requires the `release` environment approval and a ready report bound to the candidate bundle. The integration bypass is broad, so only a reviewed publish workflow may request tag-writing permission.
+`version-tags.json` blocks `v*` tags except for a repository admin or the GitHub Actions integration. Publication requires the `release` environment approval and a ready report bound to the candidate bundle. The publish path is currently blocked. The integration bypass is broad, so only a reviewed publish workflow may request tag-writing permission.

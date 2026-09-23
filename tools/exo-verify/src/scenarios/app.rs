@@ -82,7 +82,7 @@ pub fn scenarios() -> Vec<Scenario> {
             claim: "with in-depth diagnostics opted in but no elevation, present diagnostics report requiresElevation and claim no data",
             lane: Lane::Gpu,
             also: &[Lane::Quick],
-            tier: Tier::Recommended,
+            tier: Tier::Required,
             requires: &[Capability::InteractiveDesktop],
             timeout: secs(90.0),
             run: present_unelevated,

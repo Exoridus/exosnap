@@ -217,7 +217,12 @@ impl Context {
     }
 
     pub fn keep(&mut self, path: &Path) {
-        self.artifacts.push(path.display().to_string());
+        let reference = path
+            .strip_prefix(&self.run_dir)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        self.artifacts.push(reference);
     }
 
     /// Asks the operator a yes/no question. Only scenarios that require the

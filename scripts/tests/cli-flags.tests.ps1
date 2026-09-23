@@ -126,7 +126,6 @@ Test-Case 'an unregistered option is actually detected' {
 # ever read.
 $harnessSources = @(
     'scripts/lib/LiveVerifyChecks.ps1'
-    'scripts/lib/ReleaseScenarios.ps1'
 )
 
 function Get-HarnessArgumentFlag {

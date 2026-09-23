@@ -61,10 +61,18 @@ enum Command {
     /// Merge lane results and decisions into the release report.
     #[command(subcommand)]
     Report(ReportCommand),
-    /// Print readiness for a merged report; exit 0 only when ready for approval.
+    /// Recompute and print readiness from bound evidence; exit 0 only when ready for approval.
     Status {
         #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
         report: PathBuf,
+        #[arg(long)]
+        decisions: Option<PathBuf>,
+        #[arg(long = "results", required = true)]
+        results: Vec<PathBuf>,
     },
     /// Record an explicit maintainer decision for one scenario.
     Accept(AcceptArgs),
@@ -141,6 +149,12 @@ enum PlanCommand {
         #[arg(long)]
         out: PathBuf,
     },
+    Verify {
+        #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long)]
+        plan: PathBuf,
+    },
 }
 
 #[derive(Args)]
@@ -175,6 +189,8 @@ struct RunArgs {
 enum ReportCommand {
     Merge {
         #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long)]
         plan: PathBuf,
         #[arg(long)]
         decisions: Option<PathBuf>,
@@ -183,6 +199,18 @@ enum ReportCommand {
         results: Vec<PathBuf>,
         #[arg(long)]
         out: PathBuf,
+    },
+    Verify {
+        #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
+        report: PathBuf,
+        #[arg(long)]
+        decisions: Option<PathBuf>,
+        #[arg(long = "results", required = true)]
+        results: Vec<PathBuf>,
     },
 }
 
@@ -491,14 +519,23 @@ fn real_main() -> Result<ExitCode> {
                 b.sha256
             );
         }
+        Command::Plan(PlanCommand::Verify { bundle: path, plan }) => {
+            let bundle = bundle::open_any(&path)?;
+            let plan = ReleasePlan::load(&plan)?;
+            plan.verify_against(&bundle, &scenarios::registry())?;
+            println!("plan matches {} and the source registry", bundle.sha256);
+        }
         Command::Run(args) => return run(args),
         Command::Report(ReportCommand::Merge {
+            bundle,
             plan,
             decisions,
             results,
             out,
         }) => {
+            let bundle = bundle::open_any(&bundle)?;
             let plan = ReleasePlan::load(&plan)?;
+            plan.verify_against(&bundle, &scenarios::registry())?;
             let decisions = decisions
                 .filter(|d| d.is_file())
                 .map(|d| Decisions::load(&d))
@@ -521,10 +558,43 @@ fn real_main() -> Result<ExitCode> {
                 println!("  blocking: {item}");
             }
         }
-        Command::Status { report } => {
-            let report: report::Report = serde_json::from_slice(&std::fs::read(&report)?)?;
-            print!("{}", report::markdown(&report));
-            return Ok(if report.ready_for_approval {
+        Command::Report(ReportCommand::Verify {
+            bundle,
+            plan,
+            report,
+            decisions,
+            results,
+        }) => {
+            let bundle = bundle::open_any(&bundle)?;
+            let plan = ReleasePlan::load(&plan)?;
+            plan.verify_against(&bundle, &scenarios::registry())?;
+            let decisions = decisions.map(|path| Decisions::load(&path)).transpose()?;
+            let results = collect_results(&results)?;
+            let stored: report::Report = serde_json::from_slice(&std::fs::read(&report)?)?;
+            report::verify(&stored, &plan, &results, decisions.as_ref())?;
+            println!("report matches candidate, plan, decisions and lane results");
+            return Ok(if stored.ready_for_approval {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            });
+        }
+        Command::Status {
+            bundle,
+            plan,
+            report,
+            decisions,
+            results,
+        } => {
+            let bundle = bundle::open_any(&bundle)?;
+            let plan = ReleasePlan::load(&plan)?;
+            plan.verify_against(&bundle, &scenarios::registry())?;
+            let decisions = decisions.map(|path| Decisions::load(&path)).transpose()?;
+            let results = collect_results(&results)?;
+            let stored: report::Report = serde_json::from_slice(&std::fs::read(&report)?)?;
+            report::verify(&stored, &plan, &results, decisions.as_ref())?;
+            print!("{}", report::markdown(&stored));
+            return Ok(if stored.ready_for_approval {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(1)

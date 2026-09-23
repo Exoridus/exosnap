@@ -6,7 +6,7 @@ This is the normal contributor entry point. [CONTRIBUTING](../../CONTRIBUTING.md
 
 Use Windows 10/11 x64, Visual Studio 2022 Desktop development with C++, PowerShell 7, Git and the repository's CMake presets. The root declares CMake 3.27 as its minimum; the pinned Qt/toolchain can impose a newer practical requirement. Qt, FFmpeg and other dependency pins are build inputs, not independent versions to select casually. Use the matching developer shell for Ninja/MSVC.
 
-The source language is C++20. NVIDIA NVENC is needed for real recording, not for most pure tests. Python, PowerShell and the pinned .NET SDK are also needed by registered tool/harness tests. Configuration defaults to requiring test tools so a missing tool cannot silently produce a smaller green suite.
+The source language is C++20. NVIDIA NVENC is needed for real recording, not for most pure tests. Python, PowerShell and Rust are also needed by registered tool tests. Configuration defaults to requiring test tools so a missing tool cannot silently produce a smaller green suite.
 
 ```powershell
 cmake --preset windows-x64-ninja-debug
@@ -35,7 +35,7 @@ pwsh scripts/verify.ps1 -Fast
 pwsh scripts/verify.ps1 -Full
 ```
 
-A filter selects a registered test/binary prefix, not necessarily one internal GoogleTest case. Check the printed selection. Hardware exclusions reduce reach and must be reported as such. `-Fast` is scoped iteration; `-Full` is the complete local gate, including missing-tool failures, whole-tree static checks, build/test and the typed verification harness.
+A filter selects a registered test/binary prefix, not necessarily one internal GoogleTest case. Check the printed selection. Hardware exclusions reduce reach and must be reported as such. `-Fast` is scoped iteration; `-Full` is the complete local gate, including missing-tool failures, whole-tree static checks, build/test and the Rust verifier.
 
 Build, test and receipt publication share a host lock per build directory. Independent trees do not block each other. Do not run a second unmanaged build into a tree the test runner is currently judging.
 
@@ -60,17 +60,17 @@ Most developer probes require `-DEXOSNAP_BUILD_PROBES=ON`. Capture instruments u
 
 Development capture/edit/visual switches are available in non-Release configurations. An exact Release needs `EXOSNAP_BUILD_BENCHMARK_HARNESS=ON` for harness-only modes. Official release acceptance uses the opt-in production control channel, not a specially rebuilt product whose instrumentation changes its identity.
 
-## Typed harness development
+## Verifier development
 
-From `tools/release-verify`, so its `global.json` selects the SDK and test runner:
+The Rust verifier owns the scenario registry, candidate plan and report checks:
 
 ```powershell
-dotnet restore ExoSnap.Verify.slnx --locked-mode
-dotnet build ExoSnap.Verify.slnx --no-restore -warnaserror
-dotnet test ExoSnap.Verify.slnx --no-restore
+cargo fmt --all --check --manifest-path tools/exo-verify/Cargo.toml
+cargo clippy --locked --all-targets --manifest-path tools/exo-verify/Cargo.toml -- -D warnings
+cargo test --locked --manifest-path tools/exo-verify/Cargo.toml
 ```
 
-See [harness development](release-verify-harness.md) for contracts and catalog generation. A locked restore must fail rather than silently moving a dependency of the program that decides release eligibility.
+The lockfile is part of the verifier input. A locked build must fail if dependencies drift.
 
 ## What a successful local gate does not prove
 

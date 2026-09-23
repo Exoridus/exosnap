@@ -1,19 +1,39 @@
 //! The scenario registry, organised by product capability.
 
 pub mod app;
+pub mod audio;
+pub mod capture;
 pub mod common;
+pub mod display;
 pub mod dist;
+pub mod env;
+pub mod fse;
 pub mod install;
+pub mod journey;
+pub mod present;
 pub mod record;
+pub mod schema;
+pub mod update;
+pub mod visual;
 
 use crate::scenario::Scenario;
 
 pub fn registry() -> Vec<Scenario> {
     let mut all = Vec::new();
     all.extend(dist::scenarios());
+    all.extend(env::scenarios());
+    all.extend(fse::scenarios());
     all.extend(app::scenarios());
+    all.extend(audio::scenarios());
+    all.extend(capture::scenarios());
+    all.extend(display::scenarios());
     all.extend(install::scenarios());
+    all.extend(journey::scenarios());
+    all.extend(present::scenarios());
     all.extend(record::scenarios());
+    all.extend(schema::scenarios());
+    all.extend(update::scenarios());
+    all.extend(visual::scenarios());
     all
 }
 

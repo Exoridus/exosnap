@@ -91,6 +91,9 @@ pub fn run_one(scenario: &Scenario, ctx: &mut Context) -> ScenarioResult {
     result.artifacts = std::mem::take(&mut ctx.artifacts);
     if verdict == Verdict::Pass && !ctx.keep_media {
         let _ = prune_media(&ctx.scenario_dir);
+        result
+            .artifacts
+            .retain(|reference| ctx.run_dir.join(reference).exists());
     }
     result
 }

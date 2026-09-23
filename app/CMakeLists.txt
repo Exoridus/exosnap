@@ -1406,48 +1406,6 @@ if(EXOSNAP_PWSH)
     set_tests_properties(live_verify.endpoint_names PROPERTIES TIMEOUT 120 LABELS "live_verify")
     exosnap_set_test_phase(live_verify.endpoint_names hermetic)
 
-    # Wave D: the release campaign runner and the environment orchestrator. Every
-    # case here runs against a FAKE envctl, which is what makes the interesting
-    # failures reachable at all -- "the setter returned success and the read-back
-    # disagreed" and "the original device vanished before the restore" cannot be
-    # produced on demand by a real display or a real audio endpoint. Nothing in this
-    # suite touches the machine's actual configuration.
-    add_test(NAME live_verify.release_runner
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/release-verify.tests.ps1")
-    set_tests_properties(live_verify.release_runner PROPERTIES TIMEOUT 300 LABELS "live_verify")
-    exosnap_set_test_phase(live_verify.release_runner hermetic)
-
-    # The publish lock: the qualification record a release is promoted on, and the
-    # script the release workflow runs before it may publish anything. Registered
-    # here because its whole value is a refusal -- a missing record, a record about
-    # a different commit, a record about different bytes, a FAIL, an INFRA_ERROR, a
-    # required gate nobody answered -- and every one of those is only reachable from
-    # a fixture. Queries no hardware and reads no real release.
-    add_test(NAME live_verify.release_qualification
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/release-qualification.tests.ps1")
-    set_tests_properties(live_verify.release_qualification PROPERTIES TIMEOUT 300 LABELS "live_verify")
-    exosnap_set_test_phase(live_verify.release_qualification hermetic)
-
-    # The signature the publish lock reads before anything else. Pinned to RFC 8032's
-    # own test vectors, because a verifier that says yes to everything reports a proof
-    # it never had, and nothing downstream could tell.
-    add_test(NAME pipeline.ed25519
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/ed25519.tests.ps1")
-    set_tests_properties(pipeline.ed25519 PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.ed25519 hermetic)
-
-    # Which release candidate a commit may be promoted from. Two gates read that
-    # answer, so a wrong one publishes a release against evidence describing
-    # something else. `gh` is a stub here; nothing reaches the network.
-    add_test(NAME live_verify.find_qualified_rc
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/find-qualified-rc.tests.ps1")
-    set_tests_properties(live_verify.find_qualified_rc PROPERTIES TIMEOUT 180 LABELS "live_verify")
-    exosnap_set_test_phase(live_verify.find_qualified_rc hermetic)
-
     # The packaging version-drift gate. Every case is the real packaging tree with
     # exactly one literal edited: a partial bump is the mistake the gate exists for,
     # and a check that only noticed when everything moved together would notice

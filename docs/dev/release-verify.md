@@ -2,38 +2,29 @@
 
 A release campaign binds checks to explicit candidate bytes, prepares declared environment state, invokes the real application and validates results with independent instruments. [Release checklist](../release-checklist.md) owns acceptance; [verification boundaries](../architecture/verification-boundaries.md) owns the trust model. [Live Verify](live-verify.md) documents the process protocol.
 
-## Select the execution engine
+## Candidate and execution lanes
+
+The `Build release candidate` workflow creates one official final-version build from a commit on `next`. Download `candidate-bundle/` and `candidate-plan.json` from the same Actions run. Keep them together with the separately signed disposable test-feed artifact. The bundle inventories the exact MSI, portable ZIP and verifier bytes; the plan freezes the source registry for that candidate.
 
 ```powershell
-pwsh scripts/release-verify.ps1 run
-pwsh scripts/release-verify.ps1 run -Engine DotNet
+exo-verify bundle verify candidate-bundle
+exo-verify plan verify --bundle candidate-bundle --plan candidate-plan.json
+exo-verify list
+exo-verify capabilities
+exo-verify run --profile release-ci --lane release-ci-core --bundle candidate-bundle --out results/core
+exo-verify run --profile release-ci --lane release-ci-install --bundle candidate-bundle --out results/install
+exo-verify run --profile release-ci --lane release-ci-update --bundle candidate-bundle --out results/update
+exo-verify run --profile release-gpu --bundle candidate-bundle --out results/gpu
+exo-verify run --profile release-hardware --bundle candidate-bundle --out results/hardware
+exo-verify report merge --bundle candidate-bundle --plan candidate-plan.json `
+    --results results --out report
+exo-verify status --bundle candidate-bundle --plan candidate-plan.json `
+    --results results --report report/release-report.json
 ```
 
-PowerShell is the wrapper's default. `-Engine DotNet` selects the typed `ExoSnap.Verify` implementation and builds/publishes it when necessary. It forwards prepare, run, list, qualify and report. Wrapper recover/resume/retry/status have no equivalent in that selection and are refused rather than emulated.
+Run installer and update lanes in a disposable guest. GPU and physical hardware lanes need declared capabilities and actual observations. `--only` narrows a diagnostic run; it does not remove a required scenario from the frozen plan. Keep results and media in a private untracked campaign directory. A missing lane is unavailable, never a pass.
 
-The implementations have distinct catalogs and capabilities. The [typed catalog](release-verify-catalog.md) contains concrete bodies for its declarations, but a body can still report unavailable/deferred. Do not infer candidate qualification from body presence, or assume the two catalogs have identical required sets. The final publisher's source catalog and [release policy](../../scripts/lib/release-policy.json) remain decisive.
-
-## Prepare and run
-
-Use the exact published candidate, not a build tree with convenient neighboring tools:
-
-```powershell
-pwsh scripts/release-verify.ps1 prepare `
-    -ExePath '<candidate install>\exosnap.exe' -Tag '<candidate tag>' `
-    -SourceCommit '<full commit>' `
-    -PortableZip '<published portable ZIP>' -Msi '<published MSI>'
-pwsh scripts/release-verify.ps1 list
-pwsh scripts/release-verify.ps1 run
-pwsh scripts/release-verify.ps1 run -Only REL-CAP-001
-pwsh scripts/release-verify.ps1 run -IncludeClass display,audio-physical
-pwsh scripts/release-verify.ps1 status
-pwsh scripts/release-verify.ps1 report
-pwsh scripts/release-verify.ps1 qualify
-```
-
-The runner reports a private untracked campaign directory holding identity, state, evidence and reports. Missing commit/package identity can permit a diagnostic run but cannot support release qualification. A default run excludes opt-in long/disruptive classes; selection and qualification requirements are separate decisions.
-
-For PowerShell, `resume` refingerprints and continues, `retry -Only <id>` explicitly reattempts a finding, and `recover` restores dirty environment state without running product checks. An existing FAIL is not silently erased by rerunning a sweep. `-NonInteractive` defers questions rather than approving them.
+The CI update lane uses the production embedded Ed25519 public key. A separate signing job reads the production private key only from its GitHub secret and uploads only the test manifest and detached signature. The key is never written to a file, log, result or artifact. The manifest describes the candidate package hashes and local test-feed URLs. It is served only by a loopback HTTPS server in the disposable update job, where a temporary hosts entry and certificate redirect `api.github.com`. No release or Stable feed receives that manifest. The official application rejects `--update-base-url`; no user setting or environment variable enables a feed override. The temporary network redirect changes discovery transport only. The product still performs release discovery, version comparison, Ed25519 signature verification and package SHA-256 verification.
 
 ## Interpret both verdicts
 
@@ -41,11 +32,10 @@ For PowerShell, `resume` refingerprints and continues, `retry -Only <id>` explic
 |---|---|
 | PASS / FAIL | Measured correct / measured product failure |
 | INFRA_ERROR | The instrument, parser, runner or required operation failed to establish product truth |
-| UNVERIFIED / STALE | Attempt without usable outcome / evidence bound to changed inputs |
-| UNAVAILABLE / BLOCKED | Capability/precondition cannot be satisfied |
-| DEFERRED / SKIPPED | Human/decision postponement / not selected |
+| UNAVAILABLE | Capability or precondition cannot be satisfied |
+| SKIPPED | A scenario was not selected or run |
 
-The typed engine uses its corresponding named enum outcomes. Exceptions escaping a gate are infrastructure errors, not fabricated product failures. Unknown fields, malformed external JSON and absent tools are not zero-valued measurements.
+Exceptions escaping a scenario are infrastructure errors, not fabricated product failures. Unknown fields, malformed external JSON and absent tools are not zero-valued measurements.
 
 Environment restoration is reported separately: not applicable, restored, restore pending, pending because the original device is unavailable, or failed. Product PASS with failed restore is not a releasable campaign. Report/JUnit must expose both.
 
@@ -85,21 +75,21 @@ The audio device-format/default-role properties can be human-only in envctl beca
 
 Install/update tests should run in a disposable OS with copied artifacts and isolated configuration. Sandbox workers report completion with a marker/result document; the launcher returning does not mean the guest completed. Missing marker, unreadable result or a step never reached is unverified/infrastructure failure, never a partial PASS.
 
-`EXOSNAP_UPDATE_FROM` / `EXOSNAP_UPDATE_FROM_MSI` identify an explicit older baseline for relevant gates. Ensure the target remains candidate-bound. `EXOSNAP_RELEASE_MSI` can explicitly select the intended installer. MSI identity and hashes must be checked, not inferred from a neighboring filename.
+`EXOSNAP_UPDATE_FROM` / `EXOSNAP_UPDATE_FROM_MSI` identify an explicit older baseline for relevant gates. Ensure the target remains candidate-bound. MSI identity and hashes must be checked, not inferred from a neighboring filename.
 
 A Chocolatey rehearsal can install/upgrade its `vcredist140` dependency. Do not attempt an unsafe system runtime downgrade to undo it. Record that footprint. The package source is not edited in place for a rehearsal; use a scratch copy with the tested MSI/hash.
 
 ## Operator protocol and faults
 
-Prompts distinguish **Enter to start the runner's action** from **Enter after completing the operator action**. Detail/help, skip and abort remain explicit. `-Attest <id>` says an action has already occurred and skips the action prompt; the independent Verify step still decides. It cannot attest someone else's visual judgment.
+`--attest operator` declares that an operator is available for a named scenario. It does not attest that a result passed. The operator follows the scenario prompt and the independent measurement decides the result. Desktop input requires current coordination.
 
-Real UAC cannot be clicked by an agent. An elevated worker is a separate process with a result-file boundary, not cross-integrity UI inspection. A deliberate updater `uacDeclined` fault seam only simulates refusal at the elevation call site. It can never bypass verification or make an install succeed and is not evidence that a real Secure Desktop interaction occurred.
+Real UAC cannot be clicked by an agent. The real decline scenario asks a human in an unelevated disposable guest to refuse the prompt and verifies the installed bytes and updater state. A separate `uacDeclined` fault seam only simulates refusal at the elevation call site. It cannot substitute for the real Secure Desktop observation.
 
 Close a declined/failed updater before the next install gate; a running process holding its own file is not clean starting state. Human questions remain inside restoration scope even when the operator aborts or leaves.
 
 ## Field and media contracts
 
-`REL-SCHEMA-001` verifies field existence across idle state, running pipeline and result. Empty collections prove their container exists, not every element's schema. Its consumers must distinguish missing, unavailable and measured zero. Keep declared consumers aligned with current scenario IDs.
+The diagnostics schema scenario verifies field existence across idle state, running pipeline and result. Empty collections prove their container exists, not every element's schema. Consumers must distinguish missing, unavailable and measured zero.
 
 Frame analysis reports decode/count/timebase departures as values for the gate to judge. A baseline must contain no tested stimulus. Time alignment must not derive from the very feature under test. Use independent wall-clock, in-band marker or performance-counter evidence with declared uncertainties; at least two independent anchors must agree before a strong aligned verdict.
 
@@ -109,8 +99,8 @@ Use the production control channel to record official artifacts. Harness-only `-
 
 ## Qualification and evidence retention
 
-Record each artifact hash, environment before/desired/applied/restored, independent observations, assertions, operator actions and evidence digests. A verdict whose evidence was not collected is not complete. Qualification revalidates source/catalog/artifact bindings and required results; the publisher independently re-derives that decision and verifies its signature.
+Record each artifact hash, environment before/desired/applied/restored, independent observations, assertions, operator actions and evidence digests. A verdict whose evidence was not collected is not complete. `report merge`, `report verify` and `status` revalidate the bundle and source plan against lane results. A maintainer decision may accept an unavailable result or explicitly accept an observed product failure as a known risk. It never changes the measured verdict.
 
-`qualify -Publish` is a separately authorized maintainer operation, not the normal end of an agent run. A printed local verdict does not establish that the record passes the publisher's current catalog/policy/signature requirements. Follow [release checklist](../release-checklist.md#3a-bind-qualify-and-promote) for the complete boundary.
+`READY FOR APPROVAL` is a calculation, not release permission. Publication remains blocked until an approved path checks the frozen report and reuses the exact candidate MSI and ZIP bytes behind the `release` environment. Follow the [release checklist](../release-checklist.md#4-publication-boundary).
 
 Runner tests use fake environment/tools and hostile inputs to execute real gate logic. They test refusal, restoration, interrupted state, schema and evidence handling without changing the developer's machine. Their success does not claim the hardware or installer under test has been exercised.

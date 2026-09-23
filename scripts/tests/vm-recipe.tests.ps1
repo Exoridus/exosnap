@@ -1723,7 +1723,7 @@ Test-Case 'the run script refuses its removed harness command-line contract' {
     Assert-Match 'guest-command-missing' $result.Output 'the dry run must name the required integration input'
     Assert-NoMatch '--output' $result.Output 'the current harness has no --output option'
 
-    $command = 'C:\ExoSnapRun\harness\ExoSnap.Verify.exe run --run-dir C:\ExoSnapRun\out'
+    $command = 'C:\ExoSnapRun\bundle\runtime\exo-verify.exe list'
     $explicit = Invoke-Script -Path $script:RunScript -Arguments @('-DryRun', '-RunId', 'has-command',
         '-Root', 'T:\images', '-GuestCommand', $command)
     Assert-Match ([regex]::Escape($command)) $explicit.Output 'an explicit current harness command is preserved'

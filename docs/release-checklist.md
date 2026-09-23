@@ -2,7 +2,7 @@
 
 This document owns release acceptance and publication procedure. [Release verification](dev/release-verify.md) explains the runner. [Verification boundaries](architecture/verification-boundaries.md) explains what the evidence proves. A successful build is necessary, not sufficient, for release.
 
-Creating/pushing a version tag, publishing a release, attaching a qualification record or submitting a package requires explicit maintainer authorization for that operation. Preparing or qualifying a candidate is not authorization to publish it. Published versions and their bytes are immutable.
+Creating/pushing a version tag, publishing a release or submitting a package requires explicit maintainer authorization for that operation. Preparing or verifying a candidate does not authorize publication. Published versions and their bytes are immutable.
 
 ## 1. Prepare the source
 
@@ -12,70 +12,48 @@ Creating/pushing a version tag, publishing a release, attaching a qualification 
 - Review current product behavior, limitations and privacy disclosures. Run the documentation check and privacy validators. Leave development narrative in the pull request.
 - At the release cut only, preview `pwsh scripts/new-changelog.ps1`. Set `EXOSNAP_CHANGELOG_CUT=1` and use `-Version <x.y.z> -Apply` to perform the deliberate cut. Preview `pwsh scripts/render-release-notes.ps1 -Version <x.y.z>`. Ordinary feature branches do not edit the changelog.
 
-## 2. Build and audit packages
+## 2. Build and audit a candidate
 
-The tag workflow and `scripts/build-release-artifacts.ps1` own the packaging gate. Review its report, not just whether an archive was produced. It must cover:
+Run `Build release candidate` from `next` with the full source commit and a unique candidate ID. The workflow verifies that `main` is an ancestor and the commit is on `next`, compiles the final `X.Y.Z` identity once with the official update key, and uses `exo-verify package` to build MSI and portable ZIP from one CMake install tree. It uploads `candidate-bundle/` and `candidate-plan.json` as a private Actions artifact. A separate job signs disposable update-feed metadata without exposing the signing key to the candidate build job.
+
+Review the package report and bundle, not just whether archives were produced. The gate covers:
 
 | Check | Required evidence |
 |---|---|
-| Identity | Full tag-derived version equals the executable ProductVersion strings and package/manifest identity; base version matches CMake |
+| Identity | Final version equals the executable ProductVersion strings, package names and CMake base version; bundle binds the source commit and every file hash |
 | Install tree | Required executables, Qt/QML/plugins, FFmpeg, legal files and licenses present; development files, probes, secrets and unintended dependencies absent |
 | Runtime imports | Required imports resolved against packaged files or the explicit Windows-system classification; never satisfy a missing package DLL from a developer PATH |
 | MSI | Harvested contents match the validated staging tree, installer metadata is correct, smoke succeeds |
 | Portable | Whole folder launches in the packaged layout, without source/build-tree dependencies |
 | Updater | Separate updater and required runtime are packaged and load correctly |
-| Reproducibility records | Package hashes, portable artifact inventory with executable section hashes, and toolchain manifest produced |
+| Candidate record | `bundle.json` inventories exact package bytes, a source commit, candidate ID and toolchain inputs; `candidate-plan.json` freezes the source registry |
 
 Qt deployment must include discovered QML imports as well as linked DLLs. The package inventory, not a hand-maintained generic Qt list, identifies exact deployed files. ExoSnap's own code remains C++20; resolve build-tool requirements against the pinned Qt/toolchain configuration.
 
-## 3. Publish an immutable candidate
+## 3. Verify the frozen candidate
 
-The maintainer explicitly pushes a candidate tag `vX.Y.Z-<suffix>` from the intended commit. The release workflow validates the tag/base identity, requires official update-key configuration, builds/audits the packages, signs the update manifest, creates a draft, uploads, re-downloads and verifies, then publishes as a prerelease. Failure must not expose a half-published update.
+Download the candidate bundle and plan from the same Actions run. Use the candidate's own `exo-verify.exe` against its official package bytes. The bundle hash binds each release lane's result to the exact MSI, ZIP and runtime. The plan fixes every required scenario, revision and lane from that source commit. Run the CI core, disposable install and update, GPU and hardware lanes where their declared capabilities exist. [Release verification](dev/release-verify.md) gives the commands and guest preparation.
 
-Confirm the release is a prerelease and contains the portable ZIP, MSI, SHA-256 sidecars, `update-manifest.json`, detached `.sig`, `artifact-manifest.json` and `toolchain-manifest.json`. Download the published artifacts for acceptance; local build-tree output is not a substitute.
-
-Use Preview for candidate discovery. The baseline for a natural update must itself contain the current updater protocol and honestly embed its full version. Verify those properties of the baseline instead of naming a permanently fixed candidate in this checklist. Same-version verification reinstall tests mechanics but does not replace natural newer-version discovery.
-
-If product code changes after acceptance, cut and qualify another immutable candidate. Do not overwrite the previous candidate's assets or transplant its PASS results onto changed bytes.
-
-### 3a. Bind, qualify and promote
-
-Bind the campaign to explicit published bytes and source identity:
+For a local result set, rederive the report and check it against the original bundle and source registry:
 
 ```powershell
-pwsh scripts/release-verify.ps1 prepare `
-    -ExePath '<extracted candidate>\exosnap.exe' -Tag '<candidate tag>' `
-    -SourceCommit '<full source commit>' `
-    -PortableZip '<downloaded candidate ZIP>' -Msi '<downloaded candidate MSI>'
-pwsh scripts/release-verify.ps1 list
-pwsh scripts/release-verify.ps1 run
-pwsh scripts/release-verify.ps1 report
-pwsh scripts/release-verify.ps1 qualify
+exo-verify bundle verify <candidate-bundle>
+exo-verify plan verify --bundle <candidate-bundle> --plan <candidate-plan.json>
+exo-verify report merge --bundle <candidate-bundle> --plan <candidate-plan.json> `
+    --results <result-directory> --out <report-directory>
+exo-verify status --bundle <candidate-bundle> --plan <candidate-plan.json> `
+    --results <result-directory> --report <report-directory>/release-report.json
 ```
 
-Select the release-relevant opt-in scenarios explicitly and include them with `-Required` when qualifying. The canonical [release policy](../scripts/lib/release-policy.json) and source catalog determine requirements; a record cannot reduce its own required set.
+An explicit `exo-verify accept` decision can cover an unavailable or failed required scenario, with its reason and author visible in the report. `ACCEPTED_RISK` applies only to an observed product failure. A decision never changes the recorded verdict. Review lane evidence and environment restoration before acting on `READY FOR APPROVAL`; that phrase is a readiness calculation, not release permission.
 
-Qualification requires complete source/artifact/package/harness/catalog identity, exactly one passing verdict for every required gate, no recorded product failure or infrastructure error, complete evidence, and successful restoration of every mutated environment. Unknown, unavailable, deferred, stale or unattempted required work cannot become PASS. A failed requalification must not leave an old successful export usable.
+If source or package bytes change, build another candidate and rerun the affected acceptance. Never transplant a result to a different bundle hash.
 
-Attaching a signed qualification record is a separate maintainer operation: `pwsh scripts/release-verify.ps1 qualify -RunId <id> -Publish`. Supply the signing seed through the approved environment secret mechanism, not a committed file or shell transcript. Public-key matching is checked before signing when configured. The upload includes the record's detached signature.
+## 4. Publication boundary
 
-Only then may the maintainer push the final tag from the exact qualified commit. The publish lock verifies the record signature **before parsing**, re-derives eligibility against the source catalog/release policy, and checks candidate identity and package hashes. An unsigned or self-asserted `QUALIFIED` field is insufficient.
+There is currently no enabled publish workflow. The candidate workflow creates no version tag and publishes no GitHub Release. Until the publish path verifies the frozen report and reuses the candidate's exact MSI and ZIP bytes behind the `release` environment, do not push a release tag or submit a package-manager version.
 
-### Promotion comparison and limits
-
-Candidate and final binaries are different because their full versions are compiled in. The promotion contract `exosnap.release-promotion/2` permits this rebuild while comparing the final portable tree and toolchain against the qualified candidate.
-
-All files must match byte-for-byte except the declared executables, `exosnap.exe`, `exosnap-updater.exe` and `crashpad_handler.exe`. Changed declared executables require matching section inventories; all sections outside `.rdata` and `.rsrc` must match. The record may not widen that budget. Missing inventories, moved source, different toolchain or additional/removed files are refusals.
-
-This does **not** prove literal byte identity of the final binaries. Constants/strings in the permitted sections can differ. MSI internal structure is not compared as a PE tree; its content is covered by its packaging assertions. The artifact/toolchain manifests themselves are not individually signed update assets. Preserve these limits instead of calling the process a byte-for-byte promotion or assuming every final executable is unconstrained.
-
-## 4. Publish and inspect the final release
-
-The authorized final tag triggers the workflow. Do not create a competing manual Release. The workflow validates packaging versions, official identity, signed update metadata and qualified promotion, then publishes only after the downloadable bytes pass the post-upload checks.
-
-Verify the published manifest version, package URLs/hashes and detached signature match what clients receive. Confirm both distribution forms and their legal files. A checksum alone verifies integrity, not publisher identity. State the actual Authenticode status; an Ed25519 update signature does not remove SmartScreen warnings.
-
-The standalone signing workflow is not a way around qualification. Attaching replacement update metadata to a published release changes what clients install and requires the same explicit authority and asset checks. Prefer a new candidate when correcting candidate artifacts.
+At publication, independently re-download and hash every public asset, verify the signed production update manifest against the embedded public key, and confirm that the tag names the exact source commit and final version already compiled into the candidate. State the actual Authenticode status; an Ed25519 update signature does not remove SmartScreen warnings.
 
 ## 5. Update and installation acceptance
 
@@ -83,7 +61,7 @@ Use a disposable install tree or OS. Never use the maintainer's working installa
 
 | Path | Acceptance |
 |---|---|
-| Portable natural update | Newer candidate is offered on Preview; signature/hash checked; app closes; staged swap verifies and relaunches; installed bytes match intended artifact; backup/temp cleanup completes |
+| Portable natural update | Newer candidate is offered by the signed disposable feed; signature/hash checked; app closes; staged swap verifies and relaunches; installed bytes match intended artifact; backup/temp cleanup completes |
 | MSI update | Correct installed context, explicit UAC, correct version/product identity and retained user settings; independently inspect installer result |
 | Declined elevation | Installation remains intact; retryable refusal, not a successful update |
 | Download failure/cancel | Installed version untouched; failure and intentional cancellation remain distinct; retries are offered only where they can change the outcome |
@@ -94,7 +72,7 @@ Use a disposable install tree or OS. Never use the maintainer's working installa
 
 ### 5a. Verification reinstall and channel guards
 
-Launch the official candidate with `--verify-update-reinstall`. Confirm an exact same-full-version reinstall is visibly labeled, goes through production manifest/signature/hash and installation checks, and installs the published bytes. The flag is not persisted. Without it the identical version is not offered. It never allows a downgrade or relaxes cryptographic checks.
+Launch the official candidate with `--verify-update-reinstall` where this separate reinstall behavior is in scope. Confirm an exact same-full-version reinstall is visibly labeled, goes through production manifest/signature/hash and installation checks, and installs the candidate bytes. The flag is not persisted. Without it the identical version is not offered. It never allows a downgrade or relaxes cryptographic checks.
 
 Check recording/preparation/finalization guards, channel-switch invalidation and an in-flight old-channel result being discarded. Check app-handoff identity against the updater's transaction/target. A manual updater starts at rest and requires separate check/download/install actions. Test natural candidate-to-newer-candidate or final discovery separately when such a release exists.
 
@@ -104,7 +82,7 @@ Complete [Privacy review](privacy-review.md): source allowlist/egress checks, li
 
 ## 7. Recording and UI acceptance
 
-Use [the scenario catalog](dev/release-verify-catalog.md) to select the strongest available verifier. Source/tests prove deterministic contracts; real files and hardware establish the remaining boundaries.
+Use `exo-verify list` to inspect the source registry and lane requirements. Source/tests prove deterministic contracts; real files and hardware establish the remaining boundaries.
 
 | Area | Required checks for relevant release changes |
 |---|---|
@@ -131,10 +109,10 @@ Inspect packet-span durations for each stream, listen at the beginning/middle/en
 
 ## 8. Package-manager publication
 
-Publish downstream only after the release is qualified, promoted and available. Follow [WinGet](../packaging/winget/README.md), [Chocolatey](../packaging/chocolatey/README.md) and [Scoop](../packaging/scoop/README.md). The [publication policy](../packaging/publication-policy.json) records each channel's intended hold/publish state; `scripts/check-feed-drift.ps1` is an advisory comparison, not an upload command.
+Publish downstream only after the approved release is available. Follow [WinGet](../packaging/winget/README.md), [Chocolatey](../packaging/chocolatey/README.md) and [Scoop](../packaging/scoop/README.md). The [publication policy](../packaging/publication-policy.json) records each channel's intended hold/publish state; `scripts/check-feed-drift.ps1` is an advisory comparison, not an upload command.
 
 Fill release hashes from the published bytes/sidecars. Read each new MSI ProductCode from that MSI; never reuse the previous build's generated code. Preserve the permanent UpgradeCode. Run each full package validator, including manifest/hash checks where required. Version-placeholder checks alone do not authorize submission.
 
 ## 9. Closeout
 
-Retain signed qualification, artifact/toolchain identities, scenario evidence and package publication results with the release records. Do not copy the campaign transcript into durable docs. Update only actual changed behavior, boundaries and procedures. Recheck server-side protection against the tracked intended rulesets; source files cannot prove the server currently enforces them.
+Retain the bundle, frozen plan, lane results, explicit decisions, verified report, toolchain facts and package publication results with the release records. Do not copy the campaign transcript into durable docs. Update only actual changed behavior, boundaries and procedures. Recheck server-side protection against the tracked intended rulesets; source files cannot prove the server currently enforces them.
