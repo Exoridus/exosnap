@@ -50,6 +50,7 @@ using exosnap::update::MakeSwapPlan;
 using exosnap::update::ParseManifest;
 using exosnap::update::ParseSemVer;
 using exosnap::update::ReadInstallPath;
+using exosnap::update::RenameOutcome;
 using exosnap::update::RepairOrphanedSwap;
 using exosnap::update::RestoreBackup;
 using exosnap::update::SelectPackage;
@@ -831,7 +832,13 @@ bool UpdaterWorker::runInstallPortable() {
         }
     }
 
-    switch (StageRename(plan_)) {
+    RenameOutcome failed_rename;
+    const SwapError swap_error = StageRename(plan_, {}, &failed_rename);
+    if (swap_error != SwapError::None && failed_rename.attempts > 0) {
+        std::fprintf(stderr, "exosnap-updater: directory rename failed after %u attempt(s), Windows error %lu\n",
+                     failed_rename.attempts, failed_rename.error);
+    }
+    switch (swap_error) {
     case SwapError::None:
         break;
     case SwapError::StagingMissing: // nothing touched, old install intact

@@ -193,7 +193,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: candidate-results-core-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
+          name: candidate-results-core-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}-attempt-${{ github.run_attempt }}
           path: |
             lane-results/*.result.json
             lane-results/*/scenarios/**/*.log
@@ -233,7 +233,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: candidate-results-install-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
+          name: candidate-results-install-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}-attempt-${{ github.run_attempt }}
           path: |
             lane-results/*.result.json
             lane-results/*/scenarios/**/*.log
@@ -328,7 +328,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: candidate-results-update-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
+          name: candidate-results-update-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}-attempt-${{ github.run_attempt }}
           path: |
             lane-results/*.result.json
             lane-results/*/scenarios/**/*.log
@@ -359,9 +359,10 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         continue-on-error: true
         with:
-          pattern: candidate-results-*-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
+          # Every attempt of a rerun lane keeps its own artifact and directory, so
+          # the merge sees a failed first attempt next to a passing rerun.
+          pattern: candidate-results-*-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}-attempt-*
           path: results
-          merge-multiple: true
       - name: Merge candidate report
         shell: pwsh
         run: |
@@ -381,7 +382,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: candidate-report-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
+          name: candidate-report-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}-attempt-${{ github.run_attempt }}
           path: report/
           if-no-files-found: error
           retention-days: 90

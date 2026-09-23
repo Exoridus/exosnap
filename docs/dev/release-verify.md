@@ -30,6 +30,9 @@ The v0.9.0 Stable updater predates the injected UAC-decline fault.
 The hosted update lane checks the accepting path against that baseline.
 A real UAC refusal remains an external hardware-lane check.
 The simulated decline is reserved for a later baseline that contains the fault seam.
+The portable update from that baseline runs the v0.9.0 updater, which renames each directory exactly once.
+A handle still open in the old tree after the application exits can therefore fail `update.portable` with "The current installation is in use and could not be moved."
+The bounded rename retry of later updaters cannot change that first hop.
 
 ## Interpret both verdicts
 
@@ -105,6 +108,16 @@ Use the production control channel to record official artifacts. Harness-only `-
 ## Qualification and evidence retention
 
 Record each artifact hash, environment before/desired/applied/restored, independent observations, assertions, operator actions and evidence digests. A verdict whose evidence was not collected is not complete. `report merge`, `report verify` and `status` revalidate the bundle and source plan against lane results. A maintainer decision may accept an unavailable result or explicitly accept an observed product failure as a known risk. It never changes the measured verdict.
+
+Every lane result names the attempt that produced it: run, attempt and job in GitHub Actions, a fresh identifier elsewhere.
+A rerun is a new attempt, never a replacement.
+The hosted lanes upload one artifact per attempt, and the report lists every attempt of a scenario in finishing order.
+The effective verdict over the attempts of the planned revision is the most severe one.
+A measured FAIL stays FAIL when a later attempt passes, and the entry is marked as having inconsistent attempts.
+Only an ACCEPTED_RISK decision lets such a FAIL through.
+An INFRA_ERROR or UNAVAILABLE attempt is resolved by a later measured verdict but stays in the history.
+Attempts of another scenario revision are listed and never counted.
+Supplying the same lane attempt twice is refused, because a copy is not independent evidence.
 
 The hosted lanes upload their result JSON and focused diagnostic files.
 Extracted package trees and copied executables are working data, not evidence.

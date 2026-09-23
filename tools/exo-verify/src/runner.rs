@@ -7,8 +7,8 @@ use std::time::Instant;
 
 use crate::context::Context;
 use crate::model::{
-    Identity, LaneResult, RESULT_SCHEMA_VERSION, ScenarioResult, Verdict, now_rfc3339,
-    runner_version,
+    Identity, LaneResult, RESULT_SCHEMA_VERSION, ScenarioResult, Verdict, current_attempt,
+    now_rfc3339, runner_version,
 };
 use crate::scenario::{Lane, Scenario, Stop};
 
@@ -189,6 +189,7 @@ pub fn run_lane(
         runner_version: runner_version(),
         started_at,
         finished_at: now_rfc3339(),
+        attempt: current_attempt(),
         identity,
         environment: ctx.caps.facts.clone(),
         tools,
