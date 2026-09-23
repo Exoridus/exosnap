@@ -14,18 +14,18 @@ name: Advisory Checks
 #
 # WHY THIS IS ITS OWN WORKFLOW FILE
 #
-# This job used to live in ci.yml and ran on every push to main, where it cost
+# This job used to live in ci.yml and ran on every development-branch push, where it cost
 # up to 45 min of Windows runner time to re-derive a finding list that changes
 # on the scale of weeks, not commits. It is now nightly instead. It could not
 # simply gain a `schedule:` trigger inside ci.yml, for two reasons:
 #
 #   1. The README CI badge reads
-#      img.shields.io/github/actions/workflow/status/.../ci.yml?branch=main,
-#      which reports the conclusion of the most recent ci.yml run on main. A
+#      img.shields.io/github/actions/workflow/status/.../ci.yml?branch=next,
+#      which reports the conclusion of the most recent ci.yml run on next. A
 #      `schedule:` event always runs on the default branch, so every nightly
-#      would become the newest main run of ci.yml and would drive the badge.
+#      would become the newest next run of ci.yml and would drive the badge.
 #      A nightly that times out or trips over a toolchain hiccup would then
-#      paint the CI badge red even though main builds fine. Keeping the nightly
+#      paint the CI badge red even though next builds fine. Keeping the nightly
 #      in a separate workflow file keeps it out of ci.yml's history entirely.
 #   2. A `schedule:` trigger on ci.yml would also start the quick checks and,
 #      via their own conditions, potentially the heavy build legs — a scheduled
@@ -44,7 +44,7 @@ name: Advisory Checks
 on:
   # Nightly on the default branch. 03:00 UTC is off-peak for GitHub's hosted
   # Windows pool, and a run that starts then has finished long before the
-  # working day. schedule events always run on the default branch (main).
+  # working day. schedule events always run on the default branch (next).
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:

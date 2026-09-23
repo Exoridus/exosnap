@@ -41,7 +41,7 @@
     Repository to check. Defaults to the repository this script lives in.
 
 .PARAMETER Base
-    Commit to diff against. Defaults to the merge base with origin/main.
+    Commit to diff against. Defaults to the merge base with origin/next.
 
 .PARAMETER All
     Check every tracked Markdown file instead of only added lines.
@@ -185,8 +185,11 @@ if ($All) {
 else {
     $baseRef = $Base
     if (-not $baseRef) {
-        $mergeBase = (Invoke-Git @('merge-base', 'HEAD', 'origin/main'))
-        if ($LASTEXITCODE -ne 0 -or -not $mergeBase) { $mergeBase = (Invoke-Git @('merge-base', 'HEAD', 'main')) }
+        $mergeBase = $null
+        foreach ($candidate in @('origin/next', 'origin/main', 'next', 'main')) {
+            $mergeBase = (Invoke-Git @('merge-base', 'HEAD', $candidate))
+            if ($LASTEXITCODE -eq 0 -and $mergeBase) { break }
+        }
         $baseRef = if ($mergeBase) { $mergeBase.Trim() } else { $null }
     }
     if (-not $baseRef) {

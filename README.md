@@ -4,7 +4,7 @@
 
 ### Record your screen. Keep your audio separate. Know what happened.
 
-[![Latest](https://img.shields.io/github/v/release/Exoridus/exosnap?style=for-the-badge&label=Latest&logo=github&color=44cc11)](https://github.com/Exoridus/exosnap/releases/latest) [![Downloads](https://img.shields.io/github/downloads/Exoridus/exosnap/total?style=for-the-badge&label=Downloads&logo=github)](https://github.com/Exoridus/exosnap/releases) [![CI](https://img.shields.io/github/actions/workflow/status/Exoridus/exosnap/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=fff&label=CI)](https://github.com/Exoridus/exosnap/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/Exoridus/exosnap?style=for-the-badge&color=44cc11)](LICENSE)
+[![Latest](https://img.shields.io/github/v/release/Exoridus/exosnap?style=for-the-badge&label=Latest&logo=github&color=44cc11)](https://github.com/Exoridus/exosnap/releases/latest) [![Downloads](https://img.shields.io/github/downloads/Exoridus/exosnap/total?style=for-the-badge&label=Downloads&logo=github)](https://github.com/Exoridus/exosnap/releases) [![CI](https://img.shields.io/github/actions/workflow/status/Exoridus/exosnap/ci.yml?branch=next&style=for-the-badge&logo=githubactions&logoColor=fff&label=CI)](https://github.com/Exoridus/exosnap/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/Exoridus/exosnap?style=for-the-badge&color=44cc11)](LICENSE)
 
 A Windows screen recorder for gameplay, software demos and everyday capture. NVIDIA hardware encoding, multi-track audio, HDR10, lossless trimming and recording diagnostics. Your recordings stay on your machine. No account required.
 

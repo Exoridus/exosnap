@@ -46,7 +46,7 @@
 
 .PARAMETER Base
     Commit to diff against for the change set. Defaults to the merge base with
-    origin/main, then origin/HEAD, then HEAD.
+    origin/next, then origin/main, then origin/HEAD, then HEAD.
 
 .PARAMETER DryRun
     Do not execute anything: report the plan with every executed check forced to
@@ -127,7 +127,7 @@ $head = (Invoke-Git @('rev-parse', 'HEAD') | Select-Object -First 1)
 $dirty = @(Invoke-Git @('status', '--porcelain')).Count -gt 0
 
 if (-not $Base) {
-    foreach ($candidate in @('origin/main', 'origin/HEAD', 'main')) {
+    foreach ($candidate in @('origin/next', 'origin/main', 'origin/HEAD', 'next', 'main')) {
         $merge = (Invoke-Git @('merge-base', $candidate, 'HEAD') | Select-Object -First 1)
         if ($merge) { $Base = $merge; break }
     }

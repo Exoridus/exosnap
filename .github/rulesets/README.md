@@ -2,7 +2,9 @@
 
 GitHub stores branch and tag protection server-side, where it is invisible to review and drifts without a commit. The files next to this one are the intended state, and `scripts/check-github-rulesets.ps1` reports the difference between them and what the repository actually has.
 
-Each file is a ruleset payload in the shape the REST API accepts, so applying one is:
+`next-branch.json` protects the development default. `main-branch.json` protects the latest Stable commit. The `main` payload allows the GitHub Actions integration to fast-forward `main` during an approved publish job. The integration ID is 15368. This bypass applies to every workflow token with write permission, so workflows that receive such tokens must be reviewed as release authority.
+
+Each file is a ruleset payload in the shape the REST API accepts, so updating an existing one is:
 
 ```pwsh
 # Read the id first; never guess it.
@@ -10,11 +12,11 @@ gh api repos/:owner/:repo/rulesets --jq '.[] | {id, name, target}'
 gh api --method PUT repos/:owner/:repo/rulesets/<id> --input .github/rulesets/main-branch.json
 ```
 
-Applying is a deliberate, separately authorised act. The checker never writes.
+Creating the new `next` ruleset uses `POST repos/:owner/:repo/rulesets` with `next-branch.json`. Applying either payload and changing the default branch are separately authorised acts. The checker never writes.
 
 ## Why exactly two required contexts
 
-`ci-required` and `crash-capture-required` are aggregate jobs: they always run, they always report, and they decide per job whether a non-success result is the documented behaviour for that event or a failure being waved through.
+`ci-required`, `crash-capture-required` and `pr-policy-required` are aggregate jobs: they always run, they always report, and they decide per job whether a non-success result is the documented behaviour for that event or a failure being waved through.
 
 Requiring the heavy jobs directly has two failure modes:
 
@@ -25,4 +27,4 @@ Keeping the decision in the workflow means it is reviewed with the code that mak
 
 ## Why the tag ruleset is not the release authorisation
 
-`version-tags.json` blocks `v*` tags for everyone except a repository admin, which is the person who would push one anyway. It raises the cost of an accidental tag; it does not decide whether a release may ship. That decision is `scripts/check-release-qualification.ps1` in the release pipeline, which refuses to publish for a commit with no qualified record.
+`version-tags.json` blocks `v*` tags except for a repository admin or the GitHub Actions integration. Publication requires the `release` environment approval and a ready report bound to the candidate bundle. The integration bypass is broad, so only a reviewed publish workflow may request tag-writing permission.

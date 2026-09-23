@@ -1,11 +1,11 @@
 name: Crash-Capture Build
 
 # Validates the EXOSNAP_ENABLE_CRASH_CAPTURE=ON build so the crash strand cannot
-# silently break on main. The ON build fetches and compiles sentry-native 0.15.0
+# silently break on next. The ON build fetches and compiles sentry-native 0.15.0
 # + Crashpad + mini_chromium from source — that is slow (~10-20 min), so this job
 # is deliberately NOT part of the per-PR `ci.yml`. It is gated to:
 #
-#   - push to `main`          (catch breakage the moment it lands)
+#   - push to `next`          (catch breakage the moment it lands)
 #   - workflow_dispatch       (manual on-demand validation)
 #   - PRs labeled `crash-capture` (opt-in heavy check when touching the strand)
 #   - PRs that touch crash-capture-relevant paths (auto, via the `changes` job)
@@ -18,7 +18,7 @@ name: Crash-Capture Build
 
 on:
   push:
-    branches: [main]
+    branches: [next]
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:

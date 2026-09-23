@@ -204,6 +204,24 @@ Test-Case 'the required contexts name jobs that exist and always report' {
     }
 }
 
+Test-Case 'main and next have distinct protection and only publish refs allow Actions bypass' {
+    $rulesets = @('main-branch.json', 'next-branch.json', 'version-tags.json') |
+        ForEach-Object {
+            Get-Content -LiteralPath (Join-Path $scriptRoot "../.github/rulesets/$_") -Raw | ConvertFrom-Json
+        }
+    $main = @($rulesets | Where-Object name -eq 'Protect Stable main')[0]
+    $next = @($rulesets | Where-Object name -eq 'Protect development next')[0]
+    $tags = @($rulesets | Where-Object target -eq 'tag')[0]
+    Assert-True (@($main.conditions.ref_name.include) -contains 'refs/heads/main') 'main ruleset does not protect main explicitly'
+    Assert-True (@($next.conditions.ref_name.include) -contains 'refs/heads/next') 'next ruleset does not protect next explicitly'
+    foreach ($entry in @($main, $tags)) {
+        Assert-True (@($entry.bypass_actors | Where-Object { $_.actor_type -eq 'Integration' -and $_.actor_id -eq 15368 -and $_.bypass_mode -eq 'always' }).Count -eq 1) `
+            "$($entry.name): publish cannot write using the GitHub Actions integration"
+    }
+    Assert-True (@($next.bypass_actors | Where-Object actor_type -eq 'Integration').Count -eq 0) `
+        'development branch accepts a workflow bypass'
+}
+
 Write-Host ''
 Write-Host "$script:Passed/$($script:Passed + $script:Failed) passed"
 if ($script:Failed -gt 0) { exit 1 }
