@@ -347,8 +347,7 @@ pub fn write_zip(root: &Path, top: &str, archive: &Path) -> Result<()> {
     let file = fs::File::create(archive)?;
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated)
-        .large_file(true);
+        .compression_method(zip::CompressionMethod::Deflated);
     for path in walk_files(root)? {
         zip.start_file(format!("{top}/{}", relative(root, &path)), options)?;
         let mut source = fs::File::open(&path)?;
@@ -759,5 +758,19 @@ mod tests {
                 .all(|n| n.starts_with("ExoSnap-0.10.0-windows-x64-portable/")),
             "{names:?}"
         );
+    }
+
+    #[test]
+    fn small_portable_entries_do_not_require_zip64() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("tree");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.txt"), "a").unwrap();
+        let archive = dir.path().join("p.zip");
+        write_zip(&root, "ExoSnap-0.10.0-windows-x64-portable", &archive).unwrap();
+
+        let bytes = fs::read(&archive).unwrap();
+        assert_eq!(&bytes[..4], b"PK\x03\x04");
+        assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 20);
     }
 }

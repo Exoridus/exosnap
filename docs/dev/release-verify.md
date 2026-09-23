@@ -26,6 +26,11 @@ Run installer and update lanes in a disposable guest. GPU and physical hardware 
 
 The CI update lane uses the production embedded Ed25519 public key. A separate signing job reads the production private key only from its GitHub secret and uploads only the test manifest and detached signature. The key is never written to a file, log, result or artifact. The manifest describes the candidate package hashes and local test-feed URLs. It is served only by a loopback HTTPS server in the disposable update job, where a temporary hosts entry and certificate redirect `api.github.com`. No release or Stable feed receives that manifest. The official application rejects `--update-base-url`; no user setting or environment variable enables a feed override. The temporary network redirect changes discovery transport only. The product still performs release discovery, version comparison, Ed25519 signature verification and package SHA-256 verification.
 
+The v0.9.0 Stable updater predates the injected UAC-decline fault.
+The hosted update lane checks the accepting path against that baseline.
+A real UAC refusal remains an external hardware-lane check.
+The simulated decline is reserved for a later baseline that contains the fault seam.
+
 ## Interpret both verdicts
 
 | Product result | Meaning |
@@ -100,6 +105,11 @@ Use the production control channel to record official artifacts. Harness-only `-
 ## Qualification and evidence retention
 
 Record each artifact hash, environment before/desired/applied/restored, independent observations, assertions, operator actions and evidence digests. A verdict whose evidence was not collected is not complete. `report merge`, `report verify` and `status` revalidate the bundle and source plan against lane results. A maintainer decision may accept an unavailable result or explicitly accept an observed product failure as a known risk. It never changes the measured verdict.
+
+The hosted lanes upload their result JSON and focused diagnostic files.
+Extracted package trees and copied executables are working data, not evidence.
+Passing recordings are discarded unless explicitly requested.
+Failures retain available logs, analyzer output, short media, dumps and screenshots.
 
 `READY FOR APPROVAL` is a calculation, not release permission. Publication remains blocked until an approved path checks the frozen report and reuses the exact candidate MSI and ZIP bytes behind the `release` environment. Follow the [release checklist](../release-checklist.md#4-publication-boundary).
 

@@ -74,7 +74,14 @@ pub struct Bundle {
 
 impl Bundle {
     pub fn path_of(&self, file: &BundleFile) -> PathBuf {
-        self.root.join(&file.path)
+        #[cfg(windows)]
+        {
+            self.root.join(file.path.replace('/', "\\"))
+        }
+        #[cfg(not(windows))]
+        {
+            self.root.join(&file.path)
+        }
     }
 
     pub fn require(&self, role: FileRole) -> Result<PathBuf> {
@@ -429,6 +436,15 @@ pub mod tests {
         .unwrap();
         let error = open(&bundle.root).unwrap_err().to_string();
         assert!(error.contains("does not match the inventory"), "{error}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn package_paths_use_native_separators_for_windows_installers() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = fixture(dir.path(), "0.10.0");
+        let installer = bundle.require(FileRole::Installer).unwrap();
+        assert!(!installer.to_string_lossy().contains('/'));
     }
 
     #[test]
