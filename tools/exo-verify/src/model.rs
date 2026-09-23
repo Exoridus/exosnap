@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
-pub const RESULT_SCHEMA_VERSION: u32 = 1;
+pub const RESULT_SCHEMA_VERSION: u32 = 2;
 
 /// The only verdicts a scenario can produce.
 ///
@@ -89,6 +89,10 @@ pub struct LaneResult {
     pub runner_version: String,
     pub started_at: String,
     pub finished_at: String,
+    /// The execution that produced this document. Every rerun of a lane gets a
+    /// new attempt, so reruns stay separate evidence. Two documents with the
+    /// same lane and attempt are copies of one execution.
+    pub attempt: String,
     pub identity: Identity,
     #[serde(default)]
     pub environment: BTreeMap<String, serde_json::Value>,
@@ -116,6 +120,27 @@ pub fn runner_version() -> String {
     format!("exo-verify {}", env!("CARGO_PKG_VERSION"))
 }
 
+/// Names this execution. A GitHub Actions job is identified by run, attempt
+/// and job, because rerunning a failed job keeps the run id and artifacts of
+/// earlier attempts. Anywhere else each invocation gets a fresh identifier.
+pub fn current_attempt() -> String {
+    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+    attempt_id(
+        var("GITHUB_RUN_ID").as_deref(),
+        var("GITHUB_RUN_ATTEMPT").as_deref(),
+        var("GITHUB_JOB").as_deref(),
+    )
+    .unwrap_or_else(|| crate::control::new_run_id("local"))
+}
+
+fn attempt_id(
+    run_id: Option<&str>,
+    run_attempt: Option<&str>,
+    job: Option<&str>,
+) -> Option<String> {
+    Some(format!("github:{}/{}/{}", run_id?, run_attempt?, job?))
+}
+
 pub fn now_rfc3339() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
@@ -140,6 +165,15 @@ mod tests {
             json,
             r#"["PASS","FAIL","UNAVAILABLE","INFRA_ERROR","SKIPPED"]"#
         );
+    }
+
+    #[test]
+    fn a_ci_attempt_names_run_attempt_and_job() {
+        assert_eq!(
+            attempt_id(Some("35913379675"), Some("2"), Some("release-ci-update")).as_deref(),
+            Some("github:35913379675/2/release-ci-update")
+        );
+        assert_eq!(attempt_id(Some("35913379675"), None, Some("job")), None);
     }
 
     #[test]

@@ -16,6 +16,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <thread>
 #include <vector>
@@ -29,8 +30,8 @@ namespace {
 constexpr const wchar_t* kExeName = L"exosnap.exe";
 
 // MoveFileExW(existing, target, 0): same-volume atomic rename. No copy fallback.
-[[nodiscard]] bool RenameDir(const std::wstring& from, const std::wstring& to) noexcept {
-    return ::MoveFileExW(from.c_str(), to.c_str(), 0) != 0;
+unsigned long MoveDirectory(const std::wstring& from, const std::wstring& to) {
+    return ::MoveFileExW(from.c_str(), to.c_str(), 0) != 0 ? ERROR_SUCCESS : ::GetLastError();
 }
 
 // Best-effort recursive delete. True if the path is gone afterwards.
@@ -51,6 +52,31 @@ constexpr const wchar_t* kExeName = L"exosnap.exe";
 }
 
 } // namespace
+
+bool IsTransientRenameError(unsigned long win32_error) noexcept {
+    return win32_error == ERROR_ACCESS_DENIED || win32_error == ERROR_SHARING_VIOLATION ||
+           win32_error == ERROR_LOCK_VIOLATION;
+}
+
+RenameOutcome RenameDirectory(const std::wstring& from, const std::wstring& to, const RenameRetry& retry) {
+    RenameOutcome outcome;
+    auto delay = retry.first_delay;
+    auto remaining = retry.budget;
+    for (;;) {
+        ++outcome.attempts;
+        outcome.error = retry.rename ? retry.rename(from, to) : MoveDirectory(from, to);
+        if (outcome.ok() || !IsTransientRenameError(outcome.error) || delay > remaining) {
+            return outcome;
+        }
+        if (retry.sleep) {
+            retry.sleep(delay);
+        } else {
+            std::this_thread::sleep_for(delay);
+        }
+        remaining -= delay;
+        delay = (std::min)(delay * 2, retry.max_delay);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Plan
@@ -78,7 +104,15 @@ SwapPlan MakeSwapPlan(const std::wstring& install_dir, SemVer target) {
 // Staged swap
 // ---------------------------------------------------------------------------
 
-SwapError StageRename(const SwapPlan& plan) {
+SwapError StageRename(const SwapPlan& plan, const RenameRetry& retry, RenameOutcome* failed_rename) {
+    const auto rename = [&](const std::wstring& from, const std::wstring& to) {
+        const RenameOutcome outcome = RenameDirectory(from, to, retry);
+        if (!outcome.ok() && failed_rename != nullptr) {
+            *failed_rename = outcome;
+        }
+        return outcome.ok();
+    };
+
     // 1. Staging must exist and carry an exosnap.exe, otherwise there is
     //    nothing valid to promote -- reject with nothing touched, old install
     //    intact.
@@ -96,18 +130,18 @@ SwapError StageRename(const SwapPlan& plan) {
     // 3. install -> backup. The old version now lives at backup_dir; the
     //    install path is free. Failure leaves the old install in place,
     //    untouched.
-    if (!RenameDir(plan.install_dir, plan.backup_dir)) {
+    if (!rename(plan.install_dir, plan.backup_dir)) {
         return SwapError::RenameOldFailed;
     }
 
     // 4. staging -> install. On success the new version is live.
-    if (!RenameDir(plan.staging_dir, plan.install_dir)) {
+    if (!rename(plan.staging_dir, plan.install_dir)) {
         // Compensate: put the old version back where it belongs. The install
         // path is free again (step 3 emptied it), so this rename should
         // succeed; if it does the old install is restored and live again. If
         // even this fails we are in the worst case and must report red with
         // paths.
-        if (!RenameDir(plan.backup_dir, plan.install_dir)) {
+        if (!rename(plan.backup_dir, plan.install_dir)) {
             return SwapError::RestoreFailed;
         }
         return SwapError::RenameNewFailed;
@@ -116,7 +150,7 @@ SwapError StageRename(const SwapPlan& plan) {
     return SwapError::None;
 }
 
-SwapError RestoreBackup(const SwapPlan& plan) {
+SwapError RestoreBackup(const SwapPlan& plan, const RenameRetry& retry) {
     // Undo a completed (or verify-failed) swap: backup -> install. The current
     // install tree (the new, unwanted version) must be cleared first because a
     // directory rename cannot overwrite an existing directory.
@@ -126,7 +160,7 @@ SwapError RestoreBackup(const SwapPlan& plan) {
     if (FileExists(plan.install_dir) && !RemoveTree(plan.install_dir)) {
         return SwapError::RestoreFailed;
     }
-    if (!RenameDir(plan.backup_dir, plan.install_dir)) {
+    if (!RenameDirectory(plan.backup_dir, plan.install_dir, retry).ok()) {
         return SwapError::RestoreFailed;
     }
     return SwapError::None;

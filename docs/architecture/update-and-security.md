@@ -31,6 +31,8 @@ The transaction ID correlates the application's child-launch snapshot, updater i
 The updater is staged outside the live installation with the runtime files it needs, so it does not prevent replacing itself. The app's card enters Updater running on launch and Pending only after the marked close/handoff is accepted. A child that exits before handoff re-arms an actionable state instead of leaving a persisted pending fiction.
 
 Portable update uses staged replacement: old installation to backup, verified new tree to live, installed-version/health checks, then approved relaunch and cleanup. Failure can restore the backup; if restoration itself fails, report the stranded/unknown state. Interrupted swaps are inspected and self-healed before another normal update proceeds.
+Each directory rename retries access, sharing and lock violations with a short bounded backoff, because the exited application, its crash handler or a file scanner can hold a handle inside the tree for a moment after the process is gone.
+Any other error, or a lock that outlasts the budget, fails the step with the last Windows error written to the updater's standard error.
 
 MSI update invokes Windows Installer with the verified, locked package and the required UAC boundary. The updater itself remains `asInvoker`, not a generally elevated application. Windows Installer results and post-install verification do **not** establish the same rollback guarantee as a portable backup. `installState` can truthfully be `unknown`; the application must not promise that every MSI verification failure restored the previous version.
 

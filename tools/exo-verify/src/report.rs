@@ -1,10 +1,13 @@
 //! Merging lane results into one release report.
 //!
 //! The merge refuses any result that names a different bundle than the plan.
-//! A scenario reported by several runs takes the most severe product verdict:
-//! a FAIL in one run and a PASS in another is a FAIL, never "flaky but green".
-//! An INFRA_ERROR followed by a PASS is a PASS, because the infrastructure
-//! failure never judged the product.
+//! Every attempt of a scenario stays in the report, whatever order the attempts
+//! ran in. The effective verdict over the attempts of the planned revision is
+//! the most severe product verdict: a FAIL in one attempt and a PASS in another
+//! is a FAIL flagged as inconsistent, never "flaky but green". Only an
+//! ACCEPTED_RISK decision can let such a FAIL through. An INFRA_ERROR or
+//! UNAVAILABLE attempt followed by a PASS is a PASS, because the earlier attempt
+//! never judged the product. It remains listed.
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -14,12 +17,13 @@ use std::fmt::Write as _;
 use crate::model::{LaneResult, ScenarioResult, Verdict};
 use crate::plan::{Decision, DecisionKind, Decisions, ReleasePlan, Tier};
 
-pub const REPORT_SCHEMA: &str = "exosnap.release-report/1";
+pub const REPORT_SCHEMA: &str = "exosnap.release-report/2";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
     pub lane: String,
+    pub attempt: String,
     pub runner_version: String,
     pub finished_at: String,
     pub verdict: Verdict,
@@ -38,8 +42,12 @@ pub struct ReportEntry {
     /// Effective verdict over all runs of the planned revision; `None` when no
     /// run of that revision was reported.
     pub verdict: Option<Verdict>,
+    /// The attempts of the planned revision measured both PASS and FAIL.
+    pub inconsistent: bool,
     pub status: String,
     pub detail: String,
+    /// Every attempt of this scenario in finishing order, including attempts
+    /// of other revisions, which never count toward the verdict.
     pub runs: Vec<Run>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decision: Option<Decision>,
@@ -50,6 +58,7 @@ pub struct ReportEntry {
 #[serde(rename_all = "camelCase")]
 pub struct LaneSummary {
     pub lane: String,
+    pub attempt: String,
     pub runner_version: String,
     pub started_at: String,
     pub finished_at: String,
@@ -94,7 +103,15 @@ pub fn merge(
     results: &[LaneResult],
     decisions: Option<&Decisions>,
 ) -> Result<Report> {
+    let mut attempts = BTreeSet::new();
     for result in results {
+        if !attempts.insert((&result.lane, &result.attempt)) {
+            bail!(
+                "lane '{}' attempt '{}' is supplied twice; copies of one execution are not separate attempts",
+                result.lane,
+                result.attempt
+            );
+        }
         match result.bundle_sha256() {
             Some(sha) if sha == plan.bundle_sha256 => {}
             Some(sha) => bail!(
@@ -151,6 +168,7 @@ pub fn merge(
             for scenario in result.scenarios.iter().filter(|s| s.id == planned.id) {
                 runs.push(Run {
                     lane: result.lane.clone(),
+                    attempt: result.attempt.clone(),
                     runner_version: result.runner_version.clone(),
                     finished_at: result.finished_at.clone(),
                     verdict: scenario.verdict,
@@ -159,11 +177,14 @@ pub fn merge(
                 });
             }
         }
+        runs.sort_by(|a, b| (&a.finished_at, &a.attempt).cmp(&(&b.finished_at, &b.attempt)));
         let current: Vec<&Run> = runs
             .iter()
             .filter(|r| r.scenario_revision == planned.scenario_revision)
             .collect();
         let verdict = effective(current.iter().map(|r| r.verdict));
+        let inconsistent = current.iter().any(|r| r.verdict == Verdict::Fail)
+            && current.iter().any(|r| r.verdict == Verdict::Pass);
         let detail = match verdict {
             Some(v) => current
                 .iter()
@@ -194,6 +215,7 @@ pub fn merge(
                     "FAIL; an ACCEPTED decision does not cover a FAIL, only ACCEPTED_RISK does"
                         .to_string()
                 }
+                (Some(v), _) if inconsistent => format!("{v}; inconsistent attempts"),
                 (Some(v), _) => v.to_string(),
                 (None, _) => "not run".to_string(),
             };
@@ -206,6 +228,7 @@ pub fn merge(
             tier: planned.tier,
             planned_revision: planned.scenario_revision,
             verdict,
+            inconsistent,
             status: match verdict {
                 Some(value) => value.to_string(),
                 None if matches!(planned.lane.as_str(), "release-gpu" | "release-hardware") => {
@@ -242,6 +265,7 @@ pub fn merge(
             }
             LaneSummary {
                 lane: r.lane.clone(),
+                attempt: r.attempt.clone(),
                 runner_version: r.runner_version.clone(),
                 started_at: r.started_at.clone(),
                 finished_at: r.finished_at.clone(),
@@ -283,8 +307,25 @@ pub fn verify(
     Ok(())
 }
 
+/// The effective verdict, followed by the attempt history of the planned
+/// revision when more than one attempt reported it.
 fn verdict_cell(entry: &ReportEntry) -> String {
-    entry.status.replace('_', " ")
+    let status = entry.status.replace('_', " ");
+    let current: Vec<String> = entry
+        .runs
+        .iter()
+        .filter(|r| r.scenario_revision == entry.planned_revision)
+        .map(|r| r.verdict.as_str().replace('_', " "))
+        .collect();
+    if current.len() < 2 {
+        return status;
+    }
+    let consistency = if entry.inconsistent {
+        "; inconsistent"
+    } else {
+        ""
+    };
+    format!("{status} (attempts: {}{consistency})", current.join(", "))
 }
 
 fn one_line(text: &str) -> String {
@@ -327,15 +368,16 @@ pub fn markdown(report: &Report) -> String {
     } else {
         let _ = writeln!(
             md,
-            "| Lane | Finished | PASS | FAIL | UNAVAILABLE | INFRA_ERROR | SKIPPED | Runner |"
+            "| Lane | Attempt | Finished | PASS | FAIL | UNAVAILABLE | INFRA_ERROR | SKIPPED | Runner |"
         );
-        let _ = writeln!(md, "|---|---|---|---|---|---|---|---|");
+        let _ = writeln!(md, "|---|---|---|---|---|---|---|---|---|");
         for lane in &report.lanes {
             let c = |k: &str| lane.counts.get(k).copied().unwrap_or(0);
             let _ = writeln!(
                 md,
-                "| {} | {} | {} | {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
                 lane.lane,
+                lane.attempt,
                 lane.finished_at,
                 c("PASS"),
                 c("FAIL"),
@@ -561,6 +603,7 @@ mod tests {
             runner_version: "exo-verify test".into(),
             started_at: "s".into(),
             finished_at: "f".into(),
+            attempt: "github:1/1/job".into(),
             identity: Identity {
                 bundle_sha256: sha.map(String::from),
                 ..Default::default()
@@ -582,6 +625,13 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    /// A rerun of the same lane: a new attempt that finished at `finished_at`.
+    fn rerun(mut result: LaneResult, attempt: u32, finished_at: &str) -> LaneResult {
+        result.attempt = format!("github:1/{attempt}/job");
+        result.finished_at = finished_at.into();
+        result
     }
 
     fn decision(id: &str, kind: DecisionKind) -> Decisions {
@@ -674,35 +724,189 @@ mod tests {
     }
 
     #[test]
-    fn fail_in_any_run_beats_pass_in_another() {
+    fn a_later_pass_does_not_erase_a_measured_fail() {
+        let first = rerun(
+            lane(Some(SHA), &[("a", Verdict::Fail), ("b", Verdict::Pass)]),
+            1,
+            "2026-01-01T00:00:01Z",
+        );
+        let second = rerun(
+            lane(Some(SHA), &[("a", Verdict::Pass), ("b", Verdict::Pass)]),
+            2,
+            "2026-01-01T00:00:02Z",
+        );
+        // Input order must not matter: the history is ordered by finishing time.
+        let r = merge(&plan(), &[second, first], None).unwrap();
+        let a = &r.scenarios[0];
+        assert_eq!(a.verdict, Some(Verdict::Fail));
+        assert!(a.inconsistent);
+        assert_eq!(
+            a.runs
+                .iter()
+                .map(|run| (run.attempt.as_str(), run.verdict))
+                .collect::<Vec<_>>(),
+            vec![
+                ("github:1/1/job", Verdict::Fail),
+                ("github:1/2/job", Verdict::Pass)
+            ]
+        );
+        assert_eq!(a.detail, "a FAIL", "the FAIL attempt explains the verdict");
+        assert!(!r.ready_for_approval);
+        assert_eq!(
+            r.blocking,
+            vec!["a (FAIL; inconsistent attempts)".to_string()]
+        );
+        assert!(
+            !r.scenarios[1].inconsistent,
+            "agreeing attempts are consistent"
+        );
+        let md = markdown(&r);
+        assert!(
+            md.contains("| a | release-ci-core | FAIL (attempts: FAIL, PASS; inconsistent) |"),
+            "{md}"
+        );
+        assert!(
+            md.contains("| b | release-ci-core | PASS (attempts: PASS, PASS) |"),
+            "{md}"
+        );
+        assert_eq!(r.lanes.len(), 2, "each attempt keeps its lane summary");
+    }
+
+    #[test]
+    fn a_later_fail_overrides_an_earlier_pass() {
         let r = merge(
             &plan(),
             &[
-                lane(Some(SHA), &[("a", Verdict::Pass), ("b", Verdict::Pass)]),
-                lane(Some(SHA), &[("a", Verdict::Fail)]),
+                rerun(
+                    lane(Some(SHA), &[("a", Verdict::Pass), ("b", Verdict::Pass)]),
+                    1,
+                    "2026-01-01T00:00:01Z",
+                ),
+                rerun(
+                    lane(Some(SHA), &[("a", Verdict::Fail)]),
+                    2,
+                    "2026-01-01T00:00:02Z",
+                ),
             ],
             None,
         )
         .unwrap();
         assert_eq!(r.scenarios[0].verdict, Some(Verdict::Fail));
+        assert!(r.scenarios[0].inconsistent);
         assert!(!r.ready_for_approval);
     }
 
     #[test]
-    fn infra_error_then_pass_is_pass() {
+    fn accepted_risk_covers_an_inconsistent_fail_without_rewriting_it() {
+        let results = [
+            rerun(
+                lane(Some(SHA), &[("a", Verdict::Fail), ("b", Verdict::Pass)]),
+                1,
+                "2026-01-01T00:00:01Z",
+            ),
+            rerun(
+                lane(Some(SHA), &[("a", Verdict::Pass)]),
+                2,
+                "2026-01-01T00:00:02Z",
+            ),
+        ];
+        let r = merge(
+            &plan(),
+            &results,
+            Some(&decision("a", DecisionKind::AcceptedRisk)),
+        )
+        .unwrap();
+        assert!(r.ready_for_approval);
+        assert_eq!(r.scenarios[0].verdict, Some(Verdict::Fail));
+        assert!(r.scenarios[0].inconsistent);
+    }
+
+    #[test]
+    fn a_pass_after_an_infra_error_resolves_it_and_keeps_the_history() {
         let r = merge(
             &plan(),
             &[
-                lane(
-                    Some(SHA),
-                    &[("a", Verdict::InfraError), ("b", Verdict::Pass)],
+                rerun(
+                    lane(
+                        Some(SHA),
+                        &[("a", Verdict::InfraError), ("b", Verdict::Unavailable)],
+                    ),
+                    1,
+                    "2026-01-01T00:00:01Z",
                 ),
-                lane(Some(SHA), &[("a", Verdict::Pass)]),
+                rerun(
+                    lane(Some(SHA), &[("a", Verdict::Pass), ("b", Verdict::Pass)]),
+                    2,
+                    "2026-01-01T00:00:02Z",
+                ),
             ],
             None,
         )
         .unwrap();
         assert!(r.ready_for_approval);
+        for entry in &r.scenarios[..2] {
+            assert_eq!(entry.verdict, Some(Verdict::Pass));
+            assert!(!entry.inconsistent);
+            assert_eq!(entry.runs.len(), 2, "{}", entry.id);
+        }
+        assert_eq!(r.scenarios[0].runs[0].verdict, Verdict::InfraError);
+        assert!(
+            markdown(&r).contains("| a | release-ci-core | PASS (attempts: INFRA ERROR, PASS) |")
+        );
+    }
+
+    #[test]
+    fn one_attempt_supplied_twice_is_rejected() {
+        let result = lane(Some(SHA), &[("a", Verdict::Pass)]);
+        let error = merge(&plan(), &[result.clone(), result], None).unwrap_err();
+        assert!(error.to_string().contains("supplied twice"), "{error}");
+    }
+
+    #[test]
+    fn an_attempt_on_other_bytes_poisons_the_whole_merge() {
+        let error = merge(
+            &plan(),
+            &[
+                rerun(
+                    lane(Some(SHA), &[("a", Verdict::Pass)]),
+                    1,
+                    "2026-01-01T00:00:01Z",
+                ),
+                rerun(
+                    lane(Some(OTHER), &[("a", Verdict::Pass)]),
+                    2,
+                    "2026-01-01T00:00:02Z",
+                ),
+            ],
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("never merged"), "{error}");
+    }
+
+    #[test]
+    fn attempts_of_another_revision_are_listed_but_never_counted() {
+        let mut old = rerun(
+            lane(Some(SHA), &[("a", Verdict::Fail), ("b", Verdict::Pass)]),
+            1,
+            "2026-01-01T00:00:01Z",
+        );
+        old.scenarios[0].scenario_revision = 0;
+        let current = rerun(
+            lane(Some(SHA), &[("a", Verdict::Pass)]),
+            2,
+            "2026-01-01T00:00:02Z",
+        );
+        let r = merge(&plan(), &[old, current], None).unwrap();
+        let a = &r.scenarios[0];
+        assert_eq!(a.verdict, Some(Verdict::Pass));
+        assert!(!a.inconsistent);
+        assert_eq!(a.runs.len(), 2, "the other revision stays visible");
+        assert!(r.ready_for_approval);
+        assert!(
+            markdown(&r).contains("| a | release-ci-core | PASS |"),
+            "another revision is not part of the attempt history"
+        );
     }
 
     #[test]
