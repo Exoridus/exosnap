@@ -33,10 +33,12 @@ pub enum Capability {
     Operator,
     /// A physical audio device the operator can unplug and replug.
     PhysicalAudioDisconnect,
+    /// The whole operating system may be discarded after destructive tests.
+    DisposableOs,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 18] = [
+    pub const ALL: [Capability; 19] = [
         Capability::Windows,
         Capability::Admin,
         Capability::InteractiveDesktop,
@@ -55,6 +57,7 @@ impl Capability {
         Capability::Ffmpeg,
         Capability::Operator,
         Capability::PhysicalAudioDisconnect,
+        Capability::DisposableOs,
     ];
 
     pub fn name(self) -> &'static str {
@@ -77,6 +80,7 @@ impl Capability {
             Capability::Ffmpeg => "ffmpeg",
             Capability::Operator => "operator",
             Capability::PhysicalAudioDisconnect => "physical-audio-disconnect",
+            Capability::DisposableOs => "disposable-os",
         }
     }
 
@@ -88,7 +92,7 @@ impl Capability {
     pub fn is_attested(self) -> bool {
         matches!(
             self,
-            Capability::Operator | Capability::PhysicalAudioDisconnect
+            Capability::Operator | Capability::PhysicalAudioDisconnect | Capability::DisposableOs
         )
     }
 }

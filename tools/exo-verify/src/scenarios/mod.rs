@@ -3,6 +3,7 @@
 pub mod app;
 pub mod common;
 pub mod dist;
+pub mod install;
 
 use crate::scenario::Scenario;
 
@@ -10,6 +11,7 @@ pub fn registry() -> Vec<Scenario> {
     let mut all = Vec::new();
     all.extend(dist::scenarios());
     all.extend(app::scenarios());
+    all.extend(install::scenarios());
     all
 }
 
@@ -50,6 +52,25 @@ mod tests {
                     crate::plan::Tier::Recommended,
                     "{} is a development check",
                     s.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn install_lane_requires_disposable_admin_desktop() {
+        let install: Vec<_> = registry()
+            .into_iter()
+            .filter(|s| s.lane == crate::scenario::Lane::CiInstall)
+            .collect();
+        assert!(!install.is_empty(), "install lane has no scenarios");
+        for scenario in install {
+            let requirements: Vec<_> = scenario.requires.iter().map(|c| c.name()).collect();
+            for required in ["windows", "admin", "interactive-desktop", "disposable-os"] {
+                assert!(
+                    requirements.contains(&required),
+                    "{} lacks {required}",
+                    scenario.id
                 );
             }
         }

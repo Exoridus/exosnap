@@ -1068,6 +1068,15 @@ exosnap_add_gtest(
 )
 target_compile_definitions(test_display_color_recheck PRIVATE NOMINMAX)
 
+exosnap_add_gtest(
+    NAME test_display_color_watch_lifetime
+    TEST_PREFIX engine.
+    SOURCES tests/test_display_color_watch_lifetime.cpp
+    LIBRARIES exosnap_engine
+    PHASE desktop
+)
+target_compile_definitions(test_display_color_watch_lifetime PRIVATE NOMINMAX)
+
 # OD acquire-failure classifier: pure recording-loss policy (ACCESS_LOST recover
 # vs DEVICE_REMOVED / unexpected HRESULT fail-closed). No GPU.
 exosnap_add_gtest(

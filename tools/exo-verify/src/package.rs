@@ -63,6 +63,19 @@ pub fn project_version(repo_root: &Path) -> Result<String> {
         .to_string())
 }
 
+fn external_path(path: &Path) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// Files and directories every runtime tree must carry. Qt Quick modules are
 /// load-bearing: without them the process starts and dies at QML load, which
 /// no compile or link step can catch.
@@ -508,7 +521,7 @@ pub fn msi_missing_binaries(staging: &Path, extracted: &Path) -> Result<Vec<Stri
 }
 
 pub fn run(args: &PackageArgs) -> Result<PackageResult> {
-    let repo_root = fs::canonicalize(&args.repo_root)?;
+    let repo_root = external_path(&fs::canonicalize(&args.repo_root)?);
     let base = project_version(&repo_root)?;
     let version = args
         .version
@@ -531,7 +544,7 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
         );
     }
     fs::create_dir_all(&args.out)?;
-    let out = fs::canonicalize(&args.out)?;
+    let out = external_path(&fs::canonicalize(&args.out)?);
     let top = portable_dir_name(&version);
     let staging = out.join("staging").join(&top);
 
@@ -659,6 +672,18 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_tools_receive_normal_windows_paths() {
+        assert_eq!(
+            external_path(Path::new(r"\\?\C:\work\package")),
+            PathBuf::from(r"C:\work\package")
+        );
+        assert_eq!(
+            external_path(Path::new(r"\\?\UNC\server\share\package")),
+            PathBuf::from(r"\\server\share\package")
+        );
+    }
 
     #[test]
     fn debug_qt_names_are_recognised() {
