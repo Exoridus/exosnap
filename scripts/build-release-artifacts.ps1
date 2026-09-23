@@ -1164,13 +1164,6 @@ $fileEntries = foreach ($file in ($allFiles | Sort-Object FullName)) {
         size   = $file.Length
         sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
-    # Every executable also gets per-section hashes. The ones this repository
-    # compiles carry the release identity, so a final release cannot match its
-    # qualified candidate file for file; the promotion contract compares their
-    # sections instead, and a manifest without them cannot be promoted from.
-    if ($file.Extension -eq '.exe') {
-        $entry['sections'] = Get-ReleasePeSectionHash -Path $file.FullName
-    }
     $entry
 }
 $manifest = [ordered]@{
