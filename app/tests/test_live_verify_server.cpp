@@ -179,6 +179,9 @@ class StubSource final : public LiveVerifySource {
     bool LogsOpen(QString*) override {
         return true;
     }
+    bool AppQuit(QString*) override {
+        return true;
+    }
     bool RecoveryContinue(int, QString*) override {
         return true;
     }

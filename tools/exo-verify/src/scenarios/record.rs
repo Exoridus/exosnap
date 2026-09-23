@@ -13,7 +13,7 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             id: "record.ddx-h264-mkv",
-            revision: 1,
+            revision: 2,
             title: "A 60 fps display recording decodes with aligned system audio",
             claim: "DXGI display capture produces H.264 in MKV with a changing stimulus, ordered frames, decoded system audio and bounded A/V offset",
             lane: Lane::Gpu,

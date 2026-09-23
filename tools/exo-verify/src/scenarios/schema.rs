@@ -20,6 +20,7 @@ const IDLE: &[Field] = &[
     ("environment.snapshot", "present.available"),
     ("environment.snapshot", "present.availability"),
     ("environment.snapshot", "displays.screens[].name"),
+    ("environment.snapshot", "displays.screens[].device"),
     ("environment.snapshot", "displays.screens[].primary"),
     ("environment.snapshot", "displays.screens[].hdrActive"),
     (
@@ -66,9 +67,9 @@ const RESULT: &[Field] = &[
 pub fn scenarios() -> Vec<Scenario> {
     vec![Scenario {
         id: "schema.live-verify-fields",
-        revision: 1,
+        revision: 2,
         title: "Live Verify fields consumed by release scenarios are emitted",
-        claim: "every declared field exists in idle, measured recording and completed-result snapshots, including the shape of every nonempty collection",
+        claim: "every declared field exists in idle, measured recording and completed-result snapshots, including the shape of every nonempty collection, and the primary screen's display device selects its monitor target",
         lane: Lane::Gpu,
         also: &[],
         tier: Tier::Required,
@@ -162,13 +163,15 @@ fn field_contract(ctx: &mut Context) -> Step {
         ],
     )?;
     let environment = app.call("environment.snapshot", json!({}))?;
-    let monitor = environment["displays"]["screens"]
-        .as_array()
-        .and_then(|screens| screens.iter().find(|screen| screen["primary"] == true))
-        .and_then(|screen| screen["name"].as_str())
-        .ok_or_else(|| Stop::unavailable("the product reports no primary display"))?
-        .to_string();
-    common::select_display(&mut app, &monitor)?;
+    let primary = common::primary_screen(&environment, false)
+        .ok_or_else(|| Stop::unavailable("the product reports no primary display"))?;
+    // Here the device is part of the contract under test, so an unreadable one
+    // is the product's failure rather than a missing precondition.
+    let device = common::screen_device(primary).map_err(|stop| match stop {
+        Stop::Infra(error) => Stop::fail(format!("{error:#}")),
+        other => other,
+    })?;
+    common::select_display(&mut app, &device)?;
     common::start_recording(&mut app)?;
     std::thread::sleep(secs(4.0));
     let live = app.call("pipeline.snapshot", json!({}))?;

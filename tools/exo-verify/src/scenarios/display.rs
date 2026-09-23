@@ -317,7 +317,7 @@ fn hdr_transaction(ctx: &mut Context) -> Step {
 fn judge_hdr(environment: &Value, device: &str) -> Step {
     let screen = environment["displays"]["screens"]
         .as_array()
-        .and_then(|items| items.iter().find(|screen| screen["name"] == device))
+        .and_then(|items| items.iter().find(|screen| screen["device"] == device))
         .ok_or_else(|| Stop::infra(format!("product environment has no bound display {device}")))?;
     product_ensure!(
         screen["hdrActive"] == true,
@@ -357,7 +357,7 @@ fn record_display(ctx: &mut Context, device: &str, hdr_expected: bool) -> Step {
     ctx.evidence.put("recordWallSeconds", wall);
     ctx.evidence.put("decodedFrames", frames.len() as u64);
     ctx.evidence.put("decodedSpanSeconds", decoded_span);
-    app.close()?;
+    app.kill_for_cleanup()?;
     Ok(())
 }
 
@@ -430,23 +430,31 @@ fn mixed_preview_crossing(ctx: &mut Context) -> Step {
         .and_then(|items| items.iter().find(|w| w["role"] == "main"))
         .and_then(|w| w["screen"].as_str())
         .ok_or_else(|| Stop::infra("the main window has no reported screen"))?;
-    let current_hdr = screens
+    // The window reports Qt's screen name, which window.moveToScreen takes; the
+    // capture target is selected by the same screen's display device.
+    let current_screen = screens
         .iter()
         .find(|s| s["name"] == current)
-        .and_then(|s| s["hdrActive"].as_bool())
+        .ok_or_else(|| Stop::infra(format!("the main window's screen {current} is not listed")))?;
+    let current_hdr = current_screen["hdrActive"]
+        .as_bool()
         .ok_or_else(|| Stop::infra("the main window's current display has no HDR state"))?;
-    let target = screens
+    let current_device = common::screen_device(current_screen)?;
+    let target_screen = screens
         .iter()
         .find(|s| s["name"] != current && s["hdrActive"].as_bool() == Some(!current_hdr))
-        .and_then(|s| s["name"].as_str())
         .ok_or_else(|| Stop::unavailable("no display of the opposite HDR state can be selected"))?;
-    common::select_display(&mut app, current)?;
+    let target = target_screen["name"]
+        .as_str()
+        .ok_or_else(|| Stop::infra("the opposite-HDR display has no screen name"))?;
+    let target_device = common::screen_device(target_screen)?;
+    common::select_display(&mut app, &current_device)?;
     let baseline = watch_preview(&mut app, secs(10.0))?;
     infra_ensure!(
         baseline,
         "the preview consumed no frame before the display crossing"
     );
-    let first = record_mixed_display(&mut app, current)?;
+    let first = record_mixed_display(&mut app, &current_device)?;
     app.client
         .request("window.moveToScreen", json!({"screen": target}), secs(15.0))?
         .map_err(|refusal| Stop::fail(format!("window.moveToScreen refused: {refusal}")))?;
@@ -469,7 +477,7 @@ fn mixed_preview_crossing(ctx: &mut Context) -> Step {
         "the main window did not reach display {target}"
     );
     judge_preview_progress(&samples)?;
-    let second = record_mixed_display(&mut app, target)?;
+    let second = record_mixed_display(&mut app, &target_device)?;
     judge_mixed_recordings(&first, &second)?;
     ctx.evidence.put("mixedDisplayRecordings", json!([
         {"display": first.display, "outputPath": first.file, "decodedFrames": first.frames, "decodedSpanSeconds": first.span_seconds},
@@ -678,15 +686,20 @@ mod tests {
 
     #[test]
     fn hdr_must_be_reported_on_the_bound_display() {
+        // Twin panels share a friendly name; only the device tells them apart.
         let environment = json!({"displays":{"screens":[
-            {"name":"DISPLAY1","hdrActive":false},
-            {"name":"DISPLAY2","hdrActive":true}
+            {"name":"27GL850","device":r"\\.\DISPLAY1","hdrActive":false},
+            {"name":"27GL850","device":r"\\.\DISPLAY2","hdrActive":true}
         ]}});
         assert!(matches!(
-            judge_hdr(&environment, "DISPLAY1"),
+            judge_hdr(&environment, r"\\.\DISPLAY1"),
             Err(Stop::Fail(_))
         ));
-        judge_hdr(&environment, "DISPLAY2").unwrap();
+        judge_hdr(&environment, r"\\.\DISPLAY2").unwrap();
+        assert!(matches!(
+            judge_hdr(&environment, "27GL850"),
+            Err(Stop::Infra(_))
+        ));
     }
 
     #[test]

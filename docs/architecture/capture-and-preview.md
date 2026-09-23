@@ -30,7 +30,7 @@ Keeping duplication open can affect desktop presentation paths on some systems. 
 | Access loss before the first display frame | Bounded start hold, up to 15 seconds; suspend the ordinary first-frame guard while reopening, then restart that guard |
 | GPU/device removal | Fail the recording and finalize what can be finalized |
 | Captured window closes | End the recording; never select a replacement window |
-| Window is minimized or has no new content | Preserve the last frame; lack of motion alone is not a failure |
+| Window is minimized or has no new content | Preserve the last frame; lack of motion alone is not a failure. WGC keeps delivering frames of a minimized window at its iconic caption size; those frames, and stale ones of that size dequeued after restore, are held back rather than read as a resize |
 | Source dimensions change | Stop with the old/new dimensions and require a new recording |
 | Webcam disappears | Hold its last image and retry the same camera |
 

@@ -196,17 +196,9 @@ fn prepared_app(ctx: &mut Context) -> Step<App> {
         ],
     )?;
     let environment = app.call("environment.snapshot", json!({}))?;
-    let screen = environment["displays"]["screens"]
-        .as_array()
-        .and_then(|items| {
-            items
-                .iter()
-                .find(|screen| screen["primary"] == true)
-                .or_else(|| items.first())
-        })
-        .and_then(|screen| screen["name"].as_str())
+    let screen = common::primary_screen(&environment, true)
         .ok_or_else(|| Stop::infra("product reported no primary display"))?;
-    common::select_display(&mut app, screen)?;
+    common::select_display(&mut app, &common::screen_device(screen)?)?;
     infra_ensure!(
         common::record_snapshot(&mut app)?["systemAudioEnabled"] == true,
         "the system-audio source did not become enabled"
@@ -257,7 +249,7 @@ fn endpoint_44100(ctx: &mut Context) -> Step {
     ctx.evidence.put("ffprobe", probe);
     ctx.evidence.put("audioPacketSpansSeconds", json!(spans));
     ctx.evidence.put("recordWallSeconds", wall);
-    app.close()?;
+    app.kill_for_cleanup()?;
     Ok(())
 }
 
@@ -317,7 +309,7 @@ fn connected_silence(ctx: &mut Context) -> Step {
     ctx.evidence.put("audioPeak", peak as f64);
     ctx.evidence.put("recordResult", result);
     ctx.evidence.put("ffprobe", probe);
-    app.close()?;
+    app.kill_for_cleanup()?;
     Ok(())
 }
 
@@ -409,7 +401,7 @@ fn endpoint_degrade(ctx: &mut Context) -> Step {
     ctx.evidence.put("audioEndpointAfter", json!(after));
     ctx.evidence.put("recordResult", result);
     ctx.evidence.put("ffprobe", probe);
-    app.close()?;
+    app.kill_for_cleanup()?;
     Ok(())
 }
 
@@ -435,17 +427,9 @@ fn mixed_clock_soak(ctx: &mut Context) -> Step {
             "no default microphone endpoint is available for the second clock",
         ));
     }
-    let screen = environment["displays"]["screens"]
-        .as_array()
-        .and_then(|screens| {
-            screens
-                .iter()
-                .find(|screen| screen["primary"] == true)
-                .or_else(|| screens.first())
-        })
-        .and_then(|screen| screen["name"].as_str())
-        .ok_or_else(|| Stop::infra("no primary display name was reported"))?;
-    common::select_display(&mut app, screen)?;
+    let screen = common::primary_screen(&environment, true)
+        .ok_or_else(|| Stop::infra("no primary display was reported"))?;
+    common::select_display(&mut app, &common::screen_device(screen)?)?;
     let enabled = common::record_snapshot(&mut app)?;
     infra_ensure!(
         enabled["systemAudioEnabled"] == true && enabled["microphoneEnabled"] == true,

@@ -88,6 +88,8 @@ QJsonObject AdapterJson(const capability::AdapterInfo& adapter, const capability
 QJsonObject DisplayJson(const ScreenFacts& screen, const capability::DisplayHdrFacts* dxgi, bool displays_probed) {
     QJsonObject json;
     json.insert(QStringLiteral("name"), screen.name);
+    json.insert(QStringLiteral("device"),
+                screen.device.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(screen.device));
     json.insert(QStringLiteral("x"), screen.x);
     json.insert(QStringLiteral("y"), screen.y);
     json.insert(QStringLiteral("width"), screen.width);

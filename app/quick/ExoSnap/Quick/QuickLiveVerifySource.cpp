@@ -22,6 +22,7 @@
 
 #include "ExoSnapBuildInfo.h"
 
+#include "diagnostics/AppLog.h"
 #include "diagnostics/NativeWindowFacts.h"
 #include "diagnostics/PresentMonProvider.h"
 #include "models/AboutInfo.h"
@@ -48,6 +49,7 @@
 #include <QScreen>
 #include <QSet>
 #include <QVariant>
+#include <QtGui/qscreen_platform.h>
 
 #include <optional>
 #include <utility>
@@ -187,6 +189,19 @@ QJsonObject ScreenJson(const QScreen* screen) {
     json.insert(QStringLiteral("devicePixelRatio"), screen->devicePixelRatio());
     json.insert(QStringLiteral("refreshHz"), screen->refreshRate());
     return json;
+}
+
+// The screen's own HMONITOR, not one found by geometry: Qt geometry is in
+// device-independent pixels, which do not map back to a monitor across mixed DPI.
+QString DisplayDeviceName(const QScreen& screen) {
+    const auto* native = screen.nativeInterface<QNativeInterface::QWindowsScreen>();
+    if (native == nullptr || native->handle() == nullptr)
+        return {};
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (GetMonitorInfoW(native->handle(), &info) == FALSE)
+        return {};
+    return QString::fromWCharArray(info.szDevice);
 }
 
 QJsonObject NativeFactsJson(const diagnostics::NativeWindowFacts& facts) {
@@ -788,6 +803,7 @@ QJsonObject QuickLiveVerifySource::EnvironmentSnapshot() const {
         observability::ScreenFacts facts;
         const QRect geometry = screen->geometry();
         facts.name = screen->name();
+        facts.device = DisplayDeviceName(*screen);
         facts.x = geometry.x();
         facts.y = geometry.y();
         facts.width = geometry.width();
@@ -1416,6 +1432,17 @@ bool QuickLiveVerifySource::LogsOpen(QString* error) {
         return false;
     }
     diagnostics->openLogs();
+    return true;
+}
+
+bool QuickLiveVerifySource::AppQuit(QString* error) {
+    // Paired with the shell's close-decision line, like the tray Quit's request.
+    diagnostics::AppLog::info(QStringLiteral("shell"), QStringLiteral("control-channel Quit requested"));
+    QString guard;
+    if (!application_.requestQuit(&guard)) {
+        *error = QStringLiteral("A close guard kept the application open (%1)").arg(guard);
+        return false;
+    }
     return true;
 }
 

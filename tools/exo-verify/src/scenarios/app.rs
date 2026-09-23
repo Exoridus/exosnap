@@ -179,7 +179,7 @@ fn control_endpoint_lifecycle(ctx: &mut Context) -> Step {
         live_verify_pipes().contains(&pipe),
         "the armed endpoint {pipe} is not listed"
     );
-    app.close()?;
+    app.kill_for_cleanup()?;
     let deadline = Instant::now() + secs(10.0);
     while live_verify_pipes().contains(&pipe) {
         product_ensure!(

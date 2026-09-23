@@ -121,6 +121,79 @@ pub fn read_log(path: &std::path::Path) -> Result<Vec<LogEvent>> {
         .collect())
 }
 
+/// How long a synchronised visual marker stays lit. A marker must survive
+/// sampling at the lowest release-tested capture rate (30 fps, one sample per
+/// 33.3 ms) in at least two samples, whatever the phase between the stimulus
+/// and the recorder, so that its leading edge is bracketed by an unlit and a
+/// lit sample. 100 ms gives three samples at 30 fps and six at 60 fps, and
+/// stays far below the marker interval, so consecutive pulses cannot merge
+/// or pair with the wrong beep.
+pub const MARKER_PULSE_SECONDS: f64 = 0.1;
+
+/// Whether a presented frame shows the marker, and whether it is the first
+/// frame of a pulse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarkerFrame {
+    pub lit: bool,
+    /// The scheduled marker QPC this frame starts, on the pulse's first frame.
+    pub onset: Option<i64>,
+}
+
+/// Marker pulses in QPC ticks: a pulse starts on the first frame at or after
+/// its scheduled time and stays lit for the pulse width measured from that
+/// frame, so a late first frame still yields a full-width pulse.
+#[derive(Debug, Clone)]
+pub struct MarkerSchedule {
+    next: i64,
+    interval: i64,
+    pulse: i64,
+    lit_until: Option<i64>,
+}
+
+impl MarkerSchedule {
+    /// `interval` of 0 disables markers. The pulse is capped at half the
+    /// interval so an unlit gap always separates two markers.
+    pub fn new(start: i64, interval: i64, pulse: i64) -> Self {
+        MarkerSchedule {
+            next: if interval > 0 {
+                start + interval
+            } else {
+                i64::MAX
+            },
+            interval,
+            pulse: pulse.min(interval / 2).max(1),
+            lit_until: None,
+        }
+    }
+
+    pub fn frame(&mut self, now: i64) -> MarkerFrame {
+        if let Some(end) = self.lit_until {
+            if now < end {
+                return MarkerFrame {
+                    lit: true,
+                    onset: None,
+                };
+            }
+            self.lit_until = None;
+        }
+        if now < self.next {
+            return MarkerFrame {
+                lit: false,
+                onset: None,
+            };
+        }
+        let scheduled = self.next;
+        self.lit_until = Some(now + self.pulse);
+        while self.next <= now {
+            self.next += self.interval;
+        }
+        MarkerFrame {
+            lit: true,
+            onset: Some(scheduled),
+        }
+    }
+}
+
 /// Cursor position for frame `id` in canvas coordinates.
 pub fn cursor_at(mode: CursorMode, layout: &crate::pattern::Layout, id: u32) -> Option<(i32, i32)> {
     let f = layout.field();
@@ -439,11 +512,12 @@ mod imp {
         }
 
         let mut id: u32 = 0;
-        let mut next_marker = if marker_ticks > 0 {
-            start + marker_ticks
-        } else {
-            i64::MAX
-        };
+        let mut markers = MarkerSchedule::new(
+            start,
+            marker_ticks.max(0),
+            (super::MARKER_PULSE_SECONDS * freq as f64) as i64,
+        );
+        let mut onset = None;
         let mut state = FrameState {
             frame_id: 0,
             generation: args.generation,
@@ -513,9 +587,10 @@ mod imp {
             }
             if !frozen.load(Ordering::SeqCst) {
                 id += 1;
-                let now = qpc();
+                let marker = markers.frame(qpc());
                 state.frame_id = id;
-                state.flash = now >= next_marker;
+                state.flash = marker.lit;
+                onset = marker.onset;
                 paint(&state, false);
             }
             // DwmFlush returns once the compositor has taken the frame; the QPC
@@ -530,13 +605,10 @@ mod imp {
                     qpc: presented,
                     flash: state.flash,
                 });
-                if state.flash {
-                    if let Ok(b) = &audio {
-                        log.write(&LogEvent::Beep {
-                            qpc: b.onset_for(next_marker),
-                        });
-                    }
-                    next_marker += marker_ticks;
+                if let (Some(scheduled), Ok(b)) = (onset.take(), &audio) {
+                    log.write(&LogEvent::Beep {
+                        qpc: b.onset_for(scheduled),
+                    });
                 }
             }
             if let Some((cx, cy)) = cursor_at(args.cursor, &layout, id) {
@@ -686,5 +758,84 @@ mod imp {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FREQ: i64 = 10_000_000;
+
+    fn seconds(ticks: i64) -> f64 {
+        ticks as f64 / FREQ as f64
+    }
+
+    /// Lit runs as (first lit frame, last lit frame, scheduled onset) for a
+    /// stimulus presenting at `hz` for `span` seconds.
+    fn pulses(hz: f64, span: f64, pulse: f64) -> Vec<(i64, i64, i64)> {
+        let mut schedule = MarkerSchedule::new(0, 2 * FREQ, (pulse * FREQ as f64) as i64);
+        let step = FREQ as f64 / hz;
+        let mut runs: Vec<(i64, i64, i64)> = Vec::new();
+        let mut index = 0.0;
+        while index * step < span * FREQ as f64 {
+            let now = (index * step) as i64;
+            let frame = schedule.frame(now);
+            if let Some(scheduled) = frame.onset {
+                runs.push((now, now, scheduled));
+            } else if frame.lit {
+                runs.last_mut().expect("lit without an onset").1 = now;
+            }
+            index += 1.0;
+        }
+        runs
+    }
+
+    #[test]
+    fn a_marker_stays_lit_for_the_pulse_width_not_one_frame() {
+        let frame = 1.0 / 144.0;
+        let runs = pulses(144.0, 9.0, MARKER_PULSE_SECONDS);
+        assert_eq!(runs.len(), 4);
+        for (first, last, _) in &runs {
+            let lit = seconds(last - first) + frame;
+            assert!(
+                (MARKER_PULSE_SECONDS..=MARKER_PULSE_SECONDS + frame + 1e-9).contains(&lit),
+                "pulse lit for {lit} s"
+            );
+        }
+    }
+
+    #[test]
+    fn the_onset_is_the_first_frame_at_or_after_its_scheduled_time() {
+        let frame = 1.0 / 144.0;
+        for (first, _, scheduled) in pulses(144.0, 9.0, MARKER_PULSE_SECONDS) {
+            let late = seconds(first - scheduled);
+            assert!((0.0..frame).contains(&late), "onset {late} s late");
+        }
+    }
+
+    #[test]
+    fn a_stalled_first_frame_still_gets_a_full_pulse() {
+        let mut schedule = MarkerSchedule::new(0, 2 * FREQ, FREQ / 10);
+        assert!(!schedule.frame(FREQ).lit);
+        // The stimulus stalls past the marker and presents 50 ms late.
+        let first = schedule.frame(2 * FREQ + FREQ / 20);
+        assert_eq!(first.onset, Some(2 * FREQ));
+        assert!(schedule.frame(2 * FREQ + FREQ / 20 + FREQ / 10 - 1).lit);
+        assert!(!schedule.frame(2 * FREQ + FREQ / 20 + FREQ / 10).lit);
+    }
+
+    #[test]
+    fn consecutive_markers_stay_separated_by_an_unlit_gap() {
+        let mut schedule = MarkerSchedule::new(0, FREQ / 10, FREQ);
+        assert!(schedule.frame(FREQ / 10).lit);
+        assert!(!schedule.frame(FREQ / 10 + FREQ / 20).lit);
+        assert_eq!(schedule.frame(2 * FREQ / 10).onset, Some(2 * FREQ / 10));
+    }
+
+    #[test]
+    fn a_disabled_schedule_never_lights() {
+        let mut schedule = MarkerSchedule::new(0, 0, FREQ / 10);
+        assert!((0..100).all(|i| !schedule.frame(i * FREQ).lit));
     }
 }

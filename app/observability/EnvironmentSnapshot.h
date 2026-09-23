@@ -42,7 +42,11 @@ namespace exosnap::observability {
 // which is what DXGI sees: the two describe the same monitor from two different
 // APIs and are matched by name where possible, never merged into one guess.
 struct ScreenFacts {
+    // Qt's screen name: the monitor's friendly name, not unique across twins.
     QString name;
+    // The Windows display device (e.g. "\\.\DISPLAY1"): the stable identity a
+    // monitor capture target is selected by. Empty when it could not be read.
+    QString device;
     int x = 0;
     int y = 0;
     int width = 0;

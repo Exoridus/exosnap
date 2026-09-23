@@ -153,6 +153,11 @@ class QuickApplication {
     // channel's availableActions and its precondition read the same predicate
     // the intent does instead of a second guess at it.
     [[nodiscard]] bool canOpenEditor() const;
+    // The tray Quit without a window to route through: the shell's close guards
+    // decide, and an allowed quit flushes pending writes and ends the process
+    // through the normal shutdown. On refusal `guard` receives the guard's
+    // decision key and a guard prompt may be up, exactly as for the tray Quit.
+    [[nodiscard]] bool requestQuit(QString* guard);
     // Which blocking surface is up, straight from the arbiter that decides it.
     [[nodiscard]] const BlockingSurfaceArbiter& blockingSurfaces() const noexcept {
         return surface_arbiter_;

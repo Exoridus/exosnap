@@ -257,6 +257,10 @@ class FakeSource final : public LiveVerifySource {
         calls.append(QStringLiteral("logs.open"));
         return Outcome(error);
     }
+    bool AppQuit(QString* error) override {
+        calls.append(QStringLiteral("app.quit"));
+        return Outcome(error);
+    }
 
     bool RecoveryContinue(int index, QString* error) override {
         calls.append(QStringLiteral("recovery.continue:%1").arg(index));
@@ -1325,6 +1329,24 @@ TEST(LiveVerifyDispatcher, ExportAndDiagnosticsRunAreAcceptedWithoutClaimingComp
     source.state.diagnostics_checking = true;
     EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(QStringLiteral("diagnostics.run")))),
               QString::fromLatin1(error_code::kInvalidState));
+}
+
+// A quit is only asked for here; the answer comes from the close guards and the
+// completion is the process ending, so an accepted quit never claims to be settled
+// and a guard's refusal reaches the client as a refusal, not as success.
+TEST(LiveVerifyDispatcher, AppQuitRoutesThroughTheCloseGuardsWithoutClaimingCompletion) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject accepted = dispatcher.Dispatch(RequestV2(QStringLiteral("app.quit")));
+    ASSERT_TRUE(Ok(accepted));
+    EXPECT_FALSE(accepted.value(QStringLiteral("settled")).toBool());
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("app.quit")));
+
+    source.allow_intents = false;
+    const QJsonObject refused = dispatcher.Dispatch(RequestV2(QStringLiteral("app.quit")));
+    EXPECT_FALSE(Ok(refused));
 }
 
 // The in-depth diagnostics switch has no settings key any more, so this command

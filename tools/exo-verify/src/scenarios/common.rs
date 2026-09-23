@@ -250,7 +250,48 @@ pub fn configure_exact(app: &mut App, settings: &[(&str, Value)]) -> Step {
     Ok(())
 }
 
+/// Whether `value` is a Windows display device name (`\\.\DISPLAYn`), the
+/// identity `record.selectTarget` matches monitor targets by.
+pub fn is_display_device(value: &str) -> bool {
+    value
+        .strip_prefix(r"\\.\")
+        .is_some_and(|rest| !rest.is_empty())
+}
+
+/// The display device of one `environment.snapshot` screen. The screen's
+/// `name` is Qt's friendly monitor name, shared by identical panels and never
+/// accepted by `record.selectTarget`, so it is not a fallback.
+pub fn screen_device(screen: &Value) -> Step<String> {
+    let device = screen["device"].as_str().ok_or_else(|| {
+        Stop::infra(format!(
+            "environment.snapshot screen {} carries no display device",
+            screen["name"]
+        ))
+    })?;
+    infra_ensure!(
+        is_display_device(device),
+        "environment.snapshot screen {} reports {device:?}, which is not a display device",
+        screen["name"]
+    );
+    Ok(device.to_string())
+}
+
+/// The primary screen of an `environment.snapshot`, or the first one when
+/// `or_first` and no screen is marked primary.
+pub fn primary_screen(environment: &Value, or_first: bool) -> Option<&Value> {
+    let screens = environment["displays"]["screens"].as_array()?;
+    screens
+        .iter()
+        .find(|screen| screen["primary"] == true)
+        .or_else(|| or_first.then(|| screens.first()).flatten())
+}
+
+/// Selects a monitor target by its display device (see [`screen_device`]).
 pub fn select_display(app: &mut App, device: &str) -> Step {
+    infra_ensure!(
+        is_display_device(device),
+        "{device:?} is not a display device; monitor targets are selected by device, not by name"
+    );
     let snapshot = app
         .client
         .request(
@@ -537,6 +578,19 @@ pub fn judge_video(
     })
 }
 
+/// Visual marker onsets in a recording, from `(pts, lit)` samples in
+/// presentation order. Only a real leading edge counts: an unlit sample
+/// followed by a lit one. The onset lies between the two, so it is estimated
+/// at their midpoint, within half a sample interval of the truth. A recording
+/// that opens on a lit sample has no observable onset for that pulse.
+pub fn flash_onsets(samples: &[(f64, bool)]) -> Vec<f64> {
+    samples
+        .windows(2)
+        .filter(|pair| !pair[0].1 && pair[1].1)
+        .map(|pair| (pair[0].0 + pair[1].0) / 2.0)
+        .collect()
+}
+
 /// A/V alignment from the stimulus's synchronised flash + beep markers.
 pub fn judge_av_sync(
     ctx: &mut Context,
@@ -546,18 +600,12 @@ pub fn judge_av_sync(
 ) -> Step {
     let samples = media::audio_samples(file, audio_stream, 48_000)?;
     let onsets = media::tone_onsets(&samples, 48_000, 1000.0, 0.5);
-    let flashes: Vec<f64> = {
-        let mut out = Vec::new();
-        let mut last = false;
-        for f in &video.frames {
-            let on = crate::pattern::flash_on(&f.luma());
-            if on && !last {
-                out.push(f.pts);
-            }
-            last = on;
-        }
-        out
-    };
+    let samples: Vec<(f64, bool)> = video
+        .frames
+        .iter()
+        .map(|f| (f.pts, crate::pattern::flash_on(&f.luma())))
+        .collect();
+    let flashes = flash_onsets(&samples);
     ctx.evidence.put("audioOnsets", json!(onsets));
     ctx.evidence.put("videoFlashes", json!(flashes));
     infra_ensure!(
@@ -611,4 +659,165 @@ pub fn audio_streams(probe: &Value) -> usize {
 pub fn field<'a>(v: &'a Value, path: &str) -> Step<&'a Value> {
     json_path(v, path)
         .ok_or_else(|| Stop::fail(format!("the control surface no longer reports '{path}'")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_display_devices_identify_a_monitor_target() {
+        assert!(is_display_device(r"\\.\DISPLAY1"));
+        assert!(!is_display_device("27GL850"));
+        assert!(!is_display_device("DISPLAY1"));
+        assert!(!is_display_device(r"\\.\"));
+    }
+
+    #[test]
+    fn a_screen_is_selected_by_device_never_by_friendly_name() {
+        let environment = json!({"displays": {"screens": [
+            {"name": "27GL850", "device": r"\\.\DISPLAY2", "primary": false},
+            {"name": "27GL850", "device": r"\\.\DISPLAY1", "primary": true}
+        ]}});
+        let primary = primary_screen(&environment, false).unwrap();
+        assert_eq!(screen_device(primary).unwrap(), r"\\.\DISPLAY1");
+    }
+
+    #[test]
+    fn a_screen_without_a_device_is_not_selected_by_its_name() {
+        for screen in [
+            json!({"name": "27GL850"}),
+            json!({"name": "27GL850", "device": null}),
+            json!({"name": "27GL850", "device": "27GL850"}),
+        ] {
+            assert!(matches!(screen_device(&screen), Err(Stop::Infra(_))));
+        }
+    }
+
+    #[test]
+    fn the_first_screen_stands_in_for_a_missing_primary_only_on_request() {
+        let environment = json!({"displays": {"screens": [
+            {"name": "A", "device": r"\\.\DISPLAY3", "primary": false}
+        ]}});
+        assert!(primary_screen(&environment, false).is_none());
+        assert_eq!(
+            screen_device(primary_screen(&environment, true).unwrap()).unwrap(),
+            r"\\.\DISPLAY3"
+        );
+    }
+
+    use crate::stimulus::{MARKER_PULSE_SECONDS, MarkerSchedule};
+
+    const FREQ: i64 = 10_000_000;
+
+    /// A stimulus presenting at `stimulus_hz` for `span` seconds with pulses
+    /// `pulse` seconds wide, recorded by sampling the screen at `fps` from
+    /// `phase` seconds on. Returns the recorded `(pts, lit)` samples and the
+    /// true onsets (the first lit frame's present time) of every pulse.
+    fn record(
+        stimulus_hz: f64,
+        fps: f64,
+        phase: f64,
+        span: f64,
+        pulse: f64,
+    ) -> (Vec<(f64, bool)>, Vec<f64>) {
+        let mut schedule = MarkerSchedule::new(0, 2 * FREQ, (pulse * FREQ as f64) as i64);
+        let mut presented = Vec::new();
+        let mut truth = Vec::new();
+        let mut index = 0.0;
+        while index / stimulus_hz < span {
+            let at = index / stimulus_hz;
+            let frame = schedule.frame((at * FREQ as f64) as i64);
+            if frame.onset.is_some() {
+                truth.push(at);
+            }
+            presented.push((at, frame.lit));
+            index += 1.0;
+        }
+        let mut samples = Vec::new();
+        let mut shown = 0;
+        let mut k = 0.0;
+        while phase + k / fps < span {
+            let t = phase + k / fps;
+            while shown + 1 < presented.len() && presented[shown + 1].0 <= t {
+                shown += 1;
+            }
+            samples.push((t, presented[shown].1));
+            k += 1.0;
+        }
+        (samples, truth)
+    }
+
+    #[test]
+    fn every_marker_is_observed_at_release_tested_capture_rates() {
+        for stimulus_hz in [60.0, 144.0] {
+            for fps in [30.0, 60.0] {
+                for step in 0..40 {
+                    let phase = step as f64 / 40.0 / fps;
+                    let (samples, truth) =
+                        record(stimulus_hz, fps, phase, 11.0, MARKER_PULSE_SECONDS);
+                    let lit = samples.iter().filter(|(_, on)| *on).count();
+                    assert!(
+                        lit >= 2 * truth.len(),
+                        "{stimulus_hz} Hz stimulus at {fps} fps phase {phase}: {lit} lit samples for {} markers",
+                        truth.len()
+                    );
+                    let onsets = flash_onsets(&samples);
+                    assert_eq!(
+                        onsets.len(),
+                        truth.len(),
+                        "{stimulus_hz} Hz at {fps} fps phase {phase}"
+                    );
+                    // The screen changes only on stimulus frames, so the edge
+                    // is known to one sample interval, plus one stimulus frame
+                    // for the frame the compositor was still showing.
+                    let bound = 0.5 / fps + 1.0 / stimulus_hz + 1e-9;
+                    for (estimate, true_onset) in onsets.iter().zip(&truth) {
+                        assert!(
+                            (estimate - true_onset).abs() <= bound,
+                            "onset {estimate} vs truth {true_onset} at {fps} fps"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_one_frame_impulse_is_missed_at_60_fps() {
+        // Negative control for the pulse width: a flash lit for a single
+        // 144 Hz frame falls between 60 fps samples for most phases.
+        let missed = (0..40)
+            .filter(|step| {
+                let phase = *step as f64 / 40.0 / 60.0;
+                let (samples, truth) = record(144.0, 60.0, phase, 11.0, 1.0 / 144.0);
+                flash_onsets(&samples).len() < truth.len()
+            })
+            .count();
+        assert!(
+            missed > 20,
+            "only {missed} of 40 phases missed a one-frame flash"
+        );
+    }
+
+    #[test]
+    fn only_real_leading_edges_are_onsets() {
+        let samples = [
+            (0.0, true),
+            (0.1, true),
+            (0.2, false),
+            (0.3, false),
+            (0.4, true),
+            (0.5, true),
+            (0.6, false),
+        ];
+        let onsets = flash_onsets(&samples);
+        assert_eq!(
+            onsets.len(),
+            1,
+            "a recording that opens lit has no observable onset"
+        );
+        assert!((onsets[0] - 0.35).abs() < 1e-12);
+        assert!(flash_onsets(&[(0.0, false), (0.1, false)]).is_empty());
+    }
 }

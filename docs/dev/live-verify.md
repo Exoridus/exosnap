@@ -69,6 +69,7 @@ Protocol 2 adds a monotonic `stateRevision` when published product state changes
 |---|---|
 | `system.hello`, `system.capabilities`, `system.snapshot` | Process identity, exact surface and display/environment facts |
 | `app.snapshot`, `ui.getState` | Appearance/navigation and named product state, blocking surface, edit session versus visibility, available actions |
+| `app.quit` | The tray Quit's close-guard chain; an accepted quit ends through the normal shutdown that records a clean exit, and completion is the process ending |
 | `window.snapshot`, `window.moveToScreen` | Native style/geometry/affinity and application-owned placement; use a screen name returned by snapshot |
 | `preview.snapshot` | Publication/render counters and outstanding-frame debt |
 | `record.snapshot`, `record.selectTarget`, `record.start/pause/resume/stop/split/captureFrame`, `record.result` | Real source/transport/result flow with the same admission guards as UI |

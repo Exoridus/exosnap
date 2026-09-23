@@ -55,17 +55,9 @@ fn elevated_observation(ctx: &mut Context) -> Step {
     let mut app = ctx.launch(&[])?;
     app.call("diagnostics.setInDepth", json!({"enabled": true}))?;
     let environment = app.call("environment.snapshot", json!({}))?;
-    let screen = environment["displays"]["screens"]
-        .as_array()
-        .and_then(|items| {
-            items
-                .iter()
-                .find(|screen| screen["primary"] == true)
-                .or_else(|| items.first())
-        })
-        .and_then(|screen| screen["name"].as_str())
+    let screen = common::primary_screen(&environment, true)
         .ok_or_else(|| Stop::infra("the elevated product reported no display"))?;
-    common::select_display(&mut app, screen)?;
+    common::select_display(&mut app, &common::screen_device(screen)?)?;
     common::start_recording(&mut app)?;
     let deadline = Instant::now() + secs(30.0);
     let mut present = Value::Null;
