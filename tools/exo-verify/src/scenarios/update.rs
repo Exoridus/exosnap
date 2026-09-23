@@ -18,7 +18,7 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             id: "update.portable",
-            revision: 1,
+            revision: 2,
             title: "Portable update installs the candidate",
             claim: "the old portable build accepts the signed candidate offer and installs the bound candidate bytes",
             lane: Lane::CiUpdate,
@@ -68,7 +68,7 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "update.msi-accept",
-            revision: 1,
+            revision: 2,
             title: "MSI update installs and relaunches the candidate",
             claim: "accepting the signed candidate offer installs the bound candidate and the updater confirms its relaunch",
             lane: Lane::CiUpdate,
@@ -614,7 +614,7 @@ fn drive_update(
                 if !decline
                     && matches!(
                         final_state["phase"].as_str(),
-                        Some("restartPending" | "rebootRequired" | "failed")
+                        Some("completed" | "restartPending" | "rebootRequired" | "failed")
                     )
                 {
                     break;
@@ -712,7 +712,7 @@ fn declined_state(state: &Value) -> Step {
 
 fn accepted_state(state: &Value) -> Step {
     product_ensure!(
-        state["phase"] == "restartPending" && state["failureCase"].is_null(),
+        state["phase"] == "completed" && state["failureCase"].is_null(),
         "updater did not confirm a successful relaunch: {state}"
     );
     Ok(())
@@ -740,7 +740,11 @@ mod tests {
 
     #[test]
     fn accept_requires_successful_relaunch() {
-        accepted_state(&json!({"phase":"restartPending", "failureCase":null})).unwrap();
+        accepted_state(&json!({"phase":"completed", "failureCase":null})).unwrap();
+        assert!(
+            accepted_state(&json!({"phase":"restartPending", "failureCase":"launchFailed"}))
+                .is_err()
+        );
         assert!(accepted_state(&json!({"phase":"failed", "failureCase":"launchFailed"})).is_err());
         assert!(accepted_state(&json!({"phase":"rebootRequired", "failureCase":null})).is_err());
     }

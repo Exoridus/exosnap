@@ -475,6 +475,12 @@ pub fn harvest_fragment(root: &Path) -> Result<String> {
 /// Administrative extraction of an MSI (no install, no registry, no elevation).
 pub fn msi_extract(msi: &Path, target: &Path) -> Result<()> {
     fs::create_dir_all(target)?;
+    // Windows Installer interprets a relative TARGETDIR as a network location.
+    let target = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(target)
+    };
     let out = crate::tools::run(
         Command::new("msiexec.exe")
             .arg("/a")

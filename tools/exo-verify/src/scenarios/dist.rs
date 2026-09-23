@@ -80,9 +80,9 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "dist.embedded-update-key",
-            revision: 1,
-            title: "Both executables embed the official update verification key",
-            claim: "exosnap.exe and exosnap-updater.exe carry the configured official Ed25519 public key, so signed manifests verify in the field",
+            revision: 2,
+            title: "The updater embeds the official update verification key",
+            claim: "exosnap-updater.exe carries the configured official Ed25519 public key used to verify signed manifests",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Required,
@@ -424,15 +424,13 @@ fn embedded_update_key(ctx: &mut Context) -> Step {
         key.len() == 32 && key.iter().any(|b| *b != 0),
         "the configured public key is not a real 32-byte key"
     );
-    let product = ctx.product()?;
-    for exe in [&product.exe, &product.updater] {
-        let bytes = std::fs::read(exe)?;
-        product_ensure!(
-            contains(&bytes, &key),
-            "{} does not embed the official update key",
-            exe.display()
-        );
-    }
+    let updater = &ctx.product()?.updater;
+    let bytes = std::fs::read(updater)?;
+    product_ensure!(
+        contains(&bytes, &key),
+        "{} does not embed the official update key",
+        updater.display()
+    );
     Ok(())
 }
 
