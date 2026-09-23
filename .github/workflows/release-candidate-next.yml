@@ -84,7 +84,7 @@ jobs:
             "-DEXOSNAP_UPDATE_PUBLIC_KEY_HEX=$env:UPDATE_PUBLIC_KEY" `
             -DFETCHCONTENT_BASE_DIR=C:/es
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build --preset windows-x64-ninja-release
+          cmake --build --preset windows-x64-ninja-release-exosnap
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked --release --manifest-path tools/exo-verify/Cargo.toml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
