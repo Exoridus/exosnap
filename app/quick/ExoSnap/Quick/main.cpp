@@ -475,6 +475,24 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
             return failNavigationLifecycle(destination.object_name);
     }
 
+    // ui.navigate answers settled:true, and a runner's next command addresses the
+    // page's own object. A first visit is still incubating when the navigation
+    // request returns, so the automation edge has to have waited for it.
+    {
+        exosnap::quick::QuickLiveVerifySource automation(application, window);
+        QString error;
+        if (!automation.Navigate(QStringLiteral("logs"), &error))
+            return failNavigationLifecycle(qPrintable(error));
+        bool logs_ready = false;
+        QMetaObject::invokeMethod(shell, "destinationReady", Q_RETURN_ARG(bool, logs_ready), Q_ARG(int, 3));
+        if (!logs_ready || findShellPage(window, "quickLogsPage") == nullptr)
+            return failNavigationLifecycle("ui.navigate returned before its first-visit page was loaded");
+        if (automation.Reveal(QStringLiteral("logs"), QStringLiteral("no-such-target"), &error) !=
+            exosnap::live_verify::LiveVerifySource::RevealOutcome::UnknownTarget)
+            return failNavigationLifecycle("an unknown reveal target right after navigation was not reported as such");
+        shell->setProperty("currentPage", 0);
+    }
+
     // First visit: the page exists and holds the adapter it was handed.
     std::array<QObject*, 4> first_visit{};
     for (std::size_t index = 0; index < destinations.size(); ++index) {
