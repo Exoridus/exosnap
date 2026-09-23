@@ -370,7 +370,7 @@ TEST_F(Mp4SplitRemuxTest, CancelRemux_SafeWhenIdle) {
 }
 
 // =============================================================================
-// ADR-0015: ArmedFromRecovery state tests
+// ArmedFromRecovery state tests
 // =============================================================================
 
 // ─── 16. ArmFromRecovery transitions coordinator to ArmedFromRecovery ─────────

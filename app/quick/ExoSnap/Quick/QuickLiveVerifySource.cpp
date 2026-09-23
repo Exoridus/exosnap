@@ -810,7 +810,7 @@ QJsonObject QuickLiveVerifySource::EnvironmentSnapshot() const {
     inputs.audio_outputs = map_endpoints(audio.outputs);
     inputs.audio_observed = !audio.inputs.isEmpty() || !audio.outputs.isEmpty();
 
-    // PresentMon (ADR 0033). The opt-in and the elevation state are reported
+    // PresentMon. The opt-in and the elevation state are reported
     // unconditionally, because they are what a client needs in order to know WHY
     // there is no present measurement rather than merely that there is none.
     //

@@ -377,7 +377,7 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
     vb->setContentsMargins(0, 0, 0, 0);
     vb->setSpacing(9);
 
-    // The eyebrow is where the run says what KIND of run it is. ADR 0055's
+    // The eyebrow is where the run says what KIND of run it is. Verification reinstall's
     // verification reinstall and a terminal failure are both content-level
     // markings here, because the title bar's role label stays "Updater" in
     // every state -- a title that changes under the user is the thing this

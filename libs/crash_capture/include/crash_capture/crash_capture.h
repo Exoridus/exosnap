@@ -2,7 +2,7 @@
 
 // crash_capture.h — Public API for ExoSnap crash-capture engine.
 //
-// Design constraints (ADR 0017 / CLAUDE.md):
+// Design constraints:
 //   - UI-agnostic: no Qt, no Windows message loop dependencies.
 //   - EXOSNAP_OFFICIAL_BUILD gate: DSN is only compiled in when the flag is defined.
 //     Self-builds never phone home.

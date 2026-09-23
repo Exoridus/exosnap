@@ -35,7 +35,7 @@
     Read the description from this file instead.
 
 .PARAMETER Base
-    Base branch. Defaults to main.
+    Base branch. Defaults to next. Patch work targets main with -Base main.
 
 .PARAMETER KeepDraft
     Leave the pull request in draft instead of marking it ready for review.
@@ -54,7 +54,7 @@ param(
     [string] $Subject,
     [string] $Body,
     [string] $BodyFile,
-    [string] $Base = 'main',
+    [string] $Base = 'next',
     [switch] $KeepDraft,
     [switch] $NoPush
 )

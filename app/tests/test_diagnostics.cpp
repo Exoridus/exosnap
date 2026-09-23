@@ -561,7 +561,7 @@ TEST(RecommendationEngineTest, Generate_RefreshRateMatch_NoWarn) {
     EXPECT_FALSE(found_mismatch);
 }
 
-// --- Live present-cadence correlation (v0.8.0 / ADR 0033) ---
+// --- Live present-cadence correlation  ---
 
 namespace {
 exosnap::engine::RecordingDiagnosticsSnapshot MakeJudderSnapshot(bool cfr, double jitter_ms, double coalesce_ratio) {
@@ -1118,7 +1118,7 @@ TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     // v0.8.0-D added rec.009 (audio/container compat) and rec.010 (video/container compat); the
     // color-range compatibility guard added rec.color.range; the H.264 + HDR10-native
     // blocker added rec.hdr.h264; stable display identity added display.saved.unresolved;
-    // ADR 0046 audio device loss added rec.audio.degraded; the exclusive-window pre-flight
+    // Audio device loss uses rec.audio.degraded; the exclusive-window pre-flight
     // check added rec.capture.exclusive_window — expect 15 codes now.
     // v0.9 measured cards: rec.audio.endpoint_taken, rec.pacing.duplication, rec.audio.clock_saturated.
     EXPECT_EQ(codes.size(), 21u);
@@ -1746,7 +1746,7 @@ TEST(RecommendationEngineTest, LowDpcLatencyRaisesNothing) {
                              [](const DiagnosticResult& r) { return r.id == "rec.dpc.latency"; }));
 }
 
-// --- ADR 0035: Smooth pacing Auto FixAction when judder fires + Newest pacing ---
+// --- Smooth pacing Auto FixAction when judder fires + Newest pacing ---
 
 TEST(RecommendationEngineTest, JudderInNewestOffersSmoothPacingAutoFix) {
     // Live judder + config.frame_pacing = Newest → rec.pacing.smooth result

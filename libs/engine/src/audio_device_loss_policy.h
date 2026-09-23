@@ -1,6 +1,6 @@
 #pragma once
 
-// Device-loss policy for WASAPI audio capture sources (ADR 0046).
+// Device-loss policy for WASAPI audio capture sources.
 //
 // Unlike the original fail-closed policy (ClassifyWasapiAcquireFailure -> Fail
 // ends the whole recording), an audio endpoint lost mid-recording no longer

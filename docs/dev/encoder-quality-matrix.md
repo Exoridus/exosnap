@@ -1,97 +1,57 @@
-# Encoder quality matrix: workflow
+# Encoder-quality measurement
 
-Dev-only tooling to objectively measure NVENC quality-per-bitrate (SSIM/VMAF/BD-rate) against ExoSnap's real encoder code path. Nothing here ships in the product: see `tools/probes/probe_encode_file` and `scripts/dev/encoder_quality_matrix.py`.
+This developer workflow measures NVENC quality per bitrate through ExoSnap's actual encoder path. It does not add a product feature or establish universal quality claims. The encoder configuration contract is in [encoding and containers](../architecture/encoding-and-containers.md).
 
-This is the NVIDIA-only piece of a larger, cross-vendor 1.0 quality gate the roadmap reserves (`docs/roadmap.md`): a down payment on that gate, not the gate itself.
+## Prerequisites and reference clips
 
-## Prerequisites
+Use an NVIDIA NVENC GPU, `probe_encode_file` and a full system FFmpeg with `libvmaf`. The application's small shared FFmpeg build is not the external analysis tool.
 
-- An NVIDIA GPU with NVENC (the same requirement as the product).
-- An `ffmpeg` build with `libvmaf` compiled in. A full build from
-  <https://www.gyan.dev/ffmpeg/builds/> (or any build whose `ffmpeg -filters` output lists
-  `libvmaf`) works. No ExoSnap-specific patches are needed. Verify with: `ffmpeg -filters | grep libvmaf`.
-
-  If nothing prints, get a different build. The matrix script checks this itself and refuses to run otherwise.
-- A local build of `probe_encode_file`: `cmake --preset windows-x64-debug -DEXOSNAP_BUILD_PROBES=ON` then `cmake --build build/windows-x64-debug --target probe_encode_file --config Debug`.
-
-## Reference clip set
-
-Y4M (8-bit 4:2:0) clips, 10-30 seconds each, covering:
-
-- Fast gameplay (high motion, frequent scene changes)
-- Slow gameplay (low motion, stable scenes)
-- Desktop / text-scroll (sharp edges, low motion, the case most sensitive to blocking)
-
-Source clips from real recordings, not synthetic test patterns, so results reflect actual usage. Convert a section of any existing recording:
-
-```bash
-ffmpeg -i <recording>.mkv -ss <start> -t <duration> -pix_fmt yuv420p -vf scale=1920:1080 <name>.y4m
+```powershell
+ffmpeg -filters | Select-String libvmaf
+cmake --preset windows-x64-debug -DEXOSNAP_BUILD_PROBES=ON
+cmake --build build/windows-x64-debug --target probe_encode_file --config Debug
 ```
 
-This command is the whole clip-set-generation "tool": repeatable any time a new or better reference clip is needed. There is no separate script.
+Use representative 8-bit 4:2:0 Y4M clips, normally 10–30 seconds each: fast motion, slow/stable content and desktop/text scrolling. Keep the exact reference bytes and the same scored interval across comparisons. A synthetic pattern can test the instrument but is not the complete product workload.
 
-## Recording a reference clip with the product itself
-
-`--auto-record --cq <n>` takes a recording at a canonical CQ the shipped ladder does not offer, which is what a reference clip needs: at CQ 1 the encode is close enough to lossless that the measurement is about the candidate rather than about the reference. Everything else about the run is the normal harness path.
-
-```
-exosnap.exe --auto-record --target monitor --duration 30             --frame-rate 60 --cq 1 --container mkv --video-codec av1             --audio-codec opus --chroma 420 --bit-depth 8 --hdr off --audio-rows sys
+```powershell
+ffmpeg -i '<recording>.mkv' -ss '<start>' -t '<duration>' -pix_fmt yuv420p -vf scale=1920:1080 '<reference>.y4m'
 ```
 
-`--auto-record` is only compiled into a Release build configured with `EXOSNAP_BUILD_BENCHMARK_HARNESS=ON`. A Debug build always has it. Point `EXOSNAP_OUTPUT_DIR` at a scratch directory: a reference clip is a large file and never belongs in the user's output folder.
+A harness-enabled ExoSnap can capture a high-quality reference using `--auto-record --cq 1`. That is still an encoded reference, not a mathematically lossless ground truth. Record its provenance and residual reference loss when interpreting results. Keep reference capture outside the normal user output directory.
 
-## Running the matrix
+## Run and qualify the measurement
 
-Per codec, per clip:
-
-```bash
-python scripts/dev/encoder_quality_matrix.py \
-    --clip desktop-scroll.y4m \
-    --vcodec av1 \
-    --output docs/dev/quality-results/2026-07-24-rtx5070ti-av1-desktop-scroll
-```
-
-Repeat for `--vcodec h264`/`hevc` and for each clip. Each run sweeps P4 and P7, each under CQ (the product default) and VBR, at 4 rate-control points, enough for a BD-rate curve fit. Writes `<output>.csv` (raw data) and `<output>.md` (human-readable table).
-
-Sweep selection is optional: `--presets`, `--cq-values` and `--vbr-values` replace the baseline sweep when an exploration needs different points. Omit all three and the baseline matrix runs unchanged, so the invocation above keeps producing the same cells and the 4-point BD-rate contract below still holds.
-
-## Trusting the numbers before trusting the encoder
-
-```bash
+```powershell
 python scripts/dev/encoder_quality_matrix.py --metric-sanity --clip desktop-scroll.y4m
+python scripts/dev/encoder_quality_matrix.py --clip desktop-scroll.y4m --vcodec av1 --output '<evidence directory>/av1-desktop'
 ```
 
-Builds four candidates from the clip whose ordering is known in advance (a lossless copy, a mildly and a severely degraded encode, and the clip shifted by one frame) and verifies that VMAF, SSIM and PSNR all rank them `identity > mild > severe` with the shifted copy far below identity. Run it after any change to the scoring path, and on a new clip before a sweep it will be used for. It carries no absolute thresholds: those depend on the clip, and pinning them turns a content change into a false failure.
+Repeat for H.264/HEVC and each reference. The baseline sweep compares P4/P7 under CQ/VBR at four rate-control points. `--presets`, `--cq-values` and `--vbr-values` intentionally change that selection; do not compare differently selected matrices as though only the encoder changed.
 
-Two things the scoring path does unconditionally, both of which this suite exists to keep honest:
+Metric sanity constructs identity, mild/severe degradation and a one-frame temporal shift. Identity must rank above progressively degraded candidates, and the shifted sequence must not look equivalent. Run it when the scoring path or reference changes. A tool that produces a number is not necessarily measuring aligned frames.
 
-- **Frames are paired by index**, by re-stamping both inputs. Metric filters pair by presentation time, and a muxed candidate carries container timestamps a raw Y4M reference does not: Matroska quantises to its 1 ms timecode scale, so 60 fps lands on 0/16/33/50 ms while the Y4M sits on exact 1/60 s. Left alone, a bit-exact lossless copy scores PSNR-Y 21 dB with a third of its frames at VMAF 0.
-- **Colour descriptions are normalised on both inputs.** The encodes carry one (the encoder writes BT.709 into the bitstream); a Y4M reference does not. ffmpeg then auto-inserts a colour conversion on one input only and the metric scores that conversion, measured at 14 dB of PSNR-Y and 4.3 VMAF on a 1440p60 AV1 encode whose pixels were untouched, which is more than enough to invert a comparison between two encoders.
+Two normalization rules are load-bearing:
 
-Reports name the ffmpeg version, the libvmaf version, the VMAF model and the scored frame count, and list VMAF **median, p10, p5, p1, worst-1%-mean and minimum** next to the mean. On screen content the mean hides the answer: over a scrolling small-text clip the median stays at exactly 100.0000 across an entire CQ sweep while p10 travels 8 points, and over a *real* browser scroll even p10 pegs at 100.0000 and only the extreme tail moves. Absolute VMAF is not a screen-quality grade: only the ordering within one clip and one harness is.
+- Pair frames by index, with matching timestamps, rather than letting container timestamp quantization shift frame pairing.
+- Normalize color descriptions on both inputs so FFmpeg does not insert a conversion on only one side and score that conversion instead of encoder loss.
 
-**Which tail statistic to read.** `min` finds the single worst frame and is the most sensitive, but a single frame is also the easiest thing to move by an outlier. `worst-1%-mean` averages the worst percentile instead, which keeps a short visible scroll or rasterizer failure legible without resting a verdict on one frame. The two coincide on windows shorter than 200 frames, where one per cent is one frame, so sweep at least 200 frames when the tail is what decides.
+Preserve frame count, FFmpeg/libvmaf versions, model, command, source/encoded file hashes, GPU/driver and probe binary identity in the run evidence. The generated report does not automatically capture every host/probe fact; add missing facts to the evidence, not a permanent historical report under `docs/`.
 
-## Result storage
+## Read the result
 
-File results under `docs/dev/quality-results/<date>-<gpu>-<codec>-<clip>.md` (matching the `--output` path above), tracked in git so results are diffable across runs. The `<gpu>` in the filename is manual: the generated report logs the `ffmpeg` version but not the GPU name, driver version, or the probe binary's commit hash, so note those in the filename or a line at the top of the `.md` before committing a result if the comparison will ever cross hardware or driver versions.
+Read mean and tail statistics together: median, p10, p5, p1, worst-1%-mean and minimum. Screen/text content can saturate a mean or median while a short scrolling interval visibly degrades. Minimum is sensitive to one outlier; worst-1%-mean summarizes a short bad interval. Use at least 200 frames for a meaningful percentile tail rather than treating a single frame as an independent distribution.
 
-## Computing BD-rate between two runs
+VMAF is a relative ranking within the same clip and qualified harness, not an absolute screen-quality certification. Keep SSIM/PSNR and visual inspection alongside it. Do not infer one codec's universal superiority from one clip, one GPU or unmatched bitrate/latency points.
 
-`bd_rate()` in `scripts/dev/encoder_quality_matrix.py` takes two (bitrate, VMAF) curves (the baseline and the candidate) and returns the percent bitrate delta at equal quality (negative = candidate is better). Each curve must be **exactly 4** (bitrate, VMAF) points (matching the 4 CQ / 4 VBR points `default_matrix()` sweeps per preset) and raises `ValueError` for any other count. The fit-quality check that catches ill-conditioned input only holds at exactly 4 points (see `bd_rate`'s and `_polyfit3`'s docstrings for why). Import it directly from a small script, or extend `encoder_quality_matrix.py` with a `--compare` mode when a concrete before/after comparison is needed (not built speculatively here, kept out of scope for this measurement-only pass, not comparison tooling).
+`bd_rate()` in `scripts/dev/encoder_quality_matrix.py` compares two bitrate/quality curves. Its cubic fit requires exactly four points per curve and rejects other counts. Negative bitrate delta means fewer bits at equal measured quality. The fit and overlap must be meaningful; extrapolating disjoint or ill-conditioned curves is not useful evidence.
 
-## Gate rule for shipping an encoder-quality change
+The script writes CSV and Markdown beneath the chosen output prefix. Keep those results in untracked evidence or attached review/release artifacts. Durable docs hold the procedure and any current default's rationale, not dated benchmark campaigns.
 
-A future encoder-quality change (enabling B-frames/lookahead/temporal AQ, or changing an existing default) may become a shipped default when, over the full reference clip set:
+## Gate for changing a shipped encoder-quality default
 
-1. Median BD-rate improves by at least 5% in the target rate-control mode, and
-2. No single clip regresses by more than 2% BD-rate, and
-3. p99 encode latency (measurement infrastructure already shipped) still stays inside the frame budget for the target configuration (60 fps -> under ~16 ms).
+For the full reference set, a proposed default must improve median BD-rate by at least 5% in the target rate-control mode, regress no individual clip by more than 2%, and keep p99 encode latency inside the target frame budget. At 60 fps the nominal frame interval is about 16.67 ms; reserve practical pipeline headroom rather than spending the entire interval on encode alone.
 
-These thresholds are a deliberate, revisable choice, not a law of nature. Changing them is cheap. Not having any threshold at all would be the real mistake.
+These are explicit project acceptance criteria, not physical constants. Revisit them deliberately with evidence. A preset increase, spatial/temporal AQ flag or deeper asynchronous queue does not earn a default change without measured user benefit and reliable output.
 
-## What this does not cover
-
-- 10-bit/HDR clips (8-bit only in this pass).
-- Multipass/`lookaheadLevel`/UHQ tuning (no measurement basis yet for these newer SDK features).
-- Cross-vendor comparison (AMD/Intel): that is the separate, later 1.0 roadmap gate this harness is a down payment on.
+The current workflow does not establish 10-bit/HDR quality, every advanced SDK tuning feature or cross-vendor equivalence. Add the relevant reference formats and hardware before making those claims. [Soak testing](soak-and-recovery-drills.md) independently checks endurance/synchronization; a quality sweep is not a reliability gate.

@@ -176,7 +176,7 @@ UpdateOffer DecideOffer(const SemVer& release_version, std::string_view release_
     if (release_version > params.current_version)
         return UpdateOffer::Update;
 
-    // Verification reinstall (ADR 0055): only the byte-identical version, and
+    // Verification reinstall: only the byte-identical version, and
     // only when the mode is explicitly on for this app run. Everything else --
     // in particular anything older -- stays invisible.
     if (params.allow_same_version_reinstall && !params.current_version_raw.empty() && !release_version_raw.empty() &&

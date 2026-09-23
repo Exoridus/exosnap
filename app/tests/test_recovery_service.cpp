@@ -352,7 +352,7 @@ TEST(RecoveryServiceTest, ScanKeepsLegacyMkvTmpManifestEntriesReadable) {
 }
 
 // =============================================================================
-// ADR-0015: Finish tests
+// Finish tests
 // =============================================================================
 
 // 6. Finish with MKV-intended + finalized=true → rename

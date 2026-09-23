@@ -88,25 +88,14 @@ struct OutputSettingsModel {
     // QueryChroma444 and reconciled in SanitizePresetConfig — forced back to
     // Cs420 for AV1, 10-bit, or GPUs without YUV444 support).
     capability::ChromaSubsampling chroma_subsampling = capability::ChromaSubsampling::Cs420;
-    // Y'CbCr quantization range. Limited (16-235, broadcast) is the default as of
-    // fix/color-range-signaling: common consumer players (verified: VLC) ignore
-    // the range flag entirely and always apply limited->full expansion, so a
-    // Full-range recording looks permanently crushed/dark there regardless of
-    // correct tagging — the same reason OBS and the rest of the consumer-video
-    // ecosystem encode limited by default. Full (0-255, native screen precision)
-    // remains available as an opt-in for pipelines known to honour the range
-    // flag. Always valid for every codec/container — never gated.
+    // Limited range is the compatible default for players that always expand
+    // studio levels. Full remains explicit for range-aware playback pipelines.
     capability::ColorRange color_range = capability::ColorRange::Limited;
-    // NVENC encoder speed/quality preset (P1 fastest/lowest quality .. P7
-    // slowest/best quality). Applies uniformly to all three NVENC codecs; never
-    // capability-gated. Default P4 (balanced) — matches the prior AV1/HEVC
-    // default; H.264 previously used P6 (visible default change, expert-
-    // overridable — see ADR 0039). Takes effect from the next recording
-    // (not applied live).
+    // NVENC P1-P7 speed/quality choice, independent of constant quantizer.
+    // Applied when the next recording initializes its encoder, not live.
     exosnap::engine::NvencPreset nvenc_preset = exosnap::engine::NvencPreset::P4;
-    // HDR handling mode. Model only for now — no UI control yet; the expert
-    // HDR control will gate on capability::QueryHdr10Native(). Default
-    // TonemapSdr — see exosnap::engine::HdrMode.
+    // Tone-map to SDR by default. Native HDR10 requires a compatible source,
+    // codec and 10-bit path, enforced by the capability resolver.
     exosnap::engine::HdrMode hdr_mode = exosnap::engine::HdrMode::TonemapSdr;
     OutputResolutionSettings resolution;
     SplitRecordingSettings split;

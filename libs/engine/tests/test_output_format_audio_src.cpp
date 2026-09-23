@@ -1,4 +1,4 @@
-// Unit tests for OutputFormatAudioSrc (ADR 0030 — 0.6.0).
+// Unit tests for OutputFormatAudioSrc.
 //
 // Tests the resampling/channel-conversion decorator using a synthetic
 // IAudioCaptureSource stub that delivers pre-filled Float32 frames.

@@ -1,7 +1,7 @@
 #pragma once
 
 // WasapiAudioRenderer -- the Edit-page video player's audio-out path and
-// playback master clock (docs/dev/edit-player-architecture.md). No WASAPI
+// playback master clock (docs/architecture/edit-and-export.md). No WASAPI
 // render path existed anywhere in this codebase before this class; only
 // capture (WasapiCaptureSrc, wasapi_loopback.cpp) did.
 //
@@ -46,7 +46,7 @@ namespace exosnap::engine {
 
 // Ring capacity used unless a caller overrides it. 200 ms @ 48 kHz stereo is
 // the fixed backpressure point that paces the playback AUDIO decode thread
-// (docs/dev/edit-player-architecture.md). Kept deliberately small: it bounds
+// (docs/architecture/edit-and-export.md). Kept deliberately small: it bounds
 // how far ahead of the audio clock that thread can race before PushSamples()
 // blocks it.
 //

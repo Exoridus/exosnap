@@ -363,7 +363,7 @@ TEST(DiagnosticsAdapterTest, HdrTargetFactRaisesTheHdrBlockerCard) {
     EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("cannot record HDR10")));
 }
 
-// ── ADR 0033: the DPC/ISR producer that reached nothing ─────────────────────────
+// ── the DPC/ISR producer that reached nothing ─────────────────────────
 //
 // RecommendationEngine::checkDpcLatency has been correct and covered from the day it
 // landed, and it still never fired in a shipping build: DpcLatencyProvider.cpp was

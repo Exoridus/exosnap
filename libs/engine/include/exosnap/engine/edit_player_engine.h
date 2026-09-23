@@ -1,7 +1,7 @@
 #pragma once
 
 // EditPlayerEngine -- demux/decode engine for the Edit-page video player.
-// See docs/dev/edit-player-architecture.md for the thread and decode contracts.
+// See docs/architecture/edit-and-export.md for the thread and decode contracts.
 //
 // UI-agnostic (no Qt types) per CLAUDE.md. Opens the MKV edit master
 // (EditContext::mkv_master_path) and decodes video frames in TWO shapes,
@@ -16,7 +16,7 @@
 // - DecodeFrameAtRaw/StartPlaybackDecode (this class's own scrub-seek and
 //   continuous playback, driven by EditPlayerSession) instead return/deliver
 //   RawDecodedVideoFrame -- unconverted decoder planes -- for the editor
-//   player's GPU render path (docs/dev/edit-player-architecture.md), which
+//   player's GPU render path (docs/architecture/edit-and-export.md), which
 //   does the colour conversion itself, on the GPU.
 //
 // Also decodes audio to a fixed 48 kHz stereo interleaved float32 PCM stream
@@ -190,7 +190,7 @@ class EditPlayerEngine {
 
     // Same contract as DecodeFrameAt, but returns the frame unconverted (raw
     // decoder planes) for the GPU conversion path
-    // (docs/dev/edit-player-architecture.md) instead of CPU-converted BGRA --
+    // (docs/architecture/edit-and-export.md) instead of CPU-converted BGRA --
     // EditPlayerSession drives this one for
     // the editor player's own scrub/trim-handle-drag seeks, so its result can
     // go straight to EditFrameGpuConverter without an extra CPU round trip.
@@ -226,7 +226,7 @@ class EditPlayerEngine {
     //
     // Runs on THREE threads -- demux, video decode+wrap, audio
     // decode+resample+mix -- so that audio never depends on video keeping up
-    // (docs/dev/edit-player-architecture.md).
+    // (docs/architecture/edit-and-export.md).
     // Every audio track decodes on that one audio thread and is summed there,
     // so the track count changes what a block CONTAINS, never how many arrive.
     // Consequences for callers:
@@ -256,7 +256,7 @@ class EditPlayerEngine {
     // discarded. An empty std::function is treated the same as "no clock".
     //
     // Delivers unconverted (RawDecodedVideoFrame) video for the editor
-    // player's GPU render path (docs/dev/edit-player-architecture.md) -- the
+    // player's GPU render path (docs/architecture/edit-and-export.md) -- the
     // caller's own EditFrameGpuConverter does the colour conversion, not this
     // engine.
     void StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,

@@ -114,7 +114,7 @@ struct CapabilitySet {
     SupportAnnotation QueryLookahead(VideoCodec v) const;
     SupportAnnotation QueryTemporalAq(VideoCodec v) const;
 
-    // Query support for a canonical rate-control mode (ADR 0009).
+    // Query support for a canonical rate-control mode.
     // Returns Available for CQ/VBR/CBR; NotImplemented for Lossless.
     // This is a static capability declaration (not runtime-probed per-session).
     SupportAnnotation QueryRateControlMode(exosnap::engine::RateControlMode mode) const;

@@ -838,7 +838,7 @@ void DiagnosticsAdapter::applyProbe(diagnostics::DiagnosticsController::ProbeRes
 }
 
 void DiagnosticsAdapter::refreshSnapshot() {
-    // ADR 0033. Read the DPC/ISR producer HERE, where the recommendation engine is about
+    // Read the DPC/ISR producer HERE, where the recommendation engine is about
     // to run, and hand the controller nothing at all unless the kernel trace is actually
     // measuring. An unavailable reading is not a zero one: with no measurement there is
     // no recommendation to make, and the Diagnostics page says nothing about DPC rather

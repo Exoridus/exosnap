@@ -722,7 +722,7 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
     // failed initial open). The retry is UNBOUNDED: a webcam unplugged mid-recording
     // keeps its last frame served by TryGetFrame (frozen) and resumes live if it
     // returns, rather than vanishing — the user decides when to stop. Mirrors the
-    // DXGI OD in-place recovery (ADR 0013). Only Stop()/stop_token ends the loop.
+    // DXGI OD in-place recovery. Only Stop()/stop_token ends the loop.
     constexpr auto kReconnectDelay = std::chrono::milliseconds{500};
 
     // Timestamp of the last sample accepted as fresh (MF 100ns units; see

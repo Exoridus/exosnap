@@ -274,8 +274,7 @@ TEST(RecordingPresetStore, VideoBitDepthPersists_DefaultEightBit) {
 }
 
 // ===========================================================================
-// Colour range persists (introduced schema 18; default flipped Full->Limited
-// with the schema-20 migration by fix/color-range-signaling — see ADR 0032)
+// Color range persists independently of the current default.
 // ===========================================================================
 
 // Default preset round-trips as Limited range (the current default).
@@ -1520,7 +1519,7 @@ TEST(RecordingPresetStore, OldSchemaVersion_Load_KeepsData_NotRepaired) {
 }
 
 // ===========================================================================
-// Frame pacing — default Smooth + Newest round-trip (ADR 0035, schema 19)
+// Frame pacing — default Smooth + Newest round-trip (schema 19)
 // ===========================================================================
 
 TEST(RecordingPresetStore, FramePacingRoundtrips) {

@@ -256,7 +256,7 @@ class RecommendationEngine {
     std::optional<WindowTargetFacts> capture_window_facts_;
     WindowHubEvidence capture_window_hub_;
 
-    // Live present-cadence correlation (v0.8.0 / ADR 0033). Extracted from an optional live
+    // Live present-cadence correlation. Extracted from an optional live
     // RecordingDiagnosticsSnapshot; all false/neutral when no live measurement is available
     // (e.g. idle, or WGC capture which has no present timestamp).
     bool live_present_available_ = false;
@@ -275,12 +275,12 @@ class RecommendationEngine {
     // A degraded source whose endpoint refused reactivation as in use.
     bool live_audio_endpoint_in_use_ = false;
 
-    // Live disk-write latency (ADR 0033 extra-checks). Extracted from the live snapshot's
+    // Live disk-write latency. Extracted from the live snapshot's
     // DiskDiagnostics; available only for the streaming Matroska writer (MP4 remux is post-stop).
     bool live_disk_write_available_ = false;
     double live_disk_peak_write_ms_ = 0.0;
 
-    // Live audio device-loss health (ADR 0046). Extracted from the live snapshot's
+    // Live audio device-loss health. Extracted from the live snapshot's
     // AudioDiagnostics: how many capture sources are currently degraded (endpoint
     // lost, contributing honest silence) out of the total. A calm Tier-2 measured
     // problem while recording — NEVER a blocker; the recording keeps running and the
@@ -293,7 +293,7 @@ class RecommendationEngine {
     uint32_t live_audio_channels_ = 0;
     bool live_audio_format_available_ = false;
 
-    // Present-mode observation (v0.8.0 / ADR 0033). Available only when the present provider
+    // Present-mode observation. Available only when the present provider
     // is active (elevation + ETW session open). Empty when not available.
     std::optional<PresentSample> present_;
 

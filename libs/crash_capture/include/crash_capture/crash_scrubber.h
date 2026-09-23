@@ -5,7 +5,7 @@
 // The before_send hook calls ScrubEvent() before any event is sent to Sentry
 // (or written to the local crash dir).
 //
-// Scrubbing rules (ADR 0017):
+// Scrubbing rules:
 //   REMOVE from event:
 //     - %USERPROFILE% / %USERNAME% / machine name anywhere in string fields
 //     - Any absolute Windows path (C:\..., UNC \\...)
@@ -34,7 +34,7 @@ namespace exosnap::crash_capture {
 // Allow-listed tag keys (structured context allowed through before_send).
 // Any tag whose key does NOT appear here is stripped before upload.
 //
-// This is the SINGLE source of truth (ADR 0045): it used to also live as a
+// This is the SINGLE source of truth: it used to also live as a
 // literal, hand-repeated brace-list inside BeforeSendHook (crash_capture.cpp),
 // which could drift from this array. BeforeSendHook now iterates
 // AllowedTagKeys() instead. The markers below are also parsed by

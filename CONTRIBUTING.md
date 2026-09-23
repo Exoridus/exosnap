@@ -7,8 +7,16 @@ ExoSnap is a Windows-native screen recorder: a C++ recording engine with a Qt 6 
 - **Bugs and feature requests:** open a GitHub issue. For a recording bug, include the app version, GPU and driver version, capture source, and the selected container/codec. Review logs before attaching them.
 - **Security issues:** do not open a public issue. Follow [SECURITY.md](SECURITY.md).
 - **Large or behavioural changes:** open an issue first so the approach can be agreed before you write code. `docs/product-spec.md` is authoritative for user-visible behaviour, defaults, navigation, and terminology; a change that moves any of those updates the spec in the same pull request.
-- **Documentation:** [docs/README.md](docs/README.md) maps what belongs in tracked documentation, in `.workspace/`, and how a temporary finding is promoted into a durable one.
+- **Documentation:** [docs/README.md](docs/README.md) maps product, architecture, developer workflow and accepted future-design authorities. Private working notes remain untracked.
 - [AGENTS.md](AGENTS.md) holds the repository rules (architecture boundaries, source hygiene, commit and validation expectations). It applies to human and automated contributors alike.
+
+## Documentation ownership
+
+The current tree describes the current system. Pull requests, commits and releases retain development history. Update the existing canonical document before adding another. A durable explanation belongs in documentation only when a future contributor needs it to understand or safely modify ExoSnap.
+
+User-visible behavior belongs in the product specification, constraints/rationale in thematic architecture, operational commands in developer guides and future priorities in the roadmap. Accepted unimplemented designs state their exact status. Once implemented, absorb their contracts into the current authorities and remove the completed design. Do not create numbered decision archives or preserve superseded implementations for historical completeness.
+
+Prefer a self-contained invariant in a source comment over a documentation pointer. Use a link to current architecture only for genuinely larger context. Run the documentation gate from [Build and test](docs/dev/build-and-test.md) after moves or navigation changes. Keep private evidence and plans untracked. The changelog and legal notices retain their separate responsibilities.
 
 ## Development environment
 
@@ -18,7 +26,7 @@ ExoSnap is a Windows-native screen recorder: a C++ recording engine with a Qt 6 
 ```powershell
 git clone https://github.com/Exoridus/exosnap.git
 cd exosnap
-git switch -c my-change origin/main
+git switch -c my-change origin/next
 
 cmake --preset windows-x64-ninja-debug
 cmake --build --preset windows-x64-ninja-debug-exosnap
@@ -29,18 +37,18 @@ pwsh scripts/run-tests.ps1 -Filter recorder_core.   # one binary
 
 ## Making a change
 
-1. Work on a branch off `origin/main`; `main` only advances through merges.
+1. Work on a branch off `origin/next` for features and general fixes. `next` is the development default. For a Stable patch, branch from `origin/main` and merge the patch back into `next` after it lands. `main` tracks the latest Stable release.
 2. Keep the change scoped to one subsystem where you can. Match the style of the code around you.
 3. Business and product policy stays in C++. QML owns presentation, layout, and interaction only.
 4. Add or update focused tests for what you changed. `scripts/run-tests.ps1` is the entry point.
 5. Run `pwsh scripts/verify.ps1 -Fast` while iterating and `pwsh scripts/verify.ps1 -Full` before pushing. The git hooks use the same entry point; CI runs the full gate again.
-6. Open a pull request against `main` with `scripts/open-pr.ps1`. Describe what changed, what validates it, and any spec or ADR updates the change required.
+6. Open a pull request against `next` with `scripts/open-pr.ps1`, or pass `-Base main` for a Stable patch. Describe what changed, what validates it, and any product, architecture or workflow updates the change required.
 
 ## Commit subjects and pull request descriptions
 
 A commit is its Conventional Commits subject: `type(scope): summary`, in English and the imperative mood. The accepted types are `feat`, `fix`, `perf`, `refactor`, `docs`, `ci`, `build`, `test`, `chore` and `style`. A breaking change is marked with `!` before the colon — `refactor(engine)!: ...`.
 
-The repository squash-merges with the pull request title alone, so a merged commit has no body at all, and the merge appends the pull request number: `fix(engine): bound the capture drains (#390)`. Everything the changelog and the release notes ever read comes from that one line. A `BREAKING CHANGE:` footer would have nowhere to survive the squash, which is why the `!` is the marking that counts.
+The repository squash-merges with the pull request title alone, so a merged commit has no body at all, and the merge appends the pull request number: `fix(engine): bound the capture drains (#N)`. Everything the changelog and the release notes ever read comes from that one line. A `BREAKING CHANGE:` footer would have nowhere to survive the squash, which is why the `!` is the marking that counts.
 
 The same subject line passes through three points, and the number belongs to exactly one of them:
 
@@ -48,9 +56,9 @@ The same subject line passes through three points, and the number belongs to exa
 |---|---|---|
 | Local commit | `type(scope): summary` | none |
 | Pull request title | `type(scope): summary` | none |
-| Merged subject on `main` | `type(scope): summary (#N)` | exactly one, appended by `scripts/merge-pr.ps1` |
+| Merged subject on the target branch | `type(scope): summary (#N)` | exactly one, appended by `scripts/merge-pr.ps1` |
 
-A title that already ends in its own number is rejected, because the append would land it twice. A citation of a *different* pull request inside the summary is untouched. For example, "finish what (#370) started" remains valid.
+A title that already ends in its own number is rejected, because the append would land it twice. A citation of a *different* pull request inside the summary is untouched. For example, "finish what (#M) started" remains valid.
 
 A body on a local commit is optional and short. The pull request description carries the reasoning: what changed, why, what measured it, what a breaking change breaks and what to do about it. The changelog links to the pull request, so nothing needs saying twice.
 

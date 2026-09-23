@@ -1,6 +1,6 @@
 #pragma once
 
-// OutputFormatAudioSrc (ADR 0030 — 0.6.0)
+// OutputFormatAudioSrc
 //
 // IAudioCaptureSource decorator that converts an inner source to a target
 // {sample_rate, channels} / Float32 using FFmpeg libswresample.

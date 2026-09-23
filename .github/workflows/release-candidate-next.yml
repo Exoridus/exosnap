@@ -1,0 +1,344 @@
+name: Build release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Full commit SHA on next
+        required: true
+        type: string
+      candidate_id:
+        description: Unique candidate name (letters, digits, dots and hyphens)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: candidate-${{ inputs.source_commit }}-${{ inputs.candidate_id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/next' && github.repository == 'Exoridus/exosnap'
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.source_commit }}
+          fetch-depth: 0
+
+      - name: Bind source and final version
+        shell: pwsh
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SOURCE_COMMIT -cnotmatch '^[0-9a-f]{40}$') { throw 'source_commit must be a full lowercase SHA' }
+          if ($env:CANDIDATE_ID -cnotmatch '^[A-Za-z0-9][A-Za-z0-9.-]{0,63}$') { throw 'invalid candidate_id' }
+          if ((git rev-parse HEAD).Trim() -cne $env:SOURCE_COMMIT) { throw 'checkout differs from source_commit' }
+          git fetch origin '+refs/heads/main:refs/remotes/origin/main' '+refs/heads/next:refs/remotes/origin/next'
+          if ($LASTEXITCODE -ne 0) { throw 'could not fetch release branches' }
+          git merge-base --is-ancestor origin/main HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'candidate does not descend from main' }
+          git merge-base --is-ancestor HEAD origin/next
+          if ($LASTEXITCODE -ne 0) { throw 'candidate is not on next' }
+          $source = Get-Content CMakeLists.txt -Raw
+          $match = [regex]::Match($source, 'project\(exosnap VERSION ([0-9]+\.[0-9]+\.[0-9]+)')
+          if (-not $match.Success) { throw 'CMake version is missing' }
+          "RELEASE_VERSION=$($match.Groups[1].Value)" | Add-Content $env:GITHUB_ENV
+          "SOURCE_DATE_EPOCH=$((git log -1 --format=%ct).Trim())" | Add-Content $env:GITHUB_ENV
+
+      - uses: ./.github/actions/setup-qt
+        with:
+          profile: quick
+      - uses: ./.github/actions/setup-msvc
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Install WiX
+        shell: pwsh
+        run: dotnet tool install --global wix --version 4.0.5
+      - name: Enable long Git paths
+        shell: pwsh
+        run: git config --global core.longpaths true
+
+      - name: Build official candidate once
+        shell: pwsh
+        env:
+          UPDATE_PUBLIC_KEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+          SCCACHE_GHA_ENABLED: 'true'
+          SCCACHE_GHA_RW_MODE: READ_ONLY
+          SCCACHE_IDLE_TIMEOUT: '0'
+        run: |
+          if ($env:UPDATE_PUBLIC_KEY -notmatch '^[0-9a-fA-F]{64}$') { throw 'the official update public key is missing or malformed' }
+          cmake --preset windows-x64-ninja-release `
+            -DEXOSNAP_OFFICIAL_BUILD=ON `
+            -DEXOSNAP_ENABLE_CRASH_CAPTURE=ON `
+            "-DEXOSNAP_RELEASE_VERSION=$env:RELEASE_VERSION" `
+            "-DEXOSNAP_UPDATE_PUBLIC_KEY_HEX=$env:UPDATE_PUBLIC_KEY" `
+            -DFETCHCONTENT_BASE_DIR=C:/es
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset windows-x64-ninja-release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --release --manifest-path tools/exo-verify/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package and freeze bundle and plan
+        shell: pwsh
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+        run: |
+          $verify = 'tools/exo-verify/target/release/exo-verify.exe'
+          & $verify package --build-dir build/windows-x64-ninja-release --out candidate-package --version $env:RELEASE_VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $portable = "candidate-package/ExoSnap-$env:RELEASE_VERSION-windows-x64-portable.zip"
+          $installer = "candidate-package/ExoSnap-$env:RELEASE_VERSION-windows-x64.msi"
+          & $verify bundle create --out candidate-bundle --version $env:RELEASE_VERSION `
+            --commit $env:SOURCE_COMMIT --candidate-id $env:CANDIDATE_ID `
+            --installer $installer --portable $portable --runtime $verify `
+            --toolchain 'generator=Ninja' --toolchain 'runner=windows-2022'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $verify plan create --bundle candidate-bundle --out candidate-plan.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $verify plan verify --bundle candidate-bundle --plan candidate-plan.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload exact candidate bytes and frozen plan
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: candidate-${{ inputs.candidate_id }}
+          path: |
+            candidate-bundle/
+            candidate-plan.json
+          if-no-files-found: error
+          retention-days: 90
+
+  sign-test-feed:
+    # The protected next workflow revision is the signing-code trust boundary.
+    # Candidate packages are only read as data in this separate runner.
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Build verifier from the workflow revision
+        shell: pwsh
+        run: |
+          cargo build --locked --manifest-path tools/exo-verify/Cargo.toml
+          exit $LASTEXITCODE
+
+      - name: Download candidate bytes
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-${{ inputs.candidate_id }}
+
+      - name: Sign only the disposable feed metadata
+        shell: pwsh
+        env:
+          EXOSNAP_UPDATE_SIGNING_KEY: ${{ secrets.EXOSNAP_UPDATE_SIGNING_KEY }}
+          UPDATE_PUBLIC_KEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+        run: |
+          $verify = 'tools/exo-verify/target/debug/exo-verify.exe'
+          & $verify bundle verify candidate-bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $inventory = Get-Content candidate-bundle/bundle.json -Raw | ConvertFrom-Json
+          $version = $inventory.productVersion
+          if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { throw 'bundle has no final version' }
+          $base = 'https://api.github.com'
+          & $verify manifest sign --bundle candidate-bundle `
+            --installer-url "$base/ExoSnap-$version-windows-x64.msi" `
+            --portable-url "$base/ExoSnap-$version-windows-x64-portable.zip" `
+            --out candidate-feed --public-key-hex $env:UPDATE_PUBLIC_KEY
+          exit $LASTEXITCODE
+
+      - name: Upload signed disposable feed metadata
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: candidate-feed-${{ inputs.candidate_id }}
+          path: candidate-feed/
+          if-no-files-found: error
+          retention-days: 90
+
+  release-ci-core:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-${{ inputs.candidate_id }}
+      - name: Verify bundle and run core lane
+        shell: pwsh
+        run: |
+          $verify = './candidate-bundle/runtime/exo-verify.exe'
+          & $verify bundle verify candidate-bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $verify plan verify --bundle candidate-bundle --plan candidate-plan.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $verify run --profile release-ci --lane release-ci-core --bundle candidate-bundle --out lane-results
+          exit $LASTEXITCODE
+      - name: Preserve core result and focused evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: candidate-results-core-${{ inputs.candidate_id }}
+          path: |
+            lane-results/*.result.json
+            lane-results/*/scenarios/
+          if-no-files-found: error
+          retention-days: 90
+
+  release-ci-install:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-${{ inputs.candidate_id }}
+      - name: Verify bundle and run disposable install lane
+        shell: pwsh
+        run: |
+          $verify = './candidate-bundle/runtime/exo-verify.exe'
+          & $verify bundle verify candidate-bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $verify plan verify --bundle candidate-bundle --plan candidate-plan.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $verify run --profile release-ci --lane release-ci-install --bundle candidate-bundle --out lane-results --attest disposable-os
+          exit $LASTEXITCODE
+      - name: Preserve install result and focused evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: candidate-results-install-${{ inputs.candidate_id }}
+          path: |
+            lane-results/*.result.json
+            lane-results/*/scenarios/
+          if-no-files-found: error
+          retention-days: 90
+
+  release-ci-update:
+    needs: [build, sign-test-feed]
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-${{ inputs.candidate_id }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-feed-${{ inputs.candidate_id }}
+          path: candidate-feed
+      - name: Download official previous Stable packages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path previous -Force | Out-Null
+          gh release download v0.9.0 --repo Exoridus/exosnap --dir previous `
+            --pattern 'ExoSnap-0.9.0-windows-x64.msi' `
+            --pattern 'ExoSnap-0.9.0-windows-x64.msi.sha256' `
+            --pattern 'ExoSnap-0.9.0-windows-x64-portable.zip' `
+            --pattern 'ExoSnap-0.9.0-windows-x64-portable.sha256'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($name in @('ExoSnap-0.9.0-windows-x64.msi', 'ExoSnap-0.9.0-windows-x64-portable.zip')) {
+            $declared = (Get-Content -LiteralPath "previous/$name.sha256" -Raw).Trim().Split(' ')[0]
+            $actual = (Get-FileHash -LiteralPath "previous/$name" -Algorithm SHA256).Hash
+            if ($declared -notmatch '^[0-9a-fA-F]{64}$' -or $declared -ine $actual) { throw "previous Stable asset hash mismatch: $name" }
+          }
+          Expand-Archive -LiteralPath previous/ExoSnap-0.9.0-windows-x64-portable.zip -DestinationPath previous/portable
+          $oldExe = @(Get-ChildItem -LiteralPath previous/portable -Recurse -Filter exosnap.exe -File)
+          if ($oldExe.Count -ne 1) { throw 'previous Stable ZIP must contain one exosnap.exe' }
+          "EXOSNAP_UPDATE_FROM=$($oldExe[0].FullName)" | Add-Content $env:GITHUB_ENV
+          "EXOSNAP_UPDATE_FROM_MSI=$((Resolve-Path previous/ExoSnap-0.9.0-windows-x64.msi).Path)" | Add-Content $env:GITHUB_ENV
+      - name: Prepare local signed HTTPS feed
+        shell: pwsh
+        env:
+          UPDATE_PUBLIC_KEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+        run: |
+          $verify = './candidate-bundle/runtime/exo-verify.exe'
+          & $verify bundle verify candidate-bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $verify plan verify --bundle candidate-bundle --plan candidate-plan.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $verify feed --generate-cert --cert candidate-feed/server.pem --key candidate-feed/server.key --cert-der candidate-feed/ca.der
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          certutil -addstore -f Root candidate-feed/ca.der
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content "$env:SystemRoot/System32/drivers/etc/hosts" "`n127.0.0.1 api.github.com"
+      - name: Run disposable update lane against local signed feed
+        shell: pwsh
+        env:
+          UPDATE_PUBLIC_KEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+        run: |
+          $verify = './candidate-bundle/runtime/exo-verify.exe'
+          $args = @('feed', '--bundle', 'candidate-bundle', '--manifest', 'candidate-feed/update-manifest.json', '--signature', 'candidate-feed/update-manifest.json.sig', '--cert', 'candidate-feed/server.pem', '--key', 'candidate-feed/server.key', '--public-key-hex', $env:UPDATE_PUBLIC_KEY)
+          $feed = Start-Process -FilePath $verify -ArgumentList $args -WindowStyle Hidden -PassThru
+          $env:EXO_VERIFY_UPDATE_FEED_READY = '1'
+          $env:NO_PROXY = 'api.github.com,127.0.0.1'
+          $env:no_proxy = $env:NO_PROXY
+          try {
+            Start-Sleep -Seconds 1
+            if ($feed.HasExited) { throw 'local candidate feed exited before verification' }
+            & $verify run --profile release-ci --lane release-ci-update --bundle candidate-bundle --out lane-results --attest disposable-os
+            $runCode = $LASTEXITCODE
+          } finally {
+            Stop-Process -Id $feed.Id -ErrorAction SilentlyContinue
+          }
+          exit $runCode
+      - name: Preserve update result and focused evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: candidate-results-update-${{ inputs.candidate_id }}
+          path: |
+            lane-results/*.result.json
+            lane-results/*/scenarios/
+          if-no-files-found: error
+          retention-days: 90
+
+  report:
+    needs: [build, release-ci-core, release-ci-install, release-ci-update]
+    if: always() && needs.build.result == 'success'
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-${{ inputs.candidate_id }}
+      - name: Download available lane results
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          pattern: candidate-results-*-${{ inputs.candidate_id }}
+          path: results
+          merge-multiple: true
+      - name: Merge candidate report
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path results -Force | Out-Null
+          $verify = './candidate-bundle/runtime/exo-verify.exe'
+          & $verify bundle verify candidate-bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $verify plan verify --bundle candidate-bundle --plan candidate-plan.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $verify report merge --bundle candidate-bundle --plan candidate-plan.json --results results --out report
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $verify report verify --bundle candidate-bundle --plan candidate-plan.json --results results --report report/release-report.json
+          if ($LASTEXITCODE -gt 1) { exit $LASTEXITCODE }
+          Get-Content report/release-report.md
+          exit 0
+      - name: Upload partial report for external GPU and hardware lanes
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: candidate-report-${{ inputs.candidate_id }}
+          path: report/
+          if-no-files-found: error
+          retention-days: 90

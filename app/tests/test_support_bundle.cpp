@@ -90,7 +90,7 @@ TEST(SupportBundle, ProducesExpectedEntries) {
     EXPECT_TRUE(AnyEntryContains(entries, QStringLiteral("No telemetry")));
 }
 
-// ADR 0055: a bundle taken during a verification-reinstall run says so; a normal
+// a bundle taken during a verification-reinstall run says so; a normal
 // bundle carries no such key at all.
 TEST(SupportBundle, ManifestNotesTheVerificationReinstallModeOnlyWhileItIsOn) {
     QTemporaryDir tmp;
@@ -130,7 +130,7 @@ TEST(SupportBundle, NoPersonalDataOrWindowTitleSurvives) {
     EXPECT_TRUE(AnyEntryContains(entries, QStringLiteral("backend=wgc")));
 }
 
-// ADR 0044 and the product spec both promise startup-trace.txt in the bundle.
+// The product specification requires startup-trace.txt in the bundle.
 // It was promised, formatted and never collected: CollectBundleEntries did not
 // add it and FormatStartupTrace had no production caller at all.
 TEST(SupportBundle, CarriesTheStartupTraceTable) {

@@ -65,7 +65,7 @@ class MixedAudioSrc final : public IAudioCaptureSource {
     void SetSourceMuted(std::size_t index, bool muted) noexcept;
 
     bool Init(std::string& out_error) override;
-    // Reactivate every currently-degraded inner source (ADR 0046). Each inner is
+    // Reactivate every currently-degraded inner source. Each inner is
     // reacquired with its own identity rules (a PID-keyed loopback may refuse and
     // stay silent; a default endpoint follows the current default). Sources that
     // recover clear their degraded flag; the survivors are never touched. Returns
@@ -79,7 +79,7 @@ class MixedAudioSrc final : public IAudioCaptureSource {
     uint32_t Channels() const override;
     AudioSampleFormat SampleFormat() const override;
     const std::string& EndpointName() const override;
-    // Source-granular health (ADR 0046): total inner sources and how many are
+    // Source-granular health: total inner sources and how many are
     // currently degraded (endpoint lost, contributing honest silence). Lets the
     // audio thread surface a partly-degraded merged track without ending it.
     uint32_t CaptureSourceCount() const override;
@@ -113,7 +113,7 @@ class MixedAudioSrc final : public IAudioCaptureSource {
     // the surplus a source delivered beyond what has been mixed so far.
     std::vector<std::vector<float>> source_fifo_;
 
-    // Per-source degraded flag (ADR 0046). Set when an inner source's acquire
+    // Per-source degraded flag. Set when an inner source's acquire
     // fails mid-recording (endpoint lost): the mixer stops polling it (it would
     // only fail again) so the survivors keep mixing, and Reinit reacquires it.
     // This replaces the old silent-swallow that made a dead inner vanish without

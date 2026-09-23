@@ -110,7 +110,7 @@ TEST(RuntimeMergeTest, TC3_NvencApiVersionUnavailableBlocksAv1Path) {
 // TC-4/TC-5: retired. AAC used to have a Media Foundation runtime probe
 // (MFTEnumEx + CLSID_AACMFTEncoder fallback) that could report AAC
 // unavailable; these covered that downgrade and its CLSID fallback. Since
-// ADR 0052, AAC is encoded by FFmpeg's bundled native AAC-LC encoder, which
+// AAC is encoded by FFmpeg's bundled native AAC-LC encoder, which
 // has no runtime-probeable failure mode — see TC-1, which now covers AAC
 // staying Available unconditionally.
 // -------------------------------------------------------------------------

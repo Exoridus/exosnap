@@ -231,7 +231,7 @@ bool IsBuiltInPresetId(std::string_view id) {
 // ---------------------------------------------------------------------------
 
 void ReconcileContainerCodecs(OutputSettingsModel& output) {
-    // Delegate to the single-source-of-truth registry (ADR 0010).
+    // Delegate to the single-source-of-truth registry.
     // ContainerCompatRegistry::ReconcileCodecs replaces the previous ad-hoc
     // switch/if chain and uses the same compatibility table that gates
     // recording start via CapabilitySet::QueryCombo().
@@ -252,7 +252,7 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     }
 
     // Output format: the resolver owns every static reconciliation rule
-    // (container × codec per ADR 0010, the 10-bit demotion per ADR 0032, the
+    // (container × codec, the 10-bit demotion, the
     // 4:4:4 chroma snap, and the MP4 CFR timing constraint). Copy its answer
     // instead of keeping a second rule set that could drift.
     {
@@ -285,7 +285,7 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
             config.video.frame_rate_den = 1;
         }
     }
-    // Video: frame_pacing (ADR 0035) — clamp unknown integer values to Smooth.
+    // Video: frame_pacing — clamp unknown integer values to Smooth.
     {
         const int fp = static_cast<int>(config.video.frame_pacing);
         if (fp < 0 || fp > 1) {
@@ -343,7 +343,7 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         // muted is bool — no sanitization needed.
     }
 
-    // Audio encoding params (ADR 0019):
+    // Audio encoding params:
     // audio_bitrate_kbps: 0 is valid (auto default); non-zero clamped to the
     // broadest safe range (Opus's, the wider of the two -- see codec_types.h).
     // Codec-specific clamping (kOpusBitrateKbpsMin/Max vs. kAacBitrateKbpsMin/Max)
@@ -367,7 +367,7 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         }
     }
 
-    // Channel / sample-format model (ADR 0030 — 0.6.0):
+    // Channel / sample-format model:
     //   audio_channels: must be 1 or 2; else default to 2.
     //   audio_sample_rate: vetted set {44100, 48000, 96000}; else default to 48000.
     //     Opus locks to 48000 regardless of stored value.
@@ -644,7 +644,7 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
         return false;
     }
 
-    // Audio encoding params (ADR 0019).
+    // Audio encoding params.
     if (a.audio.audio_bitrate_kbps != b.audio.audio_bitrate_kbps) {
         return false;
     }
@@ -690,7 +690,7 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.audio.mic_rnnoise_enabled != b.audio.mic_rnnoise_enabled) {
         return false;
     }
-    // Channel / sample-format model (ADR 0030 — 0.6.0): exact integer comparisons.
+    // Channel / sample-format model: exact integer comparisons.
     if (a.audio.audio_sample_rate != b.audio.audio_sample_rate) {
         return false;
     }
@@ -923,7 +923,7 @@ std::string_view ConfigDirtyDifference(const RecordingPresetConfig& a, const Rec
         return "audio.mic_gain_linear";
     }
 
-    // Audio encoding params (ADR 0019).
+    // Audio encoding params.
     if (a.audio.audio_bitrate_kbps != b.audio.audio_bitrate_kbps) {
         return "audio.audio_bitrate_kbps";
     }
@@ -969,7 +969,7 @@ std::string_view ConfigDirtyDifference(const RecordingPresetConfig& a, const Rec
     if (a.audio.mic_rnnoise_enabled != b.audio.mic_rnnoise_enabled) {
         return "audio.mic_rnnoise_enabled";
     }
-    // Channel / sample-format model (ADR 0030 — 0.6.0): exact integer comparisons.
+    // Channel / sample-format model: exact integer comparisons.
     if (a.audio.audio_sample_rate != b.audio.audio_sample_rate) {
         return "audio.audio_sample_rate";
     }

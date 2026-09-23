@@ -142,7 +142,7 @@ class UpdateService::Impl {
     // writing `state` at once, and a UI that said "not checking" the whole time.
     std::uint64_t next_operation_id = 1;
     std::uint64_t active_operation = 0;
-    // ADR 0055. Atomic because SetVerifyReinstallMode/IsVerifyReinstallMode run
+    // Atomic because SetVerifyReinstallMode/IsVerifyReinstallMode run
     // outside the mutex; its value is snapshotted into the operation context at
     // check start so a toggle cannot change what a running check means.
     std::atomic<bool> verify_reinstall{false};
@@ -582,7 +582,7 @@ void UpdateService::LaunchUpdater() {
     // and Qt's default library paths cover the application directory and the
     // *build-time* Qt plugins path — neither of which exists on a user machine.
     // Without this file the staged updater cannot load qwindows.dll and dies at
-    // startup with "could not load the Qt platform plugin". ADR 0037 §E treats
+    // startup with "could not load the Qt platform plugin". The packaging gate treats
     // it as part of the staging contract for exactly that reason: the packaging
     // gate's updater smoke reproduces this write verbatim. So its failure is a
     // staging failure, not something to shrug at — the previous code checked

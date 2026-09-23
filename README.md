@@ -4,7 +4,7 @@
 
 ### Record your screen. Keep your audio separate. Know what happened.
 
-[![Latest](https://img.shields.io/github/v/release/Exoridus/exosnap?style=for-the-badge&label=Latest&logo=github&color=44cc11)](https://github.com/Exoridus/exosnap/releases/latest) [![Downloads](https://img.shields.io/github/downloads/Exoridus/exosnap/total?style=for-the-badge&label=Downloads&logo=github)](https://github.com/Exoridus/exosnap/releases) [![CI](https://img.shields.io/github/actions/workflow/status/Exoridus/exosnap/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=fff&label=CI)](https://github.com/Exoridus/exosnap/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/Exoridus/exosnap?style=for-the-badge&color=44cc11)](LICENSE)
+[![Latest](https://img.shields.io/github/v/release/Exoridus/exosnap?style=for-the-badge&label=Latest&logo=github&color=44cc11)](https://github.com/Exoridus/exosnap/releases/latest) [![Downloads](https://img.shields.io/github/downloads/Exoridus/exosnap/total?style=for-the-badge&label=Downloads&logo=github)](https://github.com/Exoridus/exosnap/releases) [![CI](https://img.shields.io/github/actions/workflow/status/Exoridus/exosnap/ci.yml?branch=next&style=for-the-badge&logo=githubactions&logoColor=fff&label=CI)](https://github.com/Exoridus/exosnap/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/Exoridus/exosnap?style=for-the-badge&color=44cc11)](LICENSE)
 
 A Windows screen recorder for gameplay, software demos and everyday capture. NVIDIA hardware encoding, multi-track audio, HDR10, lossless trimming and recording diagnostics. Your recordings stay on your machine. No account required.
 
@@ -34,10 +34,10 @@ A Windows screen recorder for gameplay, software demos and everyday capture. NVI
 1. Download the **MSI installer** or **portable ZIP** from [Releases](https://github.com/Exoridus/exosnap/releases). For the portable build, extract the whole folder and run `exosnap.exe`; keep its bundled files together.
 2. Choose a screen, window or region. Select the application/system audio and microphone sources you want.
 3. Review the readiness status. ExoSnap explains blockers before you start and offers a fix where possible.
-4. Press **Record**, or use the default **Alt+F9** start/stop hotkey. Hotkeys are configurable.
+4. Press **Record**, or use the default **Alt+Shift+R** start/stop hotkey. Hotkeys are configurable.
 5. Stop the recording and review the result. Open it in the built-in editor for a lossless trim if needed.
 
-The built-in profile starts with **MKV, AV1, Opus and 60 fps CFR**. On first start, the video codec is reconciled to the best available encoder on your GPU: AV1, then HEVC, then H.264. Recordings default to `%USERPROFILE%\Videos\ExoSnap`. The destination is configurable.
+The built-in profile starts with **MKV, AV1, Opus and 60 fps CFR**. On first start, the video codec is reconciled to the best available encoder on your GPU: AV1, then HEVC, then H.264. Recordings default to the Windows Videos known folder plus `ExoSnap`, respecting folder redirection. The destination is configurable.
 
 The **Microsoft Visual C++ 2022 x64 Redistributable** is required. If startup reports a missing runtime DLL, install it from [Microsoft](https://aka.ms/vs/17/release/vc_redist.x64.exe). Current portable and MSI builds are unsigned, so Windows SmartScreen may warn on first launch. See the [portable guide](README-PORTABLE.md) for setup and storage details.
 
@@ -89,7 +89,7 @@ The editor supports **keyframe-accurate lossless trim**, not arbitrary frame-acc
 
 ## Local by default
 
-Recordings are never uploaded or processed in the cloud. There is no account and no analytics telemetry. Update checks use public GitHub Releases. Crash reports require consent and are scrubbed before upload. Self-built binaries disable the updater by default. Update installation is visible and user-controlled, with verified downloads and rollback on failure.
+Recordings are never uploaded or processed in the cloud. There is no account and no analytics telemetry. Update checks use public GitHub Releases. Crash reports require consent. Structured events are scrubbed; native minidumps can contain executable module paths, as disclosed in the privacy policy. Automatic checks are off by default in all builds; self-builds additionally lack the official production-feed/upload configuration. Update installation is visible and user-controlled, with verified downloads and explicit failure/restoration states.
 
 Read [Privacy](PRIVACY.md) for the network and storage details, and [Security](SECURITY.md) for reporting security issues. For recording bugs, include the app version, GPU/driver, capture source and selected format in an [issue](https://github.com/Exoridus/exosnap/issues). Review logs before sharing them.
 
@@ -115,7 +115,9 @@ Use `scripts/verify.ps1 -Fast` for scoped iteration and `scripts/verify.ps1 -Ful
 | [Product specification](docs/product-spec.md) | Behavior, defaults and product decisions. |
 | [Roadmap](docs/roadmap.md) | Planned work; not a promise of current support. |
 | [Known limitations](KNOWN_LIMITATIONS.md) | Current platform, codec and workflow boundaries. |
-| [Development tooling](docs/dev/harness-and-tracing.md) | Diagnostics harnesses and debugging. |
+| [Documentation index](docs/README.md) | Product, architecture, developer workflows and accepted future designs. |
+| [Architecture](docs/architecture/overview.md) | Current subsystem boundaries and invariants. |
+| [Build and test](docs/dev/build-and-test.md) | Development environment, tests and verification. |
 
 ## License and acknowledgements
 

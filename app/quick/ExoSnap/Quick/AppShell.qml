@@ -43,7 +43,7 @@ Item {
     // opt-in during the migration, when About was the only migrated page; leaving
     // it that way shipped an application that opens on its own version numbers.
     property int currentPage: ShellAdapter.RecordPage
-    // Edit/Output/Save is an overlay over the Record page (ADR 0022), never a
+    // Edit/Output/Save is an overlay over the Record page, never a
     // nav destination — so its visibility is shell state, not a stack index.
     property bool editOverlayOpen: false
 
@@ -790,17 +790,9 @@ Item {
         }
     }
 
-    // The Edit surface is still a LAYER rather than a stack destination (ADR
-    // 0022 is untouched: nothing about who owns the clip, the decoder or the
-    // export changed) — but it now occupies the same content region every page
-    // does, below the shell's own 40 px band, instead of the whole window.
-    //
-    // Covering the window was the source of the "giant modal" reading, and of
-    // one outright defect: the shell's minimize, maximize and close buttons sat
-    // UNDER the editor, so a window with the editor open could not be closed or
-    // dragged by its own chrome. Anchoring below the title bar puts the brand,
-    // the navigation, the status pill, the notification bell and the three
-    // window buttons back where they always are.
+    // Edit belongs to Record but occupies only the page content region.
+    // Keep the shell's title bar, navigation and native window controls usable.
+
     //
     // This and the three loaders after it keep an id no expression reads (QCR-706
     // removed eleven such ids elsewhere). They are kept deliberately: the four are

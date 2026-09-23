@@ -23,7 +23,7 @@ struct RecoveryActionResult {
     std::string message; // human-readable error on failure, empty on success
 };
 
-// UI-agnostic service for startup crash-recovery (ADR-0014, ADR-0015).
+// UI-agnostic service for startup crash-recovery.
 // Scan() must be called first; the action methods operate on individual
 // entries returned by Scan(). All blocking remux calls happen on the calling
 // thread — callers must dispatch to a worker thread themselves.
@@ -41,7 +41,7 @@ class RecoveryService {
     // disk; return surviving candidates enriched with file-size metadata.
     [[nodiscard]] QVector<RecoveryCandidate> Scan();
 
-    // "Finish" action (ADR-0015): honour the manifest snapshot.
+    // "Finish" action: honour the manifest snapshot.
     //   target container = intended_container, destination = final_output_path.
     //   Fallback to the current configured output directory when the stored
     //   folder no longer exists on disk.

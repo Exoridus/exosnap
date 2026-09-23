@@ -501,7 +501,7 @@ LiveTile AudioSyncTile(const LiveTileInputs& in) {
         tile.session_detail = "session peak " + Number(s.peak_av_drift_ms, 1) + " ms";
 
     tile.tone = ToneOfStage(s, {exosnap::engine::PipelineBottleneck::Audio});
-    // A degraded source is a MEASURED problem in its own right (ADR 0046) and is
+    // A degraded source is a MEASURED problem in its own right and is
     // reported as one even while the engine still calls the pipeline healthy --
     // the recording keeps running, which is why it never escalates past Notice.
     if (s.audio.source_degraded && tile.tone == TileTone::Neutral)

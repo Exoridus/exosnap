@@ -9,11 +9,9 @@
 
 // ---------------------------------------------------------------------------
 // The WYSIWYG preview tap publishes the engine's pre-encode surface to the
-// preview renderer through a shared texture (see preview_shared_texture.h and
-// ADR 0040). For an SDR or tone-mapped session that surface is already an SDR
-// image; a native HDR10 session encodes straight from linear scRGB FP16, so the
-// tapped surface needs a display transform on the consumer side before it can
-// be drawn into an SDR swap chain.
+// preview renderer through a shared texture (preview_shared_texture.h). For an SDR or tone-mapped session that surface
+// is already an SDR image; a native HDR10 session encodes straight from linear scRGB FP16, so the tapped surface needs
+// a display transform on the consumer side before it can be drawn into an SDR swap chain.
 //
 // This header is the contract between the producer (VideoThread) and the
 // consumer (the preview renderer): which transform the consumer must apply,

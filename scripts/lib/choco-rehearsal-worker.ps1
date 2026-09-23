@@ -45,7 +45,57 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path $PSScriptRoot 'ReleaseScenarios.ps1')
+function New-ReleaseChocolateyPackageCopy {
+    <#
+    .SYNOPSIS
+        Copies packaging/chocolatey and points the copy at a local MSI.
+    .DESCRIPTION
+        `Install-ChocolateyPackage` accepts a local path in `url64bit`, so a
+        rehearsal can install the package WITHOUT the release being published --
+        which is the point: the checksum in the tracked file describes an MSI that
+        does not exist on GitHub until the release is built.
+
+        The tracked files are never touched. The rewrite happens in a copy, and both
+        substitutions must match exactly once: a `chocolateyinstall.ps1` whose shape
+        changed would otherwise be packed unrewritten and the rehearsal would quietly
+        download the PREVIOUS release instead.
+
+    .OUTPUTS
+        @{ Ok = $true; InstallScript } or @{ Ok = $false; Detail }
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $SourceDirectory,
+        [Parameter(Mandatory)] [string] $DestinationDirectory,
+        [Parameter(Mandatory)] [string] $MsiPath,
+        [Parameter(Mandatory)] [string] $Sha256
+    )
+
+    New-Item -ItemType Directory -Path $DestinationDirectory -Force | Out-Null
+    Copy-Item -LiteralPath $SourceDirectory -Destination $DestinationDirectory -Recurse -Force
+    $copyRoot = Join-Path $DestinationDirectory (Split-Path -Leaf $SourceDirectory)
+    $installScript = Join-Path $copyRoot 'tools/chocolateyinstall.ps1'
+    if (-not (Test-Path -LiteralPath $installScript)) {
+        return @{ Ok = $false; Detail = "the package copy carries no tools/chocolateyinstall.ps1" }
+    }
+
+    $text = Get-Content -LiteralPath $installScript -Raw
+    $urlPattern = "(?m)^(\s*url64bit\s*=\s*)'[^']*'"
+    $checksumPattern = "(?m)^(\s*checksum64\s*=\s*)'[^']*'"
+    $urlMatches = [regex]::Matches($text, $urlPattern)
+    $checksumMatches = [regex]::Matches($text, $checksumPattern)
+    if ($urlMatches.Count -ne 1 -or $checksumMatches.Count -ne 1) {
+        return @{ Ok = $false
+            Detail = "chocolateyinstall.ps1 carries $($urlMatches.Count) url64bit and " +
+            "$($checksumMatches.Count) checksum64 assignment(s); exactly one of each is required"
+        }
+    }
+    # $1 rather than a rebuilt line: the file's own indentation and alignment are
+    # not this function's to decide.
+    $text = [regex]::Replace($text, $urlPattern, "`${1}'$($MsiPath -replace "'", "''")'")
+    $text = [regex]::Replace($text, $checksumPattern, "`${1}'$Sha256'")
+    Set-Content -LiteralPath $installScript -Value $text -Encoding utf8NoBOM
+    return @{ Ok = $true; Detail = ''; PackageDirectory = $copyRoot; InstallScript = $installScript }
+}
 
 $installDirectory = 'C:\Program Files\Codexo\ExoSnap'
 $vendorDirectory = 'C:\Program Files\Codexo'

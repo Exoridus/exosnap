@@ -8,7 +8,7 @@
     Sentry tag keys (libs/crash_capture/include/crash_capture/crash_scrubber.h,
     `kAllowedTagKeys`). PRIVACY.md and docs/product-spec.md §14 separately
     enumerate "what is sent" in plain language. Nothing enforced that the two
-    stayed in sync (docs/privacy-review.md, ADR 0045) — a key added to the code
+    stayed in sync (docs/privacy-review.md) — a key added to the code
     allowlist without a doc update, or a doc claim with no matching code key,
     would silently drift the public promise away from the actual behavior.
 

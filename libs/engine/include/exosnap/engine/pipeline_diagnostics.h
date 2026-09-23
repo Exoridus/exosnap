@@ -73,7 +73,7 @@ enum class CaptureSourceType : uint8_t {
     Region,
 };
 
-// Presentation mode of the captured source (present/tearing diagnostics, ADR 0033).
+// Presentation mode of the captured source (present/tearing diagnostics).
 // Mirror of app::diagnostics::PresentMode, kept local so this engine header
 // does not depend on the app-layer PresentProvider.h (layering: app → core only).
 enum class PresentMode : uint8_t {
@@ -123,7 +123,7 @@ struct CaptureDiagnostics {
     double seconds_without_capture = 0.0;
     bool capture_starved = false;
 
-    // Present cadence (VRR/CFR judder correlation, v0.8.0 / ADR 0033). DXGI Output
+    // Present cadence (VRR/CFR judder correlation). DXGI Output
     // Duplication: derived from DXGI_OUTDUPL_FRAME_INFO.LastPresentTime (QPC) deltas
     // and AccumulatedFrames. WGC (Window/Region): from the frame's SystemRelativeTime
     // deltas, a delivery time rather than a present time, so its jitter floor is
@@ -139,7 +139,7 @@ struct CaptureDiagnostics {
     double source_coalesce_ratio = 1.0; // mean AccumulatedFrames per acquire (>1 == presents coalesced)
     MetricAvailability present_cadence_availability = MetricAvailability::Unavailable;
 
-    // Present mode + tearing (PresentMon ETW present-diagnostics, ADR 0033). Elevation-
+    // Present mode + tearing (PresentMon ETW present-diagnostics). Elevation-
     // and opt-in-gated; Unavailable until the in-process PresentMon consumer is vendored
     // and a real present has been observed (never a fabricated Composed/zero).
     PresentMode source_present_mode = PresentMode::Unknown;
@@ -246,7 +246,7 @@ struct EncoderDiagnostics {
 
 // Immutable encoder initialization parameters, captured once when the encoder is
 // configured and carried unchanged on every snapshot thereafter. Plain data only —
-// no NVENC types leak to the app layer (ADR: engine stays UI-agnostic). `valid` is
+// no NVENC types leak to the app layer. `valid` is
 // false until the encoder has been configured (e.g. a failure before configure).
 struct EncoderInitInfo {
     bool valid = false;
@@ -299,7 +299,7 @@ struct AudioDiagnostics {
     uint32_t channels = 0;
     AudioCodec codec = AudioCodec::Opus;
     uint32_t track_count = 0;
-    // Device hot-swap health (ADR 0046). degraded_sources = capture sources
+    // Device hot-swap health. degraded_sources = capture sources
     // across all audio tracks whose endpoint is currently lost and contributing
     // honest silence (the recording keeps running; the source reactivates when
     // the device returns). source_degraded == degraded_sources > 0. A calm,

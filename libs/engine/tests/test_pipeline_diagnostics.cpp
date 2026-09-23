@@ -122,7 +122,7 @@ TEST(RollingTimeWindow, PercentileHonoursHorizon) {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Audio device-loss health (ADR 0046)
+// Audio device-loss health
 // ---------------------------------------------------------------------------
 
 TEST(PipelineDiagnostics, AudioSourceHealthDefaultsHealthy) {
@@ -343,7 +343,7 @@ TEST(PipelineDiagnostics, ObservedIntervalMarkedAvailableOnVfr) {
 }
 
 // ---------------------------------------------------------------------------
-// Present cadence (VRR/CFR judder correlation, v0.8.0 / ADR 0033)
+// Present cadence (VRR/CFR judder correlation)
 // ---------------------------------------------------------------------------
 
 TEST(PipelineDiagnostics, PresentCadenceUnavailableWithoutSamples) {

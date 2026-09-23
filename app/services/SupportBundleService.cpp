@@ -55,7 +55,7 @@ diagnostics::BundleInputs BuildSupportBundleInputs(const SupportBundleContext& c
     inputs.commit_sha = QString::fromLatin1(build::kGitCommit);
     inputs.verify_update_reinstall = context.verify_update_reinstall;
     inputs.settings_summary = context.settings_summary;
-    // ADR 0044 promises startup-trace.txt in the bundle. The trace is a
+    // The support bundle includes startup-trace.txt. The trace is a
     // process-global singleton, so it is read here at the boundary rather than
     // inside the collector, which stays a pure function of its inputs.
     inputs.startup_trace = diagnostics::StartupTrace::instance().entries();

@@ -178,7 +178,7 @@ class DiagnosticsAdapter : public QObject {
     void refreshDisplayFacts();
     void setElevated(bool elevated);
     void setHasLastRecording(bool has_last_recording);
-    // ADR 0033 DPC/ISR latency. Borrowed, never owned, and PULLED on every evaluation
+    // DPC/ISR latency. Borrowed, never owned, and PULLED on every evaluation
     // rather than pushed: the reading is only ever as current as the last read, so
     // sampling where the recommendation engine runs is what keeps a peak that stopped
     // being measured from standing on the page. nullptr means no producer is installed,

@@ -341,7 +341,7 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                 libebml::GetChild<libmatroska::KaxTrackDefaultDuration>(vid).SetValue(frame_dur_ns);
             }
 
-            // Colour description (ADR 0032). Written for every recording so the
+            // Colour description. Written for every recording so the
             // file is no longer color-ambiguous; the values match the BT.709
             // limited-range conversion the VideoProcessor performs in
             // video_thread.cpp. HDR sub-elements are emitted only when set.

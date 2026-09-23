@@ -41,7 +41,7 @@
     Repository to check. Defaults to the repository this script lives in.
 
 .PARAMETER Base
-    Commit to diff and log against. Defaults to the merge base with origin/main.
+    Commit to diff and log against. Defaults to the merge base with origin/next.
 
 .PARAMETER Subject
     Check this single subject instead of the branch's commits.
@@ -107,10 +107,10 @@ function Get-PolicyEpoch {
 
 function Resolve-Base {
     if ($Base) { return $Base }
-    $mergeBase = (Invoke-Git @('merge-base', 'HEAD', 'origin/main'))
-    if ($LASTEXITCODE -eq 0 -and $mergeBase) { return $mergeBase.Trim() }
-    $mergeBase = (Invoke-Git @('merge-base', 'HEAD', 'main'))
-    if ($LASTEXITCODE -eq 0 -and $mergeBase) { return $mergeBase.Trim() }
+    foreach ($candidate in @('origin/next', 'origin/main', 'next', 'main')) {
+        $mergeBase = (Invoke-Git @('merge-base', 'HEAD', $candidate))
+        if ($LASTEXITCODE -eq 0 -and $mergeBase) { return $mergeBase.Trim() }
+    }
     return $null
 }
 
@@ -145,7 +145,7 @@ if (Test-RuleEnabled 'commit-subject') {
         else {
             $baseRef = Resolve-Base
             if (-not $baseRef) {
-                [void]$violations.Add('commit-subject: neither origin/main nor main could be resolved, so the branch range is unknown')
+                [void]$violations.Add('commit-subject: no development or Stable base could be resolved, so the branch range is unknown')
             }
             else {
                 # Two ranges intersected: what this branch adds, and what the

@@ -9,7 +9,7 @@
 //   B.  DXGI:  IDXGIFactory -> EnumAdapters -> adapter description string
 //   D.  OS: RtlGetVersion via ntdll.dll
 //
-// AAC audio capability is not probed here: since ADR 0052, AAC is encoded by
+// AAC audio capability is not probed here: AAC is encoded by
 // FFmpeg's bundled native AAC-LC encoder (libs/engine/src/ffmpeg_aac_encoder.cpp),
 // which ships with every build and requires no Media Foundation component. It
 // is therefore always available; see CapabilityBuilder::BuildStaticValidatedBaseline().
@@ -589,7 +589,7 @@ RuntimeCapabilitySnapshot CapabilityBuilder::QueryRuntimeFacts() {
     ProbeNvencCodecs(snapshot.nvidia); // A2: per-GPU codec GUIDs (best-effort; needs a real NVIDIA GPU)
     ProbeAdapterName(snapshot.nvidia);
     ProbeMfWebcam(snapshot.mf_webcam); // S4: webcam MF presence probe (safe, LoadLibraryW-based)
-    // No AAC probe: FFmpeg's bundled native AAC-LC encoder is always available (ADR 0052).
+    // No AAC probe: FFmpeg's bundled native AAC-LC encoder is always available.
     ProbeOs(snapshot.os);
     ProbeDisplays(snapshot.displays);
     // DXGI-only and no heavier than the display probe next to it. Carried in the

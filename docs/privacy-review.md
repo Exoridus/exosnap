@@ -1,95 +1,67 @@
 # Privacy review
 
-A durable, tracked inventory of every place ExoSnap's code can touch the network, plus the review checklist that keeps `PRIVACY.md` and `docs/product-spec.md` §14 honest release over release. See ADR 0045 for the decisions behind this document and its automated checks.
+This runbook owns the runtime egress inventory and the checks that keep [Privacy](../PRIVACY.md) and the [product privacy contract](product-spec.md#14-privacy) aligned with code. It does not change consent or authorize uploads. [Updates and security](architecture/update-and-security.md) describes the trust boundaries.
 
-This is **not** a new privacy feature. ExoSnap remains telemetry-free. Nothing here changes what data the app processes. It is a **procedure**: a place the egress inventory lives, plus a handful of automated checks that make "nothing new phones home" and "the docs match the code" provable instead of a reviewer's hope.
+## Runtime feature inventory
 
-## Egress inventory (E1-E4)
+The identifiers below classify features, not a claim that the repository has exactly four network calls. The support-bundle entry is explicitly local. Build/provisioning downloads are developer operations, not product runtime egress.
 
-There are exactly four runtime network call sites in the app, all over WinHTTP, all to GitHub or Sentry. `scripts/validate-network-egress.ps1` (CI, every PR) fails if a fifth appears without this table being updated and the script's allowlist being consciously extended.
+| ID | Feature | Gate and data | Recipient |
+|---|---|---|---|
+| E1 | Crash-report delivery | Official-build upload configuration and explicit one-shot or remembered consent. Scrubbed structured event plus the separate native minidump channel. | Configured Sentry EU ingest endpoint |
+| E2 | Update discovery and manifest retrieval | User-requested check or enabled automatic check. Automatic checks default off. Public release metadata, fixed checker User-Agent, no GitHub token and no installed version sent for comparison. | Public GitHub API and release assets |
+| E3 | Update package retrieval | Explicit application Update action or manual updater download action. Fixed updater User-Agent, package signature/hash validation before installation. | URLs authorized by the verified release manifest and permitted download handling |
+| E4 | Support bundle | User-initiated local ZIP creation. No automatic upload. | None |
 
-| # | Purpose | Gate · Consent | Fields sent | Recipient / host |
-|---|---|---|---|---|
-| E1 | Crash report upload (Sentry, Stage 1) | Official build only (DSN compiled in under `EXOSNAP_OFFICIAL_BUILD`); **consent-gated** by Ask/Always/Never policy. One-shot Send flushes the pending envelope before resetting consent. | Allowlisted tags only (see table below) + crash stack + minidump. Minidump binary carries module paths; see "Minidump module paths" below. | `ingest.de.sentry.io` (EU) |
-| E2 | Update check | **Opt-in**: `check_updates_on_start` defaults to `false` (ADR 0045); self-built binaries are additionally blocked at compile time (`IsUpdateCheckEnabled()`) regardless of the setting | No request body, no auth token, no app version. Fixed User-Agent `ExoSnap-UpdateChecker/1.0` (protocol version, not app version) + `Accept`/`X-GitHub-Api-Version` headers. Version comparison is client-side against the fetched releases JSON. | `api.github.com` |
-| E3 | Update package download | Same opt-in gate as E2 (only reached after E2 finds a newer release and the user clicks Update) | No body, no token. Fixed User-Agent `ExoSnap-Updater/1.0`. | GitHub Release asset URLs (`objects.githubusercontent.com` / `github.com`) |
-| E4 | Support bundle (Thema "diagnostics support channel", #194) | User-initiated, local file operation: **no transmission** | N/A: the bundle is a `.zip` written to a location the user picks; ExoSnap never uploads it | None: this is the "local, not egress" entry, kept in the table so "no network path" is explicit rather than merely absent |
+The application-handled feed override is development-only, requires HTTPS and a host, is not persisted, and is refused by official builds. It does not relax signature or package-hash verification. An application handoff gives the updater the verified candidate data; it does not ask it to discover a different release.
 
-**E2 baseline note (ADR 0045).** Before this slice, `check_updates_on_start` defaulted to `true` with no first-run consent step. An Official build silently contacted `api.github.com` on first launch, contradicting `PRIVACY.md`'s "opt-in" claim. The default is now `false`. This table's E2 row is code-true as written. See ADR 0045 for the full before/after.
+A request necessarily carries a network source address to its recipient. The policy's Sentry residency, IP retention and organization-side scrubbing assertions are deployment configuration that must be checked in the service account; source code alone cannot verify them.
 
-### What is sent (crash-report tag allowlist)
+## Crash fields and binary boundary
 
-The `kAllowedTagKeys` array in `libs/crash_capture/include/crash_capture/crash_scrubber.h` is the single source of truth for which structured tags can ever leave the process on the Sentry path (E1). `scripts/validate-privacy-allowlist.ps1` (CI, every PR) fails if this list drifts from the mapping tables in `PRIVACY.md` or `docs/product-spec.md` §14 in either direction.
+`kAllowedTagKeys` in `libs/crash_capture/include/crash_capture/crash_scrubber.h` owns the structured tag allowlist. The validator compares its keys with the marked tables in both public policy and product specification.
 
-| Tag key | What it carries | Populated today? |
-|---|---|---|
-| `os.name` | Windows edition name | No: not yet set via `SetTag`/`SetEncoderContext` |
-| `os.version` | Windows build/version string | No |
-| `gpu.model` | GPU adapter name | No |
-| `gpu.vendor` | GPU vendor | No |
-| `gpu.driver` | GPU driver version | No |
-| `app.version` | ExoSnap version | No |
-| `encoder_backend` | Active encoder backend | Yes (`SetEncoderContext`) |
-| `container` | Output container | Yes |
-| `video_codec` | Selected video codec | Yes |
-| `audio_codec` | Selected audio codec | Yes |
+| Tag | Populated by current application tag wiring |
+|---|---|
+| `os.name`, `os.version` | No |
+| `gpu.model`, `gpu.vendor`, `gpu.driver` | No |
+| `app.version` | No |
+| `encoder_backend`, `container`, `video_codec`, `audio_codec` | Yes |
 
-OS/GPU facts are not populated on the Sentry tag path and are not presented as previous-session facts in the next-launch dialog. This is deliberate doc↔code precision: less is sent than the allowlist permits, never more.
+Allowlisted does not mean populated. Do not promote reserved fields to a claim that they are currently sent. Structured event scrubbing removes unsafe tags, paths/user/machine fields, breadcrumbs and defensive SDK additions such as `server_name` and device context. Review nonfatal diagnostic events and the hard-crash path separately; a successful test event does not produce or inspect a native minidump.
 
-### Minidump module paths (E1 detail)
+Crashpad writes a local minidump out of process. The structured-event hook cannot sanitize its binary module list. A portable installation beneath a user profile can therefore place a username-bearing executable path in the minidump. Consent UI and the public policy must continue to disclose this; no blanket claim that every uploaded byte is path-free is valid.
 
-A hard crash uploads, with consent, a Crashpad minidump out-of-process. The `before_send` scrubber runs only on the structured event, never on the minidump binary, and it cannot strip the `MINIDUMP_MODULE_LIST`, which carries the full install path of `exosnap.exe`.
+Ask every time is the default. A one-shot Send flushes the pending delivery and returns SDK consent to unknown. Remembered Send automatically persists until changed. Never send suppresses reporting prompts, not local recording recovery. Dialog dismissal does not change policy. Self-builds without official upload configuration do not upload.
 
-For a standard Program-Files-style install this is not personal. For a **portable install run from under `%USERPROFILE%`**, the username segment of that path can appear in the uploaded minidump.
+## Local stores and control channels
 
-This is a real, narrower exception to "paths are stripped" (see `PRIVACY.md`). It applies only to the minidump binary, never to the structured event. The crash dialog discloses this boundary but does not display the binary contents.
+Settings (`settings.ini`), presets (`presets.toml`), recording history, recovery manifests, logs, session reports and recordings are local. Application data normally lives under the Windows local-application-data ExoSnap directory; recordings use the selected output directory. Explicit test overrides can isolate both.
 
-No code mitigation ships in this slice (see Offene Frage 1 and ADR 0045). The doc precision above is the fix that landed. A forced standard-install-path mitigation remains a possible follow-up, tracked as a known limitation rather than silently promised.
+Capture-target titles are neutralized at recording log producers. Support-bundle construction additionally redacts recognized capture-target fields, paths, user and machine names, and serializes allowlisted settings facts rather than copying raw configuration. It excludes recordings and crash dumps. This is a known-shape scrubber, not a guarantee against every arbitrary personal string.
 
-### `before_send` defensive backstop
+Application Live Verify and updater automation endpoints are dormant unless armed by their respective command-line options. They use native named pipes with a creating-user DACL and remote-client rejection. There is no product TCP listener. A bundled/transitive Qt Network DLL is not evidence of egress, and its absence would not be proof of privacy either. Review actual call sites and gates.
 
-`BeforeSendHook` (`libs/crash_capture/src/crash_capture.cpp`) additionally strips `server_name` and `contexts.device` from every event before it can be sent. This is **not** closing an active leak: the pinned sentry-native version (0.15.0, see `cmake/VendorSentry.cmake`) does not set either field on init. It is a cheap guard against a future sentry-native version (or future app code) adding either without `before_send` being updated to catch it.
+## Automated checks
 
-### Local, never-transmitted stores
+Run these from the repository root:
 
-Confirmed by code search: no `WinHttpOpen`/socket call exists outside `libs/update` and `libs/crash_capture` (enforced by `scripts/validate-network-egress.ps1`).
+```powershell
+pwsh scripts/validate-privacy-allowlist.ps1
+pwsh scripts/validate-network-egress.ps1
+pwsh scripts/run-tests.ps1 -Filter crash
+pwsh scripts/run-tests.ps1 -Filter support_bundle
+```
 
-- Application settings: `%LOCALAPPDATA%\ExoSnap\settings.ini`
-- Recording presets: `%LOCALAPPDATA%\ExoSnap\presets.ini`
-- Recording history: `%LOCALAPPDATA%\ExoSnap\recording-history.json`
-- Crash-recovery manifest: `%LOCALAPPDATA%\ExoSnap\`
-- Logs: `exosnap.log`, `engine.jsonl` (rotated) and per-recording `reports/session-*.json`
-- Local crash captures: `%LOCALAPPDATA%\ExoSnap\crashes\*.dmp`
-- Recordings: the output folder the user chooses
-- Support bundle `.zip`: written to a location the user picks (E4 above)
-- Live Verify control channel: a **native Windows named pipe**, created only when the executable is launched with the explicit `--live-verify-*` opt-in and never by a normal start. It is listed here rather than in the egress table because a named pipe has no port and no listening socket: the transport was chosen over `QLocalServer` precisely so that `Qt6::Network` is not linked into the shipping executable at all, and the pipe is created with a DACL granting the creating user alone plus `PIPE_REJECT_REMOTE_CLIENTS`. "Not reachable from the network" is therefore answered by the API, not by a bind address. See `app/live_verify/LiveVerifyControlServer.h` and ADR 0066.
+The egress check is a source-pattern inventory guard, not taint analysis. Review its allowlist deliberately when an approved network primitive or host changes. Passing it establishes neither consent flow correctness nor the exact bytes a library sends.
 
-## Window-title logging (capture-target privacy)
+The sentry-free scrubber tests run without service credentials. The Sentry-linked `before_send` path needs the crash-capture build configuration. Confirm the relevant `crash-capture-build.yml` leg actually ran for the release rather than assuming the ordinary test configuration covered it. A missing upload configuration is not a live privacy pass.
 
-A capture-target **window title** (a WGC-capture app/window name, potentially a document title, a private tab title, or a chat partner's name) is neutralized **at the log source**, not only when a support bundle is later assembled:
+## Release review
 
-- `RecordingCoordinator::StartRecording` and `RecordPage`'s target-selection/start-request log lines now log `[window]` instead of the actual title whenever the capture target is a window (`RecordViewModel::LogSafeTargetLabel`). Monitor targets are unaffected: a display description ("Desktop - Display 1") is a technical identifier, never personal.
-- The one-click support bundle (`app/diagnostics/SupportBundle.cpp`, `RedactCaptureTargets`) additionally redacts any `target="…"` value it still finds to `[capture-target]`, as a defense-in-depth backstop for any log line this slice's source-level fix does not cover and for historical log content already on disk before an upgrade.
-- The UI-facing labels a user actually sees (the target picker list, the recording chrome status, notifications) are **unaffected**. Only what reaches the on-disk log changed.
+- Check an official first launch with both network features disabled: no unsolicited update/crash request. Then capture an explicit update check and inspect destination, headers and query data.
+- Exercise Ask, one-shot Send, remembered Send and Never send. Confirm dismissal preserves policy and local recovery remains independent. Inspect an actual received structured event and a separate hard-crash minidump, including a portable user-profile installation.
+- Inspect a generated support bundle with representative sensitive paths and window titles. Confirm it is local and excludes raw settings, media and dumps. Review the policy's service-side residency/IP/scrubber settings in the configured account.
+- Reconcile policy, spec, source allowlist and this inventory. Change the policy effective date when actual data handling, recipients or consent policy changes, not for an editorial link correction.
 
-## Review checklist (repeat every release)
-
-Each item is tagged **[CI]** (automatic, part of the `lint` job on every PR) or **[Live]** (a named manual check on real hardware / a real Official build / a real Sentry event). CI has no GPU and no Sentry DSN, so these cannot be automated. See `docs/release-checklist.md` for where this plugs into the release process.
-
-- **[CI]** `scripts/validate-privacy-allowlist.ps1` green: the crash-report tag allowlist matches `PRIVACY.md` and `docs/product-spec.md` §14, in both directions.
-- **[CI]** `scripts/validate-network-egress.ps1` green: no network primitive or disallowed host literal outside the four known call sites (E1/E2/E3 above).
-- **[CI]** Crash-scrubber tests green: the allowlist Golden-Set test (`test_crash_scrubber.cpp`) and the sentry-free `IsAllowedTagKey`/`ScrubString` suite, on every PR (`build-test` job, `ci.yml`). The sentry-linked `before_send` path (tag filtering + the defensive backstop) is exercised by the crash_capture test suite **only** when `crash-capture-build.yml` runs: push to `main`, the `crash-capture` PR label, or manual dispatch, never an unlabeled PR. This is an intentional, documented CI-reach boundary (see ADR 0045), not a gap that was closed silently.
-- **[CI]** Support-bundle scrubber coverage green (`test_support_bundle.cpp`), including the window-title fixture (`NoPersonalDataOrWindowTitleSurvives`).
-- **[Live]** **Sentry reality check (event).** On a real Official build, give consent, trigger `SendTestEvent`; in the Sentry EU UI, confirm no hostname/`server_name`, no path/username in the event, and exactly the allowlisted tags + stack arrived.
-- **[Live]** **Minidump module-path check (hard crash).** Provoke a real hard crash with consent active; inspect the uploaded minidump's module list (Sentry UI or the local `.dmp`) for a username segment in the `exosnap.exe` path (relevant for non-standard/portable installs). `SendTestEvent` does not produce a minidump. This is the only real check of the binary channel.
-- **[Live]** **Update-check network trace.** A proxy/Fiddler capture of a real update check shows only the expected `GET api.github.com/.../releases` with the fixed User-Agent: no user data in the query.
-- **[Manual/Doc]** `PRIVACY.md`'s `Effective date` and `docs/product-spec.md` §14 have been walked against this inventory for the release; bump `Effective date` if any field or recipient changed.
-
-Ruhig, nicht alarmistisch: this is a per-release checkbox ritual, not a continuous monitor. The CI checks are silent unless something actually drifted.
-
-## What this deliberately does not do
-
-- No new telemetry, analytics, or consent dashboard: the review only *proves* the existing telemetry-free behavior.
-- No static taint/data-flow analysis: `validate-network-egress.ps1` is a deliberately blunt grep guard. It proves *no new egress point appeared unnoticed*, not *what bytes flow*. The "what is sent" question is answered by the field inventory above plus the crash-scrubber tests plus the Live Sentry check.
-- No automated Sentry event introspection in CI: the CI runner has no Official build / DSN. The event-level check stays a named Live check.
-- No change to the update/crash network paths themselves: they were already correct. This document and its checks encapsulate them, they do not rebuild them.
+Record release evidence outside the durable documentation tree. Promote only a changed current constraint or procedure, not a transcript of the review.

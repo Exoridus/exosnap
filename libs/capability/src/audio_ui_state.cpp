@@ -31,7 +31,7 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     result.mic_device_id = state.selected_mic_device_id;
     result.mic_gain_linear = state.mic_gain_linear;
 
-    // Audio encoding params (ADR 0019) — pass through directly.
+    // Audio encoding params — pass through directly.
     result.audio_bitrate_kbps = state.audio_bitrate_kbps;
     result.opus_frame_duration = state.opus_frame_duration;
     result.opus_complexity = state.opus_complexity;
@@ -58,7 +58,7 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     // Microphone RNNoise neural noise suppression (Audio v2) — pass through directly.
     result.mic_rnnoise_enabled = state.mic_rnnoise_enabled;
 
-    // Channel / sample-format model (ADR 0030) — pass through directly.
+    // Channel / sample-format model — pass through directly.
     result.audio_sample_rate = state.audio_sample_rate;
     result.audio_channels = state.audio_channels;
     result.audio_bit_depth = state.audio_bit_depth;

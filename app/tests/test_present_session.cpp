@@ -1,4 +1,4 @@
-// ADR 0033 / Wave D: the PRODUCTION present session, compiled exactly as it ships.
+// the PRODUCTION present session, compiled exactly as it ships.
 //
 // This file exists because of a specific hole. PresentMonEtwSession used to be split by
 // `#ifdef EXOSNAP_HAS_PRESENTMON`, and this test target compiled the no-op side -- so

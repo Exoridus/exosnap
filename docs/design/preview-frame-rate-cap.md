@@ -1,55 +1,27 @@
-# Preview frame rate cap
+# Preview frame-rate cap
 
-Status: Accepted, not implemented. Approved 2026-08-07.
+**Status: Accepted, not implemented.** This document owns only the proposed preview preference. The current preview is producer-driven as described in [capture and preview](../architecture/capture-and-preview.md); the preference below is not a shipped setting.
 
-## Problem
+## User contract
 
-The Record page's live preview (`DxgiPreviewRenderer`) always presents at a hardcoded 60 fps, both idle (before recording starts, driven by its own WGC capture) and during recording (pushed mode, fed by the engine's WYSIWYG source-tap, per ADR 0040). The interval comes from `RecordPage::primaryRecorderConfig()` (`RecordPage.cpp:295-306`), a fixed baseline stub that has nothing to do with the user's actual configuration. There is no way to lower this, and no way to turn the preview off, even though nothing about it is required for the recording itself to work. This was found live while investigating why the idle app measurably uses CPU on the Record page.
+Add a **Preview frame rate** choice under Settings > Video quality & timing: Off, 15, 30, 60 or 120 fps, default 60. Keep values visible but unavailable when the display-derived cap cannot support them, with the same honest reason presentation as the recording-rate control.
 
-## Target
+The preference affects presentation only, both before and during recording. Recording rate, timestamp selection, encoder behavior and file output are unchanged. A preview capped below recording rate is a sampled view, not proof that frames are missing from the file.
 
-A new "Preview frame rate" row in Settings → Quality & timing, directly under the existing "Frame rate" row: a combo box, `Off / 15 / 30 / 60 / 120 fps`, default **60 fps**. Same display-refresh gating the recording Frame rate row already has: 120 fps is listed but disabled (with a tooltip) when no attached display can feed it.
+Off stops preview rendering and its idle capture subscription, with a static **Preview off** placeholder. During recording, it does not stop the recording producer or the existing pre-encode tap. The preview may not show framing or PiP placement while Off; that consequence must be explicit.
 
-The cap applies uniformly, idle and during recording:
+## Ownership and implementation constraints
 
-- **15/30/60/120**: the preview render thread's present interval is derived from this value instead of the hardcoded 60. Lower values mean fewer Present() calls and less composition work per second: nothing else about the preview changes.
-- **Off**: neither the idle WGC capture (`DxgiPreviewRenderer::StartCapture`) nor the pushed-only WYSIWYG render thread (`StartPushedOnly`) is started at all. `PreviewSurface` shows a calm static placeholder, "Preview off", in the same visual language as the existing "Preview unavailable" state (4:4:4 Expert clips in the editor), instead of a live image.
+Store one global application preference, not a recording preset field: `0` for Off, otherwise 15/30/60/120, default 60. Use the current settings store and typed Quick adapter; no page-local duplicate authority. Validate load/import values and preserve the setting across preset switches.
 
-## Storage
+Apply the limit at the Quick preview scheduling/consumption boundary. Do not introduce a periodic redraw loop that wakes a still desktop. Producer notifications remain edge-driven and coalesced. If a rate deadline delays a published frame, retain presentation debt and arrange one bounded deadline wakeup rather than dropping the edge forever. Expose, screen change and scene-graph recreation must still present the newest owed frame when eligible.
 
-A global app setting, not part of the recording preset: `AppSettingsStore::preview_frame_rate` (int, `0` = Off, else 15/30/60/120, default `60`), following the same pattern as `open_editor_when_finished`. It is a UI/performance preference (it does not affect the recorded file), so it stays fixed across preset switches rather than traveling with `presets.toml`.
+Off releases preview-only ownership without taking a recording lease away. Re-enabling establishes a new valid subscription/device-generation view and cannot resurrect a stale shared handle. Changes must work in idle and engine-fed preview modes without restarting the recording. Native capture/color/encoder policy remains outside QML.
 
-## Data flow
+No exact renderer method names or retired frontend call chain are prescribed here. Integrate with the current scheduling and lease owners rather than recreating a separate preview thread or a second capture during recording.
 
-```
-ConfigPage (new combo + previewFrameRateChanged(int) signal)
-  -> MainWindow (persists via settings_store_.Save(); holds the current value)
-    -> RecordPage::setPreviewFrameRateCap(int fps)   // new setter, called from the ctor
-                                                       // (persisted value) and on change
-      -> tryStartHubPreview / tryStartDxgiPreview     // use this value instead of
-                                                       // primaryRecorderConfig().frame_rate_num
-```
+## Acceptance
 
-`RecordPage` caches the cap in a new member (`preview_frame_rate_cap_`, default 60) the same way it already caches `current_output_settings_` etc. Both preview-start call sites read from this member. `primaryRecorderConfig()`'s `frame_rate_num`/`frame_rate_den` fields become dead at that point and are removed from it: its only remaining fields are the format-baseline ones capability validation needs elsewhere, if any are still live after this change (check at implementation time. If none are, retire the function entirely rather than leave an empty stub, per the warning already on it after the 2026-08-07 codec-fallback fix).
+Test every stored choice, invalid-value fallback, display relevance and preset independence. For each preview mode, prove a cap changes only presentation count and not recorded frames/PTS; Off creates no preview-only capture/render work. Verify re-enable, source change, hidden/exposed window, cross-monitor movement and scene-graph recreation with a pending frame.
 
-When the setting changes while a preview is already running (idle or pushed), the existing `tryStartHubPreview`/`tryStartDxgiPreview` restart path is reused (stop, then start with the new cap): the same mechanism a target change already goes through. No new restart logic.
-
-## Non-goals
-
-- The engine still produces and publishes its shared pre-encode texture during recording (ADR 0040's tap) even when the preview is Off or capped low: nothing subscribes to it, but the encode-side publish cost is unchanged. Touching that is a change to the recording path itself, not the preview, and is out of scope here.
-- No attempt to skip re-presenting an unchanged frame when the preview's cap happens to exceed the producer's ~30 Hz push rate during recording (a separate, smaller optimization noticed while investigating this, not requested).
-
-## Known trade-off
-
-With the cap set to Off, there is no way to visually confirm framing/webcam PiP placement before pressing Record: the idle preview is the only thing that shows it today. This is accepted, matching the explicit choice to make Off a real "nothing renders" state rather than a throttled one.
-
-## Testing
-
-- `PreviewFrameIntervalMs`-style unit coverage for the new cap → interval mapping (reuse `PreviewHelpers.h`'s existing table-driven pattern, extended for the cap value in place of the recording frame rate).
-- `RecordPage::setPreviewFrameRateCap` reaches both preview-start call sites: a widget-level test (or the existing `--visual-test` scenario machinery, if it already exercises preview start) that sets a non-default cap and asserts the value threading through, plus an Off case asserting neither preview path is started and the surface shows the placeholder.
-- `ConfigPage` combo round-trip: selecting each entry emits the signal with the right value; the 120 fps entry is disabled/enabled following the same display-refresh gating as the existing Frame rate row (existing helper, reused not reimplemented).
-- Settings persistence: `AppSettingsStore` save/load round-trips `preview_frame_rate`, and the documented default (60) is asserted the same way `test_app_settings_store.cpp` already asserts other defaults.
-
-## Docs
-
-`docs/product-spec.md`'s Settings/Quality & timing section gets a short paragraph for the new row, matching the existing "Frame rate" paragraph's tone (§ around line 303).
+Measure idle wakeups and representative capture load, not just an FPS label. A missing second producer frame must never leave the first frame pending forever. Once implemented, move the user contract to the product specification, scheduling invariants to architecture and operational measurement to the harness guide, then remove this design document.

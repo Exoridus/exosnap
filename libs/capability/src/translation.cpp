@@ -23,7 +23,7 @@ exosnap::engine::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& c
 
     const UserRecorderConfig& final_config = resolved.resolved_config;
     // Chroma is fixed at 4:2:0. Bit depth is 8-bit universally; 10-bit (HEVC Main10 /
-    // AV1 10-bit P010, SDR BT.709 — ADR 0032) is valid only for HEVC and AV1, never
+    // AV1 10-bit P010, SDR BT.709) is valid only for HEVC and AV1, never
     // H.264. The per-combo flags below combine this with the codec, so a 10-bit H.264
     // request falls through to the rejection path.
     const bool bit_depth_ok =

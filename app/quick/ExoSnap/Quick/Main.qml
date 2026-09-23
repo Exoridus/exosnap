@@ -39,7 +39,7 @@ ApplicationWindow {
     // itself documents. The Binding below only ever writes `true`; once written
     // it holds regardless of what `when` does afterward.
     property bool recordingOverlaysArmed: false
-    // ADR 0033. The destination the pre-elevation instance was showing, handed
+    // The destination the pre-elevation instance was showing, handed
     // back by the relaunch. Applied as the shell's STARTING page, not as a
     // navigation: the window is still hidden at this point and nothing has
     // happened yet that a navigation policy could have an opinion about.
@@ -379,7 +379,7 @@ ApplicationWindow {
     Binding { target: overlayCountdownLoader.item; property: "countdownProgress"; value: root.recordViewModel.countdownProgress }
 
     // The one capture-excluded overlay that is deliberately NOT click-through:
-    // it is an interactive control surface (ADR 0016), so it takes mouse input
+    // it is an interactive control surface, so it takes mouse input
     // while still being kept out of the recording.
     Loader {
         id: overlayQuickControlsLoader

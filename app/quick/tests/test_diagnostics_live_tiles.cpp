@@ -194,7 +194,7 @@ TEST(DiagnosticsLiveTiles, FramePacingCarriesTargetOutputAndSourceJitter) {
 TEST(DiagnosticsLiveTiles, ALostAudioSourceIsANoticeEvenWhileThePipelineIsHealthy) {
     const std::vector<LiveTile> tiles = TilesFor("degraded");
     const LiveTile audio = Find(tiles, "audioSync");
-    // ADR 0046: the recording keeps running, so this is a calm measured notice
+    // the recording keeps running, so this is a calm measured notice
     // and never escalates past one -- but it is not silent either.
     EXPECT_EQ(audio.tone, TileTone::Notice);
     EXPECT_NE(audio.detail.find("1 source(s) silent"), std::string::npos);

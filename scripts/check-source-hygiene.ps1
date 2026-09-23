@@ -21,7 +21,7 @@
     Repository to scan. Defaults to the repository this script lives in.
 
 .PARAMETER Base
-    Commit to diff against. Defaults to the merge base with origin/main.
+    Commit to diff against. Defaults to the merge base with origin/next.
 
 .PARAMETER All
     Scan every tracked source file instead of only added/changed lines.
@@ -352,7 +352,7 @@ function Get-ChangedLine {
 # ---------------------------------------------------------------------------
 
 if (-not $All -and -not $Base) {
-    foreach ($candidate in @('origin/main', 'origin/HEAD', 'main')) {
+    foreach ($candidate in @('origin/next', 'origin/main', 'origin/HEAD', 'next', 'main')) {
         $merge = (& git -C $RepoRoot merge-base $candidate HEAD 2>$null | Select-Object -First 1)
         if ($merge) { $Base = $merge; break }
     }

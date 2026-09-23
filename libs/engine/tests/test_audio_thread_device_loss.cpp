@@ -1,4 +1,4 @@
-// Audio-thread device-loss integration (ADR 0046). Drives the real AudioThread
+// Audio-thread device-loss integration. Drives the real AudioThread
 // with fake sources that lose their endpoint mid-recording. The contract:
 //   - the session stays alive (no RecordFailure, stop is not raised by the loss),
 //   - the encoder timeline stays continuous (a silence gap, not a freeze),

@@ -1,4 +1,4 @@
-// Tests for audio encoding parameters in preset persistence (ADR 0019):
+// Tests for audio encoding parameters in preset persistence:
 //   - Preset round-trip for audio_bitrate_kbps, opus_frame_duration, opus_complexity
 //   - SanitizePresetConfig bounds
 //   - NormalizedConfigEquals / ConfigDirtyEquivalent for the new fields
@@ -735,7 +735,7 @@ TEST(AudioEncodingPreset, StoreRoundTrip_MicRnnoise) {
 }
 
 // ===========================================================================
-// Channel / sample-format model (ADR 0030 — 0.6.0)
+// Channel / sample-format model
 // ===========================================================================
 
 // --- Default values ---

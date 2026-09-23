@@ -16,7 +16,7 @@ This is an isolated capability probe, not production audio-engine code.
 ## Build
 
 ```pwsh
-cmake --preset windows-x64-debug
+cmake --preset windows-x64-debug -DEXOSNAP_BUILD_PROBES=ON
 cmake --build --preset windows-x64-debug --target probe_process_loopback
 ```
 
@@ -25,7 +25,7 @@ The executable is produced at: `build/windows-x64-debug/tools/probes/probe_proce
 ## Run
 
 ```pwsh
-.\build\windows-x64-debug\apps\probes\probe_process_loopback\Debug\probe_process_loopback.exe
+.\build\windows-x64-debug\tools\probes\probe_process_loopback\Debug\probe_process_loopback.exe
 ```
 
 On startup the probe:

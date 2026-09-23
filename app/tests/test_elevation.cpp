@@ -1,4 +1,4 @@
-// ELEVATION-FOUNDATION-R1 (ADR 0033): unit tests for the elevation provider
+// ELEVATION-FOUNDATION-R1: unit tests for the elevation provider
 // interface, the elevated-relaunch handoff arg builder/parser, and the
 // RelaunchResult contract. The Win32 ShellExecuteEx/token calls themselves are
 // NOT exercised here — only the pure logic.

@@ -10,7 +10,7 @@
 
 namespace exosnap::diagnostics {
 
-// PresentMon-backed present/tearing diagnostics provider (ADR 0033).
+// PresentMon-backed present/tearing diagnostics provider.
 //
 // GateOpen() is the pre-session condition: opt_in && elevation.IsElevated().
 // IsAvailable() additionally requires the ETW session to be open.

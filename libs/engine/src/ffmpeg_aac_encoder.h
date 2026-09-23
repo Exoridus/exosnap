@@ -1,24 +1,11 @@
 #pragma once
 
-// FfmpegAacEncoder: AAC-LC encoder built on FFmpeg's native libavcodec AAC
-// encoder (avcodec_find_encoder(AV_CODEC_ID_AAC)).
-//
-// This is the migration target for ExoSnap's AAC audio path, replacing the
-// previously statically-linked third-party AAC-LC encoder. See ADR 0052,
-// which supersedes ADR 0043: moving to FFmpeg's native encoder sidesteps
-// that prior fork's patent-risk argument entirely.
-//
-// SEQUENCING NOTE: the encoder is only usable at runtime once the pinned
-// exosnap-ffmpeg-build release ships an avcodec DLL compiled with
-// --enable-encoder=aac (r5+). Against the currently pinned r4 DLL (no encoders)
-// Init() fails cleanly with a distinguishable message rather than crashing.
-//
-// Behaviour matches the retired encoder's IAudioEncoder contract:
-//   * AAC-LC only, 44.1/48 kHz, mono/stereo.
-//   * Configurable bitrate, default 192 kbit/s (same default as before).
-//   * Raw AAC access units (no ADTS); CodecPrivateBytes() returns the
-//     AudioSpecificConfig from AVCodecContext::extradata, matching what the
-//     Matroska A_AAC writer and the MP4 remux path already expect.
+// Native FFmpeg AAC-LC implementation of IAudioEncoder.
+// The bundled avcodec must expose AV_CODEC_ID_AAC; Init reports failure when
+// it cannot open the requested sample rate/channel configuration.
+// Bitrate defaults to 192 kbit/s when no valid value is supplied.
+// Output is raw access units, not ADTS. CodecPrivateBytes publishes the
+// AudioSpecificConfig needed by Matroska and the MP4 remuxer.
 
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/interfaces/IAudioEncoder.h>

@@ -1,6 +1,6 @@
 #pragma once
 
-// VerifyReinstallMode.h -- the verification-reinstall CLI opt-in (ADR 0055).
+// VerifyReinstallMode.h -- the verification-reinstall CLI opt-in.
 //
 // A release candidate that ships a wrong version identity cannot be told apart
 // from a correct one by looking at the update card: the check only ever offers

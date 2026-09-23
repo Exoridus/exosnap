@@ -266,7 +266,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/StartupTrace.h
         ${PROJECT_SOURCE_DIR}/app/services/ElevatedRelaunch.cpp
         ${PROJECT_SOURCE_DIR}/app/services/ElevatedRelaunch.h
-        # ADR 0055: --verify-update-reinstall argv gate, shared with the Widgets
+        # --verify-update-reinstall argv gate, shared with the Widgets
         # entry point.
         ${PROJECT_SOURCE_DIR}/app/services/VerifyReinstallMode.cpp
         ${PROJECT_SOURCE_DIR}/app/services/VerifyReinstallMode.h
@@ -323,7 +323,7 @@ target_sources(exosnap
         # observation can never disagree.
         ${PROJECT_SOURCE_DIR}/app/diagnostics/NativeWindowFacts.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/NativeWindowFacts.h
-        # ADR 0066: the application binding for the Live Verify control channel.
+        # the application binding for the Live Verify control channel.
         # The channel itself lives in exosnap_live_verify; this is the only file
         # that knows what an ExoSnap adapter is.
         QuickLiveVerifySource.cpp
@@ -347,7 +347,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/CrashSessionContext.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/CrashSessionContext.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/ElevationProvider.cpp
-        # ADR 0033 present diagnostics. These sources existed since the ETW slice
+        # Present diagnostics. The shipping target must link the real producer
         # landed but were compiled ONLY by present_provider_tests, so the shipping
         # binary contained the no-op session and could never report a present mode.
         # Wave D compiles them here and defines EXOSNAP_HAS_PRESENTMON below, which
@@ -364,7 +364,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentTraceBackend.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentModeMapping.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentModeMapping.h
-        # The DPC/ISR half of the same ADR 0033 opt-in, and the worse case of the same
+        # The DPC/ISR half of the same opt-in, and the worse case of the same
         # defect: this file was compiled by NO target at all, so the check that names
         # the kernel driver behind "smooth game, stuttery recording" evaluated an
         # absent reading in every build there has ever been.
@@ -417,7 +417,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/GlobalHotkeyService.cpp
         ${PROJECT_SOURCE_DIR}/app/services/GlobalHotkeyService.h
         ${PROJECT_SOURCE_DIR}/app/services/Win32HotkeyRegistrar.h
-        # ADR 0012: the Qt-side owner of the update engine. UpdateLaunchPlan alone
+        # the Qt-side owner of the update engine. UpdateLaunchPlan alone
         # only provided the pure helpers -- the service itself is what makes the
         # Settings updates card do anything.
         ${PROJECT_SOURCE_DIR}/app/services/UpdateService.cpp
@@ -553,7 +553,7 @@ target_compile_options(exosnap
         $<$<CXX_COMPILER_ID:MSVC>:/wd4702>
 )
 
-# ADR 0033 / Wave D: the real in-process PresentMon ETW consumer. Without the
+# the real in-process PresentMon ETW consumer. Without the
 # define, PresentMonEtwSession compiles to the graceful no-op branch and
 # IsAvailable() is false forever -- which is exactly the state the shipping
 # binary was in, and why present mode, tearing, discarded count and mode flips
@@ -612,7 +612,7 @@ target_link_libraries(exosnap
         mfuuid
         ole32
         runtimeobject
-        # ADR 0033: ShellExecuteExW (Shell32) for the elevated relaunch plus the
+        # ShellExecuteExW (Shell32) for the elevated relaunch plus the
         # token APIs behind the elevation check (Advapi32); Version.lib backs the
         # file-version queries the update/diagnostics paths make.
         Shell32

@@ -33,7 +33,7 @@ class EditPlayerAdapter;
 // WA_NativeWindow, no CreateWindowEx, no QQuickWidget, no createWindowContainer.
 // The Widgets EditPlayerSurface/EditPlayerRenderer pair created a WS_CHILD
 // window with its own swap chain and render thread; reintroducing one would
-// restore exactly the input/compositing barrier ADR 0058 removed.
+// restore exactly the input/compositing barrier a native child HWND introduces.
 //
 // The present-gate that policy DOES survive: a frame whose PTS is already behind
 // the playback clock is dropped in presentFrame, before any GPU work, exactly as

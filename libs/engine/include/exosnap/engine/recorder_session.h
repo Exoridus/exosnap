@@ -37,7 +37,7 @@ struct WebcamFrameProvider {
     // loss (unplug / driver error) does NOT make this return false — the last
     // captured frame keeps being served (frozen) so the composite holds the last
     // webcam image instead of the PiP vanishing, matching the DXGI monitor recovery
-    // (ADR 0013) and industry practice. The provider recovers live if the device
+    // and industry practice. The provider recovers live if the device
     // returns. Returns false only before the first frame is captured (nothing to
     // show yet) or after the provider is stopped.
     // out_generation is bumped once per newly captured sample (StoreFrame call),
@@ -210,7 +210,7 @@ enum class MicChannelMode {
 
 // Engine-level split configuration carried in RecorderConfig.
 //
-// Two independent thresholds (ADR 0021: dual time+size, whichever first):
+// Two independent thresholds (time and size, whichever first):
 //   duration_ms == 0  → time-based splitting disabled
 //   size_bytes   == 0 → size-based splitting disabled
 // Both may be active simultaneously. Manual splits are always available
@@ -308,7 +308,7 @@ using PreviewSharedHandleCallback =
 using PreviewFramePublishedCallback = std::function<void()>;
 
 // ---------------------------------------------------------------------------
-// OpusFrameDuration — configurable Opus frame size (ADR 0019)
+// OpusFrameDuration — configurable Opus frame size
 // ---------------------------------------------------------------------------
 
 // Supported Opus frame durations. Maps to frame-size-in-samples at 48 kHz.
@@ -355,7 +355,7 @@ struct RecorderConfig {
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;
     BitDepth bit_depth = BitDepth::Bit8;
 
-    // Color description for the encoded video (ADR 0032). Default SDR BT.709
+    // Color description for the encoded video. Default SDR BT.709
     // full-range; written into the container and matched by the encoder-input
     // color conversion (range is user-selectable — Full default / Limited). HDR
     // fields stay unset until the HDR slice.
@@ -375,14 +375,11 @@ struct RecorderConfig {
     // quality parameter (NVENC: CQP).
     uint32_t cq = CanonicalCq(QualityPreset::Balanced);
 
-    // Canonical rate-control mode (ADR 0009). Defaults to ConstantQuality (existing behavior).
+    // Canonical rate-control mode. Defaults to ConstantQuality (existing behavior).
     RateControlMode nvenc_rate_control = RateControlMode::ConstantQuality;
 
-    // NVENC speed/quality preset (P1 fastest/lowest quality .. P7 slowest/best
-    // quality). Applies uniformly to all three NVENC codecs; never capability-
-    // gated. Default P4 (balanced) — matches the prior hardcoded AV1/HEVC
-    // default; H.264 previously used P6 (visible default change, expert-
-    // overridable — see ADR 0039).
+    // NVENC P1-P7 speed/quality trade-off, independent of rate control and CQ.
+    // P4 is the default for all supported codecs.
     NvencPreset nvenc_preset = NvencPreset::P4;
 
     // Target bitrate in kbps — used for VariableBitrate and ConstantBitrate modes.
@@ -390,7 +387,7 @@ struct RecorderConfig {
     uint32_t nvenc_bitrate_kbps = 20000;
 
     // ---------------------------------------------------------------------------
-    // Audio encoding parameters (ADR 0019)
+    // Audio encoding parameters
     // ---------------------------------------------------------------------------
 
     // Target audio bitrate in kbps. 0 = use encoder default.
@@ -408,7 +405,7 @@ struct RecorderConfig {
     int opus_complexity = 10;
 
     // ---------------------------------------------------------------------------
-    // Audio format model (ADR 0030 — 0.6.0)
+    // Audio format model
     // ---------------------------------------------------------------------------
 
     // Target sample rate in Hz. Vetted set: 44100, 48000, 96000.
@@ -441,7 +438,7 @@ struct RecorderConfig {
     // When false: VFR passthrough (WGC timestamps used directly as PTS).
     bool cfr = true;
 
-    // CFR frame pacing (ADR 0035). Smooth = phase-correct selection; Newest = newest-at-tick.
+    // CFR frame pacing. Smooth = phase-correct selection; Newest = newest-at-tick.
     // Ignored for VFR and for WGC capture (no LastPresentTime → newest-at-tick).
     FramePacingMode cfr_pacing_mode = FramePacingMode::Smooth;
 

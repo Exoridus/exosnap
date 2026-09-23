@@ -31,7 +31,7 @@ struct AudioUiState {
     std::optional<uint32_t> selected_window_pid;
 
     // ---------------------------------------------------------------------------
-    // Audio encoding parameters (ADR 0019)
+    // Audio encoding parameters
     // ---------------------------------------------------------------------------
 
     // Target audio bitrate in kbps. 0 = use the engine default for the active codec.
@@ -109,7 +109,7 @@ struct AudioUiState {
     bool mic_rnnoise_enabled = false;
 
     // ---------------------------------------------------------------------------
-    // Channel / sample-format model (ADR 0030 — 0.6.0)
+    // Channel / sample-format model
     // ---------------------------------------------------------------------------
 
     // Output sample rate in Hz. Vetted set: 44100, 48000, 96000. Default 48000.
@@ -146,7 +146,7 @@ struct AudioPlanResult {
     std::optional<std::string> mic_device_id;
     float mic_gain_linear = 1.0f;
 
-    // Audio encoding parameters (ADR 0019) — passed through from AudioUiState.
+    // Audio encoding parameters — passed through from AudioUiState.
     uint32_t audio_bitrate_kbps = 160;
     exosnap::engine::OpusFrameDuration opus_frame_duration = exosnap::engine::OpusFrameDuration::Ms20;
     int opus_complexity = 10;
@@ -173,7 +173,7 @@ struct AudioPlanResult {
     // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0) — passed through.
     bool mic_rnnoise_enabled = false;
 
-    // Channel / sample-format model (ADR 0030 — 0.6.0) — passed through from AudioUiState.
+    // Channel / sample-format model — passed through from AudioUiState.
     uint32_t audio_sample_rate = 48000;
     uint32_t audio_channels = 2;
     uint32_t audio_bit_depth = 16;

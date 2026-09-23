@@ -101,7 +101,7 @@ class AudioClockDriftEstimator {
     }
 
     // Drop all history and the normalization baseline. Called after an audio
-    // source is reinitialized mid-recording (device hot-swap, ADR 0046): the
+    // source is reinitialized mid-recording (device hot-swap): the
     // fresh stream restarts its device position near zero, so a stale baseline
     // would read the whole reacquired timeline as a huge negative drift. The
     // next observation re-establishes the baseline cleanly.

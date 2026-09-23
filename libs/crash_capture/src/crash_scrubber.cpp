@@ -32,7 +32,7 @@ namespace exosnap::crash_capture {
 
 // ---------------------------------------------------------------------------
 // IsAllowedTagKey — kAllowedTagKeys is now the header's single definition
-// (ADR 0045); see crash_scrubber.h for the array itself.
+// see crash_scrubber.h for the array itself.
 // ---------------------------------------------------------------------------
 bool IsAllowedTagKey(std::string_view key) {
     for (auto& allowed : kAllowedTagKeys) {

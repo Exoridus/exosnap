@@ -557,7 +557,7 @@ std::string RecordViewModel::TargetLabelFromCaptureTarget(const exosnap::engine:
 }
 
 std::string RecordViewModel::LogSafeTargetLabel(const exosnap::engine::CaptureTarget& target) {
-    // Privacy (ADR 0045): a window's title (and the app-name/title label built
+    // Privacy: a window's title (and the app-name/title label built
     // from it) is potentially sensitive -- document titles, chat partner names,
     // private tab titles -- and must be neutralized at the LOG SOURCE, not only
     // when a support bundle is later assembled (the bundle's RedactCaptureTargets

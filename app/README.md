@@ -1,59 +1,9 @@
-# exosnap (Qt 6 + Qt Quick)
+# ExoSnap application layer
 
-## Building
+`app/` contains the Qt Quick frontend and the services/adapters connecting it to the recording engine. It is not another engine implementation.
 
-### Prerequisites
+Process-level startup/shutdown belongs to `bootstrap`. `quick/ExoSnap/Quick` owns the Quick application, typed adapters, scene-graph presentation and QML components. Shared models/services own configuration, recording coordination, source selection and persistence. Diagnostics, notifications and observability expose structured facts to UI, logs and verification clients.
 
-- Qt 6.11+ at `C:\Qt\6.11.2\msvc2022_64` (via `aqtinstall` or the Qt Online Installer)
-- Visual Studio 2022 with C++ workload
-- CMake 3.27+
+The main application uses Qt Widgets for native tray integration only. The updater is a separate executable with its own Widgets UI. Do not introduce a second bootstrap, recreate a native child preview window or put capability/recording policy in QML.
 
-Override the Qt path: `-DQt6_DIR=<path>/lib/cmake/Qt6`
-
-### Build
-
-```pwsh
-cmake --preset windows-x64-debug
-cmake --build --preset windows-x64-debug --target exosnap
-```
-
-### Deploy Qt DLLs (first run)
-
-```pwsh
-C:\Qt\6.11.2\msvc2022_64\bin\windeployqt6.exe `
-    build\windows-x64-debug\app\Debug\exosnap.exe
-```
-
-## Project structure
-
-```
-app/
-├── main.cpp                        Qt entry point, centralized theme application
-├── MainWindow.h / .cpp             QMainWindow: sidebar nav + QStackedWidget
-├── ui/theme/
-│   ├── ExoSnapPalette.h            Central color tokens
-│   ├── ExoSnapMetrics.h            Central spacing/sizing tokens
-│   ├── ExoSnapTheme.h/.cpp         Theme bootstrap (Fusion, palette, QSS)
-│   ├── exosnap_dark.qss            Global warm dark console styling
-│   └── exosnap_theme.qrc           Theme resource registration
-├── pages/
-│   ├── RecordPage.h / .cpp         Full UI: target picker, start/stop, stats, result
-│   ├── VideoPage.h / .cpp          Stub
-│   ├── AudioPage.h / .cpp          Stub
-│   ├── DiagnosticsPage.h / .cpp    Stub
-│   ├── LogsPage.h / .cpp           Stub
-│   └── AdvancedPage.h / .cpp       Stub
-├── services/
-│   └── RecordingCoordinator.h/.cpp Engine bridge (thread-safe via QMetaObject)
-├── viewmodels/
-│   └── RecordViewModel.h/.cpp      Pure C++ view model, no UI dependency
-├── startup_log.h / .cpp            File + OutputDebugString logger
-└── CMakeLists.txt                  find_package(Qt6 QUIET), qt_add_executable
-```
-
-## Design notes
-
-- Dark theme: Fusion + centralized ExoSnap theme tokens + global QSS
-- `RecordingCoordinator` dispatches background thread callbacks to the main thread via `QMetaObject::invokeMethod(..., Qt::QueuedConnection)`. No WinRT is required.
-- Recording engine (`engine`, `exosnap::capability`) is fully UI-agnostic
-- If Qt6 is not found at configure time the target degrades gracefully with a warning
+See [Frontend architecture](../docs/architecture/frontend.md), [product specification](../docs/product-spec.md) and [build/test workflow](../docs/dev/build-and-test.md). Tests live alongside the application and Quick modules and are registered through the repository test helpers. `scripts/run-tests.ps1` provides isolation and a current-build receipt; a direct unqualified CTest run is not equivalent evidence.

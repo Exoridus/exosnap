@@ -6,7 +6,7 @@
 #include "models/RecordingPreset.h"
 #include "models/VideoSettingsModel.h"
 
-// Tests for the 0.5.0 video rate-control slice (ADR 0009):
+// Tests for the 0.5.0 video rate-control slice:
 //  - VideoSettingsModel defaults
 //  - Preset round-trip / dirty-tracking for rate_control + bitrate_kbps
 //  - SanitizePresetConfig: bitrate clamping, Lossless → CQ fallback

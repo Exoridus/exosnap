@@ -5,7 +5,7 @@
 // No Qt, no WinAPI, no I/O. Pure value types and enums so the logic layer
 // (UpdateChecker, ManifestVerifier) can be tested without any runtime.
 //
-// ADR 0012: Update Security Model (0.4.0 implementation).
+// Update Security Model (0.4.0 implementation).
 
 #include <cstdint>
 #include <optional>
@@ -111,7 +111,7 @@ struct UpdateManifest {
     SemVer version;
     // The manifest's "version" field verbatim, unparsed ("0.9.0-rc4"). SemVer
     // collapses foreign prerelease labels onto ordinal 0, so the verification
-    // reinstall gate (ADR 0055) compares this exact string instead.
+    // reinstall gate compares this exact string instead.
     std::string version_raw;
     SemVer minimum_accepted_version;
     std::vector<PackageEntry> packages;
@@ -161,7 +161,7 @@ struct ReleaseNote {
 
 struct UpdateCheckResult {
     bool update_available = false;
-    // ADR 0055: true when update_available was granted by the verification
+    // true when update_available was granted by the verification
     // reinstall rule (the offered version is byte-identical to the running one)
     // rather than by a genuinely newer release.
     bool verification_reinstall = false;
@@ -170,7 +170,7 @@ struct UpdateCheckResult {
     // Empty when nothing is offered. SemVer collapses every foreign prerelease
     // label onto ordinal 0, so this exact string -- not SemVer::ToString() -- is
     // what the handoff pins as the target version and what the updater's target
-    // gate compares byte-for-byte, the same equality the ADR 0055 verification
+    // gate compares byte-for-byte, the same equality the verification-reinstall verification
     // reinstall gate already uses.
     std::string available_version_raw;
     std::optional<std::string> releases_page_url;

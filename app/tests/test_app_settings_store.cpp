@@ -345,7 +345,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingShowNotifications_DefaultsToT
     EXPECT_TRUE(loaded.show_notifications);
 }
 
-// open_editor_when_finished round-trip tests. Was a debug-only ADR-0031
+// open_editor_when_finished round-trip tests. Was a debug-only
 // roadmap-dummy toggle (no engine setting backed it, no Release row existed);
 // now a real, persisted preference: default ON (recording completion opens
 // the Edit overlay directly), OFF falls back to a notification toast
@@ -786,7 +786,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_DefaultUpdateChannelIsStable) {
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_DefaultCheckUpdatesOnStartIsFalse) {
-    // ADR 0045: the update check must be opt-in — a first launch must not
+    // the update check must be opt-in — a first launch must not
     // contact api.github.com before the user has explicitly turned this on.
     PersistedAppSettings settings;
     EXPECT_FALSE(settings.check_updates_on_start);
@@ -834,7 +834,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingUpdateKeys_DefaultToStableAnd
 
     AppSettingsStore store(settings_path);
     const PersistedAppSettings loaded = store.Load();
-    // Update keys absent: must default to Stable / false (ADR 0045 — opt-in).
+    // Update keys absent: must default to Stable / false (opt-in).
     EXPECT_EQ(loaded.update_channel, QStringLiteral("Stable"));
     EXPECT_FALSE(loaded.check_updates_on_start);
 }

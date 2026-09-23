@@ -168,7 +168,7 @@ void MuxThread::Run() {
     sw_config_template.encode_height = encH;
     sw_config_template.frame_rate_num = m_state.config.frame_rate_num;
     sw_config_template.frame_rate_den = m_state.config.frame_rate_den;
-    // Color description (ADR 0032) — carried from RecorderConfig into the track's
+    // Color description — carried from RecorderConfig into the track's
     // Colour element. Default SDR BT.709 limited-range.
     sw_config_template.color = m_state.config.color;
     // An HDR10 session measures its content light levels while it records, so the
@@ -208,7 +208,7 @@ void MuxThread::Run() {
             sw_config_template.audio_tracks[i].name = DeriveAudioTrackName(m_state.config.audio_track_plan.tracks[i]);
         }
     }
-    // Thread audio format from RecorderConfig into the stream writer config (ADR 0030).
+    // Thread audio format from RecorderConfig into the stream writer config.
     // Opus is locked to 48 kHz by Validate(); all other codecs use the configured rate.
     sw_config_template.audio_sample_rate = m_state.config.audio_sample_rate;
     sw_config_template.audio_channels = m_state.config.audio_channels;
@@ -334,7 +334,7 @@ void MuxThread::Run() {
             // keeps this segment's recovery-manifest entry precisely because
             // the engine failed (see RecordingCoordinator::FinishRecording,
             // "Engine failed → leave the entry so recovery UI can offer
-            // repair" / ADR-0014's RemuxToMkv salvage path) — deleting the
+            // repair" / the RemuxToMkv salvage path) — deleting the
             // file here would silently destroy the footage that flow exists
             // to save. Every cluster flushed before the failure (typically
             // all of them; Finalize() only fails writing the trailer) is

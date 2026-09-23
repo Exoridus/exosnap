@@ -166,7 +166,7 @@ RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSnapshot(const QString& kind) {
     }
     if (kind == QLatin1String("degraded")) {
         // The pipeline itself is fine -- the recording keeps running and the file
-        // keeps growing (ADR 0046). The audio tile carries the notice on its own.
+        // keeps growing. The audio tile carries the notice on its own.
         s.audio.degraded_sources = 1;
         s.audio.source_degraded = true;
         s.audio.source_degraded_occurred = true;

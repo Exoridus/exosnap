@@ -9,7 +9,7 @@
       - Package.wxs must NOT contain any <File Source= element.
         Presence of such an element means someone reverted to a hand-maintained
         file list, which will silently omit runtime DLLs added by CMake install
-        rules (the defect that triggered ADR 0036 and this gate).
+        rules.
 
       - Package.wxs MUST contain <ComponentGroupRef Id="StagingFiles" />.
         This is the reference into the auto-generated _harvest.wxs fragment

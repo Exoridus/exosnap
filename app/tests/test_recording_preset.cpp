@@ -724,7 +724,7 @@ TEST(RecordingPreset, Reconcile_WebM_ForcesAv1Opus) {
 }
 
 TEST(RecordingPreset, Reconcile_Mkv_H264Opus_Unchanged) {
-    // MKV + H.264 + Opus is now Allowed (working combo per ADR 0010 policy update).
+    // MKV + H.264 + Opus is now Allowed (working combo under the compatibility registry).
     // The reconciler must leave it unchanged — no rewrite to AAC.
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
@@ -749,7 +749,7 @@ TEST(RecordingPreset, Reconcile_Mkv_Hevc_Aac_IsUnchanged) {
 TEST(RecordingPreset, Reconcile_Mkv_Pcm_Unchanged) {
     // 0.6.0 Audio v2: MKV + (AV1|H.264) + PCM is Allowed (uncompressed S16LE
     // A_PCM/INT/LIT), so the reconciler leaves PCM in place — no rewrite to AAC.
-    // WebM cannot carry PCM (Prohibited); MP4 + PCM is Experimental (ADR 0030, ipcm).
+    // WebM cannot carry PCM (Prohibited); MP4 + PCM is Experimental (ipcm).
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
     out.video_codec = capability::VideoCodec::H264;
@@ -760,7 +760,7 @@ TEST(RecordingPreset, Reconcile_Mkv_Pcm_Unchanged) {
 }
 
 TEST(RecordingPreset, Reconcile_Mp4_Pcm_ForcesAac) {
-    // ADR 0030 (narrowed): MP4 + H.264 + PCM is back to Experimental — the reconciler
+    // MP4 + H.264 + PCM is Experimental — the reconciler
     // must fix audio to AAC. PCM is deferred for MP4 (libavformat emits ipcm, limited
     // player support). MP4 video is forced to H264 regardless.
     OutputSettingsModel out;
@@ -860,7 +860,7 @@ TEST(RecordingPreset, Sanitize_WebMContainer_ForcesAv1Opus) {
 }
 
 TEST(RecordingPreset, Sanitize_Mkv_H264Opus_Unchanged) {
-    // MKV + H.264 + Opus is now Allowed (working combo per ADR 0010 policy update).
+    // MKV + H.264 + Opus is now Allowed (working combo under the compatibility registry).
     // Sanitization must leave it unchanged — no rewrite to AAC.
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Matroska;

@@ -274,7 +274,7 @@ TEST_F(UpdaterTextLayoutTest, EyebrowNamesTheRunAndTheTitleBarNeverChanges) {
         ASSERT_NE(eyebrow, nullptr);
         EXPECT_EQ(eyebrow->text(), QString::fromLatin1(scenario.eyebrow));
 
-        // ADR 0055: the role label is stable in every state, including a
+        // the role label is stable in every state, including a
         // verification reinstall and a terminal failure.
         auto* role = window.findChild<QLabel*>(QStringLiteral("updaterTitle"));
         ASSERT_NE(role, nullptr);

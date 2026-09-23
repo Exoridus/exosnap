@@ -2,7 +2,7 @@
 
 Every drawing the product shows for itself: the brand mark, the five session states, and the two animations: a six-frame recording beat and a four-frame processing loop.
 
-The recording frames modulate BRIGHTNESS only. The designer cut's candidate moved the radii as well, and at 16 px two adjacent frames of that differ by well under a device pixel: it read as a flicker rather than as a heartbeat, which is why the shell used to play it twice and then stop. Brightness has no sub-pixel problem, so the beat now runs for as long as the recording does.
+The recording frames modulate brightness only. Radius animation at notification-icon sizes can move less than a device pixel and appear as flicker. The beat runs while recording and stops while paused.
 
 ## What is authoritative
 
@@ -38,4 +38,4 @@ None of them ships. `app/ui/brand/BrandMarkSvg.cpp` substitutes the running them
 
 - The multi-resolution application icon and the thumbnail-toolbar glyphs, which are `.ico` files beside this directory: Windows reads them out of the PE resource table, and they carry no session and no accent.
 - The optical corrections small rasters need, which are a property of the raster rather than of the drawing and live in `app/ui/brand/BrandMark.h`.
-- Anything about how the wordmark is placed beside the mark. The Top Bar owns that, and it is the reference for it: a later asset that merges the two takes its scale, gap and vertical centring from the band, not from a legacy file.
+- Anything about how the wordmark is placed beside the mark. The Top Bar owns that, and it is the reference for it: a later asset that merges the two takes its scale, gap and vertical centring from the band, not from a separate combined asset.
