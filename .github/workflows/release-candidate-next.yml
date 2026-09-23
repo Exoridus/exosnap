@@ -179,6 +179,8 @@ jobs:
           name: candidate-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
       - name: Verify bundle and run core lane
         shell: pwsh
+        env:
+          EXO_VERIFY_UPDATE_PUBLIC_KEY_HEX: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
         run: |
           $verify = './candidate-bundle/runtimes/exo-verify.exe'
           & $verify bundle verify candidate-bundle
@@ -194,7 +196,18 @@ jobs:
           name: candidate-results-core-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
           path: |
             lane-results/*.result.json
-            lane-results/*/scenarios/
+            lane-results/*/scenarios/**/*.log
+            lane-results/*/scenarios/**/*.jsonl
+            lane-results/*/scenarios/**/*.json
+            lane-results/*/scenarios/**/*.csv
+            lane-results/*/scenarios/**/*.txt
+            lane-results/*/scenarios/**/*.png
+            lane-results/*/scenarios/**/*.jpg
+            lane-results/*/scenarios/**/*.dmp
+            lane-results/*/scenarios/**/*.mkv
+            lane-results/*/scenarios/**/*.mp4
+            lane-results/*/scenarios/**/*.webm
+            lane-results/*/scenarios/**/*.partial
           if-no-files-found: error
           retention-days: 90
 
@@ -223,7 +236,18 @@ jobs:
           name: candidate-results-install-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
           path: |
             lane-results/*.result.json
-            lane-results/*/scenarios/
+            lane-results/*/scenarios/**/*.log
+            lane-results/*/scenarios/**/*.jsonl
+            lane-results/*/scenarios/**/*.json
+            lane-results/*/scenarios/**/*.csv
+            lane-results/*/scenarios/**/*.txt
+            lane-results/*/scenarios/**/*.png
+            lane-results/*/scenarios/**/*.jpg
+            lane-results/*/scenarios/**/*.dmp
+            lane-results/*/scenarios/**/*.mkv
+            lane-results/*/scenarios/**/*.mp4
+            lane-results/*/scenarios/**/*.webm
+            lane-results/*/scenarios/**/*.partial
           if-no-files-found: error
           retention-days: 90
 
@@ -307,7 +331,18 @@ jobs:
           name: candidate-results-update-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
           path: |
             lane-results/*.result.json
-            lane-results/*/scenarios/
+            lane-results/*/scenarios/**/*.log
+            lane-results/*/scenarios/**/*.jsonl
+            lane-results/*/scenarios/**/*.json
+            lane-results/*/scenarios/**/*.csv
+            lane-results/*/scenarios/**/*.txt
+            lane-results/*/scenarios/**/*.png
+            lane-results/*/scenarios/**/*.jpg
+            lane-results/*/scenarios/**/*.dmp
+            lane-results/*/scenarios/**/*.mkv
+            lane-results/*/scenarios/**/*.mp4
+            lane-results/*/scenarios/**/*.webm
+            lane-results/*/scenarios/**/*.partial
           if-no-files-found: error
           retention-days: 90
 

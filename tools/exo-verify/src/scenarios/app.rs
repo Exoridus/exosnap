@@ -41,9 +41,9 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "app.protocol-compat",
-            revision: 1,
-            title: "Protocol 1 is still answered unchanged beside protocol 2",
-            claim: "a protocol-1 client gets protocol-1 envelopes without protocol-2 fields and cannot reach protocol-2 commands",
+            revision: 2,
+            title: "Protocol 1 and protocol 2 work in sequence on the same endpoint",
+            claim: "a protocol-1 client gets protocol-1 envelopes without protocol-2 fields and cannot reach protocol-2 commands; a subsequent protocol-2 client retains its fields",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Recommended,
@@ -192,11 +192,12 @@ fn control_endpoint_lifecycle(ctx: &mut Context) -> Step {
 }
 
 fn protocol_compat(ctx: &mut Context) -> Step {
-    let mut app = ctx.launch(&[])?;
+    let app = ctx.launch(&[])?;
+    drop(app.client);
     let mut v1 = Client::connect_protocol("LiveVerify", &app.run_id, secs(15.0), PROTOCOL_V1)
         .map_err(|e| {
             Stop::fail(format!(
-                "a protocol-1 client could not connect beside protocol 2: {e:#}"
+                "a protocol-1 client could not connect after protocol 2: {e:#}"
             ))
         })?;
     v1.request("record.snapshot", json!({}), secs(10.0))?
@@ -220,9 +221,11 @@ fn protocol_compat(ctx: &mut Context) -> Step {
             r.code
         ),
     }
-    app.call("record.snapshot", json!({}))?;
+    drop(v1);
+    let mut v2 = Client::connect("LiveVerify", &app.run_id, secs(15.0))?;
+    v2.call("record.snapshot", json!({}))?;
     product_ensure!(
-        app.client.last_response.get("stateRevision").is_some(),
+        v2.last_response.get("stateRevision").is_some(),
         "protocol 2 lost its stateRevision field"
     );
     Ok(())

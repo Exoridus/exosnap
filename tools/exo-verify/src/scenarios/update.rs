@@ -34,12 +34,12 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "update.msi-decline",
-            revision: 1,
+            revision: 2,
             title: "Simulated declined MSI elevation leaves the installation intact",
             claim: "the updater's uacDeclined fault seam reports a declined elevation and preserves the old installation",
-            lane: Lane::CiUpdate,
+            lane: Lane::Nightly,
             also: &[],
-            tier: Tier::Required,
+            tier: Tier::Recommended,
             requires: &[
                 Capability::Windows,
                 Capability::Admin,

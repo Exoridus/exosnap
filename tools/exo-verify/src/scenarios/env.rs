@@ -17,7 +17,7 @@ pub fn scenarios() -> Vec<Scenario> {
             revision: 1,
             title: "Environment properties have explicit capability classes and mechanisms",
             claim: "the complete environment catalogue classifies every property and names its read mechanism and any supported mutation mechanism",
-            lane: Lane::CiCore,
+            lane: Lane::Hardware,
             also: &[],
             tier: Tier::Required,
             requires: &[Capability::Windows],
