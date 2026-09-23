@@ -41,6 +41,7 @@ pub struct Output {
     pub status: ExitStatus,
     pub stdout: String,
     pub stderr: String,
+    #[allow(dead_code, reason = "Reserved for process timing evidence")]
     pub elapsed: Duration,
 }
 

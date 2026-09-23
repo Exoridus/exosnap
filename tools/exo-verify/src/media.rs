@@ -41,6 +41,7 @@ pub fn streams<'a>(probe: &'a Value, kind: &str) -> Vec<&'a Value> {
         .unwrap_or_default()
 }
 
+#[allow(dead_code, reason = "Reserved for media metadata checks")]
 pub fn f64_field(v: &Value, key: &str) -> Option<f64> {
     v.get(key).and_then(|x| {
         x.as_str()
@@ -390,11 +391,13 @@ pub fn tone_onsets(samples: &[f32], rate: u32, freq: f64, gap_s: f64) -> Vec<f64
     onsets
 }
 
+#[allow(dead_code, reason = "Reserved for audio-level checks")]
 pub fn peak(samples: &[f32]) -> f32 {
     samples.iter().fold(0.0f32, |m, x| m.max(x.abs()))
 }
 
 /// Encodes BGRA frames into a video file with ffmpeg, for oracle fixtures.
+#[allow(dead_code, reason = "Used by media oracle tests only")]
 pub fn encode_fixture(
     frames: impl Iterator<Item = Vec<u8>>,
     width: u32,

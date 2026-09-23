@@ -352,6 +352,10 @@ pub fn close_windows(pid: u32) -> usize {
 /// Luma of the desktop inside `rect` (virtual-screen physical pixels), read
 /// through GDI. Used only to prove a precondition (the stimulus is actually
 /// on screen) independently of the product.
+#[allow(
+    dead_code,
+    reason = "Reserved for independent stimulus visibility checks"
+)]
 pub fn screen_luma(rect: [i32; 4], width: u32) -> anyhow::Result<(u32, u32, Vec<u8>)> {
     use windows::Win32::Graphics::Gdi::*;
     let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);

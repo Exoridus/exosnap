@@ -21,6 +21,7 @@ pub struct Product {
     pub root: PathBuf,
     pub exe: PathBuf,
     pub updater: PathBuf,
+    #[allow(dead_code, reason = "Reserved for bundle-specific scenario checks")]
     pub from_bundle: bool,
 }
 
@@ -68,6 +69,7 @@ pub fn extract_zip(archive: &Path, out: &Path) -> Result<()> {
 }
 
 pub struct Context {
+    #[allow(dead_code, reason = "Reserved for lane-specific scenario behavior")]
     pub lane: Lane,
     pub caps: CapabilitySet,
     pub bundle: Option<Bundle>,
@@ -155,6 +157,7 @@ impl Context {
         self.caps.has(c)
     }
 
+    #[allow(dead_code, reason = "Reserved for scenario capability checks")]
     pub fn require(&self, c: Capability) -> Step {
         if self.caps.has(c) {
             Ok(())
@@ -219,6 +222,7 @@ impl Context {
 
     /// Asks the operator a yes/no question. Only scenarios that require the
     /// `operator` capability may call this.
+    #[allow(dead_code, reason = "Reserved for operator-assisted scenarios")]
     pub fn ask(&self, question: &str) -> Step<bool> {
         self.require(Capability::Operator)?;
         use std::io::Write;
@@ -229,6 +233,7 @@ impl Context {
         Ok(matches!(line.trim(), "y" | "Y" | "yes"))
     }
 
+    #[allow(dead_code, reason = "Reserved for operator-assisted scenarios")]
     pub fn announce(&self, text: &str) {
         println!("  [{}] {text}", self.lane.name());
     }
@@ -238,7 +243,9 @@ impl Context {
 pub struct App {
     pub client: Client,
     pub child: Child,
+    #[allow(dead_code, reason = "Reserved for recording output checks")]
     pub output: PathBuf,
+    #[allow(dead_code, reason = "Reserved for configuration checks")]
     pub config: PathBuf,
     pub run_id: String,
 }
@@ -267,10 +274,12 @@ impl App {
     }
 }
 
+#[allow(dead_code, reason = "Reserved for control-response assertions")]
 pub fn json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     path.split('.').try_fold(value, |v, key| v.get(key))
 }
 
+#[allow(dead_code, reason = "Reserved for control requests")]
 pub fn obj(pairs: &[(&str, Value)]) -> Value {
     let mut map = serde_json::Map::new();
     for (k, v) in pairs {
@@ -279,6 +288,7 @@ pub fn obj(pairs: &[(&str, Value)]) -> Value {
     Value::Object(map)
 }
 
+#[allow(dead_code, reason = "Reserved for control requests")]
 pub fn empty() -> Value {
     json!({})
 }

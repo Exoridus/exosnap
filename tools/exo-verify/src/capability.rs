@@ -119,6 +119,7 @@ impl CapabilitySet {
         self.present.insert(c);
     }
 
+    #[allow(dead_code, reason = "Reserved for scenario capability overrides")]
     pub fn remove(&mut self, c: Capability) {
         self.present.remove(&c);
     }
@@ -131,6 +132,7 @@ impl CapabilitySet {
         self.present.iter().map(|c| c.name().to_string()).collect()
     }
 
+    #[allow(dead_code, reason = "Reserved for scenario capability fixtures")]
     pub fn from_names(names: &[&str]) -> Self {
         let mut set = CapabilitySet::default();
         for n in names {

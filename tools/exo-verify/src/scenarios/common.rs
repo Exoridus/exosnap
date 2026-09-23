@@ -28,8 +28,10 @@ pub struct Stimulus {
     pub log_path: PathBuf,
     pub title: String,
     pub monitor: String,
+    #[allow(dead_code, reason = "Reserved for screen placement checks")]
     pub rect: [i32; 4],
     pub qpc_frequency: i64,
+    #[allow(dead_code, reason = "Reserved for DPI checks")]
     pub dpi: u32,
 }
 
@@ -148,6 +150,7 @@ impl Stimulus {
 
     /// Waits until the stimulus logs `state`, the ground truth for lifecycle
     /// scenarios (a window really destroyed, really minimised).
+    #[allow(dead_code, reason = "Reserved for stimulus lifecycle scenarios")]
     pub fn wait_state(&self, state: &str, timeout: Duration) -> Step<i64> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -409,6 +412,7 @@ pub struct VideoExpectation {
 
 pub struct VideoFacts {
     pub probe: Value,
+    #[allow(dead_code, reason = "Reserved for recording timeline checks")]
     pub timeline: IdTimeline,
     pub frames: Vec<media::LumaFrame>,
     pub duration: f64,
@@ -603,6 +607,7 @@ pub fn audio_streams(probe: &Value) -> usize {
     media::streams(probe, "audio").len()
 }
 
+#[allow(dead_code, reason = "Reserved for control-response assertions")]
 pub fn field<'a>(v: &'a Value, path: &str) -> Step<&'a Value> {
     json_path(v, path)
         .ok_or_else(|| Stop::fail(format!("the control surface no longer reports '{path}'")))

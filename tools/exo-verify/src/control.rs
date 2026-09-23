@@ -207,6 +207,7 @@ impl Client {
     }
 
     /// Waits for an event whose `data` matches every field of `filter`.
+    #[allow(dead_code, reason = "Reserved for event-driven scenarios")]
     pub fn wait_event(
         &mut self,
         name: &str,

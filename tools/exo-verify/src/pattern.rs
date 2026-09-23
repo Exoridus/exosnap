@@ -203,6 +203,7 @@ fn fill(px: &mut [u8], layout: &Layout, r: Rect, rgb: [u8; 3]) {
 }
 
 /// Renders one frame as tightly packed BGRA.
+#[allow(dead_code, reason = "Used by media oracle tests only")]
 pub fn render(layout: &Layout, state: &FrameState) -> Vec<u8> {
     let mut px = vec![0u8; layout.width as usize * layout.height as usize * 4];
     paint_static(layout, &mut px);
@@ -341,6 +342,7 @@ pub fn decode_id(luma: &Luma) -> Decoded {
     }
 }
 
+#[allow(dead_code, reason = "Used by pattern tests and pending state checks")]
 pub fn decode_state(luma: &Luma) -> Option<u8> {
     let layout = Layout::new(luma.width, luma.height);
     let mut value = 0u8;
@@ -360,6 +362,7 @@ pub fn flash_on(luma: &Luma) -> bool {
 }
 
 /// BGRA to BT.709 limited-range-agnostic luma (full-range 0..255 output).
+#[allow(dead_code, reason = "Used by pattern tests and pending screen checks")]
 pub fn bgra_to_luma(bgra: &[u8]) -> Vec<u8> {
     bgra.chunks_exact(4)
         .map(|p| (0.0722 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.2126 * p[2] as f64).round() as u8)
