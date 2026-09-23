@@ -1,6 +1,10 @@
 name: Build release candidate
 
 on:
+  push:
+    branches: [next]
+    paths:
+      - .github/workflows/release-candidate-next.yml
   workflow_dispatch:
     inputs:
       source_commit:
@@ -16,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: candidate-${{ inputs.source_commit }}-${{ inputs.candidate_id }}
+  group: candidate-${{ inputs.source_commit || github.sha }}-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
   cancel-in-progress: false
 
 jobs:
@@ -27,14 +31,14 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.source_commit }}
+          ref: ${{ inputs.source_commit || github.sha }}
           fetch-depth: 0
 
       - name: Bind source and final version
         shell: pwsh
         env:
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
-          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          SOURCE_COMMIT: ${{ inputs.source_commit || github.sha }}
+          CANDIDATE_ID: ${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:SOURCE_COMMIT -cnotmatch '^[0-9a-f]{40}$') { throw 'source_commit must be a full lowercase SHA' }
@@ -88,8 +92,8 @@ jobs:
       - name: Package and freeze bundle and plan
         shell: pwsh
         env:
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
-          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          SOURCE_COMMIT: ${{ inputs.source_commit || github.sha }}
+          CANDIDATE_ID: ${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
         run: |
           $verify = 'tools/exo-verify/target/release/exo-verify.exe'
           & $verify package --build-dir build/windows-x64-ninja-release --out candidate-package --version $env:RELEASE_VERSION
@@ -109,7 +113,7 @@ jobs:
       - name: Upload exact candidate bytes and frozen plan
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: candidate-${{ inputs.candidate_id }}
+          name: candidate-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
           path: |
             candidate-bundle/
             candidate-plan.json
@@ -136,7 +140,7 @@ jobs:
       - name: Download candidate bytes
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: candidate-${{ inputs.candidate_id }}
+          name: candidate-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
 
       - name: Sign only the disposable feed metadata
         shell: pwsh
@@ -160,7 +164,7 @@ jobs:
       - name: Upload signed disposable feed metadata
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: candidate-feed-${{ inputs.candidate_id }}
+          name: candidate-feed-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
           path: candidate-feed/
           if-no-files-found: error
           retention-days: 90
@@ -172,7 +176,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: candidate-${{ inputs.candidate_id }}
+          name: candidate-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
       - name: Verify bundle and run core lane
         shell: pwsh
         run: |
@@ -187,7 +191,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: candidate-results-core-${{ inputs.candidate_id }}
+          name: candidate-results-core-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
           path: |
             lane-results/*.result.json
             lane-results/*/scenarios/
@@ -201,7 +205,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: candidate-${{ inputs.candidate_id }}
+          name: candidate-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
       - name: Verify bundle and run disposable install lane
         shell: pwsh
         run: |
@@ -216,7 +220,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: candidate-results-install-${{ inputs.candidate_id }}
+          name: candidate-results-install-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
           path: |
             lane-results/*.result.json
             lane-results/*/scenarios/
@@ -230,10 +234,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: candidate-${{ inputs.candidate_id }}
+          name: candidate-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: candidate-feed-${{ inputs.candidate_id }}
+          name: candidate-feed-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
           path: candidate-feed
       - name: Download official previous Stable packages
         shell: pwsh
@@ -296,7 +300,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: candidate-results-update-${{ inputs.candidate_id }}
+          name: candidate-results-update-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
           path: |
             lane-results/*.result.json
             lane-results/*/scenarios/
@@ -311,12 +315,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: candidate-${{ inputs.candidate_id }}
+          name: candidate-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
       - name: Download available lane results
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         continue-on-error: true
         with:
-          pattern: candidate-results-*-${{ inputs.candidate_id }}
+          pattern: candidate-results-*-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
           path: results
           merge-multiple: true
       - name: Merge candidate report
@@ -338,7 +342,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: candidate-report-${{ inputs.candidate_id }}
+          name: candidate-report-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
           path: report/
           if-no-files-found: error
           retention-days: 90
