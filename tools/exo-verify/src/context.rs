@@ -260,9 +260,11 @@ impl App {
         self.client.call(command, params)
     }
 
-    /// Ends the instance. The job kills anything left; this is only the
-    /// polite first attempt so the product can flush its logs.
-    pub fn close(mut self) -> Result<Option<i32>> {
+    /// Ends the instance for harness cleanup: the control connection is
+    /// dropped and whatever is still running a second later is killed. A
+    /// killed product records an unclean exit, so nothing may afterwards be
+    /// judged as a normal restart; use [`App::close_gracefully`] for that.
+    pub fn kill_for_cleanup(mut self) -> Result<Option<i32>> {
         drop(self.client);
         match crate::tools::wait(&mut self.child, Duration::from_secs(1)) {
             Ok(status) => Ok(status.code()),
@@ -274,8 +276,127 @@ impl App {
         }
     }
 
+    /// Quits through the product's own shutdown (`app.quit`, the tray Quit's
+    /// close-guard chain) and proves that it completed: the process exits
+    /// with code 0 within `timeout` and its crash session records a clean
+    /// exit. Never falls back to killing the process. A refusal, hang or
+    /// unclean exit is the product's verdict; anything left running is
+    /// removed by the scenario's job afterwards.
+    pub fn close_gracefully(mut self, timeout: Duration) -> Step<GracefulExit> {
+        let crash_record = self.config.join("crashes").join("last_session.json");
+        let mut instance = RunningInstance {
+            client: Some(self.client),
+            child: &mut self.child,
+            crash_record,
+        };
+        shut_down(&mut instance, timeout)
+    }
+
     pub fn identity(&self) -> &Value {
         &self.client.identity
+    }
+}
+
+/// Proof that an instance ended through the product's own shutdown. Only a
+/// completed graceful shutdown creates one, so a restart judged against it
+/// cannot follow a forced termination.
+#[derive(Debug)]
+pub struct GracefulExit {
+    pub code: i32,
+    _proof: (),
+}
+
+/// What a graceful shutdown needs from a running instance. There is
+/// deliberately no way to kill through it.
+trait Shutdown {
+    /// Asks the product to quit. The outer error is a transport failure, the
+    /// inner one the product's refusal.
+    fn request_quit(&mut self) -> Result<Result<(), String>>;
+    /// Waits up to `timeout` for the process to end; `None` while it runs.
+    fn wait_exit(&mut self, timeout: Duration) -> Result<Option<Option<i32>>>;
+    /// The product's own clean-exit flag, `None` when it left no record.
+    fn clean_exit_recorded(&self) -> Result<Option<bool>>;
+}
+
+struct RunningInstance<'a> {
+    client: Option<Client>,
+    child: &'a mut Child,
+    crash_record: PathBuf,
+}
+
+impl Shutdown for RunningInstance<'_> {
+    fn request_quit(&mut self) -> Result<Result<(), String>> {
+        let client = self
+            .client
+            .as_mut()
+            .ok_or_else(|| anyhow!("the control connection is already closed"))?;
+        let answer = client.request("app.quit", json!({}), Duration::from_secs(30));
+        // The product must not wait on a client that holds its pipe open.
+        drop(self.client.take());
+        Ok(answer?.map(|_| ()).map_err(|refusal| refusal.to_string()))
+    }
+
+    fn wait_exit(&mut self, timeout: Duration) -> Result<Option<Option<i32>>> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.child.try_wait()? {
+                return Ok(Some(status.code()));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn clean_exit_recorded(&self) -> Result<Option<bool>> {
+        if !self.crash_record.is_file() {
+            return Ok(None);
+        }
+        let record: Value = serde_json::from_slice(&std::fs::read(&self.crash_record)?)
+            .with_context(|| format!("parse {}", self.crash_record.display()))?;
+        Ok(record.get("clean_exit").and_then(Value::as_bool))
+    }
+}
+
+fn shut_down(instance: &mut impl Shutdown, timeout: Duration) -> Step<GracefulExit> {
+    match instance.request_quit() {
+        Ok(Ok(())) => {}
+        Ok(Err(refusal)) => {
+            return Err(Stop::fail(format!(
+                "the product refused app.quit: {refusal}"
+            )));
+        }
+        // The answer can be lost when the process exits right after sending
+        // it. Only an actual exit, judged below, makes that a quit.
+        Err(error) => {
+            if instance.wait_exit(Duration::ZERO)?.is_none() {
+                return Err(Stop::Infra(error.context("app.quit")));
+            }
+        }
+    }
+    let Some(code) = instance.wait_exit(timeout)? else {
+        return Err(Stop::fail(format!(
+            "the product accepted app.quit but was still running after {} s",
+            timeout.as_secs()
+        )));
+    };
+    if code != Some(0) {
+        return Err(Stop::fail(format!(
+            "the product exited with code {code:?} after app.quit"
+        )));
+    }
+    match instance.clean_exit_recorded()? {
+        Some(true) => Ok(GracefulExit {
+            code: 0,
+            _proof: (),
+        }),
+        Some(false) => Err(Stop::fail(
+            "the product exited after app.quit without recording a clean exit",
+        )),
+        None => Err(Stop::infra(
+            "the product left no clean-exit record; a clean shutdown cannot be established",
+        )),
     }
 }
 
@@ -296,4 +417,114 @@ pub fn obj(pairs: &[(&str, Value)]) -> Value {
 #[allow(dead_code, reason = "Reserved for control requests")]
 pub fn empty() -> Value {
     json!({})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A product that runs until asked to quit and then behaves as configured.
+    struct FakeProduct {
+        answer: Option<Result<(), String>>,
+        exit: Option<Option<i32>>,
+        clean: Option<bool>,
+        asked: bool,
+    }
+
+    impl FakeProduct {
+        fn clean() -> Self {
+            FakeProduct {
+                answer: Some(Ok(())),
+                exit: Some(Some(0)),
+                clean: Some(true),
+                asked: false,
+            }
+        }
+    }
+
+    impl Shutdown for FakeProduct {
+        fn request_quit(&mut self) -> Result<Result<(), String>> {
+            self.asked = true;
+            self.answer
+                .clone()
+                .ok_or_else(|| anyhow!("control pipe closed"))
+        }
+        fn wait_exit(&mut self, _: Duration) -> Result<Option<Option<i32>>> {
+            Ok(if self.asked { self.exit } else { None })
+        }
+        fn clean_exit_recorded(&self) -> Result<Option<bool>> {
+            Ok(self.clean)
+        }
+    }
+
+    fn outcome(mut product: FakeProduct) -> Step<GracefulExit> {
+        shut_down(&mut product, Duration::from_secs(1))
+    }
+
+    #[test]
+    fn accepted_quit_with_clean_exit_proves_a_graceful_shutdown() {
+        assert_eq!(outcome(FakeProduct::clean()).unwrap().code, 0);
+    }
+
+    #[test]
+    fn a_refused_quit_is_a_product_verdict() {
+        let product = FakeProduct {
+            answer: Some(Err("blocked: recording".into())),
+            exit: None,
+            ..FakeProduct::clean()
+        };
+        assert!(matches!(outcome(product), Err(Stop::Fail(_))));
+    }
+
+    #[test]
+    fn a_process_that_outlives_an_accepted_quit_fails_instead_of_being_killed() {
+        let product = FakeProduct {
+            exit: None,
+            ..FakeProduct::clean()
+        };
+        assert!(matches!(outcome(product), Err(Stop::Fail(_))));
+    }
+
+    #[test]
+    fn an_exit_without_a_clean_record_is_not_graceful() {
+        let unclean = FakeProduct {
+            clean: Some(false),
+            ..FakeProduct::clean()
+        };
+        assert!(matches!(outcome(unclean), Err(Stop::Fail(_))));
+        let failed = FakeProduct {
+            exit: Some(Some(1)),
+            ..FakeProduct::clean()
+        };
+        assert!(matches!(outcome(failed), Err(Stop::Fail(_))));
+        let killed = FakeProduct {
+            exit: Some(None),
+            ..FakeProduct::clean()
+        };
+        assert!(matches!(outcome(killed), Err(Stop::Fail(_))));
+    }
+
+    #[test]
+    fn a_missing_clean_exit_record_is_unobserved_not_passed() {
+        let product = FakeProduct {
+            clean: None,
+            ..FakeProduct::clean()
+        };
+        assert!(matches!(outcome(product), Err(Stop::Infra(_))));
+    }
+
+    #[test]
+    fn a_lost_answer_counts_only_when_the_process_really_exits() {
+        let exited = FakeProduct {
+            answer: None,
+            ..FakeProduct::clean()
+        };
+        assert_eq!(outcome(exited).unwrap().code, 0);
+        let running = FakeProduct {
+            answer: None,
+            exit: None,
+            ..FakeProduct::clean()
+        };
+        assert!(matches!(outcome(running), Err(Stop::Infra(_))));
+    }
 }

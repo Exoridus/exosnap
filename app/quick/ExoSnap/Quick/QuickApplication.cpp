@@ -4701,6 +4701,24 @@ void QuickApplication::initializeShell() {
     });
 }
 
+bool QuickApplication::requestQuit(QString* guard) {
+    QString decision;
+    const QMetaObject::Connection capture =
+        QObject::connect(&shell_adapter_, &ShellAdapter::closeDecided, &shell_adapter_,
+                         [&decision](const QString& kind, bool, bool, bool, bool) { decision = kind; });
+    const bool allowed = shell_adapter_.requestClose();
+    QObject::disconnect(capture);
+    if (!allowed) {
+        if (guard != nullptr)
+            *guard = decision;
+        return false;
+    }
+    // An allowed requestClose() quits through closeDecided, never closeApproved,
+    // so the debounced writes are flushed here.
+    flushPendingPersists();
+    return true;
+}
+
 void QuickApplication::initializeTray() {
     // One-time process setup, ahead of the availability check below rather than
     // gated by it: the opt-in is a process-wide setting, not a property of the
@@ -4759,8 +4777,7 @@ void QuickApplication::initializeTray() {
         // came to do nothing at all, so ask the shell directly: same guard chain,
         // same decision, and the approved case quits through closeDecided like
         // every other close.
-        if (shell_adapter_.requestClose())
-            flushPendingPersists();
+        static_cast<void>(requestQuit(nullptr));
     });
 
     // The unread badge mirrors the in-window bell: a toast raised while the

@@ -158,6 +158,12 @@ class LiveVerifySource {
     virtual bool DiagnosticsSetInDepth(bool enabled, QString* error) = 0;
     virtual bool LogsOpen(QString* error) = 0;
 
+    // --- Lifetime (protocol 2) -------------------------------------------------
+    // The tray Quit's guard chain. Returns false with the guard's answer when a
+    // recording, export, remux or finalize keeps the application open; true
+    // means the normal shutdown has been scheduled and the process will exit.
+    virtual bool AppQuit(QString* error) = 0;
+
     // --- Blocking surfaces (protocol 2) --------------------------------------
     // Only the actions the surface really offers. There is no failure injection
     // here and never will be: raising a recovery or crash surface is something

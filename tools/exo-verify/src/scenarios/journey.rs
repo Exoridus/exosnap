@@ -7,7 +7,7 @@ use std::path::Path;
 use super::common::{self, Stimulus, StimulusOptions, secs};
 use crate::bundle::sha256_file;
 use crate::capability::Capability;
-use crate::context::Context;
+use crate::context::{Context, GracefulExit};
 use crate::media;
 use crate::plan::Tier;
 use crate::product_ensure;
@@ -16,9 +16,9 @@ use crate::scenario::{Lane, Scenario, Step, Stop};
 pub fn scenarios() -> Vec<Scenario> {
     vec![Scenario {
         id: "journey.record-edit-export-restart",
-        revision: 1,
+        revision: 2,
         title: "A recording can be edited, exported and reopened after restart",
-        claim: "the candidate records a changing window, accepts a marker and pause/resume, exports an ordered trim to a decodable file, and starts again with the same candidate identity",
+        claim: "the candidate records a changing window, accepts a marker and pause/resume, exports an ordered trim to a decodable file, quits through its own shutdown with a recorded clean exit, and starts again with the same candidate identity and no blocking surface",
         lane: Lane::Gpu,
         also: &[],
         tier: Tier::Required,
@@ -180,7 +180,8 @@ fn journey(ctx: &mut Context) -> Step {
     ctx.evidence
         .put("exportPath", exported[0].display().to_string());
     ctx.evidence.put("exportDurationSeconds", exported_duration);
-    app.close()?;
+    let exit = app.close_gracefully(secs(60.0))?;
+    ctx.evidence.put("firstInstanceExitCode", exit.code);
     let mut restarted = ctx.launch(&[])?;
     product_ensure!(
         restarted.identity()["executableSha256"]
@@ -189,14 +190,20 @@ fn journey(ctx: &mut Context) -> Step {
         "the restarted process does not report the candidate executable hash"
     );
     let state = restarted.call("ui.getState", json!({}))?;
+    ctx.evidence.put("restartState", state.clone());
+    judge_restart(&exit, &state)
+}
+
+/// A normal restart is only judged after the first instance was proven to end
+/// through the product's own shutdown; after a kill a crash surface is correct.
+fn judge_restart(_after: &GracefulExit, state: &Value) -> Step {
     product_ensure!(
         state["blockingSurface"]
             .as_str()
             .is_none_or(|value| value.is_empty() || value == "none"),
-        "restart opened a blocking surface: {}",
+        "restart after a clean shutdown opened a blocking surface: {}",
         state["blockingSurface"]
     );
-    ctx.evidence.put("restartState", state);
     Ok(())
 }
 

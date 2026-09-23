@@ -170,13 +170,9 @@ fn capture_overlays(ctx: &mut Context) -> Step {
         ],
     )?;
     let environment = app.call("environment.snapshot", json!({}))?;
-    let monitor = environment["displays"]["screens"]
-        .as_array()
-        .and_then(|screens| screens.iter().find(|screen| screen["primary"] == true))
-        .and_then(|screen| screen["name"].as_str())
-        .ok_or_else(|| Stop::unavailable("the product reports no primary monitor"))?
-        .to_string();
-    common::select_display(&mut app, &monitor)?;
+    let primary = common::primary_screen(&environment, false)
+        .ok_or_else(|| Stop::unavailable("the product reports no primary monitor"))?;
+    common::select_display(&mut app, &common::screen_device(primary)?)?;
     common::start_recording(&mut app)?;
     accepted(
         &mut app,
@@ -198,7 +194,7 @@ fn capture_overlays(ctx: &mut Context) -> Step {
         ],
     )?;
     common::stop_recording(&mut app)?;
-    app.close()?;
+    app.kill_for_cleanup()?;
     let mut countdown = ctx.launch(&["--overlay-visual-state", "hud-countdown"])?;
     let ready = countdown
         .client

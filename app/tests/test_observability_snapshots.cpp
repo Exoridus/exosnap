@@ -588,6 +588,30 @@ TEST(EnvironmentSnapshotJson, HdrOffAndHdrUnknownAreDifferentPayloads) {
     EXPECT_EQ(measured.value(QStringLiteral("colorAvailability")).toString(), QStringLiteral("available"));
 }
 
+// A monitor capture target is selected by its Windows display device, never by
+// Qt's friendly screen name. The snapshot carries both, and an unread device is
+// null rather than a name standing in for it.
+TEST(EnvironmentSnapshotJson, ScreensCarryTheDisplayDeviceBesideTheFriendlyName) {
+    EnvironmentSnapshotInputs inputs;
+    ScreenFacts known;
+    known.name = QStringLiteral("27GL850");
+    known.device = QStringLiteral("\\\\.\\DISPLAY1");
+    inputs.screens.push_back(known);
+    ScreenFacts unread;
+    unread.name = QStringLiteral("27GL850");
+    inputs.screens.push_back(unread);
+
+    const QJsonArray screens = EnvironmentSnapshotToJson(inputs)
+                                   .value(QStringLiteral("displays"))
+                                   .toObject()
+                                   .value(QStringLiteral("screens"))
+                                   .toArray();
+    ASSERT_EQ(screens.size(), 2);
+    EXPECT_EQ(screens.at(0).toObject().value(QStringLiteral("device")).toString(), QStringLiteral("\\\\.\\DISPLAY1"));
+    EXPECT_EQ(screens.at(0).toObject().value(QStringLiteral("name")).toString(), QStringLiteral("27GL850"));
+    EXPECT_TRUE(screens.at(1).toObject().value(QStringLiteral("device")).isNull());
+}
+
 // The DXGI output walk and Qt's screen list are two independent enumerations of
 // the same monitors. A positional join reads correctly only while the two happen
 // to agree, and reports one monitor's HDR state under the other's name the moment

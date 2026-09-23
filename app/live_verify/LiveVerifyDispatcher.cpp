@@ -188,6 +188,16 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
     QString error;
     const QJsonObject& params = request.params;
 
+    if (command.name == QLatin1String("app.quit")) {
+        if (!source.AppQuit(&error))
+            return IntentRefused(command, source, error);
+        // Accepted, not finished: the exit happens after this answer is sent, and
+        // its completion is the process ending.
+        QJsonObject result;
+        result.insert(QStringLiteral("quitting"), true);
+        return Succeeded(result, /*settled=*/false);
+    }
+
     if (command.name == QLatin1String("window.moveToScreen")) {
         if (!source.MoveWindowToScreen(ParamString(params, "screen"), &error))
             return IntentRefused(command, source, error);

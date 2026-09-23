@@ -32,6 +32,7 @@
 #include <exosnap/engine/util/com_apartment.h>
 #include <exosnap/engine/visual_generations.h>
 #include <exosnap/engine/wgc_acquire_classify.h>
+#include <exosnap/engine/wgc_frame_geometry.h>
 #include <exosnap/engine/wgc_session_config.h>
 
 #include <exosnap/engine/frame_pacing.h>
@@ -2250,6 +2251,39 @@ void VideoThread::Run() {
     // (same failure family as the OD phase-correct seed, measured live).
     winrt::com_ptr<ID3D11Texture2D> seedWgcTex;
 
+    // A WGC pool surface never changes size on a window resize: WGC renders the
+    // new-size content into a corner of the old-size surface, so the texture
+    // descriptor can never signal it. The frame's ContentSize is what changes.
+    // The encoder and compositor are fixed at the session's source size, so a
+    // real change ends the recording explicitly (same contract as the OD path),
+    // never silent corner content. A minimized window is not a resize: it keeps
+    // delivering frames at its iconic caption size, and those are held back.
+    WgcFrameGeometryTracker wgcGeometry({static_cast<int32_t>(sourceWidth), static_cast<int32_t>(sourceHeight)});
+    bool wgcHoldingMinimized = false;
+    auto classifyWgcFrame = [&](const winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame& frame) {
+        const auto content = frame.ContentSize();
+        const bool minimized = targetHwnd != nullptr && IsIconic(targetHwnd) != FALSE;
+        const WgcFrameGeometry verdict = wgcGeometry.Classify({content.Width, content.Height}, minimized);
+        const bool holding = verdict == WgcFrameGeometry::HoldLastFrame;
+        if (holding != wgcHoldingMinimized && verdict != WgcFrameGeometry::SourceResized) {
+            const logging::LogField fields[] = {
+                {"content_size", std::to_string(content.Width) + "x" + std::to_string(content.Height)},
+                {"window_minimized", BoolText(minimized)}};
+            logging::log(logging::LogLevel::Info, "video_thread",
+                         holding ? "captured window minimized; holding last frame"
+                                 : "captured window restored; encoding new frames",
+                         std::span<const logging::LogField>(fields, std::size(fields)));
+        }
+        wgcHoldingMinimized = holding;
+        if (verdict == WgcFrameGeometry::SourceResized) {
+            std::ostringstream err;
+            err << "capture source size changed during session from " << sourceWidth << "x" << sourceHeight << " to "
+                << content.Width << "x" << content.Height << "; restart recording to reconfigure encoder";
+            m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+        }
+        return verdict;
+    };
+
     // --- Wait for first frame (5 s timeout) ---
     {
         LARGE_INTEGER freq{}, tStart{}, tNow{};
@@ -2490,13 +2524,12 @@ void VideoThread::Run() {
                         // surface, so borrowing it would let WGC render future
                         // frames into the held seed. Only a frame whose visible
                         // content matches the configured capture size may seed
-                        // the encoder (the pool surface itself never changes
-                        // size — ContentSize is the real signal); on mismatch
-                        // the drain loop reports the honest size-changed
-                        // failure on the next frame.
+                        // the encoder (see wgcGeometry); on mismatch the drain
+                        // loop reports the honest size-changed failure on the
+                        // next frame.
                         const auto seedContent = frame.ContentSize();
-                        if (seedContent.Width == static_cast<int32_t>(sourceWidth) &&
-                            seedContent.Height == static_cast<int32_t>(sourceHeight)) {
+                        if (wgcGeometry.Classify({seedContent.Width, seedContent.Height}, false) ==
+                            WgcFrameGeometry::Encode) {
                             auto surface = frame.Surface();
                             auto access =
                                 surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
@@ -3751,25 +3784,10 @@ void VideoThread::Run() {
                         frame = next;
                     }
                     if (frame != nullptr) {
-                        // A window resize does NOT resize the pool's surfaces:
-                        // WGC keeps rendering the (new-size) content into a
-                        // corner of the old-size surface, so the texture
-                        // descriptor always matches the pool and can never
-                        // signal the resize. The frame's ContentSize is what
-                        // actually changes. The encoder and compositor are
-                        // fixed at the session's source size, so a real change
-                        // is an explicit failure (same contract as the OD
-                        // path), never silent corner content.
-                        const auto content = frame.ContentSize();
-                        if (content.Width != static_cast<int32_t>(sourceWidth) ||
-                            content.Height != static_cast<int32_t>(sourceHeight)) {
-                            std::ostringstream err;
-                            err << "capture source size changed during session from " << sourceWidth << "x"
-                                << sourceHeight << " to " << content.Width << "x" << content.Height
-                                << "; restart recording to reconfigure encoder";
-                            m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+                        const WgcFrameGeometry geometry = classifyWgcFrame(frame);
+                        if (geometry == WgcFrameGeometry::SourceResized) {
                             sourceLost = true;
-                        } else {
+                        } else if (geometry == WgcFrameGeometry::Encode) {
                             auto surface = frame.Surface();
                             auto access =
                                 surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
@@ -4491,20 +4509,12 @@ void VideoThread::Run() {
                         frame = next;
                     }
                     if (frame != nullptr) {
-                        // Same as the CFR drain: the pool surface never changes
-                        // size on a window resize — ContentSize is the real
-                        // signal — and the surface is recycled by the pool, so
-                        // the kept frame must be a copy (see wgcCapturedTex).
-                        const auto content = frame.ContentSize();
-                        if (content.Width != static_cast<int32_t>(sourceWidth) ||
-                            content.Height != static_cast<int32_t>(sourceHeight)) {
-                            std::ostringstream err;
-                            err << "capture source size changed during session from " << sourceWidth << "x"
-                                << sourceHeight << " to " << content.Width << "x" << content.Height
-                                << "; restart recording to reconfigure encoder";
-                            m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+                        // The surface is recycled by the pool, so the kept frame
+                        // must be a copy (see wgcCapturedTex).
+                        const WgcFrameGeometry geometry = classifyWgcFrame(frame);
+                        if (geometry == WgcFrameGeometry::SourceResized) {
                             sourceLost = true;
-                        } else {
+                        } else if (geometry == WgcFrameGeometry::Encode) {
                             auto surface = frame.Surface();
                             auto access =
                                 surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();

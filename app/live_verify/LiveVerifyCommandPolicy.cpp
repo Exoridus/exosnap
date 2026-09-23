@@ -480,6 +480,13 @@ const QVector<CommandDescriptor>& AllCommands() {
          {Param("recordingSessionId", "string", true)},
          &NoPrecondition},
 
+        // --- Lifetime -----------------------------------------------------------
+        // The tray Quit, not a process kill: the close guards answer it exactly
+        // as they answer a user, and an allowed quit ends through the normal
+        // shutdown that records a clean exit. Asynchronous, because the process
+        // is still running when the answer is sent.
+        {QStringLiteral("app.quit"), 2, true, true, Settle::Asynchronous, {}, &NoPrecondition},
+
         // --- Window ----------------------------------------------------------
         {QStringLiteral("window.moveToScreen"),
          1,

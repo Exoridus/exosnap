@@ -1699,6 +1699,15 @@ exosnap_add_gtest(
 )
 target_include_directories(test_wgc_acquire_classify PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# WGC frame geometry: a minimized window holds the last frame, a resize ends the
+# recording. Pure size logic, no D3D/WinRT.
+exosnap_add_gtest(
+    NAME test_wgc_frame_geometry
+    TEST_PREFIX engine.
+    SOURCES tests/test_wgc_frame_geometry.cpp
+)
+target_include_directories(test_wgc_frame_geometry PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 # Capture backend resolution: normal monitor/window selection plus the harness-only
 # monitor WGC override. Pure configuration logic, no D3D/WinRT.
 exosnap_add_gtest(

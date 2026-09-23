@@ -30,14 +30,17 @@ pub fn scenarios() -> Vec<Scenario> {
             timeout: secs(180.0),
             run: window_stall,
         },
+        // Required: minimizing the captured window is ordinary use, and a
+        // recording that ends on it loses the user's work. No other scenario
+        // exercises the minimized geometry WGC reports.
         Scenario {
             id: "capture.minimized-window-quiet",
-            revision: 1,
-            title: "A minimized quiet window does not raise a stall notice",
-            claim: "a minimized window with a measured halt in captured frames stays free of a new stall notice while recording continues and finalizes",
+            revision: 2,
+            title: "A minimized quiet window keeps recording without a stall notice",
+            claim: "a minimized window with a measured halt in captured frames stays free of a new stall notice while recording continues, resumes capturing when restored, and finalizes",
             lane: Lane::Gpu,
             also: &[],
-            tier: Tier::Recommended,
+            tier: Tier::Required,
             requires: &[
                 Capability::InteractiveDesktop,
                 Capability::Wgc,
@@ -159,6 +162,21 @@ fn judge_quiet(notice: Option<&str>, pipeline: &Value) -> Step {
     judge_running(pipeline)
 }
 
+fn judge_resumed(quiet: &Value, restored: &Value) -> Step {
+    judge_running(restored)?;
+    let before = quiet["capture"]["framesCaptured"]
+        .as_f64()
+        .ok_or_else(|| Stop::infra("the quiet pipeline sample has no capture.framesCaptured"))?;
+    let after = restored["capture"]["framesCaptured"]
+        .as_f64()
+        .ok_or_else(|| Stop::infra("the restored pipeline sample has no capture.framesCaptured"))?;
+    product_ensure!(
+        after > before,
+        "capture did not resume after the window was restored ({before} to {after} frames)"
+    );
+    Ok(())
+}
+
 fn finalized_video(app: &mut App) -> Step {
     let result = common::stop_recording(app)?;
     let output = common::output_path(&result)?;
@@ -230,6 +248,12 @@ fn observe(ctx: &mut Context, frozen: bool) -> Step {
         judge_stall(notice.as_deref().unwrap_or(""), &second)?;
     } else {
         judge_quiet(notice.as_deref(), &second)?;
+        stimulus.command("restore")?;
+        stimulus.wait_state("restored", secs(5.0))?;
+        std::thread::sleep(secs(3.0));
+        let restored = app.call("pipeline.snapshot", json!({}))?;
+        ctx.evidence.put("pipelineRestored", restored.clone());
+        judge_resumed(&second, &restored)?;
     }
     finalized_video(&mut app)?;
     stimulus.stop();
@@ -285,6 +309,30 @@ mod tests {
             Err(Stop::Fail(_))
         ));
         judge_quiet(None, &json!({"lifecycle": "recording"})).unwrap();
+    }
+
+    #[test]
+    fn a_restored_window_must_resume_a_running_capture() {
+        let quiet = json!({"lifecycle": "recording", "capture": {"framesCaptured": 90}});
+        judge_resumed(
+            &quiet,
+            &json!({"lifecycle": "recording", "capture": {"framesCaptured": 150}}),
+        )
+        .unwrap();
+        assert!(matches!(
+            judge_resumed(
+                &quiet,
+                &json!({"lifecycle": "recording", "capture": {"framesCaptured": 90}})
+            ),
+            Err(Stop::Fail(_))
+        ));
+        assert!(matches!(
+            judge_resumed(
+                &quiet,
+                &json!({"lifecycle": "failed", "capture": {"framesCaptured": 150}})
+            ),
+            Err(Stop::Fail(_))
+        ));
     }
 
     #[test]
