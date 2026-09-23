@@ -156,6 +156,8 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     // that page is not loaded. Constant object names only -- a client-supplied
     // string never reaches findChild().
     [[nodiscard]] QObject* pageObjectFor(const QString& surface) const;
+    // Blocks, bounded, until the shell reports `page_index`'s content loaded.
+    [[nodiscard]] bool waitForDestinationReady(int page_index, const QString& page, QString* error);
     // The hub row holding `sequence`, or -1. The hub's model is index-addressed
     // and the wire is sequence-addressed on purpose: the list reorders on
     // dismissal, so an index a client read a moment ago can name a different

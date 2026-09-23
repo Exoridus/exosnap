@@ -41,6 +41,8 @@
 #include <update_handoff/handoff.h>
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QMetaObject>
@@ -1539,12 +1541,45 @@ bool QuickLiveVerifySource::Navigate(const QString& page, QString* error) {
     // single navigation guard. Writing `currentPage` here would be exactly the
     // bug QCR-001 removed: a page swapped without the policy ever running.
     //
-    // Synchronous: the QML connection is direct, and the destination loaders use
-    // Loader.setSource(), which loads synchronously. The resulting page is
-    // readable on the next line, which is what lets ui.navigate answer
-    // settled:true with no wait at all.
+    // The QML connection is direct, so the accepted request is readable on the
+    // next line. The destination's content is not: the page loaders are
+    // asynchronous, and a first visit is still incubating when the request
+    // returns. ui.navigate answers settled:true, and the commands that follow it
+    // address the page's own object, so the wait for that content happens here.
     emit shell->navigateToPageRequested(*destination);
-    return true;
+    if (shell->currentPage() != *destination)
+        return true; // Refused by the navigation guard; the caller reports the page it stayed on.
+    return waitForDestinationReady(*destination, page, error);
+}
+
+bool QuickLiveVerifySource::waitForDestinationReady(int page_index, const QString& page, QString* error) {
+    QObject* app_shell =
+        root_window_ != nullptr ? root_window_->findChild<QObject*>(QStringLiteral("quickAppShell")) : nullptr;
+    if (app_shell == nullptr)
+        return true;
+    // Below the control server's dispatch timeout, so a page that never loads is
+    // answered as this command's failure rather than as a wedged main thread.
+    constexpr int kTimeoutMs = 10000;
+    QElapsedTimer timer;
+    timer.start();
+    for (;;) {
+        bool ready = false;
+        if (!QMetaObject::invokeMethod(app_shell, "destinationReady", Q_RETURN_ARG(bool, ready),
+                                       Q_ARG(int, page_index))) {
+            *error = QStringLiteral("The shell cannot report whether the %1 page is loaded").arg(page);
+            return false;
+        }
+        if (ready)
+            return true;
+        if (timer.hasExpired(kTimeoutMs)) {
+            *error = QStringLiteral("The %1 page did not finish loading within %2 ms").arg(page).arg(kTimeoutMs);
+            return false;
+        }
+        // Incubation advances as ordinary event handling. User input stays
+        // queued so that nothing the developer does can act on a half-answered
+        // command.
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 20);
+    }
 }
 
 QObject* QuickLiveVerifySource::pageObjectFor(const QString& surface) const {

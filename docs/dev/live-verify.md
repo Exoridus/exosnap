@@ -79,7 +79,7 @@ Protocol 2 adds a monotonic `stateRevision` when published product state changes
 | `diagnostics.snapshot`, `diagnostics.setInDepth` | Measured diagnostic state and the session-scoped in-depth switch |
 | `settings.*`, `pipeline.*`, `notifications.*`, other discovered surfaces | Use the schema/allowlist returned by this build; fixture paths must match emitted data |
 
-Reveal/scroll commands require the target page to be the current page, even if another page's object remains resident. A syntactically valid target name is not proof that it reached the viewport. Navigation goes through the same guard as tabs and Ctrl+1…5.
+Reveal/scroll commands require the target page to be the current page, even if another page's object remains resident. A syntactically valid target name is not proof that it reached the viewport. Navigation goes through the same guard as tabs and Ctrl+1…5. Pages other than Record load asynchronously on their first visit, so an accepted `ui.navigate` waits, bounded, for the destination's content before it answers `settled:true`. A page that does not finish loading in time is `operation_failed`.
 
 The endpoint does not expose arbitrary shell execution, registry writes, Windows display/audio setters, arbitrary URL opening or destructive recovery/crash actions. Their UI state can be observable without granting mutation authority.
 
