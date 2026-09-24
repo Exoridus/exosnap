@@ -2,8 +2,10 @@
 
 use serde_json::Value;
 use serde_json::json;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::bundle::{FileRole, sha256_file};
@@ -463,7 +465,12 @@ fn start_old(ctx: &Context, exe: &Path, config: &Path, fault: bool) -> Step<(Chi
         &run_id,
         fault,
     );
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = ctx.spawn(&mut command)?;
+    capture_console(
+        &mut child,
+        &ctx.scenario_dir.join(format!("console-{run_id}.log")),
+    )?;
     let client = match Client::connect("LiveVerify", &run_id, Duration::from_secs(60)) {
         Ok(client) => client,
         Err(error) => {
@@ -476,6 +483,36 @@ fn start_old(ctx: &Context, exe: &Path, config: &Path, fault: bool) -> Step<(Chi
         }
     };
     Ok((child, client))
+}
+
+/// Copies the old app's console, and that of the updater it launches and
+/// which inherits it, into `log` with a receive time per line, and still
+/// forwards every line to this process's stderr. The old updater reports its
+/// failures only there, so the time of that line is the time of the failure.
+fn capture_console(child: &mut Child, log: &Path) -> Step {
+    let file = Arc::new(Mutex::new(std::fs::File::create(log)?));
+    fn pump(
+        stream: impl Read + Send + 'static,
+        name: &'static str,
+        file: Arc<Mutex<std::fs::File>>,
+    ) {
+        std::thread::spawn(move || {
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else { break };
+                eprintln!("{line}");
+                if let Ok(mut file) = file.lock() {
+                    let _ = writeln!(file, "{} {name} {line}", crate::model::now_rfc3339());
+                }
+            }
+        });
+    }
+    if let Some(stdout) = child.stdout.take() {
+        pump(stdout, "stdout", Arc::clone(&file));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        pump(stderr, "stderr", file);
+    }
+    Ok(())
 }
 
 fn old_command(exe: &Path, config: &Path, output: &Path, run_id: &str, fault: bool) -> Command {
@@ -578,6 +615,12 @@ fn drive_update(
         &config,
         decline_kind == Some(DeclineKind::Simulated),
     )?;
+    // The swap moves this tree right after the old app exits. When it fails
+    // as "in use", this names the processes that still held it at that moment.
+    #[cfg(windows)]
+    let holder_watch = exe
+        .parent()
+        .map(|tree| crate::holders::HolderWatch::start(tree, old.id()));
     update_offer(&mut client, &version)?;
     if decline_kind == Some(DeclineKind::Operator) {
         ctx.announce("Decline the Windows UAC prompt on the disposable guest's Secure Desktop. The runner will observe the updater state afterwards.");
@@ -631,6 +674,21 @@ fn drive_update(
             }
         }
         std::thread::sleep(Duration::from_millis(250));
+    }
+    if final_state["phase"] == "failed" {
+        ctx.evidence
+            .put("failureObservedAt", crate::model::now_rfc3339());
+        // Only now: the query opens files in the tree, which would itself
+        // block the very move it is meant to explain.
+        #[cfg(windows)]
+        if let Some(tree) = exe.parent() {
+            ctx.evidence
+                .put("treeUsers", crate::holders::restart_manager_users(tree));
+        }
+    }
+    #[cfg(windows)]
+    if let Some(watch) = holder_watch {
+        ctx.evidence.put("treeHolders", watch.finish());
     }
     ctx.evidence.put("updaterState", final_state.clone());
     if installed {

@@ -32,7 +32,15 @@ A real UAC refusal remains an external hardware-lane check.
 The simulated decline is reserved for a later baseline that contains the fault seam.
 The portable update from that baseline runs the v0.9.0 updater, which renames each directory exactly once.
 A handle still open in the old tree after the application exits can therefore fail `update.portable` with "The current installation is in use and could not be moved."
+One known holder: v0.9.0 always starts `crashpad_handler.exe` from the installation, the handler inherits the application's working directory and outlives it by up to about 50 ms.
+When the application was started with its working directory inside the tree, as a launch from Explorer does, the single rename falls into that window.
+The installation stays intact, and the updater offers Retry, which re-enters at the install step.
 The bounded rename retry of later updaters cannot change that first hop.
+The update scenarios record the evidence for such a failure as a timeline.
+`console-<run id>.log` holds the old application's console and that of the updater it launches, with a receive time per line; the updater reports its failure only there.
+`treeHolders` lists every process whose image or working directory lies in the old tree, and the application's children, with the time each ended relative to the application's exit.
+It reads process state only and opens nothing in the tree, because any open file inside a directory blocks that directory's rename.
+For the same reason `treeUsers`, the Restart Manager's list of processes using files in the tree, is taken only after the updater has reported the failure.
 
 ## Interpret both verdicts
 

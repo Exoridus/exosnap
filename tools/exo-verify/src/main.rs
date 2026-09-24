@@ -9,6 +9,8 @@ mod context;
 mod control;
 mod docs;
 mod feed;
+#[cfg(windows)]
+mod holders;
 mod job;
 mod manifest;
 mod media;
