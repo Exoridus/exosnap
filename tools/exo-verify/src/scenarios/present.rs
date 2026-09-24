@@ -33,9 +33,9 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "diagnostics.present-crosscheck",
-            revision: 1,
+            revision: 2,
             title: "PresentMon independently confirms the product's presentation mode",
-            claim: "a PresentMon ETW capture attributed to this product process agrees with its diagnostics on the presentation path",
+            claim: "a PresentMon ETW capture attributed to this product process shows a present in the product's reported mode, and its most recently observed present agrees with the mode the product reports at snapshot time",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Required,
@@ -146,7 +146,7 @@ fn independent_crosscheck(ctx: &mut Context) -> Step {
         "product environment mode {mode} disagrees with pipeline mode {pipeline_mode}"
     );
     let csv = std::fs::read_to_string(&csv_path)?;
-    let count = compare_presentmon(&csv, pid, mode)?;
+    let summary = compare_presentmon(&csv, pid, mode)?;
     ctx.evidence.put("present", present.clone());
     ctx.evidence.put(
         "pipelineSourcePresentation",
@@ -154,7 +154,19 @@ fn independent_crosscheck(ctx: &mut Context) -> Step {
     );
     ctx.evidence.put("recordResult", result);
     ctx.evidence.put("presentMonProcessId", pid as u64);
-    ctx.evidence.put("presentMonPresents", count as u64);
+    ctx.evidence
+        .put("presentMonPresents", summary.total_presents as u64);
+    ctx.evidence.put(
+        "presentMonModeDistribution",
+        json!(
+            summary
+                .distribution
+                .iter()
+                .map(|(mode, count)| (mode.to_string(), *count as u64))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        ),
+    );
+    ctx.evidence.put("presentMonLastMode", summary.last_mode);
     ctx.keep(&csv_path);
     Ok(())
 }
@@ -190,7 +202,22 @@ fn independent_crosscheck_unavailable_reason() -> Stop {
     )
 }
 
-fn compare_presentmon(csv: &str, process_id: u32, product_mode: &str) -> Step<usize> {
+struct PresentMonSummary {
+    total_presents: usize,
+    distribution: std::collections::BTreeMap<&'static str, usize>,
+    last_mode: &'static str,
+}
+
+/// The product exposes `present.mode` as the mode of the single most recently
+/// decoded present at snapshot time (`PresentMonEtwSession::latest_`, overwritten
+/// per drained event), not an aggregate over the capture window. DWM legitimately
+/// interleaves `Composed: Flip` and `Hardware Composed: Independent Flip` for the
+/// same process across an 8-second window (observed: 1127 vs. 157 presents,
+/// scattered throughout), so requiring one homogeneous mode for the whole window
+/// is a false assumption about desktop composition, not a product defect. Compare
+/// against the same "last observed" semantics PresentMon carries: chronologically
+/// last matching row, not the mode set as a whole.
+fn compare_presentmon(csv: &str, process_id: u32, product_mode: &str) -> Step<PresentMonSummary> {
     let mut lines = csv.lines().filter(|line| !line.trim().is_empty());
     let header = lines
         .next()
@@ -204,7 +231,9 @@ fn compare_presentmon(csv: &str, process_id: u32, product_mode: &str) -> Step<us
         .iter()
         .position(|column| column.trim().eq_ignore_ascii_case("PresentMode"))
         .ok_or_else(|| Stop::infra("PresentMon capture has no PresentMode column"))?;
-    let mut modes = std::collections::BTreeSet::new();
+    let mut distribution: std::collections::BTreeMap<&'static str, usize> =
+        std::collections::BTreeMap::new();
+    let mut last_mode: Option<&'static str> = None;
     let mut count = 0;
     for line in lines {
         let fields = split_csv(line)?;
@@ -232,22 +261,31 @@ fn compare_presentmon(csv: &str, process_id: u32, product_mode: &str) -> Step<us
             | "composed: composition atlas" => "composed",
             _ => "unknown",
         };
-        modes.insert(mode);
+        *distribution.entry(mode).or_insert(0) += 1;
+        last_mode = Some(mode);
     }
     infra_ensure!(
         count > 0,
         "PresentMon attributed no present to process {process_id}"
     );
     infra_ensure!(
-        modes.len() == 1 && !modes.contains("unknown"),
-        "PresentMon reported unclassified or mixed presentation modes: {modes:?}"
+        !distribution.contains_key("unknown"),
+        "PresentMon reported an unclassified presentation mode: {distribution:?}"
+    );
+    let last_mode = last_mode.expect("count > 0 implies at least one classified mode");
+    product_ensure!(
+        distribution.contains_key(product_mode),
+        "product mode {product_mode} was never observed by PresentMon; it saw {distribution:?}"
     );
     product_ensure!(
-        modes.contains(product_mode),
-        "product mode {product_mode} disagrees with PresentMon mode {}",
-        modes.first().unwrap()
+        last_mode == product_mode,
+        "product reports mode {product_mode} but PresentMon's most recently observed present for this process was {last_mode} ({distribution:?})"
     );
-    Ok(count)
+    Ok(PresentMonSummary {
+        total_presents: count,
+        distribution,
+        last_mode,
+    })
 }
 
 fn split_csv(line: &str) -> Step<Vec<String>> {
@@ -330,15 +368,76 @@ mod tests {
     }
 
     #[test]
-    fn mixed_or_unknown_presentmon_modes_do_not_pass() {
-        let mixed = "ProcessID,PresentMode\n42,Composed: Flip\n42,Hardware: Independent Flip\n";
+    fn homogeneous_window_requires_exact_match() {
+        let composed = "ProcessID,PresentMode\n42,Composed: Flip\n42,Composed: Flip\n";
+        compare_presentmon(composed, 42, "composed").unwrap();
         assert!(matches!(
-            compare_presentmon(mixed, 42, "composed"),
-            Err(Stop::Infra(_))
+            compare_presentmon(composed, 42, "independentFlip"),
+            Err(Stop::Fail(_))
         ));
+
+        let flip = "ProcessID,PresentMode\n42,Hardware Composed: Independent Flip\n";
+        compare_presentmon(flip, 42, "independentFlip").unwrap();
+        assert!(matches!(
+            compare_presentmon(flip, 42, "composed"),
+            Err(Stop::Fail(_))
+        ));
+    }
+
+    #[test]
+    fn real_mixed_window_is_judged_by_the_most_recently_observed_present() {
+        // Reflects an actual 1127/157 split observed on hardware, scattered
+        // across the whole capture, ending on a run of "Composed: Flip".
+        let mixed = "ProcessID,PresentMode\n\
+             42,Hardware Composed: Independent Flip\n\
+             42,Composed: Flip\n\
+             42,Composed: Flip\n\
+             42,Hardware Composed: Independent Flip\n\
+             42,Composed: Flip\n";
+        let summary = compare_presentmon(mixed, 42, "composed").unwrap();
+        assert_eq!(summary.total_presents, 5);
+        assert_eq!(summary.distribution.get("composed"), Some(&3));
+        assert_eq!(summary.distribution.get("independentFlip"), Some(&2));
+        assert_eq!(summary.last_mode, "composed");
+
+        // Mixing alone is not an infrastructure error: a mismatch against the
+        // real last-observed mode is a genuine product disagreement (FAIL).
+        assert!(matches!(
+            compare_presentmon(mixed, 42, "independentFlip"),
+            Err(Stop::Fail(_))
+        ));
+    }
+
+    #[test]
+    fn product_mode_never_observed_by_presentmon_fails() {
+        let csv = "ProcessID,PresentMode\n42,Composed: Flip\n42,Composed: Flip\n";
+        assert!(matches!(
+            compare_presentmon(csv, 42, "exclusiveFullscreen"),
+            Err(Stop::Fail(_))
+        ));
+    }
+
+    #[test]
+    fn unknown_presentmon_mode_never_passes() {
         let unknown = "ProcessID,PresentMode\n42,New Mode\n";
         assert!(matches!(
             compare_presentmon(unknown, 42, "composed"),
+            Err(Stop::Infra(_))
+        ));
+
+        let mixed_with_unknown =
+            "ProcessID,PresentMode\n42,Composed: Flip\n42,New Mode\n42,Composed: Flip\n";
+        assert!(matches!(
+            compare_presentmon(mixed_with_unknown, 42, "composed"),
+            Err(Stop::Infra(_))
+        ));
+    }
+
+    #[test]
+    fn no_presents_for_pid_is_infra_not_fail() {
+        let csv = "ProcessID,PresentMode\n7,Composed: Flip\n";
+        assert!(matches!(
+            compare_presentmon(csv, 42, "composed"),
             Err(Stop::Infra(_))
         ));
     }
