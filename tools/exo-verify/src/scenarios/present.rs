@@ -156,7 +156,6 @@ fn independent_crosscheck(ctx: &mut Context) -> Step {
     };
     let csv = std::fs::read_to_string(&csv_path)?;
     let summary = summarize_presentmon(&csv, pid)?;
-    judge_crosscheck(&before, &after, mode, &summary)?;
     ctx.evidence.put("present", present.clone());
     ctx.evidence.put(
         "pipelineSourcePresentation",
@@ -187,7 +186,7 @@ fn independent_crosscheck(ctx: &mut Context) -> Step {
         ),
     );
     ctx.keep(&csv_path);
-    Ok(())
+    judge_crosscheck(&before, &after, mode, &summary)
 }
 
 fn judge_elevated_present(present: &Value) -> Step {
