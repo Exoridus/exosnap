@@ -34,8 +34,8 @@ pub fn scenarios() -> Vec<Scenario> {
         Scenario {
             id: "diagnostics.present-crosscheck",
             revision: 2,
-            title: "PresentMon independently confirms the product's presentation mode",
-            claim: "a PresentMon ETW capture attributed to this product process shows a present in the product's reported mode, and its most recently observed present agrees with the mode the product reports at snapshot time",
+            title: "PresentMon independently confirms the product's presentation activity",
+            claim: "over a shared capture window, an independent PresentMon ETW capture attributed to this product process shows a present count, mode set and mode-transition activity that agree with what the product's own present diagnostics reported growing over the same window",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Required,
@@ -112,6 +112,11 @@ fn independent_crosscheck(ctx: &mut Context) -> Step {
         "the selected capture target is not attributed to the product process {pid}: {selection}"
     );
     common::start_recording(&mut app)?;
+    let before_present = app.call("environment.snapshot", json!({}))?["present"].clone();
+    let before = ProductPresentState {
+        present_count: before_present["presentCount"].as_f64().unwrap_or(0.0) as u64,
+        mode_flip_count: before_present["modeFlipCount"].as_f64().unwrap_or(0.0) as u64,
+    };
     let csv_path = ctx.scenario_dir.join("presentmon.csv");
     let session = crate::control::new_run_id("exov-present");
     let capture = crate::tools::run(
@@ -145,8 +150,13 @@ fn independent_crosscheck(ctx: &mut Context) -> Step {
         pipeline_mode == mode,
         "product environment mode {mode} disagrees with pipeline mode {pipeline_mode}"
     );
+    let after = ProductPresentState {
+        present_count: present["presentCount"].as_f64().unwrap_or(0.0) as u64,
+        mode_flip_count: present["modeFlipCount"].as_f64().unwrap_or(0.0) as u64,
+    };
     let csv = std::fs::read_to_string(&csv_path)?;
-    let summary = compare_presentmon(&csv, pid, mode)?;
+    let summary = summarize_presentmon(&csv, pid)?;
+    judge_crosscheck(&before, &after, mode, &summary)?;
     ctx.evidence.put("present", present.clone());
     ctx.evidence.put(
         "pipelineSourcePresentation",
@@ -155,7 +165,17 @@ fn independent_crosscheck(ctx: &mut Context) -> Step {
     ctx.evidence.put("recordResult", result);
     ctx.evidence.put("presentMonProcessId", pid as u64);
     ctx.evidence
+        .put("productPresentCountBefore", before.present_count);
+    ctx.evidence
+        .put("productPresentCountAfter", after.present_count);
+    ctx.evidence
+        .put("productModeFlipCountBefore", before.mode_flip_count);
+    ctx.evidence
+        .put("productModeFlipCountAfter", after.mode_flip_count);
+    ctx.evidence
         .put("presentMonPresents", summary.total_presents as u64);
+    ctx.evidence
+        .put("presentMonTransitions", summary.transition_count as u64);
     ctx.evidence.put(
         "presentMonModeDistribution",
         json!(
@@ -166,7 +186,6 @@ fn independent_crosscheck(ctx: &mut Context) -> Step {
                 .collect::<std::collections::BTreeMap<_, _>>()
         ),
     );
-    ctx.evidence.put("presentMonLastMode", summary.last_mode);
     ctx.keep(&csv_path);
     Ok(())
 }
@@ -205,19 +224,42 @@ fn independent_crosscheck_unavailable_reason() -> Stop {
 struct PresentMonSummary {
     total_presents: usize,
     distribution: std::collections::BTreeMap<&'static str, usize>,
-    last_mode: &'static str,
+    /// Count of mode changes between chronologically consecutive presents
+    /// attributed to the process, mirroring the product's own `modeFlipCount`
+    /// instability proxy.
+    transition_count: usize,
 }
 
-/// The product exposes `present.mode` as the mode of the single most recently
-/// decoded present at snapshot time (`PresentMonEtwSession::latest_`, overwritten
-/// per drained event), not an aggregate over the capture window. DWM legitimately
-/// interleaves `Composed: Flip` and `Hardware Composed: Independent Flip` for the
-/// same process across an 8-second window (observed: 1127 vs. 157 presents,
-/// scattered throughout), so requiring one homogeneous mode for the whole window
-/// is a false assumption about desktop composition, not a product defect. Compare
-/// against the same "last observed" semantics PresentMon carries: chronologically
-/// last matching row, not the mode set as a whole.
-fn compare_presentmon(csv: &str, process_id: u32, product_mode: &str) -> Step<PresentMonSummary> {
+/// Presents and mode-flip totals the product itself reports at a point in time
+/// (`PresentSample::present_count` / `mode_flip_count`), sampled before and after
+/// the PresentMon capture window so the *delta* over that window -- not a single
+/// momentary reading -- is what gets compared against PresentMon's independent
+/// count. A single `present.mode` snapshot is not an aggregate over the window:
+/// DWM legitimately interleaves `Composed: Flip` and
+/// `Hardware Composed: Independent Flip` for the same process across an
+/// 8-second window (observed: 1127 vs. 157 presents, scattered throughout), so
+/// requiring one homogeneous mode for the whole window is a false assumption
+/// about desktop composition, not a product defect.
+struct ProductPresentState {
+    present_count: u64,
+    mode_flip_count: u64,
+}
+
+/// Relative tolerance for comparing the product's own counters against
+/// PresentMon's independent count over the same window: the two observers'
+/// capture windows are not perfectly aligned (start/stop skew of a poll or two),
+/// so exact equality is not a meaningful bar. Reasonable agreement is a strong
+/// enough independent confirmation of activity and magnitude.
+const COUNT_TOLERANCE_RELATIVE: f64 = 0.15;
+const COUNT_TOLERANCE_FLOOR: u64 = 10;
+
+fn counts_reasonably_agree(product: u64, external: u64) -> bool {
+    let diff = product.abs_diff(external);
+    let relative_budget = (external as f64 * COUNT_TOLERANCE_RELATIVE).round() as u64;
+    diff <= COUNT_TOLERANCE_FLOOR.max(relative_budget)
+}
+
+fn summarize_presentmon(csv: &str, process_id: u32) -> Step<PresentMonSummary> {
     let mut lines = csv.lines().filter(|line| !line.trim().is_empty());
     let header = lines
         .next()
@@ -233,7 +275,8 @@ fn compare_presentmon(csv: &str, process_id: u32, product_mode: &str) -> Step<Pr
         .ok_or_else(|| Stop::infra("PresentMon capture has no PresentMode column"))?;
     let mut distribution: std::collections::BTreeMap<&'static str, usize> =
         std::collections::BTreeMap::new();
-    let mut last_mode: Option<&'static str> = None;
+    let mut prev_mode: Option<&'static str> = None;
+    let mut transition_count = 0;
     let mut count = 0;
     for line in lines {
         let fields = split_csv(line)?;
@@ -262,7 +305,12 @@ fn compare_presentmon(csv: &str, process_id: u32, product_mode: &str) -> Step<Pr
             _ => "unknown",
         };
         *distribution.entry(mode).or_insert(0) += 1;
-        last_mode = Some(mode);
+        if let Some(prev) = prev_mode {
+            if prev != mode {
+                transition_count += 1;
+            }
+        }
+        prev_mode = Some(mode);
     }
     infra_ensure!(
         count > 0,
@@ -272,20 +320,70 @@ fn compare_presentmon(csv: &str, process_id: u32, product_mode: &str) -> Step<Pr
         !distribution.contains_key("unknown"),
         "PresentMon reported an unclassified presentation mode: {distribution:?}"
     );
-    let last_mode = last_mode.expect("count > 0 implies at least one classified mode");
-    product_ensure!(
-        distribution.contains_key(product_mode),
-        "product mode {product_mode} was never observed by PresentMon; it saw {distribution:?}"
-    );
-    product_ensure!(
-        last_mode == product_mode,
-        "product reports mode {product_mode} but PresentMon's most recently observed present for this process was {last_mode} ({distribution:?})"
-    );
     Ok(PresentMonSummary {
         total_presents: count,
         distribution,
-        last_mode,
+        transition_count,
     })
+}
+
+/// Judges the product's own present/mode-flip counters, sampled before and
+/// after the PresentMon capture window, against PresentMon's independent
+/// summary of the same window. See `ProductPresentState` for why deltas over
+/// the window (not a single `present.mode` reading) are the right comparison.
+fn judge_crosscheck(
+    before: &ProductPresentState,
+    after: &ProductPresentState,
+    after_mode: &str,
+    external: &PresentMonSummary,
+) -> Step {
+    let product_present_delta = after.present_count.saturating_sub(before.present_count);
+    let product_flip_delta = after.mode_flip_count.saturating_sub(before.mode_flip_count);
+
+    product_ensure!(
+        product_present_delta > 0,
+        "the product's presentCount did not grow ({} -> {}) while PresentMon independently attributed {} presents to it",
+        before.present_count,
+        after.present_count,
+        external.total_presents
+    );
+    product_ensure!(
+        counts_reasonably_agree(product_present_delta, external.total_presents as u64),
+        "the product's presentCount grew by {product_present_delta}, but PresentMon independently counted {} presents over the same window -- too far apart to agree",
+        external.total_presents
+    );
+    product_ensure!(
+        external.distribution.contains_key(after_mode),
+        "the product reports mode {after_mode}, which PresentMon never observed for this process; it saw {:?}",
+        external.distribution
+    );
+
+    let external_flip_count = external.transition_count as u64;
+    if external_flip_count == 0 {
+        product_ensure!(
+            product_flip_delta == 0,
+            "PresentMon saw a single stable mode for the whole window, but the product's modeFlipCount grew by {product_flip_delta}"
+        );
+        let sole_mode = *external
+            .distribution
+            .keys()
+            .next()
+            .expect("total_presents > 0 implies at least one classified mode");
+        product_ensure!(
+            after_mode == sole_mode,
+            "PresentMon saw only {sole_mode} for the whole window, but the product reports {after_mode}"
+        );
+    } else {
+        product_ensure!(
+            product_flip_delta > 0,
+            "PresentMon observed {external_flip_count} mode transitions, but the product's modeFlipCount did not grow"
+        );
+        product_ensure!(
+            counts_reasonably_agree(product_flip_delta, external_flip_count),
+            "the product's modeFlipCount grew by {product_flip_delta}, but PresentMon independently counted {external_flip_count} transitions over the same window -- too far apart to agree"
+        );
+    }
+    Ok(())
 }
 
 fn split_csv(line: &str) -> Step<Vec<String>> {
@@ -354,91 +452,160 @@ mod tests {
     }
 
     #[test]
-    fn presentmon_comparison_requires_same_process_and_mode() {
-        let csv = "Application,ProcessID,PresentMode\nother.exe,9,Hardware: Independent Flip\nexosnap.exe,42,Composed: Flip\n";
-        compare_presentmon(csv, 42, "composed").unwrap();
-        assert!(matches!(
-            compare_presentmon(csv, 42, "independentFlip"),
-            Err(Stop::Fail(_))
-        ));
-        assert!(matches!(
-            compare_presentmon(csv, 10, "composed"),
-            Err(Stop::Infra(_))
-        ));
+    fn summary_counts_presents_filtered_to_the_attributed_process() {
+        let csv = "Application,ProcessID,PresentMode\nother.exe,9,Hardware: Independent Flip\nexosnap.exe,42,Composed: Flip\nexosnap.exe,42,Composed: Flip\n";
+        let summary = summarize_presentmon(csv, 42).unwrap();
+        assert_eq!(summary.total_presents, 2);
+        assert_eq!(summary.distribution.get("composed"), Some(&2));
+        assert_eq!(summary.transition_count, 0);
     }
 
     #[test]
-    fn homogeneous_window_requires_exact_match() {
-        let composed = "ProcessID,PresentMode\n42,Composed: Flip\n42,Composed: Flip\n";
-        compare_presentmon(composed, 42, "composed").unwrap();
-        assert!(matches!(
-            compare_presentmon(composed, 42, "independentFlip"),
-            Err(Stop::Fail(_))
-        ));
-
-        let flip = "ProcessID,PresentMode\n42,Hardware Composed: Independent Flip\n";
-        compare_presentmon(flip, 42, "independentFlip").unwrap();
-        assert!(matches!(
-            compare_presentmon(flip, 42, "composed"),
-            Err(Stop::Fail(_))
-        ));
-    }
-
-    #[test]
-    fn real_mixed_window_is_judged_by_the_most_recently_observed_present() {
+    fn summary_counts_transitions_between_consecutive_attributed_rows() {
         // Reflects an actual 1127/157 split observed on hardware, scattered
-        // across the whole capture, ending on a run of "Composed: Flip".
+        // across the whole capture.
         let mixed = "ProcessID,PresentMode\n\
              42,Hardware Composed: Independent Flip\n\
              42,Composed: Flip\n\
              42,Composed: Flip\n\
              42,Hardware Composed: Independent Flip\n\
              42,Composed: Flip\n";
-        let summary = compare_presentmon(mixed, 42, "composed").unwrap();
+        let summary = summarize_presentmon(mixed, 42).unwrap();
         assert_eq!(summary.total_presents, 5);
         assert_eq!(summary.distribution.get("composed"), Some(&3));
         assert_eq!(summary.distribution.get("independentFlip"), Some(&2));
-        assert_eq!(summary.last_mode, "composed");
-
-        // Mixing alone is not an infrastructure error: a mismatch against the
-        // real last-observed mode is a genuine product disagreement (FAIL).
-        assert!(matches!(
-            compare_presentmon(mixed, 42, "independentFlip"),
-            Err(Stop::Fail(_))
-        ));
+        // independentFlip -> composed -> composed -> independentFlip -> composed
+        assert_eq!(summary.transition_count, 3);
     }
 
     #[test]
-    fn product_mode_never_observed_by_presentmon_fails() {
-        let csv = "ProcessID,PresentMode\n42,Composed: Flip\n42,Composed: Flip\n";
-        assert!(matches!(
-            compare_presentmon(csv, 42, "exclusiveFullscreen"),
-            Err(Stop::Fail(_))
-        ));
-    }
-
-    #[test]
-    fn unknown_presentmon_mode_never_passes() {
+    fn unknown_presentmon_mode_is_infra() {
         let unknown = "ProcessID,PresentMode\n42,New Mode\n";
         assert!(matches!(
-            compare_presentmon(unknown, 42, "composed"),
+            summarize_presentmon(unknown, 42),
             Err(Stop::Infra(_))
         ));
 
         let mixed_with_unknown =
             "ProcessID,PresentMode\n42,Composed: Flip\n42,New Mode\n42,Composed: Flip\n";
         assert!(matches!(
-            compare_presentmon(mixed_with_unknown, 42, "composed"),
+            summarize_presentmon(mixed_with_unknown, 42),
             Err(Stop::Infra(_))
         ));
     }
 
     #[test]
-    fn no_presents_for_pid_is_infra_not_fail() {
+    fn no_presents_for_pid_is_infra() {
         let csv = "ProcessID,PresentMode\n7,Composed: Flip\n";
+        assert!(matches!(summarize_presentmon(csv, 42), Err(Stop::Infra(_))));
+    }
+
+    #[test]
+    fn counts_within_tolerance_agree() {
+        assert!(counts_reasonably_agree(981, 987));
+        assert!(counts_reasonably_agree(253, 251));
+        assert!(counts_reasonably_agree(0, 5)); // within the absolute floor
+    }
+
+    #[test]
+    fn counts_far_apart_disagree() {
+        assert!(!counts_reasonably_agree(10, 987)); // product barely moved
+        assert!(!counts_reasonably_agree(987, 10)); // external barely moved
+    }
+
+    fn state(present_count: u64, mode_flip_count: u64) -> ProductPresentState {
+        ProductPresentState {
+            present_count,
+            mode_flip_count,
+        }
+    }
+
+    fn summary(
+        total_presents: usize,
+        distribution: &[(&'static str, usize)],
+        transition_count: usize,
+    ) -> PresentMonSummary {
+        PresentMonSummary {
+            total_presents,
+            distribution: distribution.iter().cloned().collect(),
+            transition_count,
+        }
+    }
+
+    #[test]
+    fn stable_window_requires_zero_product_flips_and_matching_sole_mode() {
+        let before = state(0, 0);
+        let after = state(987, 0);
+        let external = summary(987, &[("composed", 987)], 0);
+        judge_crosscheck(&before, &after, "composed", &external).unwrap();
+
+        // Product's mode disagrees with PresentMon's sole observed mode.
         assert!(matches!(
-            compare_presentmon(csv, 42, "composed"),
-            Err(Stop::Infra(_))
+            judge_crosscheck(&before, &after, "independentFlip", &external),
+            Err(Stop::Fail(_))
+        ));
+
+        // Product's modeFlipCount grew despite PresentMon seeing one stable mode.
+        let after_with_flips = state(987, 3);
+        assert!(matches!(
+            judge_crosscheck(&before, &after_with_flips, "composed", &external),
+            Err(Stop::Fail(_))
+        ));
+    }
+
+    #[test]
+    fn mixed_window_requires_product_flips_to_also_grow_and_roughly_agree() {
+        let before = state(0, 0);
+        let after = state(1284, 253);
+        let external = summary(1284, &[("composed", 1127), ("independentFlip", 157)], 251);
+        judge_crosscheck(&before, &after, "composed", &external).unwrap();
+        judge_crosscheck(&before, &after, "independentFlip", &external).unwrap();
+
+        // PresentMon saw many transitions but the product's modeFlipCount never moved.
+        let after_no_flips = state(1284, 0);
+        assert!(matches!(
+            judge_crosscheck(&before, &after_no_flips, "composed", &external),
+            Err(Stop::Fail(_))
+        ));
+
+        // Product's flip count grew, but nowhere near PresentMon's 251 transitions.
+        let after_few_flips = state(1284, 2);
+        assert!(matches!(
+            judge_crosscheck(&before, &after_few_flips, "composed", &external),
+            Err(Stop::Fail(_))
+        ));
+    }
+
+    #[test]
+    fn product_mode_never_observed_by_presentmon_fails() {
+        let before = state(0, 0);
+        let after = state(987, 0);
+        let external = summary(987, &[("composed", 987)], 0);
+        assert!(matches!(
+            judge_crosscheck(&before, &after, "exclusiveFullscreen", &external),
+            Err(Stop::Fail(_))
+        ));
+    }
+
+    #[test]
+    fn no_new_product_presents_fails() {
+        let before = state(500, 0);
+        let after = state(500, 0); // never grew
+        let external = summary(987, &[("composed", 987)], 0);
+        assert!(matches!(
+            judge_crosscheck(&before, &after, "composed", &external),
+            Err(Stop::Fail(_))
+        ));
+    }
+
+    #[test]
+    fn present_counts_too_far_apart_fail() {
+        let before = state(0, 0);
+        let after = state(20, 0); // product barely counted any presents
+        let external = summary(987, &[("composed", 987)], 0);
+        assert!(matches!(
+            judge_crosscheck(&before, &after, "composed", &external),
+            Err(Stop::Fail(_))
         ));
     }
 }
