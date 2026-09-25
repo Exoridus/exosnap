@@ -78,6 +78,19 @@ The runner creates a differencing disk/VM, configures the declared partition/net
 
 No campaign receives reusable production credentials. The recipe's local administrator credentials belong only to this disposable, non-RDP guest and must not be reused elsewhere.
 
+## Watch a running campaign
+
+A campaign that waits on an operator in the guest console gives the host no signal until it ends. Follow it with the watch script instead of an improvised polling loop:
+
+```powershell
+pwsh -NoProfile -NonInteractive -File tools/vm/Watch-ReleaseVmRun.ps1 -VMName '<vm>' `
+    -ExitFile 'C:\ExoSnapRun\out\<exit file>' -LogFile 'C:\ExoSnapRun\out\<log>' -TimeoutMinutes 60
+```
+
+The watch only reads over PowerShell Direct and never prompts. Each read has its own timeout, repeated failed reads end it with exit code 3 and the deadline ends it with exit code 2. Exit code 0 means the exit file appeared; its content is printed, not propagated. Ending the watch does not stop the campaign.
+
+Call the module with `pwsh`, never Windows PowerShell. The execution policy stops `powershell.exe` from loading `ReleaseVm.psm1`. The credential is then `$null`, and `Invoke-Command -Credential $null` opens an interactive logon dialog on the host desktop.
+
 ## Limits and recovery
 
 Do not use checkpoints, live migration or saved state as a substitute for the differencing-disk model on a GPU-partitioned VM. Do not substitute an RDP desktop for the qualified interactive console. Do not infer general capture support from the availability of a virtual adapter.
