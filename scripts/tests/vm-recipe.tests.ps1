@@ -1946,6 +1946,68 @@ Test-Case 'a resumed gpu phase stops the machine itself' {
     Assert-Equal 'stop-for-gpu' $names[0] 'the phase cannot attach a partition to a running machine'
     Assert-Match 'Stop-ReleaseVmIfRunning' $plan[0].Command 'stopping must tolerate a machine that is already off'
 }
+
+function New-WatchClock {
+    $clock = [pscustomobject]@{ Time = [DateTime]::new(2026, 1, 1, 0, 0, 0, [DateTimeKind]::Utc) }
+    return $clock
+}
+
+Test-Case 'a guest watch returns the exit file and every log line in order' {
+    $reads = [System.Collections.Generic.Queue[object]]::new()
+    $reads.Enqueue([pscustomobject]@{ Text = "one`n"; Offset = 4; Done = $false; ExitText = $null })
+    $reads.Enqueue([pscustomobject]@{ Text = ''; Offset = 4; Done = $false; ExitText = $null })
+    $reads.Enqueue([pscustomobject]@{ Text = "two`nlast"; Offset = 12; Done = $true; ExitText = '0' })
+    $offsets = [System.Collections.Generic.List[long]]::new()
+    $printed = [System.Text.StringBuilder]::new()
+    $result = Watch-ReleaseVmGuestRun -Read { param($Offset) $offsets.Add($Offset); $reads.Dequeue() } `
+        -OnText { param($Text) [void] $printed.Append($Text) } -Sleep { param($Seconds) }
+    Assert-Equal 'finished' $result.Outcome 'an exit file ends the watch'
+    Assert-Equal '0' $result.ExitText 'the exit file content is reported'
+    Assert-Equal "one`ntwo`nlast" $printed.ToString() 'log text is printed once, in order'
+    Assert-Equal '0 4 4' ($offsets -join ' ') 'each read continues at the offset the previous one returned'
+}
+
+Test-Case 'a guest watch that never sees an exit file ends at its deadline' {
+    $clock = New-WatchClock
+    $result = Watch-ReleaseVmGuestRun -TimeoutMinutes 1 -PollSeconds 15 -Now { $clock.Time } `
+        -Sleep { param($Seconds) $clock.Time = $clock.Time.AddSeconds($Seconds) } `
+        -Read { param($Offset) [pscustomobject]@{ Text = ''; Offset = 0; Done = $false; ExitText = $null } } `
+        -OnText { param($Text) }
+    Assert-Equal 'deadline' $result.Outcome 'an operator gate that is never answered must not hold the host'
+}
+
+Test-Case 'a guest watch gives up after consecutive failed reads, and a good read resets the count' {
+    $script:watchCalls = 0
+    $result = Watch-ReleaseVmGuestRun -MaxConsecutiveFailures 3 -Sleep { param($Seconds) } -OnText { param($Text) } `
+        -Read {
+            param($Offset)
+            $script:watchCalls++
+            if ($script:watchCalls -eq 3) {
+                return [pscustomobject]@{ Text = ''; Offset = 0; Done = $false; ExitText = $null }
+            }
+            throw 'guest gone'
+        }
+    Assert-Equal 'unreachable' $result.Outcome 'a guest that stops answering ends the watch'
+    Assert-Equal 6 $script:watchCalls 'two failures, one success, then three failures'
+    Assert-Match 'guest gone' $result.Detail 'the last failure is named'
+}
+
+Test-Case 'a progress read with no credential is refused instead of prompting' {
+    $refused = $false
+    try {
+        Read-ReleaseVmGuestProgress -VMName 'ExoSnap-None' -Credential $null -ExitFile 'C:\x' | Out-Null
+    }
+    catch { $refused = $_.Exception.Message -match 'Credential' }
+    Assert-True $refused 'a null credential reaching Invoke-Command opens a logon dialog on the host'
+}
+
+Test-Case 'the watch script refuses a missing argument without asking for it' {
+    $run = Invoke-Script -Path (Join-Path $script:VmRoot 'Watch-ReleaseVmRun.ps1') -Arguments @('-VMName', 'x')
+    Assert-Equal 1 $run.ExitCode 'a missing exit file is a usage failure'
+    Assert-Match '-ExitFile is required' $run.Output 'the refusal names the argument'
+    $source = Get-Content -LiteralPath (Join-Path $script:VmRoot 'Watch-ReleaseVmRun.ps1') -Raw
+    Assert-NoMatch '\[Parameter\(Mandatory' $source 'a mandatory parameter prompts when a host is interactive'
+}
 Write-Host ''
 Write-Host "  $($script:Passed) passed, $($script:Failed) failed."
 if ($script:Failed -gt 0) { exit 1 }
