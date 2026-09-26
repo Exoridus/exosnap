@@ -97,6 +97,22 @@ enum CheckCommand {
         #[arg(long)]
         fix: bool,
     },
+    /// The rulesets this repository declares under .github/rulesets against
+    /// the ones GitHub actually enforces. Never writes.
+    Rulesets {
+        /// Directory holding the intended ruleset payloads. Defaults to
+        /// .github/rulesets under the repository root.
+        #[arg(long)]
+        desired: Option<PathBuf>,
+        /// Read the live state from this file instead of the GitHub API: the
+        /// array `gh api repos/:owner/:repo/rulesets` returns, with each
+        /// entry's rules and bypass_actors expanded. Usable offline.
+        #[arg(long)]
+        current_json: Option<PathBuf>,
+        /// Print only the difference, not the full comparison.
+        #[arg(long)]
+        quiet: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -267,6 +283,11 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 require_pull_request,
             ),
             CheckCommand::Format { staged, fix } => check_format(&repo_root, staged, fix),
+            CheckCommand::Rulesets {
+                desired,
+                current_json,
+                quiet,
+            } => check_rulesets(&repo_root, desired, current_json, quiet),
         },
         Command::Lint { command } => match command {
             LintCommand::Canaries { clang_tidy, only } => {
@@ -448,6 +469,38 @@ fn check_format(repo_root: &std::path::Path, staged: bool, fix: bool) -> anyhow:
     }
     println!("clang-format: OK");
     Ok(ExitCode::SUCCESS)
+}
+
+/// Exit codes match the porting contract exactly: 0 clean, 1 drift found, 2
+/// when the declared or live state could not be established at all. The
+/// unreadable case is mapped here from `CheckOutcome::Unreadable` rather than
+/// left to propagate as an error, so it stays a deliberate exit code and
+/// never an accident of the generic error handler.
+fn check_rulesets(
+    repo_root: &std::path::Path,
+    desired: Option<PathBuf>,
+    current_json: Option<PathBuf>,
+    quiet: bool,
+) -> anyhow::Result<ExitCode> {
+    let declared_dir = desired.unwrap_or_else(|| repo_root.join(".github/rulesets"));
+    let live = match current_json {
+        Some(path) => exo_dev::rulesets::LiveSource::File(path),
+        None => exo_dev::rulesets::LiveSource::GhApi,
+    };
+    match exo_dev::rulesets::check(&declared_dir, live)? {
+        exo_dev::rulesets::CheckOutcome::Unreadable(message) => {
+            eprintln!("{message}");
+            Ok(ExitCode::from(2))
+        }
+        exo_dev::rulesets::CheckOutcome::Compared(report) => {
+            print!("{}", exo_dev::rulesets::render(&report, quiet));
+            if report.ok() {
+                Ok(ExitCode::SUCCESS)
+            } else {
+                Ok(ExitCode::FAILURE)
+            }
+        }
+    }
 }
 
 fn lint_canaries(

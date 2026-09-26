@@ -14,6 +14,7 @@ pub mod plan;
 pub mod process;
 pub mod profile;
 pub mod report;
+pub mod rulesets;
 pub mod run;
 pub mod scope;
 pub mod source_hygiene;
