@@ -164,13 +164,7 @@ impl StepId {
         match self {
             StepId::Sanity => step("sanity", &[], Native),
             StepId::Diff => step("diff", SANITY, Native),
-            StepId::Drift => step(
-                "drift",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev check drift",
-                },
-            ),
+            StepId::Drift => step("drift", SANITY, Native),
             StepId::SourceHygiene => step(
                 "source-hygiene",
                 SANITY,

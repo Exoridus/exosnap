@@ -324,6 +324,51 @@ impl RealExecutor {
         }
         Outcome::pass("format, clippy, tests")
     }
+
+    /// Runs an in-process (native) step. Every later flip from a `pwsh`/`step`
+    /// process call to a direct Rust call goes through this one path, so it
+    /// carries the same contract the process path gives for free:
+    ///
+    /// - a log file at the same place a spawned process's would land, so
+    ///   `--failure-tail-lines` and the receipt's evidence work unchanged;
+    /// - the log streamed inside a `::group::`/`::endgroup::` pair in CI, the
+    ///   way `StepRunner::run` streams a child process's output;
+    /// - `f` returning `Err` becomes `Status::Fail`, never a silent pass. A
+    ///   check that wants `Status::ToolMissing` reports it explicitly through
+    ///   its returned `Outcome`; an `Err` is a refusal or a bug in the check
+    ///   itself, not a missing tool, so it is never mapped to `ToolMissing`.
+    ///
+    /// `f` returns the text to write to the step's log (typically the rendered
+    /// violations or findings) alongside the `Outcome` to report.
+    fn native(&self, name: &str, f: impl FnOnce() -> anyhow::Result<(String, Outcome)>) -> Outcome {
+        let (log_text, mut outcome) = match f() {
+            Ok(pair) => pair,
+            Err(error) => {
+                let detail = format!("{error:#}");
+                (detail.clone(), Outcome::fail(detail))
+            }
+        };
+
+        let log_path = self.ctx.runner.log_path(name);
+        match std::fs::create_dir_all(&self.ctx.runner.log_dir)
+            .and_then(|()| std::fs::write(&log_path, &log_text))
+        {
+            Ok(()) => outcome = outcome.with_log(&log_path.display().to_string()),
+            Err(error) => eprintln!("exo-dev: could not write {}: {error}", log_path.display()),
+        }
+
+        if self.ctx.runner.stream {
+            println!("::group::{name}");
+            for line in log_text.lines() {
+                println!("{line}");
+            }
+            println!("::endgroup::");
+        }
+        if outcome.status == Status::Fail {
+            self.ctx.runner.print_tail(name, &log_path);
+        }
+        outcome
+    }
 }
 
 impl RealExecutor {
@@ -379,7 +424,27 @@ impl RealExecutor {
                 }
                 Outcome::pass("")
             }
-            StepId::Drift => self.pwsh("drift", "check-drift.ps1", &[]),
+            StepId::Drift => self.native("drift", || {
+                let report = crate::drift::check(&ctx.repo_root)?;
+                let mut log = String::new();
+                for v in &report.violations {
+                    let where_ = if v.line > 0 {
+                        format!("{}:{}", v.file, v.line)
+                    } else {
+                        v.file.clone()
+                    };
+                    log.push_str(&format!("[{}] {where_}: {}\n", v.rule, v.message));
+                }
+                let outcome = if report.violations.is_empty() {
+                    log.push_str(
+                        "check-drift: OK (Qt version, Qt setup, Qt SDK paths, no qmake project files)\n",
+                    );
+                    Outcome::pass("")
+                } else {
+                    Outcome::fail(format!("{} violation(s)", report.violations.len()))
+                };
+                Ok((log, outcome))
+            }),
             StepId::SourceHygiene => {
                 let args: Vec<String> = match check.evidence_str("scope") {
                     Some("whole-tree") => vec!["-All".into()],

@@ -33,6 +33,24 @@ impl Git {
         Some(std::path::absolute(top).unwrap_or_else(|_| PathBuf::from(top)))
     }
 
+    /// Every file tracked at the current index, `git ls-files` order. Errors
+    /// when `root` is not (inside) a git repository: a repo boundary failure is
+    /// a refusal, never an empty, falsely-clean file list.
+    pub fn ls_files(&self) -> anyhow::Result<Vec<String>> {
+        let (code, stdout) = self.run(&["ls-files"]);
+        anyhow::ensure!(
+            code == 0,
+            "git ls-files failed in '{}': is this a git repository?",
+            self.root.display()
+        );
+        Ok(stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+
     pub fn run(&self, args: &[&str]) -> (i32, String) {
         let mut command = process::command("git");
         command.arg("-C").arg(&self.root).args(args);

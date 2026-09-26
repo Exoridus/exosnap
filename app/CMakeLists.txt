@@ -1458,11 +1458,9 @@ if(EXOSNAP_PWSH)
     # Label "pipeline", deliberately not "live_verify": these cases guard the
     # local pipeline rather than the Live Verify runner, and nothing here queries
     # hardware.
-    add_test(NAME pipeline.drift_guards
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/check-drift.tests.ps1")
-    set_tests_properties(pipeline.drift_guards PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.drift_guards hermetic)
+    #
+    # check-drift.ps1's own contract is now `cargo test -p exo-dev drift::`,
+    # ported alongside `exo-dev check drift` in tools/exo-dev/src/drift.rs.
 
     add_test(NAME pipeline.quality_helpers
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File

@@ -1,6 +1,7 @@
 //! ExoSnap repository verification: which checks run for a change, in what order,
 //! what each depends on, and what a run may claim afterwards.
 
+pub mod drift;
 pub mod evidence;
 pub mod executor;
 pub mod git;

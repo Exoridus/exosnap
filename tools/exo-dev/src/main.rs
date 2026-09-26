@@ -31,6 +31,18 @@ enum Command {
         #[arg(value_parser = ["pre-commit", "pre-push"])]
         name: String,
     },
+    /// Standalone checks, also reachable individually outside a verify profile.
+    Check {
+        #[command(subcommand)]
+        check: CheckCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum CheckCommand {
+    /// The four build/Qt drift invariants: qt-version-consistency,
+    /// setup-qt-centralized, no-qmake-project, qt-sdk-path-allowlist.
+    Drift,
 }
 
 #[derive(Args, Default)]
@@ -110,6 +122,9 @@ fn run_cli() -> anyhow::Result<ExitCode> {
     let repo_root = Git::discover(&cwd).context("not inside a git work tree")?;
     match cli.command {
         Command::Verify(args) => verify(&repo_root, *args),
+        Command::Check { check } => match check {
+            CheckCommand::Drift => check_drift(&repo_root),
+        },
         Command::Hook { name } => match name.as_str() {
             "pre-commit" => {
                 let git = Git::new(&repo_root);
@@ -141,6 +156,25 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 verify(&repo_root, args)
             }
         },
+    }
+}
+
+fn check_drift(repo_root: &std::path::Path) -> anyhow::Result<ExitCode> {
+    let report = exo_dev::drift::check(repo_root)?;
+    for v in &report.violations {
+        let where_ = if v.line > 0 {
+            format!("{}:{}", v.file, v.line)
+        } else {
+            v.file.clone()
+        };
+        eprintln!("  [{}] {where_}: {}", v.rule, v.message);
+    }
+    if report.violations.is_empty() {
+        println!("check-drift: OK (Qt version, Qt setup, Qt SDK paths, no qmake project files)");
+        Ok(ExitCode::SUCCESS)
+    } else {
+        println!("check-drift: FAILED");
+        Ok(ExitCode::FAILURE)
     }
 }
 
