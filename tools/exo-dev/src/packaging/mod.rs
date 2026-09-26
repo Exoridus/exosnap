@@ -41,10 +41,10 @@ impl ValidationReport {
     }
 }
 
-/// Renders a validator's skips and errors the way its original PowerShell
-/// script printed them: every skip first (informational, never a failure),
-/// then every error. The caller appends its own final pass/fail line, since
-/// each validator's wording (and whether it names a version) differs.
+/// Renders a validator's skips and errors: every skip first (informational,
+/// never a failure), then every error. The caller appends its own final
+/// pass/fail line, since each validator's wording (and whether it names a
+/// version) differs.
 pub fn render(report: &ValidationReport) -> String {
     let mut out = String::new();
     for skip in &report.skips {
@@ -76,10 +76,12 @@ pub fn cmake_project_version(repo_root: &Path) -> anyhow::Result<String> {
 }
 
 /// Every `\d+.\d+.\d+`-shaped substring in `line` that is not part of a
-/// longer dotted-number run, with its byte offset. Rust's `regex` crate has
-/// no lookaround, so the negative lookaround the original PowerShell
-/// validators used (`(?<![\d.])...(?![\d.])`) is reproduced here by checking
-/// the raw bytes immediately before and after each match.
+/// longer dotted-number run, with its byte offset. A version-looking token
+/// counts only when the character immediately before and after it (if any)
+/// is neither a digit nor a `.`, which excludes a substring of a longer
+/// dotted-number run such as an MSVC toolset version. Rust's `regex` crate
+/// has no lookaround, so this boundary check is done manually on the raw
+/// bytes around each match instead of in the pattern itself.
 pub(crate) fn bare_version_matches(line: &str) -> Vec<(usize, String)> {
     static VERSION_LIKE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+\.\d+\.\d+").unwrap());
     let bytes = line.as_bytes();

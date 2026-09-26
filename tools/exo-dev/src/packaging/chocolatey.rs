@@ -964,4 +964,212 @@ This description exists only to satisfy the thirty character minimum for the mod
                 .any(|e| e.contains("is not a PowerShell script"))
         );
     }
+
+    #[test]
+    fn a_checksum_that_is_not_lowercase_hex_is_rejected() {
+        let dir = fixture();
+        std::fs::write(
+            dir.path()
+                .join("packaging/chocolatey/tools/chocolateyinstall.ps1"),
+            INSTALL.replace(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "NOTAHASH",
+            ),
+        )
+        .unwrap();
+        let report = validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap();
+        assert!(!report.ok());
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("is not 64 lowercase hex characters"))
+        );
+    }
+
+    #[test]
+    fn an_automation_script_without_a_stop_preference_is_rejected() {
+        let dir = fixture();
+        std::fs::write(
+            dir.path()
+                .join("packaging/chocolatey/tools/chocolateyuninstall.ps1"),
+            UNINSTALL.replace("$ErrorActionPreference = 'Stop'\n", ""),
+        )
+        .unwrap();
+        let report = validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap();
+        assert!(!report.ok());
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("must start with $ErrorActionPreference = 'Stop'"))
+        );
+    }
+
+    #[test]
+    fn a_private_chocolatey_environment_variable_is_rejected() {
+        let dir = fixture();
+        std::fs::write(
+            dir.path()
+                .join("packaging/chocolatey/tools/chocolateyinstall.ps1"),
+            format!("{INSTALL}\n$target = $env:chocolateyPackageFolder\n"),
+        )
+        .unwrap();
+        let report = validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap();
+        assert!(!report.ok());
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("private Chocolatey environment variable"))
+        );
+    }
+
+    #[test]
+    fn a_chocolatey_tag_is_rejected() {
+        let dir = fixture();
+        std::fs::write(
+            dir.path().join("packaging/chocolatey/exosnap.nuspec"),
+            NUSPEC.replace(
+                "<tags>exosnap recorder screen-capture</tags>",
+                "<tags>exosnap recorder screen-capture chocolatey</tags>",
+            ),
+        )
+        .unwrap();
+        let report = validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap();
+        assert!(!report.ok());
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("must not contain 'chocolatey'"))
+        );
+    }
+
+    #[test]
+    fn a_raw_github_icon_url_is_rejected() {
+        let dir = fixture();
+        std::fs::write(
+            dir.path().join("packaging/chocolatey/exosnap.nuspec"),
+            NUSPEC.replace(
+                "<iconUrl>https://cdn.jsdelivr.net/gh/Exoridus/exosnap@v0.10.0/app/assets/brand/exosnap-logo.svg</iconUrl>",
+                "<iconUrl>https://raw.githubusercontent.com/Exoridus/exosnap/main/icon.svg</iconUrl>",
+            ),
+        )
+        .unwrap();
+        let report = validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap();
+        assert!(!report.ok());
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("must go through a CDN"))
+        );
+    }
+
+    #[test]
+    fn a_plain_http_metadata_url_is_rejected() {
+        let dir = fixture();
+        std::fs::write(
+            dir.path().join("packaging/chocolatey/exosnap.nuspec"),
+            NUSPEC.replace(
+                "<bugTrackerUrl>https://github.com/Exoridus/exosnap/issues</bugTrackerUrl>",
+                "<bugTrackerUrl>http://github.com/Exoridus/exosnap/issues</bugTrackerUrl>",
+            ),
+        )
+        .unwrap();
+        let report = validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap();
+        assert!(!report.ok());
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("is not an https:// URL"))
+        );
+    }
+
+    #[test]
+    fn a_missing_nuspec_enhancement_field_is_rejected() {
+        let dir = fixture();
+        std::fs::write(
+            dir.path().join("packaging/chocolatey/exosnap.nuspec"),
+            NUSPEC.replace(
+                "<docsUrl>https://github.com/Exoridus/exosnap/blob/main/README.md</docsUrl>",
+                "<docsUrl></docsUrl>",
+            ),
+        )
+        .unwrap();
+        let report = validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap();
+        assert!(!report.ok());
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("<docsUrl> is missing or empty"))
+        );
+    }
+
+    #[test]
+    fn a_markdown_heading_with_no_space_after_the_hash_is_rejected() {
+        let dir = fixture();
+        std::fs::write(
+            dir.path().join("packaging/chocolatey/exosnap.nuspec"),
+            NUSPEC.replace("## Notes", "##Notes"),
+        )
+        .unwrap();
+        let report = validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap();
+        assert!(!report.ok());
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("a Markdown heading with no space after the '#'"))
+        );
+    }
+
+    #[test]
+    fn the_placeholder_is_rejected_even_when_a_manifest_agrees_with_it() {
+        let dir = fixture();
+        std::fs::write(
+            dir.path()
+                .join("packaging/chocolatey/tools/chocolateyinstall.ps1"),
+            INSTALL.replace(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                &"0".repeat(64),
+            ),
+        )
+        .unwrap();
+        let release_dir = dir.path().join(".workspace/release/0.10.0");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        std::fs::write(
+            release_dir.join("artifact-manifest.json"),
+            format!(r#"{{"version":"0.10.0","msiSha256":"{}"}}"#, "0".repeat(64)),
+        )
+        .unwrap();
+        let report = validate_chocolatey(
+            dir.path(),
+            VERSION,
+            ChocolateyMode {
+                require_manifest: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!report.ok());
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("placeholder for an unpublished release"))
+        );
+        assert!(
+            !report
+                .errors
+                .iter()
+                .any(|e| e.contains("!= artifact manifest msiSha256")),
+            "the manifest cross-check must not add a second, contradictory error when the \
+             placeholder happens to match the manifest: {:?}",
+            report.errors
+        );
+    }
 }

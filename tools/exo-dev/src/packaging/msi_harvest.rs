@@ -116,9 +116,20 @@ mod tests {
 
     #[test]
     fn both_violations_are_reported_together() {
-        let dir = fixture("<Wix></Wix>");
+        let dir = fixture("<Wix><File Source=\"bin\\exosnap.exe\" /></Wix>");
         let report = validate_msi_harvest(dir.path()).unwrap();
-        assert_eq!(report.errors.len(), 1);
-        assert!(report.errors[0].contains("missing <ComponentGroupRef"));
+        assert_eq!(report.errors.len(), 2);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("hand-maintained <File Source= element"))
+        );
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("missing <ComponentGroupRef"))
+        );
     }
 }

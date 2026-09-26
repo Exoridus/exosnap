@@ -824,8 +824,7 @@ fn privacy_allowlist(repo_root: &std::path::Path) -> anyhow::Result<ExitCode> {
 }
 
 /// Resolves an explicit `--version` or falls back to the canonical CMake
-/// project version, the same default every packaging validator's original
-/// script used.
+/// project version, every packaging validator's own default.
 fn resolve_packaging_version(
     repo_root: &std::path::Path,
     version: Option<String>,
@@ -839,7 +838,7 @@ fn resolve_packaging_version(
 /// Every packaging validator's exit code convention: 0 clean, 1 for any
 /// failure, whether that failure is a specific finding or the target
 /// manifest could not even be read. There is no distinct "could not run"
-/// exit code here, matching the scripts these validators replace.
+/// exit code.
 fn packaging_chocolatey(
     repo_root: &std::path::Path,
     version: Option<String>,
