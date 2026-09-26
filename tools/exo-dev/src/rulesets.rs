@@ -503,8 +503,7 @@ fn display_bool(value: bool) -> String {
 }
 
 /// The scalar's display text: a bare string without its JSON quoting, a
-/// capitalized boolean matching how the legacy PowerShell checker printed one,
-/// and a number as its plain digits.
+/// capitalized boolean (`True`/`False`), and a number as its plain digits.
 fn display_json(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
@@ -584,7 +583,7 @@ mod tests {
         }
     }
 
-    // -- the ten ported legacy cases -----------------------------------------
+    // -- comparison and drift-reporting behavior -----------------------------
 
     #[test]
     fn a_live_state_matching_the_declared_one_is_accepted() {
