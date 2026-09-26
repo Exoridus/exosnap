@@ -17,6 +17,7 @@
 //! formatted against.
 
 pub mod canaries;
+pub mod clang_tidy;
 pub mod format;
 
 use std::ffi::OsStr;

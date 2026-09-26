@@ -275,13 +275,7 @@ impl StepId {
             StepId::ClangTidy => StepInfo {
                 windows_only: true,
                 locks: TREE_AND_BUILD,
-                ..step(
-                    "clang-tidy",
-                    BUILD,
-                    Legacy {
-                        owner: "exo-dev lint clang-tidy",
-                    },
-                )
+                ..step("clang-tidy", BUILD, Native)
             },
             StepId::PackagingSmoke => StepInfo {
                 windows_only: true,

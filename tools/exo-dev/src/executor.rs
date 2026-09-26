@@ -737,24 +737,75 @@ impl RealExecutor {
                         None,
                     )
                 });
-                let mut args = vec![
-                    "-BuildDir".to_string(),
-                    self.ctx.build_dir.clone(),
-                    "-CacheDir".into(),
-                    cache.display().to_string(),
-                    "-Jobs".into(),
-                    jobs,
-                ];
-                match check.evidence_str("scope") {
-                    Some("changed-since-parent") => args.extend(["-Base".into(), "HEAD^".into()]),
-                    Some("changed") => {
-                        if let Some(base) = &self.ctx.base {
-                            args.extend(["-Base".into(), base.clone()]);
-                        }
+                let base = match check.evidence_str("scope") {
+                    Some("changed-since-parent") => Some("HEAD^".to_string()),
+                    Some("changed") => self.ctx.base.clone(),
+                    _ => None,
+                };
+                let build_dir = self.ctx.tree();
+                let jobs = self.ctx.jobs;
+                self.native("clang-tidy", || {
+                    let report = crate::lint::clang_tidy::run_blocking(
+                        &ctx.repo_root,
+                        &build_dir,
+                        base.as_deref(),
+                        &cache,
+                        jobs,
+                        None,
+                        false,
+                        None,
+                    )?;
+                    if report.tool_path.as_os_str().is_empty() {
+                        // Nothing analysed: base scoping found no affected
+                        // translation unit. `report.scope` already carries
+                        // the human-readable reason.
+                        return Ok((format!("{}\n", report.scope), Outcome::pass("")));
                     }
-                    _ => {}
-                }
-                self.pwsh_with("clang-tidy", "run-clang-tidy-blocking.ps1", args, None, &[])
+                    let mut log = format!(
+                        "clang-tidy      : {}\n",
+                        report.tool_path.display()
+                    );
+                    log.push_str(&format!("compile database: {}\n", report.compile_db.display()));
+                    log.push_str(&format!(
+                        "blocking checks : {}\n",
+                        crate::lint::canaries::BLOCKING_CHECKS.join(", ")
+                    ));
+                    log.push_str(&format!(
+                        "scope           : {}, {} translation unit(s), {jobs} parallel job(s)\n",
+                        report.scope, report.analyzed
+                    ));
+                    if report.cache_enabled {
+                        log.push_str(&format!(
+                            "result cache    : {} - {} replayed, {} analysed\n",
+                            report.cache_dir.display(),
+                            report.replayed,
+                            report.analyzed.saturating_sub(report.replayed)
+                        ));
+                    }
+                    log.push('\n');
+                    let outcome = if report.violations.is_empty() {
+                        log.push_str(&format!(
+                            "clang-tidy blocking check set: clean ({} translation unit(s)).\n",
+                            report.analyzed
+                        ));
+                        Outcome::pass("")
+                    } else {
+                        log.push_str(&format!(
+                            "clang-tidy blocking check violations: {}\n",
+                            report.violations.len()
+                        ));
+                        for violation in &report.violations {
+                            log.push_str(&format!("  {violation}\n"));
+                        }
+                        log.push_str(
+                            "\nThese checks are required to stay at zero findings. Fix the code, or take \
+                             the check out of BLOCKING_CHECKS in tools/exo-dev/src/lint/canaries.rs and out \
+                             of .clang-tidy.\n",
+                        );
+                        Outcome::fail(format!("{} violation(s)", report.violations.len()))
+                    };
+                    Ok((log, outcome))
+                })
             }
             StepId::PackagingSmoke => self.pwsh_with(
                 "packaging-smoke",

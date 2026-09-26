@@ -37,7 +37,7 @@
 #   readability-redundant-declaration  duplicate forward declarations
 # All five are informational only — do NOT promote to blocking without a human triage pass.
 #
-# Blocking check set (enforced in CI by scripts/run-clang-tidy-blocking.ps1):
+# Blocking check set (enforced in CI by cargo exo-dev lint clang-tidy):
 #   bugprone-use-after-move
 #   bugprone-dangling-handle
 #   readability-misleading-indentation

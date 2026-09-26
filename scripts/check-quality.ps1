@@ -240,7 +240,7 @@ elseif ($compDb -and (Test-Path -Path $compDb -PathType Leaf)) {
     if ($srcFiles) {
         # -clang-analyzer-*: .clang-tidy enables a few path-sensitive analyser
         # checks for the blocking gate, and the analyser turns this pass into a
-        # multi-hour one. scripts/run-clang-tidy-blocking.ps1 runs those checks.
+        # multi-hour one. cargo exo-dev lint clang-tidy runs those checks.
         #
         # Two reasons this is not one invocation. A single command line carrying
         # every tracked source exceeds the length limit ("Der Dateiname oder die
@@ -248,7 +248,7 @@ elseif ($compDb -and (Test-Path -Path $compDb -PathType Leaf)) {
         # around; and clang-tidy is single-threaded, so a serial whole-tree pass
         # over this repository runs for the better part of an hour, nearly all of
         # it re-parsing Qt headers. Batches are independent, so they run
-        # concurrently the way run-clang-tidy-blocking.ps1 runs its units.
+        # concurrently the way the blocking runner runs its units.
         $compDbAbsolute = (Resolve-Path -LiteralPath (Join-Path $repoRoot $compDbTree)).Path
         $fixedArguments = @('-p', $compDbAbsolute, '--checks=-clang-analyzer-*')
         $batches = Split-VerifyCommandLineBatch -Item $srcFiles -FixedArgument $fixedArguments
@@ -283,8 +283,8 @@ elseif ($compDb -and (Test-Path -Path $compDb -PathType Leaf)) {
             # Reported, never thrown. The broad set in .clang-tidy is advisory by
             # design -- advisory-checks.yml owns its CI form -- and it currently
             # reports findings across this tree. The set that blocks is the
-            # curated one in scripts/run-clang-tidy-blocking.ps1, which
-            # `cargo exo-dev verify` runs as its own step.
+            # curated one `cargo exo-dev lint clang-tidy` runs, which
+            # `cargo exo-dev verify` also runs as its own step.
             $text = ($failures -join "`n")
             $lines = @($text -split "`r?`n" | Where-Object { $_ -match ': (warning|error): ' })
             Write-Host ("clang-tidy ADVISORY: {0} finding(s), last {1} shown" -f $lines.Count, $FailureTailLines)

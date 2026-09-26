@@ -6,14 +6,14 @@
 
 | Pass | Status | Entry point |
 |---|---|---|
-| Selected clang-tidy checks | Blocking | `scripts/run-clang-tidy-blocking.ps1`, the `clang-tidy` step of `cargo exo-dev verify` and of CI's `ci-build-debug` profile |
+| Selected clang-tidy checks | Blocking | `cargo exo-dev lint clang-tidy`, the `clang-tidy` step of `cargo exo-dev verify` and of CI's `ci-build-debug` profile |
 | cppcheck warning/performance/portability | Blocking locally | `scripts/check-quality.ps1`, the `cppcheck` step of `cargo exo-dev verify`; no CI profile runs it yet |
 | Broad clang-tidy advisory set | Advisory | `advisory-checks.yml` |
 | cppcheck unused-function analysis | Advisory | `advisory-checks.yml` |
 
 clang-tidy compilation integration requires Ninja; the Visual Studio generator does not run `CMAKE_CXX_CLANG_TIDY`. Use the lint preset or the explicit compile-database runner rather than interpreting a Visual Studio build as a tidy pass.
 
-The blocking set includes use-after-move, dangling handles, misleading indentation and the selected analyzer call/uninitialized/allocation checks. Read `.clang-tidy` and the blocking runner for exact patterns. Qt meta-object use and registered OS callbacks require special care when triaging apparent unused symbols; broad automated removal is unsafe.
+The blocking set includes use-after-move, dangling handles, misleading indentation and the selected analyzer call/uninitialized/allocation checks. Read `.clang-tidy` and `tools/exo-dev/src/lint/canaries.rs` for exact patterns. Qt meta-object use and registered OS callbacks require special care when triaging apparent unused symbols; broad automated removal is unsafe.
 
 MSVC `/W4 /WX` is supplemented by explicit unhandled-enumerator C4062 enablement. C4061 for switches with a `default` stays separate. Keep exhaustive policy switches genuinely exhaustive rather than adding a default that hides a new enum case.
 

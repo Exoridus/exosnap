@@ -113,6 +113,37 @@ enum LintCommand {
         #[arg(long, value_delimiter = ',')]
         only: Vec<String>,
     },
+    /// Runs the curated, blocking clang-tidy check set
+    /// (exo_dev::lint::canaries::BLOCKING_CHECKS) over the project's own
+    /// sources.
+    ClangTidy {
+        /// Directory containing compile_commands.json. Defaults to the Ninja
+        /// debug preset.
+        #[arg(long, default_value = "build/windows-x64-ninja-debug")]
+        build_dir: PathBuf,
+        /// Git revision to diff against. When given, only the affected
+        /// translation units are analysed. Omit for a full-tree pass.
+        #[arg(long)]
+        base: Option<String>,
+        /// Explicit path to clang-tidy.exe. Autodetected from the Visual
+        /// Studio LLVM toolset and then from PATH when omitted.
+        #[arg(long)]
+        clang_tidy: Option<PathBuf>,
+        /// Parallel clang-tidy processes. Defaults to the processor count.
+        #[arg(long, default_value_t = 0)]
+        jobs: usize,
+        /// Directory holding cached per-translation-unit results.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Version the resolved clang-tidy must report, as a full version or
+        /// a leading part of one ('22' matches 22.1.0). A mismatch fails the
+        /// run.
+        #[arg(long)]
+        require_version: Option<String>,
+        /// Print the blocking check list and exit.
+        #[arg(long)]
+        list_checks: bool,
+    },
 }
 
 #[derive(Args, Default)]
@@ -217,6 +248,24 @@ fn run_cli() -> anyhow::Result<ExitCode> {
             LintCommand::Canaries { clang_tidy, only } => {
                 lint_canaries(&repo_root, clang_tidy, only)
             }
+            LintCommand::ClangTidy {
+                build_dir,
+                base,
+                clang_tidy,
+                jobs,
+                cache_dir,
+                require_version,
+                list_checks,
+            } => lint_clang_tidy(
+                &repo_root,
+                build_dir,
+                base,
+                clang_tidy,
+                jobs,
+                cache_dir,
+                require_version,
+                list_checks,
+            ),
         },
         Command::Hook { name } => match name.as_str() {
             "pre-commit" => {
@@ -398,6 +447,84 @@ fn lint_canaries(
     println!();
     println!(
         "docs/dev/static-analysis.md explains why a silent check and a clean tree look the same."
+    );
+    Ok(ExitCode::FAILURE)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lint_clang_tidy(
+    repo_root: &std::path::Path,
+    build_dir: PathBuf,
+    base: Option<String>,
+    clang_tidy: Option<PathBuf>,
+    jobs: usize,
+    cache_dir: Option<PathBuf>,
+    require_version: Option<String>,
+    list_checks: bool,
+) -> anyhow::Result<ExitCode> {
+    let build_dir = if build_dir.is_absolute() {
+        build_dir
+    } else {
+        repo_root.join(build_dir)
+    };
+    let cache_dir =
+        cache_dir.unwrap_or_else(|| exo_dev::evidence::tool_cache_dir("clang-tidy", &[], None));
+
+    let report = exo_dev::lint::clang_tidy::run_blocking(
+        repo_root,
+        &build_dir,
+        base.as_deref(),
+        &cache_dir,
+        jobs,
+        require_version.as_deref(),
+        list_checks,
+        clang_tidy.as_deref(),
+    )?;
+    if list_checks {
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    println!("clang-tidy      : {}", report.tool_path.display());
+    if !report.compile_db.as_os_str().is_empty() {
+        println!("compile database: {}", report.compile_db.display());
+    }
+    println!(
+        "blocking checks : {}",
+        exo_dev::lint::canaries::BLOCKING_CHECKS.join(", ")
+    );
+    println!(
+        "scope           : {}, {} translation unit(s), {jobs} parallel job(s)",
+        report.scope, report.analyzed
+    );
+    if report.cache_enabled {
+        println!(
+            "result cache    : {} - {} replayed, {} analysed",
+            report.cache_dir.display(),
+            report.replayed,
+            report.analyzed.saturating_sub(report.replayed)
+        );
+    }
+    println!();
+
+    if report.ok() {
+        println!(
+            "clang-tidy blocking check set: clean ({} translation unit(s)).",
+            report.analyzed
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    eprintln!(
+        "clang-tidy blocking check violations: {}",
+        report.violations.len()
+    );
+    for violation in &report.violations {
+        eprintln!("  {violation}");
+    }
+    eprintln!();
+    eprintln!(
+        "These checks are required to stay at zero findings. Fix the code, or take the check out \
+         of BLOCKING_CHECKS in tools/exo-dev/src/lint/canaries.rs and out of .clang-tidy."
     );
     Ok(ExitCode::FAILURE)
 }
