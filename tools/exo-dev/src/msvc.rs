@@ -96,7 +96,23 @@ pub fn environment() -> anyhow::Result<Option<(PathBuf, EnvVars)>> {
     Ok(Some((compiler, variables)))
 }
 
+/// The latest Visual Studio installation with the x64 C++ toolset, whatever
+/// its product version. The Ninja/vcvars64 import wants exactly this: the
+/// newest usable toolchain, not a particular VS line.
 pub(crate) fn find_installation() -> Option<PathBuf> {
+    vswhere_installation_path(&[])
+}
+
+/// The latest VS-2022-line installation with the x64 C++ toolset, or `None`
+/// when only an installation outside that line (an older VS, or a preview
+/// channel vswhere's plain `-latest` would prefer) exists. `-version
+/// "[17.0,18.0)"` is VS 2022's product-version range; this excludes both an
+/// older VS and a preview/next line without hardcoding a folder path.
+pub(crate) fn find_installation_vs2022() -> Option<PathBuf> {
+    vswhere_installation_path(&["-version", "[17.0,18.0)"])
+}
+
+fn vswhere_installation_path(extra_args: &[&str]) -> Option<PathBuf> {
     let program_files = std::env::var_os("ProgramFiles(x86)")?;
     let vswhere = Path::new(&program_files).join("Microsoft Visual Studio/Installer/vswhere.exe");
     if !vswhere.is_file() {
@@ -109,9 +125,9 @@ pub(crate) fn find_installation() -> Option<PathBuf> {
         "*",
         "-requires",
         "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-        "-property",
-        "installationPath",
     ]);
+    command.args(extra_args);
+    command.args(["-property", "installationPath"]);
     let (_, stdout) = crate::process::query(command).ok()?;
     stdout
         .lines()

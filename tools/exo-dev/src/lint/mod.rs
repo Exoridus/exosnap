@@ -8,16 +8,16 @@
 //! binary until the matching Store package is installed), and must answer
 //! `--version` with exit code 0.
 //!
-//! `msvc::find_installation` is shared Phase A infrastructure: it asks
+//! `msvc::find_installation` is shared Phase A infrastructure that asks
 //! vswhere for the *latest* installation, which the build path genuinely
-//! wants. `check-format.ps1`'s original search was never "the latest VS" --
-//! it recursed literally under `...\Microsoft Visual Studio\2022\...` and
-//! never looked at a preview channel (a different major version number, such
-//! as a "18" install ahead of "2022" in vswhere's `-latest` ordering). The
-//! VS-LLVM tier below keeps that scope: it accepts `find_installation`'s
-//! result only when the path names the 2022 line, and otherwise falls
-//! through to standalone LLVM and PATH exactly as the original script would
-//! have (it would have found nothing under `2022` and moved on).
+//! wants; it is not reused here. `check-format.ps1`'s original search was
+//! never "the latest VS" -- it recursed literally under
+//! `...\Microsoft Visual Studio\2022\...` and never looked at a preview or
+//! other-numbered channel. The VS-LLVM tier below calls
+//! `msvc::find_installation_vs2022` instead, which asks vswhere the same
+//! question scoped to the VS 2022 product-version range, so a preview
+//! channel ahead of 2022 in plain `-latest` ordering is excluded by vswhere
+//! itself rather than by a path-string filter here.
 
 pub mod format;
 
@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 /// binary. See the module documentation for the search order and what counts
 /// as a match.
 pub fn find_tool(names: &[&str]) -> Option<PathBuf> {
-    let vs_llvm_root = crate::msvc::find_installation();
+    let vs_llvm_root = crate::msvc::find_installation_vs2022();
     let standalone_llvm_root = std::env::var_os("ProgramFiles").map(|p| Path::new(&p).join("LLVM"));
     let path_var = std::env::var_os("PATH").unwrap_or_default();
     let local_app_data = std::env::var_os("LOCALAPPDATA");
@@ -51,7 +51,6 @@ fn find_tool_in(
     local_app_data: Option<&OsStr>,
 ) -> Option<PathBuf> {
     if let Some(root) = vs_install_root
-        && is_vs_2022_install(root)
         && let Some(found) = find_under(root, names, Some("\\llvm\\x64\\bin\\"), local_app_data)
     {
         return Some(found);
@@ -62,14 +61,6 @@ fn find_tool_in(
         return Some(found);
     }
     find_on_path(names, path_var, local_app_data)
-}
-
-/// Whether `find_installation`'s result names the 2022 line: `check-format.ps1`
-/// never searched a preview or other-numbered channel, so an install outside
-/// that scope must be treated as though vswhere had found nothing.
-fn is_vs_2022_install(root: &Path) -> bool {
-    root.components()
-        .any(|component| component.as_os_str() == "2022")
 }
 
 /// The first `{name}.exe` under `root` (recursive) whose path, lowercased,
@@ -204,10 +195,7 @@ mod tests {
     #[test]
     fn vs_bundled_llvm_wins_over_standalone_llvm_and_path() {
         let vs_dir = tempfile::tempdir().unwrap();
-        // The 2022 component matters: only that line is in scope (see
-        // `is_vs_2022_install`).
-        let vs_root = vs_dir.path().join("2022/BuildTools");
-        let llvm_bin = vs_root.join("VC/Tools/Llvm/x64/bin");
+        let llvm_bin = vs_dir.path().join("VC/Tools/Llvm/x64/bin");
         let vs_tool = place_as("clang-format", &llvm_bin);
 
         let standalone_dir = tempfile::tempdir().unwrap();
@@ -218,7 +206,7 @@ mod tests {
 
         let found = find_tool_in(
             &["clang-format"],
-            Some(&vs_root),
+            Some(vs_dir.path()),
             Some(standalone_dir.path()),
             &path_var(&[path_dir.path()]),
             None,
@@ -229,16 +217,15 @@ mod tests {
     #[test]
     fn a_vs_bundled_clang_format_outside_llvm_x64_bin_is_not_matched() {
         let vs_dir = tempfile::tempdir().unwrap();
-        let vs_root = vs_dir.path().join("2022/BuildTools");
         // Not under \Llvm\x64\bin\: the marker filter must reject it.
-        place_as("clang-format", &vs_root.join("VC/Tools/Other"));
+        place_as("clang-format", &vs_dir.path().join("VC/Tools/Other"));
 
         let path_dir = tempfile::tempdir().unwrap();
         let path_tool = place_as("clang-format", path_dir.path());
 
         let found = find_tool_in(
             &["clang-format"],
-            Some(&vs_root),
+            Some(vs_dir.path()),
             None,
             &path_var(&[path_dir.path()]),
             None,
@@ -246,43 +233,27 @@ mod tests {
         assert_eq!(found, Some(path_tool));
     }
 
+    /// `msvc::find_installation_vs2022` returns `None` on a machine where
+    /// only a preview/other-numbered VS line is installed: vswhere's own
+    /// `-version` filter excludes it, so nothing ever reaches this tier as a
+    /// root to search under. The VS-LLVM tier must fall through to
+    /// standalone LLVM exactly as if VS were entirely absent.
     #[test]
-    fn a_vs_install_outside_the_2022_line_is_skipped_in_favor_of_standalone_llvm() {
-        let vs_dir = tempfile::tempdir().unwrap();
-        // A preview/other-numbered channel, e.g. an install vswhere's
-        // `-latest` prefers over 2022 on a machine with both installed. The
-        // original script never searched outside `...\2022\...`.
-        let preview_root = vs_dir.path().join("18/Community");
-        place_as("clang-format", &preview_root.join("VC/Tools/Llvm/x64/bin"));
-
+    fn a_vs2022_scoped_lookup_that_found_nothing_falls_through_to_standalone_llvm() {
         let standalone_dir = tempfile::tempdir().unwrap();
         let standalone_tool = place_as("clang-format", &standalone_dir.path().join("bin"));
 
+        let path_dir = tempfile::tempdir().unwrap();
+        place_as("clang-format", path_dir.path());
+
         let found = find_tool_in(
             &["clang-format"],
-            Some(&preview_root),
+            None,
             Some(standalone_dir.path()),
-            &path_var(&[standalone_dir.path()]),
+            &path_var(&[path_dir.path()]),
             None,
         );
         assert_eq!(found, Some(standalone_tool));
-    }
-
-    #[test]
-    fn a_vs_install_outside_the_2022_line_with_nothing_else_available_is_none() {
-        let vs_dir = tempfile::tempdir().unwrap();
-        let preview_root = vs_dir.path().join("18/Community");
-        place_as("clang-format", &preview_root.join("VC/Tools/Llvm/x64/bin"));
-
-        let empty = tempfile::tempdir().unwrap();
-        let found = find_tool_in(
-            &["clang-format"],
-            Some(&preview_root),
-            None,
-            &path_var(&[empty.path()]),
-            None,
-        );
-        assert_eq!(found, None);
     }
 
     #[test]
