@@ -16,6 +16,7 @@
 //! bundled clang-format would not agree with the version the tree is
 //! formatted against.
 
+pub mod canaries;
 pub mod format;
 
 use std::ffi::OsStr;

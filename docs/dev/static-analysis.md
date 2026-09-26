@@ -21,7 +21,7 @@ MSVC `/W4 /WX` is supplemented by explicit unhandled-enumerator C4062 enablement
 
 First run it over all relevant project translation units and triage every repository-owned finding. A blocking check must have a clean actionable baseline, not a tree-wide suppression that hides its subject.
 
-Second add a deliberate violation under `scripts/tests/fixtures/lint-canaries` and prove `scripts/check-lint-canaries.ps1` rejects it. Zero findings can mean either clean code or a check that never executed. A canary proves the instrument runs; the tree scan proves the repository satisfies it. Neither replaces the other.
+Second add a deliberate violation under `scripts/tests/fixtures/lint-canaries` and prove `cargo exo-dev lint canaries` rejects it. Zero findings can mean either clean code or a check that never executed. A canary proves the instrument runs; the tree scan proves the repository satisfies it. Neither replaces the other.
 
 Record run-specific counts, commands and analysis with review evidence. Promote only the rule and durable rationale into configuration or this guide. Count distinct `(file, line, column, check)` sites rather than raw diagnostic lines, and compare runs only when their input sets and tool versions match.
 

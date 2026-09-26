@@ -36,6 +36,12 @@ enum Command {
         #[command(subcommand)]
         check: CheckCommand,
     },
+    /// Lint tooling that is not itself a pass/fail check over source, e.g.
+    /// proving the checks a lint step relies on are still effective.
+    Lint {
+        #[command(subcommand)]
+        command: LintCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -90,6 +96,22 @@ enum CheckCommand {
         /// files and refuses a file that also has unstaged edits.
         #[arg(long)]
         fix: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum LintCommand {
+    /// Runs clang-tidy against the one canary fixture per blocking check
+    /// under scripts/tests/fixtures/lint-canaries, and fails if a check no
+    /// longer fires on its own canary.
+    Canaries {
+        /// Explicit path to clang-tidy.exe. Autodetected from PATH when
+        /// omitted.
+        #[arg(long)]
+        clang_tidy: Option<PathBuf>,
+        /// Check only the named checks.
+        #[arg(long, value_delimiter = ',')]
+        only: Vec<String>,
     },
 }
 
@@ -190,6 +212,11 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 require_pull_request,
             ),
             CheckCommand::Format { staged, fix } => check_format(&repo_root, staged, fix),
+        },
+        Command::Lint { command } => match command {
+            LintCommand::Canaries { clang_tidy, only } => {
+                lint_canaries(&repo_root, clang_tidy, only)
+            }
         },
         Command::Hook { name } => match name.as_str() {
             "pre-commit" => {
@@ -341,6 +368,38 @@ fn check_format(repo_root: &std::path::Path, staged: bool, fix: bool) -> anyhow:
     }
     println!("clang-format: OK");
     Ok(ExitCode::SUCCESS)
+}
+
+fn lint_canaries(
+    repo_root: &std::path::Path,
+    clang_tidy: Option<PathBuf>,
+    only: Vec<String>,
+) -> anyhow::Result<ExitCode> {
+    let report = exo_dev::lint::canaries::run_canaries(repo_root, clang_tidy.as_deref(), &only)?;
+    for check in exo_dev::lint::canaries::BLOCKING_CHECKS {
+        let in_scope = only.is_empty() || only.iter().any(|wanted| wanted == check);
+        let failed = report
+            .failures
+            .iter()
+            .any(|failure| failure.check == *check);
+        if in_scope && !failed {
+            println!("  fires  {check}");
+        }
+    }
+    println!();
+    println!("lint canaries: {} check(s) exercised", report.checked);
+    if report.ok() {
+        return Ok(ExitCode::SUCCESS);
+    }
+    println!();
+    for failure in &report.failures {
+        eprintln!("FAIL  {} : {}", failure.check, failure.detail);
+    }
+    println!();
+    println!(
+        "docs/dev/static-analysis.md explains why a silent check and a clean tree look the same."
+    );
+    Ok(ExitCode::FAILURE)
 }
 
 fn verify(repo_root: &std::path::Path, args: VerifyArgs) -> anyhow::Result<ExitCode> {

@@ -174,13 +174,7 @@ impl StepId {
                 },
             ),
             StepId::CommitPolicy => step("commit-policy", SANITY, Native),
-            StepId::LintCanaries => step(
-                "lint-canaries",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev lint canaries",
-                },
-            ),
+            StepId::LintCanaries => step("lint-canaries", SANITY, Native),
             StepId::ProseLines => step(
                 "prose-lines",
                 SANITY,

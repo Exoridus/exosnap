@@ -548,7 +548,34 @@ impl RealExecutor {
                     Ok((log, outcome))
                 })
             }
-            StepId::LintCanaries => self.pwsh("lint-canaries", "check-lint-canaries.ps1", &[]),
+            StepId::LintCanaries => self.native("lint-canaries", || {
+                let report = crate::lint::canaries::run_canaries(&ctx.repo_root, None, &[])?;
+                let mut log = String::new();
+                for check in crate::lint::canaries::BLOCKING_CHECKS {
+                    if report.failures.iter().any(|failure| failure.check == *check) {
+                        continue;
+                    }
+                    log.push_str(&format!("  fires  {check}\n"));
+                }
+                log.push_str(&format!(
+                    "\nlint canaries: {} check(s) exercised\n",
+                    report.checked
+                ));
+                let outcome = if report.ok() {
+                    Outcome::pass("")
+                } else {
+                    log.push('\n');
+                    for failure in &report.failures {
+                        log.push_str(&format!("FAIL  {} : {}\n", failure.check, failure.detail));
+                    }
+                    log.push_str(
+                        "\ndocs/dev/static-analysis.md explains why a silent check and a clean \
+                         tree look the same.\n",
+                    );
+                    Outcome::fail(format!("{} failure(s)", report.failures.len()))
+                };
+                Ok((log, outcome))
+            }),
             StepId::ProseLines => {
                 let mut args = vec!["-Advisory".to_string()];
                 if ctx.profile.ci
