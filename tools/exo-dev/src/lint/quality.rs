@@ -65,6 +65,10 @@ pub struct QualityReport {
 /// Runs the selected passes. Neither pass stops the other: a missing tool is
 /// collected and reported only after both have had their chance to run, so
 /// asking for one tool's install never hides that the other is also absent.
+///
+/// `cache_root` overrides cppcheck's tool-cache root (`None` means the real
+/// per-user cache under `%LOCALAPPDATA%`); it exists so a test can inject a
+/// throwaway directory instead of reading and writing the real one.
 pub fn run(
     repo_root: &Path,
     build_dir: Option<&Path>,
@@ -72,6 +76,7 @@ pub fn run(
     only: Option<Only>,
     jobs: usize,
     report_path: Option<&Path>,
+    cache_root: Option<&Path>,
 ) -> anyhow::Result<QualityReport> {
     let mut missing: Vec<&'static str> = Vec::new();
     let mut clang_tidy_skip_reason = None;
@@ -93,7 +98,7 @@ pub fn run(
     };
 
     let cppcheck = if only != Some(Only::ClangTidy) {
-        match cppcheck_pass(repo_root)? {
+        match cppcheck_pass(repo_root, cache_root)? {
             Some(report) => Some(report),
             None => {
                 missing.push("cppcheck");
@@ -201,7 +206,7 @@ fn clang_tidy_pass(
         jobs
     };
 
-    let findings = run_clang_tidy_batches(&tool, repo_root, &fixed_arguments, &batches, jobs);
+    let findings = run_clang_tidy_batches(&tool, repo_root, &fixed_arguments, &batches, jobs)?;
 
     if let Some(path) = report_path {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -275,45 +280,71 @@ fn touched_files(repo_root: &Path, base: &str) -> HashSet<String> {
 /// once, returning the combined stdout/stderr of every batch that exited
 /// nonzero. A clean batch contributes nothing: this pass is advisory, and
 /// only what clang-tidy actually flagged is worth printing.
+///
+/// A batch that never starts (the tool vanished between discovery and this
+/// call, an invalid working directory, ...) is a hard error, not silence:
+/// treating a spawn failure as "no findings" would report a clean pass over
+/// an analysis that never ran, exactly the failure mode the blocking
+/// clang-tidy gate and `check-quality.ps1`'s own `ToolMissingExitCode`
+/// existed to rule out.
 fn run_clang_tidy_batches(
     tool: &Path,
     repo_root: &Path,
     fixed_arguments: &[String],
     batches: &[Vec<String>],
     jobs: usize,
-) -> Vec<String> {
+) -> anyhow::Result<Vec<String>> {
     if batches.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let jobs = jobs.max(1).min(batches.len());
     let queue: std::sync::Mutex<std::collections::VecDeque<&Vec<String>>> =
         std::sync::Mutex::new(batches.iter().collect());
     let findings: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let spawn_error: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
     std::thread::scope(|scope| {
         for _ in 0..jobs {
             scope.spawn(|| {
                 loop {
+                    if spawn_error.lock().unwrap().is_some() {
+                        // Another batch already failed to launch; stop pulling
+                        // more work rather than racing more spawn attempts.
+                        break;
+                    }
                     let next = queue.lock().unwrap().pop_front();
                     let Some(batch) = next else { break };
                     let mut command = crate::process::command(&tool.to_string_lossy());
                     command.current_dir(repo_root);
                     command.args(fixed_arguments);
                     command.args(batch.as_slice());
-                    if let Ok(output) = command.output()
-                        && !output.status.success()
-                    {
-                        let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-                        combined.push_str(&String::from_utf8_lossy(&output.stderr));
-                        findings.lock().unwrap().push(combined);
+                    match command.output() {
+                        Ok(output) if !output.status.success() => {
+                            let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+                            combined.push_str(&String::from_utf8_lossy(&output.stderr));
+                            findings.lock().unwrap().push(combined);
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            let mut guard = spawn_error.lock().unwrap();
+                            if guard.is_none() {
+                                *guard = Some(format!("could not run {}: {error}", tool.display()));
+                            }
+                        }
                     }
                 }
             });
         }
     });
-    findings.into_inner().unwrap()
+    if let Some(message) = spawn_error.into_inner().unwrap() {
+        anyhow::bail!(message);
+    }
+    Ok(findings.into_inner().unwrap())
 }
 
-fn cppcheck_pass(repo_root: &Path) -> anyhow::Result<Option<CppCheckOutcome>> {
+fn cppcheck_pass(
+    repo_root: &Path,
+    cache_root: Option<&Path>,
+) -> anyhow::Result<Option<CppCheckOutcome>> {
     let Some(tool) = discover_cppcheck() else {
         return Ok(None);
     };
@@ -325,8 +356,7 @@ fn cppcheck_pass(repo_root: &Path) -> anyhow::Result<Option<CppCheckOutcome>> {
     // set analyses afresh instead of replaying verdicts reached under
     // different rules.
     let version = cppcheck_version(&tool)?;
-    let cache_dir =
-        crate::evidence::tool_cache_dir("cppcheck", &[version, arguments.join(" ")], None);
+    let cache_dir = cppcheck_cache_dir(&version, &arguments, cache_root);
     std::fs::create_dir_all(&cache_dir)
         .with_context(|| format!("could not create {}", cache_dir.display()))?;
 
@@ -345,6 +375,19 @@ fn cppcheck_pass(repo_root: &Path) -> anyhow::Result<Option<CppCheckOutcome>> {
         ok: output.status.success(),
         output: combined,
     }))
+}
+
+/// cppcheck's own result cache location for one toolchain, salted by both its
+/// version and its full argument list so a cppcheck upgrade or a changed
+/// check set analyses afresh instead of replaying verdicts reached under
+/// different rules. `root` overrides the real per-user cache root; a test
+/// passes one so it never reads or writes `%LOCALAPPDATA%`.
+fn cppcheck_cache_dir(version: &str, arguments: &[String], root: Option<&Path>) -> PathBuf {
+    crate::evidence::tool_cache_dir(
+        "cppcheck",
+        &[version.to_string(), arguments.join(" ")],
+        root,
+    )
 }
 
 fn cppcheck_arguments() -> Vec<String> {
@@ -459,23 +502,93 @@ mod tests {
         assert!(error.to_string().contains("compile_commands.json"));
     }
 
+    /// Non-vacuous by construction: a real (if empty) `compile_commands.json`
+    /// and real project sources are present, so if the `only !=
+    /// Some(Only::CppCheck)` guard around the clang-tidy pass were ever
+    /// removed, `clang_tidy_pass` would actually attempt to run clang-tidy
+    /// against this database and set `clang_tidy`/`clang_tidy_skip_reason` to
+    /// something other than "never touched". A tempdir with no build tree at
+    /// all (the earlier version of this test) cannot tell "the filter
+    /// excluded the pass" apart from "the pass ran and immediately skipped
+    /// for lack of a compile database" -- both look like `None`.
     #[test]
-    fn only_cppcheck_never_touches_git_or_the_compile_database() {
-        // A directory that is not a git repository at all: project_sources
-        // would fail immediately if the clang-tidy pass ran. Only::CppCheck
-        // must short-circuit before that, so cppcheck's own tool-missing
-        // report (this environment may or may not have cppcheck installed)
-        // is the only way this call can end.
-        let dir = tempfile::tempdir().unwrap();
-        let result = run(dir.path(), None, None, Some(Only::CppCheck), 1, None);
+    fn only_cppcheck_never_attempts_the_clang_tidy_pass_even_with_a_real_compile_database() {
+        let dir = repo_with_sources();
+        let build_dir = dir.path().join("build/windows-x64-ninja-debug");
+        std::fs::create_dir_all(&build_dir).unwrap();
+        std::fs::write(build_dir.join("compile_commands.json"), "[]").unwrap();
+        // Injected, never the real per-user cache: this test may run on a
+        // machine with cppcheck actually installed, and must not read or
+        // write %LOCALAPPDATA%\ExoSnap\tool-cache.
+        let cache_root = dir.path().join("tool-cache");
+
+        let result = run(
+            dir.path(),
+            None,
+            None,
+            Some(Only::CppCheck),
+            1,
+            None,
+            Some(&cache_root),
+        );
+
         match result {
             Ok(report) => {
-                assert!(report.clang_tidy.is_none());
-                assert!(report.cppcheck.is_some());
+                assert!(
+                    report.clang_tidy.is_none(),
+                    "Only::CppCheck must keep the clang-tidy pass from ever running"
+                );
+                assert!(
+                    report.clang_tidy_skip_reason.is_none(),
+                    "a skip reason means the pass ran and decided to skip; it must never have started"
+                );
             }
             Err(error) => {
-                assert!(error.downcast_ref::<ToolMissing>().is_some());
+                assert!(
+                    error.downcast_ref::<ToolMissing>().is_some(),
+                    "the only tool this call may report missing is cppcheck"
+                );
             }
         }
+    }
+
+    #[test]
+    fn cppcheck_cache_dir_is_salted_by_version_and_the_full_argument_list() {
+        let arguments = cppcheck_arguments();
+        let root = tempfile::tempdir().unwrap();
+
+        let one = cppcheck_cache_dir("2.13", &arguments, Some(root.path()));
+        let same_inputs_again = cppcheck_cache_dir("2.13", &arguments, Some(root.path()));
+        assert_eq!(
+            one, same_inputs_again,
+            "identical version and arguments must address the same cache directory"
+        );
+
+        let different_version = cppcheck_cache_dir("2.14", &arguments, Some(root.path()));
+        assert_ne!(
+            one, different_version,
+            "a cppcheck upgrade must not replay verdicts reached under a different version"
+        );
+
+        let mut different_arguments = arguments.clone();
+        different_arguments.push("--enable=unusedFunction".to_string());
+        let different_key = cppcheck_cache_dir("2.13", &different_arguments, Some(root.path()));
+        assert_ne!(
+            one, different_key,
+            "a changed check set must not replay verdicts reached under a different rule set"
+        );
+    }
+
+    #[test]
+    fn a_batch_that_fails_to_spawn_is_a_hard_error_never_silent_success() {
+        // A name no PATH entry can resolve: `Command::output()` fails with
+        // "file not found" rather than the process ever starting.
+        let bogus_tool = Path::new("exo-dev-test-tool-that-does-not-exist.exe");
+        let batches = vec![vec!["a.cpp".to_string()]];
+        let result = run_clang_tidy_batches(bogus_tool, Path::new("."), &[], &batches, 1);
+        assert!(
+            result.is_err(),
+            "a batch that never started must not be reported as zero findings"
+        );
     }
 }

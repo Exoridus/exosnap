@@ -719,6 +719,7 @@ impl RealExecutor {
                     Some(crate::lint::quality::Only::CppCheck),
                     ctx.jobs,
                     None,
+                    None,
                 )?;
                 let cppcheck = report
                     .cppcheck

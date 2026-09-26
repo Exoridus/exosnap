@@ -560,6 +560,23 @@ fn lint_clang_tidy(
     Ok(ExitCode::FAILURE)
 }
 
+/// `error`'s exit code for `lint quality`: `ToolMissing` becomes exit 3,
+/// distinct from every other exit code and matching `check-quality.ps1`'s
+/// original `ToolMissingExitCode` -- a caller must be able to tell "the tool
+/// this run needed is not installed" from "the checks ran and found
+/// something" and from any other failure to launch. Any other error is
+/// handed back unchanged, for `run_cli` to report and turn into exit 2.
+fn quality_tool_missing_exit(error: anyhow::Error) -> anyhow::Result<ExitCode> {
+    match error.downcast::<exo_dev::executor::ToolMissing>() {
+        Ok(missing) => {
+            eprintln!();
+            eprintln!("Static quality check INCOMPLETE: {missing}.");
+            Ok(ExitCode::from(3))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn lint_quality(
     repo_root: &std::path::Path,
     only: Option<String>,
@@ -582,20 +599,10 @@ fn lint_quality(
         only,
         jobs,
         report_path.as_deref(),
+        None,
     ) {
         Ok(report) => report,
-        // Distinct from every other exit code, matching check-quality.ps1's
-        // original ToolMissingExitCode: a caller must be able to tell "the
-        // tool this run needed is not installed" from "the checks ran and
-        // found something" and from any other failure to launch.
-        Err(error) => match error.downcast::<exo_dev::executor::ToolMissing>() {
-            Ok(missing) => {
-                eprintln!();
-                eprintln!("Static quality check INCOMPLETE: {missing}.");
-                return Ok(ExitCode::from(3));
-            }
-            Err(error) => return Err(error),
-        },
+        Err(error) => return quality_tool_missing_exit(error),
     };
 
     if let Some(clang_tidy) = &report.clang_tidy {
@@ -798,5 +805,28 @@ fn verify(repo_root: &std::path::Path, args: VerifyArgs) -> anyhow::Result<ExitC
     } else {
         println!("exo-dev verify ({}): FAILED", spec.name);
         Ok(ExitCode::FAILURE)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tool_missing_error_becomes_exit_code_3() {
+        let error: anyhow::Error =
+            exo_dev::executor::ToolMissing("cppcheck, clang-tidy not installed".into()).into();
+        let code = quality_tool_missing_exit(error).unwrap();
+        // std::process::ExitCode has no PartialEq; Debug is stable and exact
+        // enough to tell 3 apart from every other code this function returns.
+        assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(3)));
+    }
+
+    #[test]
+    fn any_other_error_is_handed_back_unchanged() {
+        let error = anyhow::anyhow!("boom");
+        let result = quality_tool_missing_exit(error);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "boom");
     }
 }
