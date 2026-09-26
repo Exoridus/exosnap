@@ -188,13 +188,7 @@ impl StepId {
                     owner: "none (retired)",
                 },
             ),
-            StepId::Format => step(
-                "format",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev check format",
-                },
-            ),
+            StepId::Format => step("format", SANITY, Native),
             StepId::PackagingVersion => step(
                 "packaging-version",
                 SANITY,

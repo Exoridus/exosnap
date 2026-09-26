@@ -8,6 +8,7 @@ pub mod executor;
 pub mod git;
 pub mod hook;
 pub mod host_lock;
+pub mod lint;
 pub mod msvc;
 pub mod plan;
 pub mod process;

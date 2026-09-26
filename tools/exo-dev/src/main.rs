@@ -80,6 +80,17 @@ enum CheckCommand {
         #[arg(long)]
         require_pull_request: bool,
     },
+    /// clang-format over the tracked (or staged) C++ source in libs/, app/
+    /// and tests/.
+    Format {
+        /// Scope to staged files instead of every tracked source file.
+        #[arg(long)]
+        staged: bool,
+        /// Format in place. Combined with --staged, re-stages the formatted
+        /// files and refuses a file that also has unstaged edits.
+        #[arg(long)]
+        fix: bool,
+    },
 }
 
 #[derive(Args, Default)]
@@ -178,6 +189,7 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 only,
                 require_pull_request,
             ),
+            CheckCommand::Format { staged, fix } => check_format(&repo_root, staged, fix),
         },
         Command::Hook { name } => match name.as_str() {
             "pre-commit" => {
@@ -306,6 +318,29 @@ fn check_commit_policy(
     } else {
         Ok(ExitCode::FAILURE)
     }
+}
+
+fn check_format(repo_root: &std::path::Path, staged: bool, fix: bool) -> anyhow::Result<ExitCode> {
+    let report = exo_dev::lint::format::format(repo_root, staged, fix)?;
+    print!("{}", report.output);
+
+    if report.files.is_empty() {
+        println!("clang-format: SKIP (no {} C++ source files)", report.scope);
+        return Ok(ExitCode::SUCCESS);
+    }
+    if report.fixed {
+        println!(
+            "clang-format: OK (formatted {} file(s))",
+            report.files.len()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    if report.violations {
+        eprintln!("clang-format violations found. Fix with: clang-format -i <file>");
+        return Ok(ExitCode::FAILURE);
+    }
+    println!("clang-format: OK");
+    Ok(ExitCode::SUCCESS)
 }
 
 fn verify(repo_root: &std::path::Path, args: VerifyArgs) -> anyhow::Result<ExitCode> {

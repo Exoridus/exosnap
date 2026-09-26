@@ -96,7 +96,7 @@ pub fn environment() -> anyhow::Result<Option<(PathBuf, EnvVars)>> {
     Ok(Some((compiler, variables)))
 }
 
-fn find_installation() -> Option<PathBuf> {
+pub(crate) fn find_installation() -> Option<PathBuf> {
     let program_files = std::env::var_os("ProgramFiles(x86)")?;
     let vswhere = Path::new(&program_files).join("Microsoft Visual Studio/Installer/vswhere.exe");
     if !vswhere.is_file() {

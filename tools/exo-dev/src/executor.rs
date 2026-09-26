@@ -558,14 +558,30 @@ impl RealExecutor {
                 }
                 self.pwsh_with("prose-lines", "check-prose-lines.ps1", args, None, &[])
             }
-            StepId::Format => {
-                let args: &[&str] = if ctx.staged {
-                    &["-Staged", "-Fix"]
+            StepId::Format => self.native("format", || {
+                let report = crate::lint::format::format(&ctx.repo_root, ctx.staged, ctx.staged)?;
+                let mut log = report.output.clone();
+                let outcome = if report.files.is_empty() {
+                    log.push_str(&format!(
+                        "clang-format: SKIP (no {} C++ source files)\n",
+                        report.scope
+                    ));
+                    Outcome::pass("")
+                } else if report.fixed {
+                    log.push_str(&format!(
+                        "clang-format: OK (formatted {} file(s))\n",
+                        report.files.len()
+                    ));
+                    Outcome::pass("")
+                } else if report.violations {
+                    log.push_str("clang-format violations found. Fix with: clang-format -i <file>\n");
+                    Outcome::fail(format!("{} file(s) checked", report.files.len()))
                 } else {
-                    &[]
+                    log.push_str("clang-format: OK\n");
+                    Outcome::pass("")
                 };
-                self.pwsh("format", "check-format.ps1", args)
-            }
+                Ok((log, outcome))
+            }),
             StepId::PackagingVersion => {
                 self.pwsh("packaging-version", "check-packaging-version.ps1", &[])
             }
