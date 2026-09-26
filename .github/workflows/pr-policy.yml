@@ -41,12 +41,15 @@ jobs:
         # The number is passed so a title that DID end in its own number is
         # rejected. A citation of another pull request inside the summary is not
         # affected; that distinction is the parser's, in scripts/lib/CommitPolicy.psm1.
+        #
+        # The same exo-dev step as the title preflight in ci.yml's guardrails
+        # job, so the two cannot drift apart.
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: >-
-          pwsh -NonInteractive -File scripts/check-commit-policy.ps1
-          -Subject "$PR_TITLE" -PullRequestNumber "$PR_NUMBER" -Only commit-subject
+          cargo exo-dev verify --profile pr-policy --event pull_request
+          --pr-title "$PR_TITLE" --pr-number "$PR_NUMBER"
 
   # Single aggregate context, so the required-check set does not have to change
   # when a second metadata check is added here. Same shape as ci-required.

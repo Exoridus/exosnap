@@ -1,0 +1,11 @@
+# `cargo exo-dev <args>` from the repository root: builds exo-dev when its sources
+# changed and runs it. The separate target directory keeps the running binary
+# out of the tree that a verify run's own `cargo test` rebuilds, which Windows
+# would refuse while the executable is in use.
+[alias]
+exo-dev = [
+    "run", "--quiet", "--locked",
+    "--manifest-path", "tools/Cargo.toml",
+    "--target-dir", "tools/target/exo-dev-host",
+    "-p", "exo-dev", "--",
+]

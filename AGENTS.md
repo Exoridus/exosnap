@@ -64,8 +64,8 @@ Use the smallest sufficient build/tests during iteration. Before completion run 
 pwsh scripts/run-tests.ps1
 pwsh scripts/run-tests.ps1 -Filter recorder_core.
 pwsh scripts/run-tests.ps1 -ExcludeLabel live
-pwsh scripts/verify.ps1 -Fast
-pwsh scripts/verify.ps1 -Full
+cargo exo-dev verify --fast
+cargo exo-dev verify --full
 ```
 
 [Build and test](docs/dev/build-and-test.md) covers tools, receipts and documentation checks. Existing probes answer hardware questions before another probe is added. The disposable guest is test infrastructure, not proof of real physical hardware.

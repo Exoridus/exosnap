@@ -2,7 +2,7 @@ param(
     [int]$FailureTailLines = 160,
     [switch]$VerboseOutput,
     # Which static pass to run. 'all' runs both tools and stays the default. The
-    # single-tool values exist so scripts/verify.ps1 can report
+    # single-tool values exist so `cargo exo-dev verify` can report
     # cppcheck and clang-tidy as separate checks -- one line per tool, so a
     # failure names the tool that failed -- without a second copy of the
     # invocation living over there.
@@ -284,7 +284,7 @@ elseif ($compDb -and (Test-Path -Path $compDb -PathType Leaf)) {
             # design -- advisory-checks.yml owns its CI form -- and it currently
             # reports findings across this tree. The set that blocks is the
             # curated one in scripts/run-clang-tidy-blocking.ps1, which
-            # scripts/verify.ps1 runs as its own step.
+            # `cargo exo-dev verify` runs as its own step.
             $text = ($failures -join "`n")
             $lines = @($text -split "`r?`n" | Where-Object { $_ -match ': (warning|error): ' })
             Write-Host ("clang-tidy ADVISORY: {0} finding(s), last {1} shown" -f $lines.Count, $FailureTailLines)

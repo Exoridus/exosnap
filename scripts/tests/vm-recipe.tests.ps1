@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Not Pester: the same homegrown harness the other script tests use, so CTest and
-    `verify.ps1` run all of them the same way and a contributor reads one style.
+    exo-dev run all of them the same way and a contributor reads one style.
 
     What is testable about a virtual machine recipe on a machine that may not have
     Hyper-V at all is exactly what the recipe was written to make testable. The two

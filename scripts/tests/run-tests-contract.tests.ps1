@@ -820,49 +820,6 @@ set_tests_properties(fixture.fails PROPERTIES LABELS "phase.hermetic")
     finally { Remove-Item -LiteralPath $failing -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-Test-Case 'every build-tree command in verify.ps1 goes through the tree lock' {
-    # The invariant spans entry points, so testing run-tests against run-tests
-    # proves only half of it: verify.ps1 builds the same directory with the host
-    # `build` lock, which is a different lock and excludes nothing a test run
-    # holds. Read out of the source, because driving verify.ps1's build step needs
-    # the real preset and the real compiler.
-    $verify = Join-Path $scriptRoot 'verify.ps1'
-    $errors = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseFile($verify, [ref]$null, [ref]$errors)
-    Assert-True (-not $errors) 'verify.ps1 does not parse'
-
-    $cmakeCalls = @($ast.FindAll({
-        param($node)
-        if ($node -isnot [System.Management.Automation.Language.CommandAst]) { return $false }
-        if ($node.GetCommandName() -ne 'Invoke-Step') { return $false }
-        $text = $node.Extent.Text
-        return ($text -match "-FilePath\s+'cmake'") -and ($text -match '--build|--preset')
-    }, $true))
-    Assert-True ($cmakeCalls.Count -ge 3) `
-        "expected verify.ps1 to drive cmake for configure, qmllint and build; found $($cmakeCalls.Count)"
-
-    foreach ($call in $cmakeCalls) {
-        $node = $call.Parent
-        $wrapped = $false
-        while ($node) {
-            if ($node -is [System.Management.Automation.Language.CommandAst] -and
-                $node.GetCommandName() -eq 'Invoke-BuildTreeStep') { $wrapped = $true; break }
-            $node = $node.Parent
-        }
-        Assert-True $wrapped ("a cmake invocation in verify.ps1 writes the build tree outside the tree lock: " +
-            $call.Extent.Text)
-    }
-
-    $helper = ($ast.FindAll({
-        param($node)
-        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-            $node.Name -eq 'Invoke-BuildTreeStep'
-    }, $true) | Select-Object -First 1)
-    Assert-True ($null -ne $helper) 'verify.ps1 has no Invoke-BuildTreeStep'
-    Assert-True ($helper.Extent.Text -match "-Kind\s+'tree'") `
-        'Invoke-BuildTreeStep does not take the tree lock'
-}
-
 # --- Evidence ----------------------------------------------------------------
 
 Test-Case 'what a failing test wrote is kept under a path of its own per run' {
@@ -973,7 +930,7 @@ Test-Case 'a failing test is named in the summary even though it carries labels'
 
 Test-Case 'the process environment it mutates is restored' {
     # In-process on purpose: the leak this guards against is only observable in a
-    # caller that survives the script, which is how verify.ps1 and the hooks run it.
+    # caller that survives the script, such as the developer's interactive shell.
     $tree = New-FixtureTree
     $savedConfigDir = $env:EXOSNAP_CONFIG_DIR
     $savedPath = $env:PATH

@@ -7,7 +7,8 @@
 /cmake-build-*/
 /out/
 /dist/
-/tools/exo-verify/target/
+/tools/target/
+/tools/*/target/
 
 #CMake / Ninja generated files(for accidental in - source builds)
 CMakeCache.txt

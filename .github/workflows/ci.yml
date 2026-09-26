@@ -138,36 +138,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Check clang-format
-        run: pwsh -NonInteractive -File scripts/check-format.ps1
-
-      - name: Validate packaging versions
-        # The product version is declared once, in project(exosnap VERSION x.y.z),
-        # and repeated by hand across roughly sixteen literals in the Chocolatey,
-        # WinGet and Scoop packaging. A bump that missed one of them used to publish
-        # a package pointing at a release that does not exist, and nothing failed
-        # until a submission was rejected. This runs the three validators on their
-        # version axis only (no installer hash, no moderation bar -- neither can be
-        # true between a bump and the release that produces the bytes).
-        run: pwsh -NonInteractive -File scripts/check-packaging-version.ps1
-
-      - name: Validate MSI harvest config
-        # Cheap regex check (no build, no WiX required). Asserts Package.wxs
-        # is metadata-only and references StagingFiles — prevents anyone from
-        # reverting to a hand-maintained file list that silently omits DLLs.
-        run: pwsh -NonInteractive -File scripts/validate-msi-harvest.ps1
-
-      - name: Validate privacy allowlist doc sync
-        # Build-free (docs/privacy-review.md): the crash-report tag
-        # allowlist (crash_scrubber.h) must stay identical to what PRIVACY.md
-        # and docs/product-spec.md §14 document as "what is sent".
-        run: pwsh -NonInteractive -File scripts/validate-privacy-allowlist.ps1
-
-      - name: Validate network egress inventory
-        # Build-free (docs/privacy-review.md): fails if a network
-        # primitive or a disallowed host literal appears outside the known
-        # GitHub/Sentry call sites, so a new egress point cannot land unnoticed.
-        run: pwsh -NonInteractive -File scripts/validate-network-egress.ps1
+      # clang-format plus the build-free packaging, MSI-harvest, privacy-allowlist
+      # and network-egress validators. What each of them guards is documented at
+      # its step in tools/exo-dev/src/step.rs; the same steps block before a push.
+      - name: Lint gate (exo-dev ci-lint)
+        env:
+          EVENT: ${{ github.event_name }}
+        run: cargo exo-dev verify --profile ci-lint --event $env:EVENT
 
   # ---------------------------------------------------------------------------
   # Cheap guardrails that block locally and did not block here. Each of them runs
@@ -203,68 +180,11 @@ jobs:
           fetch-depth: 0
 
       - name: Assert PowerShell
-        # ubuntu-24.04 images carry pwsh already; asserted rather than assumed, so
-        # a runner image that drops it fails here with its name instead of later
-        # with a shell error. Through the shell's own `-Version`, not a
-        # PowerShell expression in single quotes: the step is bash, and bash
-        # single quotes are what keeps `$PSVersionTable` from being expanded
-        # by bash -- which shellcheck reads, correctly, as a variable that is not.
+        # ubuntu-24.04 images carry pwsh already, and the guardrail checks that
+        # are not ported yet still run on it. Asserted rather than assumed, so a
+        # runner image that drops it fails here with its name instead of later
+        # with a shell error.
         run: pwsh -Version
-
-      - name: Check drift (Qt version, Qt setup, SDK paths)
-        run: pwsh -NonInteractive -File scripts/check-drift.ps1
-
-      - name: Source hygiene over the PR range
-        # Only on a pull_request, where the range is the PR's base against its
-        # head: the set of lines this change added, which is the contract the
-        # pre-commit hook enforces locally. A tag push or a manual dispatch has no
-        # range a change can be attributed to (github.event.before is zeros or
-        # absent), and scanning the whole tree there would block a release on the
-        # 51-finding backlog in older comments that AGENTS.md names -- a decision
-        # about the backlog, not about the tag. Reported below, not enforced.
-        if: github.event_name == 'pull_request'
-        run: >-
-          pwsh -NonInteractive -File scripts/check-source-hygiene.ps1
-          -Base ${{ github.event.pull_request.base.sha }}
-
-      - name: Source hygiene backlog (whole tree, report only)
-        # Visible on every run so the number is known, never a gate: the backlog
-        # is older comments, and a release is not the place it gets paid down.
-        if: github.event_name != 'pull_request'
-        continue-on-error: true
-        run: pwsh -NonInteractive -File scripts/check-source-hygiene.ps1 -All
-
-      - name: Pull request title (preflight)
-        # The AUTHORITATIVE verdict on the title is pr-policy.yml's, under its own
-        # required context; this step is a cost gate, and the two are not the same
-        # job. The two workflows cannot wait on each other -- there is no
-        # cross-workflow `needs:` -- so without this step a malformed title opened
-        # in a brand-new pull request would fail in pr-policy.yml within seconds
-        # while the Windows legs, which hang off this job, started anyway. Only
-        # the SECOND heavy run (the one after the title correction) would have
-        # been saved, and the first one is the expensive one.
-        #
-        # Not a second implementation of the policy: the same script, the same
-        # arguments, the same parser. What this workflow must NOT have is the
-        # `edited` trigger that would re-run everything below when the title
-        # changes -- see this file's `on:` block.
-        if: github.event_name == 'pull_request'
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: >-
-          pwsh -NonInteractive -File scripts/check-commit-policy.ps1
-          -Subject "$PR_TITLE" -PullRequestNumber "$PR_NUMBER" -Only commit-subject
-
-      - name: Prose line lengths over the PR range (advisory)
-        # Advisory for the same reason the source-hygiene backlog is: the tree
-        # predates the rule, and a branch that adds a paragraph to an already
-        # wrapped document wraps it to match. check-prose-lines.ps1 records what
-        # has to be true before this loses the switch.
-        if: github.event_name == 'pull_request'
-        run: >-
-          pwsh -NonInteractive -File scripts/check-prose-lines.ps1
-          -Advisory -Base ${{ github.event.pull_request.base.sha }}
 
       - name: Install actionlint (pinned)
         # By version and by SHA-256 of the release archive. A linter fetched as
@@ -281,11 +201,6 @@ jobs:
           install -m 0755 actionlint /usr/local/bin/actionlint
           actionlint -version
 
-      - name: actionlint
-        # No -color: the escape sequences are noise in the Actions log and make
-        # the log unreadable through the API.
-        run: actionlint
-
       - name: Install zizmor (pinned)
         env:
           ZIZMOR_VERSION: '1.30.1'
@@ -294,28 +209,39 @@ jobs:
           pipx install "zizmor==${ZIZMOR_VERSION}"
           zizmor --version
 
-      - name: zizmor
-        # Offline: the audits that need the GitHub API (stale action refs) are the
-        # ones that change answer between two runs of the same workflow. What is
-        # left is what can be decided from the file, which is what a guardrail is.
-        #
-        # High only, for now. The five known high findings (caches restored on tag
-        # pushes) carry an inline 'zizmor: ignore' at the step that is the decision,
-        # with the reason, so a NEW high finding fails here. The 41 medium findings
-        # are a backlog, not a gate: blocking on them today would block on the state
-        # of the repository rather than on the change in front of the reviewer.
-        run: zizmor --offline --min-severity high .github/workflows
+      # Drift, source hygiene (the PR range as a gate, the whole-tree backlog as
+      # a report elsewhere), the pull request title preflight, prose lines, and
+      # the two workflow linters. The title check here is a cost gate for the
+      # Windows legs that hang off this job; the authoritative verdict is
+      # pr-policy.yml's, which alone listens for `edited`.
+      - name: Guardrails gate (exo-dev ci-guardrails)
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          args=(verify --profile ci-guardrails --event "$EVENT")
+          if [ "$EVENT" = pull_request ]; then
+            args+=(--base "$BASE_SHA" --pr-title "$PR_TITLE" --pr-number "$PR_NUMBER")
+          fi
+          cargo exo-dev "${args[@]}"
 
-  exo-verify:
-    name: exo-verify
+  # The Rust workspace under tools/ (exo-dev and exo-verify), checked by cargo
+  # directly rather than through exo-dev: the orchestrator must not be the only
+  # thing that certifies itself. The same commands run as the `rust` step of the
+  # local contracts.
+  rust-tools:
+    name: rust-tools
     runs-on: windows-2022
     timeout-minutes: 20
     concurrency:
-      group: ci-${{ github.workflow }}-exo-verify-${{ github.event.pull_request.number || github.run_id }}
+      group: ci-${{ github.workflow }}-rust-tools-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     defaults:
       run:
-        working-directory: tools/exo-verify
+        working-directory: tools
     env:
       EXO_VERIFY_REQUIRE_FFMPEG: '1'
     steps:
@@ -331,10 +257,10 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --locked
+        run: cargo test --workspace --locked
 
   # ---------------------------------------------------------------------------
   # Dev scripts: regression-guard the A/V-sync analyzer against a committed
@@ -366,19 +292,12 @@ jobs:
           ffmpeg -version
           ffprobe -version
 
-      - name: A/V-sync analyzer vs golden fixture
-        # Regression-guards the analyzer's event detection, its edge location and
-        # the drift fit. The budget is intentionally loose: a 4 s clip's residual
-        # drift is bounded by the 60 fps frame grid, not by a real A/V budget, and
-        # must stay green across ffmpeg-version differences in reported PTS. The
-        # real 20 ms budget applies to live multi-hour captures, not this fixture.
-        #
-        # Five markers, not two: the analyzer refuses a verdict from a reference
-        # that cannot carry one, and two markers never can. A two-marker fixture
-        # would only ever exercise the path that refusal takes.
-        run: >-
-          python scripts/dev/av-sync-check.py tests/fixtures/av-sync/clapper-golden.mp4
-          --max-drift-ms 25 --expected-markers 5 --json
+      # The analyzer against the golden clapper clip. Its budget and marker count
+      # are explained at the av-sync-golden step in tools/exo-dev/src/step.rs.
+      - name: A/V-sync analyzer vs golden fixture (exo-dev ci-dev-scripts)
+        env:
+          EVENT: ${{ github.event_name }}
+        run: cargo exo-dev verify --profile ci-dev-scripts --event $env:EVENT
 
   # ---------------------------------------------------------------------------
   # Detect whether this PR touches packaging-relevant or build/tooling-relevant
@@ -532,46 +451,8 @@ jobs:
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
         # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
 
-      # No frontend flag: there is one frontend. The Qt Quick application and its
-      # adapter/QML test targets are the default build.
-      - name: Configure (windows-x64-ninja-debug)
-        run: cmake --preset windows-x64-ninja-debug -DEXOSNAP_USE_SCCACHE=ON
-
-      - name: Build (windows-x64-ninja-debug)
-        run: cmake --build --preset windows-x64-ninja-debug
-
-      # qmllint over every QML module in the tree — the shipping one and the QML
-      # test module. Deterministic and fast, and it catches a class of defect no
-      # C++ test can: an Accessible attachment on a non-Item, an unresolvable
-      # import, a property that does not exist on the declared type. `all_qmllint`
-      # rather than the per-module target so a newly added module cannot slip past
-      # the gate by not being named here.
-      - name: qmllint (all QML modules)
-        run: cmake --build build/windows-x64-ninja-debug --target all_qmllint
-
-      # Runs through scripts/run-tests.ps1 (the documented, canonical test entry
-      # point — see AGENTS.md) rather than a bare `ctest`, so CI shares the same
-      # -ExcludeLabel mechanism as local dev instead of relying solely on the
-      # "live" binaries' own GTEST_SKIP self-guard. Two capability test binaries
-      # carry LABELS live (real DXGI/GPU queries); this runner has no GPU, so
-      # they are excluded here rather than trusted to skip themselves — a future
-      # runner-image change (or a new live test that forgets the self-skip)
-      # would otherwise fail silently past this gate.
-      #
-      # `live` and the execution phases are two axes and neither replaces the
-      # other. A phase says what KIND of machine a test needs; `live` says the
-      # test reads real machine state. The quick.* tests are phase.desktop and run
-      # here because an offscreen Qt platform is a desktop surface — except the
-      # two that also carry `live` because they need the native platform and the
-      # real cursor. Selecting by phase alone would either lose the first group or
-      # keep the second.
-      - name: Test (windows-x64-ninja-debug)
-        run: >-
-          pwsh -NonInteractive -File scripts/run-tests.ps1
-          -BuildDir build/windows-x64-ninja-debug -Config Debug
-          -ExcludeLabel live
-
-      # Blocking static analysis. Deliberately a step inside build-test-debug
+      # Blocking static analysis runs inside this job, as the last step of the
+      # ci-build-debug profile. Deliberately a step inside build-test-debug
       # rather than a job of its own: build-test-debug is already a required
       # check, so the required status-check set does not change (a brand-new
       # job would have to be added to branch protection to block anything at
@@ -608,11 +489,22 @@ jobs:
           restore-keys: |
             clang-tidy-blocking-${{ runner.os }}-
 
-      - name: clang-tidy blocking check set (windows-x64-ninja-debug)
+      # Configure (sccache on), qmllint over every QML module, build, the test
+      # suite through run-tests.ps1 without the `live` label (this runner has no
+      # GPU, and a test reading real machine state is excluded rather than
+      # trusted to skip itself), then the scoped blocking clang-tidy set against
+      # HEAD^. Tests and clang-tidy only run behind a build that passed in the
+      # same invocation.
+      #
+      # PowerShell, not bash: Git Bash puts its own link.exe ahead of MSVC's on
+      # PATH, and the compiler processes inherit this step's environment.
+      - name: Build, qmllint, test and clang-tidy (exo-dev ci-build-debug)
+        env:
+          EVENT: ${{ github.event_name }}
+          TIDY_CACHE: ${{ runner.temp }}/clang-tidy-cache
         run: >-
-          pwsh -NonInteractive -File scripts/run-clang-tidy-blocking.ps1
-          -BuildDir build/windows-x64-ninja-debug -Base HEAD^
-          -CacheDir "${{ runner.temp }}/clang-tidy-cache"
+          cargo exo-dev verify --profile ci-build-debug --event $env:EVENT
+          --tidy-cache-dir $env:TIDY_CACHE
 
       - name: sccache stats
         if: always()
@@ -679,40 +571,11 @@ jobs:
       # A Release build is the only configuration that compiles out the harness
       # code paths, so the Debug leg alone would miss exactly the guards that
       # differ between the two.
-      - name: Configure (windows-x64-ninja-release)
-        run: cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
-
-      - name: Build (windows-x64-ninja-release)
-        run: cmake --build --preset windows-x64-ninja-release
-
-      # Runs through scripts/run-tests.ps1 (the documented, canonical test entry
-      # point — see AGENTS.md) rather than a bare `ctest`, so CI shares the same
-      # -ExcludeLabel mechanism as local dev instead of relying solely on the
-      # "live" binaries' own GTEST_SKIP self-guard. Two capability test binaries
-      # carry LABELS live (real DXGI/GPU queries); this runner has no GPU, so
-      # they are excluded here rather than trusted to skip themselves — a future
-      # runner-image change (or a new live test that forgets the self-skip)
-      # would otherwise fail silently past this gate.
       #
-      # `live` and the execution phases are two axes and neither replaces the
-      # other. A phase says what KIND of machine a test needs; `live` says the
-      # test reads real machine state. The quick.* tests are phase.desktop and run
-      # here because an offscreen Qt platform is a desktop surface — except the
-      # two that also carry `live` because they need the native platform and the
-      # real cursor. Selecting by phase alone would either lose the first group or
-      # keep the second.
+      # The Release suite runs on tags and manual dispatches, which are the
+      # release gate. On a pull request the debug leg already carried the full
+      # suite, and this leg's tier is configure, compile and link.
       #
-      # Not on pull_request: the debug leg already carried the full suite, and
-      # this leg's PR-tier job is configure/compile/link (see the job comment).
-      # Tags and manual dispatches are the release gate and run the Release
-      # suite in full.
-      - name: Test (windows-x64-ninja-release)
-        if: github.event_name != 'pull_request'
-        run: >-
-          pwsh -NonInteractive -File scripts/run-tests.ps1
-          -BuildDir build/windows-x64-ninja-release -Config Release
-          -ExcludeLabel live
-
       # Packaging smoke on the build this job just produced. The candidate
       # workflow runs the full package gate (install -> audit -> MSI -> content
       # assertion -> MSI smoke -> ZIP smoke) on explicit dispatch. This is the
@@ -726,19 +589,23 @@ jobs:
       #   - portable ZIP creation + the isolated launch smoke (app exe + updater
       #     exe, both via SetErrorMode + dialog-sentinel)
       #
-      # -SkipConfigure: configured above. -SkipMsi: the WiX/MSI build, the MSI
-      # content assertion and the MSI smoke need the WiX Toolset and add several
-      # minutes for a package format the portable-ZIP path already exercises
-      # structurally (same staging tree, same harvest source); they stay with
-      # the release gate. Same preset as the release gate, so what this smokes
-      # is the build path that ships.
+      # The WiX/MSI build, the MSI content assertion and the MSI smoke need the
+      # WiX Toolset and add several minutes for a package format the portable-ZIP
+      # path already exercises structurally (same staging tree, same harvest
+      # source); they stay with the release gate. Same preset as the release
+      # gate, so what this smokes is the build path that ships.
       #
-      # A step here rather than its own job: the job it would need is this one
+      # Part of this job rather than its own: the job it would need is this one
       # again -- checkout, MSVC, Qt, sccache, configure, build -- on a second
       # runner, for a five-minute smoke of the build this runner already holds.
-      - name: Install, package and smoke-test (release-gate subset)
-        if: github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true'
-        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipConfigure -Preset windows-x64-ninja-release -SkipMsi
+      - name: Build, test and package smoke (exo-dev ci-build-release)
+        env:
+          EVENT: ${{ github.event_name }}
+          PACKAGING: ${{ needs.changes.outputs.packaging }}
+        run: |
+          $arguments = @('verify', '--profile', 'ci-build-release', '--event', $env:EVENT)
+          if ($env:PACKAGING -eq 'true') { $arguments += '--packaging-changed' }
+          cargo exo-dev @arguments
 
       - name: sccache stats
         if: always()
@@ -786,7 +653,7 @@ jobs:
     needs:
       - lint
       - guardrails
-      - exo-verify
+      - rust-tools
       - dev-scripts
       - changes
       - build-test-debug
@@ -800,7 +667,7 @@ jobs:
           PACKAGING_FILTER: ${{ needs.changes.outputs.packaging }}
           R_LINT: ${{ needs.lint.result }}
           R_GUARDRAILS: ${{ needs.guardrails.result }}
-          R_EXO_VERIFY: ${{ needs.exo-verify.result }}
+          R_RUST_TOOLS: ${{ needs.rust-tools.result }}
           R_DEV_SCRIPTS: ${{ needs.dev-scripts.result }}
           R_CHANGES: ${{ needs.changes.result }}
           R_DEBUG: ${{ needs.build-test-debug.result }}
@@ -829,7 +696,7 @@ jobs:
           # These five run on every trigger; a skip is a workflow defect.
           require lint                "$R_LINT"           must-run
           require guardrails          "$R_GUARDRAILS"     must-run
-          require exo-verify          "$R_EXO_VERIFY"      must-run
+          require rust-tools          "$R_RUST_TOOLS"     must-run
           require dev-scripts         "$R_DEV_SCRIPTS"    must-run
           require "detect changes"    "$R_CHANGES"        must-run
 

@@ -333,6 +333,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-dev"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hex",
+ "regex",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "windows",
+]
+
+[[package]]
 name = "exo-verify"
 version = "0.1.0"
 dependencies = [

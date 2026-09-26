@@ -86,7 +86,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build --preset windows-x64-ninja-release-exosnap
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --locked --release --manifest-path tools/exo-verify/Cargo.toml
+          cargo build --locked --release --manifest-path tools/Cargo.toml -p exo-verify
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package and freeze bundle and plan
@@ -95,7 +95,7 @@ jobs:
           SOURCE_COMMIT: ${{ inputs.source_commit || github.sha }}
           CANDIDATE_ID: ${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
         run: |
-          $verify = 'tools/exo-verify/target/release/exo-verify.exe'
+          $verify = 'tools/target/release/exo-verify.exe'
           & $verify package --build-dir build/windows-x64-ninja-release --out candidate-package --version $env:RELEASE_VERSION
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $portable = "candidate-package/ExoSnap-$env:RELEASE_VERSION-windows-x64-portable.zip"
@@ -134,7 +134,7 @@ jobs:
       - name: Build verifier from the workflow revision
         shell: pwsh
         run: |
-          cargo build --locked --manifest-path tools/exo-verify/Cargo.toml
+          cargo build --locked --manifest-path tools/Cargo.toml -p exo-verify
           exit $LASTEXITCODE
 
       - name: Download candidate bytes
@@ -148,7 +148,7 @@ jobs:
           EXOSNAP_UPDATE_SIGNING_KEY: ${{ secrets.EXOSNAP_UPDATE_SIGNING_KEY }}
           UPDATE_PUBLIC_KEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
         run: |
-          $verify = 'tools/exo-verify/target/debug/exo-verify.exe'
+          $verify = 'tools/target/debug/exo-verify.exe'
           & $verify bundle verify candidate-bundle
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $inventory = Get-Content candidate-bundle/bundle.json -Raw | ConvertFrom-Json

@@ -46,7 +46,7 @@
 
 .PARAMETER BuildDir
     CMake build tree to test. Default: build/windows-x64-ninja-debug -- the same
-    tree verify.ps1 configures and builds, so the inner loop and the gate judge
+    tree `cargo exo-dev verify` configures and builds, so the inner loop and the gate judge
     the same binaries. A Visual Studio tree works, but an incremental build in one
     takes minutes rather than seconds.
 
@@ -940,7 +940,7 @@ try {
     # Everything that reads or writes this build tree happens inside this hold:
     # the build, the freshness judgement, the census, the suite, the closing
     # source fingerprint and the receipt. A second cooperating entry point --
-    # another run-tests, or verify.ps1's configure, qmllint or build step --
+    # another run-tests, or exo-dev's configure, qmllint or build step --
     # waits, so no result can describe binaries a concurrent build replaced
     # underneath it.
     #

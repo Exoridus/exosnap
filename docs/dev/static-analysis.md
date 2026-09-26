@@ -6,8 +6,8 @@
 
 | Pass | Status | Entry point |
 |---|---|---|
-| Selected clang-tidy checks | Blocking | `scripts/run-clang-tidy-blocking.ps1`, included in `verify.ps1` |
-| cppcheck warning/performance/portability | Blocking | `scripts/check-quality.ps1`, included in `verify.ps1` |
+| Selected clang-tidy checks | Blocking | `scripts/run-clang-tidy-blocking.ps1`, the `clang-tidy` step of `cargo exo-dev verify` and of CI's `ci-build-debug` profile |
+| cppcheck warning/performance/portability | Blocking locally | `scripts/check-quality.ps1`, the `cppcheck` step of `cargo exo-dev verify`; no CI profile runs it yet |
 | Broad clang-tidy advisory set | Advisory | `advisory-checks.yml` |
 | cppcheck unused-function analysis | Advisory | `advisory-checks.yml` |
 
@@ -27,7 +27,7 @@ Record run-specific counts, commands and analysis with review evidence. Promote 
 
 ## Missing tools and caches
 
-A requested but missing analysis tool yields exit 3 from the quality runner. `verify.ps1` reports `TOOL_MISSING`; Full fails, Fast can report the gap and continue. Install the missing tool rather than interpreting absence as success.
+A requested but missing analysis tool yields exit 3 from the quality runner. `cargo exo-dev verify` reports `TOOL_MISSING`; `--full` fails, `--fast` can report the gap and continue. Install the missing tool rather than interpreting absence as success.
 
 clang-tidy caches by the translation unit's recorded input set. cppcheck uses its build-directory cache. Shared tool caches live under `%LOCALAPPDATA%\ExoSnap\tool-cache`, outside source/build trees. Delete that directory for a deliberate cold run. Full runs the whole tree; Fast scopes the pass to affected translation units where supported.
 

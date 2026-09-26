@@ -31,11 +31,15 @@ Use a branch from the integrated default branch. Configure installs repository G
 pwsh scripts/run-tests.ps1
 pwsh scripts/run-tests.ps1 -Filter recorder_core.
 pwsh scripts/run-tests.ps1 -ExcludeLabel live
-pwsh scripts/verify.ps1 -Fast
-pwsh scripts/verify.ps1 -Full
+cargo exo-dev verify --fast
+cargo exo-dev verify --full
 ```
 
-A filter selects a registered test/binary prefix, not necessarily one internal GoogleTest case. Check the printed selection. Hardware exclusions reduce reach and must be reported as such. `-Fast` is scoped iteration; `-Full` is the complete local gate, including missing-tool failures, whole-tree static checks, build/test and the Rust verifier.
+A filter selects a registered test/binary prefix, not necessarily one internal GoogleTest case. Check the printed selection. Hardware exclusions reduce reach and must be reported as such.
+
+`cargo exo-dev` is a Cargo alias defined in `.cargo/config.toml`; run it from the repository root. It builds `tools/exo-dev` when its sources changed and runs it. `--fast` is the scoped pre-commit contract: it may check more than a change strictly needs, never less. `--full` is the complete local gate, including missing-tool failures, whole-tree static checks, build/test and the Rust workspace. The git hooks call the same two contracts. `--dry-run` executes nothing and shows the plan a change would get; `--simulate-fail <step>` exercises the failure paths without a compiler.
+
+Each CI job calls one named profile (`--profile ci-lint`, `ci-guardrails`, `ci-build-debug`, ...), so what a job blocks on is defined next to the local contract. A check that blocks in CI either also blocks before a push or declares why it cannot. Every run writes step logs and a receipt to `.workspace/verify/`. The receipt records the profile, HEAD, whether the tree was dirty, each check's status and whether it is still a PowerShell or Python script behind the Rust orchestration (`implementation: legacy`).
 
 Build, test and receipt publication share a host lock per build directory. Independent trees do not block each other. Do not run a second unmanaged build into a tree the test runner is currently judging.
 
@@ -60,17 +64,18 @@ Most developer probes require `-DEXOSNAP_BUILD_PROBES=ON`. Capture instruments u
 
 Development capture/edit/visual switches are available in non-Release configurations. An exact Release needs `EXOSNAP_BUILD_BENCHMARK_HARNESS=ON` for harness-only modes. Official release acceptance uses the opt-in production control channel, not a specially rebuilt product whose instrumentation changes its identity.
 
-## Verifier development
+## Rust tooling development
 
-The Rust verifier owns the scenario registry, candidate plan and report checks:
+`tools/` is a Cargo workspace with one lockfile. `exo-verify` owns the release scenario registry, candidate plan and report checks, and ships in the candidate bundle. `exo-dev` owns repository verification: change scope, gate order, hooks and CI profiles. It never ships.
 
 ```powershell
-cargo fmt --all --check --manifest-path tools/exo-verify/Cargo.toml
-cargo clippy --locked --all-targets --manifest-path tools/exo-verify/Cargo.toml -- -D warnings
-cargo test --locked --manifest-path tools/exo-verify/Cargo.toml
+cd tools
+cargo fmt --all --check
+cargo clippy --workspace --locked --all-targets -- -D warnings
+cargo test --workspace --locked
 ```
 
-The lockfile is part of the verifier input. A locked build must fail if dependencies drift.
+The lockfile is part of the tool input. A locked build must fail if dependencies drift. CI runs these commands directly rather than through `exo-dev`, so the orchestrator is never the only thing that certifies itself.
 
 ## What a successful local gate does not prove
 
