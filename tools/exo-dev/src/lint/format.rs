@@ -1,17 +1,17 @@
 //! Runs clang-format over the tracked or staged C++ source in `libs/`, `app/`
-//! and `tests/`, ported from `check-format.ps1`.
+//! and `tests/`.
 //!
-//! `--Fix --Staged` refuses to autoformat a file that is only partially
+//! `--staged --fix` refuses to autoformat a file that is only partially
 //! staged: formatting the whole file and re-staging it would silently
 //! discard the intent behind whatever the developer left unstaged. The file
 //! list is chunked, because passing every source file to clang-format in one
-//! invocation eventually exceeds the command-line length limit -- the file
+//! invocation eventually exceeds the command-line length limit. The file
 //! list grows with the repository, and a deep checkout path pushes it over
 //! sooner.
 
 use std::path::Path;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 
 use crate::executor::ToolMissing;
 use crate::git::Git;
@@ -130,7 +130,7 @@ fn refuse_partially_staged_overlap(git: &Git, staged_files: &[String]) -> anyhow
     }
     bail!(
         "Cannot autoformat staged files that also have unstaged edits: {}. Stage the full file or \
-         run `cargo exo-dev check format --staged --fix` manually.",
+         run `cargo exo-dev check format --fix` manually.",
         shown.join(", ")
     );
 }
@@ -189,6 +189,10 @@ fn is_cpp_source(path: &str) -> bool {
     lower.ends_with(".cpp") || lower.ends_with(".h")
 }
 
+/// Runs clang-format for one batch, capturing stdout and stderr together:
+/// `--dry-run --Werror` reports violations on stderr, and a fix-mode parse
+/// error goes there too, so `process::query` (which discards stderr) would
+/// silently drop the diagnostic the caller needs to act on.
 fn invoke(
     tool: &Path,
     repo_root: &Path,
@@ -197,8 +201,12 @@ fn invoke(
 ) -> anyhow::Result<(i32, String)> {
     let mut command = crate::process::command(&tool.to_string_lossy());
     command.current_dir(repo_root).args(args).args(files);
-    let (code, stdout) = crate::process::query(command)?;
-    Ok((code, stdout))
+    let output = command
+        .output()
+        .with_context(|| format!("could not run {}", tool.display()))?;
+    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    Ok((output.status.code().unwrap_or(-1), combined))
 }
 
 #[cfg(test)]
@@ -287,23 +295,35 @@ mod tests {
 
     #[test]
     fn staged_fix_formats_and_restages_the_staged_files() {
-        let dir = fixture_repo_committed(&[("app/thing.cpp", "int x=0;\n")]);
-        write_files(dir.path(), &[("app/thing.cpp", "int x = 0;\n")]);
+        let dir = fixture_repo_committed(&[("app/thing.cpp", "int x = 0;\n")]);
+        // Staged with deliberately bad formatting, so the re-formatted
+        // content differs from what is currently in the index.
+        write_files(dir.path(), &[("app/thing.cpp", "int   x=0;\n")]);
         run_git(dir.path(), &["add", "-A"]);
 
-        let fake = FakeInvocations::always_ok();
-        let report = run(dir.path(), true, true, |a, b| fake.invoke(a, b)).unwrap();
+        // Stands in for clang-format -i: rewrites the file on disk, the same
+        // way the real tool would.
+        let repo_root = dir.path().to_path_buf();
+        let invoke = |_args: &[&str], batch: &[String]| -> anyhow::Result<(i32, String)> {
+            for file in batch {
+                std::fs::write(repo_root.join(file), "int x = 0;\n").unwrap();
+            }
+            Ok((0, String::new()))
+        };
+
+        let report = run(dir.path(), true, true, invoke).unwrap();
         assert!(report.fixed);
         assert_eq!(report.files, vec!["app/thing.cpp".to_string()]);
 
-        // Re-staged: the working tree now matches the index exactly (nothing
-        // left uncommitted-but-unstaged for the formatted file).
-        let status = std::process::Command::new("git")
-            .args(["diff", "--name-only", "app/thing.cpp"])
+        // Without restage(), the index would still hold the badly-formatted
+        // content that was staged before the fix ran, not what clang-format
+        // wrote to disk.
+        let indexed = std::process::Command::new("git")
+            .args(["show", ":app/thing.cpp"])
             .current_dir(dir.path())
             .output()
             .unwrap();
-        assert!(String::from_utf8_lossy(&status.stdout).trim().is_empty());
+        assert_eq!(String::from_utf8_lossy(&indexed.stdout), "int x = 0;\n");
     }
 
     #[test]
@@ -327,7 +347,7 @@ mod tests {
     fn non_staged_fix_does_not_require_staged_semantics() {
         let dir = fixture_repo_committed(&[("app/thing.cpp", "int x=0;\n")]);
         write_files(dir.path(), &[("app/thing.cpp", "int x = 0;\n")]);
-        // Deliberately not staged: a whole-tree --Fix formats every tracked
+        // Deliberately not staged: a whole-tree --fix formats every tracked
         // file in place without touching the index.
         let fake = FakeInvocations::always_ok();
         let report = run(dir.path(), false, true, |a, b| fake.invoke(a, b)).unwrap();

@@ -1,5 +1,5 @@
-//! Discovery for the LLVM-based tools (clang-format, clang-tidy, cppcheck) that
-//! `check-format.ps1` and `check-quality.ps1` used to duplicate the search for.
+//! Discovery for the LLVM-based tools (clang-format, clang-tidy, cppcheck):
+//! VS-bundled LLVM, a standalone LLVM install, then PATH.
 //!
 //! Three tiers, in order: the LLVM toolset bundled with the detected Visual
 //! Studio "Desktop development with C++" installation, a standalone LLVM
@@ -8,16 +8,13 @@
 //! binary until the matching Store package is installed), and must answer
 //! `--version` with exit code 0.
 //!
-//! `msvc::find_installation` is shared Phase A infrastructure that asks
-//! vswhere for the *latest* installation, which the build path genuinely
-//! wants; it is not reused here. `check-format.ps1`'s original search was
-//! never "the latest VS" -- it recursed literally under
-//! `...\Microsoft Visual Studio\2022\...` and never looked at a preview or
-//! other-numbered channel. The VS-LLVM tier below calls
-//! `msvc::find_installation_vs2022` instead, which asks vswhere the same
-//! question scoped to the VS 2022 product-version range, so a preview
-//! channel ahead of 2022 in plain `-latest` ordering is excluded by vswhere
-//! itself rather than by a path-string filter here.
+//! The VS-LLVM tier is scoped to the VS 2022 line, the version the tree is
+//! actually formatted against: it calls `msvc::find_installation_vs2022`, a
+//! narrower vswhere query than `msvc::find_installation` (which stays "really
+//! latest" for the build path's own use). Without that scoping, a newer or
+//! preview VS line installed alongside 2022 would be preferred, and its
+//! bundled clang-format would not agree with the version the tree is
+//! formatted against.
 
 pub mod format;
 
