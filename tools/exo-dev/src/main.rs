@@ -42,6 +42,55 @@ enum Command {
         #[command(subcommand)]
         command: LintCommand,
     },
+    /// Build one CMake tree and run its CTest suite in an isolated
+    /// environment: a throwaway EXOSNAP_CONFIG_DIR, offscreen Qt and the
+    /// canonical Qt on PATH. The full ctest output goes to
+    /// <build-dir>/Testing/last-run.log and the verdict to
+    /// <build-dir>/Testing/last-run-receipt.json, whose `reusable` field is
+    /// the one to read. Exit codes: 0 the selected tests passed and the run
+    /// is valid, 2 the build directory does not exist, 3 the tree was not
+    /// proven to match the source, 4 not a valid verification run, and
+    /// otherwise the build's or ctest's own exit code.
+    Test(TestArgs),
+}
+
+#[derive(Args)]
+struct TestArgs {
+    /// CMake build tree to test, relative to the repository root. The tree
+    /// `exo-dev verify` configures and builds by default, so the inner loop
+    /// and the gate judge the same binaries.
+    #[arg(long, default_value = "build/windows-x64-ninja-debug")]
+    build_dir: PathBuf,
+    /// Multi-config configuration to run (ctest -C).
+    #[arg(long, default_value = "Debug")]
+    config: String,
+    /// Regex passed to ctest -R to select test binaries by name, e.g.
+    /// "recorder_core.".
+    #[arg(long, default_value = "")]
+    filter: String,
+    /// Label excluded from the run, e.g. "live" for the binaries that query
+    /// real hardware. A plain word is anchored to ^word$, because ctest -LE
+    /// is a regex and "live" would also drop "live_verify". A value with
+    /// regex metacharacters passes through unchanged.
+    #[arg(long, default_value = "")]
+    exclude_label: String,
+    /// Run only the tests of one execution phase: hermetic, cpu, gpu,
+    /// desktop, vm or human.
+    #[arg(long, value_parser = ["hermetic", "cpu", "gpu", "desktop", "vm", "human"])]
+    phase: Option<String>,
+    /// Parallel test jobs (ctest -j). Defaults to EXOSNAP_VERIFY_JOBS, then
+    /// all cores but two.
+    #[arg(long, default_value_t = 0)]
+    jobs: usize,
+    /// Skip the build and test what the tree holds. Only a Ninja tree can
+    /// then be proven current, so without --allow-stale this usually ends in
+    /// exit 3.
+    #[arg(long)]
+    no_build: bool,
+    /// Report a result although the tree was not proven to match the source
+    /// (instead of exit 3). The result may describe old binaries.
+    #[arg(long, requires = "no_build")]
+    allow_stale: bool,
 }
 
 #[derive(Subcommand)]
@@ -323,6 +372,7 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 report_path,
             } => lint_quality(&repo_root, only, build_dir, base, jobs, report_path),
         },
+        Command::Test(args) => test(&repo_root, args),
         Command::Hook { name } => match name.as_str() {
             "pre-commit" => {
                 let git = Git::new(&repo_root);
@@ -354,6 +404,42 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 verify(&repo_root, args)
             }
         },
+    }
+}
+
+fn test(repo_root: &std::path::Path, args: TestArgs) -> anyhow::Result<ExitCode> {
+    use exo_dev::test::{
+        catalog::Phase,
+        host::{Console, RealHost},
+        runner,
+    };
+
+    let options = runner::Options {
+        build_dir: args.build_dir,
+        config: args.config,
+        filter: args.filter,
+        exclude_label: args.exclude_label,
+        phase: args.phase.as_deref().and_then(Phase::from_name),
+        jobs: args.jobs,
+        no_build: args.no_build,
+        allow_stale: args.allow_stale,
+        ..runner::Options::new(repo_root)
+    };
+    let result = runner::run(&options, &RealHost::default(), &mut Console::live());
+    Ok(exit_code(result.exit_code))
+}
+
+/// A child's exit code passed through unchanged. Codes outside 0..=255 (a
+/// Windows NTSTATUS from a crashed ctest) cannot be an `ExitCode`, so those
+/// leave through `process::exit`.
+fn exit_code(code: i32) -> ExitCode {
+    match u8::try_from(code) {
+        Ok(code) => ExitCode::from(code),
+        Err(_) => {
+            use std::io::Write as _;
+            let _ = std::io::stdout().flush();
+            std::process::exit(code)
+        }
     }
 }
 

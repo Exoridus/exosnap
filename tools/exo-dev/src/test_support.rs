@@ -13,6 +13,8 @@
 use std::path::Path;
 use std::process::Command;
 
+pub mod test_runner;
+
 /// Initializes a throwaway git repository, writes `files` (relative path,
 /// content) and stages them. Returns the open `TempDir`; dropping it removes
 /// the repository. The tree is left uncommitted on purpose: most callers scope
