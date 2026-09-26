@@ -120,26 +120,39 @@ impl Git {
         base: &str,
     ) -> anyhow::Result<HashMap<String, Vec<Range<usize>>>> {
         let range = format!("{base}...HEAD");
-        let mut changed =
+        // An unresolvable base (a typo, or a shallow CI checkout with no
+        // merge-base) must be a refusal, not an empty, falsely-clean diff: the
+        // caller would otherwise pass every rule on nothing.
+        let (code, base_diff) =
             self.diff_line_ranges(&["diff", "--unified=0", "--diff-filter=ACMR", &range]);
-        for (file, ranges) in self.diff_line_ranges(&["diff", "--unified=0", "--diff-filter=ACMR"])
-        {
+        anyhow::ensure!(
+            code == 0,
+            "git diff {range} failed in '{}': is '{base}' a valid ref reachable from HEAD?",
+            self.root.display()
+        );
+        let mut changed = base_diff;
+        let (_, worktree_diff) =
+            self.diff_line_ranges(&["diff", "--unified=0", "--diff-filter=ACMR"]);
+        for (file, ranges) in worktree_diff {
             changed.entry(file).or_default().extend(ranges);
         }
-        for (file, ranges) in
-            self.diff_line_ranges(&["diff", "--cached", "--unified=0", "--diff-filter=ACMR"])
-        {
+        let (_, staged_diff) =
+            self.diff_line_ranges(&["diff", "--cached", "--unified=0", "--diff-filter=ACMR"]);
+        for (file, ranges) in staged_diff {
             changed.entry(file).or_default().extend(ranges);
         }
         Ok(changed)
     }
 
-    fn diff_line_ranges(&self, args: &[&str]) -> HashMap<String, Vec<Range<usize>>> {
+    /// Returns the invoked git command's exit code alongside the parsed
+    /// ranges: a caller scoped to a specific `base` needs to tell "no changes"
+    /// apart from "the diff never ran."
+    fn diff_line_ranges(&self, args: &[&str]) -> (i32, HashMap<String, Vec<Range<usize>>>) {
         // A hunk header with no explicit count means one line; an explicit `,0`
         // means a pure deletion, which touches no line on the new side.
         let hunk = regex::Regex::new(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@").unwrap();
         let mut changed: HashMap<String, Vec<Range<usize>>> = HashMap::new();
-        let (_, stdout) = self.run(args);
+        let (code, stdout) = self.run(args);
         let mut file: Option<String> = None;
         for line in stdout.lines() {
             if let Some(rest) = line.strip_prefix("+++ b/") {
@@ -159,6 +172,23 @@ impl Git {
                     .push(start..start + count);
             }
         }
-        changed
+        (code, changed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::fixture_repo_committed;
+
+    #[test]
+    fn an_unresolvable_base_is_a_hard_error_not_an_empty_diff() {
+        let dir = fixture_repo_committed(&[("app/x.cpp", "int x = 0;\n")]);
+        let git = Git::new(dir.path());
+        let result = git.changed_line_ranges("not-a-real-ref");
+        assert!(
+            result.is_err(),
+            "an unresolvable base must refuse, not silently report zero changed lines"
+        );
     }
 }

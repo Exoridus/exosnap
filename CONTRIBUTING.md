@@ -83,7 +83,7 @@ Two branches that both add a line to the top of the same section conflict on eve
 
 Prose — pull request descriptions, `docs/`, READMEs, release notes, commit bodies where there is one — is written in long lines. Break a line where a paragraph ends or where the break carries meaning, never at a column. Text wrapped at column 80 reads as a wall everywhere it is rendered at another width, and an edit to one sentence reflows every line after it, so a one-line change arrives as a whole-paragraph diff.
 
-Code comments follow the formatter and are not covered by this; `scripts/check-source-hygiene.ps1` owns those. `scripts/check-prose-lines.ps1` checks the Markdown lines a branch adds, and exempts code blocks, tables, headings and front matter. Most of the tree predates the rule and is not swept: the rule governs new and changed prose, and the backlog is taken on deliberately rather than as a side effect of an unrelated change.
+Code comments follow the formatter and are not covered by this; `exo-dev check source-hygiene` owns those. `scripts/check-prose-lines.ps1` checks the Markdown lines a branch adds, and exempts code blocks, tables, headings and front matter. Most of the tree predates the rule and is not swept: the rule governs new and changed prose, and the backlog is taken on deliberately rather than as a side effect of an unrelated change.
 
 ## License
 

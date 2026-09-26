@@ -285,7 +285,7 @@ fn starts_with_at(chars: &[char], pos: usize, needle: &[char]) -> bool {
 }
 
 fn find_at(chars: &[char], from: usize, needle: &[char]) -> Option<usize> {
-    if needle.is_empty() || from > chars.len().saturating_sub(needle.len()) {
+    if needle.is_empty() || chars.len() < needle.len() || from > chars.len() - needle.len() {
         return None;
     }
     (from..=chars.len() - needle.len()).find(|&i| chars[i..i + needle.len()] == *needle)
@@ -840,14 +840,17 @@ mod tests {
             "scripts/tests/fixture.ps1",
             "# fixes #999\nWrite-Host 'ok'\n",
         )]);
-        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        // All scope, not a diff scope: this asserts the exclusion itself,
+        // independent of whether the fixture repository has a HEAD to diff
+        // against.
+        let report = check(dir.path(), Scope::All, None).unwrap();
         assert!(report.findings.is_empty());
     }
 
     #[test]
     fn files_outside_the_scanned_roots_are_ignored() {
         let dir = fixture_repo(&[("docs/history.md", "not scanned anyway (no comment syntax)")]);
-        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        let report = check(dir.path(), Scope::All, None).unwrap();
         assert!(report.findings.is_empty());
     }
 
@@ -885,5 +888,296 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = check(dir.path(), Scope::All, None);
         assert!(result.is_err());
+    }
+
+    // -- regression: find_at must not underflow on a short line in a block --
+
+    #[test]
+    fn a_one_character_line_inside_a_block_comment_does_not_panic() {
+        // The closing marker is two characters; a one-character line ("}")
+        // still fully inside the block comment must fail to find it without
+        // computing `chars.len() - needle.len()` on a shorter slice.
+        let dir = fixture_repo(&[("app/x.cpp", "/*\n}\n*/\nint x;\n")]);
+        let report = check(dir.path(), Scope::All, None);
+        assert!(
+            report.is_ok(),
+            "a short line inside a block comment must not panic the scanner"
+        );
+    }
+
+    // -- PR-gate path: the committed base-range diff, not just HEAD ---------
+
+    #[test]
+    fn a_committed_base_range_flags_only_the_new_commit_not_the_untouched_baseline() {
+        let dir = fixture_repo_committed(&[(
+            "app/thing.cpp",
+            "// fixes #900\nint a = 0;\nint b = 0;\nint c = 0;\nint d = 0;\n",
+        )]);
+        let base = run_git(dir.path(), &["rev-parse", "HEAD"]);
+        write_files(
+            dir.path(),
+            &[(
+                "app/thing.cpp",
+                "// fixes #900\nint a = 0;\nint b = 0;\nint c = 0;\nint d = 0;\n// fixes #901\nint e = 0;\n",
+            )],
+        );
+        run_git(dir.path(), &["add", "-A"]);
+        run_git(dir.path(), &["commit", "-q", "-m", "second"]);
+
+        let report = check(dir.path(), Scope::Diff { base }, None).unwrap();
+        assert!(
+            report
+                .blocking()
+                .any(|f| f.rule == "issue-reference" && f.value.contains("901")),
+            "the line the second commit added must be flagged"
+        );
+        assert!(
+            report.blocking().all(|f| !f.value.contains("900")),
+            "the untouched baseline line must not be flagged just because the file was touched again"
+        );
+    }
+
+    #[test]
+    fn a_multi_line_hunk_flags_only_its_own_lines_not_the_untouched_neighbors() {
+        let dir = fixture_repo_committed(&[(
+            "app/thing.cpp",
+            "// fixes #900\nplaceholder two\nplaceholder three\n// fixes #904\n",
+        )]);
+        write_files(
+            dir.path(),
+            &[(
+                "app/thing.cpp",
+                "// fixes #900\nchanged two\n// fixes #903\n// fixes #904\n",
+            )],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(
+            report
+                .blocking()
+                .any(|f| f.rule == "issue-reference" && f.line == 3 && f.value.contains("903")),
+            "the changed line inside the multi-line hunk must be flagged"
+        );
+        assert!(
+            report.blocking().all(|f| f.line != 1 && f.line != 4),
+            "lines 1 and 4 sit outside the hunk and were not touched"
+        );
+    }
+
+    #[test]
+    fn a_pure_deletion_hunk_flags_nothing_and_does_not_panic() {
+        let dir = fixture_repo_committed(&[(
+            "app/thing.cpp",
+            "// fixes #900\nto be deleted\n// fixes #903\n",
+        )]);
+        write_files(
+            dir.path(),
+            &[("app/thing.cpp", "// fixes #900\n// fixes #903\n")],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(
+            report.findings.is_empty(),
+            "deleting a line touches no line on the new side; nothing should be flagged"
+        );
+    }
+
+    // -- comment-syntax coverage across the ported table ---------------------
+
+    #[test]
+    fn a_powershell_block_comment_is_scanned() {
+        let dir = fixture_repo_committed(&[("scripts/x.ps1", "$x = 1\n")]);
+        write_files(
+            dir.path(),
+            &[(
+                "scripts/x.ps1",
+                "<# QCR-208 explains why this retries #>\n$x = 1\n",
+            )],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(
+            report
+                .advisory()
+                .any(|f| f.rule == "task-id" && f.value == "QCR-208")
+        );
+    }
+
+    #[test]
+    fn a_name_matched_cmakelists_file_is_scanned() {
+        let dir = fixture_repo_committed(&[("app/CMakeLists.txt", "add_library(x)\n")]);
+        write_files(
+            dir.path(),
+            &[("app/CMakeLists.txt", "# Kept for BUG-7.\nadd_library(x)\n")],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(
+            report
+                .advisory()
+                .any(|f| f.rule == "task-id" && f.value == "BUG-7")
+        );
+    }
+
+    #[test]
+    fn a_qml_comment_is_scanned() {
+        let dir = fixture_repo_committed(&[("app/x.qml", "Item { }\n")]);
+        write_files(
+            dir.path(),
+            &[("app/x.qml", "// Widened for QCR-101.\nItem { }\n")],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(
+            report
+                .advisory()
+                .any(|f| f.rule == "task-id" && f.value == "QCR-101")
+        );
+    }
+
+    #[test]
+    fn a_dot_cmake_file_is_scanned() {
+        let dir = fixture_repo_committed(&[("cmake/x.cmake", "set(x 1)\n")]);
+        write_files(
+            dir.path(),
+            &[("cmake/x.cmake", "# TASK-3 pending\nset(x 1)\n")],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(
+            report
+                .advisory()
+                .any(|f| f.rule == "task-id" && f.value == "TASK-3")
+        );
+    }
+
+    #[test]
+    fn a_yaml_file_is_scanned() {
+        let dir = fixture_repo_committed(&[("app/config.yml", "key: value\n")]);
+        write_files(
+            dir.path(),
+            &[("app/config.yml", "# ISSUE-5 pending\nkey: value\n")],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(
+            report
+                .advisory()
+                .any(|f| f.rule == "task-id" && f.value == "ISSUE-5")
+        );
+    }
+
+    #[test]
+    fn a_toml_file_is_scanned() {
+        let dir = fixture_repo_committed(&[("tools/x.toml", "key = 1\n")]);
+        write_files(
+            dir.path(),
+            &[("tools/x.toml", "# TICKET-9 pending\nkey = 1\n")],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(
+            report
+                .advisory()
+                .any(|f| f.rule == "task-id" && f.value == "TICKET-9")
+        );
+    }
+
+    // -- legitimate vocabulary and false-positive guards ---------------------
+
+    #[test]
+    fn technical_vocabulary_that_looks_like_a_ticket_is_silent() {
+        let dir = fixture_repo_committed(&[("app/x.cpp", "int x = 1;\n")]);
+        write_files(
+            dir.path(),
+            &[(
+                "app/x.cpp",
+                "// Hash with SHA-256, decode as UTF-8, verify the CRC-32.\nint x = 1;\n",
+            )],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(report.findings.is_empty());
+    }
+
+    #[test]
+    fn a_product_diagnostic_identifier_is_not_a_tracker_reference() {
+        let dir = fixture_repo_committed(&[("app/x.cpp", "int x = 1;\n")]);
+        write_files(
+            dir.path(),
+            &[(
+                "app/x.cpp",
+                "// Emits ART-001 when the artifact is missing.\nint x = 1;\n",
+            )],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(report.findings.iter().all(|f| f.rule != "task-id"));
+    }
+
+    #[test]
+    fn the_long_path_prefix_is_not_a_unc_violation() {
+        let dir = fixture_repo_committed(&[("app/x.cpp", "int x = 1;\n")]);
+        write_files(
+            dir.path(),
+            &[(
+                "app/x.cpp",
+                "// \\\\?\\ removes the MAX_PATH limit.\nint x = 1;\n",
+            )],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(report.blocking().all(|f| f.rule != "unc-path"));
+    }
+
+    #[test]
+    fn a_url_with_a_hash_inside_a_string_literal_is_not_a_comment_or_an_issue_reference() {
+        let dir = fixture_repo_committed(&[("app/x.cpp", "int x = 1;\n")]);
+        write_files(
+            dir.path(),
+            &[(
+                "app/x.cpp",
+                "const char* u = \"https://example.com/a#321\";\nint x = 1;\n",
+            )],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(report.findings.is_empty());
+    }
+
+    #[test]
+    fn preprocessor_directives_are_not_issue_references() {
+        let dir = fixture_repo_committed(&[("app/x.cpp", "int x = 1;\n")]);
+        write_files(
+            dir.path(),
+            &[("app/x.cpp", "#include <cstdio>\n#define X 1\nint x = 1;\n")],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(report.findings.is_empty());
+    }
+
+    #[test]
+    fn a_retry_describing_the_previous_attempts_failure_is_not_provenance() {
+        let dir = fixture_repo_committed(&[("app/x.cpp", "int x = 1;\n")]);
+        write_files(
+            dir.path(),
+            &[(
+                "app/x.cpp",
+                "// Keeps a retry from publishing the previous attempt's failure.\nint x = 1;\n",
+            )],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.rule != "conversation-provenance")
+        );
+    }
+
+    #[test]
+    fn a_first_person_previous_attempt_is_provenance() {
+        let dir = fixture_repo_committed(&[("app/x.cpp", "int x = 1;\n")]);
+        write_files(
+            dir.path(),
+            &[(
+                "app/x.cpp",
+                "// My previous attempt cleared this at every call site.\nint x = 1;\n",
+            )],
+        );
+        let report = check(dir.path(), diff_at_head(), None).unwrap();
+        assert!(
+            report
+                .blocking()
+                .any(|f| f.rule == "conversation-provenance")
+        );
     }
 }

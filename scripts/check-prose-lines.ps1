@@ -12,7 +12,7 @@
 
     The rule is about text people read -- Markdown under docs/ and at the
     repository root, pull request and release prose. Code comments follow the
-    formatter and are not in scope; check-source-hygiene.ps1 owns those.
+    formatter and are not in scope; exo-dev check source-hygiene owns those.
 
     What is NOT a violation, and why the check is narrow enough to be blocking:
 
@@ -30,7 +30,7 @@
     rather than obeyed. -All is the sweep, for when that backlog is taken on.
 
     Staged adoption, for the same reason and by the same means as the advisory
-    rules in check-source-hygiene.ps1: the gate runs this -Advisory today. Even
+    rules in exo-dev check source-hygiene: the gate runs this -Advisory today. Even
     the diff scope is red on this tree, because a branch that adds a paragraph
     to an already-wrapped document wraps it to match, and unwrapping only the
     touched paragraphs would leave a document half one way and half the other.
