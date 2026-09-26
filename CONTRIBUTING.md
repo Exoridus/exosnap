@@ -41,7 +41,7 @@ pwsh scripts/run-tests.ps1 -Filter recorder_core.   # one binary
 2. Keep the change scoped to one subsystem where you can. Match the style of the code around you.
 3. Business and product policy stays in C++. QML owns presentation, layout, and interaction only.
 4. Add or update focused tests for what you changed. `scripts/run-tests.ps1` is the entry point.
-5. Run `pwsh scripts/verify.ps1 -Fast` while iterating and `pwsh scripts/verify.ps1 -Full` before pushing. The git hooks use the same entry point; CI runs the full gate again.
+5. Run `cargo exo-dev verify --fast` while iterating and `cargo exo-dev verify --full` before pushing. The git hooks use the same entry point; CI runs the full gate again.
 6. Open a pull request against `next` with `scripts/open-pr.ps1`, or pass `-Base main` for a Stable patch. Describe what changed, what validates it, and any product, architecture or workflow updates the change required.
 
 ## Commit subjects and pull request descriptions

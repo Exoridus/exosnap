@@ -11,23 +11,23 @@ name = "exo-verify"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1"
+anyhow.workspace = true
 base64 = "0.22"
-clap = { version = "4.5", features = ["derive"] }
+clap.workspace = true
 ed25519-dalek = "2.2"
-hex = "0.4"
-regex = "1.11"
+hex.workspace = true
+regex.workspace = true
 rcgen = "0.13"
 rustls = "0.23"
 rustls-pemfile = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
-sha2 = "0.10"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 zip = { version = "7", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = [
+windows = { workspace = true, features = [
     "Graphics_Capture",
     "Wdk_System_Threading",
     "Win32_Foundation",
@@ -61,8 +61,4 @@ windows = { version = "0.62", features = [
 ] }
 
 [dev-dependencies]
-tempfile = "3"
-
-[profile.release]
-lto = "thin"
-codegen-units = 4
+tempfile.workspace = true

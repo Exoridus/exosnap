@@ -168,9 +168,9 @@ Test-Case 'the host-wide locks are independent of each other' {
 }
 
 Test-Case 'a tree lock is the same lock for two spellings of one directory' {
-    # The premise the whole protection rests on: verify.ps1 names the tree
-    # "build/windows-x64-ninja-debug" relative to the repo and run-tests.ps1 makes
-    # it absolute. If those were two locks, both would be granted at once.
+    # The premise the whole protection rests on: exo-dev names the tree
+    # "build/windows-x64-ninja-debug" joined to the repo root and run-tests.ps1
+    # makes it absolute. If those were two locks, both would be granted at once.
     $root = Join-Path ([IO.Path]::GetTempPath()) "host-lock-tests/$([guid]::NewGuid().ToString('n'))"
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     try {

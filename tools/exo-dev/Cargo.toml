@@ -1,0 +1,29 @@
+[package]
+name = "exo-dev"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+description = "ExoSnap repository verification: scope, gate order, hooks and CI profiles"
+publish = false
+
+[[bin]]
+name = "exo-dev"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+hex.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true

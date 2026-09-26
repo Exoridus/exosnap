@@ -10,6 +10,8 @@ Complete candidate-bound verification where a scenario still cannot prove which 
 
 Strengthen display restoration against identity ambiguity. The current matcher prefers an exact connector path before panel metadata; it cannot guarantee that a different physical panel on that connector will be rejected. Any stronger promise needs matcher changes and regression tests, not just different wording.
 
+Consolidate repository tooling into the Rust workspace under `tools/`. `exo-dev` already owns gate order, scope, hooks and CI profiles; the checks it still runs as PowerShell or Python scripts move into it one at a time, each replacing a script and its script tests with Rust tests. PowerShell remains only where the external system requires it: Chocolatey package scripts and Hyper-V/PowerShell Direct guest control under `tools/vm`.
+
 Maintain repeatable privacy review and symbol delivery for official crash reports. Authenticode signing and its operational integration remain release work; signed update manifests are not a substitute for executable publisher signing. Keep signing status explicit in release documentation.
 
 ## Product work

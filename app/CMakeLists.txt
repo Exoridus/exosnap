@@ -1448,12 +1448,12 @@ if(EXOSNAP_PWSH)
     set_tests_properties(live_verify.vm_recipe PROPERTIES TIMEOUT 300 LABELS "live_verify")
     exosnap_set_test_phase(live_verify.vm_recipe hermetic)
 
-    # The local verification pipeline's own contracts. These belong in CTest and
-    # not only in verify.ps1, because verify.ps1 is the thing under test: a
-    # pipeline that reports PASS is worth nothing until it has been shown to
-    # report FAIL when a step fails, and to refuse PASS for a step whose
-    # prerequisite never ran. Running them from inside the pipeline they guard
-    # would let a broken orchestrator pass itself.
+    # The contracts of the checks the local gate runs. These belong in CTest and
+    # not only in `cargo exo-dev verify`, which runs the checks themselves: a
+    # check that reports PASS is worth nothing until it has been shown to report
+    # FAIL when it should, and running its contracts only from inside the gate it
+    # serves would let a broken gate pass itself. The orchestrator's own
+    # contracts are Rust tests, run by cargo directly in CI for the same reason.
     #
     # Label "pipeline", deliberately not "live_verify": these cases guard the
     # local pipeline rather than the Live Verify runner, and nothing here queries
@@ -1464,11 +1464,11 @@ if(EXOSNAP_PWSH)
     set_tests_properties(pipeline.drift_guards PROPERTIES TIMEOUT 180 LABELS "pipeline")
     exosnap_set_test_phase(pipeline.drift_guards hermetic)
 
-    add_test(NAME pipeline.verify_orchestrator
+    add_test(NAME pipeline.quality_helpers
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/verify-pipeline.tests.ps1")
-    set_tests_properties(pipeline.verify_orchestrator PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.verify_orchestrator hermetic)
+    set_tests_properties(pipeline.quality_helpers PROPERTIES TIMEOUT 180 LABELS "pipeline")
+    exosnap_set_test_phase(pipeline.quality_helpers hermetic)
 
     add_test(NAME pipeline.source_hygiene
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File

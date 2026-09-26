@@ -261,6 +261,49 @@ $ExternalPrerequisiteDlls = @(
     'concrt140.dll', 'vcomp140.dll'
 )
 
+# Lowercase SHA-256 of every section of a PE image, by section name. A
+# whole-file hash cannot compare a release build against its qualified
+# candidate: the release identity is compiled in, so the two executables
+# differ by construction. Per section, they need not -- everything the
+# linker places in .text, .data, .pdata and .reloc is byte-identical between
+# two builds of one commit, and only the sections holding the identity
+# (.rdata) and the VERSIONINFO resource (.rsrc) move. Headers are excluded:
+# they carry the link timestamp. Hashes raw section data as laid out in the
+# file, not the virtual image, so the result is of bytes that exist on disk.
+function Get-ReleasePeSectionHash {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 0x40 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+        throw "'$Path' is not a PE image (no MZ header)."
+    }
+    $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+    if ($peOffset + 24 -gt $bytes.Length -or [BitConverter]::ToUInt32($bytes, $peOffset) -ne 0x00004550) {
+        throw "'$Path' is not a PE image (no PE signature)."
+    }
+    $sectionCount = [BitConverter]::ToUInt16($bytes, $peOffset + 6)
+    $optionalHeaderSize = [BitConverter]::ToUInt16($bytes, $peOffset + 20)
+    $tableOffset = $peOffset + 24 + $optionalHeaderSize
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $sections = [ordered]@{}
+    try {
+        for ($index = 0; $index -lt $sectionCount; $index++) {
+            $entry = $tableOffset + $index * 40
+            $name = [Text.Encoding]::ASCII.GetString($bytes, $entry, 8).TrimEnd([char]0)
+            $rawSize = [BitConverter]::ToUInt32($bytes, $entry + 16)
+            $rawPointer = [BitConverter]::ToUInt32($bytes, $entry + 20)
+            if ($rawPointer + $rawSize -gt $bytes.Length) {
+                throw "'$Path' section '$name' points past the end of the file."
+            }
+            $digest = $sha.ComputeHash($bytes, [int]$rawPointer, [int]$rawSize)
+            $sections[$name] = ([BitConverter]::ToString($digest) -replace '-', '').ToLowerInvariant()
+        }
+    }
+    finally { $sha.Dispose() }
+    return $sections
+}
+
 # Locate dumpbin.exe via vswhere (part of the required MSVC toolchain).
 function Find-Dumpbin {
     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"

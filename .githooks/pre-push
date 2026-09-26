@@ -1,35 +1,11 @@
 #!/bin/sh
-zero_sha="0000000000000000000000000000000000000000"
-has_branch_update=0
-
-while read local_ref local_sha remote_ref remote_sha
-do
-    case "$local_ref:$remote_ref" in
-        refs/heads/*:*|*:refs/heads/*)
-            if [ "$local_sha" != "$zero_sha" ] && [ "$local_sha" != "$remote_sha" ]; then
-                has_branch_update=1
-            fi
-            ;;
-    esac
-done
-
-if [ "$has_branch_update" -eq 0 ]; then
-    exit 0
-fi
-
-# The full local blocking contract. This is deliberately wider than what this
-# hook used to run (check-quality.ps1 -StaticOnly, i.e. cppcheck plus a
-# conditional broad clang-tidy): build and test were left to CI, so a push could
-# be made from a tree that had never compiled. verify.ps1 -Full restores them and
-# ties them together -- tests only run behind a build that succeeded in the same
-# invocation.
+# The full local blocking contract, for pushes that update a branch. Build and
+# test are one evidence chain: tests only run behind a build that succeeded in
+# the same invocation. The ref list on stdin is passed through to exo-dev, which
+# decides whether the push updates a branch.
 #
-# No speed claim is made here yet. Making -Full quick is the compiler-side work
-# (sccache, a working Ninja developer preset) that is deliberately not part of
-# this change.
-#
-# To keep the machine usable during a push, export EXOSNAP_VERIFY_JOBS=<n> in your
-# environment: verify.ps1 caps cmake --build, ctest and clang-tidy to that. It is
-# read from the environment on purpose, so this shared hook stays uncapped and CI
-# (which never sets it) is unaffected.
-pwsh -NonInteractive -File "$(git rev-parse --show-toplevel)/scripts/verify.ps1" -Full
+# To keep the machine usable during a push, export EXOSNAP_VERIFY_JOBS=<n>. It is
+# read from the environment so this shared hook stays uncapped and CI is
+# unaffected.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+exec cargo exo-dev hook pre-push

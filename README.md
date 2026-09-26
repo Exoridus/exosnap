@@ -108,7 +108,7 @@ cmake --build --preset windows-x64-debug-exosnap
 pwsh scripts/run-tests.ps1 -Filter recorder_core.
 ```
 
-Use `scripts/verify.ps1 -Fast` for scoped iteration and `scripts/verify.ps1 -Full` for the complete local gate before pushing. Hooks use the same entry point. Work on a branch and submit a pull request. `main` is updated through merges. Follow [AGENTS.md](AGENTS.md) for repository rules.
+Use `cargo exo-dev verify --fast` for scoped iteration and `cargo exo-dev verify --full` for the complete local gate before pushing. Hooks use the same entry point. Work on a branch and submit a pull request. `main` is updated through merges. Follow [AGENTS.md](AGENTS.md) for repository rules.
 
 | Reference | Contents |
 | --- | --- |

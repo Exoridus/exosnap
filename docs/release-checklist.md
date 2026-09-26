@@ -8,7 +8,7 @@ Creating/pushing a version tag, publishing a release or submitting a package req
 
 - Start from a reviewed, integrated commit. Confirm repository protection against the intended [rulesets](../.github/rulesets/README.md); local hooks are not server-side protection.
 - Run `pwsh scripts/bump-version.ps1 -Version <x.y.z>` on a clean tree when changing the base version. It updates the coordinated version surfaces and resets release-dependent package hashes/identifiers to placeholders. Review the diff and refresh the versioned portable/support documentation.
-- Run the full gate: `pwsh scripts/verify.ps1 -Full`. Check the actual test receipt and every required CI result. A missing tool, stale binary, skipped configuration or absent crash-capture build is not equivalent to running it successfully.
+- Run the full gate: `cargo exo-dev verify --full`. Check the actual test receipt and every required CI result. A missing tool, stale binary, skipped configuration or absent crash-capture build is not equivalent to running it successfully.
 - Review current product behavior, limitations and privacy disclosures. Run the documentation check and privacy validators. Leave development narrative in the pull request.
 - At the release cut only, preview `pwsh scripts/new-changelog.ps1`. Set `EXOSNAP_CHANGELOG_CUT=1` and use `-Version <x.y.z> -Apply` to perform the deliberate cut. Preview `pwsh scripts/render-release-notes.ps1 -Version <x.y.z>`. Ordinary feature branches do not edit the changelog.
 

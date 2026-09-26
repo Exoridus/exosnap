@@ -74,28 +74,25 @@ Test-Case 'the job the heavy legs hang off validates the title itself' {
     $block = [regex]::Match($ci, '(?ms)^  guardrails:\r?\n(?<body>.*?)(?=^  [a-z][a-z0-9-]*:\r?\n)')
     Assert-True $block.Success 'ci.yml has no guardrails job'
     $body = $block.Groups['body'].Value
-    Assert-True ($body -match 'check-commit-policy\.ps1[\s\S]{0,200}-Subject') `
-        'guardrails does not run the commit policy check against the title, so a malformed title cannot stop the Windows legs'
-    Assert-True ($body -match '-PullRequestNumber') `
+    Assert-True ($body -match 'cargo exo-dev' -and $body -match '--profile ci-guardrails') `
+        'guardrails does not run the ci-guardrails profile, which carries the title preflight'
+    Assert-True ($body -match '--pr-title') `
+        'guardrails does not pass the title, so a malformed title cannot stop the Windows legs'
+    Assert-True ($body -match '--pr-number') `
         'guardrails does not pass the pull request number, so its preflight is weaker than the required check'
     Assert-True ($body -match 'github\.event\.pull_request\.title') `
         'guardrails reads no title'
-
-    # Same script, same rule set: a preflight that drifted from the required
-    # check would fail a title the required check accepts, or the reverse.
-    $ciArgs = [regex]::Match($body, 'check-commit-policy\.ps1(?<args>[\s\S]{0,200}?)(?=\r?\n\r?\n|\r?\n      -)').Groups['args'].Value
-    $policyArgs = [regex]::Match($prPolicy, 'check-commit-policy\.ps1(?<args>[\s\S]{0,200}?)(?=\r?\n\r?\n|\Z)').Groups['args'].Value
-    $normalize = { param($text) ($text -replace '\s+', ' ').Trim() }
-    Assert-True ((& $normalize $ciArgs) -eq (& $normalize $policyArgs)) `
-        "the preflight and the required check invoke the policy differently:`n  ci.yml      $(& $normalize $ciArgs)`n  pr-policy   $(& $normalize $policyArgs)"
+    # Same rule set on both sides: both profiles plan the one commit-policy step,
+    # whose arguments exo-dev builds in one place (tools/exo-dev/src/profile.rs
+    # asserts the two profiles share it).
 }
 
 Test-Case 'the metadata workflow listens for the edit and checks the title' {
     $types = Get-PullRequestTypes -Content $prPolicy -Name 'pr-policy.yml'
     Assert-True ($types -contains 'edited') "pr-policy.yml does not trigger on 'edited' (types: $($types -join ', '))"
-    Assert-True ($prPolicy -match 'check-commit-policy\.ps1[\s\S]{0,200}-Subject') `
+    Assert-True ($prPolicy -match 'cargo exo-dev' -and $prPolicy -match '--profile pr-policy' -and $prPolicy -match '--pr-title') `
         'pr-policy.yml does not run the commit policy check against the title'
-    Assert-True ($prPolicy -match '-PullRequestNumber') `
+    Assert-True ($prPolicy -match '--pr-number') `
         'pr-policy.yml does not pass the pull request number, so a title carrying its own number would pass'
 }
 

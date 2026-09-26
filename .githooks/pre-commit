@@ -1,20 +1,9 @@
 #!/bin/sh
-# Direct commits to either protected branch bypass pull request review. A local
-# branch with its own commits also diverges after a squash merge upstream.
-# Set ALLOW_PROTECTED_COMMIT=1 only for an intentional local exception.
-branch=$(git rev-parse --abbrev-ref HEAD)
-if { [ "$branch" = "main" ] || [ "$branch" = "next" ]; } && [ "$ALLOW_PROTECTED_COMMIT" != "1" ]; then
-    echo "pre-commit: refusing to commit on '$branch'." >&2
-    echo "  Work on a branch:      git switch -c <name> origin/next" >&2
-    echo "  Move what is staged:   git stash && git switch -c <name> origin/next && git stash pop" >&2
-    echo "  Intentional exception: ALLOW_PROTECTED_COMMIT=1 git commit ..." >&2
-    exit 1
-fi
-
-# One entry point, no verification logic of its own. What -Fast means, in what
-# order, and which steps a failure has to stop is scripts/verify.ps1's business;
-# this file only says when it runs. CI remains the authority either way.
+# One entry point, no verification logic of its own: the protected-branch refusal,
+# what the pre-commit contract runs and what a failure stops are exo-dev's
+# business. CI remains the authority either way.
 #
-# EXOSNAP_VERIFY_JOBS=<n> in your environment caps the parallelism when -Fast
-# escalates to a build; see scripts/verify.ps1 -? for the details.
-pwsh -NonInteractive -File "$(git rev-parse --show-toplevel)/scripts/verify.ps1" -Fast -Staged
+# EXOSNAP_VERIFY_JOBS=<n> in your environment caps the parallelism when the
+# contract escalates to a build.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+exec cargo exo-dev hook pre-commit
