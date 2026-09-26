@@ -613,7 +613,23 @@ impl RealExecutor {
             StepId::PackagingVersion => {
                 self.pwsh("packaging-version", "check-packaging-version.ps1", &[])
             }
-            StepId::MsiHarvest => self.pwsh("msi-harvest", "validate-msi-harvest.ps1", &[]),
+            StepId::MsiHarvest => self.native("msi-harvest", || {
+                let report = crate::packaging::validate_msi_harvest(&ctx.repo_root)?;
+                let mut log = crate::packaging::render(&report);
+                let outcome = if report.ok() {
+                    log.push_str(
+                        "MSI harvest validation PASSED (Package.wxs is metadata-only, references StagingFiles).\n",
+                    );
+                    Outcome::pass("")
+                } else {
+                    log.push_str(&format!(
+                        "MSI harvest validation FAILED ({} error(s)).\n",
+                        report.errors.len()
+                    ));
+                    Outcome::fail(format!("{} error(s)", report.errors.len()))
+                };
+                Ok((log, outcome))
+            }),
             StepId::PrivacyAllowlist => self.native("privacy-allowlist", || {
                 let report = crate::privacy::allowlist::check_allowlist(&ctx.repo_root)?;
                 let log = crate::privacy::allowlist::render(&report);

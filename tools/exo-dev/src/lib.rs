@@ -12,6 +12,7 @@ pub mod hook;
 pub mod host_lock;
 pub mod lint;
 pub mod msvc;
+pub mod packaging;
 pub mod plan;
 pub mod pr;
 pub mod privacy;

@@ -191,13 +191,7 @@ impl StepId {
                     owner: "exo-dev release module",
                 },
             ),
-            StepId::MsiHarvest => step(
-                "msi-harvest",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev packaging module",
-                },
-            ),
+            StepId::MsiHarvest => step("msi-harvest", SANITY, Native),
             StepId::PrivacyAllowlist => step("privacy-allowlist", SANITY, Native),
             StepId::NetworkEgress => step("network-egress", SANITY, Native),
             StepId::Actionlint => StepInfo {

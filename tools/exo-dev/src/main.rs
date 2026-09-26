@@ -63,6 +63,12 @@ enum Command {
         #[command(subcommand)]
         privacy: PrivacyCommand,
     },
+    /// Standalone packaging manifest validators, also reachable individually
+    /// outside a verify profile.
+    Packaging {
+        #[command(subcommand)]
+        packaging: PackagingCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -305,6 +311,48 @@ enum LintCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum PackagingCommand {
+    /// packaging/chocolatey/ against the target version, and, unless
+    /// --version-only, the mechanically checkable Chocolatey moderation
+    /// subset.
+    Chocolatey {
+        /// Target version. Defaults to the canonical CMake project version.
+        #[arg(long)]
+        version: Option<String>,
+        /// Skip the checksum64-vs-manifest cross-check and the moderation
+        /// subset entirely: the version axis only, for a pull-request gate
+        /// run before a release exists.
+        #[arg(long)]
+        version_only: bool,
+        /// Release artifact manifest to check checksum64 against. Defaults
+        /// to the local release build's own artifact manifest for that
+        /// version.
+        #[arg(long)]
+        manifest_path: Option<PathBuf>,
+        /// Fail instead of skipping when no release artifact manifest is
+        /// found. Ignored with --version-only.
+        #[arg(long)]
+        require_manifest: bool,
+    },
+    /// The canonical Codexo.ExoSnap WinGet manifest set against the target
+    /// version.
+    Winget {
+        /// Target version. Defaults to the canonical CMake project version.
+        #[arg(long)]
+        version: Option<String>,
+    },
+    /// packaging/scoop/exosnap.json against the target version.
+    Scoop {
+        /// Target version. Defaults to the canonical CMake project version.
+        #[arg(long)]
+        version: Option<String>,
+    },
+    /// packaging/msi/Package.wxs stays metadata-only and references the
+    /// auto-generated harvest component group.
+    MsiHarvest,
+}
+
 #[derive(Args, Default)]
 struct VerifyArgs {
     /// The scoped pre-commit contract. It may check more than strictly needed and
@@ -461,6 +509,23 @@ fn run_cli() -> anyhow::Result<ExitCode> {
         Command::Privacy { privacy } => match privacy {
             PrivacyCommand::NetworkEgress => privacy_network_egress(&repo_root),
             PrivacyCommand::Allowlist => privacy_allowlist(&repo_root),
+        },
+        Command::Packaging { packaging } => match packaging {
+            PackagingCommand::Chocolatey {
+                version,
+                version_only,
+                manifest_path,
+                require_manifest,
+            } => packaging_chocolatey(
+                &repo_root,
+                version,
+                version_only,
+                manifest_path,
+                require_manifest,
+            ),
+            PackagingCommand::Winget { version } => packaging_winget(&repo_root, version),
+            PackagingCommand::Scoop { version } => packaging_scoop(&repo_root, version),
+            PackagingCommand::MsiHarvest => packaging_msi_harvest(&repo_root),
         },
         Command::Hook { name } => match name.as_str() {
             "pre-commit" => {
@@ -755,6 +820,144 @@ fn privacy_allowlist(repo_root: &std::path::Path) -> anyhow::Result<ExitCode> {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::FAILURE)
+    }
+}
+
+/// Resolves an explicit `--version` or falls back to the canonical CMake
+/// project version, the same default every packaging validator's original
+/// script used.
+fn resolve_packaging_version(
+    repo_root: &std::path::Path,
+    version: Option<String>,
+) -> anyhow::Result<String> {
+    match version {
+        Some(version) => Ok(version),
+        None => exo_dev::packaging::cmake_project_version(repo_root),
+    }
+}
+
+/// Every packaging validator's exit code convention: 0 clean, 1 for any
+/// failure, whether that failure is a specific finding or the target
+/// manifest could not even be read. There is no distinct "could not run"
+/// exit code here, matching the scripts these validators replace.
+fn packaging_chocolatey(
+    repo_root: &std::path::Path,
+    version: Option<String>,
+    version_only: bool,
+    manifest_path: Option<PathBuf>,
+    require_manifest: bool,
+) -> anyhow::Result<ExitCode> {
+    let version = resolve_packaging_version(repo_root, version)?;
+    let mode = exo_dev::packaging::ChocolateyMode {
+        version_only,
+        manifest_path,
+        require_manifest,
+    };
+    match exo_dev::packaging::validate_chocolatey(repo_root, &version, mode) {
+        Ok(report) => {
+            print!("{}", exo_dev::packaging::render(&report));
+            if report.ok() {
+                if version_only {
+                    println!(
+                        "Chocolatey version validation PASSED for ExoSnap {version} (nuspec + chocolateyinstall.ps1 name one version)."
+                    );
+                } else {
+                    println!(
+                        "Chocolatey package validation PASSED for ExoSnap {version} (nuspec + chocolateyinstall.ps1 consistent)."
+                    );
+                }
+                Ok(ExitCode::SUCCESS)
+            } else {
+                let kind = if version_only { "version" } else { "package" };
+                println!(
+                    "Chocolatey {kind} validation FAILED ({} error(s)) for version {version}.",
+                    report.errors.len()
+                );
+                Ok(ExitCode::FAILURE)
+            }
+        }
+        Err(error) => {
+            eprintln!("{error:#}");
+            Ok(ExitCode::FAILURE)
+        }
+    }
+}
+
+fn packaging_winget(
+    repo_root: &std::path::Path,
+    version: Option<String>,
+) -> anyhow::Result<ExitCode> {
+    let version = resolve_packaging_version(repo_root, version)?;
+    match exo_dev::packaging::validate_winget(repo_root, &version) {
+        Ok(report) => {
+            print!("{}", exo_dev::packaging::render(&report));
+            if report.ok() {
+                println!(
+                    "WinGet manifest validation PASSED for Codexo.ExoSnap {version} (3 files, dependency on Microsoft.VCRedist.2015+.x64 confirmed)."
+                );
+                Ok(ExitCode::SUCCESS)
+            } else {
+                println!(
+                    "WinGet manifest validation FAILED ({} error(s)) for version {version}.",
+                    report.errors.len()
+                );
+                Ok(ExitCode::FAILURE)
+            }
+        }
+        Err(error) => {
+            eprintln!("{error:#}");
+            Ok(ExitCode::FAILURE)
+        }
+    }
+}
+
+fn packaging_scoop(
+    repo_root: &std::path::Path,
+    version: Option<String>,
+) -> anyhow::Result<ExitCode> {
+    let version = resolve_packaging_version(repo_root, version)?;
+    match exo_dev::packaging::validate_scoop(repo_root, &version) {
+        Ok(report) => {
+            print!("{}", exo_dev::packaging::render(&report));
+            if report.ok() {
+                println!("Scoop manifest validation PASSED for ExoSnap {version}.");
+                Ok(ExitCode::SUCCESS)
+            } else {
+                println!(
+                    "Scoop manifest validation FAILED ({} error(s)) for version {version}.",
+                    report.errors.len()
+                );
+                Ok(ExitCode::FAILURE)
+            }
+        }
+        Err(error) => {
+            eprintln!("{error:#}");
+            Ok(ExitCode::FAILURE)
+        }
+    }
+}
+
+fn packaging_msi_harvest(repo_root: &std::path::Path) -> anyhow::Result<ExitCode> {
+    match exo_dev::packaging::validate_msi_harvest(repo_root) {
+        Ok(report) => {
+            print!("{}", exo_dev::packaging::render(&report));
+            if report.ok() {
+                println!(
+                    "MSI harvest validation PASSED (Package.wxs is metadata-only, references StagingFiles)."
+                );
+                Ok(ExitCode::SUCCESS)
+            } else {
+                println!(
+                    "MSI harvest validation FAILED ({} error(s)).",
+                    report.errors.len()
+                );
+                Ok(ExitCode::FAILURE)
+            }
+        }
+        Err(error) => {
+            eprintln!("{error:#}");
+            Ok(ExitCode::FAILURE)
+        }
     }
 }
 
