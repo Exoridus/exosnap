@@ -38,10 +38,10 @@ namespace exosnap::crash_capture {
 // literal, hand-repeated brace-list inside BeforeSendHook (crash_capture.cpp),
 // which could drift from this array. BeforeSendHook now iterates
 // AllowedTagKeys() instead. The markers below are also parsed by
-// scripts/validate-privacy-allowlist.ps1, which checks that every key here is
-// documented in PRIVACY.md and docs/product-spec.md §14 (and vice versa) — do
-// not reformat the array declaration in a way the script's regex would miss
-// (see that script's header comment for the exact pattern it expects).
+// `cargo exo-dev privacy allowlist`, which checks that every key here is
+// documented in PRIVACY.md and docs/product-spec.md section 14, and vice
+// versa. Do not reformat the array declaration in a way that would break the
+// check's regex (tools/exo-dev/src/privacy/allowlist.rs).
 // PRIVACY-ALLOWLIST-BEGIN
 inline constexpr std::array<std::string_view, 10> kAllowedTagKeys = {
     "os.name",     "os.version",      "gpu.model", "gpu.vendor",  "gpu.driver",

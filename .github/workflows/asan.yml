@@ -80,9 +80,9 @@ jobs:
       # finding surfaces as a normal ctest failure with the report in the log.
       - name: Test (windows-x64-ninja-asan)
         run: >-
-          pwsh -NonInteractive -File scripts/run-tests.ps1
-          -BuildDir build/windows-x64-ninja-asan -Config Debug
-          -ExcludeLabel live
+          cargo exo-dev test
+          --build-dir build/windows-x64-ninja-asan --config Debug
+          --exclude-label live
 
       - name: sccache stats
         if: always()

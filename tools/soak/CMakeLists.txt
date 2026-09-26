@@ -73,11 +73,5 @@ exosnap_add_gtest(
 )
 target_compile_definitions(soak_synthetic_tests PRIVATE NOMINMAX)
 
-if(Python3_EXECUTABLE)
-    add_test(
-        NAME soak.av_sync_analyzer_unit
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/dev/test_av_sync_check.py"
-    )
-    set_tests_properties(soak.av_sync_analyzer_unit PROPERTIES TIMEOUT 30)
-    exosnap_set_test_phase(soak.av_sync_analyzer_unit hermetic)
-endif()
+# The A/V-sync analyzer's own unit tests live with its implementation now:
+# `cargo test -p exo-dev av_sync::`, run as part of the `rust` verification step.

@@ -10,19 +10,19 @@ This is a thin download-at-install package. It embeds no binaries, which is why 
 
 ## The checksum placeholder
 
-Between a version bump and the published release the MSI does not exist, so no real hash can be written. `checksum64` carries 64 zeros in that window, and `scripts/validate-chocolatey-package.ps1` fails on it unconditionally so it cannot be packed or pushed by accident. Fill it from the `ExoSnap-<x.y.z>-windows-x64.msi.sha256` sidecar once the release workflow has published it. The full release order is in `docs/release-checklist.md` §8.
+Between a version bump and the published release the MSI does not exist, so no real hash can be written. `checksum64` carries 64 zeros in that window, and `cargo exo-dev packaging chocolatey` fails on it unconditionally so it cannot be packed or pushed by accident. Fill it from the `ExoSnap-<x.y.z>-windows-x64.msi.sha256` sidecar once the release workflow has published it. The full release order is in `docs/release-checklist.md` §8.
 
 ## Submission
 
 ```powershell
-pwsh scripts/validate-chocolatey-package.ps1 -Version <x.y.z> -RequireManifest -ManifestPath <manifest>
+cargo exo-dev packaging chocolatey --version <x.y.z> --require-manifest --manifest-path <manifest>
 choco pack packaging/chocolatey/exosnap.nuspec --output-directory $env:TEMP/exosnap-choco
 choco push $env:TEMP/exosnap-choco/exosnap.<x.y.z>.nupkg --source https://push.chocolatey.org/
 ```
 
-`<manifest>` is the `artifact-manifest.json` written by `scripts/build-release-artifacts.ps1`. `docs/release-checklist.md` §8 names its location. `-RequireManifest` is mandatory for a real submission. Without it, a missing manifest skips the checksum cross-check instead of failing it.
+`<manifest>` is the `artifact-manifest.json` written by `scripts/build-release-artifacts.ps1`. `docs/release-checklist.md` §8 names its location. `--require-manifest` is mandatory for a real submission. Without it, a missing manifest skips the checksum cross-check instead of failing it.
 
-A submission is reviewed by a human moderator after two automated services have run: the *validator*, which checks the metadata and the automation scripts against the published rules, and the *verifier*, which installs and uninstalls the package on a clean machine. The validator's mechanically checkable rules are mirrored in `scripts/validate-chocolatey-package.ps1` so a failure costs a local second rather than a review round trip. When a moderator asks for a change, the corrected package is pushed under the **same** version, not a new one.
+A submission is reviewed by a human moderator after two automated services have run: the *validator*, which checks the metadata and the automation scripts against the published rules, and the *verifier*, which installs and uninstalls the package on a clean machine. The validator's mechanically checkable rules are mirrored in `cargo exo-dev packaging chocolatey` so a failure costs a local second rather than a review round trip. When a moderator asks for a change, the corrected package is pushed under the **same** version, not a new one.
 
 ## Uninstall
 

@@ -31,8 +31,8 @@ git switch -c my-change origin/next
 cmake --preset windows-x64-ninja-debug
 cmake --build --preset windows-x64-ninja-debug-exosnap
 
-pwsh scripts/run-tests.ps1                          # whole suite (builds that tree first)
-pwsh scripts/run-tests.ps1 -Filter recorder_core.   # one binary
+cargo exo-dev test                                    # whole suite (builds that tree first)
+cargo exo-dev test --filter recorder_core.            # one binary
 ```
 
 ## Making a change
@@ -40,9 +40,9 @@ pwsh scripts/run-tests.ps1 -Filter recorder_core.   # one binary
 1. Work on a branch off `origin/next` for features and general fixes. `next` is the development default. For a Stable patch, branch from `origin/main` and merge the patch back into `next` after it lands. `main` tracks the latest Stable release.
 2. Keep the change scoped to one subsystem where you can. Match the style of the code around you.
 3. Business and product policy stays in C++. QML owns presentation, layout, and interaction only.
-4. Add or update focused tests for what you changed. `scripts/run-tests.ps1` is the entry point.
+4. Add or update focused tests for what you changed. `cargo exo-dev test` is the entry point.
 5. Run `cargo exo-dev verify --fast` while iterating and `cargo exo-dev verify --full` before pushing. The git hooks use the same entry point; CI runs the full gate again.
-6. Open a pull request against `next` with `scripts/open-pr.ps1`, or pass `-Base main` for a Stable patch. Describe what changed, what validates it, and any product, architecture or workflow updates the change required.
+6. Open a pull request against `next` with `cargo exo-dev pr open`, or pass `--base main` for a Stable patch. Describe what changed, what validates it, and any product, architecture or workflow updates the change required.
 
 ## Commit subjects and pull request descriptions
 
@@ -56,34 +56,34 @@ The same subject line passes through three points, and the number belongs to exa
 |---|---|---|
 | Local commit | `type(scope): summary` | none |
 | Pull request title | `type(scope): summary` | none |
-| Merged subject on the target branch | `type(scope): summary (#N)` | exactly one, appended by `scripts/merge-pr.ps1` |
+| Merged subject on the target branch | `type(scope): summary (#N)` | exactly one, appended by `cargo exo-dev pr merge` |
 
 A title that already ends in its own number is rejected, because the append would land it twice. A citation of a *different* pull request inside the summary is untouched. For example, "finish what (#M) started" remains valid.
 
 A body on a local commit is optional and short. The pull request description carries the reasoning: what changed, why, what measured it, what a breaking change breaks and what to do about it. The changelog links to the pull request, so nothing needs saying twice.
 
-`scripts/check-commit-policy.ps1` checks the subjects this branch adds. It applies from the commit that introduced the policy onward; history behind that point was written under different rules and is left alone. The pull request title is checked separately, by `.github/workflows/pr-policy.yml`, which is a workflow of its own so that correcting a title costs seconds rather than a full Windows build.
+`exo-dev check commit-policy` checks the subjects this branch adds. It applies from the commit that introduced the policy onward; history behind that point was written under different rules and is left alone. The pull request title is checked separately, by `.github/workflows/pr-policy.yml`, which is a workflow of its own so that correcting a title costs seconds rather than a full Windows build.
 
 ## Opening and merging a pull request
 
-Two scripts own this, and neither the title nor the merge subject is assembled by hand:
+Two `exo-dev` subcommands own this, and neither the title nor the merge subject is assembled by hand:
 
-- `scripts/open-pr.ps1` derives the title from the branch's newest commit subject (or takes `-Subject`), validates it against the same parser the changelog cut reads, creates the pull request as a draft, reads its stored metadata back, and only then marks it ready for review. A draft does not start the heavy Windows legs, so a title that has to be fixed is fixed before anything expensive runs.
-- `scripts/merge-pr.ps1` builds the merged subject as `title (#N)` from the *parsed* title and passes it with `--subject`, so the number cannot land twice. It prints the subject and merges nothing unless `-Confirm` is given — and it is only ever given when the merge was explicitly asked for.
+- `cargo exo-dev pr open` derives the title from the branch's newest commit subject (or takes `--subject`), validates it against the same parser the changelog cut reads, creates the pull request as a draft, reads its stored metadata back, and only then marks it ready for review. A draft does not start the heavy Windows legs, so a title that has to be fixed is fixed before anything expensive runs.
+- `cargo exo-dev pr merge` builds the merged subject as `title (#N)` from the *parsed* title and passes it with `--subject`, so the number cannot land twice. It prints the subject and merges nothing unless `--confirm` is given — and it is only ever given when the merge was explicitly asked for.
 
 No machine paths, private workspace references, or agent and session history in commit messages, pull request descriptions, or source comments.
 
 ## The changelog is written by the release cut
 
-`CHANGELOG.md` is not edited in a pull request. Its `## [Unreleased]` section is assembled at the release cut by `scripts/new-changelog.ps1` from the squash commits since the last version tag: the type files the entry (`feat` under Added, `fix` and `perf` under Fixed, `refactor` and anything marked `!` under Changed, `docs` under Documentation, while `ci`, `build`, `test`, `chore` and `style` produce no entry), and the subject becomes the line, linked to its pull request. The description is not copied in: the changelog is the quick read and the pull request is where the detail lives.
+`CHANGELOG.md` is not edited in a pull request. Its `## [Unreleased]` section is assembled at the release cut by `cargo exo-dev release changelog` from the squash commits since the last version tag: the type files the entry (`feat` under Added, `fix` and `perf` under Fixed, `refactor` and anything marked `!` under Changed, `docs` under Documentation, while `ci`, `build`, `test`, `chore` and `style` produce no entry), and the subject becomes the line, linked to its pull request. The description is not copied in: the changelog is the quick read and the pull request is where the detail lives.
 
-Two branches that both add a line to the top of the same section conflict on every second merge, which is the whole reason the file is off limits between cuts. `scripts/check-commit-policy.ps1` fails a branch that writes it; `pwsh scripts/new-changelog.ps1` previews what the cut would add. The release notes are rendered from the same section by `scripts/render-release-notes.ps1` through `.github/templates/release-notes.md`, so the releases page and the file cannot disagree.
+Two branches that both add a line to the top of the same section conflict on every second merge, which is the whole reason the file is off limits between cuts. `exo-dev check commit-policy` fails a branch that writes it; `cargo exo-dev release changelog` previews what the cut would add. The release notes are rendered from the same section by `cargo exo-dev release release-notes` through `.github/templates/release-notes.md`, so the releases page and the file cannot disagree.
 
 ## Prose is written in long lines
 
 Prose — pull request descriptions, `docs/`, READMEs, release notes, commit bodies where there is one — is written in long lines. Break a line where a paragraph ends or where the break carries meaning, never at a column. Text wrapped at column 80 reads as a wall everywhere it is rendered at another width, and an edit to one sentence reflows every line after it, so a one-line change arrives as a whole-paragraph diff.
 
-Code comments follow the formatter and are not covered by this; `scripts/check-source-hygiene.ps1` owns those. `scripts/check-prose-lines.ps1` checks the Markdown lines a branch adds, and exempts code blocks, tables, headings and front matter. Most of the tree predates the rule and is not swept: the rule governs new and changed prose, and the backlog is taken on deliberately rather than as a side effect of an unrelated change.
+Code comments follow the formatter and are not covered by this; `exo-dev check source-hygiene` owns those. This is a writing convention, not an automated gate: AGENTS.md's "do not build brittle prose-style linters" rule retired the hard-wrapped-prose checker rather than sweeping the pre-existing backlog into a check.
 
 ## License
 

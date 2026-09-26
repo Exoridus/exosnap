@@ -1,5 +1,6 @@
 //! MSI installation on a disposable Windows machine.
 
+use anyhow::Result;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,10 @@ use crate::plan::Tier;
 use crate::scenario::{Lane, Scenario, Step, Stop};
 use crate::{infra_ensure, product_ensure};
 
-const INSTALL_KEY: &str = r"HKLM\SOFTWARE\Codexo\ExoSnap";
+/// The registry key an installed ExoSnap publishes its product state under.
+/// Shared with the Chocolatey rehearsal, which installs and removes the same
+/// product through a different channel and must recognize the same state.
+pub(crate) const INSTALL_KEY: &str = r"HKLM\SOFTWARE\Codexo\ExoSnap";
 const USER_KEY: &str = r"HKCU\SOFTWARE\Codexo\ExoSnap";
 
 pub fn scenarios() -> Vec<Scenario> {
@@ -38,7 +42,8 @@ pub fn scenarios() -> Vec<Scenario> {
     }]
 }
 
-fn reg_value(name: &str) -> Step<Option<String>> {
+/// Reads one value from [`INSTALL_KEY`], the product's own registry state.
+pub(crate) fn reg_value(name: &str) -> Result<Option<String>> {
     let out = crate::tools::run(
         Command::new("reg.exe").args(["query", INSTALL_KEY, "/v", name]),
         secs(10.0),
@@ -49,11 +54,13 @@ fn reg_value(name: &str) -> Step<Option<String>> {
     Ok(parse_reg_value(&out.stdout, name))
 }
 
-fn reg_key_exists(key: &str) -> Step<bool> {
+/// Whether a registry key exists at all, regardless of its values.
+pub(crate) fn reg_key_exists(key: &str) -> Result<bool> {
     Ok(crate::tools::run(Command::new("reg.exe").args(["query", key]), secs(10.0))?.success())
 }
 
-fn parse_reg_value(output: &str, name: &str) -> Option<String> {
+/// Parses one named value out of `reg.exe query`'s `name  REG_TYPE  value` line format.
+pub(crate) fn parse_reg_value(output: &str, name: &str) -> Option<String> {
     output.lines().find_map(|line| {
         let words: Vec<&str> = line.split_whitespace().collect();
         let kind = words.iter().position(|word| word.starts_with("REG_"))?;
@@ -66,7 +73,10 @@ fn parse_reg_value(output: &str, name: &str) -> Option<String> {
     })
 }
 
-fn tree_hashes(root: &Path) -> Step<BTreeMap<String, String>> {
+/// Relative path (lowercase, forward slashes) to sha256 for every file under
+/// `root`, or an empty map when `root` does not exist. Shared by every
+/// scenario that has to say whether a directory tree changed.
+pub(crate) fn tree_hashes(root: &Path) -> Result<BTreeMap<String, String>> {
     let mut files = BTreeMap::new();
     if !root.is_dir() {
         return Ok(files);

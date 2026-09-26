@@ -5,10 +5,10 @@
 // SOURCE OF TRUTH
 // ---------------
 // The SHAPES are not here. They live in `app/assets/brand/marks/*.svg`, written
-// by `scripts/generate-brand-marks.py` from `marks/parameters.json`, which is the
-// only place the aperture's five numbers exist. Moving a radius is an edit to
-// that file and a re-run of that script; nothing in C++, in QML or in a second
-// generator restates a coordinate.
+// by `cargo exo-dev generate-brand-marks` from `marks/parameters.json`, which is
+// the only place the aperture's five numbers exist. Moving a radius is an edit
+// to that file and a re-run of that command; nothing in C++, in QML or in a
+// second generator restates a coordinate.
 //
 // What IS here is everything the SVG cannot carry:
 //
@@ -37,7 +37,7 @@ inline constexpr double kCenter = 16.0;
 // ---------------------------------------------------------------------------
 // The reference palette
 // ---------------------------------------------------------------------------
-// The literal colours `scripts/generate-brand-marks.py` writes into the suite,
+// The literal colours `cargo exo-dev generate-brand-marks` writes into the suite,
 // and the roles they stand for. The runtime replaces each with the resolved
 // colour of the running appearance and accent, so a shipped mark carries the
 // user's palette rather than the designer's.

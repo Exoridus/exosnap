@@ -44,13 +44,13 @@ The native pipe roles are `ExoSnap.LiveVerify.<run-id>` and `ExoSnap.Updater.<ru
 Live Verify is not a harness-isolation switch. Set `EXOSNAP_CONFIG_DIR` and `EXOSNAP_OUTPUT_DIR` explicitly when a run must not touch a user's profile/output. Do not disable the single-instance, close or recording guards to make a check pass.
 
 ```powershell
-pwsh scripts/live-verify-client.ps1 hello -RunId <run-id>
-pwsh scripts/live-verify-client.ps1 capabilities -RunId <run-id>
-pwsh scripts/live-verify-client.ps1 state -RunId <run-id>
-pwsh scripts/live-verify-client.ps1 describe -RunId <run-id>
-pwsh scripts/live-verify-client.ps1 query record -RunId <run-id>
-pwsh scripts/live-verify-client.ps1 command record.pause -RunId <run-id>
-pwsh scripts/live-verify-client.ps1 wait record.stateChanged -Where stateText=Paused -TimeoutSeconds 10 -RunId <run-id>
+exo-verify control hello --run-id <run-id>
+exo-verify control capabilities --run-id <run-id>
+exo-verify control state --run-id <run-id>
+exo-verify control describe --run-id <run-id>
+exo-verify control query record --run-id <run-id>
+exo-verify control command record.pause --run-id <run-id>
+exo-verify control wait record.stateChanged --where stateText=Paused --timeout-seconds 10 --run-id <run-id>
 ```
 
 The client exits 0 on success, 2 for usage, 3 for connection/handshake/protocol failure, 4 for an answered refusal and 5 for timeout. It does not silently reconnect/retry: process replacement can be the very fact an update test is observing.
@@ -108,7 +108,7 @@ The runner should prepare machine-observable state, ask one bounded human questi
 Tests live in the protocol/server/runner-state suites:
 
 ```powershell
-pwsh scripts/run-tests.ps1 -Filter live_verify
+cargo exo-dev test --filter live_verify
 ```
 
 They cover activation, framing, hostile clients, allowed intents, asynchronous state, shutdown and artifact-bound result handling. Real cross-process package installation and real hardware remain separate acceptance layers.

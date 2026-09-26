@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn a_script_change_runs_the_script_tests_and_nothing_heavier() {
-        let s = scope(&["scripts/run-tests.ps1"]);
+        let s = scope(&["scripts/tests/build-artifacts.tests.ps1"]);
         assert!(s.requires_script_tests);
         assert!(!s.requires_build);
     }

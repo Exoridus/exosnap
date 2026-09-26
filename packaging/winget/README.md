@@ -24,4 +24,4 @@ The installer always points at the immutable public GitHub Release MSI asset and
 
 ExoSnap (`exosnap.exe` and the shipped Qt6 DLLs) links the dynamic MSVC runtime (`/MD`, the project default). The MSI does **not** bundle `VCRUNTIME140.dll`, `MSVCP140.dll`, or the related runtime DLLs. `Codexo.ExoSnap.installer.yaml` declares `Microsoft.VCRedist.2015+.x64` under `Dependencies.PackageDependencies`, so WinGet installs that package automatically before installing ExoSnap.
 
-On a clean machine without the redistributable, `exosnap.exe` cannot start. Keep the `Dependencies` block. `scripts/validate-winget-manifest.ps1` enforces it.
+On a clean machine without the redistributable, `exosnap.exe` cannot start. Keep the `Dependencies` block. `cargo exo-dev packaging winget` enforces it.

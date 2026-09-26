@@ -127,7 +127,7 @@ jobs:
   # clang-analyzer-cplusplus.NewDelete*. Each was measured at zero findings in
   # repository-owned files across all 509 project translation units before it was
   # promoted; see .clang-tidy for the candidates that did not qualify, and
-  # scripts/run-clang-tidy-blocking.ps1 for the runner.)
+  # cargo exo-dev lint clang-tidy for the runner.)
   lint:
     name: lint
     runs-on: windows-2022
@@ -210,8 +210,8 @@ jobs:
           zizmor --version
 
       # Drift, source hygiene (the PR range as a gate, the whole-tree backlog as
-      # a report elsewhere), the pull request title preflight, prose lines, and
-      # the two workflow linters. The title check here is a cost gate for the
+      # a report elsewhere), the pull request title preflight, and the two
+      # workflow linters. The title check here is a cost gate for the
       # Windows legs that hang off this job; the authoritative verdict is
       # pr-policy.yml's, which alone listens for `edited`.
       - name: Guardrails gate (exo-dev ci-guardrails)
@@ -490,7 +490,7 @@ jobs:
             clang-tidy-blocking-${{ runner.os }}-
 
       # Configure (sccache on), qmllint over every QML module, build, the test
-      # suite through run-tests.ps1 without the `live` label (this runner has no
+      # suite through exo-dev test without the `live` label (this runner has no
       # GPU, and a test reading real machine state is excluded rather than
       # trusted to skip itself), then the scoped blocking clang-tidy set against
       # HEAD^. Tests and clang-tidy only run behind a build that passed in the

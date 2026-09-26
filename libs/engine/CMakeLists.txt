@@ -1405,7 +1405,7 @@ target_include_directories(test_playback_clock PRIVATE src)
 # tests actually decode (DecodeFrameAtRaw/StartPlaybackDecode), which needs
 # a real bitstream; those open a checked-in-locally (gitignored, .workspace/ is
 # scratch) fixture clip via EXOSNAP_SOURCE_DIR and GTEST_SKIP when it is not
-# present on the host, same convention as test_analyze_encode_perf.cpp.
+# present on the host.
 # FFmpeg::mux is listed explicitly because the test compiles
 # src/edit_player_engine.cpp itself and needs the libavformat/libavcodec
 # headers at compile time (exosnap_engine links FFmpeg PRIVATE, so its include
@@ -1746,9 +1746,9 @@ exosnap_add_gtest(
 )
 target_include_directories(test_perf_histogram PRIVATE src)
 
-# analyze-encode-perf.py round-trip: write a synthetic engine.jsonl via the real
-# logging layer and assert the script recomputes the same percentiles from the
-# summary histogram. Skips itself when no Python interpreter is present.
+# exo-dev perf-analyze round-trip: write a synthetic engine.jsonl via the real
+# logging layer and assert it recomputes the same percentiles from the summary
+# histogram that the C++ LatencyHistogram would report.
 exosnap_add_gtest(
     NAME test_analyze_encode_perf
     TEST_PREFIX engine.

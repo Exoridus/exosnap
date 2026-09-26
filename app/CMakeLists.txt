@@ -1354,21 +1354,40 @@ target_compile_definitions(brand_geometry_tests PRIVATE
 # and both stayed consistent while the generator quietly stopped reproducing
 # either -- so the next person to run it would have silently reverted a shipped
 # correction. --check writes nothing and exits non-zero on drift.
-find_package(Python3 COMPONENTS Interpreter QUIET)
-if(Python3_EXECUTABLE)
+#
+# Resolution order mirrors FindExoDevExe() in the C++ gtests that shell out to
+# this same binary (see libs/engine/tests/test_analyze_encode_perf.cpp):
+# EXOSNAP_TEST_TOOL_EXE first, then the cargo workspace's known debug/release
+# output directories. Unlike a gtest's _popen call, add_test's COMMAND does not
+# go through cmd.exe, so it needs none of that quoting workaround.
+if(DEFINED ENV{EXOSNAP_TEST_TOOL_EXE} AND EXISTS "$ENV{EXOSNAP_TEST_TOOL_EXE}")
+    set(EXOSNAP_EXO_DEV_EXE "$ENV{EXOSNAP_TEST_TOOL_EXE}")
+else()
+    set(EXOSNAP_EXO_DEV_EXE "EXOSNAP_EXO_DEV_EXE-NOTFOUND")
+    foreach(config debug release)
+        foreach(target tools/target/exo-dev-host tools/target)
+            set(candidate "${CMAKE_SOURCE_DIR}/${target}/${config}/exo-dev.exe")
+            if(NOT EXOSNAP_EXO_DEV_EXE AND EXISTS "${candidate}")
+                set(EXOSNAP_EXO_DEV_EXE "${candidate}")
+            endif()
+        endforeach()
+    endforeach()
+endif()
+if(EXOSNAP_EXO_DEV_EXE)
     add_test(
         NAME brand.geometry.marks_match_the_generator
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/generate-brand-marks.py" --check
+        COMMAND "${EXOSNAP_EXO_DEV_EXE}" generate-brand-marks --check
     )
     set_tests_properties(brand.geometry.marks_match_the_generator PROPERTIES TIMEOUT 60)
     exosnap_set_test_phase(brand.geometry.marks_match_the_generator hermetic)
 elseif(EXOSNAP_REQUIRE_TEST_TOOLS)
     message(FATAL_ERROR
-        "Python 3 was not found, so brand.geometry.marks_match_the_generator would not be registered "
-        "and the suite would pass without it. Install Python 3 or configure with "
-        "-DEXOSNAP_REQUIRE_TEST_TOOLS=OFF to accept a reduced suite.")
+        "No exo-dev.exe was found, so brand.geometry.marks_match_the_generator would not be "
+        "registered and the suite would pass without it. Build tools/exo-dev first, set "
+        "EXOSNAP_TEST_TOOL_EXE, or configure with -DEXOSNAP_REQUIRE_TEST_TOOLS=OFF to accept "
+        "a reduced suite.")
 else()
-    message(STATUS "Python 3 not found: the brand geometry generator check will not be registered.")
+    message(STATUS "No exo-dev.exe found: the brand geometry generator check will not be registered.")
 endif()
 
 # Pure unit tests for HumanizeEngineDetail (RecordingErrorPanel's raw-enum → canon
@@ -1406,15 +1425,8 @@ if(EXOSNAP_PWSH)
     set_tests_properties(live_verify.endpoint_names PROPERTIES TIMEOUT 120 LABELS "live_verify")
     exosnap_set_test_phase(live_verify.endpoint_names hermetic)
 
-    # The packaging version-drift gate. Every case is the real packaging tree with
-    # exactly one literal edited: a partial bump is the mistake the gate exists for,
-    # and a check that only noticed when everything moved together would notice
-    # nothing.
-    add_test(NAME pipeline.packaging_version
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/packaging-version.tests.ps1")
-    set_tests_properties(pipeline.packaging_version PROPERTIES TIMEOUT 300 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.packaging_version hermetic)
+    # The packaging version-drift gate is Rust, not PowerShell: the contract is
+    # `cargo test -p exo-dev release::version::`, not a CTest case here.
 
     # The third-party identity the release manifest records. The cases that matter
     # are the refusals: a pin that has gone missing has to stop the manifest, because
@@ -1426,13 +1438,8 @@ if(EXOSNAP_PWSH)
     exosnap_set_test_phase(pipeline.dependency_identity hermetic)
 
     # The publication policy, offline half only: what packaging/publication-policy.json
-    # is allowed to say about each channel. The feed half of check-feed-drift.ps1 reads
-    # four public services and is advisory by design, so it is not a test.
-    add_test(NAME pipeline.publication_policy
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/publication-policy.tests.ps1")
-    set_tests_properties(pipeline.publication_policy PROPERTIES TIMEOUT 300 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.publication_policy hermetic)
+    # is allowed to say about each channel. The feed half is advisory by design, so
+    # it is not a test; its contract is `cargo test -p exo-dev release::feed_drift`.
 
     # The Hyper-V verification guest recipe. Registered here for the reason the
     # release-runner cases are: what it is worth testing about a virtual machine is
@@ -1458,86 +1465,31 @@ if(EXOSNAP_PWSH)
     # Label "pipeline", deliberately not "live_verify": these cases guard the
     # local pipeline rather than the Live Verify runner, and nothing here queries
     # hardware.
-    add_test(NAME pipeline.drift_guards
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/check-drift.tests.ps1")
-    set_tests_properties(pipeline.drift_guards PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.drift_guards hermetic)
-
-    add_test(NAME pipeline.quality_helpers
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/verify-pipeline.tests.ps1")
-    set_tests_properties(pipeline.quality_helpers PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.quality_helpers hermetic)
-
-    add_test(NAME pipeline.source_hygiene
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/check-source-hygiene.tests.ps1")
-    set_tests_properties(pipeline.source_hygiene PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.source_hygiene hermetic)
+    #
+    # The Qt/build drift guard (qt-version-consistency, setup-qt-centralized,
+    # no-qmake-project, qt-sdk-path-allowlist) and the source-hygiene
+    # provenance scan are Rust, not PowerShell: their contracts are
+    # `cargo test -p exo-dev drift::` and `cargo test -p exo-dev
+    # source_hygiene::`, not a CTest case here.
 
     # The subject grammar, the changelog assembler and the release-notes
     # renderer share one parser, and the release cut is the first place a
     # disagreement between them would surface -- after the tag is pushed.
-    add_test(NAME pipeline.commit_policy
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/commit-policy.tests.ps1")
-    set_tests_properties(pipeline.commit_policy PROPERTIES TIMEOUT 300 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.commit_policy hermetic)
+    # Their contract is `cargo test -p exo-dev commit_policy::` and
+    # `cargo test -p exo-dev release::changelog`, not a CTest case here.
 
-    # A cost contract, not a code one: that a pull request title correction
-    # cannot re-trigger the Windows build matrix, and that the metadata verdict
-    # is not the same status context as the code verdict.
-    add_test(NAME pipeline.pr_workflow_contract
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/pr-workflow-contract.tests.ps1")
-    set_tests_properties(pipeline.pr_workflow_contract PROPERTIES TIMEOUT 120 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.pr_workflow_contract hermetic)
+    # The cost contract that a pull request title correction cannot re-trigger
+    # the Windows build matrix, and that the metadata verdict is not the same
+    # status context as the code verdict, is `cargo test -p exo-dev pr::`, not
+    # a CTest case here.
 
-    add_test(NAME pipeline.prose_lines
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/prose-lines.tests.ps1")
-    set_tests_properties(pipeline.prose_lines PROPERTIES TIMEOUT 300 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.prose_lines hermetic)
+    # The hard-wrapped prose guard is retired (StepId::ProseLines removed):
+    # scripts/check-prose-lines.ps1 and its test suite no longer exist.
 
-    # Needs clang-tidy, and reports that it is missing rather than passing
-    # without it -- which is the same distinction the guard itself is about.
-    add_test(NAME pipeline.lint_canaries
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/lint-canaries.tests.ps1")
-    set_tests_properties(pipeline.lint_canaries PROPERTIES TIMEOUT 300 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.lint_canaries hermetic)
-
-    # The entry point every other gate runs the suite through. What it promises
-    # is negative -- that a label exclusion cannot take a category with it, that
-    # an empty selection is an error rather than a pass, and that a failing
-    # test's own logs survive the cleanup -- and none of that is observable from
-    # a green run of the real suite.
-    # The repository's own statement of what GitHub must enforce, and the
-    # report that compares it with what GitHub actually does. Registered because
-    # both halves are only wrong in one direction that matters -- a live state
-    # weaker than the declared one -- and that is unreachable without fixtures.
-    add_test(NAME pipeline.github_rulesets
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/github-rulesets.tests.ps1")
-    set_tests_properties(pipeline.github_rulesets PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.github_rulesets hermetic)
-
-    add_test(NAME pipeline.run_tests_contract
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/run-tests-contract.tests.ps1")
-    set_tests_properties(pipeline.run_tests_contract PROPERTIES TIMEOUT 420 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.run_tests_contract hermetic)
-
-    # What a test result is attributed to. Every case builds a throwaway git
-    # repository, because the property under test is that two working trees the
-    # build can tell apart are never given the same identity -- and a green run of
-    # the real suite cannot show that.
-    add_test(NAME pipeline.source_fingerprint
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/source-fingerprint.tests.ps1")
-    set_tests_properties(pipeline.source_fingerprint PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.source_fingerprint hermetic)
+    # The entry point every other gate runs the suite through, and the digest a
+    # test result is attributed to, are Rust, not PowerShell: the contracts are
+    # `cargo test -p exo-dev test::runner::` and `cargo test -p exo-dev
+    # test::fingerprint::`, not a CTest case here.
 
     # Which build tree a tool resolves out of. Four trees can hold the same binary
     # and the selection is only ever wrong quietly -- an old copy runs, reports
@@ -1548,14 +1500,10 @@ if(EXOSNAP_PWSH)
     set_tests_properties(pipeline.build_artifacts PROPERTIES TIMEOUT 120 LABELS "pipeline")
     exosnap_set_test_phase(pipeline.build_artifacts hermetic)
 
-    # Holds and contends the real host locks from child processes, so it runs alone:
-    # beside run_tests_contract (which runs run-tests.ps1, which takes the device
-    # lock) its timing assertions would measure the other test's hold.
-    add_test(NAME pipeline.host_resource_lock
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/host-resource-lock.tests.ps1")
-    set_tests_properties(pipeline.host_resource_lock PROPERTIES TIMEOUT 300 LABELS "pipeline" RUN_SERIAL TRUE)
-    exosnap_set_test_phase(pipeline.host_resource_lock hermetic)
+    # The host-wide build/tree/device locks (holds and contention from real
+    # child processes, inheritance to a child, an abandoned holder's release)
+    # are Rust, not PowerShell: the contract is `cargo test -p exo-dev
+    # host_lock::`, not a CTest case here.
 elseif(EXOSNAP_REQUIRE_TEST_TOOLS)
     message(FATAL_ERROR
         "pwsh was not found, so none of the Live Verify and pipeline script tests would be registered "

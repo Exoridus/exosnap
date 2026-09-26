@@ -6,14 +6,14 @@
 
 | Pass | Status | Entry point |
 |---|---|---|
-| Selected clang-tidy checks | Blocking | `scripts/run-clang-tidy-blocking.ps1`, the `clang-tidy` step of `cargo exo-dev verify` and of CI's `ci-build-debug` profile |
-| cppcheck warning/performance/portability | Blocking locally | `scripts/check-quality.ps1`, the `cppcheck` step of `cargo exo-dev verify`; no CI profile runs it yet |
+| Selected clang-tidy checks | Blocking | `cargo exo-dev lint clang-tidy`, the `clang-tidy` step of `cargo exo-dev verify` and of CI's `ci-build-debug` profile |
+| cppcheck warning/performance/portability | Blocking locally | `cargo exo-dev lint quality --only cppcheck`, the `cppcheck` step of `cargo exo-dev verify`; no CI profile runs it yet |
 | Broad clang-tidy advisory set | Advisory | `advisory-checks.yml` |
 | cppcheck unused-function analysis | Advisory | `advisory-checks.yml` |
 
 clang-tidy compilation integration requires Ninja; the Visual Studio generator does not run `CMAKE_CXX_CLANG_TIDY`. Use the lint preset or the explicit compile-database runner rather than interpreting a Visual Studio build as a tidy pass.
 
-The blocking set includes use-after-move, dangling handles, misleading indentation and the selected analyzer call/uninitialized/allocation checks. Read `.clang-tidy` and the blocking runner for exact patterns. Qt meta-object use and registered OS callbacks require special care when triaging apparent unused symbols; broad automated removal is unsafe.
+The blocking set includes use-after-move, dangling handles, misleading indentation and the selected analyzer call/uninitialized/allocation checks. Read `.clang-tidy` and `tools/exo-dev/src/lint/canaries.rs` for exact patterns. Qt meta-object use and registered OS callbacks require special care when triaging apparent unused symbols; broad automated removal is unsafe.
 
 MSVC `/W4 /WX` is supplemented by explicit unhandled-enumerator C4062 enablement. C4061 for switches with a `default` stays separate. Keep exhaustive policy switches genuinely exhaustive rather than adding a default that hides a new enum case.
 
@@ -21,7 +21,7 @@ MSVC `/W4 /WX` is supplemented by explicit unhandled-enumerator C4062 enablement
 
 First run it over all relevant project translation units and triage every repository-owned finding. A blocking check must have a clean actionable baseline, not a tree-wide suppression that hides its subject.
 
-Second add a deliberate violation under `scripts/tests/fixtures/lint-canaries` and prove `scripts/check-lint-canaries.ps1` rejects it. Zero findings can mean either clean code or a check that never executed. A canary proves the instrument runs; the tree scan proves the repository satisfies it. Neither replaces the other.
+Second add a deliberate violation under `scripts/tests/fixtures/lint-canaries` and prove `cargo exo-dev lint canaries` rejects it. Zero findings can mean either clean code or a check that never executed. A canary proves the instrument runs; the tree scan proves the repository satisfies it. Neither replaces the other.
 
 Record run-specific counts, commands and analysis with review evidence. Promote only the rule and durable rationale into configuration or this guide. Count distinct `(file, line, column, check)` sites rather than raw diagnostic lines, and compare runs only when their input sets and tool versions match.
 

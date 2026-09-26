@@ -13,8 +13,20 @@ use crate::profile::ProfileSpec;
 use crate::run::{Executor, Outcome, Status};
 use crate::step::StepId;
 
-/// check-quality.ps1's "a tool this run needed is not installed".
-const QUALITY_TOOL_MISSING_EXIT: i32 = 3;
+/// A native check's own signal that the external tool it needs is not
+/// installed, distinct from an ordinary failure. `native` downcasts to this
+/// type and maps it to `Status::ToolMissing`; every other error becomes
+/// `Status::Fail`.
+#[derive(Debug)]
+pub struct ToolMissing(pub String);
+
+impl std::fmt::Display for ToolMissing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ToolMissing {}
 
 pub struct Context {
     pub repo_root: PathBuf,
@@ -43,6 +55,30 @@ impl Context {
             .to_string()
     }
 
+    /// The built `exo-verify.exe`, so a step that needs its checks can call the
+    /// real binary instead of restating their logic in this crate.
+    /// `EXOSNAP_TEST_TOOL_EXE` first (a test pointing at a specific build), then
+    /// the workspace's own debug/release output directories.
+    fn exo_verify_exe(&self) -> Option<PathBuf> {
+        if let Ok(value) = std::env::var("EXOSNAP_TEST_TOOL_EXE") {
+            let path = PathBuf::from(value);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        for config in ["debug", "release"] {
+            let candidate = self
+                .repo_root
+                .join("tools/target")
+                .join(config)
+                .join("exo-verify.exe");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
     fn tree(&self) -> PathBuf {
         self.repo_root.join(&self.build_dir)
     }
@@ -66,6 +102,8 @@ pub struct RealExecutor {
     tests_unfiltered: bool,
     /// Inherit marks of the host locks the running step holds.
     lock_env: Vec<(String, String)>,
+    /// The locks, MSVC import and environment the test runner uses.
+    tests_host: Box<dyn crate::test::host::Host>,
 }
 
 impl RealExecutor {
@@ -79,6 +117,7 @@ impl RealExecutor {
             failed_tests: Vec::new(),
             tests_unfiltered,
             lock_env: Vec::new(),
+            tests_host: Box::new(crate::test::host::RealHost::default()),
         }
     }
 
@@ -127,16 +166,6 @@ impl RealExecutor {
                 Outcome::fail(detail).with_log(&log_text)
             }
         }
-    }
-
-    fn pwsh(&self, name: &str, script: &str, args: &[&str]) -> Outcome {
-        self.pwsh_with(
-            name,
-            script,
-            args.iter().map(|a| a.to_string()).collect(),
-            None,
-            &[],
-        )
     }
 
     fn pwsh_with(
@@ -221,6 +250,7 @@ impl RealExecutor {
                 let what = match kind {
                     LockKind::Tree => format!("tree lock on {}", tree.display()),
                     LockKind::Build => "host build lock".to_string(),
+                    LockKind::Device => "host device lock".to_string(),
                 };
                 println!(
                     "  waited {}s for the {what} held by another run",
@@ -324,6 +354,59 @@ impl RealExecutor {
         }
         Outcome::pass("format, clippy, tests")
     }
+
+    /// Runs an in-process (native) check. Writes the step's log to the same
+    /// place a spawned process's would land, so `--failure-tail-lines` and the
+    /// receipt's evidence work unchanged; streams that log inside a
+    /// `::group::`/`::endgroup::` pair in CI, matching how `StepRunner::run`
+    /// streams a child process's output; and turns `f`'s result into an
+    /// `Outcome` that can never pass silently.
+    ///
+    /// `f` returns the text to write to the step's log (typically the rendered
+    /// violations or findings) alongside the `Outcome` to report. An `Err`
+    /// becomes `Status::Fail`, printing the same `---- {name} ----` / reason
+    /// block the process path prints for a missing tool -- except when the
+    /// error downcasts to `ToolMissing`, which instead becomes
+    /// `Status::ToolMissing`: a required tool that is absent is never
+    /// conflated with an ordinary failure.
+    fn native(&self, name: &str, f: impl FnOnce() -> anyhow::Result<(String, Outcome)>) -> Outcome {
+        let (log_text, mut outcome) = match f() {
+            Ok(pair) => pair,
+            Err(error) => match error.downcast::<ToolMissing>() {
+                Ok(missing) => {
+                    let reason = missing.0;
+                    println!();
+                    println!("---- {name} ----");
+                    println!("{reason}");
+                    (reason.clone(), Outcome::new(Status::ToolMissing, reason))
+                }
+                Err(error) => {
+                    let detail = format!("{error:#}");
+                    (detail.clone(), Outcome::fail(detail))
+                }
+            },
+        };
+
+        let log_path = self.ctx.runner.log_path(name);
+        match std::fs::create_dir_all(&self.ctx.runner.log_dir)
+            .and_then(|()| std::fs::write(&log_path, &log_text))
+        {
+            Ok(()) => outcome = outcome.with_log(&log_path.display().to_string()),
+            Err(error) => eprintln!("exo-dev: could not write {}: {error}", log_path.display()),
+        }
+
+        if self.ctx.runner.stream {
+            println!("::group::{name}");
+            for line in log_text.lines() {
+                println!("{line}");
+            }
+            println!("::endgroup::");
+        }
+        if outcome.status == Status::Fail {
+            self.ctx.runner.print_tail(name, &log_path);
+        }
+        outcome
+    }
 }
 
 impl RealExecutor {
@@ -379,71 +462,222 @@ impl RealExecutor {
                 }
                 Outcome::pass("")
             }
-            StepId::Drift => self.pwsh("drift", "check-drift.ps1", &[]),
+            StepId::Drift => self.native("drift", || {
+                let report = crate::drift::check(&ctx.repo_root)?;
+                let mut log = String::new();
+                for v in &report.violations {
+                    let where_ = if v.line > 0 {
+                        format!("{}:{}", v.file, v.line)
+                    } else {
+                        v.file.clone()
+                    };
+                    log.push_str(&format!("[{}] {where_}: {}\n", v.rule, v.message));
+                }
+                let outcome = if report.violations.is_empty() {
+                    log.push_str(
+                        "check-drift: OK (Qt version, Qt setup, Qt SDK paths, no qmake project files)\n",
+                    );
+                    Outcome::pass("")
+                } else {
+                    Outcome::fail(format!("{} violation(s)", report.violations.len()))
+                };
+                Ok((log, outcome))
+            }),
             StepId::SourceHygiene => {
-                let args: Vec<String> = match check.evidence_str("scope") {
-                    Some("whole-tree") => vec!["-All".into()],
+                let scope = match check.evidence_str("scope") {
+                    Some("whole-tree") => crate::source_hygiene::Scope::All,
                     Some("range") => match &ctx.base {
-                        Some(base) => vec!["-Base".into(), base.clone()],
+                        Some(base) => crate::source_hygiene::Scope::Diff { base: base.clone() },
                         None => return Outcome::fail("a pull request run needs --base"),
                     },
-                    _ => vec!["-Base".into(), "HEAD".into()],
+                    // The work in front of the developer, not the whole branch:
+                    // that is what makes the rules adoptable on this tree.
+                    _ => crate::source_hygiene::Scope::Diff { base: "HEAD".into() },
                 };
-                self.pwsh_with(
-                    "source-hygiene",
-                    "check-source-hygiene.ps1",
-                    args,
-                    None,
-                    &[],
+                self.native("source-hygiene", || {
+                    let report = crate::source_hygiene::check(&ctx.repo_root, scope, None)?;
+                    let mut log = String::new();
+                    for finding in report.blocking() {
+                        log.push_str(&format!(
+                            "\nsource-hygiene: {}:{}\n{} in source comment: \"{}\"\n{}\n",
+                            finding.file, finding.line, finding.rule, finding.value, finding.fix
+                        ));
+                    }
+                    let advisory_count = report.advisory().count();
+                    if advisory_count > 0 {
+                        log.push_str(&format!(
+                            "\nsource-hygiene: {advisory_count} advisory finding(s), see exo-dev check source-hygiene --only <rule>\n"
+                        ));
+                    }
+                    let blocking_count = report.blocking().count();
+                    let outcome = if blocking_count == 0 {
+                        log.push_str("source-hygiene: OK\n");
+                        Outcome::pass("")
+                    } else {
+                        Outcome::fail(format!("{blocking_count} blocking finding(s)"))
+                    };
+                    Ok((log, outcome))
+                })
+            }
+            StepId::DocsSuperpowersRemoved => {
+                let Some(exo_verify) = self.ctx.exo_verify_exe() else {
+                    let reason = "exo-verify.exe is not built (tools/target/{debug,release}/exo-verify.exe)".to_string();
+                    println!();
+                    println!("---- docs-superpowers-removed ----");
+                    println!("{reason}");
+                    return Outcome::new(Status::ToolMissing, reason);
+                };
+                self.step(
+                    "docs-superpowers-removed",
+                    &exo_verify.display().to_string(),
+                    vec![
+                        "docs".to_string(),
+                        "check".to_string(),
+                        "--repo-root".to_string(),
+                        self.ctx.repo_root.display().to_string(),
+                    ],
+                    Opts::default(),
                 )
             }
-            StepId::DocsSuperpowersRemoved => self.pwsh(
-                "docs-superpowers-removed",
-                "check-docs-superpowers-removed.ps1",
-                &[],
-            ),
             StepId::CommitPolicy => {
-                if !ctx.profile.ci {
-                    return self.pwsh("commit-policy", "check-commit-policy.ps1", &[]);
-                }
-                let Some(title) = &ctx.pr_title else {
-                    return Outcome::fail("a pull request run needs --pr-title");
-                };
-                let mut args = vec!["-Subject".to_string(), title.clone()];
-                if let Some(number) = &ctx.pr_number {
-                    args.extend(["-PullRequestNumber".into(), number.clone()]);
-                }
-                args.extend(["-Only".into(), "commit-subject".into()]);
-                self.pwsh_with("commit-policy", "check-commit-policy.ps1", args, None, &[])
-            }
-            StepId::LintCanaries => self.pwsh("lint-canaries", "check-lint-canaries.ps1", &[]),
-            StepId::ProseLines => {
-                let mut args = vec!["-Advisory".to_string()];
-                if ctx.profile.ci
-                    && let Some(base) = &ctx.base
-                {
-                    args.extend(["-Base".into(), base.clone()]);
-                }
-                self.pwsh_with("prose-lines", "check-prose-lines.ps1", args, None, &[])
-            }
-            StepId::Format => {
-                let args: &[&str] = if ctx.staged {
-                    &["-Staged", "-Fix"]
+                let changelog_cut = self.env_var("EXOSNAP_CHANGELOG_CUT") == "1";
+                let options = crate::commit_policy::CommitPolicyOptions::default();
+
+                let request = if !ctx.profile.ci {
+                    crate::commit_policy::CheckRequest {
+                        subject: None,
+                        pull_request_number: None,
+                        require_pull_request: false,
+                        base: ctx.base.as_deref(),
+                        only: None,
+                        changelog_cut,
+                    }
                 } else {
-                    &[]
+                    let Some(title) = &ctx.pr_title else {
+                        return Outcome::fail("a pull request run needs --pr-title");
+                    };
+                    let pull_request_number = ctx.pr_number.as_deref().and_then(|n| n.parse().ok());
+                    crate::commit_policy::CheckRequest {
+                        subject: Some(title.as_str()),
+                        pull_request_number,
+                        require_pull_request: false,
+                        base: ctx.base.as_deref(),
+                        only: Some("commit-subject"),
+                        changelog_cut,
+                    }
                 };
-                self.pwsh("format", "check-format.ps1", args)
+
+                self.native("commit-policy", || {
+                    let report = crate::commit_policy::check(&ctx.repo_root, &request, &options)?;
+                    let log = crate::commit_policy::render(&report);
+                    let outcome = if report.ok() {
+                        Outcome::pass("")
+                    } else {
+                        Outcome::fail(format!("{} violation(s)", report.violations.len()))
+                    };
+                    Ok((log, outcome))
+                })
             }
-            StepId::PackagingVersion => {
-                self.pwsh("packaging-version", "check-packaging-version.ps1", &[])
-            }
-            StepId::MsiHarvest => self.pwsh("msi-harvest", "validate-msi-harvest.ps1", &[]),
-            StepId::PrivacyAllowlist => {
-                self.pwsh("privacy-allowlist", "validate-privacy-allowlist.ps1", &[])
-            }
-            StepId::NetworkEgress => {
-                self.pwsh("network-egress", "validate-network-egress.ps1", &[])
-            }
+            StepId::LintCanaries => self.native("lint-canaries", || {
+                let report = crate::lint::canaries::run_canaries(&ctx.repo_root, None, &[])?;
+                let mut log = String::new();
+                for check in crate::lint::canaries::BLOCKING_CHECKS {
+                    if report.failures.iter().any(|failure| failure.check == *check) {
+                        continue;
+                    }
+                    log.push_str(&format!("  fires  {check}\n"));
+                }
+                log.push_str(&format!(
+                    "\nlint canaries: {} check(s) exercised\n",
+                    report.checked
+                ));
+                let outcome = if report.ok() {
+                    Outcome::pass("")
+                } else {
+                    log.push('\n');
+                    for failure in &report.failures {
+                        log.push_str(&format!("FAIL  {} : {}\n", failure.check, failure.detail));
+                    }
+                    log.push_str(
+                        "\ndocs/dev/static-analysis.md explains why a silent check and a clean \
+                         tree look the same.\n",
+                    );
+                    Outcome::fail(format!("{} failure(s)", report.failures.len()))
+                };
+                Ok((log, outcome))
+            }),
+            StepId::Format => self.native("format", || {
+                let report = crate::lint::format::format(&ctx.repo_root, ctx.staged, ctx.staged)?;
+                let mut log = report.output.clone();
+                let outcome = if report.files.is_empty() {
+                    log.push_str(&format!(
+                        "clang-format: SKIP (no {} C++ source files)\n",
+                        report.scope
+                    ));
+                    Outcome::pass("")
+                } else if report.fixed {
+                    log.push_str(&format!(
+                        "clang-format: OK (formatted {} file(s))\n",
+                        report.files.len()
+                    ));
+                    Outcome::pass("")
+                } else if report.violations {
+                    log.push_str("clang-format violations found. Fix with: clang-format -i <file>\n");
+                    Outcome::fail(format!("{} file(s) checked", report.files.len()))
+                } else {
+                    log.push_str("clang-format: OK\n");
+                    Outcome::pass("")
+                };
+                Ok((log, outcome))
+            }),
+            StepId::PackagingVersion => self.native("packaging-version", || {
+                let report =
+                    crate::release::version::check_packaging_version(&ctx.repo_root, None)?;
+                let log = crate::release::version::render_drift(&report);
+                let outcome = if report.ok() {
+                    Outcome::pass("")
+                } else {
+                    Outcome::fail(format!("{} disagreeing surface(s)", report.failed.len()))
+                };
+                Ok((log, outcome))
+            }),
+            StepId::MsiHarvest => self.native("msi-harvest", || {
+                let report = crate::packaging::validate_msi_harvest(&ctx.repo_root)?;
+                let mut log = crate::packaging::render(&report);
+                let outcome = if report.ok() {
+                    log.push_str(
+                        "MSI harvest validation PASSED (Package.wxs is metadata-only, references StagingFiles).\n",
+                    );
+                    Outcome::pass("")
+                } else {
+                    log.push_str(&format!(
+                        "MSI harvest validation FAILED ({} error(s)).\n",
+                        report.errors.len()
+                    ));
+                    Outcome::fail(format!("{} error(s)", report.errors.len()))
+                };
+                Ok((log, outcome))
+            }),
+            StepId::PrivacyAllowlist => self.native("privacy-allowlist", || {
+                let report = crate::privacy::allowlist::check_allowlist(&ctx.repo_root)?;
+                let log = crate::privacy::allowlist::render(&report);
+                let outcome = if report.ok() {
+                    Outcome::pass("")
+                } else {
+                    Outcome::fail(format!("{} mismatch(es)", report.errors.len()))
+                };
+                Ok((log, outcome))
+            }),
+            StepId::NetworkEgress => self.native("network-egress", || {
+                let report = crate::privacy::network_egress::check_network_egress(&ctx.repo_root)?;
+                let log = crate::privacy::network_egress::render(&report);
+                let outcome = if report.ok() {
+                    Outcome::pass("")
+                } else {
+                    Outcome::fail(format!("{} new egress point(s)", report.violations.len()))
+                };
+                Ok((log, outcome))
+            }),
             StepId::Actionlint => {
                 self.step("actionlint", "actionlint", Vec::new(), Opts::default())
             }
@@ -512,40 +746,55 @@ impl RealExecutor {
                 )
             }
             StepId::Tests => {
-                let mut args = vec![
-                    "-BuildDir".to_string(),
-                    ctx.build_dir.clone(),
-                    "-Config".into(),
-                    ctx.config.clone(),
-                    "-Jobs".into(),
-                    jobs,
-                ];
-                if let Some(filter) = check.evidence_str("filter").filter(|f| !f.is_empty()) {
-                    args.extend(["-Filter".into(), filter.to_string()]);
-                }
-                if let Some(label) = check.evidence_str("excludeLabel") {
-                    args.extend(["-ExcludeLabel".into(), label.to_string()]);
-                }
-                let mut outcome = self.pwsh_with("tests", "run-tests.ps1", args, None, &[]);
-                if outcome.status == Status::Fail {
-                    if let Some(log) = outcome.evidence.get("log").and_then(|v| v.as_str()) {
-                        self.failed_tests = evidence::failed_ctest_names(Path::new(log));
-                    }
-                    outcome.detail = format!(
-                        "{}; failed: {}",
-                        outcome.detail,
-                        self.failed_tests.join(", ")
-                    );
-                }
+                let options = crate::test::runner::Options {
+                    build_dir: ctx.tree(),
+                    config: ctx.config.clone(),
+                    filter: check.evidence_str("filter").unwrap_or_default().to_string(),
+                    exclude_label: check
+                        .evidence_str("excludeLabel")
+                        .unwrap_or_default()
+                        .to_string(),
+                    jobs: ctx.jobs,
+                    // The compiler environment an earlier step imported, so
+                    // the runner's own build sees the same toolchain.
+                    child_env: ctx.runner.env.clone(),
+                    ..crate::test::runner::Options::new(&ctx.repo_root)
+                };
+                let host = self.tests_host.as_ref();
+                let mut failed = Vec::new();
+                let outcome = self.native("tests", || {
+                    let mut console = crate::test::host::Console::captured();
+                    let result = crate::test::runner::run(&options, host, &mut console);
+                    failed = result.failed_tests.clone();
+                    Ok((console.text().to_string(), tests_outcome(&result)))
+                });
+                failed.sort();
+                failed.dedup();
+                self.failed_tests = failed;
                 outcome
             }
-            StepId::CppCheck => self.pwsh_with(
-                "cppcheck",
-                "check-quality.ps1",
-                vec!["-Only".into(), "cppcheck".into()],
-                Some(QUALITY_TOOL_MISSING_EXIT),
-                &[],
-            ),
+            StepId::CppCheck => self.native("cppcheck", || {
+                let report = crate::lint::quality::run(
+                    &ctx.repo_root,
+                    None,
+                    None,
+                    Some(crate::lint::quality::Only::CppCheck),
+                    ctx.jobs,
+                    None,
+                    None,
+                )?;
+                let cppcheck = report
+                    .cppcheck
+                    .expect("Only::CppCheck always reports a cppcheck outcome");
+                let mut log = cppcheck.output.clone();
+                let outcome = if cppcheck.ok {
+                    log.push_str("cppcheck: OK\n");
+                    Outcome::pass("")
+                } else {
+                    Outcome::fail("cppcheck reported findings")
+                };
+                Ok((log, outcome))
+            }),
             StepId::ClangTidy => {
                 // The compiler import has run (see `execute`): the fingerprint
                 // reads the toolset variables it exports, and an unqualified
@@ -562,24 +811,75 @@ impl RealExecutor {
                         None,
                     )
                 });
-                let mut args = vec![
-                    "-BuildDir".to_string(),
-                    self.ctx.build_dir.clone(),
-                    "-CacheDir".into(),
-                    cache.display().to_string(),
-                    "-Jobs".into(),
-                    jobs,
-                ];
-                match check.evidence_str("scope") {
-                    Some("changed-since-parent") => args.extend(["-Base".into(), "HEAD^".into()]),
-                    Some("changed") => {
-                        if let Some(base) = &self.ctx.base {
-                            args.extend(["-Base".into(), base.clone()]);
-                        }
+                let base = match check.evidence_str("scope") {
+                    Some("changed-since-parent") => Some("HEAD^".to_string()),
+                    Some("changed") => self.ctx.base.clone(),
+                    _ => None,
+                };
+                let build_dir = self.ctx.tree();
+                let jobs = self.ctx.jobs;
+                self.native("clang-tidy", || {
+                    let report = crate::lint::clang_tidy::run_blocking(
+                        &ctx.repo_root,
+                        &build_dir,
+                        base.as_deref(),
+                        &cache,
+                        jobs,
+                        None,
+                        false,
+                        None,
+                    )?;
+                    if report.tool_path.as_os_str().is_empty() {
+                        // Nothing analysed: base scoping found no affected
+                        // translation unit. `report.scope` already carries
+                        // the human-readable reason.
+                        return Ok((format!("{}\n", report.scope), Outcome::pass("")));
                     }
-                    _ => {}
-                }
-                self.pwsh_with("clang-tidy", "run-clang-tidy-blocking.ps1", args, None, &[])
+                    let mut log = format!(
+                        "clang-tidy      : {}\n",
+                        report.tool_path.display()
+                    );
+                    log.push_str(&format!("compile database: {}\n", report.compile_db.display()));
+                    log.push_str(&format!(
+                        "blocking checks : {}\n",
+                        crate::lint::canaries::BLOCKING_CHECKS.join(", ")
+                    ));
+                    log.push_str(&format!(
+                        "scope           : {}, {} translation unit(s), {jobs} parallel job(s)\n",
+                        report.scope, report.analyzed
+                    ));
+                    if report.cache_enabled {
+                        log.push_str(&format!(
+                            "result cache    : {} - {} replayed, {} analysed\n",
+                            report.cache_dir.display(),
+                            report.replayed,
+                            report.analyzed.saturating_sub(report.replayed)
+                        ));
+                    }
+                    log.push('\n');
+                    let outcome = if report.violations.is_empty() {
+                        log.push_str(&format!(
+                            "clang-tidy blocking check set: clean ({} translation unit(s)).\n",
+                            report.analyzed
+                        ));
+                        Outcome::pass("")
+                    } else {
+                        log.push_str(&format!(
+                            "clang-tidy blocking check violations: {}\n",
+                            report.violations.len()
+                        ));
+                        for violation in &report.violations {
+                            log.push_str(&format!("  {violation}\n"));
+                        }
+                        log.push_str(
+                            "\nThese checks are required to stay at zero findings. Fix the code, or take \
+                             the check out of BLOCKING_CHECKS in tools/exo-dev/src/lint/canaries.rs and out \
+                             of .clang-tidy.\n",
+                        );
+                        Outcome::fail(format!("{} violation(s)", report.violations.len()))
+                    };
+                    Ok((log, outcome))
+                })
             }
             StepId::PackagingSmoke => self.pwsh_with(
                 "packaging-smoke",
@@ -590,23 +890,66 @@ impl RealExecutor {
                 None,
                 &[],
             ),
-            StepId::AvSyncGolden => self.step(
-                "av-sync-golden",
-                "python",
-                [
-                    "scripts/dev/av-sync-check.py",
-                    "tests/fixtures/av-sync/clapper-golden.mp4",
-                    "--max-drift-ms",
-                    "25",
-                    "--expected-markers",
-                    "5",
-                    "--json",
-                ]
-                .map(String::from)
-                .to_vec(),
-                Opts::default(),
-            ),
+            StepId::AvSyncGolden => self.native("av-sync-golden", || {
+                let path = ctx.repo_root.join("tests/fixtures/av-sync/clapper-golden.mp4");
+                let result = crate::av_sync::measure(&path, 0.7, 0.5, 25.0, Some(5), None, 0.250, 2.0);
+                let opts = crate::av_sync::VerdictOptions {
+                    unqualified_reference: false,
+                    max_drift_ms: 25.0,
+                    max_drift_ms_per_hour: None,
+                };
+                let verdict = crate::av_sync::verdict(&result, &opts);
+                let log = format!("{result:#?}\n{verdict:#?}\n");
+                Ok((log, av_sync_outcome(&verdict)))
+            }),
         }
+    }
+}
+
+/// The verify outcome of one test run. The detail names what the exit code
+/// means, so a failed gate says whether tests failed or the run could not be
+/// trusted at all.
+fn tests_outcome(result: &crate::test::runner::RunResult) -> Outcome {
+    let receipt = result.receipt.as_ref();
+    let detail = match result.exit_code {
+        0 => {
+            let passed = receipt.map_or(0, |r| r.tests_passed);
+            return Outcome::pass(format!("{passed} test(s) passed"));
+        }
+        2 => "exit 2: the build directory does not exist".to_string(),
+        3 => format!(
+            "exit 3: the build tree was not proven to match the source ({})",
+            receipt.map_or("", |r| r.freshness_detail.as_str())
+        ),
+        4 => {
+            let reasons = receipt
+                .map(|r| r.invalid_reasons.join("; "))
+                .filter(|r| !r.is_empty())
+                .unwrap_or_else(|| "the run did not start".into());
+            format!("exit 4: not a valid verification run: {reasons}")
+        }
+        code => format!("exit {code}"),
+    };
+    let mut failed = result.failed_tests.clone();
+    failed.sort();
+    failed.dedup();
+    let detail = if failed.is_empty() {
+        detail
+    } else {
+        format!("{detail}; failed: {}", failed.join(", "))
+    };
+    Outcome::fail(detail)
+}
+
+/// Maps the av-sync verdict to a step outcome: exit 3 and exit 2 both fail
+/// the step (with the verdict's own reasons as the detail), exit 0 passes.
+fn av_sync_outcome(verdict: &crate::av_sync::Verdict) -> Outcome {
+    match verdict {
+        crate::av_sync::Verdict::Pass { measured } => Outcome::pass(measured.clone()),
+        crate::av_sync::Verdict::OverBudget { measured, budget } => {
+            Outcome::fail(format!("{measured} > {budget}"))
+        }
+        crate::av_sync::Verdict::CouldNotMeasure { reasons } => Outcome::fail(reasons.join("; ")),
     }
 }
 
@@ -721,5 +1064,252 @@ impl Executor for DryRunExecutor {
             .into_iter()
             .map(|c| c.output_path.display().to_string())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plan;
+    use crate::profile::Profile;
+    use crate::scope::Scope;
+
+    fn executor(log_dir: &Path) -> RealExecutor {
+        let scope = Scope::everything();
+        let input = plan::tests::input(Profile::PrePush, &scope);
+        let plan = plan::build(&input);
+        let ctx = Context {
+            repo_root: PathBuf::from("."),
+            profile: input.profile,
+            event: input.event.clone(),
+            base: input.base.clone(),
+            staged: input.staged,
+            preset: input.preset.clone(),
+            config: input.config.clone(),
+            build_dir: plan.build_dir.clone(),
+            jobs: 1,
+            pr_title: None,
+            pr_number: None,
+            tidy_cache_dir: None,
+            head: Some("deadbeef".into()),
+            dirty: false,
+            runner: StepRunner {
+                log_dir: log_dir.to_path_buf(),
+                stream: false,
+                failure_tail_lines: 5,
+                env: Vec::new(),
+            },
+        };
+        RealExecutor::new(ctx, &plan)
+    }
+
+    /// The Tests step against a real configured tree whose one QuickTest
+    /// runner fails, with the host's locks recorded instead of taken.
+    #[test]
+    fn a_failing_test_run_names_the_failed_tests_and_keeps_the_full_log_pointer() {
+        use crate::test_support::test_runner::{RecordingHost, configured_tree, source_repo};
+
+        let repo = source_repo();
+        let (_root, build) = configured_tree(
+            "add_test(NAME quick.qml.fixture COMMAND \"${CMAKE_COMMAND}\" -E false)\n\
+             set_tests_properties(quick.qml.fixture PROPERTIES LABELS \"phase.hermetic;quicktest\")",
+        );
+        let logs = tempfile::tempdir().unwrap();
+        let mut executor = executor(logs.path());
+        executor.ctx.repo_root = repo.path().to_path_buf();
+        executor.ctx.build_dir = build.display().to_string();
+        executor.ctx.config = "Debug".into();
+        executor.tests_host = Box::new(RecordingHost::new());
+
+        let scope = Scope::everything();
+        let plan = plan::build(&plan::tests::input(Profile::PrePush, &scope));
+        let outcome = executor.execute(plan.check(StepId::Tests).unwrap());
+
+        assert_eq!(outcome.status, Status::Fail, "{}", outcome.detail);
+        assert!(
+            outcome.detail.ends_with("; failed: quick.qml.fixture"),
+            "{}",
+            outcome.detail
+        );
+        assert_eq!(executor.failed_tests, ["quick.qml.fixture"]);
+
+        // The step log is what the receipt points at. It carries the pointer
+        // to the full ctest log, which names the failure.
+        let step_log = PathBuf::from(outcome.evidence["log"].as_str().unwrap());
+        assert_eq!(step_log, logs.path().join("tests.log"));
+        let text = std::fs::read_to_string(&step_log).unwrap();
+        let full_log = build.join("Testing").join("last-run.log");
+        assert!(
+            text.contains(&format!("Full log: {}", full_log.display())),
+            "{text}"
+        );
+        assert_eq!(
+            evidence::failed_ctest_names(&step_log),
+            ["quick.qml.fixture"]
+        );
+
+        // The QuickTest diagnosis reads the same names.
+        let registration = evidence::ctest_registration(&build, "Debug", &[]);
+        let commands =
+            evidence::qml_diagnostic_commands(&executor.failed_tests, &registration, logs.path());
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].test_name, "quick.qml.fixture");
+    }
+
+    #[test]
+    fn a_passing_test_run_is_a_pass_with_its_count() {
+        use crate::test_support::test_runner::{RecordingHost, configured_tree, source_repo};
+
+        let repo = source_repo();
+        let (_root, build) = configured_tree("");
+        let logs = tempfile::tempdir().unwrap();
+        let mut executor = executor(logs.path());
+        executor.ctx.repo_root = repo.path().to_path_buf();
+        executor.ctx.build_dir = build.display().to_string();
+        executor.ctx.config = "Debug".into();
+        executor.tests_host = Box::new(RecordingHost::new());
+
+        let scope = Scope::everything();
+        let plan = plan::build(&plan::tests::input(Profile::PrePush, &scope));
+        let outcome = executor.execute(plan.check(StepId::Tests).unwrap());
+        assert_eq!(outcome.status, Status::Pass, "{}", outcome.detail);
+        assert_eq!(outcome.detail, "1 test(s) passed");
+        assert!(executor.failed_tests.is_empty());
+    }
+
+    fn run_result(exit_code: i32, reasons: &[&str]) -> crate::test::runner::RunResult {
+        use crate::test::receipt::{Freshness, Receipt};
+        let receipt = Receipt {
+            run_id: String::new(),
+            started_utc: String::new(),
+            finished_utc: None,
+            build_dir: String::new(),
+            generator: String::new(),
+            config: String::new(),
+            jobs: 1,
+            freshness: Freshness::Unknown,
+            freshness_detail: "ninja cannot see past the pending CMake regeneration".into(),
+            allow_stale: false,
+            no_build: true,
+            build_status: "skipped",
+            build_exit_code: None,
+            ctest_args: Vec::new(),
+            exclude_label: String::new(),
+            exclude_pattern: String::new(),
+            phase: String::new(),
+            filter: String::new(),
+            tests_registered: 0,
+            tests_disabled: 0,
+            tests_selected: 0,
+            tests_accounted: 0,
+            tests_expected: 0,
+            tests_passed: 3,
+            tests_failed: 0,
+            census_mismatch: false,
+            phase_violations: None,
+            ctest_exit_code: None,
+            source_before: None,
+            source_after: None,
+            source_drift: None,
+            log: String::new(),
+            rescued_config_dir: None,
+            rescue_status: "not-needed",
+            rescue_detail: None,
+            invalid_reasons: reasons.iter().map(|r| r.to_string()).collect(),
+            exit_code,
+            reusable: false,
+        };
+        crate::test::runner::RunResult {
+            exit_code,
+            failed_tests: Vec::new(),
+            log: PathBuf::new(),
+            receipt_path: PathBuf::new(),
+            receipt: Some(receipt),
+            receipt_published: true,
+        }
+    }
+
+    #[test]
+    fn every_runner_exit_code_maps_to_an_outcome_that_says_what_it_means() {
+        let pass = tests_outcome(&run_result(0, &[]));
+        assert_eq!(pass.status, Status::Pass);
+
+        let missing = tests_outcome(&run_result(2, &[]));
+        assert_eq!(missing.status, Status::Fail);
+        assert!(
+            missing.detail.contains("does not exist"),
+            "{}",
+            missing.detail
+        );
+
+        let stale = tests_outcome(&run_result(3, &[]));
+        assert_eq!(stale.status, Status::Fail);
+        assert!(stale.detail.contains("not proven to match the source"));
+        assert!(stale.detail.contains("pending CMake regeneration"));
+
+        let invalid = tests_outcome(&run_result(4, &["census mismatch: expected 3"]));
+        assert_eq!(invalid.status, Status::Fail);
+        assert!(
+            invalid
+                .detail
+                .contains("not a valid verification run: census mismatch")
+        );
+
+        let mut failing = run_result(8, &[]);
+        failing.failed_tests = vec!["b.test".into(), "a.test".into()];
+        let failed = tests_outcome(&failing);
+        assert_eq!(failed.status, Status::Fail);
+        assert_eq!(failed.detail, "exit 8; failed: a.test, b.test");
+    }
+
+    #[test]
+    fn a_tool_missing_error_maps_to_tool_missing_not_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let executor = executor(dir.path());
+        let outcome = executor.native("probe", || {
+            Err(ToolMissing("zizmor is not installed".into()).into())
+        });
+        assert_eq!(outcome.status, Status::ToolMissing);
+        assert_eq!(outcome.detail, "zizmor is not installed");
+    }
+
+    #[test]
+    fn any_other_error_maps_to_an_ordinary_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let executor = executor(dir.path());
+        let outcome = executor.native("probe", || anyhow::bail!("boom"));
+        assert_eq!(outcome.status, Status::Fail);
+        assert!(outcome.detail.contains("boom"));
+    }
+
+    #[test]
+    fn av_sync_outcome_maps_a_pass_verdict_to_pass() {
+        let verdict = crate::av_sync::Verdict::Pass {
+            measured: "4.00 ms".to_string(),
+        };
+        let outcome = av_sync_outcome(&verdict);
+        assert_eq!(outcome.status, Status::Pass);
+        assert_eq!(outcome.detail, "4.00 ms");
+    }
+
+    #[test]
+    fn av_sync_outcome_maps_an_over_budget_verdict_to_fail() {
+        let verdict = crate::av_sync::Verdict::OverBudget {
+            measured: "40.00 ms".to_string(),
+            budget: "25 ms".to_string(),
+        };
+        let outcome = av_sync_outcome(&verdict);
+        assert_eq!(outcome.status, Status::Fail);
+        assert_eq!(outcome.detail, "40.00 ms > 25 ms");
+    }
+
+    #[test]
+    fn av_sync_outcome_maps_a_could_not_measure_verdict_to_fail_with_reasons() {
+        let verdict = crate::av_sync::Verdict::CouldNotMeasure {
+            reasons: vec!["need 5 paired markers, found 2".to_string()],
+        };
+        let outcome = av_sync_outcome(&verdict);
+        assert_eq!(outcome.status, Status::Fail);
+        assert_eq!(outcome.detail, "need 5 paired markers, found 2");
     }
 }

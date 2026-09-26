@@ -47,10 +47,10 @@ Application Live Verify and updater automation endpoints are dormant unless arme
 Run these from the repository root:
 
 ```powershell
-pwsh scripts/validate-privacy-allowlist.ps1
-pwsh scripts/validate-network-egress.ps1
-pwsh scripts/run-tests.ps1 -Filter crash
-pwsh scripts/run-tests.ps1 -Filter support_bundle
+cargo exo-dev privacy allowlist
+cargo exo-dev privacy network-egress
+cargo exo-dev test --filter crash
+cargo exo-dev test --filter support_bundle
 ```
 
 The egress check is a source-pattern inventory guard, not taint analysis. Review its allowlist deliberately when an approved network primitive or host changes. Passing it establishes neither consent flow correctness nor the exact bytes a library sends.
