@@ -19,10 +19,14 @@
 //!   - `launch(&[...])` argument arrays across the exo-verify scenario
 //!     sources, which is how that harness invokes the app today.
 //!
-//! A missing registry or a missing parser source is a hard error: the source
-//! list itself needs updating, and silently skipping it would let the guard
-//! it exists to provide go dark. A missing harness script is not: that script
-//! is owned by a separate merge and this check must not block its removal.
+//! A missing registry, a registry too small to trust, or a missing parser
+//! source is a hard error: none of them leaves this check able to produce a
+//! trustworthy verdict, and silently reporting a pass would let the guard it
+//! exists to provide go dark. An absent harness script is not: that script is
+//! owned by a separate merge and this check must not block its removal. A
+//! harness script that exists but cannot be read (permissions, a directory in
+//! its place, non-UTF-8 content) is still a hard error, never a silent skip:
+//! only its absence is expected.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -137,7 +141,15 @@ pub fn check(repo_root: &Path) -> anyhow::Result<CliFlagsReport> {
                 unregistered,
             }
         }
-        Err(_) => HarnessScan::Skipped,
+        // Only a genuinely absent script is a skip: the future merge that
+        // removes it needs this check to step aside quietly. A permission
+        // error or a non-UTF-8 read on a script that DOES exist is a read
+        // failure, not an absence, and must not be reported as a clean skip.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => HarnessScan::Skipped,
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("could not read {}", harness_script_path.display()));
+        }
     };
 
     let git = crate::git::Git::new(repo_root);
@@ -526,6 +538,36 @@ mod tests {
         let report = check(dir.path()).unwrap();
         assert!(matches!(report.harness_scan, HarnessScan::Skipped));
         assert!(report.ok());
+    }
+
+    // A harness script that EXISTS but cannot be decoded as UTF-8 must not be
+    // reported as a clean skip: only absence (ErrorKind::NotFound) is. This is
+    // portable on Linux and Windows alike, unlike a permission-denied fixture,
+    // which a container running as root would not observe.
+    #[test]
+    fn a_harness_script_that_is_not_utf8_is_a_hard_error_not_a_skip() {
+        let padding = many_flags(MIN_REGISTERED_FLAGS + 1);
+        let padding_refs: Vec<&str> = padding.iter().map(String::as_str).collect();
+        let dir = crate::test_support::fixture_repo(&[
+            (
+                "app/cli/CommandLineFlags.cpp",
+                &fixture_registry(&padding_refs),
+            ),
+            ("app/auto_record/AutoRecordOptions.cpp", ""),
+            ("app/quick/ExoSnap/Quick/main.cpp", ""),
+            ("app/quick/ExoSnap/Quick/QuickAutoEditHarness.cpp", ""),
+            ("app/services/ElevatedRelaunch.h", ""),
+            ("app/services/UpdateFeedOverride.h", ""),
+            ("app/services/VerifyReinstallMode.h", ""),
+        ]);
+        let harness_path = dir.path().join(LIVE_VERIFY_HARNESS_SOURCE);
+        std::fs::create_dir_all(harness_path.parent().unwrap()).unwrap();
+        std::fs::write(&harness_path, [0xFF, 0xFE, 0xFD]).unwrap();
+        let error = check(dir.path()).unwrap_err();
+        assert!(
+            error.to_string().contains("LiveVerifyChecks.ps1"),
+            "{error:#}"
+        );
     }
 
     #[test]
