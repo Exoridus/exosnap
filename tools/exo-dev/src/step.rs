@@ -198,20 +198,8 @@ impl StepId {
                     owner: "exo-dev packaging module",
                 },
             ),
-            StepId::PrivacyAllowlist => step(
-                "privacy-allowlist",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev privacy module",
-                },
-            ),
-            StepId::NetworkEgress => step(
-                "network-egress",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev privacy module",
-                },
-            ),
+            StepId::PrivacyAllowlist => step("privacy-allowlist", SANITY, Native),
+            StepId::NetworkEgress => step("network-egress", SANITY, Native),
             StepId::Actionlint => StepInfo {
                 ci_only: Some(
                     "a pinned Linux binary the workflow installs by digest; not a developer prerequisite",

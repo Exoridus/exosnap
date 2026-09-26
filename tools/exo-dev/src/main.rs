@@ -58,6 +58,11 @@ enum Command {
         #[command(subcommand)]
         pr: PrCommand,
     },
+    /// Guards for the privacy promises in PRIVACY.md and docs/product-spec.md.
+    Privacy {
+        #[command(subcommand)]
+        privacy: PrivacyCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -143,6 +148,16 @@ struct TestArgs {
     /// (instead of exit 3). The result may describe old binaries.
     #[arg(long, requires = "no_build")]
     allow_stale: bool,
+}
+
+#[derive(Subcommand)]
+enum PrivacyCommand {
+    /// A network primitive or disallowed http(s) host literal outside the
+    /// known GitHub/Sentry call sites, under app/, libs/, apps/.
+    NetworkEgress,
+    /// The crash-report tag allowlist (crash_scrubber.h) against PRIVACY.md
+    /// and docs/product-spec.md.
+    Allowlist,
 }
 
 #[derive(Subcommand)]
@@ -443,6 +458,10 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 auto,
             } => pr_merge(&repo_root, number, confirm, delete_branch, auto),
         },
+        Command::Privacy { privacy } => match privacy {
+            PrivacyCommand::NetworkEgress => privacy_network_egress(&repo_root),
+            PrivacyCommand::Allowlist => privacy_allowlist(&repo_root),
+        },
         Command::Hook { name } => match name.as_str() {
             "pre-commit" => {
                 let git = Git::new(&repo_root);
@@ -718,6 +737,25 @@ fn pr_merge(
     let outcome = exo_dev::pr::merge(repo_root, &exo_dev::pr::RealGh::new(), &request)?;
     print!("{}", exo_dev::pr::render_merge(&outcome));
     Ok(ExitCode::SUCCESS)
+}
+fn privacy_network_egress(repo_root: &std::path::Path) -> anyhow::Result<ExitCode> {
+    let report = exo_dev::privacy::network_egress::check_network_egress(repo_root)?;
+    print!("{}", exo_dev::privacy::network_egress::render(&report));
+    if report.ok() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::FAILURE)
+    }
+}
+
+fn privacy_allowlist(repo_root: &std::path::Path) -> anyhow::Result<ExitCode> {
+    let report = exo_dev::privacy::allowlist::check_allowlist(repo_root)?;
+    print!("{}", exo_dev::privacy::allowlist::render(&report));
+    if report.ok() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::FAILURE)
+    }
 }
 
 fn lint_canaries(

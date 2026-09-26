@@ -47,8 +47,8 @@ Application Live Verify and updater automation endpoints are dormant unless arme
 Run these from the repository root:
 
 ```powershell
-pwsh scripts/validate-privacy-allowlist.ps1
-pwsh scripts/validate-network-egress.ps1
+cargo exo-dev privacy allowlist
+cargo exo-dev privacy network-egress
 pwsh scripts/run-tests.ps1 -Filter crash
 pwsh scripts/run-tests.ps1 -Filter support_bundle
 ```

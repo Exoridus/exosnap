@@ -14,6 +14,7 @@ pub mod lint;
 pub mod msvc;
 pub mod plan;
 pub mod pr;
+pub mod privacy;
 pub mod process;
 pub mod profile;
 pub mod report;

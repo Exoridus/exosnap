@@ -152,7 +152,7 @@ TEST(GenerateCorrelationIdTest, UniquePerCall) {
 // that ANY change to the allowlist — adding, removing, renaming a key — fails
 // this test and forces the author to consciously update the golden array
 // here, which is the trigger to also update the PRIVACY.md / product-spec
-// §14 mapping table (scripts/validate-privacy-allowlist.ps1 enforces that
+// section 14 mapping table (`cargo exo-dev privacy allowlist` enforces that
 // those documents list exactly this set).
 // ---------------------------------------------------------------------------
 

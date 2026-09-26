@@ -614,12 +614,26 @@ impl RealExecutor {
                 self.pwsh("packaging-version", "check-packaging-version.ps1", &[])
             }
             StepId::MsiHarvest => self.pwsh("msi-harvest", "validate-msi-harvest.ps1", &[]),
-            StepId::PrivacyAllowlist => {
-                self.pwsh("privacy-allowlist", "validate-privacy-allowlist.ps1", &[])
-            }
-            StepId::NetworkEgress => {
-                self.pwsh("network-egress", "validate-network-egress.ps1", &[])
-            }
+            StepId::PrivacyAllowlist => self.native("privacy-allowlist", || {
+                let report = crate::privacy::allowlist::check_allowlist(&ctx.repo_root)?;
+                let log = crate::privacy::allowlist::render(&report);
+                let outcome = if report.ok() {
+                    Outcome::pass("")
+                } else {
+                    Outcome::fail(format!("{} mismatch(es)", report.errors.len()))
+                };
+                Ok((log, outcome))
+            }),
+            StepId::NetworkEgress => self.native("network-egress", || {
+                let report = crate::privacy::network_egress::check_network_egress(&ctx.repo_root)?;
+                let log = crate::privacy::network_egress::render(&report);
+                let outcome = if report.ok() {
+                    Outcome::pass("")
+                } else {
+                    Outcome::fail(format!("{} new egress point(s)", report.violations.len()))
+                };
+                Ok((log, outcome))
+            }),
             StepId::Actionlint => {
                 self.step("actionlint", "actionlint", Vec::new(), Opts::default())
             }
