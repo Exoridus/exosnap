@@ -173,13 +173,7 @@ impl StepId {
                     owner: "exo-verify docs check",
                 },
             ),
-            StepId::CommitPolicy => step(
-                "commit-policy",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev commit_policy",
-                },
-            ),
+            StepId::CommitPolicy => step("commit-policy", SANITY, Native),
             StepId::LintCanaries => step(
                 "lint-canaries",
                 SANITY,

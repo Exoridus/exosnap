@@ -62,7 +62,7 @@ A title that already ends in its own number is rejected, because the append woul
 
 A body on a local commit is optional and short. The pull request description carries the reasoning: what changed, why, what measured it, what a breaking change breaks and what to do about it. The changelog links to the pull request, so nothing needs saying twice.
 
-`scripts/check-commit-policy.ps1` checks the subjects this branch adds. It applies from the commit that introduced the policy onward; history behind that point was written under different rules and is left alone. The pull request title is checked separately, by `.github/workflows/pr-policy.yml`, which is a workflow of its own so that correcting a title costs seconds rather than a full Windows build.
+`exo-dev check commit-policy` checks the subjects this branch adds. It applies from the commit that introduced the policy onward; history behind that point was written under different rules and is left alone. The pull request title is checked separately, by `.github/workflows/pr-policy.yml`, which is a workflow of its own so that correcting a title costs seconds rather than a full Windows build.
 
 ## Opening and merging a pull request
 
@@ -77,7 +77,7 @@ No machine paths, private workspace references, or agent and session history in 
 
 `CHANGELOG.md` is not edited in a pull request. Its `## [Unreleased]` section is assembled at the release cut by `scripts/new-changelog.ps1` from the squash commits since the last version tag: the type files the entry (`feat` under Added, `fix` and `perf` under Fixed, `refactor` and anything marked `!` under Changed, `docs` under Documentation, while `ci`, `build`, `test`, `chore` and `style` produce no entry), and the subject becomes the line, linked to its pull request. The description is not copied in: the changelog is the quick read and the pull request is where the detail lives.
 
-Two branches that both add a line to the top of the same section conflict on every second merge, which is the whole reason the file is off limits between cuts. `scripts/check-commit-policy.ps1` fails a branch that writes it; `pwsh scripts/new-changelog.ps1` previews what the cut would add. The release notes are rendered from the same section by `scripts/render-release-notes.ps1` through `.github/templates/release-notes.md`, so the releases page and the file cannot disagree.
+Two branches that both add a line to the top of the same section conflict on every second merge, which is the whole reason the file is off limits between cuts. `exo-dev check commit-policy` fails a branch that writes it; `pwsh scripts/new-changelog.ps1` previews what the cut would add. The release notes are rendered from the same section by `scripts/render-release-notes.ps1` through `.github/templates/release-notes.md`, so the releases page and the file cannot disagree.
 
 ## Prose is written in long lines
 

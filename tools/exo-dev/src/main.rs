@@ -57,6 +57,29 @@ enum CheckCommand {
         #[arg(long)]
         only: Option<String>,
     },
+    /// Commit subjects locally, or a single subject (a pull request title or a
+    /// merged subject) in CI.
+    CommitPolicy {
+        /// Check this single subject instead of the branch's commits.
+        #[arg(long)]
+        subject: Option<String>,
+        /// The pull request `--subject` is the title of. Rejects a title that
+        /// already ends in that number.
+        #[arg(long)]
+        pull_request_number: Option<u32>,
+        /// Commit to diff and log against. Defaults to the merge base with
+        /// origin/next, then origin/main, next, main.
+        #[arg(long)]
+        base: Option<String>,
+        /// Restrict the run to one named rule (commit-subject or
+        /// changelog-untouched).
+        #[arg(long)]
+        only: Option<String>,
+        /// Require --subject to end in a pull request number: the
+        /// merged-subject mode, for a line already on main.
+        #[arg(long)]
+        require_pull_request: bool,
+    },
 }
 
 #[derive(Args, Default)]
@@ -141,6 +164,20 @@ fn run_cli() -> anyhow::Result<ExitCode> {
             CheckCommand::SourceHygiene { base, all, only } => {
                 check_source_hygiene(&repo_root, base, all, only)
             }
+            CheckCommand::CommitPolicy {
+                subject,
+                pull_request_number,
+                base,
+                only,
+                require_pull_request,
+            } => check_commit_policy(
+                &repo_root,
+                subject,
+                pull_request_number,
+                base,
+                only,
+                require_pull_request,
+            ),
         },
         Command::Hook { name } => match name.as_str() {
             "pre-commit" => {
@@ -237,6 +274,36 @@ fn check_source_hygiene(
     } else {
         println!();
         println!("{blocking_count} blocking finding(s).");
+        Ok(ExitCode::FAILURE)
+    }
+}
+
+fn check_commit_policy(
+    repo_root: &std::path::Path,
+    subject: Option<String>,
+    pull_request_number: Option<u32>,
+    base: Option<String>,
+    only: Option<String>,
+    require_pull_request: bool,
+) -> anyhow::Result<ExitCode> {
+    let changelog_cut = std::env::var("EXOSNAP_CHANGELOG_CUT").as_deref() == Ok("1");
+    let request = exo_dev::commit_policy::CheckRequest {
+        subject: subject.as_deref(),
+        pull_request_number,
+        require_pull_request,
+        base: base.as_deref(),
+        only: only.as_deref(),
+        changelog_cut,
+    };
+    let report = exo_dev::commit_policy::check(
+        repo_root,
+        &request,
+        &exo_dev::commit_policy::CommitPolicyOptions::default(),
+    )?;
+    print!("{}", exo_dev::commit_policy::render(&report));
+    if report.ok() {
+        Ok(ExitCode::SUCCESS)
+    } else {
         Ok(ExitCode::FAILURE)
     }
 }

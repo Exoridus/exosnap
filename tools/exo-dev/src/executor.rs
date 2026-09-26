@@ -510,18 +510,43 @@ impl RealExecutor {
                 &[],
             ),
             StepId::CommitPolicy => {
-                if !ctx.profile.ci {
-                    return self.pwsh("commit-policy", "check-commit-policy.ps1", &[]);
-                }
-                let Some(title) = &ctx.pr_title else {
-                    return Outcome::fail("a pull request run needs --pr-title");
+                let changelog_cut = self.env_var("EXOSNAP_CHANGELOG_CUT") == "1";
+                let options = crate::commit_policy::CommitPolicyOptions::default();
+
+                let request = if !ctx.profile.ci {
+                    crate::commit_policy::CheckRequest {
+                        subject: None,
+                        pull_request_number: None,
+                        require_pull_request: false,
+                        base: ctx.base.as_deref(),
+                        only: None,
+                        changelog_cut,
+                    }
+                } else {
+                    let Some(title) = &ctx.pr_title else {
+                        return Outcome::fail("a pull request run needs --pr-title");
+                    };
+                    let pull_request_number = ctx.pr_number.as_deref().and_then(|n| n.parse().ok());
+                    crate::commit_policy::CheckRequest {
+                        subject: Some(title.as_str()),
+                        pull_request_number,
+                        require_pull_request: false,
+                        base: ctx.base.as_deref(),
+                        only: Some("commit-subject"),
+                        changelog_cut,
+                    }
                 };
-                let mut args = vec!["-Subject".to_string(), title.clone()];
-                if let Some(number) = &ctx.pr_number {
-                    args.extend(["-PullRequestNumber".into(), number.clone()]);
-                }
-                args.extend(["-Only".into(), "commit-subject".into()]);
-                self.pwsh_with("commit-policy", "check-commit-policy.ps1", args, None, &[])
+
+                self.native("commit-policy", || {
+                    let report = crate::commit_policy::check(&ctx.repo_root, &request, &options)?;
+                    let log = crate::commit_policy::render(&report);
+                    let outcome = if report.ok() {
+                        Outcome::pass("")
+                    } else {
+                        Outcome::fail(format!("{} violation(s)", report.violations.len()))
+                    };
+                    Ok((log, outcome))
+                })
             }
             StepId::LintCanaries => self.pwsh("lint-canaries", "check-lint-canaries.ps1", &[]),
             StepId::ProseLines => {

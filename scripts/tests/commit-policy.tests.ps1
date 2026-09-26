@@ -1,35 +1,24 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Tests for the commit subject grammar, the commit policy check, the changelog
-    assembler and the release-notes renderer.
+    Tests for the changelog assembler and the release-notes renderer.
 
 .DESCRIPTION
     Not Pester: the same homegrown harness the other script tests use.
 
-    These four share one parser, so they are tested together: a change to the
-    grammar that the assembler follows and the check does not would let a
-    subject pass review and then fail the cut, which is the failure the shared
-    module exists to prevent.
-
-    Every rule is tested BOTH ways. A check that has only ever been seen green
-    proves nothing, so each rule gets a repository it must reject and one it
-    must accept, and the accepted ones deliberately include the shapes that look
-    like violations: a subject that legitimately carries no changelog entry, a
-    changelog written during a declared release cut, and history from before the
-    policy took effect.
+    Both read the same commit subject grammar that `exo-dev check
+    commit-policy` enforces (`tools/exo-dev/src/commit_policy.rs`), so a
+    subject that check would reject is never something the assembler or the
+    renderer has to guess at.
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $scriptRoot = Split-Path -Parent $PSScriptRoot
-$policyCheck = Join-Path $scriptRoot 'check-commit-policy.ps1'
 $changelogScript = Join-Path $scriptRoot 'new-changelog.ps1'
 $notesScript = Join-Path $scriptRoot 'render-release-notes.ps1'
 $policyModule = Join-Path $scriptRoot 'lib/CommitPolicy.psm1'
-
-Import-Module $policyModule -Force
 
 # See check-drift.tests.ps1: under a git hook these are inherited from the
 # repository being committed, GIT_DIR beats -C, and a fixture's `git init` lands
@@ -147,13 +136,6 @@ function Add-FixtureCommit {
     Invoke-IsolatedGit -C $Root commit -m $Subject --quiet
 }
 
-function Invoke-PolicyCheck {
-    param([string] $Root, [string[]] $ExtraArgs = @())
-    $arguments = @('-NoProfile', '-NonInteractive', '-File', $policyCheck, '-RepoRoot', $Root) + $ExtraArgs
-    $output = & pwsh @arguments 2>&1
-    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($output | Out-String) }
-}
-
 function Invoke-Changelog {
     param([string] $Root, [string[]] $ExtraArgs = @())
     $arguments = @('-NoProfile', '-NonInteractive', '-File', $changelogScript, '-RepoRoot', $Root) + $ExtraArgs
@@ -164,318 +146,6 @@ function Invoke-Changelog {
 function Remove-Fixture {
     param([string] $Root)
     Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
-}
-
-Write-Host ''
-Write-Host 'Subject grammar'
-
-Test-Case 'a plain type and summary parses' {
-    $parsed = ConvertFrom-CommitSubject -Subject 'fix: bound the capture drains'
-    Assert-True $parsed.Valid "expected valid, got: $($parsed.Problem)"
-    Assert-True ($parsed.Type -eq 'fix') "type was $($parsed.Type)"
-    Assert-True ($null -eq $parsed.Scope) "scope was $($parsed.Scope)"
-    Assert-True ($parsed.Section -eq 'Fixed') "section was $($parsed.Section)"
-}
-
-Test-Case 'scope, breaking marker and pull request number all parse' {
-    $parsed = ConvertFrom-CommitSubject -Subject 'refactor(engine)!: one device generation contract (#391)'
-    Assert-True $parsed.Valid "expected valid, got: $($parsed.Problem)"
-    Assert-True ($parsed.Scope -eq 'engine') "scope was $($parsed.Scope)"
-    Assert-True $parsed.Breaking 'breaking marker was not read'
-    Assert-True ($parsed.PullRequest -eq 391) "pull request was $($parsed.PullRequest)"
-    Assert-True ($parsed.Summary -eq 'one device generation contract') "summary was '$($parsed.Summary)'"
-}
-
-Test-Case 'a breaking fix files under Changed, not Fixed' {
-    # A breaking change filed under Fixed reads as a bugfix a reader can take
-    # blind, which is the one thing the section is supposed to prevent.
-    $parsed = ConvertFrom-CommitSubject -Subject 'fix(config)!: reset the stored preset schema'
-    Assert-True ($parsed.Section -eq 'Changed') "section was $($parsed.Section)"
-}
-
-Test-Case 'a no-entry type parses but produces no section' {
-    $parsed = ConvertFrom-CommitSubject -Subject 'ci: pin the runner image'
-    Assert-True $parsed.Valid "expected valid, got: $($parsed.Problem)"
-    Assert-True ($null -eq $parsed.Section) "section was $($parsed.Section)"
-}
-
-Test-Case 'an unknown type is rejected and names the known ones' {
-    $parsed = ConvertFrom-CommitSubject -Subject 'engine: selectable WGC capture backend'
-    Assert-True (-not $parsed.Valid) 'an unknown type was accepted'
-    Assert-True ($parsed.Problem -match 'not a known type') "problem was '$($parsed.Problem)'"
-    Assert-True ($parsed.Problem -match 'refactor') 'the known types were not listed'
-}
-
-Test-Case 'a subject with no type at all is rejected' {
-    $parsed = ConvertFrom-CommitSubject -Subject 'Enforce release promotion integrity'
-    Assert-True (-not $parsed.Valid) 'a typeless subject was accepted'
-}
-
-Test-Case 'a subject that is only a type and a pull request number is rejected' {
-    # The grammar's own '.+' already refuses a trailing-whitespace summary, because
-    # the subject is trimmed before it is matched. The summary-is-empty branch is
-    # reachable through the optional pull request group alone, and this is the
-    # case that reaches it -- an earlier version of this test used 'fix(engine): '
-    # and passed against a parser with that branch removed.
-    $parsed = ConvertFrom-CommitSubject -Subject 'fix:   (#12)'
-    Assert-True (-not $parsed.Valid) 'a subject with no summary was accepted'
-    Assert-True ($parsed.Problem -match 'summary is empty') "problem was '$($parsed.Problem)'"
-
-    $trailing = ConvertFrom-CommitSubject -Subject 'fix(engine): '
-    Assert-True (-not $trailing.Valid) 'a subject with nothing after the colon was accepted'
-}
-
-Test-Case 'the pull request number is required only when asked for' {
-    $without = ConvertFrom-CommitSubject -Subject 'fix: bound the capture drains'
-    Assert-True $without.Valid 'a local commit was required to carry a pull request number'
-    $required = ConvertFrom-CommitSubject -Subject 'fix: bound the capture drains' -RequirePullRequest
-    Assert-True (-not $required.Valid) 'a merge-time subject passed without its pull request number'
-}
-
-Test-Case 'a title carrying its own number is rejected, another number is not' {
-    $own = ConvertFrom-CommitSubject -Subject 'fix: bound the drains (#390)' -OwnPullRequest 390
-    Assert-True (-not $own.Valid) 'a title ending in its own number was accepted'
-    Assert-True ($own.Problem -match 'its own pull request number') "the problem did not name the cause: $($own.Problem)"
-
-    $other = ConvertFrom-CommitSubject -Subject 'fix: bound the drains (#370)' -OwnPullRequest 390
-    Assert-True $other.Valid "a trailing citation of another pull request was rejected: $($other.Problem)"
-
-    $none = ConvertFrom-CommitSubject -Subject 'fix: bound the drains' -OwnPullRequest 390
-    Assert-True $none.Valid "a title with no number at all was rejected: $($none.Problem)"
-}
-
-Test-Case 'the merge subject appends the number exactly once' {
-    $plain = ConvertFrom-CommitSubject -Subject 'fix(engine): bound the drains'
-    Assert-True ((Format-MergeSubject -Commit $plain -PullRequest 390) -eq 'fix(engine): bound the drains (#390)') `
-        'a title without a number did not gain exactly one'
-
-    # The title form this rejects at check time, reconstructed anyway: the helper
-    # is what makes ' (#390) (#390)' unreachable even if one slipped through.
-    $carried = ConvertFrom-CommitSubject -Subject 'fix(engine): bound the drains (#390)'
-    Assert-True ((Format-MergeSubject -Commit $carried -PullRequest 390) -eq 'fix(engine): bound the drains (#390)') `
-        'a title that already carried its number produced it twice'
-
-    $breaking = ConvertFrom-CommitSubject -Subject 'refactor(engine)!: one device generation contract'
-    Assert-True ((Format-MergeSubject -Commit $breaking -PullRequest 391) -eq 'refactor(engine)!: one device generation contract (#391)') `
-        'the scope or the breaking marker was lost'
-
-    $cited = ConvertFrom-CommitSubject -Subject 'fix: finish what (#370) started'
-    Assert-True ((Format-MergeSubject -Commit $cited -PullRequest 391) -eq 'fix: finish what (#370) started (#391)') `
-        'a citation of another pull request did not survive the merge subject'
-}
-
-Test-Case 'an entry links its pull request and marks breaking changes' {
-    $parsed = ConvertFrom-CommitSubject -Subject 'feat(ui)!: one settings surface (#392)'
-    $line = Format-ChangelogEntry -Commit $parsed -RepositoryUrl 'https://example.invalid/r'
-    Assert-True ($line -match '^\- \*\*BREAKING: ') "line was '$line'"
-    Assert-True ($line -match '\(\[#392\]\(https://example\.invalid/r/pull/392\)\)') "line was '$line'"
-}
-
-Test-Case 'a title that already carried its number does not print it twice' {
-    $parsed = ConvertFrom-CommitSubject -Subject 'fix: eighteen defects from a source audit (#385) (#385)'
-    Assert-True $parsed.Valid 'a doubled pull request number made the subject unreadable'
-    Assert-True ($parsed.PullRequest -eq 385) "pull request was '$($parsed.PullRequest)'"
-    Assert-True ($parsed.Summary -eq 'eighteen defects from a source audit') "summary was '$($parsed.Summary)'"
-    $line = Format-ChangelogEntry -Commit $parsed -RepositoryUrl 'https://example.invalid/r'
-    Assert-True ($line -notmatch '\(#385\)\s*\(\[#385\]') "line was '$line'"
-}
-
-Test-Case 'a summary citing a different pull request keeps that reference' {
-    $parsed = ConvertFrom-CommitSubject -Subject 'fix: finish what (#370) started (#391)'
-    Assert-True ($parsed.PullRequest -eq 391) "pull request was '$($parsed.PullRequest)'"
-    Assert-True ($parsed.Summary -eq 'finish what (#370) started') "summary was '$($parsed.Summary)'"
-}
-
-Write-Host ''
-Write-Host 'commit-subject rule'
-
-Test-Case 'a branch of well-formed subjects is accepted' {
-    $root = New-FixtureRepo -WithPolicy
-    try {
-        Invoke-IsolatedGit -C $root checkout -q -b work main
-        Add-FixtureCommit -Root $root -Subject 'fix(engine): bound the capture drains'
-        Add-FixtureCommit -Root $root -Subject 'test(engine): cover the drain timeout'
-        $result = Invoke-PolicyCheck -Root $root
-        Assert-True ($result.ExitCode -eq 0) "expected acceptance, got:`n$($result.Output)"
-        Assert-True ($result.Output -match '2 commit\(s\) in scope') "scope line missing:`n$($result.Output)"
-    }
-    finally { Remove-Fixture $root }
-}
-
-Test-Case 'a malformed subject on the branch is rejected' {
-    $root = New-FixtureRepo -WithPolicy
-    try {
-        Invoke-IsolatedGit -C $root checkout -q -b work main
-        Add-FixtureCommit -Root $root -Subject 'made the drains better'
-        $result = Invoke-PolicyCheck -Root $root
-        Assert-True ($result.ExitCode -ne 0) "expected rejection, got:`n$($result.Output)"
-        Assert-True ($result.Output -match 'commit-subject') "the rule did not name itself:`n$($result.Output)"
-    }
-    finally { Remove-Fixture $root }
-}
-
-Test-Case 'a merge commit on the branch is counted, not judged' {
-    # `gh pr update-branch` merges main into the branch and git writes the
-    # subject. Judging it fails the branch over a line no author wrote, and
-    # `merge-pr.ps1` squashes every pull request, so that line can never reach
-    # the changelog. The failure this guards against is worse than one refusal:
-    # the range is rescanned on every later commit, so one merge commit locks
-    # the branch against all further work.
-    $root = New-FixtureRepo -WithPolicy
-    try {
-        Invoke-IsolatedGit -C $root checkout -q -b work main
-        Add-FixtureCommit -Root $root -Subject 'fix(engine): bound the capture drains'
-        Invoke-IsolatedGit -C $root checkout -q main
-        Add-FixtureCommit -Root $root -Subject 'fix(app): unrelated work on main' -Relative 'on-main.txt'
-        Invoke-IsolatedGit -C $root checkout -q work
-        Invoke-IsolatedGit -C $root merge main --no-ff -m "Merge branch 'main' into work" --quiet
-        $result = Invoke-PolicyCheck -Root $root
-        Assert-True ($result.ExitCode -eq 0) "a merge commit was judged as an authored subject:`n$($result.Output)"
-        Assert-True ($result.Output -match '1 merge commit\(s\) not judged') `
-            "the merge commit was dropped silently instead of reported:`n$($result.Output)"
-    }
-    finally { Remove-Fixture $root }
-}
-
-Test-Case 'a malformed subject is still rejected when a merge commit is present' {
-    # The exemption is for merge commits only. A branch that carries both must
-    # still fail, or the first case above would have bought acceptance for the
-    # whole range.
-    $root = New-FixtureRepo -WithPolicy
-    try {
-        Invoke-IsolatedGit -C $root checkout -q -b work main
-        Add-FixtureCommit -Root $root -Subject 'made the drains better'
-        Invoke-IsolatedGit -C $root checkout -q main
-        Add-FixtureCommit -Root $root -Subject 'fix(app): unrelated work on main' -Relative 'on-main.txt'
-        Invoke-IsolatedGit -C $root checkout -q work
-        Invoke-IsolatedGit -C $root merge main --no-ff -m "Merge branch 'main' into work" --quiet
-        $result = Invoke-PolicyCheck -Root $root
-        Assert-True ($result.ExitCode -ne 0) "the malformed subject was excused by the merge commit:`n$($result.Output)"
-    }
-    finally { Remove-Fixture $root }
-}
-
-Test-Case 'history before the policy commit is grandfathered' {
-    # The whole reason the epoch exists: adopting the rule must not turn every
-    # existing branch red, or the rule gets switched off instead of obeyed.
-    $root = New-FixtureRepo -WithPolicy -PrePolicySubjects @('Fix gate defects', 'made the drains better')
-    try {
-        Invoke-IsolatedGit -C $root checkout -q -b work main
-        Add-FixtureCommit -Root $root -Subject 'fix(engine): bound the capture drains'
-        $result = Invoke-PolicyCheck -Root $root -ExtraArgs @('-Base', 'policy-base~3')
-        Assert-True ($result.ExitCode -eq 0) "pre-policy history was reported:`n$($result.Output)"
-        Assert-True ($result.Output -match '1 commit\(s\) in scope') "scope was not narrowed:`n$($result.Output)"
-    }
-    finally { Remove-Fixture $root }
-}
-
-Test-Case 'a repository without the policy commit has nothing in scope' {
-    $root = New-FixtureRepo
-    try {
-        Invoke-IsolatedGit -C $root checkout -q -b work main
-        Add-FixtureCommit -Root $root -Subject 'made the drains better'
-        $result = Invoke-PolicyCheck -Root $root
-        Assert-True ($result.ExitCode -eq 0) "expected no scope, got:`n$($result.Output)"
-        Assert-True ($result.Output -match 'not committed yet') "the reason was not stated:`n$($result.Output)"
-    }
-    finally { Remove-Fixture $root }
-}
-
-Test-Case 'a pull request title is accepted without a number and rejected with its own' {
-    $root = New-FixtureRepo -WithPolicy
-    try {
-        $accepted = Invoke-PolicyCheck -Root $root -ExtraArgs @(
-            '-Subject', 'fix(engine): bound the drains', '-PullRequestNumber', '390')
-        Assert-True ($accepted.ExitCode -eq 0) "a title without its number was rejected:`n$($accepted.Output)"
-
-        $rejected = Invoke-PolicyCheck -Root $root -ExtraArgs @(
-            '-Subject', 'fix(engine): bound the drains (#390)', '-PullRequestNumber', '390')
-        Assert-True ($rejected.ExitCode -ne 0) "a title carrying its own number was accepted:`n$($rejected.Output)"
-        Assert-True ($rejected.Output -match 'its own pull request number') "the reason was not stated:`n$($rejected.Output)"
-
-        # The number is what the squash merge appends. A title citing ANOTHER
-        # pull request at the end is a different statement and has to survive.
-        $cited = Invoke-PolicyCheck -Root $root -ExtraArgs @(
-            '-Subject', 'fix(engine): finish what (#370) started', '-PullRequestNumber', '390')
-        Assert-True ($cited.ExitCode -eq 0) "a citation of another pull request was rejected:`n$($cited.Output)"
-    }
-    finally { Remove-Fixture $root }
-}
-
-Test-Case 'a merged subject still has to carry exactly one number' {
-    $root = New-FixtureRepo -WithPolicy
-    try {
-        $accepted = Invoke-PolicyCheck -Root $root -ExtraArgs @(
-            '-Subject', 'fix(engine): bound the drains (#390)', '-RequirePullRequest')
-        Assert-True ($accepted.ExitCode -eq 0) "a well-formed merged subject was rejected:`n$($accepted.Output)"
-
-        $rejected = Invoke-PolicyCheck -Root $root -ExtraArgs @(
-            '-Subject', 'fix(engine): bound the drains', '-RequirePullRequest')
-        Assert-True ($rejected.ExitCode -ne 0) "a merged subject without its number was accepted:`n$($rejected.Output)"
-    }
-    finally { Remove-Fixture $root }
-}
-
-Write-Host ''
-Write-Host 'changelog-untouched rule'
-
-Test-Case 'a branch that writes the changelog is rejected' {
-    $root = New-FixtureRepo -WithPolicy
-    try {
-        Invoke-IsolatedGit -C $root checkout -q -b work main
-        Set-FixtureFile -Root $root -Relative 'CHANGELOG.md' -Content "# Changelog`n`n## [Unreleased]`n`n- hand written`n"
-        Invoke-IsolatedGit -C $root add -A
-        Invoke-IsolatedGit -C $root commit -m 'docs: add a changelog line' --quiet
-        $result = Invoke-PolicyCheck -Root $root
-        Assert-True ($result.ExitCode -ne 0) "expected rejection, got:`n$($result.Output)"
-        Assert-True ($result.Output -match 'changelog-untouched') "the rule did not name itself:`n$($result.Output)"
-    }
-    finally { Remove-Fixture $root }
-}
-
-Test-Case 'a declared release cut may write the changelog' {
-    $root = New-FixtureRepo -WithPolicy
-    try {
-        Invoke-IsolatedGit -C $root checkout -q -b work main
-        Set-FixtureFile -Root $root -Relative 'CHANGELOG.md' -Content "# Changelog`n`n## [Unreleased]`n`n- cut`n"
-        Invoke-IsolatedGit -C $root add -A
-        Invoke-IsolatedGit -C $root commit -m 'chore(release): assemble the changelog' --quiet
-        $env:EXOSNAP_CHANGELOG_CUT = '1'
-        try { $result = Invoke-PolicyCheck -Root $root }
-        finally { Remove-Item Env:EXOSNAP_CHANGELOG_CUT -ErrorAction SilentlyContinue }
-        Assert-True ($result.ExitCode -eq 0) "a declared cut was rejected:`n$($result.Output)"
-    }
-    finally { Remove-Fixture $root }
-}
-
-Test-Case 'the commit that introduces the policy may create the changelog' {
-    # The policy commit is also the commit that creates the file the policy is
-    # about. Without this the rule could not be adopted without an escape hatch
-    # on its own first commit, which is exactly the shape that gets a rule
-    # switched off.
-    $root = New-FixtureRepo
-    try {
-        Invoke-IsolatedGit -C $root checkout -q -b work main
-        Set-FixtureFile -Root $root -Relative 'CHANGELOG.md' -Content "# Changelog`n`n## [Unreleased]`n"
-        Invoke-IsolatedGit -C $root add -A
-        Invoke-IsolatedGit -C $root commit -m 'build(policy): open a changelog' --quiet
-        $result = Invoke-PolicyCheck -Root $root
-        Assert-True ($result.ExitCode -eq 0) "the introducing commit was rejected:`n$($result.Output)"
-    }
-    finally { Remove-Fixture $root }
-}
-
-Test-Case 'an uncommitted changelog edit is rejected too' {
-    # The hook runs before the commit exists, so a rule that only read committed
-    # history would never fire where it is cheapest to obey.
-    $root = New-FixtureRepo -WithPolicy
-    try {
-        Invoke-IsolatedGit -C $root checkout -q -b work main
-        Set-FixtureFile -Root $root -Relative 'CHANGELOG.md' -Content "# Changelog`n`n## [Unreleased]`n`n- uncommitted`n"
-        $result = Invoke-PolicyCheck -Root $root
-        Assert-True ($result.ExitCode -ne 0) "an uncommitted edit passed:`n$($result.Output)"
-    }
-    finally { Remove-Fixture $root }
 }
 
 Write-Host ''
