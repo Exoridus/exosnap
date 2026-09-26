@@ -38,7 +38,7 @@ A simple launch/smoke check is allowed when it does not seize input. Use adapter
 
 Preparing or testing a release does not authorize publication. Creating or pushing a version tag, publishing a GitHub release and submitting a package-manager version each require the user's explicit approval of that exact operation in the current interaction, or the maintainer's approval at the `release` environment gate of the release workflow. A green verification report is evidence, not permission.
 
-Use `scripts/open-pr.ps1` and `scripts/merge-pr.ps1` for their validation rules. `merge-pr.ps1 -Confirm` is a mechanical guard, not authorization. Pass it only after approval to merge that exact pull request. Work in a branch and preserve Git history.
+Use `cargo exo-dev pr open` and `cargo exo-dev pr merge` for their validation rules. `pr merge --confirm` is a mechanical guard, not authorization. Pass it only after approval to merge that exact pull request. Work in a branch and preserve Git history.
 
 ## Source hygiene and language
 

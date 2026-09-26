@@ -52,6 +52,58 @@ enum Command {
     /// proven to match the source, 4 not a valid verification run, and
     /// otherwise the build's or ctest's own exit code.
     Test(TestArgs),
+    /// Pull request lifecycle: open a draft with a validated title, then
+    /// merge with the squash subject the changelog cut reads.
+    Pr {
+        #[command(subcommand)]
+        pr: PrCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum PrCommand {
+    /// Opens the pull request for the current branch as a draft, reads its
+    /// stored title back, and marks it ready once it re-validates.
+    Open {
+        /// The pull request title. Defaults to the subject of the newest
+        /// commit on this branch that is not on --base.
+        #[arg(long)]
+        subject: Option<String>,
+        /// The pull request description. Defaults to a placeholder the
+        /// author is expected to replace.
+        #[arg(long)]
+        body: Option<String>,
+        /// Read the description from this file instead of --body.
+        #[arg(long)]
+        body_file: Option<PathBuf>,
+        /// Base branch.
+        #[arg(long, default_value = "next")]
+        base: String,
+        /// Leave the pull request in draft instead of marking it ready.
+        #[arg(long)]
+        keep_draft: bool,
+        /// Do not push the branch first. Fails if the branch has no
+        /// upstream.
+        #[arg(long)]
+        no_push: bool,
+    },
+    /// Squash-merges a pull request with the exact subject the changelog cut
+    /// reads. Without --confirm, prints the subject and merges nothing.
+    Merge {
+        /// The pull request to merge. Defaults to the one for the current
+        /// branch.
+        #[arg(long)]
+        number: Option<u32>,
+        /// Required to actually merge.
+        #[arg(long)]
+        confirm: bool,
+        /// Delete the head branch after the merge.
+        #[arg(long)]
+        delete_branch: bool,
+        /// Enable auto-merge instead of merging now.
+        #[arg(long)]
+        auto: bool,
+    },
 }
 
 #[derive(Args)]
@@ -373,6 +425,24 @@ fn run_cli() -> anyhow::Result<ExitCode> {
             } => lint_quality(&repo_root, only, build_dir, base, jobs, report_path),
         },
         Command::Test(args) => test(&repo_root, args),
+        Command::Pr { pr } => match pr {
+            PrCommand::Open {
+                subject,
+                body,
+                body_file,
+                base,
+                keep_draft,
+                no_push,
+            } => pr_open(
+                &repo_root, subject, body, body_file, base, keep_draft, no_push,
+            ),
+            PrCommand::Merge {
+                number,
+                confirm,
+                delete_branch,
+                auto,
+            } => pr_merge(&repo_root, number, confirm, delete_branch, auto),
+        },
         Command::Hook { name } => match name.as_str() {
             "pre-commit" => {
                 let git = Git::new(&repo_root);
@@ -607,6 +677,47 @@ fn check_rulesets(
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pr_open(
+    repo_root: &std::path::Path,
+    subject: Option<String>,
+    body: Option<String>,
+    body_file: Option<PathBuf>,
+    base: String,
+    keep_draft: bool,
+    no_push: bool,
+) -> anyhow::Result<ExitCode> {
+    let request = exo_dev::pr::OpenRequest {
+        subject,
+        body,
+        body_file,
+        base,
+        keep_draft,
+        no_push,
+    };
+    let outcome = exo_dev::pr::open(repo_root, &exo_dev::pr::RealGh::new(), &request)?;
+    print!("{}", exo_dev::pr::render_open(&outcome));
+    Ok(ExitCode::SUCCESS)
+}
+
+fn pr_merge(
+    repo_root: &std::path::Path,
+    number: Option<u32>,
+    confirm: bool,
+    delete_branch: bool,
+    auto: bool,
+) -> anyhow::Result<ExitCode> {
+    let request = exo_dev::pr::MergeRequest {
+        number,
+        confirm,
+        delete_branch,
+        auto,
+    };
+    let outcome = exo_dev::pr::merge(repo_root, &exo_dev::pr::RealGh::new(), &request)?;
+    print!("{}", exo_dev::pr::render_merge(&outcome));
+    Ok(ExitCode::SUCCESS)
 }
 
 fn lint_canaries(

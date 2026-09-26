@@ -42,7 +42,7 @@ pwsh scripts/run-tests.ps1 -Filter recorder_core.   # one binary
 3. Business and product policy stays in C++. QML owns presentation, layout, and interaction only.
 4. Add or update focused tests for what you changed. `scripts/run-tests.ps1` is the entry point.
 5. Run `cargo exo-dev verify --fast` while iterating and `cargo exo-dev verify --full` before pushing. The git hooks use the same entry point; CI runs the full gate again.
-6. Open a pull request against `next` with `scripts/open-pr.ps1`, or pass `-Base main` for a Stable patch. Describe what changed, what validates it, and any product, architecture or workflow updates the change required.
+6. Open a pull request against `next` with `cargo exo-dev pr open`, or pass `--base main` for a Stable patch. Describe what changed, what validates it, and any product, architecture or workflow updates the change required.
 
 ## Commit subjects and pull request descriptions
 
@@ -56,7 +56,7 @@ The same subject line passes through three points, and the number belongs to exa
 |---|---|---|
 | Local commit | `type(scope): summary` | none |
 | Pull request title | `type(scope): summary` | none |
-| Merged subject on the target branch | `type(scope): summary (#N)` | exactly one, appended by `scripts/merge-pr.ps1` |
+| Merged subject on the target branch | `type(scope): summary (#N)` | exactly one, appended by `cargo exo-dev pr merge` |
 
 A title that already ends in its own number is rejected, because the append would land it twice. A citation of a *different* pull request inside the summary is untouched. For example, "finish what (#M) started" remains valid.
 
@@ -66,10 +66,10 @@ A body on a local commit is optional and short. The pull request description car
 
 ## Opening and merging a pull request
 
-Two scripts own this, and neither the title nor the merge subject is assembled by hand:
+Two `exo-dev` subcommands own this, and neither the title nor the merge subject is assembled by hand:
 
-- `scripts/open-pr.ps1` derives the title from the branch's newest commit subject (or takes `-Subject`), validates it against the same parser the changelog cut reads, creates the pull request as a draft, reads its stored metadata back, and only then marks it ready for review. A draft does not start the heavy Windows legs, so a title that has to be fixed is fixed before anything expensive runs.
-- `scripts/merge-pr.ps1` builds the merged subject as `title (#N)` from the *parsed* title and passes it with `--subject`, so the number cannot land twice. It prints the subject and merges nothing unless `-Confirm` is given — and it is only ever given when the merge was explicitly asked for.
+- `cargo exo-dev pr open` derives the title from the branch's newest commit subject (or takes `--subject`), validates it against the same parser the changelog cut reads, creates the pull request as a draft, reads its stored metadata back, and only then marks it ready for review. A draft does not start the heavy Windows legs, so a title that has to be fixed is fixed before anything expensive runs.
+- `cargo exo-dev pr merge` builds the merged subject as `title (#N)` from the *parsed* title and passes it with `--subject`, so the number cannot land twice. It prints the subject and merges nothing unless `--confirm` is given — and it is only ever given when the merge was explicitly asked for.
 
 No machine paths, private workspace references, or agent and session history in commit messages, pull request descriptions, or source comments.
 
