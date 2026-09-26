@@ -215,11 +215,13 @@ pub fn batch_command_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
     use std::path::PathBuf;
 
     /// A real, small executable that answers `--version` with exit 0, so a
     /// fixture candidate genuinely probes as usable without shelling out to
     /// the tool this module is meant to find.
+    #[cfg(windows)]
     fn probeable_exe() -> PathBuf {
         let path_var = std::env::var_os("PATH").unwrap_or_default();
         std::env::split_paths(&path_var)
@@ -228,6 +230,7 @@ mod tests {
             .expect("git.exe must be on PATH for this test")
     }
 
+    #[cfg(windows)]
     fn place_as(name: &str, dir: &Path) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
         let dest = dir.join(format!("{name}.exe"));
@@ -239,6 +242,7 @@ mod tests {
         std::env::join_paths(dirs).unwrap()
     }
 
+    #[cfg(windows)]
     #[test]
     fn vs_bundled_llvm_wins_over_standalone_llvm_and_path() {
         let vs_dir = tempfile::tempdir().unwrap();
@@ -261,6 +265,7 @@ mod tests {
         assert_eq!(found, Some(vs_tool));
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_vs_bundled_clang_format_outside_llvm_x64_bin_is_not_matched() {
         let vs_dir = tempfile::tempdir().unwrap();
@@ -285,6 +290,7 @@ mod tests {
     /// `-version` filter excludes it, so nothing ever reaches this tier as a
     /// root to search under. The VS-LLVM tier must fall through to
     /// standalone LLVM exactly as if VS were entirely absent.
+    #[cfg(windows)]
     #[test]
     fn a_vs2022_scoped_lookup_that_found_nothing_falls_through_to_standalone_llvm() {
         let standalone_dir = tempfile::tempdir().unwrap();
@@ -303,6 +309,7 @@ mod tests {
         assert_eq!(found, Some(standalone_tool));
     }
 
+    #[cfg(windows)]
     #[test]
     fn standalone_llvm_wins_over_path_when_vs_has_none() {
         let standalone_dir = tempfile::tempdir().unwrap();
@@ -321,6 +328,7 @@ mod tests {
         assert_eq!(found, Some(standalone_tool));
     }
 
+    #[cfg(windows)]
     #[test]
     fn path_is_used_when_no_llvm_install_has_the_tool() {
         let path_dir = tempfile::tempdir().unwrap();
@@ -434,6 +442,7 @@ mod tests {
         assert_eq!(batches.len(), 0, "nothing to analyse means no command line");
     }
 
+    #[cfg(windows)]
     #[test]
     fn the_first_matching_name_is_preferred() {
         let path_dir = tempfile::tempdir().unwrap();
