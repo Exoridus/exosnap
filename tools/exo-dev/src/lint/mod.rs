@@ -37,48 +37,48 @@ pub fn find_tool(names: &[&str]) -> Option<PathBuf> {
         vs_llvm_root.as_deref(),
         standalone_llvm_root.as_deref(),
         &path_var,
-        local_app_data.as_deref(),
+        &|path: &Path| is_usable_tool(path, local_app_data.as_deref()),
     )
 }
 
-/// `find_tool`, with every search root injected instead of read from the real
-/// environment, so a test can point each tier at a fixture directory.
+/// `find_tool`, with every search root and the usability probe injected
+/// instead of read from the real environment and the real `--version` check,
+/// so a test can point each tier at a fixture directory and decide for
+/// itself which candidates count as usable.
 fn find_tool_in(
     names: &[&str],
     vs_install_root: Option<&Path>,
     standalone_llvm_root: Option<&Path>,
     path_var: &OsStr,
-    local_app_data: Option<&OsStr>,
+    probe: &dyn Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
     if let Some(root) = vs_install_root
-        && let Some(found) = find_under(root, names, Some("\\llvm\\x64\\bin\\"), local_app_data)
+        && let Some(found) = find_under(root, names, Some("\\llvm\\x64\\bin\\"), probe)
     {
         return Some(found);
     }
     if let Some(root) = standalone_llvm_root
-        && let Some(found) = find_under(root, names, None, local_app_data)
+        && let Some(found) = find_under(root, names, None, probe)
     {
         return Some(found);
     }
-    find_on_path(names, path_var, local_app_data)
+    find_on_path(names, path_var, probe)
 }
 
 /// The first `{name}.exe` under `root` (recursive) whose path, lowercased,
-/// contains `must_contain` (when given) and that passes `is_usable_tool`.
+/// contains `must_contain` (when given) and that `probe` accepts.
 fn find_under(
     root: &Path,
     names: &[&str],
     must_contain: Option<&str>,
-    local_app_data: Option<&OsStr>,
+    probe: &dyn Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
     let mut candidates = Vec::new();
     collect_named_executables(root, names, &mut candidates);
     if let Some(marker) = must_contain {
         candidates.retain(|p| p.to_string_lossy().to_lowercase().contains(marker));
     }
-    candidates
-        .into_iter()
-        .find(|p| is_usable_tool(p, local_app_data))
+    candidates.into_iter().find(|p| probe(p))
 }
 
 /// Recursively collects every `{name}.exe` under `dir`, case-insensitively,
@@ -119,14 +119,14 @@ fn collect_named_executables(dir: &Path, names: &[&str], found: &mut Vec<PathBuf
 fn find_on_path(
     names: &[&str],
     path_var: &OsStr,
-    local_app_data: Option<&OsStr>,
+    probe: &dyn Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
     for name in names {
         let candidate = std::env::split_paths(path_var)
             .map(|dir| dir.join(format!("{name}.exe")))
             .find(|candidate| candidate.is_file());
         if let Some(candidate) = candidate
-            && is_usable_tool(&candidate, local_app_data)
+            && probe(&candidate)
         {
             return Some(candidate);
         }
@@ -215,33 +215,46 @@ pub fn batch_command_line(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(windows)]
-    use std::path::PathBuf;
 
-    /// A real, small executable that answers `--version` with exit 0, so a
-    /// fixture candidate genuinely probes as usable without shelling out to
-    /// the tool this module is meant to find.
-    #[cfg(windows)]
-    fn probeable_exe() -> PathBuf {
-        let path_var = std::env::var_os("PATH").unwrap_or_default();
-        std::env::split_paths(&path_var)
-            .map(|dir| dir.join("git.exe"))
-            .find(|p| p.is_file())
-            .expect("git.exe must be on PATH for this test")
+    /// A fake usability probe that accepts any real file. The search-order
+    /// tests exercise tiering (which candidate `find_tool_in` prefers), not
+    /// `is_usable_tool`'s own probing, so they use this instead of running a
+    /// real `--version` check against a machine-dependent binary.
+    fn probe_any_file(path: &Path) -> bool {
+        path.is_file()
     }
 
-    #[cfg(windows)]
+    /// A plain fixture file at the name and extension `find_tool_in`'s
+    /// collectors look for. It does not need to be runnable: the
+    /// search-order tests pair it with `probe_any_file`, not a real probe.
     fn place_as(name: &str, dir: &Path) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
         let dest = dir.join(format!("{name}.exe"));
-        std::fs::copy(probeable_exe(), &dest).unwrap();
+        std::fs::write(&dest, b"stub").unwrap();
         dest
+    }
+
+    /// A real, small executable that answers `--version` with exit 0.
+    /// `rustc` is guaranteed to be on PATH wherever `cargo test` runs, and,
+    /// unlike a Git-for-Windows `git.exe` shim, running a copy of it from a
+    /// different directory does not change its behavior.
+    fn probeable_exe() -> PathBuf {
+        let path_var = std::env::var_os("PATH").unwrap_or_default();
+        let name = format!("rustc{}", std::env::consts::EXE_SUFFIX);
+        std::env::split_paths(&path_var)
+            .map(|dir| dir.join(&name))
+            .find(|p| p.is_file())
+            .expect("rustc must be on PATH when running cargo test")
     }
 
     fn path_var(dirs: &[&Path]) -> std::ffi::OsString {
         std::env::join_paths(dirs).unwrap()
     }
 
+    // The `\llvm\x64\bin\` marker match is a literal backslash-separated
+    // string, matching a real Windows path only on Windows: `PathBuf::join`
+    // uses `/` on Linux, so this fixture would never satisfy the marker
+    // there for a reason unrelated to what the test verifies.
     #[cfg(windows)]
     #[test]
     fn vs_bundled_llvm_wins_over_standalone_llvm_and_path() {
@@ -260,12 +273,11 @@ mod tests {
             Some(vs_dir.path()),
             Some(standalone_dir.path()),
             &path_var(&[path_dir.path()]),
-            None,
+            &probe_any_file,
         );
         assert_eq!(found, Some(vs_tool));
     }
 
-    #[cfg(windows)]
     #[test]
     fn a_vs_bundled_clang_format_outside_llvm_x64_bin_is_not_matched() {
         let vs_dir = tempfile::tempdir().unwrap();
@@ -280,7 +292,7 @@ mod tests {
             Some(vs_dir.path()),
             None,
             &path_var(&[path_dir.path()]),
-            None,
+            &probe_any_file,
         );
         assert_eq!(found, Some(path_tool));
     }
@@ -290,7 +302,6 @@ mod tests {
     /// `-version` filter excludes it, so nothing ever reaches this tier as a
     /// root to search under. The VS-LLVM tier must fall through to
     /// standalone LLVM exactly as if VS were entirely absent.
-    #[cfg(windows)]
     #[test]
     fn a_vs2022_scoped_lookup_that_found_nothing_falls_through_to_standalone_llvm() {
         let standalone_dir = tempfile::tempdir().unwrap();
@@ -304,12 +315,11 @@ mod tests {
             None,
             Some(standalone_dir.path()),
             &path_var(&[path_dir.path()]),
-            None,
+            &probe_any_file,
         );
         assert_eq!(found, Some(standalone_tool));
     }
 
-    #[cfg(windows)]
     #[test]
     fn standalone_llvm_wins_over_path_when_vs_has_none() {
         let standalone_dir = tempfile::tempdir().unwrap();
@@ -323,12 +333,11 @@ mod tests {
             None,
             Some(standalone_dir.path()),
             &path_var(&[path_dir.path()]),
-            None,
+            &probe_any_file,
         );
         assert_eq!(found, Some(standalone_tool));
     }
 
-    #[cfg(windows)]
     #[test]
     fn path_is_used_when_no_llvm_install_has_the_tool() {
         let path_dir = tempfile::tempdir().unwrap();
@@ -339,7 +348,7 @@ mod tests {
             None,
             None,
             &path_var(&[path_dir.path()]),
-            None,
+            &probe_any_file,
         );
         assert_eq!(found, Some(path_tool));
     }
@@ -352,11 +361,13 @@ mod tests {
             None,
             None,
             &path_var(&[empty.path()]),
-            None,
+            &probe_any_file,
         );
         assert_eq!(found, None);
     }
 
+    // These two exercise the real `is_usable_tool`, not `probe_any_file`,
+    // since they test its own rejection rules rather than tiering order.
     #[test]
     fn a_winget_links_shim_on_path_is_skipped_even_though_it_is_a_real_file() {
         let local_app_data = tempfile::tempdir().unwrap();
@@ -367,12 +378,13 @@ mod tests {
         std::fs::create_dir_all(&links).unwrap();
         std::fs::write(links.join("clang-format.exe"), b"").unwrap();
 
+        let local_app_data = local_app_data.path().as_os_str();
         let found = find_tool_in(
             &["clang-format"],
             None,
             None,
             &path_var(&[&links]),
-            Some(local_app_data.path().as_os_str()),
+            &|path: &Path| is_usable_tool(path, Some(local_app_data)),
         );
         assert_eq!(found, None);
     }
@@ -382,6 +394,8 @@ mod tests {
         let path_dir = tempfile::tempdir().unwrap();
         // A file with the right name and extension but no valid executable
         // content: the `--version` probe must fail closed, not be skipped.
+        // Garbage bytes always fail to run, on any machine, so this needs no
+        // real tool and stays deterministic.
         std::fs::write(path_dir.path().join("clang-format.exe"), b"not a real exe").unwrap();
 
         let found = find_tool_in(
@@ -389,9 +403,25 @@ mod tests {
             None,
             None,
             &path_var(&[path_dir.path()]),
-            None,
+            &|path: &Path| is_usable_tool(path, None),
         );
         assert_eq!(found, None);
+    }
+
+    /// The one search-order-independent test that exercises `is_usable_tool`
+    /// accepting a genuinely runnable binary, so the success path of the
+    /// real `--version` probe stays covered without depending on the
+    /// search-order tests' fake probe. The copy keeps `rustc`'s own file
+    /// name: a `rustup`-managed `rustc` is itself a proxy that dispatches on
+    /// its own basename, so renaming the copy would make it fail the same
+    /// way the old `git.exe` fixture did, for an unrelated reason.
+    #[test]
+    fn is_usable_tool_accepts_a_real_binary_that_answers_version_successfully() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = probeable_exe();
+        let dest = dir.path().join(source.file_name().unwrap());
+        std::fs::copy(&source, &dest).unwrap();
+        assert!(is_usable_tool(&dest, None));
     }
 
     #[test]
@@ -442,7 +472,6 @@ mod tests {
         assert_eq!(batches.len(), 0, "nothing to analyse means no command line");
     }
 
-    #[cfg(windows)]
     #[test]
     fn the_first_matching_name_is_preferred() {
         let path_dir = tempfile::tempdir().unwrap();
@@ -454,7 +483,7 @@ mod tests {
             None,
             None,
             &path_var(&[path_dir.path()]),
-            None,
+            &probe_any_file,
         );
         assert_eq!(found, Some(first));
     }
