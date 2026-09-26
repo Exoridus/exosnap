@@ -17,11 +17,23 @@ use sha2::{Digest, Sha256};
 pub enum LockKind {
     Tree,
     Build,
+    /// The GPU and the interactive desktop: one test run, live check or VM
+    /// campaign on the host at a time.
+    Device,
 }
 
+/// The variable that moves every lock to a different set of names. A holder
+/// that overrides the namespace per call passes it on to its children under
+/// this name, so the whole process tree agrees on one set of names.
+pub const NAMESPACE_VARIABLE: &str = "EXOSNAP_HOST_LOCK_NAMESPACE";
+
 fn namespace() -> String {
-    match std::env::var("EXOSNAP_HOST_LOCK_NAMESPACE") {
-        Ok(value) if !value.trim().is_empty() => format!("ExoSnap.Host.{value}"),
+    namespace_from(std::env::var(NAMESPACE_VARIABLE).ok().as_deref())
+}
+
+fn namespace_from(value: Option<&str>) -> String {
+    match value {
+        Some(value) if !value.trim().is_empty() => format!("ExoSnap.Host.{value}"),
         _ => "ExoSnap.Host".to_string(),
     }
 }
@@ -37,13 +49,17 @@ pub fn tree_key(path: &Path) -> String {
 }
 
 pub fn lock_name(kind: LockKind, tree: Option<&Path>) -> String {
+    lock_name_in(&namespace(), kind, tree)
+}
+
+fn lock_name_in(namespace: &str, kind: LockKind, tree: Option<&Path>) -> String {
     match kind {
         LockKind::Tree => format!(
-            "Global\\{}.Tree.{}",
-            namespace(),
+            "Global\\{namespace}.Tree.{}",
             tree_key(tree.expect("a tree lock needs its build directory"))
         ),
-        LockKind::Build => format!("Global\\{}.Build", namespace()),
+        LockKind::Build => format!("Global\\{namespace}.Build"),
+        LockKind::Device => format!("Global\\{namespace}.Device"),
     }
 }
 
@@ -54,6 +70,7 @@ pub fn inherit_variable(kind: LockKind, tree: Option<&Path>) -> String {
             tree_key(tree.expect("a tree lock needs its build directory"))
         ),
         LockKind::Build => "EXOSNAP_HOST_LOCK_BUILD".to_string(),
+        LockKind::Device => "EXOSNAP_HOST_LOCK_DEVICE".to_string(),
     }
 }
 
@@ -107,21 +124,73 @@ impl HostLock {
 /// Acquires one lock, waiting up to [`timeout`]. Errors rather than proceeding
 /// unlocked: a step that ran anyway would be the collision the lock prevents.
 pub fn acquire(kind: LockKind, tree: Option<&Path>, holder: &str) -> anyhow::Result<HostLock> {
-    let variable = inherit_variable(kind, tree);
-    let inherited = std::env::var(&variable).is_ok_and(|v| !v.trim().is_empty());
-    let mut lock = HostLock {
-        kind,
-        variable,
-        holder: holder.to_string(),
-        waited: Duration::ZERO,
-        #[cfg(windows)]
-        handle: None,
-    };
-    if inherited {
-        return Ok(lock);
+    LockSpace::default().acquire(kind, tree, holder)
+}
+
+/// Where locks are taken and how long a caller waits for one, per call rather
+/// than only through the process environment. Every field left `None` falls
+/// back to its environment variable, so the default is exactly [`acquire`].
+///
+/// A caller that takes real locks from inside a run that already holds the
+/// real ones (a test of the locks, run by the test runner) gives itself a
+/// namespace of its own: it would otherwise contend with the process running
+/// it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LockSpace {
+    /// Overrides `EXOSNAP_HOST_LOCK_NAMESPACE`.
+    pub namespace: Option<String>,
+    /// Overrides [`timeout`].
+    pub timeout: Option<Duration>,
+}
+
+impl LockSpace {
+    pub fn lock_name(&self, kind: LockKind, tree: Option<&Path>) -> String {
+        let namespace = match &self.namespace {
+            Some(value) => namespace_from(Some(value)),
+            None => namespace(),
+        };
+        lock_name_in(&namespace, kind, tree)
     }
-    platform::acquire(&mut lock, &lock_name(kind, tree), timeout(), tree)?;
-    Ok(lock)
+
+    /// The variables a child needs to use the same names as this space. Empty
+    /// when the namespace is the one the child inherits anyway.
+    pub fn child_env(&self) -> Vec<(String, String)> {
+        self.namespace
+            .iter()
+            .map(|value| (NAMESPACE_VARIABLE.to_string(), value.clone()))
+            .collect()
+    }
+
+    /// Acquires one lock in this space. An inherit mark in the environment
+    /// means a process above this one holds it already, and the returned hold
+    /// releases nothing.
+    pub fn acquire(
+        &self,
+        kind: LockKind,
+        tree: Option<&Path>,
+        holder: &str,
+    ) -> anyhow::Result<HostLock> {
+        let variable = inherit_variable(kind, tree);
+        let inherited = std::env::var(&variable).is_ok_and(|v| !v.trim().is_empty());
+        let mut lock = HostLock {
+            kind,
+            variable,
+            holder: holder.to_string(),
+            waited: Duration::ZERO,
+            #[cfg(windows)]
+            handle: None,
+        };
+        if inherited {
+            return Ok(lock);
+        }
+        platform::acquire(
+            &mut lock,
+            &self.lock_name(kind, tree),
+            self.timeout.unwrap_or_else(timeout),
+            tree,
+        )?;
+        Ok(lock)
+    }
 }
 
 #[cfg(windows)]
@@ -234,6 +303,50 @@ mod tests {
     }
 
     #[test]
+    fn the_device_lock_is_host_wide_and_has_its_own_inherit_mark() {
+        assert!(lock_name(LockKind::Device, None).ends_with(".Device"));
+        assert_eq!(
+            inherit_variable(LockKind::Device, None),
+            "EXOSNAP_HOST_LOCK_DEVICE"
+        );
+    }
+
+    #[test]
+    fn a_lock_space_names_its_own_namespace_without_the_environment() {
+        let tree = Path::new("C:/x/build/p");
+        let space = LockSpace {
+            namespace: Some("probe-1".into()),
+            timeout: None,
+        };
+        assert_eq!(
+            space.lock_name(LockKind::Device, None),
+            "Global\\ExoSnap.Host.probe-1.Device"
+        );
+        assert_eq!(
+            space.lock_name(LockKind::Build, None),
+            "Global\\ExoSnap.Host.probe-1.Build"
+        );
+        assert_eq!(
+            space.lock_name(LockKind::Tree, Some(tree)),
+            format!("Global\\ExoSnap.Host.probe-1.Tree.{}", tree_key(tree))
+        );
+        assert_eq!(
+            space.child_env(),
+            vec![(NAMESPACE_VARIABLE.to_string(), "probe-1".to_string())]
+        );
+        // A blank override is the default namespace, as a blank variable is.
+        let blank = LockSpace {
+            namespace: Some("  ".into()),
+            timeout: None,
+        };
+        assert_eq!(
+            blank.lock_name(LockKind::Device, None),
+            "Global\\ExoSnap.Host.Device"
+        );
+        assert!(LockSpace::default().child_env().is_empty());
+    }
+
+    #[test]
     fn the_job_budget_prefers_a_positive_override() {
         assert_eq!(job_budget(Some("3")), 3);
         assert!(job_budget(Some("0")) >= 1);
@@ -273,6 +386,42 @@ mod tests {
                 lock_name(LockKind::Tree, Some(&tree)),
                 lock_name(LockKind::Build, None)
             ]
+        );
+    }
+
+    /// A namespace nothing else on the host uses, so a real device lock taken
+    /// here cannot contend with a test run that holds the real one.
+    #[cfg(windows)]
+    fn private_space(timeout: Duration) -> LockSpace {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        LockSpace {
+            namespace: Some(format!("exo-dev-test-{}-{nanos}", std::process::id())),
+            timeout: Some(timeout),
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_device_lock_in_a_private_namespace_excludes_a_second_holder_until_dropped() {
+        let space = private_space(Duration::from_millis(200));
+        let first = space.acquire(LockKind::Device, None, "first").unwrap();
+        // Another thread: a mutex is recursive for the thread that owns it.
+        let contender = std::thread::spawn({
+            let space = space.clone();
+            move || space.acquire(LockKind::Device, None, "second").is_err()
+        });
+        assert!(
+            contender.join().unwrap(),
+            "a second holder must not get a held device lock"
+        );
+        drop(first);
+        let again =
+            std::thread::spawn(move || space.acquire(LockKind::Device, None, "third").is_ok());
+        assert!(
+            again.join().unwrap(),
+            "a released device lock must be free again"
         );
     }
 

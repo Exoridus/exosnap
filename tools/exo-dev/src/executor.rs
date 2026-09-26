@@ -233,6 +233,7 @@ impl RealExecutor {
                 let what = match kind {
                     LockKind::Tree => format!("tree lock on {}", tree.display()),
                     LockKind::Build => "host build lock".to_string(),
+                    LockKind::Device => "host device lock".to_string(),
                 };
                 println!(
                     "  waited {}s for the {what} held by another run",
