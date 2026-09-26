@@ -46,11 +46,15 @@ use sha2::{Digest, Sha256};
 use crate::executor::ToolMissing;
 use crate::lint::{self, canaries::BLOCKING_CHECKS};
 
-/// Version of the per-translation-unit cache key composition. A Rust port has
-/// no equivalent of the original PowerShell script's own content hash to fold
-/// into the key, so this stands in for it. Bump by hand whenever the scoping
-/// or caching logic itself changes in a way that should invalidate every
-/// existing cache entry; nothing else enforces that.
+/// Version of the per-translation-unit cache key composition. There is no
+/// content hash of this module's own source to fold into the key, so this
+/// stands in for it. Bump by hand whenever a stored diagnostic could stop
+/// describing the same verdict for the same inputs: the clang-tidy
+/// invocation's own literal flags change (a new `--extra-arg`, a different
+/// `-p`/`--quiet` form), or the cache entry's stored format changes.
+/// Scoping (which translation units get analysed) does not affect what a
+/// stored entry means and is not a reason to bump this. Nothing else
+/// enforces the bump.
 pub const CACHE_SCHEMA: u32 = 1;
 
 /// Canary translation units, analysed whenever the analysis configuration
@@ -165,6 +169,7 @@ pub fn run_blocking(
 
     let tool = clang_tidy_path
         .map(Path::to_path_buf)
+        .or_else(discover_vs2022_clang_tidy)
         .or_else(|| lint::find_tool(&["clang-tidy"]))
         .ok_or_else(|| {
             ToolMissing(
@@ -233,6 +238,7 @@ pub fn run_blocking(
     };
 
     let checks_arg = format!("-*,{}", BLOCKING_CHECKS.join(","));
+    let flags = invocation_flags(&checks_arg, HEADER_FILTER);
 
     let commands: HashMap<String, String> = entries
         .iter()
@@ -240,12 +246,7 @@ pub fn run_blocking(
         .collect();
 
     let clang_tidy_config_hash = hash_file(&repo_root.join(".clang-tidy").to_string_lossy());
-    let salt = compute_salt(
-        &banner,
-        &checks_arg,
-        HEADER_FILTER,
-        clang_tidy_config_hash.as_deref(),
-    );
+    let salt = compute_salt(&banner, &flags, clang_tidy_config_hash.as_deref());
 
     let (cache_enabled, cache_keys) = if salt.is_none() {
         (false, HashMap::new())
@@ -287,7 +288,7 @@ pub fn run_blocking(
         pending.push(src.clone());
     }
 
-    let fresh = analyze_pending(&tool, build_dir, &checks_arg, HEADER_FILTER, &pending, jobs);
+    let fresh = analyze_pending(&tool, build_dir, &flags, &pending, jobs);
     for (src, output, code) in &fresh {
         results.push((src.clone(), output.clone()));
         if !cache_enabled {
@@ -626,6 +627,7 @@ fn deps_for_sources(
 // `-Base` scoping
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
 enum BaseScope {
     /// Nothing to analyse; carries the message to report.
     Nothing(String),
@@ -762,13 +764,13 @@ fn scope_for_base(
 /// miss.
 fn compute_salt(
     clang_tidy_banner: &str,
-    checks_arg: &str,
-    header_filter: &str,
+    invocation_flags: &[String],
     clang_tidy_config_hash: Option<&str>,
 ) -> Option<String> {
     let config_hash = clang_tidy_config_hash?;
     Some(format!(
-        "{clang_tidy_banner}\n{checks_arg}\n{header_filter}\nCACHE_SCHEMA={CACHE_SCHEMA}\n.clang-tidy={config_hash}"
+        "{clang_tidy_banner}\n{}\nCACHE_SCHEMA={CACHE_SCHEMA}\n.clang-tidy={config_hash}",
+        invocation_flags.join("\n")
     ))
 }
 
@@ -843,6 +845,21 @@ fn store_cache_entry(cache_dir: &Path, key: &str, output: &str) {
 // clang-tidy invocation
 // ---------------------------------------------------------------------------
 
+/// clang-tidy always sits at a fixed offset below the VS 2022 installation
+/// this tree is built against, so this checks that one path directly rather
+/// than going through `lint::find_tool`'s recursive directory walk: a
+/// `-Recurse`-equivalent sweep of a Visual Studio installation costs minutes
+/// on a cold file-system cache (the original script's own reason for the
+/// same fixed-offset check), which would dwarf a scoped clang-tidy run. Only
+/// when this fails does discovery fall back to `find_tool`'s three-tier
+/// search (standalone LLVM, then PATH; it also re-checks this same VS-LLVM
+/// tier, just via the slower walk).
+fn discover_vs2022_clang_tidy() -> Option<PathBuf> {
+    let root = crate::msvc::find_installation_vs2022()?;
+    let candidate = root.join("VC/Tools/Llvm/x64/bin/clang-tidy.exe");
+    candidate.is_file().then_some(candidate)
+}
+
 fn clang_tidy_version_banner(tool: &Path) -> anyhow::Result<String> {
     let mut command = crate::process::command(&tool.to_string_lossy());
     command.arg("--version");
@@ -862,22 +879,31 @@ fn parse_version(banner: &str) -> Option<String> {
         .map(|caps| caps[1].to_string())
 }
 
-fn invoke_clang_tidy(
-    tool: &Path,
-    build_dir: &Path,
-    checks_arg: &str,
-    header_filter: &str,
-    source: &str,
-) -> (String, i32) {
-    let mut command = crate::process::command(&tool.to_string_lossy());
-    command.args([
-        "-p".to_string(),
-        build_dir.display().to_string(),
+/// The clang-tidy invocation's literal flags, excluding `-p <build dir>`
+/// (the build directory is a path, not a verdict-relevant setting: the same
+/// compile database reached through a different path must not miss the
+/// cache) and the per-TU source path (already part of each entry's own
+/// hashed input set). Built once so the cache salt in [`compute_salt`] and
+/// the real invocation in [`invoke_clang_tidy`] cannot drift apart if a flag
+/// is ever added here.
+fn invocation_flags(checks_arg: &str, header_filter: &str) -> Vec<String> {
+    vec![
         "--quiet".to_string(),
         format!("--checks={checks_arg}"),
         format!("--header-filter={header_filter}"),
-        source.to_string(),
-    ]);
+    ]
+}
+
+fn invoke_clang_tidy(
+    tool: &Path,
+    build_dir: &Path,
+    flags: &[String],
+    source: &str,
+) -> (String, i32) {
+    let mut command = crate::process::command(&tool.to_string_lossy());
+    command.arg("-p").arg(build_dir);
+    command.args(flags);
+    command.arg(source);
     match command.output() {
         Ok(output) => {
             let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -893,8 +919,7 @@ fn invoke_clang_tidy(
 fn analyze_pending(
     tool: &Path,
     build_dir: &Path,
-    checks_arg: &str,
-    header_filter: &str,
+    flags: &[String],
     pending: &[String],
     jobs: usize,
 ) -> Vec<(String, String, i32)> {
@@ -910,8 +935,7 @@ fn analyze_pending(
                 loop {
                     let next = queue.lock().unwrap().pop_front();
                     let Some(src) = next else { break };
-                    let (output, code) =
-                        invoke_clang_tidy(tool, build_dir, checks_arg, header_filter, &src);
+                    let (output, code) = invoke_clang_tidy(tool, build_dir, flags, &src);
                     results.lock().unwrap().push((src, output, code));
                 }
             });
@@ -1188,6 +1212,173 @@ mod tests {
         assert!(graph.is_none());
     }
 
+    /// `-Base` scoping's core promise: a changed header must reach the real
+    /// translation unit that includes it, resolved from a (here, fake)
+    /// Ninja dependency graph, and a non-project source that ALSO happens to
+    /// depend on the same header must not be pulled in by the
+    /// `is_project_source` filter in that same loop.
+    #[test]
+    fn scope_for_base_expands_a_changed_header_to_its_project_source_consumer() {
+        let dir = crate::test_support::fixture_repo_committed(&[
+            ("libs/foo/src/foo.h", "int foo_value();\n"),
+            (
+                "libs/foo/src/foo.cpp",
+                "#include \"foo.h\"\nint foo_value() { return 1; }\n",
+            ),
+            ("libs/foo/src/bar.cpp", "int bar() { return 2; }\n"),
+        ]);
+        let repo_root = dir.path();
+        // An uncommitted edit: `git diff HEAD` (no --cached) sees it against
+        // the working tree, exactly like the committed-vs-working-tree scope
+        // the real caller runs against.
+        crate::test_support::write_files(
+            repo_root,
+            &[("libs/foo/src/foo.h", "int foo_value(); // changed\n")],
+        );
+
+        let repo_root_norm = normalize_root(repo_root);
+        let build_dir_norm = format!("{repo_root_norm}/build");
+
+        let foo_cpp = format!("{repo_root_norm}/libs/foo/src/foo.cpp");
+        let bar_cpp = format!("{repo_root_norm}/libs/foo/src/bar.cpp");
+        let foo_h = format!("{repo_root_norm}/libs/foo/src/foo.h");
+        // Not a project source (third_party/): must be excluded even though
+        // its fake recorded dependency also names the changed header.
+        let third_party_cpp = format!("{repo_root_norm}/third_party/vendor/x.cpp");
+
+        let all_sources = vec![foo_cpp.clone(), bar_cpp.clone()];
+
+        let mut obj_to_source = HashMap::new();
+        obj_to_source.insert("foo.obj".to_string(), foo_cpp.clone());
+        obj_to_source.insert("bar.obj".to_string(), bar_cpp.clone());
+        obj_to_source.insert("thirdparty.obj".to_string(), third_party_cpp.clone());
+
+        let lines: Vec<String> = [
+            "foo.obj: #deps 1, deps mtime 1 (VALID)".to_string(),
+            format!("    {foo_h}"),
+            String::new(),
+            "bar.obj: #deps 1, deps mtime 1 (VALID)".to_string(),
+            format!("    {bar_cpp}"),
+            String::new(),
+            "thirdparty.obj: #deps 1, deps mtime 1 (VALID)".to_string(),
+            format!("    {foo_h}"),
+        ]
+        .into_iter()
+        .collect();
+        let ninja = FakeNinja {
+            whole: Some(lines),
+            batched: None,
+        };
+
+        let scope = scope_for_base(
+            repo_root,
+            &repo_root_norm,
+            &build_dir_norm,
+            "HEAD",
+            &all_sources,
+            &obj_to_source,
+            &ninja,
+        )
+        .unwrap();
+
+        let BaseScope::Scoped { sources, .. } = scope else {
+            panic!("expected a scoped result, the header change is analysable");
+        };
+        assert_eq!(sources, vec![foo_cpp]);
+    }
+
+    /// The canary branch does not need a Ninja graph at all: a change to an
+    /// analysis-configuration trigger (here `.clang-tidy`) pulls in the fixed
+    /// canary translation units directly, by path, and a canary missing from
+    /// `all_sources` is a hard error rather than a quietly smaller scope.
+    #[test]
+    fn scope_for_base_pulls_in_canary_sources_when_the_analysis_config_changed() {
+        let dir = crate::test_support::fixture_repo_committed(&[
+            (".clang-tidy", "Checks: >\n  old-check\n"),
+            ("libs/engine/src/audio_thread.cpp", "// canary a\n"),
+            (
+                "app/quick/ExoSnap/Quick/QuickApplication.cpp",
+                "// canary b\n",
+            ),
+            (
+                "libs/engine/tests/test_split_sentinel_policy.cpp",
+                "// canary c\n",
+            ),
+        ]);
+        let repo_root = dir.path();
+        crate::test_support::write_files(
+            repo_root,
+            &[(".clang-tidy", "Checks: >\n  old-check,\n  new-check\n")],
+        );
+
+        let repo_root_norm = normalize_root(repo_root);
+        let build_dir_norm = format!("{repo_root_norm}/build");
+        let all_sources: Vec<String> = CANARY_SOURCES
+            .iter()
+            .map(|c| format!("{repo_root_norm}/{c}"))
+            .collect();
+        let obj_to_source = HashMap::new();
+        let ninja = FakeNinja {
+            whole: None,
+            batched: None,
+        };
+
+        let scope = scope_for_base(
+            repo_root,
+            &repo_root_norm,
+            &build_dir_norm,
+            "HEAD",
+            &all_sources,
+            &obj_to_source,
+            &ninja,
+        )
+        .unwrap();
+
+        let BaseScope::Scoped { sources, .. } = scope else {
+            panic!("expected a scoped result, the canary trigger changed");
+        };
+        let mut sorted = sources;
+        sorted.sort();
+        let mut expected = all_sources;
+        expected.sort();
+        assert_eq!(sorted, expected);
+    }
+
+    #[test]
+    fn scope_for_base_refuses_a_canary_source_missing_from_the_compile_database() {
+        let dir = crate::test_support::fixture_repo_committed(&[(
+            ".clang-tidy",
+            "Checks: >\n  old-check\n",
+        )]);
+        let repo_root = dir.path();
+        crate::test_support::write_files(
+            repo_root,
+            &[(".clang-tidy", "Checks: >\n  old-check,\n  new-check\n")],
+        );
+
+        let repo_root_norm = normalize_root(repo_root);
+        let build_dir_norm = format!("{repo_root_norm}/build");
+        // None of the canary sources are in the (empty) compile database.
+        let all_sources: Vec<String> = Vec::new();
+        let obj_to_source = HashMap::new();
+        let ninja = FakeNinja {
+            whole: None,
+            batched: None,
+        };
+
+        let error = scope_for_base(
+            repo_root,
+            &repo_root_norm,
+            &build_dir_norm,
+            "HEAD",
+            &all_sources,
+            &obj_to_source,
+            &ninja,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("is not in the compile database"));
+    }
+
     #[test]
     fn build_cache_keys_skips_a_source_without_a_recorded_dependency_list() {
         let dep_graph = HashMap::new();
@@ -1285,14 +1476,24 @@ mod tests {
 
     /// Integration coverage for the Ninja dependency parsing against a real
     /// `ninja -t deps` invocation: the logic above is unit-tested against
-    /// canned graphs, this proves the parser agrees with the real tool's
-    /// output format on a tiny, real CMake + Ninja project. Skipped when
-    /// `cmake`/`ninja` are unavailable, unless `EXO_DEV_REQUIRE_NINJA` is
-    /// set (CI sets it), in which case a missing tool fails loudly instead of
-    /// leaving this path untested.
+    /// canned graphs (`scope_for_base_expands_a_changed_header_to_its_project_source_consumer`
+    /// and friends), this proves the parser agrees with the real tool's
+    /// output format on a tiny, real CMake + Ninja project.
+    ///
+    /// `#[ignore]`, matching `canaries::tests::every_blocking_check_fires_on_its_own_real_canary`:
+    /// a plain `cargo test` reporting "ok" regardless of whether cmake/ninja/a
+    /// working C++ toolchain were actually available would make a silent skip
+    /// indistinguishable from a real pass in the one place that distinction is
+    /// visible without extra flags, the `passed`/`ignored` counts in the test
+    /// summary. Run with `cargo test -- --ignored` on a machine that has them
+    /// (this one does); `EXO_DEV_REQUIRE_NINJA` turns a missing tool into a
+    /// panic instead of a graceful skip for that explicit run. No CI job
+    /// currently sets `EXO_DEV_REQUIRE_NINJA` or passes `--ignored`.
     #[test]
+    #[ignore = "requires cmake, ninja and a working C++ toolchain"]
     fn a_changed_header_reaches_its_real_ninja_recorded_consumer() {
         let Some(fixture) = build_ninja_fixture() else {
+            skip("a_changed_header_reaches_its_real_ninja_recorded_consumer");
             return;
         };
 
@@ -1320,10 +1521,29 @@ mod tests {
     }
 
     struct NinjaFixture {
+        /// Kept alive for the fixture's lifetime so the directory is removed
+        /// (RAII) when the test is done with it, rather than leaked into
+        /// `%TEMP%` on every run.
+        _dir: tempfile::TempDir,
         build_dir: PathBuf,
         obj_to_source: HashMap<String, String>,
         consumer_source: String,
         shared_header: String,
+    }
+
+    /// An unmissable marker that a test's assertions did not run: printed
+    /// through the child-inherited stdio path (see `build_ninja_fixture`),
+    /// which cargo test does not buffer, so it is visible next to whatever
+    /// diagnostic the missing/failing tool itself printed, with or without
+    /// `--nocapture`. `cargo test`'s own summary line still reports the test
+    /// as passed (no assertion ran to fail); this is the human-visible
+    /// counter-signal that a plain "ok" does not carry on its own.
+    fn skip(test_name: &str) {
+        eprintln!(
+            "SKIP {test_name}: cmake/ninja/a C++ toolchain are not usable here; \
+             this run asserts nothing about real Ninja dependency parsing. \
+             Set EXO_DEV_REQUIRE_NINJA=1 on a machine that has them to turn this into a failure."
+        );
     }
 
     /// Configures and builds a two-translation-unit CMake project with Ninja,
@@ -1342,7 +1562,7 @@ mod tests {
             Ok(dir) => dir,
             Err(_) => return None,
         };
-        let root = dir.keep();
+        let root = dir.path().to_path_buf();
         let header = root.join("shared.h");
         let consumer = root.join("consumer.cpp");
         let other = root.join("other.cpp");
@@ -1388,6 +1608,7 @@ mod tests {
         let consumer_source = normalize_root(&consumer);
         let shared_header = normalize_root(&header);
         Some(NinjaFixture {
+            _dir: dir,
             build_dir,
             obj_to_source,
             consumer_source,
