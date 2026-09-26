@@ -17,6 +17,11 @@ hex.workspace = true
 regex.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+# Optional, pulled in only by `test-support`: the self-referencing dev-dependency
+# below builds this crate as a plain dependency of its own test targets, where
+# `[dev-dependencies]` is not on the graph, so a fixture helper's tempfile use
+# has to reach it through an ordinary, feature-gated dependency instead.
+tempfile = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
@@ -25,5 +30,11 @@ windows = { workspace = true, features = [
     "Win32_System_Threading",
 ] }
 
+[features]
+# Exposes `test_support` outside this crate's own `#[cfg(test)]` unit tests, for
+# integration tests under `tests/`. Never enabled by a normal build; only the
+# self-referencing dev-dependency below turns it on for test targets.
+test-support = ["dep:tempfile"]
+
 [dev-dependencies]
-tempfile.workspace = true
+exo-dev = { path = ".", features = ["test-support"] }

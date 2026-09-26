@@ -165,13 +165,7 @@ impl StepId {
             StepId::Sanity => step("sanity", &[], Native),
             StepId::Diff => step("diff", SANITY, Native),
             StepId::Drift => step("drift", SANITY, Native),
-            StepId::SourceHygiene => step(
-                "source-hygiene",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev check source-hygiene",
-                },
-            ),
+            StepId::SourceHygiene => step("source-hygiene", SANITY, Native),
             StepId::DocsSuperpowersRemoved => step(
                 "docs-superpowers-removed",
                 SANITY,

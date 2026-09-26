@@ -1460,20 +1460,16 @@ if(EXOSNAP_PWSH)
     # hardware.
     #
     # The Qt/build drift guard (qt-version-consistency, setup-qt-centralized,
-    # no-qmake-project, qt-sdk-path-allowlist) is Rust, not PowerShell: its
-    # contract is `cargo test -p exo-dev drift::`, not a CTest case here.
+    # no-qmake-project, qt-sdk-path-allowlist) and the source-hygiene
+    # provenance scan are Rust, not PowerShell: their contracts are
+    # `cargo test -p exo-dev drift::` and `cargo test -p exo-dev
+    # source_hygiene::`, not a CTest case here.
 
     add_test(NAME pipeline.quality_helpers
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/verify-pipeline.tests.ps1")
     set_tests_properties(pipeline.quality_helpers PROPERTIES TIMEOUT 180 LABELS "pipeline")
     exosnap_set_test_phase(pipeline.quality_helpers hermetic)
-
-    add_test(NAME pipeline.source_hygiene
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/check-source-hygiene.tests.ps1")
-    set_tests_properties(pipeline.source_hygiene PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.source_hygiene hermetic)
 
     # The subject grammar, the changelog assembler and the release-notes
     # renderer share one parser, and the release cut is the first place a

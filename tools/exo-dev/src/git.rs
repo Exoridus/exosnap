@@ -1,7 +1,8 @@
 //! Repository facts. Every call names its repository and runs without the hook's
 //! git environment (see `process::HOOK_GIT_VARIABLES`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use crate::process;
@@ -107,5 +108,57 @@ impl Git {
             add(&["diff", "--cached", "--name-only", "--diff-filter=ACMR"]);
         }
         files.into_iter().collect()
+    }
+
+    /// New/changed line numbers per file, as `old_start..old_start+old_count`
+    /// ranges from unified-zero-context hunk headers. Layers three sources the
+    /// same way `changed_files` does: the range against `base`, the unstaged
+    /// worktree diff and the staged diff, so an uncommitted edit is in scope
+    /// even when `base` names `HEAD` itself.
+    pub fn changed_line_ranges(
+        &self,
+        base: &str,
+    ) -> anyhow::Result<HashMap<String, Vec<Range<usize>>>> {
+        let range = format!("{base}...HEAD");
+        let mut changed =
+            self.diff_line_ranges(&["diff", "--unified=0", "--diff-filter=ACMR", &range]);
+        for (file, ranges) in self.diff_line_ranges(&["diff", "--unified=0", "--diff-filter=ACMR"])
+        {
+            changed.entry(file).or_default().extend(ranges);
+        }
+        for (file, ranges) in
+            self.diff_line_ranges(&["diff", "--cached", "--unified=0", "--diff-filter=ACMR"])
+        {
+            changed.entry(file).or_default().extend(ranges);
+        }
+        Ok(changed)
+    }
+
+    fn diff_line_ranges(&self, args: &[&str]) -> HashMap<String, Vec<Range<usize>>> {
+        // A hunk header with no explicit count means one line; an explicit `,0`
+        // means a pure deletion, which touches no line on the new side.
+        let hunk = regex::Regex::new(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@").unwrap();
+        let mut changed: HashMap<String, Vec<Range<usize>>> = HashMap::new();
+        let (_, stdout) = self.run(args);
+        let mut file: Option<String> = None;
+        for line in stdout.lines() {
+            if let Some(rest) = line.strip_prefix("+++ b/") {
+                file = Some(rest.trim().to_string());
+                continue;
+            }
+            let Some(caps) = hunk.captures(line) else {
+                continue;
+            };
+            let Some(file) = &file else { continue };
+            let start: usize = caps[1].parse().unwrap_or(1);
+            let count: usize = caps.get(2).map_or(1, |m| m.as_str().parse().unwrap_or(1));
+            if count > 0 {
+                changed
+                    .entry(file.clone())
+                    .or_default()
+                    .push(start..start + count);
+            }
+        }
+        changed
     }
 }

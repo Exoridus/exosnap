@@ -43,6 +43,20 @@ enum CheckCommand {
     /// The four build/Qt drift invariants: qt-version-consistency,
     /// setup-qt-centralized, no-qmake-project, qt-sdk-path-allowlist.
     Drift,
+    /// Development provenance in source comments: task IDs, commit hashes,
+    /// issue/PR numbers, private-workspace and machine-specific paths,
+    /// conversation/agent narrative, branch names, non-ASCII punctuation.
+    SourceHygiene {
+        /// Commit to diff against. Defaults to HEAD (the working tree).
+        #[arg(long, conflicts_with = "all")]
+        base: Option<String>,
+        /// Scan every tracked source file instead of only added/changed lines.
+        #[arg(long)]
+        all: bool,
+        /// Restrict the run to one named rule.
+        #[arg(long)]
+        only: Option<String>,
+    },
 }
 
 #[derive(Args, Default)]
@@ -124,6 +138,9 @@ fn run_cli() -> anyhow::Result<ExitCode> {
         Command::Verify(args) => verify(&repo_root, *args),
         Command::Check { check } => match check {
             CheckCommand::Drift => check_drift(&repo_root),
+            CheckCommand::SourceHygiene { base, all, only } => {
+                check_source_hygiene(&repo_root, base, all, only)
+            }
         },
         Command::Hook { name } => match name.as_str() {
             "pre-commit" => {
@@ -174,6 +191,52 @@ fn check_drift(repo_root: &std::path::Path) -> anyhow::Result<ExitCode> {
         Ok(ExitCode::SUCCESS)
     } else {
         println!("check-drift: FAILED");
+        Ok(ExitCode::FAILURE)
+    }
+}
+
+fn check_source_hygiene(
+    repo_root: &std::path::Path,
+    base: Option<String>,
+    all: bool,
+    only: Option<String>,
+) -> anyhow::Result<ExitCode> {
+    let git = Git::new(repo_root);
+    let scope = if all {
+        exo_dev::source_hygiene::Scope::All
+    } else {
+        let base = base
+            .or_else(|| git.default_base())
+            .unwrap_or_else(|| "HEAD".to_string());
+        exo_dev::source_hygiene::Scope::Diff { base }
+    };
+    let report = exo_dev::source_hygiene::check(repo_root, scope, only.as_deref())?;
+
+    for finding in report.blocking() {
+        eprintln!();
+        eprintln!("source-hygiene: {}:{}", finding.file, finding.line);
+        eprintln!("{} in source comment: \"{}\"", finding.rule, finding.value);
+        eprintln!("{}", finding.fix);
+    }
+    let advisory_count = report.advisory().count();
+    if advisory_count > 0 {
+        println!();
+        println!("source-hygiene ADVISORY: {advisory_count} finding(s)");
+    }
+
+    let blocking_count = report.blocking().count();
+    if blocking_count == 0 {
+        println!();
+        let scope_desc = if all {
+            "every tracked source file"
+        } else {
+            "the changed lines"
+        };
+        println!("source-hygiene: OK ({scope_desc})");
+        Ok(ExitCode::SUCCESS)
+    } else {
+        println!();
+        println!("{blocking_count} blocking finding(s).");
         Ok(ExitCode::FAILURE)
     }
 }

@@ -469,21 +469,40 @@ impl RealExecutor {
                 Ok((log, outcome))
             }),
             StepId::SourceHygiene => {
-                let args: Vec<String> = match check.evidence_str("scope") {
-                    Some("whole-tree") => vec!["-All".into()],
+                let scope = match check.evidence_str("scope") {
+                    Some("whole-tree") => crate::source_hygiene::Scope::All,
                     Some("range") => match &ctx.base {
-                        Some(base) => vec!["-Base".into(), base.clone()],
+                        Some(base) => crate::source_hygiene::Scope::Diff { base: base.clone() },
                         None => return Outcome::fail("a pull request run needs --base"),
                     },
-                    _ => vec!["-Base".into(), "HEAD".into()],
+                    // The work in front of the developer, not the whole branch:
+                    // that is what makes the rules adoptable on this tree.
+                    _ => crate::source_hygiene::Scope::Diff { base: "HEAD".into() },
                 };
-                self.pwsh_with(
-                    "source-hygiene",
-                    "check-source-hygiene.ps1",
-                    args,
-                    None,
-                    &[],
-                )
+                self.native("source-hygiene", || {
+                    let report = crate::source_hygiene::check(&ctx.repo_root, scope, None)?;
+                    let mut log = String::new();
+                    for finding in report.blocking() {
+                        log.push_str(&format!(
+                            "\nsource-hygiene: {}:{}\n{} in source comment: \"{}\"\n{}\n",
+                            finding.file, finding.line, finding.rule, finding.value, finding.fix
+                        ));
+                    }
+                    let advisory_count = report.advisory().count();
+                    if advisory_count > 0 {
+                        log.push_str(&format!(
+                            "\nsource-hygiene: {advisory_count} advisory finding(s), see exo-dev check source-hygiene --only <rule>\n"
+                        ));
+                    }
+                    let blocking_count = report.blocking().count();
+                    let outcome = if blocking_count == 0 {
+                        log.push_str("source-hygiene: OK\n");
+                        Outcome::pass("")
+                    } else {
+                        Outcome::fail(format!("{blocking_count} blocking finding(s)"))
+                    };
+                    Ok((log, outcome))
+                })
             }
             StepId::DocsSuperpowersRemoved => self.pwsh(
                 "docs-superpowers-removed",
