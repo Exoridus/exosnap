@@ -21,6 +21,7 @@ pub mod run;
 pub mod scope;
 pub mod source_hygiene;
 pub mod step;
+pub mod test;
 
 /// Behind a Cargo feature, never a plain `cfg(test)`, so a file under `tests/`
 /// (a separate crate) can see it too. See `test_support`'s module doc.
