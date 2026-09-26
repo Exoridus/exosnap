@@ -338,6 +338,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ed25519-dalek",
  "exo-dev",
  "hex",
  "regex",

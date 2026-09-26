@@ -13,6 +13,10 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+# Optional, pulled in only by `dev-tools`: `gen-manifest-fixture` signs a fixed
+# test fixture from a fixed seed. No std/alloc features are needed since it
+# only ever signs one in-memory byte slice with fixed-size key material.
+ed25519-dalek = { version = "2.2", default-features = false, optional = true }
 hex.workspace = true
 regex.workspace = true
 serde_json.workspace = true
@@ -31,6 +35,11 @@ windows = { workspace = true, features = [
 ] }
 
 [features]
+default = ["dev-tools"]
+# Developer-only commands (currently `gen-manifest-fixture`) that a release
+# build of this binary does not need. Kept optional so a build that turns off
+# default features skips their dependency (e.g. curve25519-dalek) entirely.
+dev-tools = ["dep:ed25519-dalek"]
 # Exposes `test_support` outside this crate's own `#[cfg(test)]` unit tests, for
 # integration tests under `tests/`. Never enabled by a normal build; only the
 # self-referencing dev-dependency below turns it on for test targets.

@@ -7,6 +7,8 @@ pub mod commit_policy;
 pub mod drift;
 pub mod evidence;
 pub mod executor;
+#[cfg(feature = "dev-tools")]
+pub mod gen_manifest_fixture;
 pub mod git;
 pub mod hook;
 pub mod host_lock;

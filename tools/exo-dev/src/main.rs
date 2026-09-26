@@ -69,6 +69,10 @@ enum Command {
         #[command(subcommand)]
         packaging: PackagingCommand,
     },
+    /// Regenerates the detached-signature fixture pasted into
+    /// libs/update/tests/test_update_signature.cpp and prints it.
+    #[cfg(feature = "dev-tools")]
+    GenManifestFixture,
 }
 
 #[derive(Subcommand)]
@@ -558,6 +562,8 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 verify(&repo_root, args)
             }
         },
+        #[cfg(feature = "dev-tools")]
+        Command::GenManifestFixture => gen_manifest_fixture(),
     }
 }
 
@@ -595,6 +601,13 @@ fn exit_code(code: i32) -> ExitCode {
             std::process::exit(code)
         }
     }
+}
+
+#[cfg(feature = "dev-tools")]
+fn gen_manifest_fixture() -> anyhow::Result<ExitCode> {
+    let fixture = exo_dev::gen_manifest_fixture::generate();
+    print!("{}", exo_dev::gen_manifest_fixture::render(&fixture));
+    Ok(ExitCode::SUCCESS)
 }
 
 fn check_drift(repo_root: &std::path::Path) -> anyhow::Result<ExitCode> {

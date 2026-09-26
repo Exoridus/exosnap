@@ -82,7 +82,7 @@ TEST(Ed25519, RFC8032Vector2OneByte) {
 // (NOT the production key), derived from the fixed 32-byte seed 00 01 02 ... 1f.
 // Public key: 03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8
 //
-// scripts/dev/gen-manifest-fixture.py regenerates the manifest text + signature.
+// `cargo exo-dev gen-manifest-fixture` regenerates the manifest text + signature.
 // ---------------------------------------------------------------------------
 static const uint8_t kFixturePubKey[32] = {0x03, 0xa1, 0x07, 0xbf, 0xf3, 0xce, 0x10, 0xbe, 0x1d, 0x70, 0xdd,
                                            0x18, 0xe7, 0x4b, 0xc0, 0x99, 0x67, 0xe4, 0xd6, 0x30, 0x9b, 0xa5,
