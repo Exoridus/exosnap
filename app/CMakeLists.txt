@@ -1459,8 +1459,9 @@ if(EXOSNAP_PWSH)
     # local pipeline rather than the Live Verify runner, and nothing here queries
     # hardware.
     #
-    # check-drift.ps1's own contract is now `cargo test -p exo-dev drift::`,
-    # ported alongside `exo-dev check drift` in tools/exo-dev/src/drift.rs.
+    # The Qt/build drift guard (qt-version-consistency, setup-qt-centralized,
+    # no-qmake-project, qt-sdk-path-allowlist) is Rust, not PowerShell: its
+    # contract is `cargo test -p exo-dev drift::`, not a CTest case here.
 
     add_test(NAME pipeline.quality_helpers
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File

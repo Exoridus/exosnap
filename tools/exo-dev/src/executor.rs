@@ -16,6 +16,21 @@ use crate::step::StepId;
 /// check-quality.ps1's "a tool this run needed is not installed".
 const QUALITY_TOOL_MISSING_EXIT: i32 = 3;
 
+/// A native check's own signal that the external tool it needs is not
+/// installed, distinct from an ordinary failure. `native` downcasts to this
+/// type and maps it to `Status::ToolMissing`; every other error becomes
+/// `Status::Fail`.
+#[derive(Debug)]
+pub struct ToolMissing(pub String);
+
+impl std::fmt::Display for ToolMissing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ToolMissing {}
+
 pub struct Context {
     pub repo_root: PathBuf,
     pub profile: ProfileSpec,
@@ -325,28 +340,36 @@ impl RealExecutor {
         Outcome::pass("format, clippy, tests")
     }
 
-    /// Runs an in-process (native) step. Every later flip from a `pwsh`/`step`
-    /// process call to a direct Rust call goes through this one path, so it
-    /// carries the same contract the process path gives for free:
-    ///
-    /// - a log file at the same place a spawned process's would land, so
-    ///   `--failure-tail-lines` and the receipt's evidence work unchanged;
-    /// - the log streamed inside a `::group::`/`::endgroup::` pair in CI, the
-    ///   way `StepRunner::run` streams a child process's output;
-    /// - `f` returning `Err` becomes `Status::Fail`, never a silent pass. A
-    ///   check that wants `Status::ToolMissing` reports it explicitly through
-    ///   its returned `Outcome`; an `Err` is a refusal or a bug in the check
-    ///   itself, not a missing tool, so it is never mapped to `ToolMissing`.
+    /// Runs an in-process (native) check. Writes the step's log to the same
+    /// place a spawned process's would land, so `--failure-tail-lines` and the
+    /// receipt's evidence work unchanged; streams that log inside a
+    /// `::group::`/`::endgroup::` pair in CI, matching how `StepRunner::run`
+    /// streams a child process's output; and turns `f`'s result into an
+    /// `Outcome` that can never pass silently.
     ///
     /// `f` returns the text to write to the step's log (typically the rendered
-    /// violations or findings) alongside the `Outcome` to report.
+    /// violations or findings) alongside the `Outcome` to report. An `Err`
+    /// becomes `Status::Fail`, printing the same `---- {name} ----` / reason
+    /// block the process path prints for a missing tool -- except when the
+    /// error downcasts to `ToolMissing`, which instead becomes
+    /// `Status::ToolMissing`: a required tool that is absent is never
+    /// conflated with an ordinary failure.
     fn native(&self, name: &str, f: impl FnOnce() -> anyhow::Result<(String, Outcome)>) -> Outcome {
         let (log_text, mut outcome) = match f() {
             Ok(pair) => pair,
-            Err(error) => {
-                let detail = format!("{error:#}");
-                (detail.clone(), Outcome::fail(detail))
-            }
+            Err(error) => match error.downcast::<ToolMissing>() {
+                Ok(missing) => {
+                    let reason = missing.0;
+                    println!();
+                    println!("---- {name} ----");
+                    println!("{reason}");
+                    (reason.clone(), Outcome::new(Status::ToolMissing, reason))
+                }
+                Err(error) => {
+                    let detail = format!("{error:#}");
+                    (detail.clone(), Outcome::fail(detail))
+                }
+            },
         };
 
         let log_path = self.ctx.runner.log_path(name);
@@ -786,5 +809,62 @@ impl Executor for DryRunExecutor {
             .into_iter()
             .map(|c| c.output_path.display().to_string())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plan;
+    use crate::profile::Profile;
+    use crate::scope::Scope;
+
+    fn executor(log_dir: &Path) -> RealExecutor {
+        let scope = Scope::everything();
+        let input = plan::tests::input(Profile::PrePush, &scope);
+        let plan = plan::build(&input);
+        let ctx = Context {
+            repo_root: PathBuf::from("."),
+            profile: input.profile,
+            event: input.event.clone(),
+            base: input.base.clone(),
+            staged: input.staged,
+            preset: input.preset.clone(),
+            config: input.config.clone(),
+            build_dir: plan.build_dir.clone(),
+            jobs: 1,
+            pr_title: None,
+            pr_number: None,
+            tidy_cache_dir: None,
+            head: Some("deadbeef".into()),
+            dirty: false,
+            runner: StepRunner {
+                log_dir: log_dir.to_path_buf(),
+                stream: false,
+                failure_tail_lines: 5,
+                env: Vec::new(),
+            },
+        };
+        RealExecutor::new(ctx, &plan)
+    }
+
+    #[test]
+    fn a_tool_missing_error_maps_to_tool_missing_not_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let executor = executor(dir.path());
+        let outcome = executor.native("probe", || {
+            Err(ToolMissing("zizmor is not installed".into()).into())
+        });
+        assert_eq!(outcome.status, Status::ToolMissing);
+        assert_eq!(outcome.detail, "zizmor is not installed");
+    }
+
+    #[test]
+    fn any_other_error_maps_to_an_ordinary_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let executor = executor(dir.path());
+        let outcome = executor.native("probe", || anyhow::bail!("boom"));
+        assert_eq!(outcome.status, Status::Fail);
+        assert!(outcome.detail.contains("boom"));
     }
 }

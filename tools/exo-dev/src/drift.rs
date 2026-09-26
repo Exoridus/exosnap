@@ -1,4 +1,5 @@
-//! Ports check-drift.ps1's four build/Qt drift invariants.
+//! Guards the few build/Qt invariants that used to be enforced by everyone
+//! remembering them.
 //!
 //! Not a Qt linter and not a style checker. Four rules, each one a shape that has
 //! already gone wrong here or is one copy-paste away from doing so:
@@ -16,10 +17,10 @@
 //! while parallel agent sessions run, plus build trees, and a recursive scan
 //! would read those as source.
 //!
-//! Rust sources are deliberately NOT scanned. check-drift.ps1 never covered
-//! `.rs` files, and doing so here would make this module trip over its own
-//! `#[cfg(test)]` fixtures: a Qt version or SDK path embedded in a Rust string
-//! literal below is test evidence, not build machinery.
+//! Rust sources are deliberately NOT scanned: a Qt version or SDK path embedded
+//! in a Rust string literal (including this module's own `#[cfg(test)]`
+//! fixtures) is test evidence, not build machinery, and must never count as a
+//! violation.
 
 use std::path::Path;
 
@@ -36,7 +37,7 @@ pub struct DriftReport {
 
 /// Absolute Qt SDK paths that already exist and are accepted. This list is the
 /// point of the rule: it is not meant to grow silently. A new entry is a
-/// decision. Ported verbatim from check-drift.ps1's `$script:QtSdkPathAllowlist`.
+/// decision.
 const QT_SDK_PATH_ALLOWLIST: &[&str] = &[
     "CMakeLists.txt",
     "scripts/check-quality.ps1",
@@ -61,8 +62,8 @@ fn strip_comment_lines(text: &str) -> Vec<String> {
 }
 
 pub fn check(root: &Path) -> anyhow::Result<DriftReport> {
-    // ls-files first, matching check-drift.ps1's own order: a missing/broken git
-    // repository is a refusal (Err), never an empty, falsely-clean violation list.
+    // A missing/broken git repository is a refusal (Err), discovered before any
+    // version logic runs, never an empty, falsely-clean violation list.
     let files = crate::git::Git::new(root).ls_files()?;
 
     let mut violations = Vec::new();
@@ -190,11 +191,10 @@ mod tests {
     use std::fs;
     use std::process::Command;
 
-    /// A clean base repository shape (check-drift.ps1's own `New-FixtureRepo`):
-    /// a composite Qt setup action, a workflow that uses it, and a CMakeLists
-    /// that pins the same version, all internally consistent. `remove` drops
-    /// base entries (e.g. to test a missing canonical version); `overrides` adds
-    /// to or replaces them.
+    /// A clean base repository shape: a composite Qt setup action, a workflow
+    /// that uses it, and a CMakeLists that pins the same version, all
+    /// internally consistent. `remove` drops base entries (e.g. to test a
+    /// missing canonical version); `overrides` adds to or replaces them.
     fn fixture(remove: &[&str], overrides: &[(&str, &str)]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         Command::new("git")
@@ -270,9 +270,9 @@ mod tests {
         assert!(report.violations.is_empty());
     }
 
-    /// This is the case that must never regress again: an earlier version of
-    /// this port scanned its own Rust test fixtures as build machinery and
-    /// failed against the real tree it was meant to guard.
+    /// The guard is only worth running if the tree it guards is currently
+    /// clean: fixtures in `.rs` files must never count as build machinery
+    /// scanned by this rule.
     #[test]
     fn the_real_repository_passes_with_zero_violations() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
