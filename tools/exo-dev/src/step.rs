@@ -56,11 +56,12 @@ pub enum StepId {
     /// new module cannot slip past by not being named.
     QmlLint,
     Build,
-    /// Through run-tests.ps1, which isolates configuration and Qt and writes the
-    /// receipt. CI excludes the `live` label: those tests read real machine state
-    /// and are excluded rather than trusted to skip themselves on a GPU-less
-    /// runner. `live` and the execution phases are separate axes; selecting by
-    /// phase alone would lose the offscreen desktop tests or keep the live ones.
+    /// `exo-dev test` in process: builds the tree, runs ctest with isolated
+    /// configuration and Qt, and writes the tree's test receipt. CI excludes the
+    /// `live` label: those tests read real machine state and are excluded rather
+    /// than trusted to skip themselves on a GPU-less runner. `live` and the
+    /// execution phases are separate axes. Selecting by phase alone would lose
+    /// the offscreen desktop tests or keep the live ones.
     Tests,
     CppCheck,
     ClangTidy,
@@ -246,18 +247,13 @@ impl StepId {
                 locks: TREE_AND_BUILD,
                 ..step("build", CONFIGURE, Native)
             },
-            // No lock here: run-tests.ps1 takes the tree lock and the host device
-            // lock itself, for the whole span from its build to its receipt.
-            // Holding either out here as well would only widen the span.
+            // No lock here: the test runner takes the tree lock for the span from
+            // its build to its receipt, the build lock around its build and the
+            // device lock around ctest alone. Holding any of them out here would
+            // widen those spans, and the device lock would then cover the build.
             StepId::Tests => StepInfo {
                 windows_only: true,
-                ..step(
-                    "tests",
-                    BUILD,
-                    Legacy {
-                        owner: "exo-dev test",
-                    },
-                )
+                ..step("tests", BUILD, Native)
             },
             StepId::CppCheck => StepInfo {
                 windows_only: true,

@@ -78,6 +78,8 @@ pub struct RealExecutor {
     tests_unfiltered: bool,
     /// Inherit marks of the host locks the running step holds.
     lock_env: Vec<(String, String)>,
+    /// The locks, MSVC import and environment the test runner uses.
+    tests_host: Box<dyn crate::test::host::Host>,
 }
 
 impl RealExecutor {
@@ -91,6 +93,7 @@ impl RealExecutor {
             failed_tests: Vec::new(),
             tests_unfiltered,
             lock_env: Vec::new(),
+            tests_host: Box::new(crate::test::host::RealHost::default()),
         }
     }
 
@@ -685,31 +688,31 @@ impl RealExecutor {
                 )
             }
             StepId::Tests => {
-                let mut args = vec![
-                    "-BuildDir".to_string(),
-                    ctx.build_dir.clone(),
-                    "-Config".into(),
-                    ctx.config.clone(),
-                    "-Jobs".into(),
-                    jobs,
-                ];
-                if let Some(filter) = check.evidence_str("filter").filter(|f| !f.is_empty()) {
-                    args.extend(["-Filter".into(), filter.to_string()]);
-                }
-                if let Some(label) = check.evidence_str("excludeLabel") {
-                    args.extend(["-ExcludeLabel".into(), label.to_string()]);
-                }
-                let mut outcome = self.pwsh_with("tests", "run-tests.ps1", args, None, &[]);
-                if outcome.status == Status::Fail {
-                    if let Some(log) = outcome.evidence.get("log").and_then(|v| v.as_str()) {
-                        self.failed_tests = evidence::failed_ctest_names(Path::new(log));
-                    }
-                    outcome.detail = format!(
-                        "{}; failed: {}",
-                        outcome.detail,
-                        self.failed_tests.join(", ")
-                    );
-                }
+                let options = crate::test::runner::Options {
+                    build_dir: ctx.tree(),
+                    config: ctx.config.clone(),
+                    filter: check.evidence_str("filter").unwrap_or_default().to_string(),
+                    exclude_label: check
+                        .evidence_str("excludeLabel")
+                        .unwrap_or_default()
+                        .to_string(),
+                    jobs: ctx.jobs,
+                    // The compiler environment an earlier step imported, so
+                    // the runner's own build sees the same toolchain.
+                    child_env: ctx.runner.env.clone(),
+                    ..crate::test::runner::Options::new(&ctx.repo_root)
+                };
+                let host = self.tests_host.as_ref();
+                let mut failed = Vec::new();
+                let outcome = self.native("tests", || {
+                    let mut console = crate::test::host::Console::captured();
+                    let result = crate::test::runner::run(&options, host, &mut console);
+                    failed = result.failed_tests.clone();
+                    Ok((console.text().to_string(), tests_outcome(&result)))
+                });
+                failed.sort();
+                failed.dedup();
+                self.failed_tests = failed;
                 outcome
             }
             StepId::CppCheck => self.native("cppcheck", || {
@@ -847,6 +850,41 @@ impl RealExecutor {
             ),
         }
     }
+}
+
+/// The verify outcome of one test run. The detail names what the exit code
+/// means, so a failed gate says whether tests failed or the run could not be
+/// trusted at all.
+fn tests_outcome(result: &crate::test::runner::RunResult) -> Outcome {
+    let receipt = result.receipt.as_ref();
+    let detail = match result.exit_code {
+        0 => {
+            let passed = receipt.map_or(0, |r| r.tests_passed);
+            return Outcome::pass(format!("{passed} test(s) passed"));
+        }
+        2 => "exit 2: the build directory does not exist".to_string(),
+        3 => format!(
+            "exit 3: the build tree was not proven to match the source ({})",
+            receipt.map_or("", |r| r.freshness_detail.as_str())
+        ),
+        4 => {
+            let reasons = receipt
+                .map(|r| r.invalid_reasons.join("; "))
+                .filter(|r| !r.is_empty())
+                .unwrap_or_else(|| "the run did not start".into());
+            format!("exit 4: not a valid verification run: {reasons}")
+        }
+        code => format!("exit {code}"),
+    };
+    let mut failed = result.failed_tests.clone();
+    failed.sort();
+    failed.dedup();
+    let detail = if failed.is_empty() {
+        detail
+    } else {
+        format!("{detail}; failed: {}", failed.join(", "))
+    };
+    Outcome::fail(detail)
 }
 
 impl Executor for RealExecutor {
@@ -997,6 +1035,165 @@ mod tests {
             },
         };
         RealExecutor::new(ctx, &plan)
+    }
+
+    /// The Tests step against a real configured tree whose one QuickTest
+    /// runner fails, with the host's locks recorded instead of taken.
+    #[test]
+    fn a_failing_test_run_names_the_failed_tests_and_keeps_the_full_log_pointer() {
+        use crate::test_support::test_runner::{RecordingHost, configured_tree, source_repo};
+
+        let repo = source_repo();
+        let (_root, build) = configured_tree(
+            "add_test(NAME quick.qml.fixture COMMAND \"${CMAKE_COMMAND}\" -E false)\n\
+             set_tests_properties(quick.qml.fixture PROPERTIES LABELS \"phase.hermetic;quicktest\")",
+        );
+        let logs = tempfile::tempdir().unwrap();
+        let mut executor = executor(logs.path());
+        executor.ctx.repo_root = repo.path().to_path_buf();
+        executor.ctx.build_dir = build.display().to_string();
+        executor.ctx.config = "Debug".into();
+        executor.tests_host = Box::new(RecordingHost::new());
+
+        let scope = Scope::everything();
+        let plan = plan::build(&plan::tests::input(Profile::PrePush, &scope));
+        let outcome = executor.execute(plan.check(StepId::Tests).unwrap());
+
+        assert_eq!(outcome.status, Status::Fail, "{}", outcome.detail);
+        assert!(
+            outcome.detail.ends_with("; failed: quick.qml.fixture"),
+            "{}",
+            outcome.detail
+        );
+        assert_eq!(executor.failed_tests, ["quick.qml.fixture"]);
+
+        // The step log is what the receipt points at. It carries the pointer
+        // to the full ctest log, which names the failure.
+        let step_log = PathBuf::from(outcome.evidence["log"].as_str().unwrap());
+        assert_eq!(step_log, logs.path().join("tests.log"));
+        let text = std::fs::read_to_string(&step_log).unwrap();
+        let full_log = build.join("Testing").join("last-run.log");
+        assert!(
+            text.contains(&format!("Full log: {}", full_log.display())),
+            "{text}"
+        );
+        assert_eq!(
+            evidence::failed_ctest_names(&step_log),
+            ["quick.qml.fixture"]
+        );
+
+        // The QuickTest diagnosis reads the same names.
+        let registration = evidence::ctest_registration(&build, "Debug", &[]);
+        let commands =
+            evidence::qml_diagnostic_commands(&executor.failed_tests, &registration, logs.path());
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].test_name, "quick.qml.fixture");
+    }
+
+    #[test]
+    fn a_passing_test_run_is_a_pass_with_its_count() {
+        use crate::test_support::test_runner::{RecordingHost, configured_tree, source_repo};
+
+        let repo = source_repo();
+        let (_root, build) = configured_tree("");
+        let logs = tempfile::tempdir().unwrap();
+        let mut executor = executor(logs.path());
+        executor.ctx.repo_root = repo.path().to_path_buf();
+        executor.ctx.build_dir = build.display().to_string();
+        executor.ctx.config = "Debug".into();
+        executor.tests_host = Box::new(RecordingHost::new());
+
+        let scope = Scope::everything();
+        let plan = plan::build(&plan::tests::input(Profile::PrePush, &scope));
+        let outcome = executor.execute(plan.check(StepId::Tests).unwrap());
+        assert_eq!(outcome.status, Status::Pass, "{}", outcome.detail);
+        assert_eq!(outcome.detail, "1 test(s) passed");
+        assert!(executor.failed_tests.is_empty());
+    }
+
+    fn run_result(exit_code: i32, reasons: &[&str]) -> crate::test::runner::RunResult {
+        use crate::test::receipt::{Freshness, Receipt};
+        let receipt = Receipt {
+            run_id: String::new(),
+            started_utc: String::new(),
+            finished_utc: None,
+            build_dir: String::new(),
+            generator: String::new(),
+            config: String::new(),
+            jobs: 1,
+            freshness: Freshness::Unknown,
+            freshness_detail: "ninja cannot see past the pending CMake regeneration".into(),
+            allow_stale: false,
+            no_build: true,
+            build_status: "skipped",
+            build_exit_code: None,
+            ctest_args: Vec::new(),
+            exclude_label: String::new(),
+            exclude_pattern: String::new(),
+            phase: String::new(),
+            filter: String::new(),
+            tests_registered: 0,
+            tests_disabled: 0,
+            tests_selected: 0,
+            tests_accounted: 0,
+            tests_expected: 0,
+            tests_passed: 3,
+            tests_failed: 0,
+            census_mismatch: false,
+            phase_violations: None,
+            ctest_exit_code: None,
+            source_before: None,
+            source_after: None,
+            source_drift: None,
+            log: String::new(),
+            rescued_config_dir: None,
+            rescue_status: "not-needed",
+            rescue_detail: None,
+            invalid_reasons: reasons.iter().map(|r| r.to_string()).collect(),
+            exit_code,
+            reusable: false,
+        };
+        crate::test::runner::RunResult {
+            exit_code,
+            failed_tests: Vec::new(),
+            log: PathBuf::new(),
+            receipt_path: PathBuf::new(),
+            receipt: Some(receipt),
+            receipt_published: true,
+        }
+    }
+
+    #[test]
+    fn every_runner_exit_code_maps_to_an_outcome_that_says_what_it_means() {
+        let pass = tests_outcome(&run_result(0, &[]));
+        assert_eq!(pass.status, Status::Pass);
+
+        let missing = tests_outcome(&run_result(2, &[]));
+        assert_eq!(missing.status, Status::Fail);
+        assert!(
+            missing.detail.contains("does not exist"),
+            "{}",
+            missing.detail
+        );
+
+        let stale = tests_outcome(&run_result(3, &[]));
+        assert_eq!(stale.status, Status::Fail);
+        assert!(stale.detail.contains("not proven to match the source"));
+        assert!(stale.detail.contains("pending CMake regeneration"));
+
+        let invalid = tests_outcome(&run_result(4, &["census mismatch: expected 3"]));
+        assert_eq!(invalid.status, Status::Fail);
+        assert!(
+            invalid
+                .detail
+                .contains("not a valid verification run: census mismatch")
+        );
+
+        let mut failing = run_result(8, &[]);
+        failing.failed_tests = vec!["b.test".into(), "a.test".into()];
+        let failed = tests_outcome(&failing);
+        assert_eq!(failed.status, Status::Fail);
+        assert_eq!(failed.detail, "exit 8; failed: a.test, b.test");
     }
 
     #[test]
