@@ -144,6 +144,30 @@ enum LintCommand {
         #[arg(long)]
         list_checks: bool,
     },
+    /// Runs the advisory clang-tidy check set (`.clang-tidy` minus
+    /// `clang-analyzer-*`) and cppcheck over the project's own sources.
+    /// Distinct from `lint clang-tidy`: findings here are reported, never a
+    /// gate for clang-tidy, while cppcheck fails the run on any finding.
+    Quality {
+        /// Restrict to one pass. Both run when omitted.
+        #[arg(long, value_parser = ["cppcheck", "clang-tidy"])]
+        only: Option<String>,
+        /// Directory containing compile_commands.json for the clang-tidy
+        /// pass. Defaults to the Ninja debug then release preset.
+        #[arg(long)]
+        build_dir: Option<PathBuf>,
+        /// Restrict the clang-tidy pass to files changed since this
+        /// revision. Full-tree when omitted.
+        #[arg(long)]
+        base: Option<String>,
+        /// Parallel clang-tidy processes. Defaults to the processor count.
+        #[arg(long, default_value_t = 0)]
+        jobs: usize,
+        /// Where to write the complete clang-tidy findings. The console only
+        /// carries a summary.
+        #[arg(long)]
+        report_path: Option<PathBuf>,
+    },
 }
 
 #[derive(Args, Default)]
@@ -266,6 +290,13 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 require_version,
                 list_checks,
             ),
+            LintCommand::Quality {
+                only,
+                build_dir,
+                base,
+                jobs,
+                report_path,
+            } => lint_quality(&repo_root, only, build_dir, base, jobs, report_path),
         },
         Command::Hook { name } => match name.as_str() {
             "pre-commit" => {
@@ -527,6 +558,80 @@ fn lint_clang_tidy(
          of BLOCKING_CHECKS in tools/exo-dev/src/lint/canaries.rs and out of .clang-tidy."
     );
     Ok(ExitCode::FAILURE)
+}
+
+fn lint_quality(
+    repo_root: &std::path::Path,
+    only: Option<String>,
+    build_dir: Option<PathBuf>,
+    base: Option<String>,
+    jobs: usize,
+    report_path: Option<PathBuf>,
+) -> anyhow::Result<ExitCode> {
+    let only = match only.as_deref() {
+        None => None,
+        Some("cppcheck") => Some(exo_dev::lint::quality::Only::CppCheck),
+        Some("clang-tidy") => Some(exo_dev::lint::quality::Only::ClangTidy),
+        Some(other) => bail!("unknown --only '{other}'"),
+    };
+
+    let report = match exo_dev::lint::quality::run(
+        repo_root,
+        build_dir.as_deref(),
+        base.as_deref(),
+        only,
+        jobs,
+        report_path.as_deref(),
+    ) {
+        Ok(report) => report,
+        // Distinct from every other exit code, matching check-quality.ps1's
+        // original ToolMissingExitCode: a caller must be able to tell "the
+        // tool this run needed is not installed" from "the checks ran and
+        // found something" and from any other failure to launch.
+        Err(error) => match error.downcast::<exo_dev::executor::ToolMissing>() {
+            Ok(missing) => {
+                eprintln!();
+                eprintln!("Static quality check INCOMPLETE: {missing}.");
+                return Ok(ExitCode::from(3));
+            }
+            Err(error) => return Err(error),
+        },
+    };
+
+    if let Some(clang_tidy) = &report.clang_tidy {
+        println!(
+            "clang-tidy ADVISORY: {} translation unit(s) ({}) in {} batch(es), {} parallel job(s)",
+            clang_tidy.analyzed, clang_tidy.scope, clang_tidy.batches, clang_tidy.jobs
+        );
+        if clang_tidy.findings.is_empty() {
+            println!("clang-tidy: OK");
+        } else {
+            for finding in &clang_tidy.findings {
+                println!("{finding}");
+            }
+        }
+    } else if let Some(reason) = &report.clang_tidy_skip_reason {
+        println!("clang-tidy: SKIP ({reason})");
+    }
+
+    let mut ok = true;
+    if let Some(cppcheck) = &report.cppcheck {
+        print!("{}", cppcheck.output);
+        if cppcheck.ok {
+            println!("cppcheck: OK");
+        } else {
+            println!("cppcheck: FAILED");
+            ok = false;
+        }
+    }
+
+    println!();
+    if ok {
+        println!("Static quality check passed.");
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::FAILURE)
+    }
 }
 
 fn verify(repo_root: &std::path::Path, args: VerifyArgs) -> anyhow::Result<ExitCode> {

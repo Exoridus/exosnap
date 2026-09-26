@@ -1465,12 +1465,6 @@ if(EXOSNAP_PWSH)
     # `cargo test -p exo-dev drift::` and `cargo test -p exo-dev
     # source_hygiene::`, not a CTest case here.
 
-    add_test(NAME pipeline.quality_helpers
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/verify-pipeline.tests.ps1")
-    set_tests_properties(pipeline.quality_helpers PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.quality_helpers hermetic)
-
     # The subject grammar, the changelog assembler and the release-notes
     # renderer share one parser, and the release cut is the first place a
     # disagreement between them would surface -- after the tag is pushed.

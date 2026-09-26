@@ -19,6 +19,7 @@
 pub mod canaries;
 pub mod clang_tidy;
 pub mod format;
+pub mod quality;
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -162,6 +163,53 @@ fn probes_ok(path: &Path) -> bool {
         Ok((code, _)) => code == 0,
         Err(_) => false,
     }
+}
+
+/// Splits `items` (one command-line argument per invocation) into batches that,
+/// together with `fixed_arguments`, fit under `command_line_budget` characters.
+///
+/// CreateProcess accepts at most 32767 characters, and the failure mode when a
+/// caller exceeds it is not a diagnosable error: the process never starts, so a
+/// step that tolerates a nonzero exit reports a clean pass over an analysis
+/// that did not happen. Every batched invocation in this repository goes
+/// through here rather than trusting an argument count to stay small.
+///
+/// Two independent limits. The budget is the hard one; `maximum_item` is a
+/// throughput choice, since batches run in parallel and smaller ones spread
+/// more evenly across cores. An item whose own cost already exceeds the budget
+/// still gets a batch of its own, never a silent drop.
+pub fn batch_command_line(
+    items: &[String],
+    fixed_arguments: &[String],
+    maximum_item: usize,
+    command_line_budget: usize,
+) -> Vec<Vec<String>> {
+    // A separating space plus the pair of quotes a path with a space in it
+    // acquires, charged to every argument so the estimate can only be too large.
+    fn cost(argument: &str) -> usize {
+        argument.len() + 3
+    }
+
+    let fixed_cost: usize = fixed_arguments.iter().map(|a| cost(a)).sum();
+    let mut batches: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    let mut current_cost = fixed_cost;
+
+    for item in items {
+        let item_cost = cost(item);
+        if !current.is_empty()
+            && (current.len() >= maximum_item || current_cost + item_cost > command_line_budget)
+        {
+            batches.push(std::mem::take(&mut current));
+            current_cost = fixed_cost;
+        }
+        current.push(item.clone());
+        current_cost += item_cost;
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+    batches
 }
 
 #[cfg(test)]
@@ -336,6 +384,54 @@ mod tests {
             None,
         );
         assert_eq!(found, None);
+    }
+
+    #[test]
+    fn no_batch_can_exceed_the_windows_command_line_limit() {
+        // 900 paths on one command line is roughly 36 KB against a
+        // 32767-character ceiling: the process never starts, and a step that
+        // tolerates failure then reports a clean pass over an analysis that
+        // did not happen.
+        let files: Vec<String> = (1..=900)
+            .map(|n| format!("libs/engine/src/some_reasonably_long_translation_unit_name_{n}.cpp"))
+            .collect();
+        let fixed = vec![
+            "-p".to_string(),
+            "C:/Users/someone/Development/exosnap/build/windows-x64-ninja-debug".to_string(),
+            "--checks=-clang-analyzer-*".to_string(),
+        ];
+        let batches = batch_command_line(&files, &fixed, 25, 30000);
+        assert!(
+            batches.len() > 1,
+            "900 files must not end up on one command line"
+        );
+        for batch in &batches {
+            let length: usize = fixed.iter().chain(batch.iter()).map(|a| a.len() + 3).sum();
+            assert!(
+                length < 32767,
+                "a batch of {} file(s) is {length} characters, past the limit",
+                batch.len()
+            );
+        }
+        let total: usize = batches.iter().map(Vec::len).sum();
+        assert_eq!(total, files.len(), "batching must not drop a file");
+    }
+
+    #[test]
+    fn a_single_argument_longer_than_the_budget_still_yields_one_batch() {
+        let items = vec!["x".repeat(200)];
+        let batches = batch_command_line(&items, &[], 25, 50);
+        assert_eq!(
+            batches.len(),
+            1,
+            "an over-budget item is still analysed, never silently dropped"
+        );
+    }
+
+    #[test]
+    fn an_empty_list_produces_no_invocation_at_all() {
+        let batches = batch_command_line(&[], &[], 25, 30000);
+        assert_eq!(batches.len(), 0, "nothing to analyse means no command line");
     }
 
     #[test]

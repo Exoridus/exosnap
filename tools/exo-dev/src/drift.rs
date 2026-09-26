@@ -38,11 +38,7 @@ pub struct DriftReport {
 /// Absolute Qt SDK paths that already exist and are accepted. This list is the
 /// point of the rule: it is not meant to grow silently. A new entry is a
 /// decision.
-const QT_SDK_PATH_ALLOWLIST: &[&str] = &[
-    "CMakeLists.txt",
-    "scripts/check-quality.ps1",
-    "scripts/run-tests.ps1",
-];
+const QT_SDK_PATH_ALLOWLIST: &[&str] = &["CMakeLists.txt", "scripts/run-tests.ps1"];
 
 /// Blanks whole-line comments, keeping line numbering intact. Only whole-line
 /// comments: a trailing comment on a real line is left alone, since stripping it
@@ -452,16 +448,10 @@ mod tests {
     fn the_already_accepted_sdk_paths_stay_accepted() {
         let dir = fixture(
             &[],
-            &[
-                (
-                    "scripts/check-quality.ps1",
-                    "$qtBin = 'C:\\Qt\\6.11.1\\msvc2022_64\\bin'\n",
-                ),
-                (
-                    "scripts/run-tests.ps1",
-                    "$qtBin = 'C:\\Qt\\6.11.1\\msvc2022_64\\bin'\n",
-                ),
-            ],
+            &[(
+                "scripts/run-tests.ps1",
+                "$qtBin = 'C:\\Qt\\6.11.1\\msvc2022_64\\bin'\n",
+            )],
         );
         let report = check(dir.path()).unwrap();
         assert!(

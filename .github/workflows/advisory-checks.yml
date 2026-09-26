@@ -118,25 +118,24 @@ jobs:
       # produce warnings (exit 0) not errors, and the finding count below is the whole point
       # of the step.
       #
-      # scripts/check-quality.ps1, not a clang-tidy invocation written out here. This step
-      # used to pass every tracked source on one command line: ~900 paths is roughly 36 KB
-      # against the 32767-character CreateProcess limit, so the process never started, and
-      # with continue-on-error the run went green without the notice line ever appearing.
-      # The script batches the file list to fit and runs the batches in parallel, and it is
-      # the same invocation local verification uses, so the two cannot drift apart.
+      # exo-dev lint quality, not a clang-tidy invocation written out here. This step used to
+      # pass every tracked source on one command line: ~900 paths is roughly 36 KB against the
+      # 32767-character CreateProcess limit, so the process never started, and with
+      # continue-on-error the run went green without the notice line ever appearing.
+      # exo-dev batches the file list to fit and runs the batches in parallel, and it is the
+      # same invocation local verification uses, so the two cannot drift apart.
       #
       # NO continue-on-error. It is the reason the launch failure went unnoticed for as long
-      # as it did. The script separates the two outcomes for us: findings are reported and
-      # exit 0, while "clang-tidy is not installed" and "this tree has no compile database"
-      # are non-zero -- which is exactly the half that must go red.
+      # as it did. exo-dev separates the two outcomes for us: findings are reported and exit
+      # 0, while "clang-tidy is not installed" and "this tree has no compile database" are
+      # non-zero -- which is exactly the half that must go red.
       - name: clang-tidy advisory checks
         shell: pwsh
         run: |
           $report = Join-Path $env:RUNNER_TEMP 'clang-tidy-advisory.txt'
-          pwsh -NoProfile -NonInteractive -File scripts/check-quality.ps1 `
-            -Only clang-tidy -BuildDir build/windows-x64-ninja-debug -ReportPath $report
+          cargo exo-dev lint quality --only clang-tidy --build-dir build/windows-x64-ninja-debug --report-path $report
           if ($LASTEXITCODE -ne 0) {
-            throw "check-quality.ps1 could not run clang-tidy (exit $LASTEXITCODE); the advisory pass produced no finding count."
+            throw "exo-dev lint quality could not run clang-tidy (exit $LASTEXITCODE); the advisory pass produced no finding count."
           }
           # Counted from the report file rather than the console: the script prints only a
           # tail, and a count taken from a truncated log is not the count it claims to be.

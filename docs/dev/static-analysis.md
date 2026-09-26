@@ -7,7 +7,7 @@
 | Pass | Status | Entry point |
 |---|---|---|
 | Selected clang-tidy checks | Blocking | `cargo exo-dev lint clang-tidy`, the `clang-tidy` step of `cargo exo-dev verify` and of CI's `ci-build-debug` profile |
-| cppcheck warning/performance/portability | Blocking locally | `scripts/check-quality.ps1`, the `cppcheck` step of `cargo exo-dev verify`; no CI profile runs it yet |
+| cppcheck warning/performance/portability | Blocking locally | `cargo exo-dev lint quality --only cppcheck`, the `cppcheck` step of `cargo exo-dev verify`; no CI profile runs it yet |
 | Broad clang-tidy advisory set | Advisory | `advisory-checks.yml` |
 | cppcheck unused-function analysis | Advisory | `advisory-checks.yml` |
 

@@ -261,13 +261,7 @@ impl StepId {
             },
             StepId::CppCheck => StepInfo {
                 windows_only: true,
-                ..step(
-                    "cppcheck",
-                    SANITY,
-                    Legacy {
-                        owner: "exo-dev lint",
-                    },
-                )
+                ..step("cppcheck", SANITY, Native)
             },
             // clang-tidy reads compile_commands.json, which configure writes and
             // the build keeps in step with the source. The tree lock keeps a

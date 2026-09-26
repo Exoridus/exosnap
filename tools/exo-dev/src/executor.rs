@@ -13,9 +13,6 @@ use crate::profile::ProfileSpec;
 use crate::run::{Executor, Outcome, Status};
 use crate::step::StepId;
 
-/// check-quality.ps1's "a tool this run needed is not installed".
-const QUALITY_TOOL_MISSING_EXIT: i32 = 3;
-
 /// A native check's own signal that the external tool it needs is not
 /// installed, distinct from an ordinary failure. `native` downcasts to this
 /// type and maps it to `Status::ToolMissing`; every other error becomes
@@ -714,13 +711,27 @@ impl RealExecutor {
                 }
                 outcome
             }
-            StepId::CppCheck => self.pwsh_with(
-                "cppcheck",
-                "check-quality.ps1",
-                vec!["-Only".into(), "cppcheck".into()],
-                Some(QUALITY_TOOL_MISSING_EXIT),
-                &[],
-            ),
+            StepId::CppCheck => self.native("cppcheck", || {
+                let report = crate::lint::quality::run(
+                    &ctx.repo_root,
+                    None,
+                    None,
+                    Some(crate::lint::quality::Only::CppCheck),
+                    ctx.jobs,
+                    None,
+                )?;
+                let cppcheck = report
+                    .cppcheck
+                    .expect("Only::CppCheck always reports a cppcheck outcome");
+                let mut log = cppcheck.output.clone();
+                let outcome = if cppcheck.ok {
+                    log.push_str("cppcheck: OK\n");
+                    Outcome::pass("")
+                } else {
+                    Outcome::fail("cppcheck reported findings")
+                };
+                Ok((log, outcome))
+            }),
             StepId::ClangTidy => {
                 // The compiler import has run (see `execute`): the fingerprint
                 // reads the toolset variables it exports, and an unqualified
