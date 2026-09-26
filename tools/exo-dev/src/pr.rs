@@ -141,6 +141,13 @@ pub struct OpenOutcome {
     pub title: String,
     pub section: Option<&'static str>,
     pub ready: bool,
+    /// `gh pr create`'s own stdout (typically the created pull request's
+    /// URL), for the caller to show the way the script's `| Write-Host`
+    /// showed it.
+    pub create_output: String,
+    /// `gh pr ready`'s own stdout. Empty when the pull request was left in
+    /// draft, since that call was never made.
+    pub ready_output: String,
 }
 
 /// Opens the pull request for the current branch. See the module doc for the
@@ -178,13 +185,13 @@ pub fn open(
     let parsed = commit_policy::parse(&subject, false, None);
     if !parsed.valid {
         bail!(
-            "the title '{subject}' -- {}. CONTRIBUTING.md has the rules.",
+            "the title '{subject}' is invalid: {}. CONTRIBUTING.md has the rules.",
             parsed.problem.unwrap_or_default()
         );
     }
     if let Some(pr) = parsed.pull_request {
-        // It cannot be the own number yet -- there is no pull request -- so
-        // this is a citation, and a citation at the END of the title is
+        // There is no pull request yet, so this cannot be the own number: it
+        // is a citation, and a citation at the END of the title is
         // indistinguishable from the number the squash merge is about to
         // append.
         bail!(
@@ -227,7 +234,7 @@ pub fn open(
         "--draft",
     ]);
     let _ = std::fs::remove_file(&body_path);
-    create_result?;
+    let create_output = create_result?;
 
     // Read the stored title back rather than trusting what was sent: GitHub is
     // what the squash merge and the changelog will read, and a title that
@@ -257,7 +264,7 @@ pub fn open(
     let stored = commit_policy::parse(&title, false, Some(number));
     if !stored.valid {
         problems.push(format!(
-            "stored title -- {}",
+            "the stored title is invalid: {}",
             stored.problem.clone().unwrap_or_default()
         ));
     }
@@ -269,11 +276,11 @@ pub fn open(
         );
     }
 
-    let ready = if request.keep_draft {
-        false
+    let (ready, ready_output) = if request.keep_draft {
+        (false, String::new())
     } else {
-        gh.run(&["pr", "ready", &number.to_string(), "--repo", REPO])?;
-        true
+        let output = gh.run(&["pr", "ready", &number.to_string(), "--repo", REPO])?;
+        (true, output)
     };
 
     Ok(OpenOutcome {
@@ -281,17 +288,31 @@ pub fn open(
         title,
         section: stored.section,
         ready,
+        create_output,
+        ready_output,
     })
+}
+
+/// Appends `text` to `out` as its own line, unless `text` is empty (`gh`
+/// printed nothing, e.g. a fake runner in a test).
+fn push_gh_output(out: &mut String, text: &str) {
+    let trimmed = text.trim_end();
+    if !trimmed.is_empty() {
+        out.push_str(trimmed);
+        out.push('\n');
+    }
 }
 
 pub fn render_open(outcome: &OpenOutcome) -> String {
     let mut out = String::new();
+    push_gh_output(&mut out, &outcome.create_output);
     out.push_str(&format!("  #{}  {}\n", outcome.number, outcome.title));
     out.push_str(&format!(
         "  files under {}\n",
         outcome.section.unwrap_or("no changelog section")
     ));
     if outcome.ready {
+        push_gh_output(&mut out, &outcome.ready_output);
         out.push_str(&format!(
             "pull request #{} is ready for review\n",
             outcome.number
@@ -331,6 +352,10 @@ pub struct Merged {
     pub subject: String,
     pub section: Option<&'static str>,
     pub auto: bool,
+    pub merge_state: String,
+    /// `gh pr merge`'s own stdout, for the caller to show the way the
+    /// script's `| Write-Host` showed it.
+    pub merge_output: String,
 }
 
 #[derive(Debug)]
@@ -378,7 +403,7 @@ pub fn merge(
     let parsed_title = commit_policy::parse(&title, false, Some(number));
     if !parsed_title.valid {
         bail!(
-            "pull request #{number} title '{title}' -- {}. CONTRIBUTING.md has the rules.",
+            "pull request #{number} title '{title}' is invalid: {}. CONTRIBUTING.md has the rules.",
             parsed_title.problem.clone().unwrap_or_default()
         );
     }
@@ -388,7 +413,7 @@ pub fn merge(
     let merged = commit_policy::parse(&subject, true, None);
     if !merged.valid {
         bail!(
-            "the constructed subject '{subject}' -- {}",
+            "the constructed subject '{subject}' is invalid: {}",
             merged.problem.clone().unwrap_or_default()
         );
     }
@@ -438,13 +463,15 @@ pub fn merge(
         merge_args.push("--delete-branch".into());
     }
     let merge_args_ref: Vec<&str> = merge_args.iter().map(String::as_str).collect();
-    gh.run(&merge_args_ref)?;
+    let merge_output = gh.run(&merge_args_ref)?;
 
     Ok(MergeOutcome::Merged(Merged {
         number,
         subject,
         section: merged.section,
         auto: request.auto,
+        merge_state,
+        merge_output,
     }))
 }
 
@@ -457,18 +484,26 @@ pub fn render_merge(outcome: &MergeOutcome) -> String {
             preview.subject,
             preview.section.unwrap_or("no changelog section")
         ),
-        MergeOutcome::Merged(merged) => format!(
-            "  #{}  subject  {}\n  files under {}\npull request #{} {}\n",
-            merged.number,
-            merged.subject,
-            merged.section.unwrap_or("no changelog section"),
-            merged.number,
-            if merged.auto {
-                "queued for auto-merge"
-            } else {
-                "merged"
-            }
-        ),
+        MergeOutcome::Merged(merged) => {
+            let mut out = format!(
+                "  #{}  merge state {}\n  subject  {}\n  files under {}\n",
+                merged.number,
+                merged.merge_state,
+                merged.subject,
+                merged.section.unwrap_or("no changelog section")
+            );
+            push_gh_output(&mut out, &merged.merge_output);
+            out.push_str(&format!(
+                "pull request #{} {}\n",
+                merged.number,
+                if merged.auto {
+                    "queued for auto-merge"
+                } else {
+                    "merged"
+                }
+            ));
+            out
+        }
     }
 }
 
@@ -481,10 +516,14 @@ mod tests {
     use super::*;
     use crate::test_support::fixture_repo_committed;
     use std::cell::RefCell;
+    use std::collections::HashMap;
 
     struct FakeGh {
         calls: RefCell<Vec<Vec<String>>>,
         view_json: String,
+        /// Canned stdout for calls other than `pr view`, keyed by `"<verb>
+        /// <noun>"` (e.g. `"pr create"`). Unset combinations return "".
+        outputs: RefCell<HashMap<String, String>>,
     }
 
     impl FakeGh {
@@ -492,7 +531,14 @@ mod tests {
             FakeGh {
                 calls: RefCell::new(Vec::new()),
                 view_json: view_json.to_string(),
+                outputs: RefCell::new(HashMap::new()),
             }
+        }
+
+        fn set_output(&self, verb: &str, noun: &str, output: &str) {
+            self.outputs
+                .borrow_mut()
+                .insert(format!("{verb} {noun}"), output.to_string());
         }
 
         fn calls(&self) -> Vec<Vec<String>> {
@@ -513,6 +559,12 @@ mod tests {
                 .push(args.iter().map(|s| s.to_string()).collect());
             if args.first() == Some(&"pr") && args.get(1) == Some(&"view") {
                 return Ok(self.view_json.clone());
+            }
+            if let (Some(verb), Some(noun)) = (args.first(), args.get(1)) {
+                let key = format!("{verb} {noun}");
+                if let Some(output) = self.outputs.borrow().get(&key) {
+                    return Ok(output.clone());
+                }
             }
             Ok(String::new())
         }
@@ -590,6 +642,56 @@ mod tests {
         assert_eq!(outcome.title, subject);
         assert!(outcome.ready);
         assert!(gh.called(&["pr", "ready", "42", "--repo", REPO]));
+    }
+
+    #[test]
+    fn open_surfaces_gh_output_from_create_and_ready_in_the_rendered_report() {
+        let (dir, branch) = topic_branch();
+        let subject = "feat(engine): add device enumeration";
+        let gh = FakeGh::new(&base_open_request(subject, &branch));
+        gh.set_output(
+            "pr",
+            "create",
+            "https://github.com/Exoridus/exosnap/pull/42",
+        );
+        gh.set_output("pr", "ready", "marked #42 as ready for review");
+        let request = OpenRequest {
+            subject: Some(subject.to_string()),
+            body: None,
+            body_file: None,
+            base: "next".to_string(),
+            keep_draft: false,
+            no_push: true,
+        };
+        let outcome = open(dir.path(), &gh, &request).unwrap();
+        assert_eq!(
+            outcome.create_output.trim(),
+            "https://github.com/Exoridus/exosnap/pull/42"
+        );
+        assert_eq!(
+            outcome.ready_output.trim(),
+            "marked #42 as ready for review"
+        );
+
+        let rendered = render_open(&outcome);
+        let create_at = rendered
+            .find("https://github.com/Exoridus/exosnap/pull/42")
+            .expect("gh's create output is not in the report");
+        let summary_at = rendered
+            .find("  #42  ")
+            .expect("the pull request summary line is not in the report");
+        let ready_at = rendered
+            .find("marked #42 as ready for review")
+            .expect("gh's ready output is not in the report");
+        let ready_line_at = rendered
+            .find("is ready for review")
+            .expect("the ready-for-review line is not in the report");
+        // The same order the scripts' `| Write-Host` produced: gh's own
+        // output for a call appears right after that call, not gathered at
+        // the end.
+        assert!(create_at < summary_at);
+        assert!(summary_at < ready_at);
+        assert!(ready_at < ready_line_at);
     }
 
     #[test]
@@ -884,6 +986,56 @@ mod tests {
             "--auto",
             "--delete-branch",
         ]));
+    }
+
+    #[test]
+    fn render_merge_shows_the_merge_state_in_both_paths_and_gh_output_once_confirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let gh = FakeGh::new(&merge_view(
+            "feat(engine): add device enumeration",
+            "OPEN",
+            false,
+            "CLEAN",
+        ));
+        gh.set_output(
+            "pr",
+            "merge",
+            "https://github.com/Exoridus/exosnap/pull/400",
+        );
+
+        let preview = merge(
+            dir.path(),
+            &gh,
+            &MergeRequest {
+                number: Some(400),
+                confirm: false,
+                delete_branch: false,
+                auto: false,
+            },
+        )
+        .unwrap();
+        assert!(render_merge(&preview).contains("merge state CLEAN"));
+
+        let merged = merge(
+            dir.path(),
+            &gh,
+            &MergeRequest {
+                number: Some(400),
+                confirm: true,
+                delete_branch: false,
+                auto: false,
+            },
+        )
+        .unwrap();
+        let rendered = render_merge(&merged);
+        assert!(
+            rendered.contains("merge state CLEAN"),
+            "the merge state is only printed before the --confirm gate in the script; it belongs in the merged report too: {rendered}"
+        );
+        assert!(
+            rendered.contains("https://github.com/Exoridus/exosnap/pull/400"),
+            "gh's own merge output is missing: {rendered}"
+        );
     }
 
     #[test]
