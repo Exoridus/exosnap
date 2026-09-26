@@ -25,7 +25,7 @@ struct KnownFlag {
 // happened. That is the worst failure a verification harness can have: it
 // reports green for something it never did.
 //
-// Registering a flag here is not optional. `scripts/tests/cli-flags.tests.ps1`
+// Registering a flag here is not optional. `cargo exo-dev check cli-flags`
 // fails when a long option appears in a CLI source and not in this table.
 [[nodiscard]] const KnownFlag* KnownCommandLineFlags(std::size_t* count) noexcept;
 

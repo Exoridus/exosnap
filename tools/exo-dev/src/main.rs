@@ -97,6 +97,9 @@ enum CheckCommand {
         #[arg(long)]
         fix: bool,
     },
+    /// app/cli/CommandLineFlags.cpp against the parser sources, the
+    /// acceptance-harness script and exo-verify's own launch calls.
+    CliFlags,
     /// The rulesets this repository declares under .github/rulesets against
     /// the ones GitHub actually enforces. Never writes.
     Rulesets {
@@ -283,6 +286,7 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 require_pull_request,
             ),
             CheckCommand::Format { staged, fix } => check_format(&repo_root, staged, fix),
+            CheckCommand::CliFlags => check_cli_flags(&repo_root),
             CheckCommand::Rulesets {
                 desired,
                 current_json,
@@ -469,6 +473,22 @@ fn check_format(repo_root: &std::path::Path, staged: bool, fix: bool) -> anyhow:
     }
     println!("clang-format: OK");
     Ok(ExitCode::SUCCESS)
+}
+
+/// Exit codes: 0 clean, 1 an unregistered or duplicate flag was found, 2 when
+/// the registry or a required parser source is missing or unreadable. The
+/// exit-2 case is not handled here: `check` returns it as an `Err`, which
+/// propagates out of `run_cli` and reaches the generic exit-2 handler in
+/// `main`, since a missing source needs the list in `cli_flags.rs` updated
+/// rather than a report field.
+fn check_cli_flags(repo_root: &std::path::Path) -> anyhow::Result<ExitCode> {
+    let report = exo_dev::cli_flags::check(repo_root)?;
+    print!("{}", exo_dev::cli_flags::render(&report));
+    if report.ok() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::FAILURE)
+    }
 }
 
 /// Exit codes match the porting contract exactly: 0 clean, 1 drift found, 2
