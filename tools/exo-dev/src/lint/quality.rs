@@ -67,8 +67,8 @@ pub struct QualityReport {
 /// asking for one tool's install never hides that the other is also absent.
 ///
 /// `cache_root` overrides cppcheck's tool-cache root (`None` means the real
-/// per-user cache under `%LOCALAPPDATA%`); it exists so a test can inject a
-/// throwaway directory instead of reading and writing the real one.
+/// per-user cache under `%LOCALAPPDATA%`). A test passes an injected directory
+/// here instead of reading and writing the real one.
 pub fn run(
     repo_root: &Path,
     build_dir: Option<&Path>,
@@ -284,9 +284,8 @@ fn touched_files(repo_root: &Path, base: &str) -> HashSet<String> {
 /// A batch that never starts (the tool vanished between discovery and this
 /// call, an invalid working directory, ...) is a hard error, not silence:
 /// treating a spawn failure as "no findings" would report a clean pass over
-/// an analysis that never ran, exactly the failure mode the blocking
-/// clang-tidy gate and `check-quality.ps1`'s own `ToolMissingExitCode`
-/// existed to rule out.
+/// an analysis that never ran. A gate that never started establishes nothing,
+/// and must never be indistinguishable from one that ran and found nothing.
 fn run_clang_tidy_batches(
     tool: &Path,
     repo_root: &Path,
@@ -307,8 +306,9 @@ fn run_clang_tidy_batches(
             scope.spawn(|| {
                 loop {
                     if spawn_error.lock().unwrap().is_some() {
-                        // Another batch already failed to launch; stop pulling
-                        // more work rather than racing more spawn attempts.
+                        // Another batch already failed to launch. Stop
+                        // pulling more work rather than racing more spawn
+                        // attempts.
                         break;
                     }
                     let next = queue.lock().unwrap().pop_front();
@@ -380,7 +380,7 @@ fn cppcheck_pass(
 /// cppcheck's own result cache location for one toolchain, salted by both its
 /// version and its full argument list so a cppcheck upgrade or a changed
 /// check set analyses afresh instead of replaying verdicts reached under
-/// different rules. `root` overrides the real per-user cache root; a test
+/// different rules. `root` overrides the real per-user cache root. A test
 /// passes one so it never reads or writes `%LOCALAPPDATA%`.
 fn cppcheck_cache_dir(version: &str, arguments: &[String], root: Option<&Path>) -> PathBuf {
     crate::evidence::tool_cache_dir(
@@ -502,18 +502,28 @@ mod tests {
         assert!(error.to_string().contains("compile_commands.json"));
     }
 
-    /// Non-vacuous by construction: a real (if empty) `compile_commands.json`
-    /// and real project sources are present, so if the `only !=
-    /// Some(Only::CppCheck)` guard around the clang-tidy pass were ever
-    /// removed, `clang_tidy_pass` would actually attempt to run clang-tidy
-    /// against this database and set `clang_tidy`/`clang_tidy_skip_reason` to
-    /// something other than "never touched". A tempdir with no build tree at
-    /// all (the earlier version of this test) cannot tell "the filter
-    /// excluded the pass" apart from "the pass ran and immediately skipped
-    /// for lack of a compile database" -- both look like `None`.
+    /// Non-vacuous by construction on two independent axes. A real (if
+    /// empty) `compile_commands.json` and real project sources are present,
+    /// so if the `only != Some(Only::CppCheck)` guard around the clang-tidy
+    /// pass were ever removed, `clang_tidy_pass` would actually attempt to
+    /// run clang-tidy against this database and set
+    /// `clang_tidy`/`clang_tidy_skip_reason` to something other than "never
+    /// touched". And the fixture is deliberately not a git repository:
+    /// `project_sources` (which only the clang-tidy pass calls) then fails
+    /// with a plain "git ls-files failed" error rather than `ToolMissing`, so
+    /// a machine where clang-tidy also happens to be absent cannot make the
+    /// buggy path (both tools missing) and the correct path (cppcheck alone
+    /// missing) report the same `ToolMissing` message.
     #[test]
     fn only_cppcheck_never_attempts_the_clang_tidy_pass_even_with_a_real_compile_database() {
-        let dir = repo_with_sources();
+        let dir = tempfile::tempdir().unwrap();
+        write_files(
+            dir.path(),
+            &[
+                ("libs/engine/src/a.cpp", "int a();\n"),
+                ("app/quick/main.cpp", "int main() { return 0; }\n"),
+            ],
+        );
         let build_dir = dir.path().join("build/windows-x64-ninja-debug");
         std::fs::create_dir_all(&build_dir).unwrap();
         std::fs::write(build_dir.join("compile_commands.json"), "[]").unwrap();
@@ -544,10 +554,12 @@ mod tests {
                 );
             }
             Err(error) => {
-                assert!(
-                    error.downcast_ref::<ToolMissing>().is_some(),
-                    "the only tool this call may report missing is cppcheck"
+                let missing = error.downcast::<ToolMissing>().expect(
+                    "the clang-tidy pass must never run here, so the only failure this call \
+                     may report is cppcheck missing, never a git error from a pass excluded by \
+                     the filter",
                 );
+                assert_eq!(missing.0, "cppcheck not installed");
             }
         }
     }
