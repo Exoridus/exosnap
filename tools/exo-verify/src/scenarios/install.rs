@@ -37,6 +37,7 @@ pub fn scenarios() -> Vec<Scenario> {
             Capability::Admin,
             Capability::InteractiveDesktop,
             Capability::DisposableOs,
+            Capability::MsvcRuntime,
         ],
         timeout: secs(900.0),
         run: msi_cycle,

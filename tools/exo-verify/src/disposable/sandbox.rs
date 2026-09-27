@@ -5,7 +5,7 @@
 //! (transcript, lane result, evidence) is written there.
 
 use anyhow::{Context as _, Result, bail};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use super::{BackendKind, DisposableWindows, GUEST_ROOT, GuestCommand, RunDir};
@@ -18,6 +18,10 @@ pub fn available() -> bool {
 pub struct Sandbox {
     id: String,
     started: bool,
+    // `wsb connect` runs the Sandbox client window until it closes. Without a
+    // connected client no user session exists, and `wsb exec -r ExistingLogin`
+    // fails with ERROR_NO_SUCH_LOGON_SESSION however long the host waits.
+    client: Option<Child>,
 }
 
 impl Sandbox {
@@ -25,6 +29,7 @@ impl Sandbox {
         Sandbox {
             id: guid(),
             started: false,
+            client: None,
         }
     }
 
@@ -131,6 +136,15 @@ impl DisposableWindows for Sandbox {
             );
         }
         self.started = true;
+        self.client = Some(
+            Command::new(tools::require("wsb")?)
+                .args(["connect", "--id", &self.id])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .context("start the Sandbox client for the instance's user session")?,
+        );
         // The instance accepts commands only once its user session exists.
         let deadline = Instant::now() + Duration::from_secs(300);
         loop {
@@ -201,6 +215,17 @@ impl DisposableWindows for Sandbox {
                 );
             }
             self.started = false;
+        }
+        // Stopping the instance ends the client; reap it, and end it if not.
+        if let Some(mut client) = self.client.take() {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while client.try_wait()?.is_none() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            if client.try_wait()?.is_none() {
+                let _ = client.kill();
+                let _ = client.wait();
+            }
         }
         Ok(())
     }
