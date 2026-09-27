@@ -23,8 +23,8 @@ A harness-enabled ExoSnap can capture a high-quality reference using `--auto-rec
 ## Run and qualify the measurement
 
 ```powershell
-python scripts/dev/encoder_quality_matrix.py --metric-sanity --clip desktop-scroll.y4m
-python scripts/dev/encoder_quality_matrix.py --clip desktop-scroll.y4m --vcodec av1 --output '<evidence directory>/av1-desktop'
+cargo exo-dev encoder-quality-matrix --metric-sanity --clip desktop-scroll.y4m
+cargo exo-dev encoder-quality-matrix --clip desktop-scroll.y4m --vcodec av1 --output '<evidence directory>/av1-desktop'
 ```
 
 Repeat for H.264/HEVC and each reference. The baseline sweep compares P4/P7 under CQ/VBR at four rate-control points. `--presets`, `--cq-values` and `--vbr-values` intentionally change that selection; do not compare differently selected matrices as though only the encoder changed.
@@ -44,9 +44,9 @@ Read mean and tail statistics together: median, p10, p5, p1, worst-1%-mean and m
 
 VMAF is a relative ranking within the same clip and qualified harness, not an absolute screen-quality certification. Keep SSIM/PSNR and visual inspection alongside it. Do not infer one codec's universal superiority from one clip, one GPU or unmatched bitrate/latency points.
 
-`bd_rate()` in `scripts/dev/encoder_quality_matrix.py` compares two bitrate/quality curves. Its cubic fit requires exactly four points per curve and rejects other counts. Negative bitrate delta means fewer bits at equal measured quality. The fit and overlap must be meaningful; extrapolating disjoint or ill-conditioned curves is not useful evidence.
+`exo-dev encoder-quality-matrix`'s BD-rate compares two bitrate/quality curves. Its cubic fit requires exactly four points per curve and rejects other counts. Negative bitrate delta means fewer bits at equal measured quality. The fit and overlap must be meaningful; extrapolating disjoint or ill-conditioned curves is not useful evidence.
 
-The script writes CSV and Markdown beneath the chosen output prefix. Keep those results in untracked evidence or attached review/release artifacts. Durable docs hold the procedure and any current default's rationale, not dated benchmark campaigns.
+The command writes CSV and Markdown beneath the chosen output prefix. Keep those results in untracked evidence or attached review/release artifacts. Durable docs hold the procedure and any current default's rationale, not dated benchmark campaigns.
 
 ## Gate for changing a shipped encoder-quality default
 

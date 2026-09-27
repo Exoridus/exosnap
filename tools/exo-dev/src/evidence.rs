@@ -33,8 +33,8 @@ pub fn first_build_error(log: &Path) -> Option<String> {
         .map(|line| line.trim().to_string())
 }
 
-/// The CTest names that failed, from a run-tests.ps1 summary or a raw ctest log.
-/// run-tests.ps1 keeps the full ctest output in a separate file named on a
+/// The CTest names that failed, from an `exo-dev test` summary or a raw ctest
+/// log. The summary keeps the full ctest output in a separate file named on a
 /// "Full log:" line; only that file carries the failure block, so the pointer is
 /// followed.
 pub fn failed_ctest_names(log: &Path) -> Vec<String> {

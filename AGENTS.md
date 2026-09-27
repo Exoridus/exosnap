@@ -38,7 +38,7 @@ A simple launch/smoke check is allowed when it does not seize input. Use adapter
 
 Preparing or testing a release does not authorize publication. Creating or pushing a version tag, publishing a GitHub release and submitting a package-manager version each require the user's explicit approval of that exact operation in the current interaction, or the maintainer's approval at the `release` environment gate of the release workflow. A green verification report is evidence, not permission.
 
-Use `scripts/open-pr.ps1` and `scripts/merge-pr.ps1` for their validation rules. `merge-pr.ps1 -Confirm` is a mechanical guard, not authorization. Pass it only after approval to merge that exact pull request. Work in a branch and preserve Git history.
+Use `cargo exo-dev pr open` and `cargo exo-dev pr merge` for their validation rules. `pr merge --confirm` is a mechanical guard, not authorization. Pass it only after approval to merge that exact pull request. Work in a branch and preserve Git history.
 
 ## Source hygiene and language
 
@@ -58,12 +58,12 @@ Keep work scoped to a subsystem unless a technical dependency requires integrati
 
 Use the smallest sufficient build/tests during iteration. Before completion run the full required gate once for the finished tree, including format, diff whitespace, Debug/tests/static checks and Release requirements. Avoid re-running an identical expensive sequence without new evidence to gain. Hardware/visual verification follows the release risk and declared acceptance boundary, not an assumed universal green from fixtures.
 
-`scripts/run-tests.ps1` is the test entry point. It builds the selected tree, isolates Qt/configuration and publishes `Testing/last-run-receipt.json`. Read `reusable`; stale binaries or incomplete test census cannot prove current code. Build and test use a shared host lock per build directory. `-NoBuild`/`-AllowStale` weaken the claim and must be disclosed.
+`cargo exo-dev test` is the test entry point. It builds the selected tree, isolates Qt/configuration and publishes `Testing/last-run-receipt.json`. Read `reusable`; stale binaries or incomplete test census cannot prove current code. Build and test use a shared host lock per build directory. `--no-build`/`--allow-stale` weaken the claim and must be disclosed.
 
 ```powershell
-pwsh scripts/run-tests.ps1
-pwsh scripts/run-tests.ps1 -Filter recorder_core.
-pwsh scripts/run-tests.ps1 -ExcludeLabel live
+cargo exo-dev test
+cargo exo-dev test --filter recorder_core.
+cargo exo-dev test --exclude-label live
 cargo exo-dev verify --fast
 cargo exo-dev verify --full
 ```

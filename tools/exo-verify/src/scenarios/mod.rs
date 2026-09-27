@@ -3,6 +3,9 @@
 pub mod app;
 pub mod audio;
 pub mod capture;
+mod chocolatey_worker;
+#[cfg(test)]
+mod command_names;
 pub mod common;
 pub mod display;
 pub mod dist;

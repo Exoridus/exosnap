@@ -7,10 +7,10 @@ Creating/pushing a version tag, publishing a release or submitting a package req
 ## 1. Prepare the source
 
 - Start from a reviewed, integrated commit. Confirm repository protection against the intended [rulesets](../.github/rulesets/README.md); local hooks are not server-side protection.
-- Run `pwsh scripts/bump-version.ps1 -Version <x.y.z>` on a clean tree when changing the base version. It updates the coordinated version surfaces and resets release-dependent package hashes/identifiers to placeholders. Review the diff and refresh the versioned portable/support documentation.
+- Run `cargo exo-dev release bump-version --version <x.y.z>` on a clean tree when changing the base version. It updates the coordinated version surfaces and resets release-dependent package hashes/identifiers to placeholders. Review the diff and refresh the versioned portable/support documentation.
 - Run the full gate: `cargo exo-dev verify --full`. Check the actual test receipt and every required CI result. A missing tool, stale binary, skipped configuration or absent crash-capture build is not equivalent to running it successfully.
 - Review current product behavior, limitations and privacy disclosures. Run the documentation check and privacy validators. Leave development narrative in the pull request.
-- At the release cut only, preview `pwsh scripts/new-changelog.ps1`. Set `EXOSNAP_CHANGELOG_CUT=1` and use `-Version <x.y.z> -Apply` to perform the deliberate cut. Preview `pwsh scripts/render-release-notes.ps1 -Version <x.y.z>`. Ordinary feature branches do not edit the changelog.
+- At the release cut only, preview `cargo exo-dev release changelog`. Set `EXOSNAP_CHANGELOG_CUT=1` and use `--version <x.y.z> --apply` to perform the deliberate cut. Preview `cargo exo-dev release release-notes --version <x.y.z>`. Ordinary feature branches do not edit the changelog.
 
 ## 2. Build and audit a candidate
 
@@ -109,7 +109,7 @@ Inspect packet-span durations for each stream, listen at the beginning/middle/en
 
 ## 8. Package-manager publication
 
-Publish downstream only after the approved release is available. Follow [WinGet](../packaging/winget/README.md), [Chocolatey](../packaging/chocolatey/README.md) and [Scoop](../packaging/scoop/README.md). The [publication policy](../packaging/publication-policy.json) records each channel's intended hold/publish state; `scripts/check-feed-drift.ps1` is an advisory comparison, not an upload command.
+Publish downstream only after the approved release is available. Follow [WinGet](../packaging/winget/README.md), [Chocolatey](../packaging/chocolatey/README.md) and [Scoop](../packaging/scoop/README.md). The [publication policy](../packaging/publication-policy.json) records each channel's intended hold/publish state; `cargo exo-dev release feed-drift` is an advisory comparison, not an upload command.
 
 Fill release hashes from the published bytes/sidecars. Read each new MSI ProductCode from that MSI; never reuse the previous build's generated code. Preserve the permanent UpgradeCode. Run each full package validator, including manifest/hash checks where required. Version-placeholder checks alone do not authorize submission.
 

@@ -1,6 +1,6 @@
 # Repository rulesets, as the repository says they should be
 
-GitHub stores branch and tag protection server-side, where it is invisible to review and drifts without a commit. The files next to this one are the intended state, and `scripts/check-github-rulesets.ps1` reports the difference between them and what the repository actually has.
+GitHub stores branch and tag protection server-side, where it is invisible to review and drifts without a commit. The files next to this one are the intended state, and `cargo exo-dev check rulesets` reports the difference between them and what the repository actually has.
 
 `next-branch.json` protects the development default. `main-branch.json` protects the latest Stable commit. The `main` payload contains a GitHub Actions integration bypass intended for an approved publish job. The integration ID is 15368. This bypass applies to every workflow token with write permission, so workflows that receive such tokens must be reviewed as release authority. No publish workflow is currently enabled.
 

@@ -7,6 +7,7 @@ mod bundle;
 mod capability;
 mod context;
 mod control;
+mod control_cli;
 mod docs;
 mod feed;
 #[cfg(windows)]
@@ -101,6 +102,8 @@ enum Command {
     /// Serve a local HTTPS update feed (used by the update lane).
     #[command(hide = true)]
     Feed(feed::FeedArgs),
+    /// Drive the product control channel of an armed process by run id.
+    Control(control_cli::ControlArgs),
 }
 
 #[derive(Subcommand)]
@@ -753,6 +756,7 @@ fn real_main() -> Result<ExitCode> {
         }
         Command::Stimulus(args) => stimulus::run(args)?,
         Command::Feed(args) => feed::serve_forever(args)?,
+        Command::Control(args) => return Ok(control_cli::run(&args)),
     }
     Ok(ExitCode::SUCCESS)
 }

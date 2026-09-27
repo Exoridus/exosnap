@@ -33,14 +33,15 @@ jobs:
 
       - name: Pull request title
         # The title carries NO pull request number: the number does not exist
-        # until the pull request is opened, and scripts/merge-pr.ps1 appends it
-        # exactly once at the squash. Requiring it here would mean a second edit
-        # of the title on every pull request -- the edit this workflow exists to
-        # stop being expensive.
+        # until the pull request is opened, and the squash merge appends it
+        # exactly once (cargo exo-dev pr merge). Requiring it here would mean
+        # a second edit of the title on every pull request -- the edit this
+        # workflow exists to stop being expensive.
         #
         # The number is passed so a title that DID end in its own number is
-        # rejected. A citation of another pull request inside the summary is not
-        # affected; that distinction is the parser's, in scripts/lib/CommitPolicy.psm1.
+        # rejected. A citation of another pull request inside the summary is
+        # not affected. That distinction is the parser's, in
+        # tools/exo-dev/src/commit_policy.rs.
         #
         # The same exo-dev step as the title preflight in ci.yml's guardrails
         # job, so the two cannot drift apart.

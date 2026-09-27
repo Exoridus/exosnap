@@ -43,7 +43,7 @@ A microphone clap observed by a webcam is a separate source/capture path. Do not
 Use a full external FFmpeg providing the analysis filters, not ExoSnap's bundled component set. Pin the tool version for an acceptance run.
 
 ```powershell
-python scripts/dev/av-sync-check.py '<recording>' --max-drift-ms 20 --expected-markers 20
+cargo exo-dev av-sync-check '<recording>' --max-drift-ms 20 --expected-markers 20
 ```
 
 For a known schedule, also supply `--marker-times-seconds` with the exact comma-separated times printed by the stimulus. Auto mode without an expected schedule only accepts its bounded small marker set; extra disturbances must not silently become favorable pairs.
@@ -64,7 +64,7 @@ A longer recording alone does not improve total-drift uncertainty: improved rate
 
 Absolute A/V offset includes the stimulus setup's display/audio emission skew. Report it, but the drift verdict concerns change over time, not an uncalibrated intercept. Large opposing segments are a reliability finding even when endpoint differences cancel.
 
-The committed golden clip and generator under `tests/fixtures/av-sync` / `scripts/dev/gen-av-sync-fixture.py` test the analysis path against a declared synthetic timeline. That guards the analyzer, not a user's hardware synchronization.
+The committed golden clip under `tests/fixtures/av-sync` and `cargo exo-dev gen-av-sync-fixture` test the analysis path against a declared synthetic timeline. That guards the analyzer, not a user's hardware synchronization.
 
 ## Release soak inspection
 

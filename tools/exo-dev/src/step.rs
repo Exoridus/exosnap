@@ -25,8 +25,6 @@ pub enum StepId {
     /// A blocking clang-tidy check that stopped firing reports zero findings,
     /// exactly like a clean tree. The canaries prove each one still fires.
     LintCanaries,
-    /// Advisory: the tree predates the rule.
-    ProseLines,
     Format,
     /// The product version is declared once and repeated by hand across the
     /// Chocolatey, WinGet and Scoop packaging. A bump that missed one published a
@@ -56,11 +54,12 @@ pub enum StepId {
     /// new module cannot slip past by not being named.
     QmlLint,
     Build,
-    /// Through run-tests.ps1, which isolates configuration and Qt and writes the
-    /// receipt. CI excludes the `live` label: those tests read real machine state
-    /// and are excluded rather than trusted to skip themselves on a GPU-less
-    /// runner. `live` and the execution phases are separate axes; selecting by
-    /// phase alone would lose the offscreen desktop tests or keep the live ones.
+    /// `exo-dev test` in process: builds the tree, runs ctest with isolated
+    /// configuration and Qt, and writes the tree's test receipt. CI excludes the
+    /// `live` label: those tests read real machine state and are excluded rather
+    /// than trusted to skip themselves on a GPU-less runner. `live` and the
+    /// execution phases are separate axes. Selecting by phase alone would lose
+    /// the offscreen desktop tests or keep the live ones.
     Tests,
     CppCheck,
     ClangTidy,
@@ -115,7 +114,7 @@ const TREE_AND_BUILD: Locks = Locks {
 };
 
 impl StepId {
-    pub const ALL: [StepId; 25] = [
+    pub const ALL: [StepId; 24] = [
         StepId::Sanity,
         StepId::Diff,
         StepId::Drift,
@@ -123,7 +122,6 @@ impl StepId {
         StepId::DocsSuperpowersRemoved,
         StepId::CommitPolicy,
         StepId::LintCanaries,
-        StepId::ProseLines,
         StepId::Format,
         StepId::PackagingVersion,
         StepId::MsiHarvest,
@@ -164,83 +162,16 @@ impl StepId {
         match self {
             StepId::Sanity => step("sanity", &[], Native),
             StepId::Diff => step("diff", SANITY, Native),
-            StepId::Drift => step(
-                "drift",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev check drift",
-                },
-            ),
-            StepId::SourceHygiene => step(
-                "source-hygiene",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev check source-hygiene",
-                },
-            ),
-            StepId::DocsSuperpowersRemoved => step(
-                "docs-superpowers-removed",
-                SANITY,
-                Legacy {
-                    owner: "exo-verify docs check",
-                },
-            ),
-            StepId::CommitPolicy => step(
-                "commit-policy",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev commit_policy",
-                },
-            ),
-            StepId::LintCanaries => step(
-                "lint-canaries",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev lint canaries",
-                },
-            ),
-            StepId::ProseLines => step(
-                "prose-lines",
-                SANITY,
-                Legacy {
-                    owner: "none (retired)",
-                },
-            ),
-            StepId::Format => step(
-                "format",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev check format",
-                },
-            ),
-            StepId::PackagingVersion => step(
-                "packaging-version",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev release module",
-                },
-            ),
-            StepId::MsiHarvest => step(
-                "msi-harvest",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev packaging module",
-                },
-            ),
-            StepId::PrivacyAllowlist => step(
-                "privacy-allowlist",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev privacy module",
-                },
-            ),
-            StepId::NetworkEgress => step(
-                "network-egress",
-                SANITY,
-                Legacy {
-                    owner: "exo-dev privacy module",
-                },
-            ),
+            StepId::Drift => step("drift", SANITY, Native),
+            StepId::SourceHygiene => step("source-hygiene", SANITY, Native),
+            StepId::DocsSuperpowersRemoved => step("docs-superpowers-removed", SANITY, Native),
+            StepId::CommitPolicy => step("commit-policy", SANITY, Native),
+            StepId::LintCanaries => step("lint-canaries", SANITY, Native),
+            StepId::Format => step("format", SANITY, Native),
+            StepId::PackagingVersion => step("packaging-version", SANITY, Native),
+            StepId::MsiHarvest => step("msi-harvest", SANITY, Native),
+            StepId::PrivacyAllowlist => step("privacy-allowlist", SANITY, Native),
+            StepId::NetworkEgress => step("network-egress", SANITY, Native),
             StepId::Actionlint => StepInfo {
                 ci_only: Some(
                     "a pinned Linux binary the workflow installs by digest; not a developer prerequisite",
@@ -276,28 +207,17 @@ impl StepId {
                 locks: TREE_AND_BUILD,
                 ..step("build", CONFIGURE, Native)
             },
-            // No lock here: run-tests.ps1 takes the tree lock and the host device
-            // lock itself, for the whole span from its build to its receipt.
-            // Holding either out here as well would only widen the span.
+            // No lock here: the test runner takes the tree lock for the span from
+            // its build to its receipt, the build lock around its build and the
+            // device lock around ctest alone. Holding any of them out here would
+            // widen those spans, and the device lock would then cover the build.
             StepId::Tests => StepInfo {
                 windows_only: true,
-                ..step(
-                    "tests",
-                    BUILD,
-                    Legacy {
-                        owner: "exo-dev test",
-                    },
-                )
+                ..step("tests", BUILD, Native)
             },
             StepId::CppCheck => StepInfo {
                 windows_only: true,
-                ..step(
-                    "cppcheck",
-                    SANITY,
-                    Legacy {
-                        owner: "exo-dev lint",
-                    },
-                )
+                ..step("cppcheck", SANITY, Native)
             },
             // clang-tidy reads compile_commands.json, which configure writes and
             // the build keeps in step with the source. The tree lock keeps a
@@ -305,13 +225,7 @@ impl StepId {
             StepId::ClangTidy => StepInfo {
                 windows_only: true,
                 locks: TREE_AND_BUILD,
-                ..step(
-                    "clang-tidy",
-                    BUILD,
-                    Legacy {
-                        owner: "exo-dev lint clang-tidy",
-                    },
-                )
+                ..step("clang-tidy", BUILD, Native)
             },
             StepId::PackagingSmoke => StepInfo {
                 windows_only: true,
@@ -329,15 +243,9 @@ impl StepId {
             StepId::AvSyncGolden => StepInfo {
                 windows_only: true,
                 ci_only: Some(
-                    "needs Python and a system FFmpeg with signalstats; replaced by the exo-dev av-sync port",
+                    "needs a system FFmpeg with signalstats/astats; not a developer prerequisite",
                 ),
-                ..step(
-                    "av-sync-golden",
-                    SANITY,
-                    Legacy {
-                        owner: "exo-dev av-sync-check",
-                    },
-                )
+                ..step("av-sync-golden", SANITY, Native)
             },
         }
     }

@@ -1,7 +1,7 @@
 {
     "policyVersion": 1,
     "product": "ExoSnap",
-    "note": "What each package channel is meant to be serving right now. Publishing is always a deliberate act (docs/release-checklist.md section 8); nothing in this repository submits a package. scripts/check-feed-drift.ps1 reads this file, reports what the public feeds actually serve, and never publishes anything.",
+    "note": "What each package channel is meant to be serving right now. Publishing is always a deliberate act (docs/release-checklist.md section 8); nothing in this repository submits a package. cargo exo-dev release feed-drift reads this file, reports what the public feeds actually serve, and never publishes anything.",
     "channels": {
         "github": {
             "intent": "publish",

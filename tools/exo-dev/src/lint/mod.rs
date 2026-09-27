@@ -1,0 +1,490 @@
+//! Discovery for the LLVM-based tools (clang-format, clang-tidy, cppcheck):
+//! VS-bundled LLVM, a standalone LLVM install, then PATH.
+//!
+//! Three tiers, in order: the LLVM toolset bundled with the detected Visual
+//! Studio "Desktop development with C++" installation, a standalone LLVM
+//! install, then PATH. A candidate must be a real file, must not be a WinGet
+//! "App Execution Alias" shim (those exist on PATH without resolving to a real
+//! binary until the matching Store package is installed), and must answer
+//! `--version` with exit code 0.
+//!
+//! The VS-LLVM tier is scoped to the VS 2022 line, the version the tree is
+//! actually formatted against: it calls `msvc::find_installation_vs2022`, a
+//! narrower vswhere query than `msvc::find_installation` (which stays "really
+//! latest" for the build path's own use). Without that scoping, a newer or
+//! preview VS line installed alongside 2022 would be preferred, and its
+//! bundled clang-format would not agree with the version the tree is
+//! formatted against.
+
+pub mod canaries;
+pub mod clang_tidy;
+pub mod format;
+pub mod quality;
+
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+
+/// Finds the first of `names` (without the `.exe` suffix) as a real, runnable
+/// binary. See the module documentation for the search order and what counts
+/// as a match.
+pub fn find_tool(names: &[&str]) -> Option<PathBuf> {
+    let vs_llvm_root = crate::msvc::find_installation_vs2022();
+    let standalone_llvm_root = std::env::var_os("ProgramFiles").map(|p| Path::new(&p).join("LLVM"));
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let local_app_data = std::env::var_os("LOCALAPPDATA");
+    find_tool_in(
+        names,
+        vs_llvm_root.as_deref(),
+        standalone_llvm_root.as_deref(),
+        &path_var,
+        &|path: &Path| is_usable_tool(path, local_app_data.as_deref()),
+    )
+}
+
+/// `find_tool`, with every search root and the usability probe injected
+/// instead of read from the real environment and the real `--version` check,
+/// so a test can point each tier at a fixture directory and decide for
+/// itself which candidates count as usable.
+fn find_tool_in(
+    names: &[&str],
+    vs_install_root: Option<&Path>,
+    standalone_llvm_root: Option<&Path>,
+    path_var: &OsStr,
+    probe: &dyn Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    if let Some(root) = vs_install_root
+        && let Some(found) = find_under(root, names, Some("\\llvm\\x64\\bin\\"), probe)
+    {
+        return Some(found);
+    }
+    if let Some(root) = standalone_llvm_root
+        && let Some(found) = find_under(root, names, None, probe)
+    {
+        return Some(found);
+    }
+    find_on_path(names, path_var, probe)
+}
+
+/// The first `{name}.exe` under `root` (recursive) whose path, lowercased,
+/// contains `must_contain` (when given) and that `probe` accepts.
+fn find_under(
+    root: &Path,
+    names: &[&str],
+    must_contain: Option<&str>,
+    probe: &dyn Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    collect_named_executables(root, names, &mut candidates);
+    if let Some(marker) = must_contain {
+        candidates.retain(|p| p.to_string_lossy().to_lowercase().contains(marker));
+    }
+    candidates.into_iter().find(|p| probe(p))
+}
+
+/// Recursively collects every `{name}.exe` under `dir`, case-insensitively,
+/// for any of `names`. An unreadable directory (permissions, a broken
+/// junction) is skipped rather than failing the whole search, matching
+/// `Get-ChildItem -Recurse -ErrorAction SilentlyContinue`.
+fn collect_named_executables(dir: &Path, names: &[&str], found: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_named_executables(&path, names, found);
+            continue;
+        }
+        let is_exe = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("exe"));
+        let name_matches = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|stem| names.iter().any(|n| stem.eq_ignore_ascii_case(n)));
+        if is_exe && name_matches {
+            found.push(path);
+        }
+    }
+}
+
+/// The first `{name}.exe` PATH resolves to, per `names` in order. Only the
+/// first PATH hit for a name is considered, matching `Get-Command`: a shim
+/// that fails validation is not found, PATH is not searched further for that
+/// name.
+fn find_on_path(
+    names: &[&str],
+    path_var: &OsStr,
+    probe: &dyn Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    for name in names {
+        let candidate = std::env::split_paths(path_var)
+            .map(|dir| dir.join(format!("{name}.exe")))
+            .find(|candidate| candidate.is_file());
+        if let Some(candidate) = candidate
+            && probe(&candidate)
+        {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn is_usable_tool(path: &Path, local_app_data: Option<&OsStr>) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    if is_winget_alias_shim(path, local_app_data) {
+        return false;
+    }
+    probes_ok(path)
+}
+
+fn is_winget_alias_shim(path: &Path, local_app_data: Option<&OsStr>) -> bool {
+    let Some(local_app_data) = local_app_data else {
+        return false;
+    };
+    let links = Path::new(local_app_data)
+        .join("Microsoft")
+        .join("WinGet")
+        .join("Links");
+    let links = links.to_string_lossy().to_lowercase();
+    path.to_string_lossy().to_lowercase().starts_with(&links)
+}
+
+fn probes_ok(path: &Path) -> bool {
+    let mut command = crate::process::command(&path.to_string_lossy());
+    command.arg("--version");
+    match crate::process::query(command) {
+        Ok((code, _)) => code == 0,
+        Err(_) => false,
+    }
+}
+
+/// Splits `items` (one command-line argument per invocation) into batches that,
+/// together with `fixed_arguments`, fit under `command_line_budget` characters.
+///
+/// CreateProcess accepts at most 32767 characters, and the failure mode when a
+/// caller exceeds it is not a diagnosable error: the process never starts, so a
+/// step that tolerates a nonzero exit reports a clean pass over an analysis
+/// that did not happen. Every batched invocation in this repository goes
+/// through here rather than trusting an argument count to stay small.
+///
+/// Two independent limits. The budget is the hard one; `maximum_item` is a
+/// throughput choice, since batches run in parallel and smaller ones spread
+/// more evenly across cores. An item whose own cost already exceeds the budget
+/// still gets a batch of its own, never a silent drop.
+pub fn batch_command_line(
+    items: &[String],
+    fixed_arguments: &[String],
+    maximum_item: usize,
+    command_line_budget: usize,
+) -> Vec<Vec<String>> {
+    // A separating space plus the pair of quotes a path with a space in it
+    // acquires, charged to every argument so the estimate can only be too large.
+    fn cost(argument: &str) -> usize {
+        argument.len() + 3
+    }
+
+    let fixed_cost: usize = fixed_arguments.iter().map(|a| cost(a)).sum();
+    let mut batches: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    let mut current_cost = fixed_cost;
+
+    for item in items {
+        let item_cost = cost(item);
+        if !current.is_empty()
+            && (current.len() >= maximum_item || current_cost + item_cost > command_line_budget)
+        {
+            batches.push(std::mem::take(&mut current));
+            current_cost = fixed_cost;
+        }
+        current.push(item.clone());
+        current_cost += item_cost;
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+    batches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fake usability probe that accepts any real file. The search-order
+    /// tests exercise tiering (which candidate `find_tool_in` prefers), not
+    /// `is_usable_tool`'s own probing, so they use this instead of running a
+    /// real `--version` check against a machine-dependent binary.
+    fn probe_any_file(path: &Path) -> bool {
+        path.is_file()
+    }
+
+    /// A plain fixture file at the name and extension `find_tool_in`'s
+    /// collectors look for. It does not need to be runnable: the
+    /// search-order tests pair it with `probe_any_file`, not a real probe.
+    fn place_as(name: &str, dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let dest = dir.join(format!("{name}.exe"));
+        std::fs::write(&dest, b"stub").unwrap();
+        dest
+    }
+
+    /// A real, small executable that answers `--version` with exit 0.
+    /// `rustc` is guaranteed to be on PATH wherever `cargo test` runs, and,
+    /// unlike a Git-for-Windows `git.exe` shim, running a copy of it from a
+    /// different directory does not change its behavior.
+    fn probeable_exe() -> PathBuf {
+        let path_var = std::env::var_os("PATH").unwrap_or_default();
+        let name = format!("rustc{}", std::env::consts::EXE_SUFFIX);
+        std::env::split_paths(&path_var)
+            .map(|dir| dir.join(&name))
+            .find(|p| p.is_file())
+            .expect("rustc must be on PATH when running cargo test")
+    }
+
+    fn path_var(dirs: &[&Path]) -> std::ffi::OsString {
+        std::env::join_paths(dirs).unwrap()
+    }
+
+    // The `\llvm\x64\bin\` marker match is a literal backslash-separated
+    // string, matching a real Windows path only on Windows: `PathBuf::join`
+    // uses `/` on Linux, so this fixture would never satisfy the marker
+    // there for a reason unrelated to what the test verifies.
+    #[cfg(windows)]
+    #[test]
+    fn vs_bundled_llvm_wins_over_standalone_llvm_and_path() {
+        let vs_dir = tempfile::tempdir().unwrap();
+        let llvm_bin = vs_dir.path().join("VC/Tools/Llvm/x64/bin");
+        let vs_tool = place_as("clang-format", &llvm_bin);
+
+        let standalone_dir = tempfile::tempdir().unwrap();
+        place_as("clang-format", &standalone_dir.path().join("bin"));
+
+        let path_dir = tempfile::tempdir().unwrap();
+        place_as("clang-format", path_dir.path());
+
+        let found = find_tool_in(
+            &["clang-format"],
+            Some(vs_dir.path()),
+            Some(standalone_dir.path()),
+            &path_var(&[path_dir.path()]),
+            &probe_any_file,
+        );
+        assert_eq!(found, Some(vs_tool));
+    }
+
+    #[test]
+    fn a_vs_bundled_clang_format_outside_llvm_x64_bin_is_not_matched() {
+        let vs_dir = tempfile::tempdir().unwrap();
+        // Not under \Llvm\x64\bin\: the marker filter must reject it.
+        place_as("clang-format", &vs_dir.path().join("VC/Tools/Other"));
+
+        let path_dir = tempfile::tempdir().unwrap();
+        let path_tool = place_as("clang-format", path_dir.path());
+
+        let found = find_tool_in(
+            &["clang-format"],
+            Some(vs_dir.path()),
+            None,
+            &path_var(&[path_dir.path()]),
+            &probe_any_file,
+        );
+        assert_eq!(found, Some(path_tool));
+    }
+
+    /// `msvc::find_installation_vs2022` returns `None` on a machine where
+    /// only a preview/other-numbered VS line is installed: vswhere's own
+    /// `-version` filter excludes it, so nothing ever reaches this tier as a
+    /// root to search under. The VS-LLVM tier must fall through to
+    /// standalone LLVM exactly as if VS were entirely absent.
+    #[test]
+    fn a_vs2022_scoped_lookup_that_found_nothing_falls_through_to_standalone_llvm() {
+        let standalone_dir = tempfile::tempdir().unwrap();
+        let standalone_tool = place_as("clang-format", &standalone_dir.path().join("bin"));
+
+        let path_dir = tempfile::tempdir().unwrap();
+        place_as("clang-format", path_dir.path());
+
+        let found = find_tool_in(
+            &["clang-format"],
+            None,
+            Some(standalone_dir.path()),
+            &path_var(&[path_dir.path()]),
+            &probe_any_file,
+        );
+        assert_eq!(found, Some(standalone_tool));
+    }
+
+    #[test]
+    fn standalone_llvm_wins_over_path_when_vs_has_none() {
+        let standalone_dir = tempfile::tempdir().unwrap();
+        let standalone_tool = place_as("clang-format", &standalone_dir.path().join("bin"));
+
+        let path_dir = tempfile::tempdir().unwrap();
+        place_as("clang-format", path_dir.path());
+
+        let found = find_tool_in(
+            &["clang-format"],
+            None,
+            Some(standalone_dir.path()),
+            &path_var(&[path_dir.path()]),
+            &probe_any_file,
+        );
+        assert_eq!(found, Some(standalone_tool));
+    }
+
+    #[test]
+    fn path_is_used_when_no_llvm_install_has_the_tool() {
+        let path_dir = tempfile::tempdir().unwrap();
+        let path_tool = place_as("clang-format", path_dir.path());
+
+        let found = find_tool_in(
+            &["clang-format"],
+            None,
+            None,
+            &path_var(&[path_dir.path()]),
+            &probe_any_file,
+        );
+        assert_eq!(found, Some(path_tool));
+    }
+
+    #[test]
+    fn nothing_found_anywhere_is_none() {
+        let empty = tempfile::tempdir().unwrap();
+        let found = find_tool_in(
+            &["clang-format"],
+            None,
+            None,
+            &path_var(&[empty.path()]),
+            &probe_any_file,
+        );
+        assert_eq!(found, None);
+    }
+
+    // These two exercise the real `is_usable_tool`, not `probe_any_file`,
+    // since they test its own rejection rules rather than tiering order.
+    #[test]
+    fn a_winget_links_shim_on_path_is_skipped_even_though_it_is_a_real_file() {
+        let local_app_data = tempfile::tempdir().unwrap();
+        let links = local_app_data.path().join("Microsoft/WinGet/Links");
+        // A shim need not itself be a working binary; the path prefix alone
+        // must be enough to reject it, matching the WinGet App Execution
+        // Alias exception.
+        std::fs::create_dir_all(&links).unwrap();
+        std::fs::write(links.join("clang-format.exe"), b"").unwrap();
+
+        let local_app_data = local_app_data.path().as_os_str();
+        let found = find_tool_in(
+            &["clang-format"],
+            None,
+            None,
+            &path_var(&[&links]),
+            &|path: &Path| is_usable_tool(path, Some(local_app_data)),
+        );
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn a_path_entry_that_does_not_resolve_to_a_real_binary_is_not_a_hit() {
+        let path_dir = tempfile::tempdir().unwrap();
+        // A file with the right name and extension but no valid executable
+        // content: the `--version` probe must fail closed, not be skipped.
+        // Garbage bytes always fail to run, on any machine, so this needs no
+        // real tool and stays deterministic.
+        std::fs::write(path_dir.path().join("clang-format.exe"), b"not a real exe").unwrap();
+
+        let found = find_tool_in(
+            &["clang-format"],
+            None,
+            None,
+            &path_var(&[path_dir.path()]),
+            &|path: &Path| is_usable_tool(path, None),
+        );
+        assert_eq!(found, None);
+    }
+
+    /// The one search-order-independent test that exercises `is_usable_tool`
+    /// accepting a genuinely runnable binary, so the success path of the
+    /// real `--version` probe stays covered without depending on the
+    /// search-order tests' fake probe. The copy keeps `rustc`'s own file
+    /// name: a `rustup`-managed `rustc` is itself a proxy that dispatches on
+    /// its own basename, so renaming the copy would make it fail the same
+    /// way the old `git.exe` fixture did, for an unrelated reason.
+    #[test]
+    fn is_usable_tool_accepts_a_real_binary_that_answers_version_successfully() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = probeable_exe();
+        let dest = dir.path().join(source.file_name().unwrap());
+        std::fs::copy(&source, &dest).unwrap();
+        assert!(is_usable_tool(&dest, None));
+    }
+
+    #[test]
+    fn no_batch_can_exceed_the_windows_command_line_limit() {
+        // 900 paths on one command line is roughly 36 KB against a
+        // 32767-character ceiling: the process never starts, and a step that
+        // tolerates failure then reports a clean pass over an analysis that
+        // did not happen.
+        let files: Vec<String> = (1..=900)
+            .map(|n| format!("libs/engine/src/some_reasonably_long_translation_unit_name_{n}.cpp"))
+            .collect();
+        let fixed = vec![
+            "-p".to_string(),
+            "C:/Users/someone/Development/exosnap/build/windows-x64-ninja-debug".to_string(),
+            "--checks=-clang-analyzer-*".to_string(),
+        ];
+        let batches = batch_command_line(&files, &fixed, 25, 30000);
+        assert!(
+            batches.len() > 1,
+            "900 files must not end up on one command line"
+        );
+        for batch in &batches {
+            let length: usize = fixed.iter().chain(batch.iter()).map(|a| a.len() + 3).sum();
+            assert!(
+                length < 32767,
+                "a batch of {} file(s) is {length} characters, past the limit",
+                batch.len()
+            );
+        }
+        let total: usize = batches.iter().map(Vec::len).sum();
+        assert_eq!(total, files.len(), "batching must not drop a file");
+    }
+
+    #[test]
+    fn a_single_argument_longer_than_the_budget_still_yields_one_batch() {
+        let items = vec!["x".repeat(200)];
+        let batches = batch_command_line(&items, &[], 25, 50);
+        assert_eq!(
+            batches.len(),
+            1,
+            "an over-budget item is still analysed, never silently dropped"
+        );
+    }
+
+    #[test]
+    fn an_empty_list_produces_no_invocation_at_all() {
+        let batches = batch_command_line(&[], &[], 25, 30000);
+        assert_eq!(batches.len(), 0, "nothing to analyse means no command line");
+    }
+
+    #[test]
+    fn the_first_matching_name_is_preferred() {
+        let path_dir = tempfile::tempdir().unwrap();
+        let first = place_as("clang-format", path_dir.path());
+        place_as("clang-format-alt", path_dir.path());
+
+        let found = find_tool_in(
+            &["clang-format", "clang-format-alt"],
+            None,
+            None,
+            &path_var(&[path_dir.path()]),
+            &probe_any_file,
+        );
+        assert_eq!(found, Some(first));
+    }
+}

@@ -10,12 +10,12 @@ The recording frames modulate brightness only. Radius animation at notification-
 
 `wordmark.svg` is the one drawing here that is **not** generated. It is the product name as outlines: Hanken Grotesk SemiBold, converted at a type size of 26 units with the baseline at `y = 0`. Outlines have no parameters to derive them from. It lives here because it goes through the same colour substitution as the aperture suite, and it is the only asset in the directory that is not square. Its box is padded above the letters so that centring the box centres the x-height band. A wordmark that is all lowercase has a descender and no ascender, so centring its ink hangs the name low beside a round mark.
 
-The other `.svg` files are **generated** from `parameters.json` by `scripts/generate-brand-marks.py` and checked in, because the runtime loads them out of Qt resources and a shape change should be visible in a diff. Do not hand-edit one: the next run of the script overwrites it, and `brand_geometry_tests` fails in the meantime.
+The other `.svg` files are **generated** from `parameters.json` by `cargo exo-dev generate-brand-marks` and checked in, because the runtime loads them out of Qt resources and a shape change should be visible in a diff. Do not hand-edit one: the next run overwrites it, and `brand_geometry_tests` fails in the meantime.
 
 ```
-python scripts/generate-brand-marks.py            # rewrite the suite
-python scripts/generate-brand-marks.py --check     # report drift, change nothing
-python scripts/generate-app-icons.py               # rebuild exosnap-app.ico and the logo
+cargo exo-dev generate-brand-marks            # rewrite the suite
+cargo exo-dev generate-brand-marks --check    # report drift, change nothing
+cargo exo-dev generate-app-icons              # rebuild exosnap-app.ico and the logo
 ```
 
 Changing a radius, a stroke weight or the spacing is therefore an edit to `parameters.json` and two commands. The per-state compositions (check, warning glyph, pause bars, dashed processing arc) are authored in the generator, expressed against the aperture, so moving the inner ring moves what sits inside it.

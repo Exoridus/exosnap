@@ -8,6 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use super::chocolatey_worker;
 use crate::bundle::{FileRole, sha256_file};
 use crate::capability::Capability;
 use crate::context::Context;
@@ -147,7 +148,7 @@ fn old_path(variable: &str) -> Step<PathBuf> {
     Ok(path)
 }
 
-fn copy_tree(from: &Path, to: &Path) -> Step {
+pub(super) fn copy_tree(from: &Path, to: &Path) -> Step {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
@@ -307,24 +308,18 @@ fn chocolatey_rehearsal(ctx: &mut Context) -> Step {
                 .eq_ignore_ascii_case(&expected_commit),
         "Chocolatey source checkout is not the candidate commit {expected_commit}"
     );
-    let script_names = ["sandbox-choco-worker.ps1", "choco-rehearsal-worker.ps1"];
-    let mut tracked = vec!["packaging/chocolatey".to_string()];
-    tracked.extend(
-        script_names
-            .iter()
-            .map(|name| format!("scripts/lib/{name}")),
-    );
     let status = crate::tools::run(
-        Command::new("git")
-            .arg("-C")
-            .arg(&checkout)
-            .args(["status", "--porcelain", "--"])
-            .args(&tracked),
+        Command::new("git").arg("-C").arg(&checkout).args([
+            "status",
+            "--porcelain",
+            "--",
+            "packaging/chocolatey",
+        ]),
         Duration::from_secs(10),
     )?;
     infra_ensure!(
         status.success() && status.stdout.trim().is_empty(),
-        "Chocolatey package source or worker scripts differ from the candidate commit"
+        "Chocolatey package source differs from the candidate commit"
     );
     let package_source = checkout.join("packaging/chocolatey");
     if !package_source.join("exosnap.nuspec").is_file() {
@@ -334,16 +329,6 @@ fn chocolatey_rehearsal(ctx: &mut Context) -> Step {
     }
     let nonce = control::new_run_id("choco");
     let staging = ctx.scenario_dir.join(format!("choco-staging-{nonce}"));
-    std::fs::create_dir_all(&staging)?;
-    for name in script_names {
-        let source = checkout.join("scripts/lib").join(name);
-        if !source.is_file() {
-            return Err(Stop::unavailable(format!(
-                "candidate checkout lacks scripts/lib/{name}"
-            )));
-        }
-        std::fs::copy(source, staging.join(name))?;
-    }
     let installer = ctx.package(FileRole::Installer)?;
     let (installer_hash, _) = sha256_file(&installer)?;
     let declared_hash = &ctx
@@ -357,51 +342,41 @@ fn chocolatey_rehearsal(ctx: &mut Context) -> Step {
         "candidate MSI changed before Chocolatey rehearsal"
     );
     let evidence = ctx.scenario_dir.join(format!("choco-evidence-{nonce}"));
-    std::fs::create_dir_all(&evidence)?;
     let result_path = ctx.scenario_dir.join(format!("choco-result-{nonce}.json"));
-    let marker_path = ctx.scenario_dir.join(format!("choco-done-{nonce}.txt"));
-    let result = crate::tools::run(
-        Command::new("pwsh")
-            .args(["-NoProfile", "-NonInteractive", "-File"])
-            .arg(staging.join("sandbox-choco-worker.ps1"))
-            .arg("-StagingDirectory")
-            .arg(&staging)
-            .arg("-PackageSource")
-            .arg(&package_source)
-            .arg("-MsiPath")
-            .arg(&installer)
-            .arg("-MsiSha256")
-            .arg(&installer_hash)
-            .arg("-EvidenceDirectory")
-            .arg(&evidence)
-            .arg("-ResultPath")
-            .arg(&result_path)
-            .arg("-MarkerPath")
-            .arg(&marker_path),
-        Duration::from_secs(840),
-    )?;
+    let outcome = chocolatey_worker::run_rehearsal(
+        &staging,
+        &package_source,
+        &installer,
+        &installer_hash,
+        &evidence,
+    );
+    let result = match outcome {
+        Ok(result) => result,
+        Err(error) => chocolatey_worker::RehearsalResult {
+            ok: false,
+            msi_path: installer.display().to_string(),
+            msi_sha256: installer_hash,
+            restore_ran: false,
+            restore_exit_code: None,
+            vcredist_before: String::new(),
+            vcredist_after: String::new(),
+            observations: vec![],
+            completed_utc: crate::model::now_rfc3339(),
+            steps: vec![],
+            fatal: Some(error.to_string()),
+        },
+    };
+    let document = serde_json::to_value(&result)?;
+    std::fs::write(&result_path, serde_json::to_vec_pretty(&document)?)?;
     ctx.keep(&result_path);
     ctx.keep(&evidence);
-    infra_ensure!(
-        marker_path.is_file() && result_path.is_file(),
-        "Chocolatey worker did not write its completion marker and result (exit {:?}): {}",
-        result.code(),
-        result.stderr.trim()
-    );
-    let document: Value = serde_json::from_slice(&std::fs::read(&result_path)?)?;
     ctx.evidence
         .put("chocolateySteps", document["steps"].clone());
     chocolatey_verdict(&document)?;
-    infra_ensure!(
-        result.success(),
-        "Chocolatey worker exited {:?} after writing passing steps: {}",
-        result.code(),
-        result.stderr.trim()
-    );
     Ok(())
 }
 
-fn chocolatey_verdict(document: &Value) -> Step {
+pub(super) fn chocolatey_verdict(document: &Value) -> Step {
     const REQUIRED: &[&str] = &[
         "prepare",
         "pack",

@@ -4,7 +4,7 @@
 // emits start-coded NAL units for those two codecs), IVF framing for AV1
 // (whose raw OBU output is not self-delimited the way Annex-B is). No muxing
 // — ffmpeg can decode either output directly. Backs
-// scripts/dev/encoder_quality_matrix.py. Never touches the ExoSnap
+// `exo-dev encoder-quality-matrix`. Never touches the ExoSnap
 // application itself — this is a standalone CLI dev tool.
 //
 // Usage:

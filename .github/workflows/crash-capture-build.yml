@@ -190,9 +190,9 @@ jobs:
         # name (TEST_PREFIX "crash." in libs/crash_capture/CMakeLists.txt):
         # test_crash_scrubber, test_crash_capture_engine, test_local_minidump.
         run: >-
-          pwsh -NonInteractive -File scripts/run-tests.ps1
-          -BuildDir build/win-on -Config Release
-          -Filter crash. -ExcludeLabel live
+          cargo exo-dev test
+          --build-dir build/win-on --config Release
+          --filter crash. --exclude-label live
 
       - name: sccache stats
         if: always()

@@ -173,7 +173,7 @@ mod tests {
                 .unwrap()
                 .contains(&"build".into())
         );
-        assert_eq!(tests["implementation"], "legacy");
+        assert_eq!(tests["implementation"], "native");
         let build = checks.iter().find(|c| c["name"] == "build").unwrap();
         assert_eq!(
             build["evidence"]["buildDir"],

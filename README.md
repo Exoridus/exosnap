@@ -105,7 +105,7 @@ cd exosnap
 git switch -c my-change origin/main
 cmake --preset windows-x64-debug
 cmake --build --preset windows-x64-debug-exosnap
-pwsh scripts/run-tests.ps1 -Filter recorder_core.
+cargo exo-dev test --filter recorder_core.
 ```
 
 Use `cargo exo-dev verify --fast` for scoped iteration and `cargo exo-dev verify --full` for the complete local gate before pushing. Hooks use the same entry point. Work on a branch and submit a pull request. `main` is updated through merges. Follow [AGENTS.md](AGENTS.md) for repository rules.

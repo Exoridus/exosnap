@@ -17,6 +17,8 @@ use std::time::Duration;
 
 use crate::pe;
 
+mod dependency_identity;
+
 pub const PLATFORM: &str = "windows-x64";
 
 #[derive(clap::Args)]

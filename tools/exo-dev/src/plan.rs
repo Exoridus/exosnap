@@ -120,7 +120,7 @@ pub fn build(input: &PlanInput) -> Plan {
                     // that is what makes the rules adoptable on this tree.
                     check.evidence.insert("scope".into(), "working-tree".into());
                 }
-                StepId::CommitPolicy | StepId::ProseLines if profile.ci => {
+                StepId::CommitPolicy if profile.ci => {
                     skip_unless(&mut check, pull_request, "not a pull request");
                 }
                 StepId::ScriptTests => skip_unless(
@@ -351,7 +351,7 @@ pub(crate) mod tests {
             &["app/quick/ExoSnap/Quick/RecordPage.qml"][..],
             &["libs/engine/include/exosnap/engine/session.h"][..],
             &["CMakeLists.txt"][..],
-            &["scripts/run-tests.ps1"][..],
+            &["scripts/tests/build-artifacts.tests.ps1"][..],
             &[".github/workflows/ci.yml"][..],
             &[][..],
         ] {
@@ -386,7 +386,6 @@ pub(crate) mod tests {
         push.event = Event::parse("push");
         let plan = build(&push);
         assert!(!plan.check(StepId::CommitPolicy).unwrap().applicable);
-        assert!(!plan.check(StepId::ProseLines).unwrap().applicable);
         let hygiene = plan.check(StepId::SourceHygiene).unwrap();
         assert!(
             hygiene.applicable && hygiene.advisory,
