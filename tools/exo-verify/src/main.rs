@@ -349,7 +349,7 @@ fn profile_lanes(profile: &str) -> Result<Vec<Lane>> {
     })
 }
 
-fn run(args: RunArgs) -> Result<ExitCode> {
+fn run(mut args: RunArgs) -> Result<ExitCode> {
     let mut lanes = profile_lanes(&args.profile)?;
     if let Some(name) = &args.lane {
         let lane = Lane::parse(name).with_context(|| format!("unknown lane '{name}'"))?;
@@ -383,6 +383,11 @@ fn run(args: RunArgs) -> Result<ExitCode> {
         .collect::<Result<Vec<_>>>()?;
     let caps = capability::probe(&attested);
     std::fs::create_dir_all(&args.out)?;
+    // Absolute: scenarios pass paths derived from this root as environment
+    // variables (EXOSNAP_CONFIG_DIR, EXOSNAP_OUTPUT_DIR, --apply-handoff) to
+    // child processes whose cwd is redirected elsewhere, so a relative root
+    // would resolve against the wrong directory in those children.
+    args.out = std::path::absolute(&args.out)?;
     let registry = scenarios::registry();
     let environment = match &args.environment {
         Some(name) => disposable::BackendKind::parse(name)
