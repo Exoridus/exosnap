@@ -63,6 +63,13 @@ impl ProfileSpec {
     }
 }
 
+// Everything a commit or a push blocks on locally. Deliberately build-free: a
+// C++ configure/build/test cycle and the whole-tree cppcheck/clang-tidy passes
+// moved to PR CI (ci-build-debug, ci-build-release, ci-lint), which already
+// runs them before merge. Duplicating a several-minute build on every commit
+// and push bought no coverage the PR gate did not already have, and cost the
+// warm local targets from the developer-loop budget in section 6 of the
+// quality sweep. See docs/dev/build-and-test.md for the resulting tiers.
 const LOCAL_STEPS: &[StepId] = &[
     StepId::Diff,
     StepId::Drift,
@@ -77,12 +84,6 @@ const LOCAL_STEPS: &[StepId] = &[
     StepId::NetworkEgress,
     StepId::ScriptTests,
     StepId::Rust,
-    StepId::Configure,
-    StepId::QmlLint,
-    StepId::Build,
-    StepId::Tests,
-    StepId::CppCheck,
-    StepId::ClangTidy,
 ];
 
 const DEBUG_PRESET: &str = "windows-x64-ninja-debug";
@@ -124,13 +125,15 @@ impl Profile {
 
     pub fn spec(self) -> ProfileSpec {
         match self {
+            // `tidy` stays at BASE's default: LOCAL_STEPS plans no ClangTidy
+            // step locally any more (see the comment on LOCAL_STEPS), so
+            // neither profile reads this field today.
             Profile::PreCommit => ProfileSpec {
                 name: "pre-commit",
                 steps: LOCAL_STEPS,
                 scoped: true,
                 ci: false,
                 exclude_label: None,
-                tidy: TidyScope::ChangedSinceBase,
                 ..BASE
             },
             Profile::PrePush => ProfileSpec {
@@ -138,7 +141,6 @@ impl Profile {
                 steps: LOCAL_STEPS,
                 ci: false,
                 exclude_label: None,
-                tidy: TidyScope::WholeTree,
                 ..BASE
             },
             Profile::CiLint => ProfileSpec {
@@ -149,6 +151,11 @@ impl Profile {
                     StepId::MsiHarvest,
                     StepId::PrivacyAllowlist,
                     StepId::NetworkEgress,
+                    // Blocking, whole-tree, and needs no compile database
+                    // (unlike CppCheck::run's clang-tidy sibling), so it belongs
+                    // on the build-free leg rather than duplicating the
+                    // ci-build-debug/-release compiler legs.
+                    StepId::CppCheck,
                 ],
                 ..BASE
             },

@@ -113,7 +113,10 @@ pub fn save(document: &Value, path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::{self, tests::input};
+    use crate::plan::{
+        self,
+        tests::{full_test_spec, input, input_for_spec},
+    };
     use crate::profile::Profile;
     use crate::run::{self, tests::Fake};
 
@@ -130,7 +133,7 @@ mod tests {
 
     #[test]
     fn the_failure_report_lists_log_and_diagnosis_of_every_failed_check() {
-        let plan = plan::build(&input(Profile::PrePush, &Scope::everything()));
+        let plan = plan::build(&input_for_spec(full_test_spec(false), &Scope::everything()));
         let mut fake = Fake::failing(&["tests"]);
         fake.diagnosis = vec!["C:/logs/record_controls_qml_tests.txt".into()];
         let run = run::run(&plan, &mut fake);
@@ -144,7 +147,7 @@ mod tests {
     #[test]
     fn the_receipt_records_the_run_truthfully() {
         let scope = Scope::of(&["libs/engine/src/muxer.cpp".to_string()]);
-        let plan = plan::build(&input(Profile::PreCommit, &scope));
+        let plan = plan::build(&input_for_spec(full_test_spec(true), &scope));
         let run = run::run(&plan, &mut Fake::failing(&["build"]));
         let document = receipt(
             &run,
@@ -183,7 +186,7 @@ mod tests {
 
     #[test]
     fn the_receipt_names_a_missing_tool() {
-        let plan = plan::build(&input(Profile::PrePush, &Scope::everything()));
+        let plan = plan::build(&input_for_spec(full_test_spec(false), &Scope::everything()));
         let mut fake = Fake::failing(&[]);
         fake.missing = vec!["cppcheck"];
         let run = run::run(&plan, &mut fake);

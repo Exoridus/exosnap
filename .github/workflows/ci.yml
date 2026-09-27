@@ -114,20 +114,27 @@ env:
   SCCACHE_IDLE_TIMEOUT: "0"
 
 jobs:
-  # Fast, build-free checks. (Static analysis — clang-tidy/cppcheck — is NOT run
-  # here: the VS generator silently ignored CMAKE_CXX_CLANG_TIDY/CPPCHECK, so the
-  # old "build with static analysis" step was a no-op duplicate of build-test's
-  # debug build. Re-enabling real static analysis on Ninja surfaced a backlog of
-  # violations, so the broad pass stays advisory in the advisory-unused-checks job
-  # of .github/workflows/advisory-checks.yml.
+  # Fast, build-free checks. (clang-tidy is NOT run here: the VS generator
+  # silently ignored CMAKE_CXX_CLANG_TIDY, so the old "build with static
+  # analysis" step was a no-op duplicate of build-test's debug build.
+  # Re-enabling real static analysis on Ninja surfaced a backlog of
+  # violations, so the broad clang-tidy pass stays advisory in the
+  # advisory-unused-checks job of .github/workflows/advisory-checks.yml.
   #
-  # A small curated subset DOES block, as the "clang-tidy blocking check set" step
-  # inside build-test: bugprone-use-after-move, bugprone-dangling-handle,
-  # clang-analyzer-core.CallAndMessage, clang-analyzer-core.uninitialized.*,
-  # clang-analyzer-cplusplus.NewDelete*. Each was measured at zero findings in
-  # repository-owned files across all 509 project translation units before it was
-  # promoted; see .clang-tidy for the candidates that did not qualify, and
-  # cargo exo-dev lint clang-tidy for the runner.)
+  # A small curated clang-tidy subset DOES block, as the "clang-tidy blocking
+  # check set" step inside build-test: bugprone-use-after-move,
+  # bugprone-dangling-handle, clang-analyzer-core.CallAndMessage,
+  # clang-analyzer-core.uninitialized.*, clang-analyzer-cplusplus.NewDelete*.
+  # Each was measured at zero findings in repository-owned files across all
+  # 509 project translation units before it was promoted; see .clang-tidy for
+  # the candidates that did not qualify, and cargo exo-dev lint clang-tidy for
+  # the runner.
+  #
+  # cppcheck DOES run and block here: unlike clang-tidy it reads no compile
+  # database (cargo exo-dev lint quality --only cppcheck), so its
+  # warning/performance/portability pass moved from the local pre-commit/
+  # pre-push gate to this build-free job instead of ci-build-debug. It used to
+  # run, unscoped, on every local commit and push; see docs/dev/build-and-test.md.)
   lint:
     name: lint
     runs-on: windows-2022
@@ -138,9 +145,33 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      # clang-format plus the build-free packaging, MSI-harvest, privacy-allowlist
-      # and network-egress validators. What each of them guards is documented at
-      # its step in tools/exo-dev/src/step.rs; the same steps block before a push.
+      # exo-dev's own tool resolution (tools/exo-dev/src/lint/mod.rs) looks at
+      # PATH and the LLVM install roots, not Cppcheck's own install directory,
+      # so make sure a runner without it already on PATH gets one installed
+      # and exposed the same way a developer machine has it.
+      - name: Ensure cppcheck is on PATH
+        shell: pwsh
+        run: |
+          $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
+            -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName -First 1
+          if (-not $cppcheck) { $cppcheck = (Get-Command cppcheck -ErrorAction SilentlyContinue)?.Source }
+          if (-not $cppcheck) {
+            winget install --id Cppcheck.Cppcheck --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null
+            $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
+              -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty FullName -First 1
+          }
+          if (-not $cppcheck) {
+            Write-Host "::error::cppcheck not available after install attempt"
+            exit 1
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path -Parent $cppcheck)
+
+      # clang-format plus the build-free packaging, MSI-harvest,
+      # privacy-allowlist, network-egress and cppcheck validators. What each of
+      # them guards is documented at its step in tools/exo-dev/src/step.rs; the
+      # same steps block before a push.
       - name: Lint gate (exo-dev ci-lint)
         env:
           EVENT: ${{ github.event_name }}
