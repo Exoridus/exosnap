@@ -47,30 +47,6 @@ pub struct Context {
 }
 
 impl Context {
-    /// The built `exo-verify.exe`, so a step that needs its checks can call the
-    /// real binary instead of restating their logic in this crate.
-    /// `EXOSNAP_TEST_TOOL_EXE` first (a test pointing at a specific build), then
-    /// the workspace's own debug/release output directories.
-    fn exo_verify_exe(&self) -> Option<PathBuf> {
-        if let Ok(value) = std::env::var("EXOSNAP_TEST_TOOL_EXE") {
-            let path = PathBuf::from(value);
-            if path.is_file() {
-                return Some(path);
-            }
-        }
-        for config in ["debug", "release"] {
-            let candidate = self
-                .repo_root
-                .join("tools/target")
-                .join(config)
-                .join("exo-verify.exe");
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-        None
-    }
-
     fn tree(&self) -> PathBuf {
         self.repo_root.join(&self.build_dir)
     }
@@ -283,6 +259,37 @@ impl RealExecutor {
         Outcome::pass(detail)
     }
 
+    /// `exo-verify.exe` built from the current tree, so a step that needs its
+    /// checks calls the real binary instead of restating their logic here. A
+    /// binary found lying in the target directory could be stale or absent on
+    /// a fresh runner, so it is always built first (a no-op when current).
+    /// `EXOSNAP_TEST_TOOL_EXE` overrides it for a test pinning a specific build.
+    fn exo_verify(&self, name: &str) -> Result<PathBuf, Outcome> {
+        if let Ok(value) = std::env::var("EXOSNAP_TEST_TOOL_EXE") {
+            let path = PathBuf::from(value);
+            if path.is_file() {
+                return Ok(path);
+            }
+        }
+        let tools = self.ctx.repo_root.join("tools");
+        let outcome = self.step(
+            &format!("{name}.build-exo-verify"),
+            "cargo",
+            ["build", "-p", "exo-verify", "--locked"]
+                .iter()
+                .map(|a| a.to_string())
+                .collect(),
+            Opts {
+                cwd: Some(&tools),
+                ..Opts::default()
+            },
+        );
+        if outcome.status != Status::Pass {
+            return Err(outcome);
+        }
+        Ok(tools.join("target/debug/exo-verify.exe"))
+    }
+
     fn rust(&self) -> Outcome {
         let tools = self.ctx.repo_root.join("tools");
         let steps: [(&str, &[&str]); 3] = [
@@ -485,12 +492,9 @@ impl RealExecutor {
                 })
             }
             StepId::Samples => {
-                let Some(exo_verify) = self.ctx.exo_verify_exe() else {
-                    let reason = "exo-verify.exe is not built (tools/target/{debug,release}/exo-verify.exe)".to_string();
-                    println!();
-                    println!("---- samples ----");
-                    println!("{reason}");
-                    return Outcome::new(Status::ToolMissing, reason);
+                let exo_verify = match self.exo_verify("samples") {
+                    Ok(path) => path,
+                    Err(outcome) => return outcome,
                 };
                 self.step(
                     "samples",
@@ -505,12 +509,9 @@ impl RealExecutor {
                 )
             }
             StepId::DocsSuperpowersRemoved => {
-                let Some(exo_verify) = self.ctx.exo_verify_exe() else {
-                    let reason = "exo-verify.exe is not built (tools/target/{debug,release}/exo-verify.exe)".to_string();
-                    println!();
-                    println!("---- docs-superpowers-removed ----");
-                    println!("{reason}");
-                    return Outcome::new(Status::ToolMissing, reason);
+                let exo_verify = match self.exo_verify("docs-superpowers-removed") {
+                    Ok(path) => path,
+                    Err(outcome) => return outcome,
                 };
                 self.step(
                     "docs-superpowers-removed",
@@ -867,12 +868,9 @@ impl RealExecutor {
                 })
             }
             StepId::PackagingSmoke => {
-                let Some(exo_verify) = self.ctx.exo_verify_exe() else {
-                    let reason = "exo-verify.exe is not built (tools/target/{debug,release}/exo-verify.exe)".to_string();
-                    println!();
-                    println!("---- packaging-smoke ----");
-                    println!("{reason}");
-                    return Outcome::new(Status::ToolMissing, reason);
+                let exo_verify = match self.exo_verify("packaging-smoke") {
+                    Ok(path) => path,
+                    Err(outcome) => return outcome,
                 };
                 // exo-verify package refuses a non-empty output directory.
                 let out = ctx.repo_root.join(".workspace").join("package-smoke");
