@@ -29,7 +29,7 @@ Read the overview first, then the subsystem being changed. These documents own c
 
 ## Developer workflows
 
-[Live Verify](dev/live-verify.md) documents the local application/updater control channel. [Release verification](dev/release-verify.md) explains candidate lanes and environment restoration. [Build and test](dev/build-and-test.md) covers Rust verifier development. [Verification guest](dev/release-verify-vm.md) describes disposable Windows runs.
+[Live Verify](dev/live-verify.md) documents the local application/updater control channel. [Release verification](dev/release-verify.md) explains candidate lanes and environment restoration. [Build and test](dev/build-and-test.md) covers Rust verifier development. [Verification guest](dev/release-verify-vm.md) describes disposable Windows runs. [C++ conventions](dev/cpp-conventions.md) covers layout and naming per layer.
 
 [Soak and recovery drills](dev/soak-and-recovery-drills.md), [encoder-quality measurement](dev/encoder-quality-matrix.md) and [static analysis](dev/static-analysis.md) are focused runbooks. Repository-local READMEs describe the adjacent tool rather than duplicating these contracts.
 
