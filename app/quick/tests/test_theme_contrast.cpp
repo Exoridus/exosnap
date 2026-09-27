@@ -395,7 +395,7 @@ struct FixedDarkGround {
 
 std::vector<FixedDarkGround> fixedDarkGrounds() {
     return {
-        // OverlayRecording / OverlayDiagnostics: "#C6161618" over black.
+        // OverlayRecording (recording + diagnostics sections): "#C6161618" over black.
         {"overlay pill", composite(QColor(QStringLiteral("#161618")), 198.0 / 255.0, QColor(0, 0, 0))},
         // RecordPage's liveMetrics: rgba(0,0,0,0.72) over the "#08080A" stage.
         {"live metrics", composite(QColor(0, 0, 0), 0.72, QColor(QStringLiteral("#08080A")))},

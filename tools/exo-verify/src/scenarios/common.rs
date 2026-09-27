@@ -47,6 +47,11 @@ pub struct StimulusOptions {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub generation: Option<u8>,
+    /// Overrides `target_monitor()` for this one stimulus. Set when a scenario
+    /// needs the stimulus on a *specific* display device rather than whatever
+    /// `EXO_VERIFY_MONITOR`/the system default resolves to, e.g. to match a
+    /// window-target overlay's own screen fallback.
+    pub monitor: Option<String>,
 }
 
 /// The monitor release-gpu scenarios draw on: `EXO_VERIFY_MONITOR`, else the
@@ -72,7 +77,7 @@ impl Stimulus {
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        if let Some(m) = target_monitor() {
+        if let Some(m) = options.monitor.clone().or_else(target_monitor) {
             command.args(["--monitor", &m]);
         }
         if options.fullscreen {

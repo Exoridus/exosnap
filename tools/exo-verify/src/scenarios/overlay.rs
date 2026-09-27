@@ -21,7 +21,7 @@ pub fn scenarios() -> Vec<Scenario> {
             revision: 1,
             title: "Capture overlays never appear in a recording",
             class: ScenarioClass::Contract,
-            contract: "the recording pill, quick controls, diagnostics overlay and notification toast shown during a display recording are absent from the recorded file",
+            contract: "the recording pill (carrying the diagnostics tokens), quick controls and notification toast shown during a display recording are absent from the recorded file",
             lane: Lane::Gpu,
             also: &[Lane::Preflight],
             tier: Tier::Required,
@@ -40,7 +40,7 @@ pub fn scenarios() -> Vec<Scenario> {
             revision: 1,
             title: "Toast and quick controls take clicks; the other overlays let them through",
             class: ScenarioClass::Contract,
-            contract: "during a recording the notification toast and quick controls receive clicks at their centre, while the recording pill and diagnostics overlay pass clicks to the window beneath",
+            contract: "during a recording the notification toast and quick controls receive clicks at their centre, while the recording pill passes clicks to the window beneath",
             lane: Lane::Gpu,
             also: &[Lane::Quick],
             tier: Tier::Required,
@@ -55,15 +55,17 @@ pub fn scenarios() -> Vec<Scenario> {
     ]
 }
 
+// The recording pill's window carries the diagnostics tokens too now
+// (OverlayDiagnostics.qml was absorbed into OverlayRecording.qml); there is
+// no separate "quickOverlayDiagnostics" window left to name.
 const PILL: &str = "quickOverlayRecording";
-const DIAGNOSTICS: &str = "quickOverlayDiagnostics";
 const QUICK_CONTROLS: &str = "quickOverlayQuickControls";
 const TOAST: &str = "quickOverlayNotificationToast";
 
 /// Overlays a recording shows. The countdown overlay is not among them: it is
 /// gone before capture starts, and the control channel has no setting that
 /// schedules one.
-const RECORDING_OVERLAYS: [&str; 4] = [PILL, DIAGNOSTICS, QUICK_CONTROLS, TOAST];
+const RECORDING_OVERLAYS: [&str; 3] = [PILL, QUICK_CONTROLS, TOAST];
 
 const OPERABLE: [&str; 2] = [TOAST, QUICK_CONTROLS];
 

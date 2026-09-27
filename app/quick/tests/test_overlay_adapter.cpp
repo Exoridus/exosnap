@@ -1,5 +1,6 @@
 #include "OverlayAdapter.h"
 #include "models/OverlayContentPolicy.h"
+#include "services/ScreenPresentation.h"
 #include "viewmodels/RecordViewModel.h"
 
 #include <gtest/gtest.h>
@@ -156,6 +157,15 @@ class OverlayAdapterTest : public ::testing::Test {
         settings_.show_quick_controls = true;
         adapter_.setSource(&model_);
         adapter_.setAppSettings(settings_);
+        // A real HWND -> monitor lookup is environment state (see
+        // ScreenPresentation.h's WindowMonitorFunction); every test here
+        // gets a deterministic one instead of whatever monitor the test
+        // machine happens to have.
+        exosnap::SetWindowMonitorFunctionForTest([](std::uintptr_t hwnd) { return hwnd; });
+    }
+
+    void TearDown() override {
+        exosnap::ResetWindowMonitorFunctionForTest();
     }
 
     void publish() {
@@ -251,18 +261,13 @@ TEST_F(OverlayAdapterTest, MeasuredDropsSwitchTheLiveHudToWarning) {
     EXPECT_TRUE(adapter_.recordingOverlayActive());
 }
 
-// No monitor target means no rectangle, and the QML falls back to its own
+// No selected target means no rectangle, and the QML falls back to its own
 // screen. An empty rect must not be reported as a zero-origin monitor.
-TEST_F(OverlayAdapterTest, WindowTargetsYieldNoMonitorGeometry) {
-    exosnap::engine::CaptureTarget window_target;
-    window_target.kind = exosnap::engine::CaptureTarget::Kind::Window;
-    window_target.native_id = 0x1234;
-    model_.targets.push_back(window_target);
-    model_.selected_target_index = 0;
+TEST_F(OverlayAdapterTest, NoSelectedTargetYieldsNoMonitorGeometry) {
+    model_.selected_target_index = -1;
     model_.SetState(UiRecordingState::Recording);
     publish();
     EXPECT_TRUE(adapter_.recordedMonitorGeometry().isEmpty());
-    EXPECT_TRUE(adapter_.recordedMonitorWorkArea().isEmpty());
 }
 
 // ---------------------------------------------------------------------------
@@ -293,21 +298,13 @@ class OverlayMonitorGeometryTest : public OverlayAdapterTest {
         presentation_ = MakePresentation(0, 0, 2560, 1440);
     }
 
-    // The work area defaults to the full monitor rectangle, matching a display
-    // with no taskbar docked to it -- the common case the geometry-only tests
-    // below don't care to distinguish.
-    static ScreenPresentation MakePresentation(int x, int y, int width, int height, QRect work_area = QRect()) {
+    static ScreenPresentation MakePresentation(int x, int y, int width, int height) {
         ScreenPresentation meta;
         meta.available = true;
         meta.width = width;
         meta.height = height;
         meta.origin_x = x;
         meta.origin_y = y;
-        const QRect work = work_area.isValid() ? work_area : QRect(x, y, width, height);
-        meta.work_width = work.width();
-        meta.work_height = work.height();
-        meta.work_origin_x = work.x();
-        meta.work_origin_y = work.y();
         return meta;
     }
 
@@ -320,42 +317,51 @@ TEST_F(OverlayMonitorGeometryTest, ResolvesTheRecordedMonitorRectangle) {
     EXPECT_EQ(adapter_.recordedMonitorGeometry(), QRect(0, 0, 2560, 1440));
 }
 
-// A monitor with no taskbar docked to it reports a work area identical to its
-// full rectangle -- the two properties must not silently diverge when there is
-// nothing to exclude.
-TEST_F(OverlayMonitorGeometryTest, WorkAreaMatchesGeometryWhenNothingIsDocked) {
+// A Window target's overlays anchor to its hosting monitor, not to whatever
+// screen Qt happens to place a new top-level window on -- previously empty,
+// which sent the overlays to that ambient fallback instead.
+TEST_F(OverlayAdapterTest, WindowTargetGeometryResolvesTheHostingMonitor) {
+    exosnap::engine::CaptureTarget window_target;
+    window_target.kind = exosnap::engine::CaptureTarget::Kind::Window;
+    window_target.native_id = 0x9999;
+    model_.targets.push_back(window_target);
+    model_.selected_target_index = 0;
+    model_.SetState(UiRecordingState::Recording);
+
+    exosnap::SetWindowMonitorFunctionForTest([](std::uintptr_t hwnd) {
+        EXPECT_EQ(hwnd, 0x9999u);
+        return std::uintptr_t{0xABCD};
+    });
+    adapter_.setPresentationProviderForTesting([](std::uintptr_t monitor) {
+        EXPECT_EQ(monitor, 0xABCDu);
+        ScreenPresentation meta;
+        meta.available = true;
+        meta.width = 1920;
+        meta.height = 1080;
+        meta.origin_x = 2560;
+        meta.origin_y = 0;
+        return meta;
+    });
+
     publish();
-    EXPECT_EQ(adapter_.recordedMonitorWorkArea(), adapter_.recordedMonitorGeometry());
+    EXPECT_EQ(adapter_.recordedMonitorGeometry(), QRect(2560, 0, 1920, 1080));
 }
 
-// The regression under test: a taskbar reduces the work area but not the full
-// rectangle, and the quick-controls pill reads only the former.
-TEST_F(OverlayMonitorGeometryTest, ATaskbarShrinksTheWorkAreaButNotTheGeometry) {
-    presentation_ = MakePresentation(0, 0, 2560, 1440, QRect(0, 0, 2560, 1392));
-    adapter_.invalidateMonitorGeometry();
-    publish();
+// A window that never resolves to a monitor (e.g. it closed between target
+// selection and this query) yields no rectangle rather than a stale or
+// half-resolved one.
+TEST_F(OverlayAdapterTest, WindowTargetWithUnresolvableMonitorYieldsNoGeometry) {
+    exosnap::engine::CaptureTarget window_target;
+    window_target.kind = exosnap::engine::CaptureTarget::Kind::Window;
+    window_target.native_id = 0x9999;
+    model_.targets.push_back(window_target);
+    model_.selected_target_index = 0;
+    model_.SetState(UiRecordingState::Recording);
 
-    EXPECT_EQ(adapter_.recordedMonitorGeometry(), QRect(0, 0, 2560, 1440));
-    EXPECT_EQ(adapter_.recordedMonitorWorkArea(), QRect(0, 0, 2560, 1392));
-    EXPECT_NE(adapter_.recordedMonitorWorkArea(), adapter_.recordedMonitorGeometry());
-}
+    exosnap::SetWindowMonitorFunctionForTest([](std::uintptr_t) { return std::uintptr_t{0}; });
 
-// Both rectangles share one cache: a change that only moves the work area (a
-// taskbar being resized without the monitor changing) must still take the same
-// dirty-flag path as a geometry change.
-TEST_F(OverlayMonitorGeometryTest, InvalidationRefreshesBothRectanglesTogether) {
     publish();
-    ASSERT_EQ(adapter_.recordedMonitorWorkArea(), QRect(0, 0, 2560, 1440));
-
-    presentation_ = MakePresentation(0, 0, 2560, 1440, QRect(0, 0, 2560, 1392));
-    publish();
-    EXPECT_EQ(adapter_.recordedMonitorWorkArea(), QRect(0, 0, 2560, 1440))
-        << "nothing has invalidated the cache yet, so the stale work area is still what it reports";
-
-    adapter_.invalidateMonitorGeometry();
-    publish();
-    EXPECT_EQ(adapter_.recordedMonitorWorkArea(), QRect(0, 0, 2560, 1392));
-    EXPECT_EQ(adapter_.recordedMonitorGeometry(), QRect(0, 0, 2560, 1440));
+    EXPECT_TRUE(adapter_.recordedMonitorGeometry().isEmpty());
 }
 
 TEST_F(OverlayMonitorGeometryTest, RepeatedSynchronizeDoesNotRequery) {
@@ -400,7 +406,6 @@ TEST_F(OverlayMonitorGeometryTest, InvalidationCatchesAMovedOrigin) {
 TEST_F(OverlayMonitorGeometryTest, AnInvalidatedMonitorThatVanishedReportsNoRectangle) {
     publish();
     ASSERT_FALSE(adapter_.recordedMonitorGeometry().isEmpty());
-    ASSERT_FALSE(adapter_.recordedMonitorWorkArea().isEmpty());
 
     // The display was unplugged: the handle is still what the target names, and
     // the query no longer answers for it.
@@ -410,7 +415,136 @@ TEST_F(OverlayMonitorGeometryTest, AnInvalidatedMonitorThatVanishedReportsNoRect
 
     EXPECT_TRUE(adapter_.recordedMonitorGeometry().isEmpty())
         << "an empty rect is what makes the overlays fall back to their own screen";
-    EXPECT_TRUE(adapter_.recordedMonitorWorkArea().isEmpty());
+}
+
+// ---------------------------------------------------------------------------
+// Source geometry: what the recording/diagnostics pill actually binds to.
+// ---------------------------------------------------------------------------
+//
+// recordedMonitorGeometry and recordedSourceGeometry agree in Monitor mode and
+// disagree everywhere else -- that disagreement is exactly the geometry defect
+// this property exists to fix, so every test here asserts on the SOURCE
+// rectangle, not the monitor one.
+
+TEST_F(OverlayMonitorGeometryTest, MonitorModeSourceGeometryMatchesTheMonitorRectangle) {
+    publish();
+    EXPECT_EQ(adapter_.recordedSourceGeometry(), adapter_.recordedMonitorGeometry());
+}
+
+TEST_F(OverlayAdapterTest, WindowModeSourceGeometryUsesTheLiveWindowRectangleNotTheMonitor) {
+    exosnap::engine::CaptureTarget window_target;
+    window_target.kind = exosnap::engine::CaptureTarget::Kind::Window;
+    window_target.native_id = 0x9999;
+    model_.targets.push_back(window_target);
+    model_.selected_target_index = 0;
+    model_.SetState(UiRecordingState::Recording);
+
+    adapter_.setPresentationProviderForTesting([](std::uintptr_t) {
+        ScreenPresentation meta;
+        meta.available = true;
+        meta.width = 2560;
+        meta.height = 1440;
+        return meta;
+    });
+    adapter_.setWindowRectProviderForTesting([](std::uintptr_t hwnd) {
+        EXPECT_EQ(hwnd, 0x9999u);
+        WindowScreenRect rect;
+        rect.available = true;
+        rect.x = 100;
+        rect.y = 40;
+        rect.width = 800;
+        rect.height = 600;
+        return rect;
+    });
+
+    publish();
+    EXPECT_EQ(adapter_.recordedSourceGeometry(), QRect(100, 40, 800, 600));
+    // The pill must not fall back to the full monitor rectangle just because
+    // one happened to resolve.
+    EXPECT_NE(adapter_.recordedSourceGeometry(), adapter_.recordedMonitorGeometry());
+}
+
+// A moved or resized window must keep the pill attached even though its
+// hosting monitor (and therefore the cached monitor rectangle) has not
+// changed -- unlike recordedMonitorGeometry, this is not gated behind the
+// same-HMONITOR fast path.
+TEST_F(OverlayAdapterTest, WindowModeSourceGeometryFollowsTheWindowEveryTick) {
+    exosnap::engine::CaptureTarget window_target;
+    window_target.kind = exosnap::engine::CaptureTarget::Kind::Window;
+    window_target.native_id = 0x9999;
+    model_.targets.push_back(window_target);
+    model_.selected_target_index = 0;
+    model_.SetState(UiRecordingState::Recording);
+
+    adapter_.setPresentationProviderForTesting([](std::uintptr_t) {
+        ScreenPresentation meta;
+        meta.available = true;
+        meta.width = 2560;
+        meta.height = 1440;
+        return meta;
+    });
+
+    QRect window_rect(100, 40, 800, 600);
+    adapter_.setWindowRectProviderForTesting([&window_rect](std::uintptr_t) {
+        WindowScreenRect rect;
+        rect.available = true;
+        rect.x = window_rect.x();
+        rect.y = window_rect.y();
+        rect.width = window_rect.width();
+        rect.height = window_rect.height();
+        return rect;
+    });
+
+    publish();
+    ASSERT_EQ(adapter_.recordedSourceGeometry(), window_rect);
+
+    // No invalidateMonitorGeometry() call here on purpose: the window moved,
+    // the monitor did not.
+    window_rect.moveTo(300, 200);
+    publish();
+    EXPECT_EQ(adapter_.recordedSourceGeometry(), window_rect);
+}
+
+// A Window target whose HWND cannot be queried (closed, or otherwise
+// unresolvable) yields no source rectangle rather than a stale one or a
+// fallback to some other monitor.
+TEST_F(OverlayAdapterTest, WindowModeSourceGeometryIsEmptyWhenTheRectIsUnresolvable) {
+    exosnap::engine::CaptureTarget window_target;
+    window_target.kind = exosnap::engine::CaptureTarget::Kind::Window;
+    window_target.native_id = 0x9999;
+    model_.targets.push_back(window_target);
+    model_.selected_target_index = 0;
+    model_.SetState(UiRecordingState::Recording);
+
+    adapter_.setWindowRectProviderForTesting([](std::uintptr_t) { return WindowScreenRect{}; });
+
+    publish();
+    EXPECT_TRUE(adapter_.recordedSourceGeometry().isEmpty());
+}
+
+// Region mode is a crop layered on top of a Monitor target: the source
+// geometry must be the region rect, not the full monitor rectangle it was
+// cropped from.
+TEST_F(OverlayMonitorGeometryTest, RegionModeSourceGeometryUsesTheRegionRectangle) {
+    model_.capture_mode = exosnap::CaptureMode::Region;
+    model_.has_region = true;
+    model_.region = exosnap::engine::CaptureRegion{200, 100, 640, 360};
+
+    publish();
+    EXPECT_EQ(adapter_.recordedSourceGeometry(), QRect(200, 100, 640, 360));
+    EXPECT_NE(adapter_.recordedSourceGeometry(), adapter_.recordedMonitorGeometry());
+}
+
+// has_region alone must not outrank the active capture mode: a region left
+// over from a previous session in a different mode must not silently redirect
+// the pill away from what is actually being recorded now.
+TEST_F(OverlayMonitorGeometryTest, AStaleRegionIsIgnoredOutsideRegionMode) {
+    model_.capture_mode = exosnap::CaptureMode::Monitor;
+    model_.has_region = true;
+    model_.region = exosnap::engine::CaptureRegion{200, 100, 640, 360};
+
+    publish();
+    EXPECT_EQ(adapter_.recordedSourceGeometry(), adapter_.recordedMonitorGeometry());
 }
 
 } // namespace

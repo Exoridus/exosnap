@@ -1,10 +1,25 @@
 #include "ScreenPresentation.h"
 
 #if defined(Q_OS_WIN) || defined(_WIN32)
+#include <dwmapi.h>
 #include <windows.h>
 #endif
 
 namespace exosnap {
+
+namespace {
+
+WindowMonitorFunction& windowMonitorOverride() {
+    static WindowMonitorFunction fn;
+    return fn;
+}
+
+WindowRectFunction& windowRectOverride() {
+    static WindowRectFunction fn;
+    return fn;
+}
+
+} // namespace
 
 ScreenPresentation QueryScreenPresentation(std::uintptr_t native_id) {
     ScreenPresentation meta;
@@ -29,15 +44,65 @@ ScreenPresentation QueryScreenPresentation(std::uintptr_t native_id) {
     meta.height = info.rcMonitor.bottom - info.rcMonitor.top;
     meta.origin_x = info.rcMonitor.left;
     meta.origin_y = info.rcMonitor.top;
-    meta.work_width = info.rcWork.right - info.rcWork.left;
-    meta.work_height = info.rcWork.bottom - info.rcWork.top;
-    meta.work_origin_x = info.rcWork.left;
-    meta.work_origin_y = info.rcWork.top;
 #else
     (void)native_id;
 #endif
 
     return meta;
+}
+
+std::uintptr_t ResolveTargetMonitor(bool is_window_target, std::uintptr_t native_id) {
+    if (!is_window_target)
+        return native_id;
+    if (const WindowMonitorFunction& fn = windowMonitorOverride(); fn)
+        return fn(native_id);
+#if defined(_WIN32)
+    const HMONITOR monitor = MonitorFromWindow(reinterpret_cast<HWND>(native_id), MONITOR_DEFAULTTONEAREST);
+    return reinterpret_cast<std::uintptr_t>(monitor);
+#else
+    return native_id;
+#endif
+}
+
+void SetWindowMonitorFunctionForTest(WindowMonitorFunction fn) {
+    windowMonitorOverride() = std::move(fn);
+}
+
+void ResetWindowMonitorFunctionForTest() {
+    windowMonitorOverride() = WindowMonitorFunction();
+}
+
+WindowScreenRect QueryWindowScreenRect(std::uintptr_t hwnd) {
+    if (const WindowRectFunction& fn = windowRectOverride(); fn)
+        return fn(hwnd);
+
+    WindowScreenRect rect;
+#if defined(_WIN32)
+    const auto handle = reinterpret_cast<HWND>(hwnd);
+    if (handle == nullptr || !IsWindow(handle))
+        return rect;
+
+    RECT bounds{};
+    if (FAILED(DwmGetWindowAttribute(handle, DWMWA_EXTENDED_FRAME_BOUNDS, &bounds, sizeof(bounds))))
+        return rect;
+
+    rect.available = true;
+    rect.x = bounds.left;
+    rect.y = bounds.top;
+    rect.width = bounds.right - bounds.left;
+    rect.height = bounds.bottom - bounds.top;
+#else
+    (void)hwnd;
+#endif
+    return rect;
+}
+
+void SetWindowRectFunctionForTest(WindowRectFunction fn) {
+    windowRectOverride() = std::move(fn);
+}
+
+void ResetWindowRectFunctionForTest() {
+    windowRectOverride() = WindowRectFunction();
 }
 
 } // namespace exosnap

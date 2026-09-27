@@ -25,9 +25,9 @@ Window {
     property bool paused: false
     property bool expanded: true
 
-    // The RECORDED monitor's WORK area, resolved in C++ from the live capture
-    // target (OverlayAdapter::recordedMonitorWorkArea), never from QML screen
-    // enumeration.
+    // The RECORDED monitor's full rectangle, resolved in C++ from the live
+    // capture target (OverlayAdapter::recordedMonitorGeometry), never from QML
+    // screen enumeration.
     //
     // The Widgets class put this pill on the primary display because it had no
     // setMonitorGeometry() at all; the port carried that forward as an open
@@ -35,15 +35,29 @@ Window {
     // is looking at, which during a capture is the one being captured. The pill
     // is capture-excluded, so putting it there costs the recording nothing.
     //
-    // The work area rather than the full monitor rectangle, unlike the other
-    // three overlays: this is the one overlay that is not click-through, so it
-    // is the one overlay the taskbar must not be allowed to cover.
-    property rect workAreaGeometry: Qt.rect(0, 0, 0, 0)
+    // The full monitor rectangle, not the work area: the dock may be moved all
+    // the way to the real screen edge and may overlap the ordinary taskbar
+    // there on purpose (see edgeMargin below) -- there is no enforced
+    // taskbar safety margin.
+    property rect monitorGeometry: Qt.rect(0, 0, 0, 0)
 
-    readonly property rect effectiveWorkArea: root.workAreaGeometry.width > 0
-                                              && root.workAreaGeometry.height > 0
-                                              ? root.workAreaGeometry
-                                              : Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height)
+    // The actually-recorded source rectangle (OverlayAdapter::recordedSourceGeometry),
+    // used only to prefer a placement near the recorded area -- never as a
+    // movement boundary. A dock that could only move inside the source rect
+    // could never sit BELOW an Area selection that reaches toward the bottom
+    // of its monitor.
+    property rect sourceGeometry: Qt.rect(0, 0, 0, 0)
+    // True only when sourceGeometry is a Region-mode crop (OverlayAdapter::
+    // recordedSourceIsRegion), as opposed to a Window-mode rectangle that also
+    // happens to be smaller than its monitor. Only a region gets the
+    // "prefer below/above it" placement; a recorded window gets the plain
+    // bottom-of-monitor default a Monitor target already had.
+    property bool sourceIsRegion: false
+
+    readonly property rect effectiveMonitor: root.monitorGeometry.width > 0
+                                             && root.monitorGeometry.height > 0
+                                             ? root.monitorGeometry
+                                             : Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height)
 
     // ── Overlay tokens (Widgets class, verbatim) ─────────────────────────────
     readonly property color pillBackground: "#CC0C0C0E"  // rgba(12,12,14,0.8)
@@ -63,18 +77,64 @@ Window {
     readonly property int buttonSize: 44
     readonly property int buttonGap: 8
 
-    // How far the pill stands off the work area on every side, for the default
-    // placement and for the drag clamp alike. The other three overlays are
-    // click-through decoration and sit close to the screen edge; this one is a
-    // control surface the user parks by hand next to real windows, and a control
-    // flush against the edge reads as clipped rather than as placed. The
-    // outermost rung of the shell's spacing scale rather than a number of its
-    // own, so it moves with the rest of the product.
-    readonly property int screenMargin: ExoTheme.spacing2Xl
+    // A resting offset for the DEFAULT placement only -- not an enforced
+    // safety margin. There is no forced taskbar exclusion: the dock may be
+    // dragged all the way flush to the real monitor edge (see gripArea's drag
+    // clamp below, whose floor is 0), and may overlap the ordinary taskbar
+    // there on purpose. A small edge offset still reads better as "placed"
+    // than a default position flush against the corner.
+    readonly property int edgeMargin: ExoTheme.spacingSm
+    // The gap between a Region-mode source rect and the dock's preferred
+    // below/above placement, distinct from edgeMargin: this one separates two
+    // things the user drew and can see move independently, not a screen edge.
+    readonly property int regionGap: ExoTheme.spacingSm
+
+    // Where the dock rests before it has ever been dragged, or after the
+    // recording target changes and it has not been dragged yet: below a
+    // Region-mode selection when there is room, above it when there is not,
+    // and bottom-centre of the target monitor otherwise -- the same default a
+    // Monitor or Window target always had. Always clamped to the monitor
+    // rectangle, which is also the drag boundary.
+    function clampToMonitor(x, y) {
+        const area = root.effectiveMonitor;
+        return Qt.point(
+            Math.max(area.x, Math.min(area.x + area.width - root.width, x)),
+            Math.max(area.y, Math.min(area.y + area.height - root.height, y)));
+    }
+
+    function defaultPosition() {
+        const area = root.effectiveMonitor;
+        if (root.sourceIsRegion && root.sourceGeometry.width > 0 && root.sourceGeometry.height > 0) {
+            const region = root.sourceGeometry;
+            const centeredX = region.x + (region.width - root.width) / 2;
+            const belowY = region.y + region.height + root.regionGap;
+            if (belowY + root.height <= area.y + area.height)
+                return root.clampToMonitor(centeredX, belowY);
+            const aboveY = region.y - root.regionGap - root.height;
+            if (aboveY >= area.y)
+                return root.clampToMonitor(centeredX, aboveY);
+            // Neither fits (the region spans the monitor's full height):
+            // falls through to the plain monitor default below, same as a
+            // Monitor or Window target -- acceptable since this dock is
+            // capture-excluded even when it lands inside the recorded area.
+        }
+        return root.clampToMonitor(area.x + (area.width - root.width) / 2,
+                                   area.y + area.height - root.height - root.edgeMargin);
+    }
+
+    readonly property point defaultPos: root.defaultPosition()
+    // Sticks once a real drag has moved the pill: only then does a monitor
+    // change need to re-clamp a user-chosen offset rather than recompute the
+    // default from scratch.
+    property bool userPositioned: false
 
     signal pauseResumeRequested()
     signal stopRequested()
     signal captureFrameRequested()
+    // Closing the dock is a persistent choice, not a per-session hide: the
+    // handler in Main.qml turns the "show quick controls" setting off, so a
+    // user who closes it once does not have to close it again next session.
+    signal closeRequested()
 
     // See OverlayRecording.qml: an inherited transient parent would take the
     // pill down with the app window — and the pill exists precisely for sessions
@@ -93,15 +153,32 @@ Window {
 
     visible: exclusion.granted && root.overlayActive
 
+    // Four buttons now (pause/resume, stop, camera, close), three internal
+    // gaps between them, plus the one gap from the grip to the row.
     width: root.pad + root.gripWidth + root.pad
-           + (root.expanded ? root.buttonGap + 3 * root.buttonSize + 2 * root.buttonGap : 0)
+           + (root.expanded ? root.buttonGap + 4 * root.buttonSize + 3 * root.buttonGap : 0)
     height: root.pad + root.buttonSize + root.pad
 
-    // Bottom-centre of the work area by default. Dragging the grip assigns x/y directly, which
-    // replaces these bindings — intentional: once the user has placed the pill,
-    // it stays where they put it.
-    x: root.effectiveWorkArea.x + (root.effectiveWorkArea.width - width) / 2
-    y: root.effectiveWorkArea.y + root.effectiveWorkArea.height - height - root.screenMargin
+    // defaultPosition() by default. Dragging the grip assigns x/y directly,
+    // which replaces these bindings — intentional: once the user has placed
+    // the pill, it stays where they put it (see userPositioned below for what
+    // happens to that placement across a monitor change).
+    x: root.defaultPos.x
+    y: root.defaultPos.y
+
+    // A user-placed pill does not re-run defaultPosition() when the recording
+    // target's monitor changes (dragging already overwrote the x/y bindings
+    // above), so its offset has to be re-clamped by hand or it could sit
+    // off-screen on a smaller monitor, or simply not on the new target's
+    // monitor at all. Not re-run for an autoplaced pill: that one already
+    // tracks the new default through the live x/y bindings.
+    onEffectiveMonitorChanged: {
+        if (!root.userPositioned)
+            return;
+        const clamped = root.clampToMonitor(root.x, root.y);
+        root.x = clamped.x;
+        root.y = clamped.y;
+    }
 
     CaptureExclusion {
         id: exclusion
@@ -114,7 +191,7 @@ Window {
     component PillGlyph: Canvas {
         id: glyph
 
-        // "pause" | "resume" | "stop" | "camera" | "grip"
+        // "pause" | "resume" | "stop" | "camera" | "grip" | "close"
         property string kind: "pause"
         property color tone: root.buttonGlyph
 
@@ -166,6 +243,16 @@ Window {
                 ctx.stroke()
                 ctx.beginPath()
                 ctx.roundedRect(cx - s * 0.25, cy - s * 0.53, s * 0.5, s * 0.25, 2, 2)
+                ctx.stroke()
+            } else if (glyph.kind === "close") {
+                ctx.lineWidth = 1.6
+                ctx.beginPath()
+                ctx.moveTo(cx - s * 0.5, cy - s * 0.5)
+                ctx.lineTo(cx + s * 0.5, cy + s * 0.5)
+                ctx.stroke()
+                ctx.beginPath()
+                ctx.moveTo(cx + s * 0.5, cy - s * 0.5)
+                ctx.lineTo(cx - s * 0.5, cy + s * 0.5)
                 ctx.stroke()
             } else {
                 // Grip: three short horizontal lines.
@@ -273,22 +360,28 @@ Window {
                     gripArea.travelled = Math.max(gripArea.travelled,
                                                   Math.abs(pointerX - gripArea.pressGlobal.x)
                                                   + Math.abs(pointerY - gripArea.pressGlobal.y))
-                    // Clamped to the work area, not the full monitor rectangle:
-                    // the taskbar must stay off-limits to a drag exactly as it is
-                    // to the default position above, or the user could park the
-                    // pill right back under it. Inset by the same margin, so a
-                    // dragged pill stands off the edge the way a placed one does.
-                    const area = root.effectiveWorkArea
-                    const margin = root.screenMargin
-                    root.x = Math.max(area.x + margin,
-                                      Math.min(area.x + area.width - root.width - margin,
+                    // Clamped to the full monitor rectangle, not the work area:
+                    // there is no enforced taskbar safety margin, so a manual
+                    // drag may place the pill flush against the real screen
+                    // edge and over the ordinary taskbar there. Floor is 0,
+                    // not edgeMargin -- that margin is a resting offset for
+                    // the DEFAULT placement, not a drag limit.
+                    const area = root.effectiveMonitor
+                    root.x = Math.max(area.x,
+                                      Math.min(area.x + area.width - root.width,
                                                pointerX - gripArea.grabOffset.x))
-                    root.y = Math.max(area.y + margin,
-                                      Math.min(area.y + area.height - root.height - margin,
+                    root.y = Math.max(area.y,
+                                      Math.min(area.y + area.height - root.height,
                                                pointerY - gripArea.grabOffset.y))
                 }
                 onReleased: {
                     gripArea.dragging = false
+                    // A real drag (not a bare click) means this pill's position
+                    // is now the user's to keep -- see the onEffectiveMonitorChanged
+                    // handler above for what that then does across a monitor
+                    // change.
+                    if (gripArea.travelled > 4)
+                        root.userPositioned = true
                     // A press that never really moved is a click on the grip:
                     // collapse or expand instead of nudging the pill by a pixel.
                     if (gripArea.travelled <= 4)
@@ -323,6 +416,15 @@ Window {
                 glyphKind: "camera"
                 Accessible.name: qsTr("Capture frame")
                 onActivated: root.captureFrameRequested()
+            }
+
+            // A closed dock stays closed: the handler in Main.qml turns the
+            // persisted "show quick controls" setting off rather than just
+            // hiding this session's window, so closing it once is enough.
+            PillButton {
+                glyphKind: "close"
+                Accessible.name: qsTr("Close quick controls")
+                onActivated: root.closeRequested()
             }
         }
     }

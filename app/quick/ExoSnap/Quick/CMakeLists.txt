@@ -112,7 +112,6 @@ qt_add_qml_module(exosnap
         NotificationBell.qml
         NotificationHub.qml
         OverlayCountdown.qml
-        OverlayDiagnostics.qml
         OverlayNotificationToast.qml
         OverlayQuickControlPill.qml
         OverlayRecording.qml
@@ -889,7 +888,7 @@ qt_add_qml_module(record_controls_qml_tests
         # ExoScrollView.qml (below) and ExoTheme.qml both resolve through this
         # singleton, same reason QuickThemeTokens is here.
         QuickWheelMetrics.h
-        # OverlayDiagnostics gates its own visibility on CaptureExclusion.granted,
+        # OverlayRecording gates its own visibility on CaptureExclusion.granted,
         # so the type has to exist for the overlay to load at all. Nothing in the
         # token tests shows the window — `granted` stays false and the delegates
         # exist regardless, which is the cost QCR-606 is about.
@@ -993,9 +992,17 @@ qt_add_qml_module(record_controls_qml_tests
         # update reaches the SAME card object.
         ExoPipelineFlow.qml
         ExoPipelineStepCard.qml
-        # QCR-606: the HUD's token list is keyed on the content policy, not on
-        # the measured values.
-        OverlayDiagnostics.qml
+        # QCR-606: the HUD's diagnostics token list is keyed on the content
+        # policy, not on the measured values. OverlayDiagnostics.qml was
+        # absorbed into this component; the token-identity test now targets it.
+        # Brand.h: the recording dot's breathing animation resolves
+        # Brand.recordingBeatMs. Its BrandMarkSvg/ShellIconRenderer backing
+        # sources are added via target_sources() below, not here -- an
+        # absolute-path .cpp inside a qt_add_qml_module SOURCES list is
+        # mis-classified as a QML-module resource file instead of a plain
+        # compiled source.
+        OverlayRecording.qml
+        Brand.h
         # The three-line body clamp and the dismiss glyph's rest-state
         # visibility are state, not pixels, so they are asserted here;
         # --visual-test judges the card's geometry and colour.
@@ -1042,9 +1049,24 @@ target_link_libraries(record_controls_qml_tests
         Qt6::Quick
         Qt6::QuickControls2
         Qt6::QuickTest
+        # BrandMarkSvg.cpp renders the mark geometry through QtSvg.
+        Qt6::Svg
         # CaptureExclusion logs its verdict through AppLog.
         exosnap_app_log_test_support
         exosnap::warnings
+)
+
+# Brand.h (added to the qml module above) declares wordmarkBox/url/source in
+# terms of BrandMarkSvg/ShellIconRenderer; moc compiles the whole class
+# regardless of whether this suite's QML ever calls those members, so the
+# backing sources have to link even though OverlayRecording only reaches
+# Brand.recordingBeatMs. Added here rather than in the qml module's SOURCES
+# list above: an absolute-path .cpp there is mis-classified as a QML-module
+# resource file instead of a plain compiled source.
+target_sources(record_controls_qml_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/app/ui/brand/BrandMarkSvg.cpp
+        ${PROJECT_SOURCE_DIR}/app/ui/brand/ShellIconRenderer.cpp
 )
 
 add_test(NAME quick.qml.record_controls COMMAND record_controls_qml_tests)
@@ -2021,6 +2043,7 @@ exosnap_add_gtest(
         exosnap_record_viewmodel_test_support
         exosnap::capability
         exosnap_engine
+        dwmapi
 )
 
 target_include_directories(overlay_qml_adapter_tests

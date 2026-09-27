@@ -16,10 +16,10 @@ use crate::{infra_ensure, product_ensure};
 pub fn scenarios() -> Vec<Scenario> {
     vec![Scenario {
         id: "journey.record-edit-export-restart",
-        revision: 3,
+        revision: 4,
         title: "A recording can be edited, exported and reopened after restart",
         class: ScenarioClass::Contract,
-        contract: "the candidate records a changing window, accepts a marker and pause/resume, keeps the open edit session unchanged while the user visits every page, exports an ordered trim to a decodable file, quits through its own shutdown with a recorded clean exit, and starts again with the same candidate identity, the settings it was given and no blocking surface",
+        contract: "the candidate records a changing window, accepts a marker and pause/resume, closes the open edit session without confirmation on navigation to any other page, exports an ordered trim to a decodable file after reopening the editor clean, quits through its own shutdown with a recorded clean exit, and starts again with the same candidate identity, the settings it was given and no blocking surface",
         lane: Lane::Gpu,
         also: &[],
         tier: Tier::Required,
@@ -157,16 +157,33 @@ fn journey(ctx: &mut Context) -> Step {
     accepted(&mut app, "edit.setTrimIn", json!({ "positionMs": start }))?;
     let trimmed = accepted(&mut app, "edit.setTrimOut", json!({ "positionMs": end }))?;
     judge_edit(&trimmed)?;
-    let edit_before = app.call("editor.snapshot", json!({}))?;
     let mut visits = Vec::new();
     for page in ["settings", "diagnostics", "logs", "about", "record"] {
         accepted(&mut app, "ui.navigate", json!({ "page": page }))?;
         let state = app.call("ui.getState", json!({}))?;
-        let editor = app.call("editor.snapshot", json!({}))?;
-        visits.push(json!({ "page": page, "state": state.clone(), "editor": editor.clone() }));
-        judge_edit_survives(page, &state, &edit_before, &editor)?;
+        visits.push(json!({ "page": page, "state": state.clone() }));
+        judge_edit_closes_on_navigation(page, &state)?;
     }
     ctx.evidence.put("editNavigation", json!(visits));
+    // product-spec.md: "Opening Edit again starts clean." The navigation above
+    // discarded the first trim, so the export below is redone from a fresh
+    // editor rather than reusing the session closed by the loop.
+    let editor = accepted(&mut app, "edit.open", json!({}))?;
+    let duration = editor["durationMs"].as_f64().unwrap_or(0.0);
+    product_ensure!(
+        duration >= 3000.0,
+        "the reopened editor opened a {duration} ms clip"
+    );
+    let start = (duration / 4.0) as i64;
+    let end = (duration * 3.0 / 4.0) as i64;
+    accepted(
+        &mut app,
+        "edit.seek",
+        json!({ "positionMs": duration as i64 / 2 }),
+    )?;
+    accepted(&mut app, "edit.setTrimIn", json!({ "positionMs": start }))?;
+    let trimmed = accepted(&mut app, "edit.setTrimOut", json!({ "positionMs": end }))?;
+    judge_edit(&trimmed)?;
     let video_before_export = video_files(&app.output)?;
     accepted(&mut app, "export.start", json!({}))?;
     let terminal = app
@@ -244,34 +261,26 @@ fn persisted_settings() -> Vec<(&'static str, Value)> {
     ]
 }
 
-/// Edit is an overlay over Record: visiting another page keeps the session
-/// open and hides it, and returning to Record shows it again, with the clip,
-/// playhead and trim exactly as they were.
-fn judge_edit_survives(page: &str, state: &Value, before: &Value, editor: &Value) -> Step {
+/// docs/product-spec.md: "Back, Escape, another clip or navigation closes it
+/// and discards the unexported recipe without a dirty badge, confirmation or
+/// draft. Returning to Record shows the normal Completed state." Edit is a
+/// workspace over Record, not a session that survives leaving it.
+fn judge_edit_closes_on_navigation(page: &str, state: &Value) -> Step {
     product_ensure!(
         state["page"] == page,
         "ui.navigate {page} landed on {}",
         state["page"]
     );
     product_ensure!(
-        state["editSession"] == "open",
-        "visiting {page} closed the edit session ({})",
+        state["editSession"] == "closed",
+        "visiting {page} left the edit session {} instead of closing it",
         state["editSession"]
     );
-    let visible_expected = page == "record";
     product_ensure!(
-        state["editVisible"] == visible_expected,
-        "on the {page} page editVisible is {}, expected {visible_expected}",
+        state["editVisible"] == false,
+        "on the {page} page editVisible is {}, expected the closed overlay to be hidden",
         state["editVisible"]
     );
-    for field in ["clipPath", "positionMs", "trimStartMs", "trimEndMs"] {
-        product_ensure!(
-            editor[field] == before[field],
-            "visiting {page} changed the editor's {field} from {} to {}",
-            before[field],
-            editor[field]
-        );
-    }
     Ok(())
 }
 
@@ -314,37 +323,31 @@ mod tests {
     }
 
     #[test]
-    fn the_edit_session_must_survive_navigation_unchanged() {
-        let before = json!({"clipPath": "a.mkv", "positionMs": 4000, "trimStartMs": 2000, "trimEndMs": 6000});
-        let hidden = json!({"page": "settings", "editSession": "open", "editVisible": false});
-        judge_edit_survives("settings", &hidden, &before, &before).unwrap();
-        let shown = json!({"page": "record", "editSession": "open", "editVisible": true});
-        judge_edit_survives("record", &shown, &before, &before).unwrap();
+    fn navigation_must_close_the_edit_session() {
+        let closed = json!({"page": "settings", "editSession": "closed", "editVisible": false});
+        judge_edit_closes_on_navigation("settings", &closed).unwrap();
+        let closed_on_record =
+            json!({"page": "record", "editSession": "closed", "editVisible": false});
+        judge_edit_closes_on_navigation("record", &closed_on_record).unwrap();
         for (page, state) in [
             (
                 "settings",
-                json!({"page": "settings", "editSession": "closed", "editVisible": false}),
+                json!({"page": "settings", "editSession": "open", "editVisible": false}),
             ),
             (
                 "settings",
-                json!({"page": "settings", "editSession": "open", "editVisible": true}),
+                json!({"page": "settings", "editSession": "closed", "editVisible": true}),
             ),
             (
                 "record",
-                json!({"page": "record", "editSession": "open", "editVisible": false}),
+                json!({"page": "diagnostics", "editSession": "closed", "editVisible": false}),
             ),
         ] {
             assert!(matches!(
-                judge_edit_survives(page, &state, &before, &before),
+                judge_edit_closes_on_navigation(page, &state),
                 Err(Stop::Fail(_))
             ));
         }
-        let mut moved = before.clone();
-        moved["trimEndMs"] = json!(5000);
-        assert!(matches!(
-            judge_edit_survives("record", &shown, &before, &moved),
-            Err(Stop::Fail(_))
-        ));
     }
 
     #[test]
