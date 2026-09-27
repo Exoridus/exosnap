@@ -100,6 +100,13 @@ pub fn probe_into(set: &mut CapabilitySet) {
     if capture > 0 {
         set.insert(Capability::AudioCapture);
     }
+    if system_libraries_present(&[
+        windows::core::w!("vcruntime140.dll"),
+        windows::core::w!("vcruntime140_1.dll"),
+        windows::core::w!("msvcp140.dll"),
+    ]) {
+        set.insert(Capability::MsvcRuntime);
+    }
     let cameras = webcam_count();
     set.facts.insert("webcams".into(), json!(cameras));
     if cameras > 0 {
@@ -454,12 +461,37 @@ pub fn version_strings(
     Ok(out)
 }
 
+/// Whether both delay-loaded Media Foundation libraries exist on this system.
+pub fn media_foundation_present() -> bool {
+    system_libraries_present(&[windows::core::w!("mfplat.dll"), windows::core::w!("mf.dll")])
+}
+
+/// Whether every named library loads from System32.
+fn system_libraries_present(names: &[windows::core::PCWSTR]) -> bool {
+    use windows::Win32::Foundation::FreeLibrary;
+    use windows::Win32::System::LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
+    names.iter().all(|&name| unsafe {
+        match LoadLibraryExW(name, None, LOAD_LIBRARY_SEARCH_SYSTEM32) {
+            Ok(module) => {
+                let _ = FreeLibrary(module);
+                true
+            }
+            Err(_) => false,
+        }
+    })
+}
+
 fn webcam_count() -> u32 {
     use windows::Win32::Media::MediaFoundation::{
         IMFActivate, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
         MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID, MF_VERSION, MFCreateAttributes,
         MFEnumDeviceSources, MFSTARTUP_LITE, MFStartup,
     };
+    // Media Foundation is delay-loaded (see build.rs); on a Windows N edition
+    // without it, calling in would raise instead of failing.
+    if !media_foundation_present() {
+        return 0;
+    }
     unsafe {
         if MFStartup(MF_VERSION, MFSTARTUP_LITE).is_err() {
             return 0;

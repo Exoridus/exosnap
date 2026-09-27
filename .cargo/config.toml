@@ -9,3 +9,10 @@ exo-dev = [
     "--target-dir", "tools/target/exo-dev-host",
     "-p", "exo-dev", "--",
 ]
+
+# The verifier and the guest agent run inside freshly created Windows guests
+# (Sandbox, Hyper-V base images) that carry no Visual C++ runtime. A binary
+# that imports VCRUNTIME140.dll fails there with STATUS_DLL_NOT_FOUND before
+# it can report anything.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

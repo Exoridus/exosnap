@@ -29,6 +29,9 @@ pub enum Capability {
     Webcam,
     Ffprobe,
     Ffmpeg,
+    /// The Visual C++ x64 runtime the product documents as a prerequisite and
+    /// does not bundle. A clean disposable guest lacks it.
+    MsvcRuntime,
     /// An operator is present to perform a physical act and answer prompts.
     Operator,
     /// A physical audio device the operator can unplug and replug.
@@ -50,7 +53,7 @@ pub enum Capability {
 }
 
 impl Capability {
-    pub const ALL: [Capability; 25] = [
+    pub const ALL: [Capability; 26] = [
         Capability::Windows,
         Capability::Admin,
         Capability::InteractiveDesktop,
@@ -67,6 +70,7 @@ impl Capability {
         Capability::Webcam,
         Capability::Ffprobe,
         Capability::Ffmpeg,
+        Capability::MsvcRuntime,
         Capability::Operator,
         Capability::PhysicalAudioDisconnect,
         Capability::DisposableOs,
@@ -96,6 +100,7 @@ impl Capability {
             Capability::Webcam => "webcam",
             Capability::Ffprobe => "ffprobe",
             Capability::Ffmpeg => "ffmpeg",
+            Capability::MsvcRuntime => "msvc-runtime",
             Capability::Operator => "operator",
             Capability::PhysicalAudioDisconnect => "physical-audio-disconnect",
             Capability::DisposableOs => "disposable-os",
