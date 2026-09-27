@@ -197,16 +197,30 @@ impl StepId {
             StepId::Rust => step("rust", SANITY, Native),
             StepId::Configure => StepInfo {
                 windows_only: true,
+                ci_only: Some(
+                    "a full CMake configure only needs to happen once per push, not once per \
+                     commit; ci-build-debug and ci-build-release configure the tree before \
+                     merge",
+                ),
                 locks: TREE_AND_BUILD,
                 ..step("configure", SANITY, Native)
             },
             StepId::QmlLint => StepInfo {
                 windows_only: true,
+                ci_only: Some(
+                    "runs against the CMake target ci-build-debug already configures and \
+                     builds; a local rerun on every commit or push duplicated that leg without \
+                     new coverage",
+                ),
                 locks: TREE_AND_BUILD,
                 ..step("qmllint", CONFIGURE, Native)
             },
             StepId::Build => StepInfo {
                 windows_only: true,
+                ci_only: Some(
+                    "a full Debug build on every commit and push duplicated ci-build-debug's \
+                     compiler leg, which already blocks a pull request before merge",
+                ),
                 locks: TREE_AND_BUILD,
                 ..step("build", CONFIGURE, Native)
             },
@@ -216,10 +230,19 @@ impl StepId {
             // widen those spans, and the device lock would then cover the build.
             StepId::Tests => StepInfo {
                 windows_only: true,
+                ci_only: Some(
+                    "the full ctest suite on every commit and push duplicated \
+                     ci-build-debug/-release, which already run and block on it before merge",
+                ),
                 ..step("tests", BUILD, Native)
             },
             StepId::CppCheck => StepInfo {
                 windows_only: true,
+                ci_only: Some(
+                    "a whole-program scan is CI-shaped cost, not per-commit cost; it now runs \
+                     in ci-lint, which needs no compiler leg because cppcheck reads no compile \
+                     database",
+                ),
                 ..step("cppcheck", SANITY, Native)
             },
             // clang-tidy reads compile_commands.json, which configure writes and
@@ -227,6 +250,11 @@ impl StepId {
             // concurrent configure from rewriting it mid-read.
             StepId::ClangTidy => StepInfo {
                 windows_only: true,
+                ci_only: Some(
+                    "the curated blocking set already runs in ci-build-debug, scoped to what \
+                     the pull request changes against its base; a local whole-tree rerun on \
+                     every push duplicated that without new coverage",
+                ),
                 locks: TREE_AND_BUILD,
                 ..step("clang-tidy", BUILD, Native)
             },

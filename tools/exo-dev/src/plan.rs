@@ -253,10 +253,54 @@ pub fn build(input: &PlanInput) -> Plan {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::profile::Profile;
+    use crate::profile::{Profile, TidyScope};
 
     pub fn input(profile: Profile, scope: &Scope) -> PlanInput<'_> {
-        let spec = profile.spec();
+        input_for_spec(profile.spec(), scope)
+    }
+
+    /// Every compiler/static-analysis step, in one place, so tests exercising
+    /// generic run/plan wiring for those steps (diff-stops-everything,
+    /// build-gates-tests, missing-tool-handling, receipt shape, ...) do not
+    /// depend on which real profile happens to plan build/tests/cppcheck/
+    /// clang-tidy today. Production membership of those steps is covered
+    /// separately, by `exo-dev/tests/cli.rs`.
+    pub const FULL_TEST_STEPS: &[StepId] = &[
+        StepId::Diff,
+        StepId::Drift,
+        StepId::SourceHygiene,
+        StepId::CommitPolicy,
+        StepId::Format,
+        StepId::NetworkEgress,
+        StepId::ScriptTests,
+        StepId::Rust,
+        StepId::Configure,
+        StepId::QmlLint,
+        StepId::Build,
+        StepId::Tests,
+        StepId::CppCheck,
+        StepId::ClangTidy,
+    ];
+
+    pub fn full_test_spec(scoped: bool) -> ProfileSpec {
+        ProfileSpec {
+            name: "test-full",
+            steps: FULL_TEST_STEPS,
+            scoped,
+            ci: false,
+            preset: "windows-x64-ninja-debug",
+            config: "Debug",
+            configure_args: &[],
+            exclude_label: None,
+            tidy: TidyScope::WholeTree,
+            tests_skip_on_pull_request: false,
+        }
+    }
+
+    /// For tests that need a step combination no shipped profile plans, e.g.
+    /// exercising build/test/static-analysis wiring generically rather than
+    /// against whichever real profile happens to plan those steps today.
+    pub fn input_for_spec(spec: ProfileSpec, scope: &Scope) -> PlanInput<'_> {
         PlanInput {
             profile: spec,
             scope,
@@ -295,25 +339,31 @@ pub(crate) mod tests {
         }
     }
 
+    /// The curated blocking set (bugprone-use-after-move and its four siblings,
+    /// see .clang-tidy) now runs only in ci-build-debug, scoped to what the pull
+    /// request changes against its base. It no longer runs locally: see the
+    /// comment on `LOCAL_STEPS` in profile.rs for why.
     #[test]
-    fn the_blocking_clang_tidy_set_is_planned_once_and_whole_tree_before_a_push() {
+    fn the_blocking_clang_tidy_set_is_planned_once_in_ci_build_debug_scoped_to_the_parent() {
         let scope = files(&["libs/engine/src/muxer.cpp"]);
-        let fast = build(&input(Profile::PreCommit, &scope));
-        let full = build(&input(Profile::PrePush, &scope));
-        for plan in [&fast, &full] {
-            assert_eq!(
-                names(plan).iter().filter(|n| **n == "clang-tidy").count(),
-                1
+        let plan = build(&input(Profile::CiBuildDebug, &scope));
+        assert_eq!(
+            names(&plan).iter().filter(|n| **n == "clang-tidy").count(),
+            1
+        );
+        assert_eq!(
+            plan.check(StepId::ClangTidy).unwrap().evidence_str("scope"),
+            Some("changed-since-parent")
+        );
+        for profile in [Profile::PreCommit, Profile::PrePush] {
+            assert!(
+                build(&input(profile, &scope))
+                    .check(StepId::ClangTidy)
+                    .is_none(),
+                "{} must not plan clang-tidy locally",
+                profile.spec().name
             );
         }
-        assert_eq!(
-            fast.check(StepId::ClangTidy).unwrap().evidence_str("scope"),
-            Some("changed")
-        );
-        assert_eq!(
-            full.check(StepId::ClangTidy).unwrap().evidence_str("scope"),
-            Some("whole-tree")
-        );
     }
 
     #[test]
@@ -333,15 +383,14 @@ pub(crate) mod tests {
         }
     }
 
+    /// Source hygiene still runs locally (LOCAL_STEPS); the compile it used to
+    /// precede locally moved to CI, so the ordering claim now belongs to the
+    /// profile that plans both: ci-build-debug does not plan source-hygiene at
+    /// all, so this checks the declaration order directly instead.
     #[test]
-    fn source_hygiene_runs_in_both_local_contracts_before_the_compile() {
-        let scope = files(&[]);
-        for profile in [Profile::PreCommit, Profile::PrePush] {
-            let n = names(&build(&input(profile, &scope)));
-            let hygiene = n.iter().position(|x| *x == "source-hygiene").unwrap();
-            let compile = n.iter().position(|x| *x == "build").unwrap();
-            assert!(hygiene < compile);
-        }
+    fn source_hygiene_is_declared_before_the_compile_steps() {
+        assert!(StepId::SourceHygiene < StepId::Build);
+        assert!(StepId::SourceHygiene < StepId::ClangTidy);
     }
 
     #[test]
@@ -356,7 +405,7 @@ pub(crate) mod tests {
             &[][..],
         ] {
             let scope = files(set);
-            let plan = build(&input(Profile::PreCommit, &scope));
+            let plan = build(&input(Profile::CiBuildDebug, &scope));
             let tests = plan.check(StepId::Tests).unwrap();
             if tests.applicable {
                 assert!(plan.check(StepId::Build).unwrap().applicable, "{set:?}");
@@ -364,17 +413,17 @@ pub(crate) mod tests {
         }
     }
 
+    /// The scoped-test-filter mechanism (narrowing ctest to a QML module's own
+    /// suite) fed the old pre-commit contract, which no longer plans Tests:
+    /// only pre-commit is ever `scoped`, and it plans no compile step any more
+    /// (LOCAL_STEPS in profile.rs). Every profile that does plan Tests today
+    /// runs the complete suite, unfiltered.
     #[test]
-    fn a_qml_change_narrows_the_scoped_suite_but_never_a_complete_one() {
+    fn every_profile_that_plans_tests_runs_the_complete_suite() {
         let scope = files(&["app/quick/ExoSnap/Quick/RecordPage.qml"]);
-        let fast = build(&input(Profile::PreCommit, &scope));
-        let full = build(&input(Profile::PrePush, &scope));
+        let plan = build(&input(Profile::CiBuildDebug, &scope));
         assert_eq!(
-            fast.check(StepId::Tests).unwrap().evidence_str("filter"),
-            Some(r"^quick\.")
-        );
-        assert_eq!(
-            full.check(StepId::Tests).unwrap().evidence_str("filter"),
+            plan.check(StepId::Tests).unwrap().evidence_str("filter"),
             Some("")
         );
     }
@@ -444,12 +493,15 @@ pub(crate) mod tests {
     #[test]
     fn windows_only_steps_skip_elsewhere() {
         let scope = Scope::everything();
-        let mut linux = input(Profile::PrePush, &scope);
+        let mut linux = input(Profile::CiBuildDebug, &scope);
         linux.windows = false;
         let plan = build(&linux);
         let build_check = plan.check(StepId::Build).unwrap();
         assert!(!build_check.applicable);
         assert_eq!(build_check.skip_reason, "Windows only");
-        assert!(plan.check(StepId::Drift).unwrap().applicable);
+
+        let mut linux_push = input(Profile::PrePush, &scope);
+        linux_push.windows = false;
+        assert!(build(&linux_push).check(StepId::Drift).unwrap().applicable);
     }
 }

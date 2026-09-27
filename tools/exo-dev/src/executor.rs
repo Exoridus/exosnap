@@ -1124,7 +1124,10 @@ mod tests {
         executor.tests_host = Box::new(RecordingHost::new());
 
         let scope = Scope::everything();
-        let plan = plan::build(&plan::tests::input(Profile::PrePush, &scope));
+        let plan = plan::build(&plan::tests::input_for_spec(
+            plan::tests::full_test_spec(false),
+            &scope,
+        ));
         let outcome = executor.execute(plan.check(StepId::Tests).unwrap());
 
         assert_eq!(outcome.status, Status::Fail, "{}", outcome.detail);
@@ -1172,7 +1175,10 @@ mod tests {
         executor.tests_host = Box::new(RecordingHost::new());
 
         let scope = Scope::everything();
-        let plan = plan::build(&plan::tests::input(Profile::PrePush, &scope));
+        let plan = plan::build(&plan::tests::input_for_spec(
+            plan::tests::full_test_spec(false),
+            &scope,
+        ));
         let outcome = executor.execute(plan.check(StepId::Tests).unwrap());
         assert_eq!(outcome.status, Status::Pass, "{}", outcome.detail);
         assert_eq!(outcome.detail, "1 test(s) passed");
