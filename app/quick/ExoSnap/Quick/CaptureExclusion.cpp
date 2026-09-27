@@ -80,18 +80,27 @@ bool dropLayeredAttribute(HWND hwnd) {
 // Forces WM_NCHITTEST to answer HTTRANSPARENT for one click-through overlay
 // HWND, ahead of Qt's own window procedure.
 //
-// Qt::WindowTransparentForInput sets WS_EX_TRANSPARENT, but that extended
-// style alone does not make a click reach whatever lies beneath in another
-// process. The pass-through a click-through window relies on is the
-// WM_NCHITTEST answer: USER32's hit-test walk (the same one WindowFromPoint
-// and real mouse dispatch both use) keeps probing downward through the
-// z-order past any window that answers HTTRANSPARENT, but stops at the first
-// one that does not -- and Qt's Windows platform window answers this message
-// itself before DefWindowProc's implicit WS_EX_TRANSPARENT handling ever
-// gets a turn, the same routing precedence QuickWindowChrome relies on to
-// answer WM_NCHITTEST for the main window's title band (with the opposite
-// answer, HTCLIENT). Left alone, a "click-through" overlay silently keeps
-// every click that lands on its HWND instead of forwarding it.
+// Qt::WindowTransparentForInput sets WS_EX_TRANSPARENT, but Qt's own Windows
+// platform window answers WM_NCHITTEST itself before DefWindowProc's implicit
+// WS_EX_TRANSPARENT handling ever gets a turn -- the same routing precedence
+// QuickWindowChrome relies on to answer WM_NCHITTEST for the main window's
+// title band (with the opposite answer, HTCLIENT). Left alone, that leaves a
+// "click-through" overlay silently keeping every click that lands on its
+// HWND instead of forwarding it: Qt's own hit-test answer is the one that
+// actually ships, and it never says HTTRANSPARENT for this window.
+//
+// Microsoft's own documentation of HTTRANSPARENT and WM_NCHITTEST does not
+// spell out cross-process routing in so many words, and its WS_EX_TRANSPARENT
+// page suggests pairing with WS_EX_LAYERED for hit-testing -- a pairing this
+// window deliberately does not carry, because WS_EX_LAYERED conflicts with
+// the DirectComposition path Qt already uses for this translucent window (see
+// dropLayeredAttribute above). This filter's actual justification is
+// `overlay.operable-hit-test` in exo-verify: with it installed, a probe point
+// over this overlay resolves (via WindowFromPoint, the same z-order hit-test
+// walk real mouse dispatch uses) to the window beneath it in another process,
+// not to this HWND. That measured result is the evidence, not a cited Win32
+// guarantee -- re-verify against a live desktop if this filter's target set
+// or its ordering relative to dropLayeredAttribute ever changes.
 //
 // A process-wide QAbstractNativeEventFilter, not a per-window virtual: Qt
 // Quick windows have no nativeEvent() override point of their own, and this

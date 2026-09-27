@@ -131,6 +131,10 @@ Window {
     signal pauseResumeRequested()
     signal stopRequested()
     signal captureFrameRequested()
+    // Closing the dock is a persistent choice, not a per-session hide: the
+    // handler in Main.qml turns the "show quick controls" setting off, so a
+    // user who closes it once does not have to close it again next session.
+    signal closeRequested()
 
     // See OverlayRecording.qml: an inherited transient parent would take the
     // pill down with the app window — and the pill exists precisely for sessions
@@ -149,8 +153,10 @@ Window {
 
     visible: exclusion.granted && root.overlayActive
 
+    // Four buttons now (pause/resume, stop, camera, close), three internal
+    // gaps between them, plus the one gap from the grip to the row.
     width: root.pad + root.gripWidth + root.pad
-           + (root.expanded ? root.buttonGap + 3 * root.buttonSize + 2 * root.buttonGap : 0)
+           + (root.expanded ? root.buttonGap + 4 * root.buttonSize + 3 * root.buttonGap : 0)
     height: root.pad + root.buttonSize + root.pad
 
     // defaultPosition() by default. Dragging the grip assigns x/y directly,
@@ -185,7 +191,7 @@ Window {
     component PillGlyph: Canvas {
         id: glyph
 
-        // "pause" | "resume" | "stop" | "camera" | "grip"
+        // "pause" | "resume" | "stop" | "camera" | "grip" | "close"
         property string kind: "pause"
         property color tone: root.buttonGlyph
 
@@ -237,6 +243,16 @@ Window {
                 ctx.stroke()
                 ctx.beginPath()
                 ctx.roundedRect(cx - s * 0.25, cy - s * 0.53, s * 0.5, s * 0.25, 2, 2)
+                ctx.stroke()
+            } else if (glyph.kind === "close") {
+                ctx.lineWidth = 1.6
+                ctx.beginPath()
+                ctx.moveTo(cx - s * 0.5, cy - s * 0.5)
+                ctx.lineTo(cx + s * 0.5, cy + s * 0.5)
+                ctx.stroke()
+                ctx.beginPath()
+                ctx.moveTo(cx + s * 0.5, cy - s * 0.5)
+                ctx.lineTo(cx - s * 0.5, cy + s * 0.5)
                 ctx.stroke()
             } else {
                 // Grip: three short horizontal lines.
@@ -400,6 +416,15 @@ Window {
                 glyphKind: "camera"
                 Accessible.name: qsTr("Capture frame")
                 onActivated: root.captureFrameRequested()
+            }
+
+            // A closed dock stays closed: the handler in Main.qml turns the
+            // persisted "show quick controls" setting off rather than just
+            // hiding this session's window, so closing it once is enough.
+            PillButton {
+                glyphKind: "close"
+                Accessible.name: qsTr("Close quick controls")
+                onActivated: root.closeRequested()
             }
         }
     }

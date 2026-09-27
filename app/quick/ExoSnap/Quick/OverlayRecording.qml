@@ -189,8 +189,28 @@ Window {
 
     width: pill.implicitWidth
     height: pill.implicitHeight
-    x: root.effectiveGeometry.x + root.effectiveGeometry.width - width - 20
-    y: root.effectiveGeometry.y + 20
+
+    // Top-right of the source rect by preference, clamped so the pill never
+    // extends past it: the product contract is that this pill sits ENTIRELY
+    // inside the actually-recorded picture, and the diagnostics merge can
+    // make it noticeably wider than a bare 20 px inset from the edge would
+    // fit in a small Region or a small App window. When the pill itself is
+    // wider or taller than the source rect, min > max below and Math.max
+    // wins: anchored to the source's own top/left edge rather than centred
+    // or left overflowing -- never a silent fall-back to the monitor.
+    readonly property point clampedPosition: {
+        const source = root.effectiveGeometry;
+        const margin = 20;
+        const minX = source.x;
+        const maxX = source.x + source.width - width;
+        const minY = source.y;
+        const maxY = source.y + source.height - height;
+        return Qt.point(Math.max(minX, Math.min(maxX, source.x + source.width - width - margin)),
+                        Math.max(minY, Math.min(maxY, source.y + margin)));
+    }
+
+    x: root.clampedPosition.x
+    y: root.clampedPosition.y
 
     CaptureExclusion {
         id: exclusion

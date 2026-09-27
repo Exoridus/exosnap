@@ -40,7 +40,7 @@ pub fn scenarios() -> Vec<Scenario> {
             revision: 1,
             title: "Toast and quick controls take clicks; the other overlays let them through",
             class: ScenarioClass::Contract,
-            contract: "during a recording the notification toast and quick controls receive clicks at their centre, while the recording pill and diagnostics overlay pass clicks to the window beneath",
+            contract: "during a recording the notification toast and quick controls receive clicks at their centre, while the recording pill passes clicks to the window beneath",
             lane: Lane::Gpu,
             also: &[Lane::Quick],
             tier: Tier::Required,

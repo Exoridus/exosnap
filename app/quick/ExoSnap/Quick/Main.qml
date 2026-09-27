@@ -412,6 +412,13 @@ ApplicationWindow {
         function onCaptureFrameRequested(): void {
             root.recordViewModel.requestCaptureFrame();
         }
+
+        // Persistent, not a per-session hide: closing the dock turns the
+        // setting off, so it stays off next time too, until the user turns
+        // it back on in Settings.
+        function onCloseRequested(): void {
+            root.settingsAdapter.showQuickControls = false;
+        }
     }
 
     // QCR-608. `RecordPreviewAdapter.active` follows the navigation index alone,

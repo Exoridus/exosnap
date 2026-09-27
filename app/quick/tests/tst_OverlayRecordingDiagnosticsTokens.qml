@@ -174,4 +174,100 @@ TestCase {
         overlay.showOutputSize = true;
         compare(overlay.showSize, true);
     }
+
+    // ── Source-rect containment ──────────────────────────────────────────────
+    //
+    // The product contract: the pill lies entirely inside monitorGeometry
+    // (bound to OverlayAdapter::recordedSourceGeometry in Main.qml, whatever
+    // that resolves to for the active capture mode). It must never fall back
+    // to the monitor just because it does not fit -- see clampedPosition.
+
+    function verifyContained(overlay, source) {
+        verify(overlay.x >= source.x, "pill left edge is left of the source rect");
+        verify(overlay.y >= source.y, "pill top edge is above the source rect");
+        verify(overlay.x + overlay.width <= source.x + source.width,
+               "pill right edge (" + (overlay.x + overlay.width) + ") is right of the source rect ("
+               + (source.x + source.width) + ")");
+        verify(overlay.y + overlay.height <= source.y + source.height,
+               "pill bottom edge is below the source rect");
+    }
+
+    // Measures the pill's own implicit size against a generous source rect
+    // first, rather than guessing at pixel widths that drift with font
+    // metrics, theme spacing or which content flags a test enables --
+    // exactly the numbers a hand-picked literal would silently go stale
+    // against.
+    function measureWidth(properties) {
+        let probe = createTemporaryObject(overlayComponent, testCase,
+            Object.assign({monitorGeometry: Qt.rect(0, 0, 4000, 4000)}, properties));
+        verify(probe);
+        return Qt.size(probe.width, probe.height);
+    }
+
+    function test_pill_stays_within_a_small_region_source_rect() {
+        // Minimal content: no diagnostics, so this is the smallest the pill
+        // gets, matching a genuinely small Region selection.
+        const props = {overlayActive: true, diagnosticsActive: false};
+        const size = measureWidth(props);
+        const source = Qt.rect(300, 100, size.width + 24, size.height + 24);
+        let overlay = createTemporaryObject(overlayComponent, testCase,
+            Object.assign({monitorGeometry: source}, props));
+        verify(overlay);
+        verifyContained(overlay, source);
+    }
+
+    function test_pill_stays_within_a_small_window_source_rect() {
+        const props = {
+            overlayActive: true,
+            diagnosticsActive: false,
+            showSourceName: true,
+            sourceNameText: "A long recorded window title that would normally push the pill wide"
+        };
+        const size = measureWidth(props);
+        const source = Qt.rect(-50, 20, size.width + 24, size.height + 24);
+        let overlay = createTemporaryObject(overlayComponent, testCase,
+            Object.assign({monitorGeometry: source}, props));
+        verify(overlay);
+        verifyContained(overlay, source);
+    }
+
+    // Diagnostics ON widens the pill the most: this is the case the merge
+    // made more likely to overflow a small source rect.
+    function test_widest_pill_with_diagnostics_still_stays_within_the_source_rect() {
+        const props = {overlayActive: true, diagnosticsActive: true, showOutputSize: true, outputSizeText: "1.2 GB"};
+        const size = measureWidth(props);
+        const source = Qt.rect(0, 0, size.width + 24, size.height + 24);
+        let overlay = createTemporaryObject(overlayComponent, testCase,
+            Object.assign({monitorGeometry: source}, props));
+        verify(overlay);
+        verifyContained(overlay, source);
+    }
+
+    // The pill is wider than the whole source rect: it cannot fit, so the
+    // policy is to anchor at the source's own top-left rather than centre,
+    // overflow, or fall back to some other rectangle.
+    function test_pill_wider_than_the_source_rect_anchors_to_its_top_left() {
+        const size = measureWidth({overlayActive: true, diagnosticsActive: true});
+        const source = Qt.rect(500, 200, Math.floor(size.width / 4), Math.floor(size.height / 2));
+        let overlay = createTemporaryObject(overlayComponent, testCase, {
+            overlayActive: true,
+            monitorGeometry: source
+        });
+        verify(overlay);
+        verify(overlay.width > source.width, "this test needs a pill wider than the source rect to mean anything");
+        compare(overlay.x, source.x);
+        compare(overlay.y, source.y);
+    }
+
+    // A monitor left of or above the primary produces negative virtual-desktop
+    // coordinates; the clamp arithmetic must not assume a positive origin.
+    function test_pill_stays_within_a_source_rect_at_negative_origin() {
+        const props = {overlayActive: true, diagnosticsActive: true};
+        const size = measureWidth(props);
+        const source = Qt.rect(-1920, -200, size.width + 24, size.height + 24);
+        let overlay = createTemporaryObject(overlayComponent, testCase,
+            Object.assign({monitorGeometry: source}, props));
+        verify(overlay);
+        verifyContained(overlay, source);
+    }
 }

@@ -301,4 +301,33 @@ TestCase {
         compare(pill.x, smaller.x + smaller.width - pill.width);
         compare(pill.y, smaller.y + smaller.height - pill.height);
     }
+
+    // ── Close button ─────────────────────────────────────────────────────────
+    //
+    // Persisting "closed" is Main.qml's job (it turns showQuickControls off);
+    // this only pins the button's own contract -- the last button in the row
+    // emits closeRequested(), once, per click.
+    function test_the_close_button_emits_close_requested() {
+        let pill = shownPill();
+        // contentItem.children[0] is the Rectangle; .children[1] inside it is
+        // the button Row, the same nesting gripOf() reaches .children[0] (the
+        // grip Item) through.
+        let buttons = pill.contentItem.children[0].children[1];
+        verify(buttons);
+        let closeButton = buttons.children[buttons.children.length - 1];
+        verify(closeButton);
+
+        let spy = createTemporaryObject(signalSpyComponent, testCase, {target: pill, signalName: "closeRequested"});
+        verify(spy);
+
+        mouseClick(closeButton, closeButton.width / 2, closeButton.height / 2, Qt.LeftButton);
+
+        compare(spy.count, 1);
+    }
+
+    Component {
+        id: signalSpyComponent
+
+        SignalSpy {}
+    }
 }
