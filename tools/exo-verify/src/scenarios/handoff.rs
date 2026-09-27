@@ -188,7 +188,9 @@ fn run_case(
     document: &Value,
     expected: &str,
 ) -> Step<Value> {
-    let path = ctx.scenario_dir.join(format!("{name}.json"));
+    // Absolute: the updater's cwd is redirected to its own staged directory
+    // below, so a relative path here would resolve against the wrong root.
+    let path = std::path::absolute(ctx.scenario_dir.join(format!("{name}.json")))?;
     std::fs::write(&path, serde_json::to_vec_pretty(document)?)?;
     let run_id = control::new_run_id("tamper");
     let mut child = ctx.spawn(
@@ -391,5 +393,34 @@ mod tests {
         std::fs::write(&signature, "0abc\r\n").unwrap();
         let altered = alter_signature(&signature, &dir.path().join("a.sig")).unwrap();
         assert_eq!(std::fs::read_to_string(altered).unwrap(), "1abc");
+    }
+
+    /// `run_case` passes its handoff-document path to the updater as
+    /// `--apply-handoff`, and the updater's cwd is redirected to its own
+    /// staged directory. A relative path there silently resolves against the
+    /// wrong root instead of failing loudly, which is why this asserts the
+    /// absolute invariant rather than trusting a passing spawn.
+    #[test]
+    fn case_document_path_survives_the_updaters_redirected_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let scenario_dir = dir
+            .path()
+            .join("scenarios")
+            .join("update.handoff-tamper-refused");
+        std::fs::create_dir_all(&scenario_dir).unwrap();
+        let path = std::path::absolute(scenario_dir.join("modified-manifest-bytes.json")).unwrap();
+        std::fs::write(&path, b"{}").unwrap();
+
+        assert!(
+            path.is_absolute(),
+            "a relative path breaks once the child's cwd differs"
+        );
+        let updater_stage = dir.path().join("updater-stage");
+        std::fs::create_dir_all(&updater_stage).unwrap();
+        let resolved_from_updater_cwd = updater_stage.join(&path);
+        assert!(
+            resolved_from_updater_cwd.is_file(),
+            "an absolute path must still resolve when joined onto an unrelated cwd"
+        );
     }
 }
