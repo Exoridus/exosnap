@@ -15,9 +15,8 @@
 // and a machine decision can be reconciled, never so the machine can match on it.
 //
 // The role is derived from the QML objectName, which is internal and stable, and
-// the derivation lives HERE rather than at each call site -- `scripts/lib/
-// LiveVerifyChecks.ps1` currently hardcodes two objectNames, which is exactly the
-// coupling a role replaces.
+// the derivation lives HERE rather than at each call site, so no automation client
+// has to hardcode an objectName.
 
 #include <QJsonObject>
 #include <QString>

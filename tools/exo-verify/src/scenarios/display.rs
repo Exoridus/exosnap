@@ -3,12 +3,11 @@
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 
 use crate::capability::Capability;
 use crate::context::Context;
 use crate::plan::Tier;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::tools;
 use crate::{infra_ensure, product_ensure};
 
@@ -20,7 +19,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "display.refresh-transaction",
             revision: 1,
             title: "A recording works at an applied display refresh rate",
-            claim: "envctl applies and reads back an alternate refresh rate, the product records a decodable file, and envctl restores the exact original",
+            class: ScenarioClass::Hardware,
+            contract: "envctl applies and reads back an alternate refresh rate, the product records a decodable file, and envctl restores the exact original",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Recommended,
@@ -36,7 +36,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "display.hdr-transaction",
             revision: 1,
             title: "HDR state agrees with the product and restores exactly",
-            claim: "envctl applies and reads back HDR, the product reports HDR and records a decodable file, and envctl restores the exact original",
+            class: ScenarioClass::Hardware,
+            contract: "envctl applies and reads back HDR, the product reports HDR and records a decodable file, and envctl restores the exact original",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Recommended,
@@ -53,9 +54,10 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "display.scaling-minimum",
             revision: 1,
             title: "The main window respects its minimum size at a measured display scale",
-            claim: "the product reports a display pixel ratio and a native main window at least 860 by 700 logical pixels",
-            lane: Lane::Hardware,
-            also: &[],
+            class: ScenarioClass::Contract,
+            contract: "the product reports a display pixel ratio and a native main window at least 860 by 700 logical pixels",
+            lane: Lane::CiCore,
+            also: &[Lane::Quick],
             tier: Tier::Required,
             requires: &[Capability::InteractiveDesktop],
             timeout: secs(90.0),
@@ -63,9 +65,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "display.mixed-preview-crossing",
-            revision: 1,
-            title: "Capture and preview continue across mixed HDR and SDR displays",
-            claim: "each HDR and SDR display yields a decodable recording, and preview consumption continues after moving the main window across them",
+            revision: 2,
+            title: "Capture works on both displays of a mixed HDR and SDR setup",
+            class: ScenarioClass::Hardware,
+            contract: "on a machine with an HDR and an SDR display attached, each display yields a decodable recording",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Recommended,
@@ -417,71 +420,22 @@ fn mixed_preview_crossing(ctx: &mut Context) -> Step {
             "the machine has fewer than two attached displays",
         ));
     }
-    let hdr_count = screens.iter().filter(|s| s["hdrActive"] == true).count();
-    let sdr_count = screens.iter().filter(|s| s["hdrActive"] == false).count();
-    if hdr_count == 0 || sdr_count == 0 {
-        return Err(Stop::unavailable(
-            "the attached displays do not report both HDR and SDR states",
-        ));
-    }
-    let before = app.call("windows.snapshot", json!({}))?;
-    let current = before["windows"]
-        .as_array()
-        .and_then(|items| items.iter().find(|w| w["role"] == "main"))
-        .and_then(|w| w["screen"].as_str())
-        .ok_or_else(|| Stop::infra("the main window has no reported screen"))?;
-    // The window reports Qt's screen name, which window.moveToScreen takes; the
-    // capture target is selected by the same screen's display device.
-    let current_screen = screens
+    let hdr = screens
         .iter()
-        .find(|s| s["name"] == current)
-        .ok_or_else(|| Stop::infra(format!("the main window's screen {current} is not listed")))?;
-    let current_hdr = current_screen["hdrActive"]
-        .as_bool()
-        .ok_or_else(|| Stop::infra("the main window's current display has no HDR state"))?;
-    let current_device = common::screen_device(current_screen)?;
-    let target_screen = screens
+        .find(|s| s["hdrActive"] == true)
+        .ok_or_else(|| Stop::unavailable("no attached display reports HDR"))?;
+    let sdr = screens
         .iter()
-        .find(|s| s["name"] != current && s["hdrActive"].as_bool() == Some(!current_hdr))
-        .ok_or_else(|| Stop::unavailable("no display of the opposite HDR state can be selected"))?;
-    let target = target_screen["name"]
-        .as_str()
-        .ok_or_else(|| Stop::infra("the opposite-HDR display has no screen name"))?;
-    let target_device = common::screen_device(target_screen)?;
-    common::select_display(&mut app, &current_device)?;
-    let baseline = watch_preview(&mut app, secs(10.0))?;
-    infra_ensure!(
-        baseline,
-        "the preview consumed no frame before the display crossing"
-    );
-    let first = record_mixed_display(&mut app, &current_device)?;
-    app.client
-        .request("window.moveToScreen", json!({"screen": target}), secs(15.0))?
-        .map_err(|refusal| Stop::fail(format!("window.moveToScreen refused: {refusal}")))?;
-    let mut samples = Vec::new();
-    for index in 0..6 {
-        if index > 0 {
-            std::thread::sleep(Duration::from_millis(250));
-        }
-        samples.push(app.call("preview.snapshot", json!({}))?);
-    }
-    let after = app.call("windows.snapshot", json!({}))?;
-    ctx.evidence.put("previewSamples", json!(samples));
-    ctx.evidence.put("windowsAfter", after.clone());
-    product_ensure!(
-        after["windows"]
-            .as_array()
-            .and_then(|items| items.iter().find(|w| w["role"] == "main"))
-            .and_then(|w| w["screen"].as_str())
-            == Some(target),
-        "the main window did not reach display {target}"
-    );
-    judge_preview_progress(&samples)?;
-    let second = record_mixed_display(&mut app, &target_device)?;
+        .find(|s| s["hdrActive"] == false)
+        .ok_or_else(|| Stop::unavailable("no attached display reports SDR"))?;
+    let hdr_device = common::screen_device(hdr)?;
+    let sdr_device = common::screen_device(sdr)?;
+    let first = record_mixed_display(&mut app, &hdr_device)?;
+    let second = record_mixed_display(&mut app, &sdr_device)?;
     judge_mixed_recordings(&first, &second)?;
     ctx.evidence.put("mixedDisplayRecordings", json!([
-        {"display": first.display, "outputPath": first.file, "decodedFrames": first.frames, "decodedSpanSeconds": first.span_seconds},
-        {"display": second.display, "outputPath": second.file, "decodedFrames": second.frames, "decodedSpanSeconds": second.span_seconds}
+        {"display": first.display, "hdr": true, "outputPath": first.file, "decodedFrames": first.frames, "decodedSpanSeconds": first.span_seconds},
+        {"display": second.display, "hdr": false, "outputPath": second.file, "decodedFrames": second.frames, "decodedSpanSeconds": second.span_seconds}
     ]));
     ctx.keep(&first.file);
     ctx.keep(&second.file);
@@ -538,58 +492,6 @@ fn judge_mixed_recordings(first: &DisplayRecording, second: &DisplayRecording) -
     Ok(())
 }
 
-fn watch_preview(app: &mut crate::context::App, timeout: Duration) -> Step<bool> {
-    let first = app.call("preview.snapshot", json!({}))?;
-    let start = first["consumedFrames"]
-        .as_f64()
-        .ok_or_else(|| Stop::infra("preview has no consumedFrames counter"))?;
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(200));
-        let current = app.call("preview.snapshot", json!({}))?;
-        let consumed = current["consumedFrames"]
-            .as_f64()
-            .ok_or_else(|| Stop::infra("preview lost its consumedFrames counter"))?;
-        if consumed > start {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn judge_preview_progress(samples: &[Value]) -> Step {
-    infra_ensure!(
-        samples.len() >= 2,
-        "preview progress needs at least two observations"
-    );
-    let first = samples.first().unwrap();
-    let last = samples.last().unwrap();
-    let consumed_start = first["consumedFrames"]
-        .as_f64()
-        .ok_or_else(|| Stop::infra("preview has no first consumedFrames counter"))?;
-    let consumed_end = last["consumedFrames"]
-        .as_f64()
-        .ok_or_else(|| Stop::infra("preview has no final consumedFrames counter"))?;
-    infra_ensure!(
-        last["updateGate"]["renderPasses"].as_f64().is_some(),
-        "preview has no renderPasses counter"
-    );
-    if consumed_end > consumed_start {
-        return Ok(());
-    }
-    if samples
-        .iter()
-        .all(|sample| sample["updateGate"]["owed"] == true)
-    {
-        return Err(Stop::fail(
-            "a published preview frame stayed unrendered across the display crossing",
-        ));
-    }
-    Err(Stop::infra(
-        "the preview consumed no frame after crossing and no persistent publish debt was observed",
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,47 +522,6 @@ mod tests {
             &json!({"windows":[{"role":"main","nativeWindowCreated":true,"native":{"width":860,"height":700}}]}),
         )
         .unwrap();
-    }
-
-    #[test]
-    fn preview_progress_requires_consumption_after_crossing() {
-        let samples = vec![
-            json!({"consumedFrames":10,"updateGate":{"renderPasses":5,"owed":true}}),
-            json!({"consumedFrames":10,"updateGate":{"renderPasses":5,"owed":true}}),
-        ];
-        assert!(matches!(
-            judge_preview_progress(&samples),
-            Err(Stop::Fail(_))
-        ));
-        let samples = vec![
-            json!({"consumedFrames":10,"updateGate":{"renderPasses":5,"owed":false}}),
-            json!({"consumedFrames":11,"updateGate":{"renderPasses":6,"owed":true}}),
-        ];
-        judge_preview_progress(&samples).unwrap();
-    }
-
-    #[test]
-    fn preview_progress_without_published_work_is_infrastructure() {
-        let samples = vec![
-            json!({"consumedFrames":10,"updateGate":{"renderPasses":5,"owed":false}}),
-            json!({"consumedFrames":10,"updateGate":{"renderPasses":5,"owed":false}}),
-        ];
-        assert!(matches!(
-            judge_preview_progress(&samples),
-            Err(Stop::Infra(_))
-        ));
-    }
-
-    #[test]
-    fn preview_progress_with_missing_counters_is_infrastructure() {
-        let samples = vec![
-            json!({"consumedFrames":10,"updateGate":{"owed":true}}),
-            json!({"consumedFrames":11,"updateGate":{"owed":false}}),
-        ];
-        assert!(matches!(
-            judge_preview_progress(&samples),
-            Err(Stop::Infra(_))
-        ));
     }
 
     #[test]

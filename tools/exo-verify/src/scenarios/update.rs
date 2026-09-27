@@ -14,16 +14,17 @@ use crate::capability::Capability;
 use crate::context::Context;
 use crate::control::{self, Client};
 use crate::plan::Tier;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
 
 pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             id: "update.portable",
-            revision: 2,
-            title: "Portable update installs the candidate",
-            claim: "the old portable build accepts the signed candidate offer and installs the bound candidate bytes",
+            revision: 3,
+            title: "Portable update installs and relaunches the candidate",
+            class: ScenarioClass::Installer,
+            contract: "the old portable build accepts the signed candidate offer, installs the bound candidate bytes and relaunches the candidate from the updated tree",
             lane: Lane::CiUpdate,
             also: &[],
             tier: Tier::Required,
@@ -39,7 +40,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "update.msi-decline",
             revision: 2,
             title: "Simulated declined MSI elevation leaves the installation intact",
-            claim: "the updater's uacDeclined fault seam reports a declined elevation and preserves the old installation",
+            class: ScenarioClass::Installer,
+            contract: "the updater's uacDeclined fault seam reports a declined elevation and preserves the old installation",
             lane: Lane::Nightly,
             also: &[],
             tier: Tier::Recommended,
@@ -56,7 +58,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "update.msi-decline-real",
             revision: 1,
             title: "Operator declines the real MSI UAC prompt",
-            claim: "in a disposable guest, an unelevated old MSI install reports uacDeclined after a human refuses the real UAC prompt and leaves the old installation intact",
+            class: ScenarioClass::Installer,
+            contract: "in a disposable guest, an unelevated old MSI install reports uacDeclined after a human refuses the real UAC prompt and leaves the old installation intact",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Required,
@@ -71,9 +74,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "update.msi-accept",
-            revision: 2,
+            revision: 3,
             title: "MSI update installs and relaunches the candidate",
-            claim: "accepting the signed candidate offer installs the bound candidate and the updater confirms its relaunch",
+            class: ScenarioClass::Installer,
+            contract: "accepting the signed candidate offer installs the bound candidate into the MSI installation, the old process ends, and the installed candidate executable runs again",
             lane: Lane::CiUpdate,
             also: &[],
             tier: Tier::Required,
@@ -90,7 +94,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "package.chocolatey-rehearsal",
             revision: 1,
             title: "Chocolatey package install and uninstall rehearsal",
-            claim: "a disposable guest installs and uninstalls the candidate Chocolatey package while preserving user configuration",
+            class: ScenarioClass::Installer,
+            contract: "a disposable guest installs and uninstalls the candidate Chocolatey package while preserving user configuration",
             lane: Lane::CiUpdate,
             also: &[],
             tier: Tier::Recommended,
@@ -702,6 +707,7 @@ fn drive_update(
         );
     } else {
         accepted_state(&final_state)?;
+        let completed_at = Instant::now();
         product_ensure!(
             old.try_wait()?.is_some(),
             "updater reported relaunch while the old app was still running"
@@ -725,6 +731,16 @@ fn drive_update(
         );
         ctx.evidence
             .put("updatedExecutableSha256", candidate_hash.clone());
+        let relaunched = wait_relaunch(&target, old.id(), completed_at + RELAUNCH_WINDOW)?;
+        ctx.evidence.put("relaunchedPid", relaunched);
+        let (running_hash, _) = sha256_file(&target)?;
+        product_ensure!(
+            running_hash == candidate_hash,
+            "the relaunched executable {} is not the candidate",
+            target.display()
+        );
+        #[cfg(windows)]
+        terminate(relaunched);
     }
     if decline {
         drop(client);
@@ -732,6 +748,131 @@ fn drive_update(
         let _ = old.wait();
     }
     Ok(())
+}
+
+/// How long after the updater reports completion the relaunched application
+/// has to be running.
+const RELAUNCH_WINDOW: Duration = Duration::from_secs(60);
+
+fn comparable_path(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('/', "\\");
+    text.strip_prefix(r"\\?\")
+        .unwrap_or(&text)
+        .to_ascii_lowercase()
+}
+
+/// The process, other than `old_pid`, whose image is `target`.
+fn relaunched_pid(
+    processes: &[(u32, Option<PathBuf>)],
+    old_pid: u32,
+    target: &Path,
+) -> Option<u32> {
+    let target = comparable_path(target);
+    processes
+        .iter()
+        .filter(|(pid, _)| *pid != old_pid)
+        .find(|(_, image)| {
+            image
+                .as_deref()
+                .is_some_and(|image| comparable_path(image) == target)
+        })
+        .map(|(pid, _)| *pid)
+}
+
+/// Waits for the relaunched application. The relaunch is not armed for
+/// automation, so it is found by enumerating processes, not by an endpoint.
+fn wait_relaunch(target: &Path, old_pid: u32, deadline: Instant) -> Step<u32> {
+    let target = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
+    loop {
+        #[cfg(windows)]
+        let processes = exosnap_processes();
+        #[cfg(not(windows))]
+        let processes: Vec<(u32, Option<PathBuf>)> = Vec::new();
+        if let Some(pid) = relaunched_pid(&processes, old_pid, &target) {
+            return Ok(pid);
+        }
+        if Instant::now() >= deadline {
+            return Err(Stop::fail(format!(
+                "no exosnap.exe from {} was running {} s after the updater reported completion",
+                target.display(),
+                RELAUNCH_WINDOW.as_secs()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// Every running `exosnap.exe` with its image path when it can be read.
+#[cfg(windows)]
+fn exosnap_processes() -> Vec<(u32, Option<PathBuf>)> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        QueryFullProcessImageNameW,
+    };
+    use windows::core::PWSTR;
+    let mut out = Vec::new();
+    let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
+        return out;
+    };
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok();
+    while more {
+        let end = entry
+            .szExeFile
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(entry.szExeFile.len());
+        if String::from_utf16_lossy(&entry.szExeFile[..end]).eq_ignore_ascii_case("exosnap.exe") {
+            let pid = entry.th32ProcessID;
+            let image = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+                .ok()
+                .and_then(|process| {
+                    let mut buffer = [0u16; 1024];
+                    let mut length = buffer.len() as u32;
+                    let read = unsafe {
+                        QueryFullProcessImageNameW(
+                            process,
+                            PROCESS_NAME_WIN32,
+                            PWSTR(buffer.as_mut_ptr()),
+                            &mut length,
+                        )
+                    };
+                    unsafe {
+                        let _ = CloseHandle(process);
+                    }
+                    read.ok().map(|_| {
+                        PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize]))
+                    })
+                });
+            out.push((pid, image));
+        }
+        more = unsafe { Process32NextW(snapshot, &mut entry) }.is_ok();
+    }
+    unsafe {
+        let _ = CloseHandle(snapshot);
+    }
+    out
+}
+
+/// Ends the relaunched candidate, which no job of this run owns.
+#[cfg(windows)]
+fn terminate(pid: u32) {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
+    if let Ok(process) = unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) } {
+        unsafe {
+            let _ = TerminateProcess(process, 1);
+            let _ = CloseHandle(process);
+        }
+    }
 }
 
 fn declined_state(state: &Value) -> Step {
@@ -780,6 +921,37 @@ mod tests {
         );
         assert!(accepted_state(&json!({"phase":"failed", "failureCase":"launchFailed"})).is_err());
         assert!(accepted_state(&json!({"phase":"rebootRequired", "failureCase":null})).is_err());
+    }
+
+    #[test]
+    fn the_relaunch_is_a_new_process_running_the_updated_executable() {
+        let target = Path::new(r"C:\Program Files\Codexo\ExoSnap\exosnap.exe");
+        let processes = vec![
+            (
+                10,
+                Some(PathBuf::from(
+                    r"C:\Program Files\Codexo\ExoSnap\exosnap.exe",
+                )),
+            ),
+            (11, Some(PathBuf::from(r"C:\Other\exosnap.exe"))),
+            (12, None),
+            (
+                13,
+                Some(PathBuf::from(
+                    r"c:\program files\codexo\exosnap\EXOSNAP.EXE",
+                )),
+            ),
+        ];
+        assert_eq!(relaunched_pid(&processes, 10, target), Some(13));
+        assert_eq!(relaunched_pid(&processes[..3], 10, target), None);
+        assert_eq!(
+            relaunched_pid(
+                &processes,
+                99,
+                Path::new(r"\\?\C:\Program Files\Codexo\ExoSnap\exosnap.exe")
+            ),
+            Some(10)
+        );
     }
 
     #[test]

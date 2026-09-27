@@ -3,7 +3,7 @@
 use crate::capability::Capability;
 use crate::context::Context;
 use crate::plan::Tier;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::process::Command;
@@ -18,7 +18,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "diagnostics.present-elevated",
             revision: 1,
             title: "Elevated present diagnostics decode real presents",
-            claim: "an elevated product process opens present diagnostics and classifies real decoded presents during a recording",
+            class: ScenarioClass::Contract,
+            contract: "an elevated product process opens present diagnostics and classifies real decoded presents during a recording",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Required,
@@ -35,7 +36,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "diagnostics.present-crosscheck",
             revision: 2,
             title: "PresentMon independently confirms the product's presentation activity",
-            claim: "over a shared capture window, an independent PresentMon ETW capture attributed to this product process shows a present count, mode set and mode-transition activity that agree with what the product's own present diagnostics reported growing over the same window",
+            class: ScenarioClass::Hardware,
+            contract: "over a shared capture window, an independent PresentMon ETW capture attributed to this product process shows a present count, mode set and mode-transition activity that agree with what the product's own present diagnostics reported growing over the same window",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Required,

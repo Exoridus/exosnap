@@ -7,7 +7,7 @@ use crate::capability::Capability;
 use crate::context::Context;
 use crate::plan::Tier;
 use crate::product_ensure;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 
 pub fn scenarios() -> Vec<Scenario> {
     vec![
@@ -15,7 +15,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "record.ddx-h264-mkv",
             revision: 2,
             title: "A 60 fps display recording decodes with aligned system audio",
-            claim: "DXGI display capture produces H.264 in MKV with a changing stimulus, ordered frames, decoded system audio and bounded A/V offset",
+            class: ScenarioClass::Hardware,
+            contract: "DXGI display capture produces H.264 in MKV with a changing stimulus, ordered frames, decoded system audio and bounded A/V offset",
             lane: Lane::Gpu,
             also: &[Lane::Preflight],
             tier: Tier::Required,
@@ -35,7 +36,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "record.wgc-hevc-mp4",
             revision: 1,
             title: "A 30 fps window recording decodes as HEVC in MP4",
-            claim: "WGC captures the changing window stimulus in a decodable HEVC MP4 with ordered frames and bounded holds",
+            class: ScenarioClass::Contract,
+            contract: "WGC captures the changing window stimulus in a decodable HEVC MP4 with ordered frames and bounded holds",
             lane: Lane::Gpu,
             also: &[Lane::Preflight],
             tier: Tier::Required,
@@ -53,7 +55,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "record.pause-resume",
             revision: 1,
             title: "Pause removes time and frames from a finished recording",
-            claim: "pausing a WGC recording suppresses the changing stimulus during the pause, resumes afterward and excludes paused wall time from the decoded file",
+            class: ScenarioClass::Contract,
+            contract: "pausing a WGC recording suppresses the changing stimulus during the pause, resumes afterward and excludes paused wall time from the decoded file",
             lane: Lane::Gpu,
             also: &[Lane::Preflight],
             tier: Tier::Required,

@@ -294,8 +294,8 @@ int main(int argc, char** argv) {
     // Packaging-smoke short-circuit: auto-quit ~2 s after the window paints so a
     // release-pipeline launch (staged temp-dir copy per UpdaterStagingFileList)
     // proves the exe + its Qt runtime load and render without hanging the gate.
-    // Only meaningful alongside --preview-state (no engine work); see
-    // scripts/build-release-artifacts.ps1.
+    // Only meaningful alongside --preview-state (no engine work); the
+    // dist.updater-staged-launch verification scenario drives it.
     const bool previewSmoke = arguments.contains(QStringLiteral("--preview-smoke"));
     constexpr int kPreviewSmokeCloseMs = 2000;
 

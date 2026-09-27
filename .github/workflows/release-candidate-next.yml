@@ -103,6 +103,7 @@ jobs:
           & $verify bundle create --out candidate-bundle --version $env:RELEASE_VERSION `
             --commit $env:SOURCE_COMMIT --candidate-id $env:CANDIDATE_ID `
             --installer $installer --portable $portable --runtime $verify `
+            --metadata candidate-package/package.json `
             --toolchain 'generator=Ninja' --toolchain 'runner=windows-2022'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $verify plan create --bundle candidate-bundle --out candidate-plan.json
@@ -313,6 +314,8 @@ jobs:
           $args = @('feed', '--bundle', 'candidate-bundle', '--manifest', 'candidate-feed/update-manifest.json', '--signature', 'candidate-feed/update-manifest.json.sig', '--cert', 'candidate-feed/server.pem', '--key', 'candidate-feed/server.key', '--public-key-hex', $env:UPDATE_PUBLIC_KEY)
           $feed = Start-Process -FilePath $verify -ArgumentList $args -WindowStyle Hidden -PassThru
           $env:EXO_VERIFY_UPDATE_FEED_READY = '1'
+          $env:EXO_VERIFY_SIGNED_FEED = (Resolve-Path candidate-feed).Path
+          $env:EXO_VERIFY_UPDATE_PUBLIC_KEY_HEX = $env:UPDATE_PUBLIC_KEY
           $env:NO_PROXY = 'api.github.com,127.0.0.1'
           $env:no_proxy = $env:NO_PROXY
           try {

@@ -10,15 +10,16 @@ use crate::capability::Capability;
 use crate::context::{Context, GracefulExit};
 use crate::media;
 use crate::plan::Tier;
-use crate::product_ensure;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
+use crate::{infra_ensure, product_ensure};
 
 pub fn scenarios() -> Vec<Scenario> {
     vec![Scenario {
         id: "journey.record-edit-export-restart",
-        revision: 2,
+        revision: 3,
         title: "A recording can be edited, exported and reopened after restart",
-        claim: "the candidate records a changing window, accepts a marker and pause/resume, exports an ordered trim to a decodable file, quits through its own shutdown with a recorded clean exit, and starts again with the same candidate identity and no blocking surface",
+        class: ScenarioClass::Contract,
+        contract: "the candidate records a changing window, accepts a marker and pause/resume, keeps the open edit session unchanged while the user visits every page, exports an ordered trim to a decodable file, quits through its own shutdown with a recorded clean exit, and starts again with the same candidate identity, the settings it was given and no blocking surface",
         lane: Lane::Gpu,
         also: &[],
         tier: Tier::Required,
@@ -112,6 +113,16 @@ fn journey(ctx: &mut Context) -> Step {
             ("audio.microphoneEnabled", json!(false)),
         ],
     )?;
+    let accent = common::configure(
+        &mut app,
+        &[(PERSISTED_APP_KEY.0, json!(PERSISTED_APP_KEY.1))],
+    )?;
+    infra_ensure!(
+        accent.is_empty(),
+        "the product did not accept {}={}: {accent:?}",
+        PERSISTED_APP_KEY.0,
+        PERSISTED_APP_KEY.1
+    );
     let mut stimulus = Stimulus::start(ctx, StimulusOptions::default())?;
     common::select_window(&mut app, &stimulus.title)?;
     common::start_recording(&mut app)?;
@@ -146,6 +157,16 @@ fn journey(ctx: &mut Context) -> Step {
     accepted(&mut app, "edit.setTrimIn", json!({ "positionMs": start }))?;
     let trimmed = accepted(&mut app, "edit.setTrimOut", json!({ "positionMs": end }))?;
     judge_edit(&trimmed)?;
+    let edit_before = app.call("editor.snapshot", json!({}))?;
+    let mut visits = Vec::new();
+    for page in ["settings", "diagnostics", "logs", "about", "record"] {
+        accepted(&mut app, "ui.navigate", json!({ "page": page }))?;
+        let state = app.call("ui.getState", json!({}))?;
+        let editor = app.call("editor.snapshot", json!({}))?;
+        visits.push(json!({ "page": page, "state": state.clone(), "editor": editor.clone() }));
+        judge_edit_survives(page, &state, &edit_before, &editor)?;
+    }
+    ctx.evidence.put("editNavigation", json!(visits));
     let video_before_export = video_files(&app.output)?;
     accepted(&mut app, "export.start", json!({}))?;
     let terminal = app
@@ -191,7 +212,67 @@ fn journey(ctx: &mut Context) -> Step {
     );
     let state = restarted.call("ui.getState", json!({}))?;
     ctx.evidence.put("restartState", state.clone());
-    judge_restart(&exit, &state)
+    judge_restart(&exit, &state)?;
+    let mut persisted = Vec::new();
+    for (key, expected) in persisted_settings() {
+        let answer = restarted
+            .client
+            .request("settings.get", json!({ "key": key }), secs(15.0))?
+            .map_err(|r| Stop::infra(format!("settings.get {key} was refused: {r}")))?;
+        let value = answer["values"].get(key).cloned().unwrap_or(Value::Null);
+        persisted.push(json!({ "key": key, "expected": expected.clone(), "value": value.clone() }));
+        product_ensure!(
+            value == expected,
+            "after a clean restart {key} is {value}, it was set to {expected}"
+        );
+    }
+    ctx.evidence.put("persistedSettings", json!(persisted));
+    Ok(())
+}
+
+/// One application-level key the restart has to keep besides the recording
+/// settings. Aqua is the default accent, so this value proves a write.
+const PERSISTED_APP_KEY: (&str, &str) = ("app.accent", "magenta");
+
+fn persisted_settings() -> Vec<(&'static str, Value)> {
+    vec![
+        ("video.container", json!("MKV")),
+        ("video.videoCodec", json!("H.264")),
+        ("video.frameRate", json!(30)),
+        ("video.cfr", json!(true)),
+        (PERSISTED_APP_KEY.0, json!(PERSISTED_APP_KEY.1)),
+    ]
+}
+
+/// Edit is an overlay over Record: visiting another page keeps the session
+/// open and hides it, and returning to Record shows it again, with the clip,
+/// playhead and trim exactly as they were.
+fn judge_edit_survives(page: &str, state: &Value, before: &Value, editor: &Value) -> Step {
+    product_ensure!(
+        state["page"] == page,
+        "ui.navigate {page} landed on {}",
+        state["page"]
+    );
+    product_ensure!(
+        state["editSession"] == "open",
+        "visiting {page} closed the edit session ({})",
+        state["editSession"]
+    );
+    let visible_expected = page == "record";
+    product_ensure!(
+        state["editVisible"] == visible_expected,
+        "on the {page} page editVisible is {}, expected {visible_expected}",
+        state["editVisible"]
+    );
+    for field in ["clipPath", "positionMs", "trimStartMs", "trimEndMs"] {
+        product_ensure!(
+            editor[field] == before[field],
+            "visiting {page} changed the editor's {field} from {} to {}",
+            before[field],
+            editor[field]
+        );
+    }
+    Ok(())
 }
 
 /// A normal restart is only judged after the first instance was proven to end
@@ -230,6 +311,40 @@ mod tests {
             &json!({"open": true, "durationMs": 8000, "trimStartMs": 1000, "trimEndMs": 7000}),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn the_edit_session_must_survive_navigation_unchanged() {
+        let before = json!({"clipPath": "a.mkv", "positionMs": 4000, "trimStartMs": 2000, "trimEndMs": 6000});
+        let hidden = json!({"page": "settings", "editSession": "open", "editVisible": false});
+        judge_edit_survives("settings", &hidden, &before, &before).unwrap();
+        let shown = json!({"page": "record", "editSession": "open", "editVisible": true});
+        judge_edit_survives("record", &shown, &before, &before).unwrap();
+        for (page, state) in [
+            (
+                "settings",
+                json!({"page": "settings", "editSession": "closed", "editVisible": false}),
+            ),
+            (
+                "settings",
+                json!({"page": "settings", "editSession": "open", "editVisible": true}),
+            ),
+            (
+                "record",
+                json!({"page": "record", "editSession": "open", "editVisible": false}),
+            ),
+        ] {
+            assert!(matches!(
+                judge_edit_survives(page, &state, &before, &before),
+                Err(Stop::Fail(_))
+            ));
+        }
+        let mut moved = before.clone();
+        moved["trimEndMs"] = json!(5000);
+        assert!(matches!(
+            judge_edit_survives("record", &shown, &before, &moved),
+            Err(Stop::Fail(_))
+        ));
     }
 
     #[test]

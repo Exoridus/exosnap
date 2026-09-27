@@ -37,6 +37,11 @@ pub struct PackageArgs {
     /// Skip the MSI (requires the WiX CLI otherwise).
     #[arg(long)]
     pub skip_msi: bool,
+    /// Start the staged exosnap.exe with --smoke-test in an environment that
+    /// hides every developer Qt, so a package that only runs with the
+    /// build machine's Qt on PATH fails here.
+    #[arg(long)]
+    pub launch_smoke: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,6 +54,8 @@ pub struct PackageResult {
     pub staging: PathBuf,
     pub file_count: usize,
     pub dependency_audit: BTreeMap<String, usize>,
+    /// Upstream identity of every third-party component in the package.
+    pub dependencies: Vec<dependency_identity::DependencyEntry>,
 }
 
 pub fn portable_dir_name(version: &str) -> String {
@@ -620,6 +627,10 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
     let portable = out.join(format!("{top}.zip"));
     println!("==> {}", portable.display());
     write_zip(&staging, &top, &portable)?;
+    if args.launch_smoke {
+        println!("==> launch smoke");
+        launch_smoke(&staging)?;
+    }
 
     let installer = if args.skip_msi {
         None
@@ -668,12 +679,73 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
             ("windows".into(), audit.system),
             ("msvcRuntime".into(), audit.msvc),
         ]),
+        dependencies: dependency_identity::derive(&repo_root)?.entries,
     };
     fs::write(
         out.join("package.json"),
         serde_json::to_vec_pretty(&result)?,
     )?;
     Ok(result)
+}
+
+/// Runs the staged application's own smoke test with only Windows on PATH,
+/// no Qt location variables, an isolated configuration and temp directory,
+/// and hard-error dialogs suppressed, so a missing DLL exits instead of
+/// waiting on a modal box.
+fn launch_smoke(staging: &Path) -> Result<()> {
+    let exe = staging.join("exosnap.exe");
+    ensure!(exe.is_file(), "{} is missing", exe.display());
+    let scratch = std::env::temp_dir().join(crate::control::new_run_id("exosnap-smoke"));
+    let (config, temp) = (scratch.join("config"), scratch.join("temp"));
+    fs::create_dir_all(&config)?;
+    fs::create_dir_all(&temp)?;
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let path = [
+        format!(r"{root}\system32"),
+        root.clone(),
+        format!(r"{root}\System32\Wbem"),
+    ]
+    .join(";");
+    let mut command = Command::new(&exe);
+    command
+        .arg("--smoke-test")
+        .current_dir(&temp)
+        .env("PATH", path)
+        .env("EXOSNAP_CONFIG_DIR", &config)
+        .env("TEMP", &temp)
+        .env("TMP", &temp);
+    for name in [
+        "QML_IMPORT_PATH",
+        "QML2_IMPORT_PATH",
+        "QT_PLUGIN_PATH",
+        "QT_QPA_PLATFORM_PLUGIN_PATH",
+        "QT_QUICK_CONTROLS_STYLE",
+        "QT_DIR",
+        "Qt6_DIR",
+    ] {
+        command.env_remove(name);
+    }
+    #[cfg(windows)]
+    let previous = unsafe {
+        use windows::Win32::System::Diagnostics::Debug::{
+            SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX, SEM_NOOPENFILEERRORBOX, SetErrorMode,
+        };
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX)
+    };
+    let result = crate::tools::run(&mut command, Duration::from_secs(120));
+    #[cfg(windows)]
+    unsafe {
+        windows::Win32::System::Diagnostics::Debug::SetErrorMode(previous);
+    }
+    let _ = fs::remove_dir_all(&scratch);
+    let out = result?;
+    ensure!(
+        out.success(),
+        "exosnap.exe --smoke-test exited {:?} in a clean environment: {}",
+        out.code(),
+        out.stderr.trim()
+    );
+    Ok(())
 }
 
 #[cfg(test)]

@@ -35,10 +35,22 @@ pub enum Capability {
     PhysicalAudioDisconnect,
     /// The whole operating system may be discarded after destructive tests.
     DisposableOs,
+    /// The OS may be restarted and the run resumes afterwards.
+    Reboot,
+    /// Elevation raises a real UAC consent prompt on the secure desktop.
+    RealUac,
+    /// Outbound network access is available.
+    Network,
+    /// Windows Sandbox and its `wsb` command line are usable from this host.
+    WindowsSandbox,
+    /// Hyper-V virtual machines can be managed from this host.
+    HyperV,
+    /// Hyper-V sockets reach the ExoSnap guest agent service.
+    HyperVSockets,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 19] = [
+    pub const ALL: [Capability; 25] = [
         Capability::Windows,
         Capability::Admin,
         Capability::InteractiveDesktop,
@@ -58,6 +70,12 @@ impl Capability {
         Capability::Operator,
         Capability::PhysicalAudioDisconnect,
         Capability::DisposableOs,
+        Capability::Reboot,
+        Capability::RealUac,
+        Capability::Network,
+        Capability::WindowsSandbox,
+        Capability::HyperV,
+        Capability::HyperVSockets,
     ];
 
     pub fn name(self) -> &'static str {
@@ -81,6 +99,12 @@ impl Capability {
             Capability::Operator => "operator",
             Capability::PhysicalAudioDisconnect => "physical-audio-disconnect",
             Capability::DisposableOs => "disposable-os",
+            Capability::Reboot => "reboot",
+            Capability::RealUac => "real-uac",
+            Capability::Network => "network",
+            Capability::WindowsSandbox => "windows-sandbox",
+            Capability::HyperV => "hyper-v",
+            Capability::HyperVSockets => "hyper-v-sockets",
         }
     }
 
@@ -88,11 +112,16 @@ impl Capability {
         Capability::ALL.into_iter().find(|c| c.name() == name)
     }
 
-    /// Capabilities that only an operator can declare.
+    /// Capabilities that only an operator or a disposable backend can declare.
     pub fn is_attested(self) -> bool {
         matches!(
             self,
-            Capability::Operator | Capability::PhysicalAudioDisconnect | Capability::DisposableOs
+            Capability::Operator
+                | Capability::PhysicalAudioDisconnect
+                | Capability::DisposableOs
+                | Capability::Reboot
+                | Capability::RealUac
+                | Capability::Network
         )
     }
 }
@@ -156,6 +185,8 @@ pub fn probe(attested: &[Capability]) -> CapabilitySet {
     }
     #[cfg(windows)]
     crate::win::probe_into(&mut set);
+    #[cfg(windows)]
+    crate::disposable::probe_into(&mut set);
     set
 }
 

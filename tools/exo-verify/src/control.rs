@@ -13,9 +13,6 @@ use std::time::{Duration, Instant};
 
 pub const PROTOCOL: u64 = 2;
 
-/// The oldest protocol the product still answers.
-pub const PROTOCOL_V1: u64 = 1;
-
 pub fn pipe_name(role: &str, run_id: &str) -> String {
     format!(r"\\.\pipe\ExoSnap.{role}.{run_id}")
 }

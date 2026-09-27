@@ -11,7 +11,7 @@
     derived the child's name wrongly would fail by hanging on a connect, which
     is the most expensive way to learn about a typo.
 
-    Deliberately not Pester, matching live-verify-state.tests.ps1.
+    Deliberately not Pester.
 #>
 
 Set-StrictMode -Version Latest

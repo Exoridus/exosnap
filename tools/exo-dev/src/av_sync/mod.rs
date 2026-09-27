@@ -687,7 +687,7 @@ mod tests {
         }
         let path = Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/av-sync/clapper-golden.mp4"
+            "/../../tests/samples/media/clapper-golden.mp4"
         ));
         let result = measure(path, 0.7, 0.5, 25.0, Some(5), None, 0.250, 2.0);
         assert!(result.measurable, "{:?}", result.error);

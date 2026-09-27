@@ -8,7 +8,7 @@ use super::common::{self, secs};
 use crate::capability::Capability;
 use crate::context::Context;
 use crate::plan::Tier;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
 
 pub fn scenarios() -> Vec<Scenario> {
@@ -16,7 +16,8 @@ pub fn scenarios() -> Vec<Scenario> {
         id: "capture.exclusive-fullscreen",
         revision: 2,
         title: "True exclusive fullscreen capture is detected and explained",
-        claim: "a probe that enters DXGI exclusive fullscreen is independently observed by PresentMon and the candidate reports the same presentation mode",
+        class: ScenarioClass::Hardware,
+        contract: "a probe that enters DXGI exclusive fullscreen is independently observed by PresentMon and the candidate reports the same presentation mode",
         lane: Lane::Hardware,
         also: &[],
         tier: Tier::Recommended,

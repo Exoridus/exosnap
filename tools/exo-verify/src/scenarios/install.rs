@@ -13,21 +13,22 @@ use crate::context::Context;
 use crate::control::{self, Client};
 use crate::package::walk_files;
 use crate::plan::Tier;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
 
 /// The registry key an installed ExoSnap publishes its product state under.
 /// Shared with the Chocolatey rehearsal, which installs and removes the same
 /// product through a different channel and must recognize the same state.
 pub(crate) const INSTALL_KEY: &str = r"HKLM\SOFTWARE\Codexo\ExoSnap";
-const USER_KEY: &str = r"HKCU\SOFTWARE\Codexo\ExoSnap";
+pub(crate) const USER_KEY: &str = r"HKCU\SOFTWARE\Codexo\ExoSnap";
 
 pub fn scenarios() -> Vec<Scenario> {
     vec![Scenario {
         id: "install.msi-cycle",
         revision: 1,
         title: "The MSI installs, starts, uninstalls and reinstalls cleanly",
-        claim: "on a clean disposable Windows machine, the MSI installs the portable bytes, first and second starts are healthy, uninstall preserves user settings, and reinstall restores the product",
+        class: ScenarioClass::Installer,
+        contract: "on a clean disposable Windows machine, the MSI installs the portable bytes, first and second starts are healthy, uninstall preserves user settings, and reinstall restores the product",
         lane: Lane::CiInstall,
         also: &[],
         tier: Tier::Required,
@@ -196,19 +197,14 @@ fn msi_cycle(ctx: &mut Context) -> Step {
     let installer = ctx.package(FileRole::Installer)?;
     let portable = ctx.product()?.root;
     let config = PathBuf::from(std::env::var("LOCALAPPDATA")?).join("ExoSnap");
-    let program_data = PathBuf::from(std::env::var("ProgramData")?).join("ExoSnap");
-    let default_install = PathBuf::from(std::env::var("ProgramFiles")?).join(r"Codexo\ExoSnap");
     let shortcut = PathBuf::from(std::env::var("ProgramData")?)
         .join(r"Microsoft\Windows\Start Menu\Programs\ExoSnap.lnk");
+    let residue = super::clean::residue()?;
+    ctx.evidence.put("residueBeforeInstall", json!(residue));
     infra_ensure!(
-        reg_value("InstallPath")?.is_none()
-            && reg_value("installed")?.is_none()
-            && !default_install.exists()
-            && !shortcut.exists()
-            && !config.exists()
-            && !program_data.exists()
-            && !reg_key_exists(USER_KEY)?,
-        "the disposable machine is not clean: installation or ExoSnap state already exists"
+        residue.is_empty(),
+        "the disposable machine is not clean: {}",
+        residue.join("; ")
     );
     msi(ctx, "/i", &installer, "install.log")?;
     let installed = reg_value("InstallPath")?

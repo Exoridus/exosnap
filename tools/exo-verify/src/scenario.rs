@@ -120,13 +120,56 @@ impl Lane {
     }
 }
 
+/// What kind of statement a scenario makes. The class decides which layer is
+/// allowed to judge it and what an absent capability means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScenarioClass {
+    /// Known input and configuration, compared against a stable oracle.
+    Regression,
+    /// A user-visible workflow preserves a durable product invariant.
+    Contract,
+    /// Whether this machine can qualify other scenarios. Never a product claim.
+    Capability,
+    /// A contract that only physical hardware can demonstrate.
+    Hardware,
+    /// Installing, updating or removing the product mutates the OS.
+    Installer,
+}
+
+impl ScenarioClass {
+    pub const ALL: [ScenarioClass; 5] = [
+        ScenarioClass::Regression,
+        ScenarioClass::Contract,
+        ScenarioClass::Capability,
+        ScenarioClass::Hardware,
+        ScenarioClass::Installer,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ScenarioClass::Regression => "regression",
+            ScenarioClass::Contract => "contract",
+            ScenarioClass::Capability => "capability",
+            ScenarioClass::Hardware => "hardware",
+            ScenarioClass::Installer => "installer",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<ScenarioClass> {
+        ScenarioClass::ALL.into_iter().find(|c| c.name() == name)
+    }
+}
+
 pub struct Scenario {
     pub id: &'static str,
     /// Bumped when the contract, oracle or stimulus changes materially.
     pub revision: u32,
     pub title: &'static str,
-    /// The product claim, in one sentence.
-    pub claim: &'static str,
+    pub class: ScenarioClass,
+    /// The current user-visible or release-critical property this scenario
+    /// protects. A scenario without one should not exist.
+    pub contract: &'static str,
     pub lane: Lane,
     /// Development lanes that also run this scenario against local bytes.
     pub also: &'static [Lane],

@@ -23,6 +23,10 @@ pub const REPORT_SCHEMA: &str = "exosnap.release-report/2";
 #[serde(rename_all = "camelCase")]
 pub struct Run {
     pub lane: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
     pub attempt: String,
     pub runner_version: String,
     pub finished_at: String,
@@ -58,6 +62,10 @@ pub struct ReportEntry {
 #[serde(rename_all = "camelCase")]
 pub struct LaneSummary {
     pub lane: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
     pub attempt: String,
     pub runner_version: String,
     pub started_at: String,
@@ -168,6 +176,8 @@ pub fn merge(
             for scenario in result.scenarios.iter().filter(|s| s.id == planned.id) {
                 runs.push(Run {
                     lane: result.lane.clone(),
+                    slot: result.slot.clone(),
+                    backend: result.backend.clone(),
                     attempt: result.attempt.clone(),
                     runner_version: result.runner_version.clone(),
                     finished_at: result.finished_at.clone(),
@@ -265,6 +275,8 @@ pub fn merge(
             }
             LaneSummary {
                 lane: r.lane.clone(),
+                slot: r.slot.clone(),
+                backend: r.backend.clone(),
                 attempt: r.attempt.clone(),
                 runner_version: r.runner_version.clone(),
                 started_at: r.started_at.clone(),
@@ -368,15 +380,17 @@ pub fn markdown(report: &Report) -> String {
     } else {
         let _ = writeln!(
             md,
-            "| Lane | Attempt | Finished | PASS | FAIL | UNAVAILABLE | INFRA_ERROR | SKIPPED | Runner |"
+            "| Lane | Slot | Backend | Attempt | Finished | PASS | FAIL | UNAVAILABLE | INFRA_ERROR | SKIPPED | Runner |"
         );
-        let _ = writeln!(md, "|---|---|---|---|---|---|---|---|---|");
+        let _ = writeln!(md, "|---|---|---|---|---|---|---|---|---|---|---|");
         for lane in &report.lanes {
             let c = |k: &str| lane.counts.get(k).copied().unwrap_or(0);
             let _ = writeln!(
                 md,
-                "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
                 lane.lane,
+                lane.slot.as_deref().unwrap_or("-"),
+                lane.backend.as_deref().unwrap_or("local"),
                 lane.attempt,
                 lane.finished_at,
                 c("PASS"),
@@ -427,14 +441,15 @@ pub fn markdown(report: &Report) -> String {
         }
         let _ = writeln!(md, "## {heading}");
         let _ = writeln!(md);
-        let _ = writeln!(md, "| Scenario | Lane | Verdict | Detail |");
-        let _ = writeln!(md, "|---|---|---|---|");
+        let _ = writeln!(md, "| Scenario | Lane | Slot | Verdict | Detail |");
+        let _ = writeln!(md, "|---|---|---|---|---|");
         for e in rows {
             let _ = writeln!(
                 md,
-                "| {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} |",
                 e.id,
                 e.lane,
+                slots(e),
                 verdict_cell(e),
                 one_line(&e.detail)
             );
@@ -454,6 +469,23 @@ pub fn markdown(report: &Report) -> String {
         }
     }
     md
+}
+
+/// The slots whose runs of the planned revision produced this verdict.
+fn slots(e: &ReportEntry) -> String {
+    let mut names: Vec<&str> = e
+        .runs
+        .iter()
+        .filter(|r| r.scenario_revision == e.planned_revision)
+        .map(|r| r.slot.as_deref().unwrap_or("-"))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    if names.is_empty() {
+        "-".into()
+    } else {
+        names.join(", ")
+    }
 }
 
 fn xml_escape(text: &str) -> String {
@@ -611,6 +643,8 @@ mod tests {
             environment: BTreeMap::new(),
             tools: BTreeMap::new(),
             capabilities: vec![],
+            slot: None,
+            backend: None,
             scenarios: verdicts
                 .iter()
                 .map(|(id, v)| ScenarioResult {
@@ -762,11 +796,11 @@ mod tests {
         );
         let md = markdown(&r);
         assert!(
-            md.contains("| a | release-ci-core | FAIL (attempts: FAIL, PASS; inconsistent) |"),
+            md.contains("| a | release-ci-core | - | FAIL (attempts: FAIL, PASS; inconsistent) |"),
             "{md}"
         );
         assert!(
-            md.contains("| b | release-ci-core | PASS (attempts: PASS, PASS) |"),
+            md.contains("| b | release-ci-core | - | PASS (attempts: PASS, PASS) |"),
             "{md}"
         );
         assert_eq!(r.lanes.len(), 2, "each attempt keeps its lane summary");
@@ -851,7 +885,8 @@ mod tests {
         }
         assert_eq!(r.scenarios[0].runs[0].verdict, Verdict::InfraError);
         assert!(
-            markdown(&r).contains("| a | release-ci-core | PASS (attempts: INFRA ERROR, PASS) |")
+            markdown(&r)
+                .contains("| a | release-ci-core | - | PASS (attempts: INFRA ERROR, PASS) |")
         );
     }
 
@@ -904,7 +939,7 @@ mod tests {
         assert_eq!(a.runs.len(), 2, "the other revision stays visible");
         assert!(r.ready_for_approval);
         assert!(
-            markdown(&r).contains("| a | release-ci-core | PASS |"),
+            markdown(&r).contains("| a | release-ci-core | - | PASS |"),
             "another revision is not part of the attempt history"
         );
     }

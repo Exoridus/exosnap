@@ -12,18 +12,8 @@
 //! FFmpeg archive, `.qt-version` for Qt, and the vendored source trees
 //! themselves for the amalgamations that carry no version string.
 //!
-//! The release packaging path does not call `derive` yet: the dependency
-//! inventory it should join is still assembled by
-//! `scripts/build-release-artifacts.ps1`, so this is a parallel, currently
-//! unwired implementation kept alongside that script's own.
-
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "the release packaging path does not consume the dependency inventory yet"
-    )
-)]
+//! `exo-verify package` records the inventory in `package.json`, which the
+//! candidate bundle carries as metadata.
 
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
@@ -35,7 +25,8 @@ use crate::package::walk_files;
 
 /// One third-party component's identity, with whichever fields its pin
 /// provides.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DependencyEntry {
     pub name: String,
     pub linkage: String,
@@ -71,6 +62,7 @@ pub struct DependencyInventory {
 }
 
 impl DependencyInventory {
+    #[cfg(test)]
     pub fn find(&self, name: &str) -> Option<&DependencyEntry> {
         self.entries.iter().find(|entry| entry.name == name)
     }
@@ -153,9 +145,8 @@ fn fetch_content_pin(text: &str, name: &str) -> Option<FetchContentPin> {
 /// file has to change the digest, or the digest would not identify the
 /// tree.
 fn vendored_source_hash(directory: &Path) -> Result<String> {
-    // PowerShell's default `Sort-Object` is case-insensitive, unlike a plain
-    // byte comparison of paths. Matching it keeps this hash identical to the
-    // one `scripts/lib/DependencyIdentity.psm1` records for the same tree.
+    // The case-insensitive order is part of the recorded identity: changing it
+    // changes the hash of every vendored tree.
     let mut relatives: Vec<(String, std::path::PathBuf)> = walk_files(directory)?
         .into_iter()
         .map(|path| {

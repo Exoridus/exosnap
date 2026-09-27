@@ -64,7 +64,7 @@ A longer recording alone does not improve total-drift uncertainty: improved rate
 
 Absolute A/V offset includes the stimulus setup's display/audio emission skew. Report it, but the drift verdict concerns change over time, not an uncalibrated intercept. Large opposing segments are a reliability finding even when endpoint differences cancel.
 
-The committed golden clip under `tests/fixtures/av-sync` and `cargo exo-dev gen-av-sync-fixture` test the analysis path against a declared synthetic timeline. That guards the analyzer, not a user's hardware synchronization.
+The committed golden clip under `tests/samples/media` and `cargo exo-dev gen-av-sync-fixture` test the analysis path against a declared synthetic timeline. That guards the analyzer, not a user's hardware synchronization.
 
 ## Release soak inspection
 

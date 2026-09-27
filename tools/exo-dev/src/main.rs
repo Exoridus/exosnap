@@ -164,7 +164,7 @@ struct FixtureArgs {
     /// Marker count (at least 2).
     #[arg(long, default_value_t = 5)]
     markers: usize,
-    /// Output path. Defaults to tests/fixtures/av-sync/clapper-golden.mp4.
+    /// Output path. Defaults to tests/samples/media/clapper-golden.mp4.
     #[arg(long)]
     out: Option<PathBuf>,
 }

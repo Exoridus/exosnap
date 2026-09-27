@@ -102,8 +102,8 @@ pub fn generate(spec: &FixtureSpec) -> anyhow::Result<Vec<f64>> {
 pub fn default_out(repo_root: &Path) -> PathBuf {
     repo_root
         .join("tests")
-        .join("fixtures")
-        .join("av-sync")
+        .join("samples")
+        .join("media")
         .join("clapper-golden.mp4")
 }
 

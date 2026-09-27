@@ -7,7 +7,7 @@ use super::common::secs;
 use crate::capability::Capability;
 use crate::context::Context;
 use crate::plan::Tier;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
 
 pub fn scenarios() -> Vec<Scenario> {
@@ -16,7 +16,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "environment.classification",
             revision: 1,
             title: "Environment properties have explicit capability classes and mechanisms",
-            claim: "the complete environment catalogue classifies every property and names its read mechanism and any supported mutation mechanism",
+            class: ScenarioClass::Capability,
+            contract: "the complete environment catalogue classifies every property and names its read mechanism and any supported mutation mechanism",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Required,
@@ -28,7 +29,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "environment.aliases",
             revision: 1,
             title: "Configured device aliases resolve without ambiguity",
-            claim: "the configured alias profile contains at least one binding and none resolves ambiguously",
+            class: ScenarioClass::Capability,
+            contract: "the configured alias profile contains at least one binding and none resolves ambiguously",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Required,

@@ -279,10 +279,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: '3.12'
-
       - name: Provision + verify system ffmpeg
         # Explicit install so the job is not silently green/red on runner-image
         # drift. The analyzer's drift math is version-robust (PTS come from a
@@ -292,12 +288,15 @@ jobs:
           ffmpeg -version
           ffprobe -version
 
-      # The analyzer against the golden clapper clip. Its budget and marker count
-      # are explained at the av-sync-golden step in tools/exo-dev/src/step.rs.
-      - name: A/V-sync analyzer vs golden fixture (exo-dev ci-dev-scripts)
+      # The analyzer against the golden clapper clip (its budget and marker count
+      # are explained at the av-sync-golden step in tools/exo-dev/src/step.rs),
+      # then the deterministic sample suite under tests/samples.
+      - name: A/V-sync analyzer and sample suite (exo-dev ci-dev-scripts)
         env:
           EVENT: ${{ github.event_name }}
-        run: cargo exo-dev verify --profile ci-dev-scripts --event $env:EVENT
+        run: |
+          cargo build --manifest-path tools/Cargo.toml -p exo-verify
+          cargo exo-dev verify --profile ci-dev-scripts --event $env:EVENT
 
   # ---------------------------------------------------------------------------
   # Detect whether this PR touches packaging-relevant or build/tooling-relevant
@@ -353,7 +352,8 @@ jobs:
           filters: |
             packaging:
               - 'packaging/**'
-              - 'scripts/build-release-artifacts.ps1'
+              - 'tools/exo-verify/src/package.rs'
+              - 'tools/exo-verify/src/package/**'
               - 'cmake/Vendor*'
               - 'CMakeLists.txt'
               - 'app/CMakeLists.txt'
@@ -624,8 +624,7 @@ jobs:
         with:
           name: packaging-smoke-report
           path: |
-            .workspace/release/*/validation-report.md
-            .workspace/release/*/artifact-manifest.json
+            .workspace/package-smoke/package.json
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------

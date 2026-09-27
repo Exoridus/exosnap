@@ -57,7 +57,7 @@ pub fn run_one(scenario: &Scenario, ctx: &mut Context) -> ScenarioResult {
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| (scenario.run)(ctx)));
     let cleanup = ctx.job.terminate();
     let (mut verdict, mut detail) = match outcome {
-        Ok(Ok(())) => (Verdict::Pass, scenario.claim.to_string()),
+        Ok(Ok(())) => (Verdict::Pass, scenario.contract.to_string()),
         Ok(Err(Stop::Fail(m))) => (Verdict::Fail, m),
         Ok(Err(Stop::Unavailable(m))) => (Verdict::Unavailable, m),
         Ok(Err(Stop::Infra(e))) => (Verdict::InfraError, format!("{e:#}")),
@@ -194,6 +194,8 @@ pub fn run_lane(
         environment: ctx.caps.facts.clone(),
         tools,
         capabilities: ctx.caps.names(),
+        slot: None,
+        backend: None,
         scenarios,
     }
 }

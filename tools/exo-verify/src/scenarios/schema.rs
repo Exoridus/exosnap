@@ -7,7 +7,7 @@ use super::common::{self, secs};
 use crate::capability::Capability;
 use crate::context::{App, Context};
 use crate::plan::Tier;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
 
 type Field = (&'static str, &'static str);
@@ -69,7 +69,8 @@ pub fn scenarios() -> Vec<Scenario> {
         id: "schema.live-verify-fields",
         revision: 2,
         title: "Live Verify fields consumed by release scenarios are emitted",
-        claim: "every declared field exists in idle, measured recording and completed-result snapshots, including the shape of every nonempty collection, and the primary screen's display device selects its monitor target",
+        class: ScenarioClass::Contract,
+        contract: "every declared field exists in idle, measured recording and completed-result snapshots, including the shape of every nonempty collection, and the primary screen's display device selects its monitor target",
         lane: Lane::Gpu,
         also: &[],
         tier: Tier::Required,

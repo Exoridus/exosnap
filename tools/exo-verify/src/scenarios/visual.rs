@@ -7,7 +7,7 @@ use super::common::{self, secs};
 use crate::capability::Capability;
 use crate::context::{App, Context};
 use crate::plan::Tier;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
 
 pub fn scenarios() -> Vec<Scenario> {
@@ -16,7 +16,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "visual.capture-overlays",
             revision: 1,
             title: "Capture overlays stay legible under light and dark Windows appearances",
-            claim: "visible native capture overlays compose with fixed dark surfaces and legible text under both Windows app appearances, judged on the desktop by an operator",
+            class: ScenarioClass::Hardware,
+            contract: "visible native capture overlays compose with fixed dark surfaces and legible text under both Windows app appearances, judged on the desktop by an operator",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Recommended,
@@ -34,7 +35,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "visual.notification-severity",
             revision: 1,
             title: "Notifications show a glyph and tint matching each severity",
-            claim: "synthetic success, caution, error and info notifications reach the hub and desktop, where an operator judges their glyphs and tints",
+            class: ScenarioClass::Hardware,
+            contract: "synthetic success, caution, error and info notifications reach the hub and desktop, where an operator judges their glyphs and tints",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Recommended,

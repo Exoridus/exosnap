@@ -8,6 +8,8 @@ Broaden real-hardware coverage of capture transitions, HDR, high-refresh recordi
 
 Complete candidate-bound verification where a scenario still cannot prove which installed bytes it exercised. Continue hardening disposable-environment provisioning, interactive-console execution, clean installation, upgrade and restoration. A gate body existing is not evidence that its preconditions can be satisfied or that a release passed it.
 
+Verification tooling converges on Rust: `exo-dev` for repository checks, `exo-verify` for product verification, `exo-guest` inside disposable VMs. The PowerShell Hyper-V recipe (`tools/vm`), its clean-machine worker and `LiveVerifyClient.psm1` remain until the Rust Hyper-V backend has run the same nondestructive scenarios with matching verdicts, evidence, cleanup and timeout behavior. After that, the only PowerShell left is the Chocolatey install and uninstall scripts that package contract requires.
+
 Strengthen display restoration against identity ambiguity. The current matcher prefers an exact connector path before panel metadata; it cannot guarantee that a different physical panel on that connector will be rejected. Any stronger promise needs matcher changes and regression tests, not just different wording.
 
 Maintain repeatable privacy review and symbol delivery for official crash reports. Authenticode signing and its operational integration remain release work; signed update manifests are not a substitute for executable publisher signing. Keep signing status explicit in release documentation.

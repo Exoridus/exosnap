@@ -1,0 +1,32 @@
+[package]
+name = "exo-guest"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "ExoSnap verification guest agent and its Hyper-V socket protocol"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "exo-guest"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64 = "0.22"
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_System_Hypervisor",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Shutdown",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+] }

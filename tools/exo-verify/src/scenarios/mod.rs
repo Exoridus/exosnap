@@ -4,6 +4,7 @@ pub mod app;
 pub mod audio;
 pub mod capture;
 mod chocolatey_worker;
+pub mod clean;
 #[cfg(test)]
 mod command_names;
 pub mod common;
@@ -11,9 +12,12 @@ pub mod display;
 pub mod dist;
 pub mod env;
 pub mod fse;
+pub mod handoff;
 pub mod install;
 pub mod journey;
+pub mod overlay;
 pub mod present;
+pub mod preview;
 pub mod record;
 pub mod schema;
 pub mod update;
@@ -25,6 +29,7 @@ pub fn registry() -> Vec<Scenario> {
     let mut all = Vec::new();
     all.extend(dist::scenarios());
     all.extend(env::scenarios());
+    all.extend(clean::scenarios());
     all.extend(fse::scenarios());
     all.extend(app::scenarios());
     all.extend(audio::scenarios());
@@ -32,10 +37,13 @@ pub fn registry() -> Vec<Scenario> {
     all.extend(display::scenarios());
     all.extend(install::scenarios());
     all.extend(journey::scenarios());
+    all.extend(overlay::scenarios());
     all.extend(present::scenarios());
+    all.extend(preview::scenarios());
     all.extend(record::scenarios());
     all.extend(schema::scenarios());
     all.extend(update::scenarios());
+    all.extend(handoff::scenarios());
     all.extend(visual::scenarios());
     all
 }
@@ -60,8 +68,30 @@ mod tests {
                 s.id
             );
             assert!(s.revision >= 1);
-            assert!(!s.claim.is_empty() && !s.title.is_empty());
+            assert!(!s.contract.is_empty() && !s.title.is_empty());
             assert!(!s.also.contains(&s.lane));
+        }
+    }
+
+    #[test]
+    fn classes_are_consistent_with_their_requirements() {
+        use crate::capability::Capability;
+        use crate::scenario::ScenarioClass;
+        for s in registry() {
+            match s.class {
+                ScenarioClass::Installer => assert!(
+                    s.requires.contains(&Capability::DisposableOs),
+                    "{} mutates the OS without a disposable one",
+                    s.id
+                ),
+                ScenarioClass::Regression => assert!(
+                    !s.requires.contains(&Capability::DisposableOs)
+                        && !s.requires.contains(&Capability::Operator),
+                    "{} is a regression check yet needs more than known inputs",
+                    s.id
+                ),
+                _ => {}
+            }
         }
     }
 
@@ -84,9 +114,13 @@ mod tests {
 
     #[test]
     fn install_lane_requires_disposable_admin_desktop() {
+        // A capability check qualifies the install machine and installs nothing.
         let install: Vec<_> = registry()
             .into_iter()
-            .filter(|s| s.lane == crate::scenario::Lane::CiInstall)
+            .filter(|s| {
+                s.lane == crate::scenario::Lane::CiInstall
+                    && s.class != crate::scenario::ScenarioClass::Capability
+            })
             .collect();
         assert!(!install.is_empty(), "install lane has no scenarios");
         for scenario in install {
