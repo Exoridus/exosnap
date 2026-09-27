@@ -207,10 +207,14 @@ pub fn run(plan: &Plan, executor: &mut dyn Executor) -> RunResult {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::plan::tests::{files, input};
+    use crate::plan::tests::{files, full_test_spec, input, input_for_spec};
     use crate::plan::{self, Check};
-    use crate::profile::Profile;
+    use crate::profile::{Profile, ProfileSpec};
     use crate::scope::Scope;
+
+    fn run_with_spec(spec: ProfileSpec, scope: &Scope, fake: &mut Fake) -> RunResult {
+        run(&plan::build(&input_for_spec(spec, scope)), fake)
+    }
 
     /// Passes everything except the named checks and records what it started.
     pub struct Fake {
@@ -248,14 +252,10 @@ pub(crate) mod tests {
         }
     }
 
-    fn run_with(profile: Profile, scope: &Scope, fake: &mut Fake) -> RunResult {
-        run(&plan::build(&input(profile, scope)), fake)
-    }
-
     #[test]
     fn a_diff_failure_stops_everything_after_it() {
         let mut fake = Fake::failing(&["diff"]);
-        let run = run_with(Profile::PrePush, &Scope::everything(), &mut fake);
+        let run = run_with_spec(full_test_spec(false), &Scope::everything(), &mut fake);
         assert!(!run.passed);
         assert_eq!(run.check("diff").status, Status::Fail);
         for later in [
@@ -282,7 +282,7 @@ pub(crate) mod tests {
     #[test]
     fn a_format_failure_stops_the_compile() {
         let mut fake = Fake::failing(&["format"]);
-        let run = run_with(Profile::PrePush, &Scope::everything(), &mut fake);
+        let run = run_with_spec(full_test_spec(false), &Scope::everything(), &mut fake);
         assert!(!run.passed);
         assert!(!fake.started.contains(&"build"));
         assert!(matches!(
@@ -304,7 +304,7 @@ pub(crate) mod tests {
             "network-egress",
         ] {
             let mut fake = Fake::failing(&[name]);
-            let run = run_with(Profile::PrePush, &Scope::everything(), &mut fake);
+            let run = run_with_spec(full_test_spec(false), &Scope::everything(), &mut fake);
             assert!(!run.passed, "{name} must be a blocking gate");
         }
     }
@@ -312,7 +312,7 @@ pub(crate) mod tests {
     #[test]
     fn a_failed_build_never_leaves_a_passing_test_result() {
         let mut fake = Fake::failing(&["build"]);
-        let run = run_with(Profile::PrePush, &Scope::everything(), &mut fake);
+        let run = run_with_spec(full_test_spec(false), &Scope::everything(), &mut fake);
         assert_eq!(run.check("build").status, Status::Fail);
         assert_eq!(run.check("tests").status, Status::SkippedDependency);
         assert_eq!(run.check("clang-tidy").status, Status::SkippedDependency);
@@ -322,7 +322,7 @@ pub(crate) mod tests {
     #[test]
     fn a_failed_configure_blocks_qmllint_build_and_tests() {
         let mut fake = Fake::failing(&["configure"]);
-        let run = run_with(Profile::PrePush, &Scope::everything(), &mut fake);
+        let run = run_with_spec(full_test_spec(false), &Scope::everything(), &mut fake);
         assert_eq!(run.check("qmllint").status, Status::SkippedDependency);
         assert_eq!(run.check("build").status, Status::SkippedDependency);
         assert_ne!(run.check("tests").status, Status::Pass);
@@ -331,7 +331,7 @@ pub(crate) mod tests {
     #[test]
     fn an_out_of_scope_prerequisite_does_not_block() {
         let scope = files(&[".github/workflows/ci.yml"]);
-        let run = run_with(Profile::PreCommit, &scope, &mut Fake::failing(&[]));
+        let run = run_with_spec(full_test_spec(true), &scope, &mut Fake::failing(&[]));
         assert_eq!(run.check("build").status, Status::Skip);
         assert_eq!(run.check("tests").status, Status::Skip);
         assert!(run.passed);
@@ -341,14 +341,14 @@ pub(crate) mod tests {
     fn a_failing_qml_test_carries_its_diagnosis() {
         let mut fake = Fake::failing(&["tests"]);
         fake.diagnosis = vec!["C:/logs/record_controls_qml_tests.txt".into()];
-        let run = run_with(Profile::PrePush, &Scope::everything(), &mut fake);
+        let run = run_with_spec(full_test_spec(false), &Scope::everything(), &mut fake);
         assert_eq!(run.check("tests").diagnostics.len(), 1);
     }
 
     #[test]
     fn a_qml_failure_without_a_diagnosis_says_so() {
         let mut fake = Fake::failing(&["tests"]);
-        let run = run_with(Profile::PrePush, &Scope::everything(), &mut fake);
+        let run = run_with_spec(full_test_spec(false), &Scope::everything(), &mut fake);
         assert!(
             run.check("tests")
                 .detail
@@ -360,7 +360,7 @@ pub(crate) mod tests {
     fn a_missing_tool_is_never_pass_and_fails_a_complete_run() {
         let mut fake = Fake::failing(&[]);
         fake.missing = vec!["cppcheck"];
-        let scoped = run_with(Profile::PreCommit, &files(&["libs/a.cpp"]), &mut fake);
+        let scoped = run_with_spec(full_test_spec(true), &files(&["libs/a.cpp"]), &mut fake);
         assert_eq!(scoped.check("cppcheck").status, Status::ToolMissing);
         assert_eq!(scoped.tool_missing, vec!["cppcheck"]);
         assert!(
@@ -370,7 +370,7 @@ pub(crate) mod tests {
 
         let mut fake = Fake::failing(&[]);
         fake.missing = vec!["cppcheck"];
-        let complete = run_with(Profile::PrePush, &Scope::everything(), &mut fake);
+        let complete = run_with_spec(full_test_spec(false), &Scope::everything(), &mut fake);
         assert!(
             !complete.passed,
             "a complete run may not pass over a gate that never started"

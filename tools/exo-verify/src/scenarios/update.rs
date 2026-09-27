@@ -21,10 +21,10 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             id: "update.portable",
-            revision: 3,
+            revision: 4,
             title: "Portable update installs and relaunches the candidate",
             class: ScenarioClass::Installer,
-            contract: "the old portable build accepts the signed candidate offer, installs the bound candidate bytes and relaunches the candidate from the updated tree",
+            contract: "the old portable build accepts the signed candidate offer, installs the bound candidate bytes, taking at most the one retry the updater offers when the install step failed with the installation intact, and relaunches the candidate from the updated tree",
             lane: Lane::CiUpdate,
             also: &[],
             tier: Tier::Required,
@@ -631,10 +631,26 @@ fn drive_update(
     let mut updater = Client::connect("Updater", run_id, Duration::from_secs(30))?;
     let until = Instant::now() + Duration::from_secs(if decline { 90 } else { 480 });
     let mut final_state = Value::Null;
+    let mut retried = false;
     while Instant::now() < until {
         match updater.call("updater.getState", json!({})) {
             Ok(state) => {
                 final_state = state;
+                // Another process can briefly hold a file in the old portable
+                // tree (a scanner, a provisioning agent), and a released
+                // updater may try the move only once. A user gets the same
+                // retry offer; the first failure stays in the evidence.
+                if !installed && !decline && !retried && offers_install_retry(&final_state) {
+                    ctx.evidence.put("firstAttempt", final_state.clone());
+                    updater
+                        .request("updater.retry", json!({}), Duration::from_secs(10))?
+                        .map_err(|refusal| {
+                            Stop::fail(format!("the updater refused its offered retry: {refusal}"))
+                        })?;
+                    retried = true;
+                    std::thread::sleep(Duration::from_millis(250));
+                    continue;
+                }
                 if decline && final_state["failureCase"] == "uacDeclined" {
                     break;
                 }
@@ -888,6 +904,17 @@ fn declined_state(state: &Value) -> Step {
     Ok(())
 }
 
+/// The only retry the verifier takes on the user's behalf: the install step
+/// failed, the installation is intact and the updater itself offers a retry.
+fn offers_install_retry(state: &Value) -> bool {
+    state["phase"] == "failed"
+        && state["failureCase"] == "installFailed"
+        && state["installState"] == "intact"
+        && state["availableActions"]
+            .as_array()
+            .is_some_and(|actions| actions.iter().any(|action| action == "updater.retry"))
+}
+
 fn accepted_state(state: &Value) -> Step {
     product_ensure!(
         state["phase"] == "completed" && state["failureCase"].is_null(),
@@ -900,6 +927,27 @@ fn accepted_state(state: &Value) -> Step {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn only_an_offered_retry_of_an_intact_install_failure_is_taken() {
+        let offered = json!({
+            "phase": "failed",
+            "failureCase": "installFailed",
+            "installState": "intact",
+            "availableActions": ["updater.close", "updater.retry"]
+        });
+        assert!(offers_install_retry(&offered));
+        for (field, value) in [
+            ("installState", json!("strandedInBackup")),
+            ("failureCase", json!("verifyDownloadFailed")),
+            ("availableActions", json!(["updater.close"])),
+            ("phase", json!("installing")),
+        ] {
+            let mut state = offered.clone();
+            state[field] = value;
+            assert!(!offers_install_retry(&state), "{field}");
+        }
+    }
 
     #[test]
     fn decline_requires_failure_case_and_safe_installation() {

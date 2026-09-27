@@ -51,11 +51,24 @@ fn an_all_green_scoped_run_exits_zero_and_says_so() {
     assert_eq!(receipt["profile"], "pre-commit");
 }
 
+// Build and tests moved off pre-commit/pre-push (see profile::LOCAL_STEPS):
+// ci-build-debug is where they now block, so that is what these two
+// simulated-failure tests exercise.
+
 #[test]
 fn a_simulated_build_failure_exits_non_zero_and_skips_the_tests() {
     let dir = tempfile::tempdir().unwrap();
     let (code, receipt) = exo_dev(
-        &["verify", "--full", "--dry-run", "--simulate-fail", "build"],
+        &[
+            "verify",
+            "--profile",
+            "ci-build-debug",
+            "--event",
+            "push",
+            "--dry-run",
+            "--simulate-fail",
+            "build",
+        ],
         &dir.path().join("r.json"),
     );
     assert_eq!(code, 1);
@@ -70,7 +83,16 @@ fn a_simulated_build_failure_exits_non_zero_and_skips_the_tests() {
 fn a_simulated_test_failure_carries_qml_evidence() {
     let dir = tempfile::tempdir().unwrap();
     let (code, receipt) = exo_dev(
-        &["verify", "--full", "--dry-run", "--simulate-fail", "tests"],
+        &[
+            "verify",
+            "--profile",
+            "ci-build-debug",
+            "--event",
+            "push",
+            "--dry-run",
+            "--simulate-fail",
+            "tests",
+        ],
         &dir.path().join("r.json"),
     );
     assert_ne!(code, 0);
@@ -114,4 +136,61 @@ fn a_ci_profile_plans_its_event_specific_steps() {
         "whole-tree"
     );
     assert_eq!(receipt["mode"], "Full");
+}
+
+fn planned_names(receipt: &Value) -> Vec<String> {
+    receipt["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The compiler/analysis steps moved from the local hooks to PR CI (section 6/7
+/// of the quality sweep). A step absent from a profile's plan is the actual
+/// proof it does not run there; a hook that merely exits zero proves nothing.
+#[test]
+fn pre_commit_and_pre_push_no_longer_plan_the_moved_compiler_steps() {
+    let moved = [
+        "configure",
+        "qmllint",
+        "build",
+        "tests",
+        "cppcheck",
+        "clang-tidy",
+    ];
+    for args in [
+        vec!["verify", "--fast", "--dry-run"],
+        vec!["verify", "--full", "--dry-run"],
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (code, receipt) = exo_dev(&args, &dir.path().join("r.json"));
+        assert_eq!(code, 0, "{args:?} exited {code}");
+        let planned = planned_names(&receipt);
+        for name in moved {
+            assert!(
+                !planned.contains(&name.to_string()),
+                "{args:?} still plans {name}: {planned:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ci_lint_plans_the_build_free_cppcheck_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, receipt) = exo_dev(
+        &[
+            "verify",
+            "--profile",
+            "ci-lint",
+            "--event",
+            "push",
+            "--dry-run",
+        ],
+        &dir.path().join("r.json"),
+    );
+    assert_eq!(code, 0);
+    assert!(planned_names(&receipt).contains(&"cppcheck".to_string()));
 }
