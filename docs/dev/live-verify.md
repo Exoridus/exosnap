@@ -87,6 +87,8 @@ Cancel is honored only during download. Checking and waiting for the parent do n
 
 UI Automation can establish that a capture-excluded window exists and contains text. It cannot establish the color/alpha the desktop actually composes. A scene-graph grab has the same limit. A native interactive cross-monitor drag differs from programmatic placement. UAC is a Secure Desktop decision, never a scripted click.
 
+`overlay.operable-hit-test` checks hit-testing, input regions and window styles; it does not deliver a click. When a change touches overlay input routing (window styles, `WM_NCHITTEST`, regions or z-order), confirm real delivery once with a `SendInput` click onto a stimulus window beneath the overlay that belongs to a different process than the overlay. A probe whose overlay and stimulus share a process is not evidence, because hit-test forwarding within one thread can succeed where cross-process routing fails. Synthesized input takes the desktop, so it needs the same coordination as any other input on a shared machine.
+
 A scenario prepares machine-observable state, asks one bounded human question only at the irreducible boundary, and verifies the observable consequence afterward. A local run validates reachable behavior/infrastructure, not official candidate acceptance.
 
 Tests live in the protocol/server suites:

@@ -314,13 +314,35 @@ fn contains(rect: ScreenRect, (x, y): (i32, i32)) -> bool {
     x >= rect[0] && x < rect[2] && y >= rect[1] && y < rect[3]
 }
 
-/// Whether a screen point lies in a window's input region. `region` holds the
-/// region's rectangles in window coordinates; `None` means no region is set,
-/// so the whole window rectangle takes input.
-fn takes_input(rect: ScreenRect, region: Option<&[ScreenRect]>, point: (i32, i32)) -> bool {
+/// A window's input region as Windows reports it.
+#[derive(Debug, PartialEq)]
+enum InputRegion {
+    /// `GetWindowRgn` answered ERROR, which means either that no region is set
+    /// or that it could not be read. Only produced for a handle already
+    /// confirmed to be a live window of the expected process; the evidence
+    /// keeps the ambiguity visible.
+    Unrestricted,
+    /// The region's rectangles in window coordinates. Empty when the region is
+    /// set but empty: nothing takes input.
+    Parts(Vec<ScreenRect>),
+}
+
+impl InputRegion {
+    fn evidence(&self) -> Value {
+        match self {
+            InputRegion::Unrestricted => {
+                json!({ "kind": "none-or-unreadable", "parts": null })
+            }
+            InputRegion::Parts(parts) => json!({ "kind": "region", "parts": parts }),
+        }
+    }
+}
+
+/// Whether a screen point lies in a window's input region.
+fn takes_input(rect: ScreenRect, region: &InputRegion, point: (i32, i32)) -> bool {
     match region {
-        None => contains(rect, point),
-        Some(parts) => parts.iter().any(|part| {
+        InputRegion::Unrestricted => contains(rect, point),
+        InputRegion::Parts(parts) => parts.iter().any(|part| {
             contains(
                 [
                     rect[0] + part[0],
@@ -342,7 +364,7 @@ fn takes_input(rect: ScreenRect, region: Option<&[ScreenRect]>, point: (i32, i32
 fn probe_point(
     rect: ScreenRect,
     others: &[ScreenRect],
-    region: Option<&[ScreenRect]>,
+    region: &InputRegion,
 ) -> Option<(i32, i32)> {
     let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
     let mut grid: Vec<(i32, i32)> = (1..8)
@@ -355,6 +377,17 @@ fn probe_point(
             !others.iter().any(|other| contains(*other, *point))
                 && takes_input(rect, region, *point)
         })
+}
+
+/// The overlay's native window handle from its snapshot. Handles are
+/// sign-extended 32-bit values, so the product reports them as signed integers.
+fn overlay_hwnd(overlay: &Value, name: &str) -> Step<u64> {
+    match overlay["native"]["hwnd"].as_i64() {
+        Some(hwnd) if hwnd != 0 => Ok(hwnd as u64),
+        _ => Err(Stop::infra(format!(
+            "{name} snapshot has no non-zero integer native.hwnd"
+        ))),
+    }
 }
 
 /// Runs `f` with physical-pixel coordinates. Overlay geometry is in physical
@@ -375,62 +408,88 @@ fn per_monitor_aware<T>(f: impl FnOnce() -> T) -> T {
     }
 }
 
-/// The input region Windows holds for `hwnd`, as rectangles in window
-/// coordinates. `QWindow::setMask()` is applied as the window region, which
-/// both clips drawing and restricts hit-testing. `None` when no region is set.
-/// An empty list means a region is set but empty: nothing takes input.
+/// The input region Windows holds for `hwnd`. `QWindow::setMask()` is applied
+/// as the window region, which both clips drawing and restricts hit-testing.
+///
+/// Fails when `hwnd` is not a live window of `expected_pid` or the region data
+/// cannot be read, so that a failed query is never mistaken for a window
+/// without a region.
 #[cfg(windows)]
-fn input_region(hwnd: u64) -> Option<Vec<ScreenRect>> {
+fn input_region(hwnd: u64, expected_pid: u32) -> Result<InputRegion, String> {
     use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::Graphics::Gdi::{
         COMPLEXREGION, CreateRectRgn, DeleteObject, GetRegionData, GetWindowRgn, NULLREGION,
         RGNDATAHEADER, SIMPLEREGION,
     };
-    if hwnd == 0 {
-        return None;
-    }
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow};
+    let window = HWND(hwnd as usize as *mut core::ffi::c_void);
     per_monitor_aware(|| unsafe {
+        if !IsWindow(Some(window)).as_bool() {
+            return Err(format!("{hwnd:#x} is not a window"));
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(window, Some(&mut pid));
+        if pid != expected_pid {
+            return Err(format!(
+                "{hwnd:#x} belongs to process {pid}, not {expected_pid}"
+            ));
+        }
         let region = CreateRectRgn(0, 0, 0, 0);
-        let kind = GetWindowRgn(HWND(hwnd as usize as *mut core::ffi::c_void), region);
-        let parts = if kind == NULLREGION {
-            Some(Vec::new())
+        if region.is_invalid() {
+            return Err("CreateRectRgn failed".to_string());
+        }
+        let kind = GetWindowRgn(window, region);
+        let result = if kind == NULLREGION {
+            Ok(InputRegion::Parts(Vec::new()))
         } else if kind == SIMPLEREGION || kind == COMPLEXREGION {
             // u32 storage keeps the RGNDATA header and its RECT array aligned.
             let size = GetRegionData(region, 0, None) as usize;
             let mut buffer = vec![0u32; size.div_ceil(4)];
-            let written = GetRegionData(region, size as u32, Some(buffer.as_mut_ptr().cast()));
-            (written as usize == size && size >= size_of::<RGNDATAHEADER>()).then(|| {
+            let written = if size >= size_of::<RGNDATAHEADER>() {
+                GetRegionData(region, size as u32, Some(buffer.as_mut_ptr().cast())) as usize
+            } else {
+                0
+            };
+            if written == 0 || written != size {
+                Err(format!("GetRegionData failed for {hwnd:#x}"))
+            } else {
                 let header = &*buffer.as_ptr().cast::<RGNDATAHEADER>();
-                let first = buffer
-                    .as_ptr()
-                    .cast::<u8>()
-                    .add(header.dwSize as usize)
-                    .cast::<RECT>();
-                std::slice::from_raw_parts(first, header.nCount as usize)
-                    .iter()
-                    .map(|r| [r.left, r.top, r.right, r.bottom])
-                    .collect()
-            })
+                let offset = header.dwSize as usize;
+                let count = header.nCount as usize;
+                if offset + count * size_of::<RECT>() > size {
+                    Err(format!(
+                        "GetRegionData returned a truncated region for {hwnd:#x}"
+                    ))
+                } else {
+                    let first = buffer.as_ptr().cast::<u8>().add(offset).cast::<RECT>();
+                    Ok(InputRegion::Parts(
+                        std::slice::from_raw_parts(first, count)
+                            .iter()
+                            .map(|r| [r.left, r.top, r.right, r.bottom])
+                            .collect(),
+                    ))
+                }
+            }
         } else {
-            // ERROR: the window has no region.
-            None
+            Ok(InputRegion::Unrestricted)
         };
         let _ = DeleteObject(region.into());
-        parts
+        result
     })
 }
 
 #[cfg(not(windows))]
-fn input_region(_: u64) -> Option<Vec<ScreenRect>> {
-    None
+fn input_region(_: u64, _: u32) -> Result<InputRegion, String> {
+    Err("window regions are only readable on Windows".to_string())
 }
 
 /// The top-level window that receives a click at a physical screen point, and
 /// its process.
 ///
-/// `WindowFromPoint` alone does not prove that real input passes through a
-/// window in another process; the style assertions in `operable_hit_test`
-/// cover what this walk cannot see.
+/// `WindowFromPoint` performs a hit test, not a click. It can report the window
+/// beneath a click-through overlay while real input stays with the overlay. The
+/// style assertions in `hit_test_failures` guard the known cause of that gap;
+/// neither observes a delivered click.
 #[cfg(windows)]
 fn window_at((x, y): (i32, i32)) -> (u64, u32) {
     use windows::Win32::Foundation::POINT;
@@ -561,11 +620,11 @@ fn operable_hit_test(ctx: &mut Context) -> Step {
                 .filter(|(other, _)| other.as_str() != name)
                 .map(|(_, (r, _))| *r)
                 .collect();
-            // Handles are sign-extended 32-bit values, so the product reports
-            // them as signed integers.
-            let overlay_hwnd = overlay["native"]["hwnd"].as_i64().unwrap_or(0) as u64;
-            let region = input_region(overlay_hwnd);
-            let point = probe_point(*rect, &others, region.as_deref()).ok_or_else(|| {
+            let overlay_hwnd = overlay_hwnd(overlay, name)?;
+            let region = input_region(overlay_hwnd, product_pid).map_err(|error| {
+                Stop::infra(format!("the input region of {name} is unknown: {error}"))
+            })?;
+            let point = probe_point(*rect, &others, &region).ok_or_else(|| {
                 Stop::infra(format!(
                     "no point of {name} is both free of other overlays and inside its input region"
                 ))
@@ -577,7 +636,7 @@ fn operable_hit_test(ctx: &mut Context) -> Step {
                 name.to_string(),
                 json!({
                     "rect": rect,
-                    "inputRegion": region,
+                    "inputRegion": region.evidence(),
                     "point": [point.0, point.1],
                     "hitWindow": hit_window,
                     "hitPid": hit_pid,
@@ -675,11 +734,12 @@ mod tests {
     #[test]
     fn probe_points_avoid_other_overlays() {
         let rect = [0, 0, 100, 40];
-        assert_eq!(probe_point(rect, &[], None), Some((50, 20)));
+        let whole = InputRegion::Unrestricted;
+        assert_eq!(probe_point(rect, &[], &whole), Some((50, 20)));
         let centre_covered = [[40, 10, 60, 30]];
-        let point = probe_point(rect, &centre_covered, None).unwrap();
+        let point = probe_point(rect, &centre_covered, &whole).unwrap();
         assert!(contains(rect, point) && !contains(centre_covered[0], point));
-        assert_eq!(probe_point(rect, &[[-10, -10, 200, 200]], None), None);
+        assert_eq!(probe_point(rect, &[[-10, -10, 200, 200]], &whole), None);
     }
 
     #[test]
@@ -687,28 +747,42 @@ mod tests {
         // Two cards with a click-through gap across the centre, in window
         // coordinates of a window placed at (100, 200).
         let rect = [100, 200, 300, 400];
-        let cards = [[0, 0, 200, 60], [0, 140, 200, 200]];
-        let point = probe_point(rect, &[], Some(&cards)).unwrap();
-        assert!(takes_input(rect, Some(&cards), point));
+        let cards = InputRegion::Parts(vec![[0, 0, 200, 60], [0, 140, 200, 200]]);
+        let point = probe_point(rect, &[], &cards).unwrap();
+        assert!(takes_input(rect, &cards, point));
         assert!(point.1 < 260 || point.1 >= 340, "{point:?} lies in the gap");
         assert_eq!(
-            probe_point(rect, &[], Some(&[])),
+            probe_point(rect, &[], &InputRegion::Parts(Vec::new())),
             None,
             "an empty region takes no input anywhere"
         );
     }
 
-    #[cfg(windows)]
     #[test]
-    fn input_region_reads_back_the_window_region() {
-        use windows::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, RGN_OR, SetWindowRgn};
-        use windows::Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP,
-        };
+    fn a_missing_or_mistyped_handle_is_an_infrastructure_error() {
+        for native in [
+            json!({}),
+            json!({ "hwnd": 0 }),
+            json!({ "hwnd": "0x1234" }),
+            json!({ "hwnd": 1.5 }),
+        ] {
+            let overlay = json!({ "native": native });
+            assert!(
+                matches!(overlay_hwnd(&overlay, TOAST), Err(Stop::Infra(_))),
+                "{overlay}"
+            );
+        }
+        let overlay = json!({ "native": { "hwnd": -2 } });
+        assert_eq!(overlay_hwnd(&overlay, TOAST).ok(), Some(-2i64 as u64));
+    }
+
+    #[cfg(windows)]
+    fn hidden_window() -> windows::Win32::Foundation::HWND {
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, WINDOW_EX_STYLE, WS_POPUP};
         use windows::core::w;
+        // Never shown: a hidden window still owns a region.
         unsafe {
-            // Never shown: a hidden window still owns a region.
-            let window = CreateWindowExW(
+            CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 w!("STATIC"),
                 None,
@@ -722,21 +796,69 @@ mod tests {
                 None,
                 None,
             )
-            .expect("create a hidden window");
+            .expect("create a hidden window")
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn input_region_reads_back_the_window_region() {
+        use windows::Win32::Graphics::Gdi::{
+            CombineRgn, CreateRectRgn, DeleteObject, RGN_OR, SetWindowRgn,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+        let pid = std::process::id();
+        unsafe {
+            let window = hidden_window();
             let hwnd = window.0 as usize as u64;
-            assert_eq!(input_region(hwnd), None, "no region is set yet");
+            assert_eq!(input_region(hwnd, pid), Ok(InputRegion::Unrestricted));
 
             let top = CreateRectRgn(0, 0, 200, 60);
             let bottom = CreateRectRgn(0, 140, 200, 200);
             CombineRgn(Some(top), Some(top), Some(bottom), RGN_OR);
+            let _ = DeleteObject(bottom.into());
             // The system owns the region after a successful SetWindowRgn.
             assert_ne!(SetWindowRgn(window, Some(top), false), 0);
             assert_eq!(
-                input_region(hwnd),
-                Some(vec![[0, 0, 200, 60], [0, 140, 200, 200]])
+                input_region(hwnd, pid),
+                Ok(InputRegion::Parts(vec![
+                    [0, 0, 200, 60],
+                    [0, 140, 200, 200]
+                ]))
+            );
+
+            assert_ne!(
+                SetWindowRgn(window, Some(CreateRectRgn(0, 0, 0, 0)), false),
+                0
+            );
+            assert_eq!(
+                input_region(hwnd, pid),
+                Ok(InputRegion::Parts(Vec::new())),
+                "a set but empty region is not the same as no region"
             );
             let _ = DestroyWindow(window);
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn input_region_refuses_a_handle_it_cannot_vouch_for() {
+        use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+        let pid = std::process::id();
+        let window = hidden_window();
+        let hwnd = window.0 as usize as u64;
+        assert!(
+            input_region(hwnd, pid + 1).is_err(),
+            "a window of another process is not the overlay"
+        );
+        unsafe {
+            let _ = DestroyWindow(window);
+        }
+        assert!(
+            input_region(hwnd, pid).is_err(),
+            "a destroyed window has no region to read"
+        );
+        assert!(input_region(0, pid).is_err());
     }
 
     fn hit(name: &'static str, pid: u32, window: u64, layered: bool, transparent: bool) -> HitTest {
