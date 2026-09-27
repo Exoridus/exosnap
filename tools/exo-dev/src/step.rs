@@ -70,6 +70,8 @@ pub enum StepId {
     /// budget. Five markers, because the analyzer refuses a verdict from a
     /// two-marker reference and such a fixture would only exercise the refusal.
     AvSyncGolden,
+    /// The deterministic sample suite under `tests/samples`, judged by exo-verify.
+    Samples,
 }
 
 /// Who implements a step today.
@@ -114,7 +116,7 @@ const TREE_AND_BUILD: Locks = Locks {
 };
 
 impl StepId {
-    pub const ALL: [StepId; 24] = [
+    pub const ALL: [StepId; 25] = [
         StepId::Sanity,
         StepId::Diff,
         StepId::Drift,
@@ -139,6 +141,7 @@ impl StepId {
         StepId::ClangTidy,
         StepId::PackagingSmoke,
         StepId::AvSyncGolden,
+        StepId::Samples,
     ];
 
     pub fn name(self) -> &'static str {
@@ -232,13 +235,7 @@ impl StepId {
                 ci_only: Some(
                     "packaging is not part of the local blocking contract; CI and the candidate workflow own it",
                 ),
-                ..step(
-                    "packaging-smoke",
-                    BUILD,
-                    Legacy {
-                        owner: "exo-verify package",
-                    },
-                )
+                ..step("packaging-smoke", BUILD, Native)
             },
             StepId::AvSyncGolden => StepInfo {
                 windows_only: true,
@@ -246,6 +243,11 @@ impl StepId {
                     "needs a system FFmpeg with signalstats/astats; not a developer prerequisite",
                 ),
                 ..step("av-sync-golden", SANITY, Native)
+            },
+            StepId::Samples => StepInfo {
+                windows_only: true,
+                ci_only: Some("needs a system FFmpeg and a built exo-verify"),
+                ..step("samples", SANITY, Native)
             },
         }
     }

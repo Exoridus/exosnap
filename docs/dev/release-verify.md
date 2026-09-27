@@ -22,6 +22,27 @@ exo-verify status --bundle candidate-bundle --plan candidate-plan.json `
     --results results --report report/release-report.json
 ```
 
+`run` selects where each lane runs from its scenarios' requirements (`--backend auto`, the default). A lane that needs a disposable OS runs itself on a runner attested with `--attest disposable-os`, otherwise inside Windows Sandbox or a Hyper-V VM. `--backend local|sandbox|hyperv` forces one for diagnostics and backend qualification. `--slot` names the qualification slot recorded with every result; it is derived from the environment when omitted. `exo-verify disposable probe` shows which backends this host can use.
+
+The Hyper-V backend needs a sealed base image. Set `EXO_VERIFY_HYPERV_BASE` to its manifest, keep the VHDX read-only, and register the guest agent's socket service once per host from an elevated shell:
+
+```powershell
+exo-verify disposable register-hyperv-service
+exo-verify disposable verify-base --manifest D:\ExoVerify\base\windows11.json
+```
+
+The base image is provisioned with `exo-guest install`, which starts the agent in the interactive session at every logon. Evidence of a Hyper-V run lands under the lane's output directory next to the VM description in `environment.json`.
+
+Deterministic media regressions run without a candidate:
+
+```powershell
+exo-verify samples list
+exo-verify samples run
+exo-verify samples run media.* --out results/samples.result.json
+```
+
+`--update-reference` rewrites a sample's reviewed reference and prints the change. It is a maintainer action and never runs in CI.
+
 Run installer and update lanes in a disposable guest. GPU and physical hardware lanes need declared capabilities and actual observations. `--only` narrows a diagnostic run; it does not remove a required scenario from the frozen plan. Keep results and media in a private untracked campaign directory. A missing lane is unavailable, never a pass.
 
 The CI update lane uses the production embedded Ed25519 public key. A separate signing job reads the production private key only from its GitHub secret and uploads only the test manifest and detached signature. The key is never written to a file, log, result or artifact. The manifest describes the candidate package hashes and local test-feed URLs. It is served only by a loopback HTTPS server in the disposable update job, where a temporary hosts entry and certificate redirect `api.github.com`. No release or Stable feed receives that manifest. The official application rejects `--update-base-url`; no user setting or environment variable enables a feed override. The temporary network redirect changes discovery transport only. The product still performs release discovery, version comparison, Ed25519 signature verification and package SHA-256 verification.
@@ -89,7 +110,7 @@ External tools are test mechanisms, not shipped runtime dependencies. Pin their 
 
 The audio device-format/default-role properties can be human-only in envctl because their setter is not a supported public Windows contract. An explicitly selected external tool can perform the test operation outside that boundary; envctl still independently reads it back, and the runner restores what was changed. This does not add an undocumented API to the product or envctl.
 
-Install/update tests should run in a disposable OS with copied artifacts and isolated configuration. Sandbox workers report completion with a marker/result document; the launcher returning does not mean the guest completed. Missing marker, unreadable result or a step never reached is unverified/infrastructure failure, never a partial PASS.
+Install/update tests should run in a disposable OS with copied artifacts and isolated configuration. A disposable backend reports completion only through the lane result the guest wrote; the launcher returning does not mean the guest completed. A missing or unreadable result is an infrastructure error for every selected scenario, never a partial PASS.
 
 `EXOSNAP_UPDATE_FROM` / `EXOSNAP_UPDATE_FROM_MSI` identify an explicit older baseline for relevant gates. Ensure the target remains candidate-bound. MSI identity and hashes must be checked, not inferred from a neighboring filename.
 

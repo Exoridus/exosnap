@@ -20,7 +20,7 @@ choco pack packaging/chocolatey/exosnap.nuspec --output-directory $env:TEMP/exos
 choco push $env:TEMP/exosnap-choco/exosnap.<x.y.z>.nupkg --source https://push.chocolatey.org/
 ```
 
-`<manifest>` is the `artifact-manifest.json` written by `scripts/build-release-artifacts.ps1`. `docs/release-checklist.md` §8 names its location. `--require-manifest` is mandatory for a real submission. Without it, a missing manifest skips the checksum cross-check instead of failing it.
+`<manifest>` is the candidate `bundle.json` written by `exo-verify bundle create`; its installer entry carries the MSI hash. `--require-manifest` is mandatory for a real submission. Without it, a missing manifest skips the checksum cross-check instead of failing it.
 
 A submission is reviewed by a human moderator after two automated services have run: the *validator*, which checks the metadata and the automation scripts against the published rules, and the *verifier*, which installs and uninstalls the package on a clean machine. The validator's mechanically checkable rules are mirrored in `cargo exo-dev packaging chocolatey` so a failure costs a local second rather than a review round trip. When a moderator asks for a change, the corrected package is pushed under the **same** version, not a new one.
 

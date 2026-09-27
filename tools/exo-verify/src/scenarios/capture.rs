@@ -8,7 +8,7 @@ use crate::capability::Capability;
 use crate::context::{App, Context};
 use crate::media;
 use crate::plan::Tier;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
 
 pub fn scenarios() -> Vec<Scenario> {
@@ -17,7 +17,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "capture.window-stall-notice",
             revision: 1,
             title: "A visible stalled window raises an honest standing notice",
-            claim: "a fullscreen-shaped window that stops presenting frames produces a stall notice while recording continues, without claiming unmeasured exclusive fullscreen",
+            class: ScenarioClass::Contract,
+            contract: "a fullscreen-shaped window that stops presenting frames produces a stall notice while recording continues, without claiming unmeasured exclusive fullscreen",
             lane: Lane::Gpu,
             also: &[],
             tier: Tier::Recommended,
@@ -37,7 +38,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "capture.minimized-window-quiet",
             revision: 2,
             title: "A minimized quiet window keeps recording without a stall notice",
-            claim: "a minimized window with a measured halt in captured frames stays free of a new stall notice while recording continues, resumes capturing when restored, and finalizes",
+            class: ScenarioClass::Contract,
+            contract: "a minimized window with a measured halt in captured frames stays free of a new stall notice while recording continues, resumes capturing when restored, and finalizes",
             lane: Lane::Gpu,
             also: &[],
             tier: Tier::Required,

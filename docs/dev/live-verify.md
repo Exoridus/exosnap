@@ -2,33 +2,17 @@
 
 Live Verify observes and drives a real ExoSnap process through application-owned semantic intents. It is not the product's general automation API and cannot administer Windows. [Verification boundaries](../architecture/verification-boundaries.md) owns the trust model. [Release verification](release-verify.md) owns candidate campaigns; the [release checklist](../release-checklist.md) owns acceptance requirements.
 
-## Local runner
+## Local runs
 
-Close any existing ExoSnap instance before preparing a run. A verification launch retains normal single-instance behavior; launching a second instance can activate the existing window instead of testing the chosen executable.
+`exo-verify` is the only scenario runner. Close any existing ExoSnap instance before a run. A verification launch retains normal single-instance behavior; launching a second instance can activate the existing window instead of testing the chosen executable.
 
 ```powershell
-pwsh scripts/live-verify.ps1 prepare -Artifact local
-pwsh scripts/live-verify.ps1 list
-pwsh scripts/live-verify.ps1 run
-pwsh scripts/live-verify.ps1 status
-pwsh scripts/live-verify.ps1 report
-pwsh scripts/live-verify.ps1 resume
+exo-verify list --lane quick
+exo-verify run --profile quick --product <installed-layout tree> --out <private run directory>
+exo-verify run --profile quick --product <tree> --out <dir> --only preview.live-frames --only app.native-chrome
 ```
 
-Use `retry <check-id>` for an explicit retry, `skip <check-id> -Reason <reason>` for a documented omission, `note <check-id> -Text <text>` for evidence context, and `run -Only <ids>` for a selection. `-NonInteractive` leaves human gates unresolved; it does not approve them.
-
-Each private run directory contains identity, state, environment, artifact fingerprint, per-check evidence, process records and generated Markdown/JSON/JUnit reports. Keep those outputs untracked. The reported path is the actual run path; do not copy a prior campaign's evidence directory into a new identity.
-
-| State | Meaning |
-|---|---|
-| PENDING / RUNNING | Not attempted / attempt persisted before execution |
-| PASS / FAIL | Proven / disproven by the check's evidence |
-| BLOCKED / MANUAL_REQUIRED | Preconditions missing / human boundary remains |
-| SKIPPED | Deliberately omitted, with a reason |
-| UNVERIFIED | Attempted but no trustworthy outcome, including interrupted RUNNING |
-| STALE | Evidence applies to different artifact bytes or relevant environment |
-
-Resume rehashes the executable and checks declared environment dependencies. A display change invalidates display-dependent evidence, not unrelated updater identity. Interruptions never become successful results.
+Each scenario reports PASS, FAIL, UNAVAILABLE, INFRA_ERROR or SKIPPED with its evidence under the run directory. Keep those outputs untracked. A human gate is an `operator` capability declared with `--attest operator`; without it the scenario is UNAVAILABLE, never approved. A rerun is a new run with a new identity; evidence from a prior run never carries over.
 
 ## Arming and connection identity
 
@@ -103,9 +87,9 @@ Cancel is honored only during download. Checking and waiting for the parent do n
 
 UI Automation can establish that a capture-excluded window exists and contains text. It cannot establish the color/alpha the desktop actually composes. A scene-graph grab has the same limit. A native interactive cross-monitor drag differs from programmatic placement. UAC is a Secure Desktop decision, never a scripted click.
 
-The runner should prepare machine-observable state, ask one bounded human question only at the irreducible boundary, and verify the observable consequence afterward. A local dry run validates reachable behavior/infrastructure, not official candidate acceptance.
+A scenario prepares machine-observable state, asks one bounded human question only at the irreducible boundary, and verifies the observable consequence afterward. A local run validates reachable behavior/infrastructure, not official candidate acceptance.
 
-Tests live in the protocol/server/runner-state suites:
+Tests live in the protocol/server suites:
 
 ```powershell
 cargo exo-dev test --filter live_verify

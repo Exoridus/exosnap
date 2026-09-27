@@ -4,29 +4,22 @@
 //! `exosnap.exe` rejects a long option it does not recognize, which is only
 //! safe while the registry lists every option a parser understands and every
 //! option a caller passes. Both sides drift independently: a parser can grow
-//! a flag the registry never learns about, and a caller (an acceptance
-//! harness, a scenario driver) can pass a flag that was renamed or never
-//! existed, in which case the run exits before anything is measured. This
-//! scans sources rather than keeping a hand-maintained list, since a
-//! hand-maintained list would have exactly the drift problem it exists to
-//! prevent.
+//! a flag the registry never learns about, and a caller (a scenario driver)
+//! can pass a flag that was renamed or never existed, in which case the run
+//! exits before anything is measured. This scans sources rather than keeping
+//! a hand-maintained list, since a hand-maintained list would have exactly
+//! the drift problem it exists to prevent.
 //!
-//! Three independent things are checked against the registry:
+//! Two independent things are checked against the registry:
 //!   - the parser sources that read argv for `exosnap.exe` (the updater is a
 //!     separate binary with its own options and is not scanned);
-//!   - `-ArgumentList` blocks that pass `--auto-record`/`--auto-edit` in
-//!     `scripts/lib/LiveVerifyChecks.ps1`, while that script still exists;
 //!   - `launch(&[...])` argument arrays across the exo-verify scenario
-//!     sources, which is how that harness invokes the app today.
+//!     sources, which is how the verification harness invokes the app.
 //!
 //! A missing registry, a registry too small to trust, or a missing parser
 //! source is a hard error: none of them leaves this check able to produce a
 //! trustworthy verdict, and silently reporting a pass would let the guard it
-//! exists to provide go dark. An absent harness script is not: that script is
-//! owned by a separate merge and this check must not block its removal. A
-//! harness script that exists but cannot be read (permissions, a directory in
-//! its place, non-UTF-8 content) is still a hard error, never a silent skip:
-//! only its absence is expected.
+//! exists to provide go dark.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -46,7 +39,6 @@ const PARSER_SOURCES: &[&str] = &[
     "app/services/VerifyReinstallMode.h",
 ];
 
-const LIVE_VERIFY_HARNESS_SOURCE: &str = "scripts/lib/LiveVerifyChecks.ps1";
 const EXO_VERIFY_SRC_PREFIX: &str = "tools/exo-verify/src/";
 
 #[derive(Debug)]
@@ -55,33 +47,11 @@ pub struct UnregisteredFlag {
     pub source: String,
 }
 
-/// The `scripts/lib/LiveVerifyChecks.ps1` half of the check. `Skipped` means
-/// the script has already been removed, which is expected once the harness it
-/// belongs to is merged elsewhere, not a failure of this check.
-#[derive(Debug)]
-pub enum HarnessScan {
-    Skipped,
-    Checked {
-        flags: BTreeSet<String>,
-        unregistered: Vec<UnregisteredFlag>,
-    },
-}
-
-impl HarnessScan {
-    fn unregistered(&self) -> &[UnregisteredFlag] {
-        match self {
-            HarnessScan::Skipped => &[],
-            HarnessScan::Checked { unregistered, .. } => unregistered,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct CliFlagsReport {
     pub registered_count: usize,
     pub duplicate_flags: Vec<String>,
     pub unregistered_in_parsers: Vec<UnregisteredFlag>,
-    pub harness_scan: HarnessScan,
     pub unregistered_in_exo_verify: Vec<UnregisteredFlag>,
 }
 
@@ -89,7 +59,6 @@ impl CliFlagsReport {
     pub fn ok(&self) -> bool {
         self.duplicate_flags.is_empty()
             && self.unregistered_in_parsers.is_empty()
-            && self.harness_scan.unregistered().is_empty()
             && self.unregistered_in_exo_verify.is_empty()
     }
 }
@@ -124,34 +93,6 @@ pub fn check(repo_root: &Path) -> anyhow::Result<CliFlagsReport> {
         }
     }
 
-    let harness_script_path = repo_root.join(LIVE_VERIFY_HARNESS_SOURCE);
-    let harness_scan = match std::fs::read_to_string(&harness_script_path) {
-        Ok(text) => {
-            let flags = harness_argument_flags(&text);
-            let unregistered = flags
-                .iter()
-                .filter(|flag| !registered.contains(*flag))
-                .map(|flag| UnregisteredFlag {
-                    flag: flag.clone(),
-                    source: LIVE_VERIFY_HARNESS_SOURCE.to_string(),
-                })
-                .collect();
-            HarnessScan::Checked {
-                flags,
-                unregistered,
-            }
-        }
-        // Only a genuinely absent script is a skip: the future merge that
-        // removes it needs this check to step aside quietly. A permission
-        // error or a non-UTF-8 read on a script that DOES exist is a read
-        // failure, not an absence, and must not be reported as a clean skip.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => HarnessScan::Skipped,
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("could not read {}", harness_script_path.display()));
-        }
-    };
-
     let git = crate::git::Git::new(repo_root);
     let tracked = git.ls_files()?;
     let mut unregistered_in_exo_verify = Vec::new();
@@ -176,7 +117,6 @@ pub fn check(repo_root: &Path) -> anyhow::Result<CliFlagsReport> {
         registered_count: registered.len(),
         duplicate_flags,
         unregistered_in_parsers,
-        harness_scan,
         unregistered_in_exo_verify,
     })
 }
@@ -204,27 +144,6 @@ pub fn render(report: &CliFlagsReport) -> String {
         );
         for entry in &report.unregistered_in_parsers {
             out.push_str(&format!("  {} ({})\n", entry.flag, entry.source));
-        }
-    }
-
-    match &report.harness_scan {
-        HarnessScan::Skipped => {
-            out.push('\n');
-            out.push_str(&format!(
-                "{LIVE_VERIFY_HARNESS_SOURCE}: not present, skipped\n"
-            ));
-        }
-        HarnessScan::Checked { unregistered, .. } => {
-            if !unregistered.is_empty() {
-                out.push('\n');
-                out.push_str(
-                    "the acceptance harness passes option(s) exosnap.exe does not know. The run \
-                     exits before anything is measured:\n",
-                );
-                for entry in unregistered {
-                    out.push_str(&format!("  {} ({})\n", entry.flag, entry.source));
-                }
-            }
         }
     }
 
@@ -274,37 +193,6 @@ fn quoted_double(text: &str) -> BTreeSet<String> {
         .captures_iter(text)
         .map(|c| c[1].to_string())
         .collect()
-}
-
-/// Every long option inside an `-ArgumentList @( ... )` block that mentions
-/// `--auto-record` or `--auto-edit`. Scoped to those blocks on purpose: the
-/// same script also builds argv for pwsh, ffprobe and envctl, whose options
-/// are none of this registry's business.
-fn harness_argument_flags(text: &str) -> BTreeSet<String> {
-    let start = regex::Regex::new(r"-ArgumentList\s*@\(").unwrap();
-    let quoted_single = regex::Regex::new(r"'(--[a-z0-9-]+)'").unwrap();
-    let bytes = text.as_bytes();
-    let mut flags = BTreeSet::new();
-    for m in start.find_iter(text) {
-        let mut depth: i32 = 1;
-        let mut i = m.end();
-        while i < bytes.len() && depth > 0 {
-            match bytes[i] {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                _ => {}
-            }
-            i += 1;
-        }
-        let block = &text[m.start()..i];
-        if !block.contains("--auto-record") && !block.contains("--auto-edit") {
-            continue;
-        }
-        for capture in quoted_single.captures_iter(block) {
-            flags.insert(capture[1].to_string());
-        }
-    }
-    flags
 }
 
 /// Every long option inside a `launch(&[...])` argument array. Deliberately
@@ -362,41 +250,6 @@ mod tests {
                 .iter()
                 .map(|e| format!("{} ({})", e.flag, e.source))
                 .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn every_option_the_acceptance_harness_passes_is_registered() {
-        let report = check(&repo_root()).unwrap();
-        match &report.harness_scan {
-            HarnessScan::Skipped => {}
-            HarnessScan::Checked { unregistered, .. } => {
-                assert!(
-                    unregistered.is_empty(),
-                    "{:?}",
-                    unregistered
-                        .iter()
-                        .map(|e| format!("{} ({})", e.flag, e.source))
-                        .collect::<Vec<_>>()
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn the_harness_scan_actually_reaches_the_invocations() {
-        let path = repo_root().join(LIVE_VERIFY_HARNESS_SOURCE);
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return;
-        };
-        let flags = harness_argument_flags(&text);
-        assert!(
-            flags.contains("--auto-record"),
-            "the harness scan found no --auto-record invocation"
-        );
-        assert!(
-            flags.contains("--audio-rows"),
-            "the harness scan missed a flag it should have seen"
         );
     }
 
@@ -517,57 +370,6 @@ mod tests {
         let report = check(dir.path()).unwrap();
         assert_eq!(report.duplicate_flags, vec!["--duplicate-flag".to_string()]);
         assert!(!report.ok());
-    }
-
-    #[test]
-    fn a_missing_harness_script_is_skipped_not_an_error() {
-        let padding = many_flags(MIN_REGISTERED_FLAGS + 1);
-        let padding_refs: Vec<&str> = padding.iter().map(String::as_str).collect();
-        let dir = crate::test_support::fixture_repo(&[
-            (
-                "app/cli/CommandLineFlags.cpp",
-                &fixture_registry(&padding_refs),
-            ),
-            ("app/auto_record/AutoRecordOptions.cpp", ""),
-            ("app/quick/ExoSnap/Quick/main.cpp", ""),
-            ("app/quick/ExoSnap/Quick/QuickAutoEditHarness.cpp", ""),
-            ("app/services/ElevatedRelaunch.h", ""),
-            ("app/services/UpdateFeedOverride.h", ""),
-            ("app/services/VerifyReinstallMode.h", ""),
-        ]);
-        let report = check(dir.path()).unwrap();
-        assert!(matches!(report.harness_scan, HarnessScan::Skipped));
-        assert!(report.ok());
-    }
-
-    // A harness script that EXISTS but cannot be decoded as UTF-8 must not be
-    // reported as a clean skip: only absence (ErrorKind::NotFound) is. This is
-    // portable on Linux and Windows alike, unlike a permission-denied fixture,
-    // which a container running as root would not observe.
-    #[test]
-    fn a_harness_script_that_is_not_utf8_is_a_hard_error_not_a_skip() {
-        let padding = many_flags(MIN_REGISTERED_FLAGS + 1);
-        let padding_refs: Vec<&str> = padding.iter().map(String::as_str).collect();
-        let dir = crate::test_support::fixture_repo(&[
-            (
-                "app/cli/CommandLineFlags.cpp",
-                &fixture_registry(&padding_refs),
-            ),
-            ("app/auto_record/AutoRecordOptions.cpp", ""),
-            ("app/quick/ExoSnap/Quick/main.cpp", ""),
-            ("app/quick/ExoSnap/Quick/QuickAutoEditHarness.cpp", ""),
-            ("app/services/ElevatedRelaunch.h", ""),
-            ("app/services/UpdateFeedOverride.h", ""),
-            ("app/services/VerifyReinstallMode.h", ""),
-        ]);
-        let harness_path = dir.path().join(LIVE_VERIFY_HARNESS_SOURCE);
-        std::fs::create_dir_all(harness_path.parent().unwrap()).unwrap();
-        std::fs::write(&harness_path, [0xFF, 0xFE, 0xFD]).unwrap();
-        let error = check(dir.path()).unwrap_err();
-        assert!(
-            error.to_string().contains("LiveVerifyChecks.ps1"),
-            "{error:#}"
-        );
     }
 
     #[test]

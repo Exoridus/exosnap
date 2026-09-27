@@ -7,8 +7,7 @@
     UpgradeCode: 8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D (permanent; do not change between product releases)
     ProductCode is auto-generated per build (*).
 
-    File list is NOT hand-maintained here. The release script
-    (scripts/build-release-artifacts.ps1) generates a companion WXS fragment
+    File list is NOT hand-maintained here. `exo-verify package` generates a companion WXS fragment
     (_harvest.wxs) from the pruned CMake install staging tree and passes both
     files to `wix build`. The fragment defines:
       - the subdirectory hierarchy (plugins/, licenses/, …) under INSTALLFOLDER

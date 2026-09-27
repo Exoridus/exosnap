@@ -10,10 +10,10 @@ use std::time::Duration;
 use super::common::secs;
 use crate::bundle::{FileRole, installer_name, portable_name, sha256_file};
 use crate::capability::Capability;
-use crate::context::{Context, extract_zip};
+use crate::context::{App, Context, extract_zip};
 use crate::package::{portable_dir_name, validate_tree, walk_files};
 use crate::plan::Tier;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
 
 pub fn scenarios() -> Vec<Scenario> {
@@ -22,7 +22,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "dist.bundle-identity",
             revision: 1,
             title: "Candidate bundle names one version, one commit and both packages",
-            claim: "the bundle's packages carry the candidate version in their names and the portable archive has exactly one top-level package directory",
+            class: ScenarioClass::Contract,
+            contract: "the bundle's packages carry the candidate version in their names and the portable archive has exactly one top-level package directory",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Required,
@@ -34,7 +35,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "dist.portable-contents",
             revision: 1,
             title: "Portable package is complete, clean and self-contained",
-            claim: "the portable tree carries every runtime file and license, no development or user data, the candidate's embedded version, and no unresolved imports",
+            class: ScenarioClass::Contract,
+            contract: "the portable tree carries every runtime file and license, no development or user data, the candidate's embedded version, and no unresolved imports",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Required,
@@ -46,7 +48,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "dist.msi-matches-portable",
             revision: 1,
             title: "MSI installs byte-identical files to the portable package",
-            claim: "every file of the portable package is inside the MSI with the same bytes, and the MSI carries no other binaries",
+            class: ScenarioClass::Contract,
+            contract: "every file of the portable package is inside the MSI with the same bytes, and the MSI carries no other binaries",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Required,
@@ -56,9 +59,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "dist.portable-first-launch",
-            revision: 1,
+            revision: 2,
             title: "Portable package starts on a bare environment and reports the candidate identity",
-            claim: "the extracted package starts with only system directories on PATH, reports the candidate's version, commit and executable hash, and leaves the user's real configuration untouched",
+            class: ScenarioClass::Contract,
+            contract: "the extracted package starts with only system directories on PATH, initialises its full UI with a native main window, reports the candidate's version, commit and executable hash, quits cleanly through its own shutdown, and leaves the user's real configuration untouched",
             lane: Lane::CiCore,
             also: &[Lane::Quick],
             tier: Tier::Required,
@@ -70,7 +74,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "dist.updater-staged-launch",
             revision: 1,
             title: "The updater runs from the file subset the application stages",
-            claim: "exosnap-updater.exe loads and renders from exactly the runtime subset the application copies before a handoff",
+            class: ScenarioClass::Contract,
+            contract: "exosnap-updater.exe loads and renders from exactly the runtime subset the application copies before a handoff",
             lane: Lane::CiCore,
             also: &[Lane::Quick],
             tier: Tier::Required,
@@ -82,7 +87,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "dist.embedded-update-key",
             revision: 2,
             title: "The updater embeds the official update verification key",
-            claim: "exosnap-updater.exe carries the configured official Ed25519 public key used to verify signed manifests",
+            class: ScenarioClass::Contract,
+            contract: "exosnap-updater.exe carries the configured official Ed25519 public key used to verify signed manifests",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Required,
@@ -300,7 +306,7 @@ fn portable_first_launch(ctx: &mut Context) -> Step {
         .env("EXOSNAP_OUTPUT_DIR", ctx.scenario_dir.join("output"));
     bare_environment(&mut command);
     let mut child = ctx.spawn(&mut command)?;
-    let client = match crate::control::Client::connect("LiveVerify", &run_id, secs(60.0)) {
+    let mut client = match crate::control::Client::connect("LiveVerify", &run_id, secs(60.0)) {
         Ok(c) => c,
         Err(e) => {
             return Err(
@@ -351,9 +357,29 @@ fn portable_first_launch(ctx: &mut Context) -> Step {
         "the running executable hashes to {}, the packaged file to {exe_sha}",
         identity["executableSha256"]
     );
-    drop(client);
-    let _ = child.kill();
-    let _ = child.wait();
+    // The endpoint answers before QML has loaded; a UI that failed to load
+    // only shows as a main window that never gets a native handle.
+    client
+        .request("ui.getState", json!({}), secs(30.0))?
+        .map_err(|r| Stop::fail(format!("ui.getState was refused: {r}")))?;
+    let windows = client
+        .poll("windows.snapshot", json!({}), secs(30.0), |snapshot| {
+            snapshot["windows"].as_array().is_some_and(|windows| {
+                windows
+                    .iter()
+                    .any(|w| w["role"] == "main" && w["nativeWindowCreated"] == true)
+            })
+        })?
+        .ok_or_else(|| Stop::fail("the main window got no native handle within 30 s"))?;
+    ctx.evidence.put("windows", windows);
+    let app = App {
+        client,
+        child,
+        output: ctx.scenario_dir.join("output"),
+        config: config.clone(),
+        run_id,
+    };
+    app.close_gracefully(secs(30.0))?;
     let after = dir_snapshot(&real_config);
     product_ensure!(
         before == after,
@@ -374,12 +400,11 @@ const UPDATER_STAGING: &[&str] = &[
     "plugins/platforms/qwindows.dll",
 ];
 
-fn updater_staged_launch(ctx: &mut Context) -> Step {
-    suppress_error_dialogs();
-    let product = ctx.product()?;
-    let stage = ctx.scenario_dir.join("updater-stage");
+/// Copies the updater's runtime subset out of `product_root` into `stage`, as
+/// the application does before a handoff, and returns the staged updater.
+pub(super) fn stage_updater(product_root: &Path, stage: &Path) -> Step<PathBuf> {
     for rel in UPDATER_STAGING {
-        let src = product.root.join(rel);
+        let src = product_root.join(rel);
         product_ensure!(
             src.is_file(),
             "the package lacks {rel}, which the application stages for its updater"
@@ -389,7 +414,14 @@ fn updater_staged_launch(ctx: &mut Context) -> Step {
         std::fs::copy(&src, &dst)?;
     }
     std::fs::write(stage.join("qt.conf"), "[Paths]\nPlugins = plugins\n")?;
-    let mut command = Command::new(stage.join("exosnap-updater.exe"));
+    Ok(stage.join("exosnap-updater.exe"))
+}
+
+fn updater_staged_launch(ctx: &mut Context) -> Step {
+    suppress_error_dialogs();
+    let product = ctx.product()?;
+    let stage = ctx.scenario_dir.join("updater-stage");
+    let mut command = Command::new(stage_updater(&product.root, &stage)?);
     command
         .args(["--preview-state", "progress", "--preview-smoke"])
         .current_dir(&stage);
@@ -408,7 +440,7 @@ fn updater_staged_launch(ctx: &mut Context) -> Step {
     }
 }
 
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+pub(super) fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 

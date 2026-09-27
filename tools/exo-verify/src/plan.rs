@@ -238,7 +238,7 @@ mod tests {
     use super::*;
     use crate::bundle::{BUNDLE_SCHEMA, Bundle, Inventory};
     use crate::capability::Capability;
-    use crate::scenario::{Lane, Scenario, Step};
+    use crate::scenario::{Lane, Scenario, ScenarioClass, Step};
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -269,7 +269,8 @@ mod tests {
             id: "core.required",
             revision: 3,
             title: "Required check",
-            claim: "The required claim holds",
+            class: ScenarioClass::Contract,
+            contract: "The required claim holds",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Required,

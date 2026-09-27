@@ -100,6 +100,13 @@ pub struct LaneResult {
     pub tools: BTreeMap<String, String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// The qualification slot: which kind of machine or environment produced
+    /// these results. A verdict holds for `scenario x slot`, never globally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+    /// The environment the lane ran in (`local`, `sandbox`, `hyperv`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
     pub scenarios: Vec<ScenarioResult>,
 }
 

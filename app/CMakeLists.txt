@@ -175,7 +175,7 @@ add_custom_target(exosnap_build_info
 
 # Windows VERSIONINFO resource — generated from the canonical project version so
 # the shipped exosnap.exe carries coherent File/Product version metadata, which
-# scripts/build-release-artifacts.ps1 asserts against the release identity.
+# `exo-verify package` asserts against the release identity.
 # Generated here rather than inside a target block: the shipping Quick target
 # compiles it from ${PROJECT_BINARY_DIR}/app/exosnap_version.rc, and this file is
 # the directory that owns that path.
@@ -1386,23 +1386,11 @@ exosnap_add_gtest(
 target_include_directories(recording_error_detail_text_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(recording_error_detail_text_tests PROPERTIES AUTOMOC ON)
 
-# The Live Verify runner's own state machine. Registered here rather
-# than left as a script somebody remembers to run: "an interruption is never
-# mistaken for success" and "a PASS is bound to the artifact it was produced
-# against" are the runner's whole value, and the only way to test them by hand is
-# to kill a real acceptance run.
 find_program(EXOSNAP_PWSH pwsh)
 if(EXOSNAP_PWSH)
-    add_test(NAME live_verify.runner_state
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-state.tests.ps1")
-    set_tests_properties(live_verify.runner_state PROPERTIES TIMEOUT 180 LABELS "live_verify")
-    exosnap_set_test_phase(live_verify.runner_state hermetic)
-
-    # The client's endpoint naming. Registered for the same reason: deriving the
-    # updater child's pipe name wrongly fails as a connect timeout, which is
-    # indistinguishable from "the child never started" -- the most expensive way
-    # to learn about a typo.
+    # The client's endpoint naming. Deriving the updater child's pipe name
+    # wrongly fails as a connect timeout, which is indistinguishable from "the
+    # child never started" -- the most expensive way to learn about a typo.
     add_test(NAME live_verify.endpoint_names
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-endpoints.tests.ps1")
@@ -1412,14 +1400,8 @@ if(EXOSNAP_PWSH)
     # The packaging version-drift gate is Rust, not PowerShell: the contract is
     # `cargo test -p exo-dev release::version::`, not a CTest case here.
 
-    # The third-party identity the release manifest records. The cases that matter
-    # are the refusals: a pin that has gone missing has to stop the manifest, because
-    # a dependency list that is quietly one entry shorter is the failure nobody sees.
-    add_test(NAME pipeline.dependency_identity
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/dependency-identity.tests.ps1")
-    set_tests_properties(pipeline.dependency_identity PROPERTIES TIMEOUT 300 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.dependency_identity hermetic)
+    # The third-party identity the release manifest records is Rust:
+    # `cargo test -p exo-verify package::dependency_identity`.
 
     # The publication policy, offline half only: what packaging/publication-policy.json
     # is allowed to say about each channel. The feed half is advisory by design, so
@@ -1474,15 +1456,6 @@ if(EXOSNAP_PWSH)
     # test result is attributed to, are Rust, not PowerShell: the contracts are
     # `cargo test -p exo-dev test::runner::` and `cargo test -p exo-dev
     # test::fingerprint::`, not a CTest case here.
-
-    # Which build tree a tool resolves out of. Four trees can hold the same binary
-    # and the selection is only ever wrong quietly -- an old copy runs, reports
-    # success and describes a build nobody asked about.
-    add_test(NAME pipeline.build_artifacts
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/build-artifacts.tests.ps1")
-    set_tests_properties(pipeline.build_artifacts PROPERTIES TIMEOUT 120 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.build_artifacts hermetic)
 
     # The host-wide build/tree/device locks (holds and contention from real
     # child processes, inheritance to a child, an abandoned holder's release)

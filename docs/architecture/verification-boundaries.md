@@ -47,6 +47,22 @@ The Rust verifier contains process lifetimes with argument-list invocation, outp
 
 Tier 0 is hermetic. Tier 1 exercises an ordinary desktop. Tier 2 uses a disposable OS for installation/registry/package state. Tier 3 needs declared physical hardware. Hyper-V GPU-partitioned guests can provide a clean console and GPU access, but are not proof of host-independent performance, physical HDR behavior, device clocks or unplug semantics. Sandbox remains a supported disposable transport where suitable.
 
+Every scenario has one class and states the current contract it protects. A check without a contract does not exist; a historical bug is not a contract.
+
+| Class | Statement | Absent capability means |
+|---|---|---|
+| regression | Known input compared against a stable oracle (`tests/samples`) | Unavailable |
+| contract | A user-visible workflow keeps a durable product invariant | Unavailable |
+| capability | Whether this machine can qualify other scenarios; no product claim | Unavailable, never Fail |
+| hardware | A contract only physical hardware can demonstrate | Unavailable |
+| installer | Installing, updating or removing the product mutates the OS | Unavailable |
+
+A scenario is judged at the cheapest layer that can prove it: unit test, deterministic sample, local product run, Windows Sandbox, Hyper-V, physical hardware. A result holds for `scenario x slot`, where the slot names the kind of machine or environment (`windows11-nvidia-hdr`, `windows11-sandbox`, `windows11-hyperv-clean`). A PASS in one slot never stands in for another.
+
+Scenarios declare capabilities, never backends. `exo-verify` runs a lane where it is, unless the lane needs an environment trait this machine lacks (`disposable-os`, `reboot`, `real-uac`). Then it selects the cheapest disposable backend that guarantees those traits, and reports UNAVAILABLE when none does. A backend copies the same `exo-verify` binary and the candidate bundle into the environment and runs the lane there. The guest probes its own hardware facts and writes its own lane result; the host only transports it and never reinterprets a verdict. A failure to obtain that result is an infrastructure error for every selected scenario, and the environment is destroyed in every case.
+
+Windows Sandbox is driven through its `wsb` command line. `wsb exec` returns only an exit code, so the run directory is mapped into the sandbox and all output travels through it. Hyper-V runs use Hyper-V WMI v2 for the VM lifecycle and the Virtual Disk API for a per-run differencing disk. The host talks to `exo-guest`, a small agent baked into the sealed base image, over a Hyper-V socket. That channel has no network stack, is reachable only from the parent partition, and accepts only a fixed set of process and file operations. It is not remote administration. The base image is immutable, read-only infrastructure described by a manifest (image id, Windows build, update level, agent version, driver set, provisioning version, VHDX SHA-256), and a base whose bytes no longer match its manifest is refused.
+
 A golden VM is never written by a campaign. A differencing disk contains its changes and is deleted after evidence collection. The recipe pins packages and records image/display/driver provenance. GPU-P guest PCI identity is not required to equal host PCI identity; partition provenance, guest adapter identity and staged driver package are separate checks. Actual capture/NVENC reachability still needs probes.
 
 `Fail` means an observed product failure. Infrastructure error means the harness could not establish the observation. Unavailable, blocked, deferred, skipped and stale are not passes. Product outcome and environment-restore outcome are separate: a successful product test can still leave an unacceptable machine state. Operator attestation can state that an action occurred, but it cannot manufacture the verifying consequence or substitute for another person's visual judgment.
@@ -61,4 +77,4 @@ Publication remains blocked until a reviewed workflow independently verifies the
 
 ## Implementation and tests
 
-See [shared control](../../libs/control), [application control](../../app/live_verify), [verifier](../../tools/exo-verify), [environment tool](../../tools/envctl), and [VM recipe](../../tools/vm). Hostile-input, refusal and fake-provider tests are essential because a real device cannot reliably reproduce every dishonest-success or failed-restore case.
+See [shared control](../../libs/control), [application control](../../app/live_verify), [verifier](../../tools/exo-verify), [guest agent](../../tools/exo-guest), [samples](../../tests/samples), [environment tool](../../tools/envctl), and [VM recipe](../../tools/vm). Hostile-input, refusal and fake-provider tests are essential because a real device cannot reliably reproduce every dishonest-success or failed-restore case.

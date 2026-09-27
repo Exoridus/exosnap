@@ -47,14 +47,6 @@ pub struct Context {
 }
 
 impl Context {
-    fn script(&self, name: &str) -> String {
-        self.repo_root
-            .join("scripts")
-            .join(name)
-            .display()
-            .to_string()
-    }
-
     /// The built `exo-verify.exe`, so a step that needs its checks can call the
     /// real binary instead of restating their logic in this crate.
     /// `EXOSNAP_TEST_TOOL_EXE` first (a test pointing at a specific build), then
@@ -166,33 +158,6 @@ impl RealExecutor {
                 Outcome::fail(detail).with_log(&log_text)
             }
         }
-    }
-
-    fn pwsh_with(
-        &self,
-        name: &str,
-        script: &str,
-        args: Vec<String>,
-        tool_missing_exit: Option<i32>,
-        extra_env: &[(String, String)],
-    ) -> Outcome {
-        let mut argv = vec![
-            "-NoProfile".to_string(),
-            "-NonInteractive".to_string(),
-            "-File".to_string(),
-            self.ctx.script(script),
-        ];
-        argv.extend(args);
-        self.step(
-            name,
-            "pwsh",
-            argv,
-            Opts {
-                tool_missing_exit,
-                env: extra_env,
-                ..Opts::default()
-            },
-        )
     }
 
     /// Makes cl.exe reachable before the first step that compiles. The import
@@ -518,6 +483,26 @@ impl RealExecutor {
                     };
                     Ok((log, outcome))
                 })
+            }
+            StepId::Samples => {
+                let Some(exo_verify) = self.ctx.exo_verify_exe() else {
+                    let reason = "exo-verify.exe is not built (tools/target/{debug,release}/exo-verify.exe)".to_string();
+                    println!();
+                    println!("---- samples ----");
+                    println!("{reason}");
+                    return Outcome::new(Status::ToolMissing, reason);
+                };
+                self.step(
+                    "samples",
+                    &exo_verify.display().to_string(),
+                    vec![
+                        "samples".to_string(),
+                        "run".to_string(),
+                        "--root".to_string(),
+                        self.ctx.repo_root.join("tests").join("samples").display().to_string(),
+                    ],
+                    Opts::default(),
+                )
             }
             StepId::DocsSuperpowersRemoved => {
                 let Some(exo_verify) = self.ctx.exo_verify_exe() else {
@@ -881,17 +866,36 @@ impl RealExecutor {
                     Ok((log, outcome))
                 })
             }
-            StepId::PackagingSmoke => self.pwsh_with(
-                "packaging-smoke",
-                "build-release-artifacts.ps1",
-                ["-SkipConfigure", "-Preset", &ctx.preset, "-SkipMsi"]
-                    .map(String::from)
-                    .to_vec(),
-                None,
-                &[],
-            ),
+            StepId::PackagingSmoke => {
+                let Some(exo_verify) = self.ctx.exo_verify_exe() else {
+                    let reason = "exo-verify.exe is not built (tools/target/{debug,release}/exo-verify.exe)".to_string();
+                    println!();
+                    println!("---- packaging-smoke ----");
+                    println!("{reason}");
+                    return Outcome::new(Status::ToolMissing, reason);
+                };
+                // exo-verify package refuses a non-empty output directory.
+                let out = ctx.repo_root.join(".workspace").join("package-smoke");
+                let _ = std::fs::remove_dir_all(&out);
+                self.step(
+                    "packaging-smoke",
+                    &exo_verify.display().to_string(),
+                    vec![
+                        "package".into(),
+                        "--build-dir".into(),
+                        ctx.tree().display().to_string(),
+                        "--out".into(),
+                        out.display().to_string(),
+                        "--repo-root".into(),
+                        ctx.repo_root.display().to_string(),
+                        "--skip-msi".into(),
+                        "--launch-smoke".into(),
+                    ],
+                    Opts::default(),
+                )
+            }
             StepId::AvSyncGolden => self.native("av-sync-golden", || {
-                let path = ctx.repo_root.join("tests/fixtures/av-sync/clapper-golden.mp4");
+                let path = ctx.repo_root.join("tests/samples/media/clapper-golden.mp4");
                 let result = crate::av_sync::measure(&path, 0.7, 0.5, 25.0, Some(5), None, 0.250, 2.0);
                 let opts = crate::av_sync::VerdictOptions {
                     unqualified_reference: false,

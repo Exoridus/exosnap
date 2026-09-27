@@ -351,7 +351,7 @@ pub(crate) mod tests {
             &["app/quick/ExoSnap/Quick/RecordPage.qml"][..],
             &["libs/engine/include/exosnap/engine/session.h"][..],
             &["CMakeLists.txt"][..],
-            &["scripts/tests/build-artifacts.tests.ps1"][..],
+            &["scripts/tests/vm-recipe.tests.ps1"][..],
             &[".github/workflows/ci.yml"][..],
             &[][..],
         ] {

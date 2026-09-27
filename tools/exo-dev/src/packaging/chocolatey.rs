@@ -6,8 +6,8 @@
 //! tag) and `<releaseNotes>` (exact GitHub Release tag URL);
 //! chocolateyinstall.ps1's `url64bit` (exact GitHub Release MSI asset URL),
 //! `checksum64` (64 lowercase hex characters, never a single-character
-//! placeholder run, cross-checked against a release artifact manifest's
-//! `msiSha256` when one is available) and `checksumType64` (`sha256`); no
+//! placeholder run, cross-checked against the candidate bundle.json
+//! installer hash when one is available) and `checksumType64` (`sha256`); no
 //! other version-looking literal left in packaging/chocolatey/ (a historical
 //! changelog bullet and the `vcredist140` dependency version are exempt);
 //! every nuspec field the community feed requires or expects, HTTPS-only
@@ -37,8 +37,8 @@ use serde_json::Value;
 use super::{ValidationReport, bare_version_matches};
 
 /// How much of the full Chocolatey validation runs: whether the
-/// checksum64-vs-manifest cross-check runs at all, which artifact manifest it
-/// reads, and whether a missing manifest fails the run instead of skipping it.
+/// checksum64-vs-manifest cross-check runs at all, which candidate bundle inventory
+/// it reads, and whether a missing manifest fails the run instead of skipping it.
 #[derive(Clone, Debug, Default)]
 pub struct ChocolateyMode {
     /// Skips the checksum64-vs-manifest cross-check entirely (both the "not
@@ -46,7 +46,7 @@ pub struct ChocolateyMode {
     /// always passes `true`; the standalone CLI defaults it to `false`.
     pub version_only: bool,
     /// Explicit override; `None` means the script's own default of the
-    /// local release build's own artifact manifest for that version.
+    /// local release build's own candidate bundle.json for that version.
     pub manifest_path: Option<PathBuf>,
     /// Promotes "no manifest found" from a skip to a hard error. Ignored
     /// when `version_only` is `true`.
@@ -267,7 +267,7 @@ pub fn validate_chocolatey(
                     ));
                 } else if is_degenerate(&value) {
                     report.errors.push(format!(
-                        "chocolateyinstall.ps1: checksum64 is the placeholder for an unpublished release ('{}' x 64), not a real hash. The package cannot be packed or submitted until the v{version} release exists. Take the lowercase value from ExoSnap-{version}-windows-x64.msi.sha256 (the sidecar published next to the MSI on the GitHub Release), or from the artifact manifest's msiSha256 for a local release build.",
+                        "chocolateyinstall.ps1: checksum64 is the placeholder for an unpublished release ('{}' x 64), not a real hash. The package cannot be packed or submitted until the v{version} release exists. Take the lowercase value from ExoSnap-{version}-windows-x64.msi.sha256 (the sidecar published next to the MSI on the GitHub Release), or from the installer entry of the candidate bundle.json for a local release build.",
                         &value[0..1]
                     ));
                 }
@@ -297,9 +297,7 @@ pub fn validate_chocolatey(
         None
     } else {
         Some(mode.manifest_path.clone().unwrap_or_else(|| {
-            repo_root.join(format!(
-                ".workspace/release/{version}/artifact-manifest.json"
-            ))
+            repo_root.join(format!(".workspace/release/{version}/bundle/bundle.json"))
         }))
     };
 
@@ -317,12 +315,12 @@ pub fn validate_chocolatey(
                 ));
             } else if mode.require_manifest {
                 report.errors.push(format!(
-                    "No release artifact manifest at '{}' and -RequireManifest was set. Refusing to validate checksum64 without a real built-MSI hash to check it against.",
+                    "No candidate bundle inventory at '{}' and -RequireManifest was set. Refusing to validate checksum64 without a real built-MSI hash to check it against.",
                     manifest_path.display()
                 ));
             } else {
                 report.skips.push(format!(
-                    "No release artifact manifest at '{}': checksum64-vs-manifest check skipped.",
+                    "No candidate bundle inventory at '{}': checksum64-vs-manifest check skipped.",
                     manifest_path.display()
                 ));
             }
@@ -331,23 +329,28 @@ pub fn validate_chocolatey(
             let manifest: Value = serde_json::from_str(&manifest_text).map_err(|error| {
                 anyhow::anyhow!("could not parse {}: {error}", manifest_path.display())
             })?;
-            let manifest_version = manifest.get("version").and_then(Value::as_str);
-            let manifest_sha = manifest.get("msiSha256").and_then(Value::as_str);
+            let manifest_version = manifest.get("productVersion").and_then(Value::as_str);
+            let manifest_sha = manifest
+                .get("files")
+                .and_then(Value::as_array)
+                .and_then(|files| files.iter().find(|f| f["role"] == "installer"))
+                .and_then(|f| f.get("sha256"))
+                .and_then(Value::as_str);
             if manifest_version.is_some_and(|v| v != version) {
                 report.errors.push(format!(
-                    "Artifact manifest '{}': version '{}' != target version '{version}'",
+                    "Candidate bundle '{}': version '{}' != target version '{version}'",
                     manifest_path.display(),
                     manifest_version.unwrap()
                 ));
             } else if manifest_sha.is_none_or(str::is_empty) {
                 if mode.require_manifest {
                     report.errors.push(format!(
-                        "Artifact manifest '{}' has no msiSha256 (MSI build was skipped) and -RequireManifest was set.",
+                        "Candidate bundle '{}' lists no installer (MSI build was skipped) and -RequireManifest was set.",
                         manifest_path.display()
                     ));
                 } else {
                     report.skips.push(format!(
-                        "Artifact manifest '{}' has no msiSha256 (MSI build was skipped): checksum64-vs-manifest check skipped.",
+                        "Candidate bundle '{}' lists no installer (MSI build was skipped): checksum64-vs-manifest check skipped.",
                         manifest_path.display()
                     ));
                 }
@@ -355,7 +358,7 @@ pub fn validate_chocolatey(
                 let manifest_sha = manifest_sha.unwrap().to_lowercase();
                 if checksum64.to_lowercase() != manifest_sha {
                     report.errors.push(format!(
-                        "chocolateyinstall.ps1: checksum64 '{checksum64}' != artifact manifest msiSha256 '{manifest_sha}' ({})",
+                        "chocolateyinstall.ps1: checksum64 '{checksum64}' != candidate bundle installer sha256 '{manifest_sha}' ({})",
                         manifest_path.display()
                     ));
                 }
@@ -873,7 +876,7 @@ This description exists only to satisfy the thirty character minimum for the mod
     #[test]
     fn the_manifest_cross_check_is_a_hard_error_when_the_explicit_path_is_missing() {
         let dir = fixture();
-        let manifest_path = dir.path().join("nope/artifact-manifest.json");
+        let manifest_path = dir.path().join("nope/bundle.json");
         let report = validate_chocolatey(
             dir.path(),
             VERSION,
@@ -916,11 +919,11 @@ This description exists only to satisfy the thirty character minimum for the mod
     #[test]
     fn a_matching_manifest_checksum_passes() {
         let dir = fixture();
-        let release_dir = dir.path().join(".workspace/release/0.10.0");
+        let release_dir = dir.path().join(".workspace/release/0.10.0/bundle");
         std::fs::create_dir_all(&release_dir).unwrap();
         std::fs::write(
-            release_dir.join("artifact-manifest.json"),
-            r#"{"version":"0.10.0","msiSha256":"0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"}"#,
+            release_dir.join("bundle.json"),
+            r#"{"productVersion":"0.10.0","files":[{"path":"x.msi","role":"installer","sha256":"0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF","size":1}]}"#,
         )
         .unwrap();
         let report = validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap();
@@ -930,11 +933,11 @@ This description exists only to satisfy the thirty character minimum for the mod
     #[test]
     fn a_mismatched_manifest_checksum_is_rejected() {
         let dir = fixture();
-        let release_dir = dir.path().join(".workspace/release/0.10.0");
+        let release_dir = dir.path().join(".workspace/release/0.10.0/bundle");
         std::fs::create_dir_all(&release_dir).unwrap();
         std::fs::write(
-            release_dir.join("artifact-manifest.json"),
-            r#"{"version":"0.10.0","msiSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}"#,
+            release_dir.join("bundle.json"),
+            r#"{"productVersion":"0.10.0","files":[{"path":"x.msi","role":"installer","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","size":1}]}"#,
         )
         .unwrap();
         let report = validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap();
@@ -943,7 +946,7 @@ This description exists only to satisfy the thirty character minimum for the mod
             report
                 .errors
                 .iter()
-                .any(|e| e.contains("!= artifact manifest msiSha256"))
+                .any(|e| e.contains("!= candidate bundle installer sha256"))
         );
     }
 
@@ -1139,11 +1142,14 @@ This description exists only to satisfy the thirty character minimum for the mod
             ),
         )
         .unwrap();
-        let release_dir = dir.path().join(".workspace/release/0.10.0");
+        let release_dir = dir.path().join(".workspace/release/0.10.0/bundle");
         std::fs::create_dir_all(&release_dir).unwrap();
         std::fs::write(
-            release_dir.join("artifact-manifest.json"),
-            format!(r#"{{"version":"0.10.0","msiSha256":"{}"}}"#, "0".repeat(64)),
+            release_dir.join("bundle.json"),
+            format!(
+                r#"{{"productVersion":"0.10.0","files":[{{"path":"x.msi","role":"installer","sha256":"{}","size":1}}]}}"#,
+                "0".repeat(64)
+            ),
         )
         .unwrap();
         let report = validate_chocolatey(
@@ -1166,7 +1172,7 @@ This description exists only to satisfy the thirty character minimum for the mod
             !report
                 .errors
                 .iter()
-                .any(|e| e.contains("!= artifact manifest msiSha256")),
+                .any(|e| e.contains("!= candidate bundle installer sha256")),
             "the manifest cross-check must not add a second, contradictory error when the \
              placeholder happens to match the manifest: {:?}",
             report.errors

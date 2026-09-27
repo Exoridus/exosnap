@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["exo-dev", "exo-verify"]
+members = ["exo-dev", "exo-guest", "exo-verify"]
 
 [workspace.dependencies]
 anyhow = "1"

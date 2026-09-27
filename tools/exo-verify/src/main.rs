@@ -8,6 +8,7 @@ mod capability;
 mod context;
 mod control;
 mod control_cli;
+mod disposable;
 mod docs;
 mod feed;
 #[cfg(windows)]
@@ -22,6 +23,7 @@ mod pe;
 mod plan;
 mod report;
 mod runner;
+mod samples;
 mod scenario;
 mod scenarios;
 mod stimulus;
@@ -92,11 +94,20 @@ enum Command {
         #[arg(long = "attest")]
         attest: Vec<String>,
     },
-    /// List scenarios, optionally for one lane.
+    /// List scenarios, optionally for one lane or class.
     List {
         #[arg(long)]
         lane: Option<String>,
+        /// regression, contract, capability, hardware or installer.
+        #[arg(long)]
+        class: Option<String>,
     },
+    /// Deterministic sample regressions against committed or generated media.
+    #[command(subcommand)]
+    Samples(samples::SamplesCommand),
+    /// Disposable Windows backends (Windows Sandbox, Hyper-V).
+    #[command(subcommand)]
+    Disposable(DisposableCommand),
     /// Show the deterministic verification stimulus window (used by GPU scenarios).
     Stimulus(stimulus::StimulusArgs),
     /// Serve a local HTTPS update feed (used by the update lane).
@@ -188,6 +199,16 @@ struct RunArgs {
     /// Keep recordings of passing scenarios.
     #[arg(long)]
     keep_media: bool,
+    /// Where the lane runs: auto (from scenario requirements), local, sandbox or hyperv.
+    #[arg(long, default_value = "auto")]
+    backend: String,
+    /// Qualification slot name recorded with every result; derived from the
+    /// environment when omitted.
+    #[arg(long)]
+    slot: Option<String>,
+    /// The disposable environment this invocation already runs inside.
+    #[arg(long, hide = true)]
+    environment: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -274,6 +295,21 @@ enum ManifestCommand {
 }
 
 #[derive(Subcommand)]
+enum DisposableCommand {
+    /// Show which disposable backends this host can use.
+    Probe,
+    /// Register the guest agent Hyper-V socket service on this host (elevated, once).
+    RegisterHypervService,
+    /// Verify a sealed Hyper-V base image against its manifest.
+    VerifyBase {
+        #[arg(long)]
+        manifest: PathBuf,
+    },
+    /// List ExoSnap state left on this machine; exits 1 when any is found.
+    Residue,
+}
+
+#[derive(Subcommand)]
 enum DocsCommand {
     Check {
         #[arg(long, default_value = ".")]
@@ -348,39 +384,77 @@ fn run(args: RunArgs) -> Result<ExitCode> {
     let caps = capability::probe(&attested);
     std::fs::create_dir_all(&args.out)?;
     let registry = scenarios::registry();
+    let environment = match &args.environment {
+        Some(name) => disposable::BackendKind::parse(name)
+            .with_context(|| format!("unknown environment '{name}'"))?,
+        None => disposable::BackendKind::Local,
+    };
+    let forced = match args.backend.as_str() {
+        "auto" => None,
+        name => Some(
+            disposable::BackendKind::parse(name)
+                .with_context(|| format!("unknown backend '{name}'"))?,
+        ),
+    };
     let mut any_blocking = false;
     for lane in lanes {
-        let mut ctx = context::Context::new(
+        let selection = runner::Selection {
             lane,
-            caps.clone(),
-            bundle.clone(),
-            args.product.clone(),
-            args.out.join(lane.name()),
-        )?;
-        ctx.keep_media = args.keep_media;
-        println!(
-            "== {} ({} scenarios) ==",
-            lane.name(),
-            runner::selected(
-                &registry,
-                &runner::Selection {
+            only: &args.only,
+            skip: &args.skip,
+        };
+        let selected = runner::selected(&registry, &selection);
+        println!("== {} ({} scenarios) ==", lane.name(), selected.len());
+        let requires = disposable::lane_requirements(&selected);
+        let backend = forced.or_else(|| disposable::select(&requires, &caps));
+        let mut result = match backend {
+            Some(disposable::BackendKind::Local) => {
+                let mut ctx = context::Context::new(
                     lane,
+                    caps.clone(),
+                    bundle.clone(),
+                    args.product.clone(),
+                    args.out.join(lane.name()),
+                )?;
+                ctx.keep_media = args.keep_media;
+                let mut result = runner::run_lane(&registry, &selection, &mut ctx, &args.profile);
+                result.backend = Some(environment.name().into());
+                result
+            }
+            kind => {
+                let request = disposable::LaneRequest {
+                    lane,
+                    profile: &args.profile,
+                    bundle: args.bundle.as_deref(),
                     only: &args.only,
-                    skip: &args.skip
+                    skip: &args.skip,
+                    attest: &args.attest,
+                    keep_media: args.keep_media,
+                    scenarios: selected.clone(),
+                    slot: args.slot.as_deref(),
+                };
+                match kind {
+                    Some(kind) => {
+                        println!("   running inside {}", kind.name());
+                        let mut env = disposable::open(kind)?;
+                        disposable::run_lane(env.as_mut(), &request, &args.out)
+                    }
+                    None => disposable::synthetic_result(
+                        &request,
+                        &model::now_rfc3339(),
+                        model::Verdict::Unavailable,
+                        "no environment on this host guarantees the lane's requirements",
+                    ),
                 }
-            )
-            .len()
-        );
-        let result = runner::run_lane(
-            &registry,
-            &runner::Selection {
-                lane,
-                only: &args.only,
-                skip: &args.skip,
-            },
-            &mut ctx,
-            &args.profile,
-        );
+            }
+        };
+        if result.slot.is_none() {
+            result.slot = Some(
+                args.slot
+                    .clone()
+                    .unwrap_or_else(|| disposable::default_slot(environment, &caps)),
+            );
+        }
         let file = args.out.join(format!("{}.result.json", lane.name()));
         write_json(&file, &result)?;
         println!(
@@ -730,19 +804,27 @@ fn real_main() -> Result<ExitCode> {
             }
             println!("{}", serde_json::to_string_pretty(&caps.facts)?);
         }
-        Command::List { lane } => {
+        Command::List { lane, class } => {
             let lane = lane
                 .map(|l| Lane::parse(&l).with_context(|| format!("unknown lane '{l}'")))
+                .transpose()?;
+            let class = class
+                .map(|c| {
+                    scenario::ScenarioClass::parse(&c)
+                        .with_context(|| format!("unknown class '{c}'"))
+                })
                 .transpose()?;
             for s in scenarios::registry()
                 .iter()
                 .filter(|s| lane.is_none_or(|l| s.runs_in(l)))
+                .filter(|s| class.is_none_or(|c| s.class == c))
             {
                 let caps: Vec<&str> = s.requires.iter().map(|c| c.name()).collect();
                 println!(
-                    "{:<40} r{} {:<20} {:<12} {:?} [{}]",
+                    "{:<40} r{} {:<11} {:<20} {:<12} {:?} [{}]",
                     s.id,
                     s.revision,
+                    s.class.name(),
                     s.lane.name(),
                     format!("{:?}", s.tier),
                     s.also.iter().map(|l| l.name()).collect::<Vec<_>>(),
@@ -750,6 +832,56 @@ fn real_main() -> Result<ExitCode> {
                 );
             }
         }
+        Command::Samples(command) => return samples::run(command),
+        Command::Disposable(DisposableCommand::Probe) => {
+            let caps = capability::probe(&[]);
+            for kind in disposable::BackendKind::ALL {
+                let usable = match kind {
+                    disposable::BackendKind::Local => true,
+                    disposable::BackendKind::Sandbox => caps.has(Capability::WindowsSandbox),
+                    disposable::BackendKind::HyperV => caps.has(Capability::HyperVSockets),
+                };
+                println!(
+                    "{:<8} {:<4} guarantees [{}]",
+                    kind.name(),
+                    if usable { "yes" } else { "no" },
+                    kind.guarantees()
+                        .iter()
+                        .map(|c| c.name())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+            }
+            for key in ["windowsSandbox", "hyperV"] {
+                if let Some(v) = caps.facts.get(key) {
+                    println!("{key}: {v}");
+                }
+            }
+        }
+        #[cfg(windows)]
+        Command::Disposable(DisposableCommand::RegisterHypervService) => {
+            disposable::hyperv::register_service()?;
+            println!("registered guest agent service {}", exo_guest::SERVICE_ID);
+        }
+        #[cfg(windows)]
+        Command::Disposable(DisposableCommand::VerifyBase { manifest }) => {
+            let (m, vhdx) = disposable::hyperv::BaseManifest::load(&manifest)?;
+            m.verify(&vhdx)?;
+            println!("{} {} verified", m.image_id, m.sha256);
+        }
+        #[cfg(windows)]
+        Command::Disposable(DisposableCommand::Residue) => {
+            let found = scenarios::clean::residue()?;
+            for finding in &found {
+                println!("{finding}");
+            }
+            if !found.is_empty() {
+                return Ok(ExitCode::FAILURE);
+            }
+            println!("clean");
+        }
+        #[cfg(not(windows))]
+        Command::Disposable(_) => bail!("disposable backends need a Windows host"),
         Command::Package(args) => {
             let result = package::run(&args)?;
             println!("{}", serde_json::to_string_pretty(&result)?);

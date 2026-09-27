@@ -1,9 +1,10 @@
-// Test runner for the Record source picker's QML contract.
+// Test runner for the QML contracts of the Record source picker and the
+// transport dock.
 //
 // A separate executable from record_controls_qml_tests for the same reason the
-// edit runner exists: RecordSourcePicker takes a REQUIRED, C++-typed adapter
+// edit runner exists: both take a REQUIRED, C++-typed adapter
 // (RecordViewModelAdapter, QML_UNCREATABLE like every application-provided
-// adapter), so it cannot be stubbed from QML. The runner owns one real adapter
+// adapter), so neither can be stubbed from QML. The runner owns one real adapter
 // over a seeded RecordViewModel and exposes it, plus a seed entry point that
 // rebuilds the target list through the same revision bump a rescan uses.
 
@@ -52,6 +53,18 @@ class RecordPickerTestDriver final : public QObject {
         source_.selected_target_index = 0;
         source_.capture_mode = exosnap::CaptureMode::Monitor;
         ++source_.targets_revision;
+        adapter_.setSource(&source_);
+    }
+
+    // "ready", "recording", or anything else for the view model's initial
+    // LoadingCapabilities state.
+    Q_INVOKABLE void setRecordingState(const QString& state) {
+        if (state == QLatin1String("ready"))
+            source_.state = exosnap::UiRecordingState::Ready;
+        else if (state == QLatin1String("recording"))
+            source_.state = exosnap::UiRecordingState::Recording;
+        else
+            source_.state = exosnap::UiRecordingState::LoadingCapabilities;
         adapter_.setSource(&source_);
     }
 

@@ -509,7 +509,7 @@ if(WIN32)
     # loads IDI_EXOSNAP_APP_ICON out of the EXE's own resources, so a target
     # without them shows a blank taskbar entry), and the generated
     # exosnap_version.rc carries VERSIONINFO, which
-    # scripts/build-release-artifacts.ps1 asserts against the release identity.
+    # `exo-verify package` asserts against the release identity.
     target_sources(exosnap
         PRIVATE
             ${PROJECT_SOURCE_DIR}/app/exosnap.rc
@@ -518,12 +518,10 @@ if(WIN32)
 endif()
 
 # Output into ${PROJECT_BINARY_DIR}/app rather than this subdirectory's own
-# binary dir. Two things depend on that location: scripts/build-release-artifacts.ps1
-# resolves the built exe as app/<config>/exosnap.exe (multi-config) or
-# app/exosnap.exe (Ninja), and every gtest binary is emitted into the same
-# directory -- so the Qt/FFmpeg runtime this target stages POST_BUILD is also
-# what makes the test executables launchable. While the Widgets frontend still
-# existed it played both roles; the Quick target inherits them whole.
+# binary dir. Every gtest binary is emitted into the same directory, so the
+# Qt/FFmpeg runtime this target stages POST_BUILD is also what makes the test
+# executables launchable. While the Widgets frontend still existed it played
+# that role; the Quick target inherits it.
 set_target_properties(exosnap PROPERTIES
     AUTORCC ON
     OUTPUT_NAME "exosnap"
@@ -1201,12 +1199,19 @@ qt_add_qml_module(record_source_picker_qml_tests
         QuickWheelMetrics.h
     QML_FILES
         ExoButton.qml
+        ExoChevron.qml
         ExoGlyph.qml
+        ExoMenu.qml
+        ExoMenuItem.qml
         ExoScrollBar.qml
         ExoSearchField.qml
         ExoSegmentedControl.qml
         ExoTheme.qml
+        RecordActionButton.qml
         RecordSourcePicker.qml
+        RecordSourceToggle.qml
+        RecordSplitButton.qml
+        RecordTransportDock.qml
 )
 
 target_compile_definitions(record_source_picker_qml_tests

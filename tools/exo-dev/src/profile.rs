@@ -170,7 +170,7 @@ impl Profile {
             },
             Profile::CiDevScripts => ProfileSpec {
                 name: "ci-dev-scripts",
-                steps: &[StepId::AvSyncGolden],
+                steps: &[StepId::AvSyncGolden, StepId::Samples],
                 ..BASE
             },
             Profile::CiBuildDebug => ProfileSpec {

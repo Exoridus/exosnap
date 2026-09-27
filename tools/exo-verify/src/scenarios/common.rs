@@ -28,7 +28,9 @@ pub struct Stimulus {
     pub log_path: PathBuf,
     pub title: String,
     pub monitor: String,
-    #[allow(dead_code, reason = "Reserved for screen placement checks")]
+    /// The stimulus window, as the operating system names it.
+    pub hwnd: u64,
+    /// Window rectangle in virtual-screen physical pixels: left, top, right, bottom.
     pub rect: [i32; 4],
     pub qpc_frequency: i64,
     #[allow(dead_code, reason = "Reserved for DPI checks")]
@@ -103,6 +105,7 @@ impl Stimulus {
         loop {
             if let Ok(events) = read_log(&log_path)
                 && let Some(LogEvent::Ready {
+                    hwnd,
                     monitor,
                     rect,
                     qpc_frequency,
@@ -123,6 +126,7 @@ impl Stimulus {
                     log_path,
                     title,
                     monitor,
+                    hwnd,
                     rect,
                     qpc_frequency,
                     dpi,
@@ -328,6 +332,61 @@ pub fn select_window(app: &mut App, title: &str) -> Step {
             )));
         }
         std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// The Qt screen name the main window is on, as `window.moveToScreen` takes it.
+pub fn main_window_screen(window: &Value) -> Step<String> {
+    window["screen"]["name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| Stop::infra(format!("window.snapshot names no screen: {window}")))
+}
+
+/// Discards already delivered `name` events, so a later wait observes only
+/// what happens after this point.
+pub fn drain_events(app: &mut App, name: &str) -> Step<usize> {
+    let mut drained = 0;
+    while app
+        .client
+        .wait_event(name, &json!({}), Duration::ZERO)?
+        .is_some()
+    {
+        drained += 1;
+    }
+    Ok(drained)
+}
+
+/// Moves the main window to `screen` and waits for the product's own
+/// `window.screenChanged` event naming it. Returns that event's window snapshot.
+pub fn move_to_screen(app: &mut App, screen: &str, timeout: Duration) -> Step<Value> {
+    drain_events(app, "window.screenChanged")?;
+    app.client
+        .request(
+            "window.moveToScreen",
+            json!({ "screen": screen }),
+            secs(15.0),
+        )?
+        .map_err(|r| Stop::fail(format!("window.moveToScreen {screen} was refused: {r}")))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match app
+            .client
+            .wait_event("window.screenChanged", &json!({}), remaining)?
+        {
+            Some(event) if event["data"]["screen"]["name"] == screen => {
+                return Ok(event["data"].clone());
+            }
+            Some(_) => {}
+            None => {
+                return Err(Stop::fail(format!(
+                    "the main window reported no move to {screen} within {} s",
+                    timeout.as_secs()
+                )));
+            }
+        }
     }
 }
 

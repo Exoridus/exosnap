@@ -10,7 +10,7 @@ use crate::capability::Capability;
 use crate::context::{App, Context};
 use crate::media;
 use crate::plan::Tier;
-use crate::scenario::{Lane, Scenario, Step, Stop};
+use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::tools;
 use crate::{infra_ensure, product_ensure};
 
@@ -24,7 +24,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "audio.mixed-clock-soak",
             revision: 1,
             title: "A 30 minute system and microphone recording stays complete",
-            claim: "separate render and microphone tracks span a long recording with bounded duration skew and a clean session report",
+            class: ScenarioClass::Hardware,
+            contract: "separate render and microphone tracks span a long recording with bounded duration skew and a clean session report",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Recommended,
@@ -41,7 +42,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "audio.endpoint-degrade",
             revision: 1,
             title: "A lost audio endpoint degrades and recovers",
-            claim: "disconnecting the bound physical playback device degrades then recovers the source without stopping the recording",
+            class: ScenarioClass::Hardware,
+            contract: "disconnecting the bound physical playback device degrades then recovers the source without stopping the recording",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Recommended,
@@ -60,7 +62,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "audio.connected-silence",
             revision: 1,
             title: "A connected silent endpoint is not degraded",
-            claim: "a known silent but connected render endpoint remains active without source degradation",
+            class: ScenarioClass::Contract,
+            contract: "a known silent but connected render endpoint remains active without source degradation",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Recommended,
@@ -78,7 +81,8 @@ pub fn scenarios() -> Vec<Scenario> {
             id: "audio.endpoint-44100",
             revision: 1,
             title: "A 44.1 kHz endpoint records correct audio",
-            claim: "a measured 44.1 kHz default render endpoint produces an expected audio rate and retains its original format and default role",
+            class: ScenarioClass::Contract,
+            contract: "a measured 44.1 kHz default render endpoint produces an expected audio rate and retains its original format and default role",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Recommended,
