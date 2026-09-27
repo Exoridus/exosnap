@@ -209,6 +209,7 @@ QString DisplayDeviceName(const QScreen& screen) {
 QJsonObject NativeFactsJson(const diagnostics::NativeWindowFacts& facts) {
     QJsonObject json;
     json.insert(QStringLiteral("valid"), facts.valid);
+    json.insert(QStringLiteral("hwnd"), static_cast<qint64>(facts.hwnd));
     json.insert(QStringLiteral("style"), QStringLiteral("0x%1").arg(facts.style, 8, 16, QLatin1Char('0')));
     json.insert(QStringLiteral("exStyle"), QStringLiteral("0x%1").arg(facts.ex_style, 8, 16, QLatin1Char('0')));
     json.insert(QStringLiteral("layered"), facts.layered);
