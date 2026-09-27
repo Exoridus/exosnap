@@ -8,6 +8,9 @@
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <functional>
+#include <memory>
+
+class QAbstractNativeEventFilter;
 
 namespace exosnap::quick {
 
@@ -48,6 +51,7 @@ class CaptureExclusion : public QObject {
     using AffinityFunction = std::function<bool(void* hwnd, quint32 affinity)>;
 
     explicit CaptureExclusion(QObject* parent = nullptr);
+    ~CaptureExclusion() override;
 
     [[nodiscard]] QQuickWindow* target() const noexcept;
 
@@ -102,6 +106,11 @@ class CaptureExclusion : public QObject {
     // The WS_EX_LAYERED correction runs on every show; the log line for it runs
     // once, so a session with twenty recordings does not carry twenty copies.
     bool composition_logged_ = false;
+    // Installed only for a target carrying Qt::WindowTransparentForInput; see
+    // ClickThroughHitTestFilter in the .cpp. Removed and replaced whenever the
+    // target changes, so a torn-down overlay window never leaves a filter
+    // running against a stale HWND.
+    std::unique_ptr<QAbstractNativeEventFilter> click_through_filter_;
 };
 
 } // namespace exosnap::quick

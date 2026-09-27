@@ -30,8 +30,9 @@ namespace exosnap::observability {
 // than silently omitted -- an unnamed top-level window is a finding, not a gap.
 namespace window_role {
 inline constexpr const char* kMain = "main";
+// Carries the diagnostics tokens too: OverlayDiagnostics was absorbed into
+// the recording pill, one window with two independently-gated sections.
 inline constexpr const char* kRecordingOverlay = "recordingOverlay";
-inline constexpr const char* kDiagnosticsOverlay = "diagnosticsOverlay";
 inline constexpr const char* kQuickControls = "quickControls";
 inline constexpr const char* kNotificationToast = "notificationToast";
 inline constexpr const char* kCountdown = "countdown";

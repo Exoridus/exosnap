@@ -13,6 +13,10 @@
 #endif
 #endif
 
+#include <QAbstractNativeEventFilter>
+#include <QByteArray>
+#include <QCoreApplication>
+
 namespace exosnap::quick {
 
 namespace {
@@ -72,11 +76,60 @@ bool dropLayeredAttribute(HWND hwnd) {
                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
     return true;
 }
+
+// Forces WM_NCHITTEST to answer HTTRANSPARENT for one click-through overlay
+// HWND, ahead of Qt's own window procedure.
+//
+// Qt::WindowTransparentForInput sets WS_EX_TRANSPARENT, but that extended
+// style alone does not make a click reach whatever lies beneath in another
+// process. The pass-through a click-through window relies on is the
+// WM_NCHITTEST answer: USER32's hit-test walk (the same one WindowFromPoint
+// and real mouse dispatch both use) keeps probing downward through the
+// z-order past any window that answers HTTRANSPARENT, but stops at the first
+// one that does not -- and Qt's Windows platform window answers this message
+// itself before DefWindowProc's implicit WS_EX_TRANSPARENT handling ever
+// gets a turn, the same routing precedence QuickWindowChrome relies on to
+// answer WM_NCHITTEST for the main window's title band (with the opposite
+// answer, HTCLIENT). Left alone, a "click-through" overlay silently keeps
+// every click that lands on its HWND instead of forwarding it.
+//
+// A process-wide QAbstractNativeEventFilter, not a per-window virtual: Qt
+// Quick windows have no nativeEvent() override point of their own, and this
+// filter is the same mechanism QuickWindowChrome and the hotkey/updater
+// filters already use for other HWNDs in this process.
+class ClickThroughHitTestFilter : public QAbstractNativeEventFilter {
+  public:
+    explicit ClickThroughHitTestFilter(HWND hwnd) : hwnd_(hwnd) {
+    }
+
+    bool nativeEventFilter(const QByteArray& event_type, void* message, qintptr* result) override {
+        if (event_type != QByteArrayLiteral("windows_generic_MSG") &&
+            event_type != QByteArrayLiteral("windows_dispatcher_MSG")) {
+            return false;
+        }
+        auto* msg = static_cast<MSG*>(message);
+        if (msg->hwnd != hwnd_ || msg->message != WM_NCHITTEST)
+            return false;
+        if (result != nullptr)
+            *result = static_cast<qintptr>(HTTRANSPARENT);
+        return true;
+    }
+
+  private:
+    HWND hwnd_;
+};
 #endif
 
 } // namespace
 
 CaptureExclusion::CaptureExclusion(QObject* parent) : QObject(parent) {
+}
+
+CaptureExclusion::~CaptureExclusion() {
+#if defined(Q_OS_WIN)
+    if (click_through_filter_)
+        QCoreApplication::instance()->removeNativeEventFilter(click_through_filter_.get());
+#endif
 }
 
 QQuickWindow* CaptureExclusion::target() const noexcept {
@@ -86,6 +139,13 @@ QQuickWindow* CaptureExclusion::target() const noexcept {
 void CaptureExclusion::setTarget(QQuickWindow* window) {
     if (target_ == window)
         return;
+
+#if defined(Q_OS_WIN)
+    if (click_through_filter_) {
+        QCoreApplication::instance()->removeNativeEventFilter(click_through_filter_.get());
+        click_through_filter_.reset();
+    }
+#endif
 
     target_ = window;
     emit targetChanged();
@@ -107,6 +167,17 @@ void CaptureExclusion::setTarget(QQuickWindow* window) {
     // SetWindowDisplayAffinity. With no handle there is nothing to apply the
     // affinity to — and equally, nothing that could have been captured yet.
     window->create();
+
+#if defined(Q_OS_WIN)
+    // Only the overlays declared unconditionally click-through carry this
+    // flag (see CaptureExclusion.h): the quick-controls dock and the
+    // notification toast take input by design and must never answer
+    // HTTRANSPARENT.
+    if ((window->flags() & Qt::WindowTransparentForInput) != 0 && window->winId() != 0) {
+        click_through_filter_ = std::make_unique<ClickThroughHitTestFilter>(reinterpret_cast<HWND>(window->winId()));
+        QCoreApplication::instance()->installNativeEventFilter(click_through_filter_.get());
+    }
+#endif
 
     const bool ok = latched_failure ? false : applyAffinity(window);
 
@@ -150,6 +221,15 @@ void CaptureExclusion::setTarget(QQuickWindow* window) {
 #endif
 
     if (!ok) {
+#if defined(Q_OS_WIN)
+        // The HWND this filter was keyed to is about to be destroyed and its
+        // value may be reused by an unrelated window; a stale filter must not
+        // outlive the handle it matches against.
+        if (click_through_filter_) {
+            QCoreApplication::instance()->removeNativeEventFilter(click_through_filter_.get());
+            click_through_filter_.reset();
+        }
+#endif
         // Second safeguard, independent of the QML `visible` binding: with the
         // platform window destroyed there is nothing for the compositor to put
         // on screen even if a later edit accidentally makes `visible` true.

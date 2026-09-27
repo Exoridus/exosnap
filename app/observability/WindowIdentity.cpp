@@ -8,12 +8,14 @@
 namespace exosnap::observability {
 
 const std::vector<QString>& AllOverlayObjectNames() {
-    // Declaration order matches Main.qml's own (recording, diagnostics,
-    // countdown, quick controls, toast) purely for readability -- nothing
-    // downstream depends on the order.
+    // Declaration order matches Main.qml's own (recording, countdown, quick
+    // controls, toast) purely for readability -- nothing downstream depends
+    // on the order. The recording overlay's window carries the diagnostics
+    // tokens too; there is no separate diagnostics window.
     static const std::vector<QString> names = {
-        QStringLiteral("quickOverlayRecording"),         QStringLiteral("quickOverlayDiagnostics"),
-        QStringLiteral("quickOverlayCountdown"),         QStringLiteral("quickOverlayQuickControls"),
+        QStringLiteral("quickOverlayRecording"),
+        QStringLiteral("quickOverlayCountdown"),
+        QStringLiteral("quickOverlayQuickControls"),
         QStringLiteral("quickOverlayNotificationToast"),
     };
     return names;
@@ -26,8 +28,6 @@ QString WindowRoleForObjectName(const QString& object_name, bool is_root) {
     // a prefix match would quietly file a NEW overlay under an existing role.
     if (object_name == QLatin1String("quickOverlayRecording"))
         return QString::fromLatin1(window_role::kRecordingOverlay);
-    if (object_name == QLatin1String("quickOverlayDiagnostics"))
-        return QString::fromLatin1(window_role::kDiagnosticsOverlay);
     if (object_name == QLatin1String("quickOverlayQuickControls"))
         return QString::fromLatin1(window_role::kQuickControls);
     if (object_name == QLatin1String("quickOverlayNotificationToast"))

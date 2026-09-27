@@ -3,13 +3,16 @@ import QtTest
 
 import ExoSnap.Quick.TestControls
 
-// The pill is the one capture-excluded overlay that is not click-through, so a
-// part of it sitting under the taskbar is an unclickable control, not merely a
-// cosmetic overlap. Before this test, the default position and the drag clamp
-// were computed against the full monitor rectangle
-// (OverlayAdapter::recordedMonitorGeometry), which includes the taskbar; a
-// monitor with a taller taskbar than the pill's own edge margin left the bottom
-// of the pill behind it.
+// The pill is the one capture-excluded overlay that is not click-through, so
+// its placement is a correctness property rather than a layout preference.
+//
+// The default placement and the drag clamp used to be computed against the
+// monitor's WORK area (excluding the taskbar). That enforced a safety margin
+// the product no longer wants: the dock may be moved all the way to the real
+// screen edge and may overlap the ordinary taskbar there. The movement
+// boundary is now the full monitor rectangle (monitorGeometry); a separate
+// sourceGeometry/sourceIsRegion pair only prefers a placement near an Area
+// selection and never bounds movement.
 //
 // The placement functions never show the window: `visible` is gated on
 // CaptureExclusion.granted, which stays false without a real platform window,
@@ -33,65 +36,106 @@ TestCase {
         }
     }
 
-    // A monitor whose taskbar takes 96 px off the bottom -- taller than the
-    // pill's 32 px default margin, so a bug that measures from the full
-    // rectangle instead of the work area is caught rather than hidden by a
-    // taskbar that happens to be thinner than the margin.
-    readonly property rect workArea: Qt.rect(100, 50, 1600, 804)
-    readonly property rect fullMonitor: Qt.rect(100, 50, 1600, 900)
+    readonly property rect monitor: Qt.rect(100, 50, 1600, 900)
 
-    function test_default_position_keeps_the_pill_inside_the_work_area() {
+    function test_default_position_is_bottom_centred_on_the_monitor() {
         let pill = createTemporaryObject(pillComponent, testCase, {
-            workAreaGeometry: testCase.workArea
+            monitorGeometry: testCase.monitor
         });
         verify(pill);
 
-        const bottom = pill.y + pill.height;
-        verify(bottom <= testCase.workArea.y + testCase.workArea.height,
-               "pill bottom " + bottom + " must stay above the work area's bottom edge "
-               + (testCase.workArea.y + testCase.workArea.height));
-        // The same edge measured against the full monitor rectangle would sit
-        // 96 px lower, inside the taskbar -- this is the regression itself.
-        verify(bottom < testCase.fullMonitor.y + testCase.fullMonitor.height - pill.screenMargin);
-    }
-
-    function test_default_position_is_bottom_centred_on_the_work_area() {
-        let pill = createTemporaryObject(pillComponent, testCase, {
-            workAreaGeometry: testCase.workArea
-        });
-        verify(pill);
-
-        compare(pill.x, testCase.workArea.x + (testCase.workArea.width - pill.width) / 2);
-        compare(pill.y, testCase.workArea.y + testCase.workArea.height - pill.height - pill.screenMargin);
+        compare(pill.x, testCase.monitor.x + (testCase.monitor.width - pill.width) / 2);
+        compare(pill.y, testCase.monitor.y + testCase.monitor.height - pill.height - pill.edgeMargin);
     }
 
     // The inset is a spacing rung, not a number of the pill's own: a theme that
-    // moves its scale has to move the overlay with it, and a second literal 32
+    // moves its scale has to move the overlay with it, and a second literal
     // would silently stop tracking.
-    function test_the_screen_margin_is_a_theme_spacing_token() {
+    function test_the_edge_margin_is_a_theme_spacing_token() {
         let pill = createTemporaryObject(pillComponent, testCase, {
-            workAreaGeometry: testCase.workArea
+            monitorGeometry: testCase.monitor
         });
         verify(pill);
 
-        compare(pill.screenMargin, ExoTheme.spacing2Xl);
-        verify(pill.screenMargin > 0);
+        compare(pill.edgeMargin, ExoTheme.spacingSm);
+        verify(pill.edgeMargin > 0);
         // The gap is real, not merely declared: the pill's bottom edge stands
-        // exactly that far off the work area's.
-        compare(testCase.workArea.y + testCase.workArea.height - (pill.y + pill.height), pill.screenMargin);
+        // exactly that far off the monitor's.
+        compare(testCase.monitor.y + testCase.monitor.height - (pill.y + pill.height), pill.edgeMargin);
     }
 
     // No monitor bound (an unresolved or non-monitor capture target) falls back
-    // to the same full-screen rectangle the other overlays use -- unchanged by
-    // this fix, and worth pinning down because it is the one path with no
-    // C++-supplied rectangle to assert against.
-    function test_an_empty_work_area_falls_back_to_the_screen() {
+    // to the same full-screen rectangle the other overlays use.
+    function test_an_empty_monitor_geometry_falls_back_to_the_screen() {
         let pill = createTemporaryObject(pillComponent, testCase, {
-            workAreaGeometry: Qt.rect(0, 0, 0, 0)
+            monitorGeometry: Qt.rect(0, 0, 0, 0)
         });
         verify(pill);
 
-        compare(pill.effectiveWorkArea, Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height));
+        compare(pill.effectiveMonitor, Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height));
+    }
+
+    // ── Region-mode anchor preference ───────────────────────────────────────
+    //
+    // sourceGeometry only ever moves the DEFAULT placement; it never bounds
+    // movement — that is what effectiveMonitor is for, and these three tests
+    // pin the placement order the design spec asks for: below, then above,
+    // then the plain monitor default.
+
+    readonly property rect regionWithRoomBelow: Qt.rect(300, 100, 400, 300)
+    readonly property rect regionNearTheBottom: Qt.rect(300, 700, 400, 190)
+    readonly property rect regionSpanningTheMonitor: Qt.rect(300, 60, 400, 880)
+
+    function test_region_mode_prefers_a_placement_below_the_region() {
+        let pill = createTemporaryObject(pillComponent, testCase, {
+            monitorGeometry: testCase.monitor,
+            sourceGeometry: testCase.regionWithRoomBelow,
+            sourceIsRegion: true
+        });
+        verify(pill);
+
+        const region = testCase.regionWithRoomBelow;
+        compare(pill.x, region.x + (region.width - pill.width) / 2);
+        compare(pill.y, region.y + region.height + pill.regionGap);
+    }
+
+    function test_region_mode_falls_back_to_above_when_there_is_no_room_below() {
+        let pill = createTemporaryObject(pillComponent, testCase, {
+            monitorGeometry: testCase.monitor,
+            sourceGeometry: testCase.regionNearTheBottom,
+            sourceIsRegion: true
+        });
+        verify(pill);
+
+        const region = testCase.regionNearTheBottom;
+        compare(pill.y, region.y - pill.regionGap - pill.height);
+        verify(pill.y >= testCase.monitor.y, "the above-region placement must still land on the monitor");
+    }
+
+    function test_region_mode_falls_back_to_the_monitor_default_when_neither_fits() {
+        let pill = createTemporaryObject(pillComponent, testCase, {
+            monitorGeometry: testCase.monitor,
+            sourceGeometry: testCase.regionSpanningTheMonitor,
+            sourceIsRegion: true
+        });
+        verify(pill);
+
+        compare(pill.y, testCase.monitor.y + testCase.monitor.height - pill.height - pill.edgeMargin);
+    }
+
+    // A Window target is also usually smaller than its monitor, but it is not a
+    // region: it must get the plain monitor default, not the below/above
+    // preference.
+    function test_a_non_region_source_rect_does_not_change_the_default_placement() {
+        let pill = createTemporaryObject(pillComponent, testCase, {
+            monitorGeometry: testCase.monitor,
+            sourceGeometry: testCase.regionWithRoomBelow,
+            sourceIsRegion: false
+        });
+        verify(pill);
+
+        compare(pill.x, testCase.monitor.x + (testCase.monitor.width - pill.width) / 2);
+        compare(pill.y, testCase.monitor.y + testCase.monitor.height - pill.height - pill.edgeMargin);
     }
 
     // ── Dragging ─────────────────────────────────────────────────────────────
@@ -101,7 +145,7 @@ TestCase {
     // the pointer, so what a move event reports depends on what the previous one
     // did.
     //
-    // These four functions are the exception to the "never shown" note above.
+    // These functions are the exception to the "never shown" note above.
     // A window that was never shown leaves its content item at 0 x 0, so the
     // grip has no hit area and no mouse event can reach it; `visible` is
     // therefore written directly here, which replaces the CaptureExclusion
@@ -109,7 +153,7 @@ TestCase {
     // on the offscreen platform.
     function shownPill() {
         let pill = createTemporaryObject(pillComponent, testCase, {
-            workAreaGeometry: testCase.workArea
+            monitorGeometry: testCase.monitor
         });
         verify(pill);
         pill.visible = true;
@@ -135,7 +179,7 @@ TestCase {
     }
 
     // The reported defect: the smallest drag on the grip sent the pill to a
-    // corner of the work area. The pill must instead sit exactly where the
+    // corner of the monitor. The pill must instead sit exactly where the
     // pointer carried it, however many events the gesture is delivered as.
     function test_a_small_drag_moves_the_pill_by_the_pointer_delta_and_no_further() {
         let pill = shownPill();
@@ -158,10 +202,11 @@ TestCase {
         compare(pill.y, startY - 6, "a 6 px drag must move the pill 6 px, not " + (startY - pill.y));
         // Named separately from the two comparisons above so a regression says
         // which failure it is: the corner is where an accumulating drag ends up.
-        verify(pill.x < testCase.workArea.x + testCase.workArea.width - pill.width - pill.screenMargin,
-               "the pill ran into the right edge of the work area");
-        verify(pill.y < testCase.workArea.y + testCase.workArea.height - pill.height - pill.screenMargin,
-               "the pill ran into the bottom edge of the work area");
+        verify(pill.x < testCase.monitor.x + testCase.monitor.width - pill.width,
+               "the pill ran into the right edge of the monitor");
+        verify(pill.y < testCase.monitor.y + testCase.monitor.height - pill.height,
+               "the pill ran into the bottom edge of the monitor");
+        compare(pill.userPositioned, true);
     }
 
     // A pointer that keeps moving, which is the ordinary case: each waypoint is
@@ -186,36 +231,74 @@ TestCase {
         compare(pill.y, startY - 30);
     }
 
-    // The drag clamp uses the same inset as the default placement, so a pill
-    // dragged hard into the corner still stands off the work-area edge rather
-    // than touching it.
-    function test_a_drag_into_the_corner_stops_at_the_themed_margin() {
+    // No enforced taskbar safety margin: a drag into the corner stops flush
+    // against the real monitor edge, not at a themed inset.
+    function test_a_drag_into_the_corner_stops_flush_with_the_monitor_edge() {
         let pill = shownPill();
         let grip = gripOf(pill);
 
         const pressLocal = Qt.point(14, 30);
-        const area = testCase.workArea;
+        const area = testCase.monitor;
 
         mousePress(grip, pressLocal.x, pressLocal.y, Qt.LeftButton);
         dragPointerTo(pill, grip, area.x + area.width + 400, area.y + area.height + 400, 6);
         mouseRelease(grip, pressLocal.x, pressLocal.y, Qt.LeftButton);
 
-        compare(pill.x, area.x + area.width - pill.width - pill.screenMargin);
-        compare(pill.y, area.y + area.height - pill.height - pill.screenMargin);
+        compare(pill.x, area.x + area.width - pill.width);
+        compare(pill.y, area.y + area.height - pill.height);
     }
 
-    function test_a_drag_into_the_opposite_corner_stops_at_the_themed_margin() {
+    function test_a_drag_into_the_opposite_corner_stops_flush_with_the_monitor_edge() {
         let pill = shownPill();
         let grip = gripOf(pill);
 
         const pressLocal = Qt.point(14, 30);
-        const area = testCase.workArea;
+        const area = testCase.monitor;
 
         mousePress(grip, pressLocal.x, pressLocal.y, Qt.LeftButton);
         dragPointerTo(pill, grip, area.x - 400, area.y - 400, 6);
         mouseRelease(grip, pressLocal.x, pressLocal.y, Qt.LeftButton);
 
-        compare(pill.x, area.x + pill.screenMargin);
-        compare(pill.y, area.y + pill.screenMargin);
+        compare(pill.x, area.x);
+        compare(pill.y, area.y);
+    }
+
+    // A press that never really moves is a click on the grip (collapse/expand),
+    // not a drag -- userPositioned must stay false so the default placement
+    // keeps tracking the recording target.
+    function test_a_bare_click_on_the_grip_does_not_mark_the_pill_user_positioned() {
+        let pill = shownPill();
+        let grip = gripOf(pill);
+        const wasExpanded = pill.expanded;
+
+        mousePress(grip, 14, 30, Qt.LeftButton);
+        mouseRelease(grip, 14, 30, Qt.LeftButton);
+
+        compare(pill.userPositioned, false);
+        compare(pill.expanded, !wasExpanded);
+    }
+
+    // A user-placed pill does not re-run the default placement when the
+    // recording target's monitor changes -- the drag already overwrote the x/y
+    // bindings -- so its offset has to be re-clamped by hand or it could sit
+    // off-screen (or simply off the new target's monitor) after the target
+    // moves to a smaller or differently-positioned display.
+    function test_a_user_placed_pill_is_re_clamped_after_a_monitor_change() {
+        let pill = shownPill();
+        let grip = gripOf(pill);
+
+        const pressLocal = Qt.point(14, 30);
+        mousePress(grip, pressLocal.x, pressLocal.y, Qt.LeftButton);
+        dragPointerTo(pill, grip, testCase.monitor.x + testCase.monitor.width + 400,
+                      testCase.monitor.y + testCase.monitor.height + 400, 6);
+        mouseRelease(grip, pressLocal.x, pressLocal.y, Qt.LeftButton);
+        verify(pill.userPositioned);
+
+        // The recording moved to a smaller monitor at a different origin.
+        const smaller = Qt.rect(0, 0, 800, 500);
+        pill.monitorGeometry = smaller;
+
+        compare(pill.x, smaller.x + smaller.width - pill.width);
+        compare(pill.y, smaller.y + smaller.height - pill.height);
     }
 }

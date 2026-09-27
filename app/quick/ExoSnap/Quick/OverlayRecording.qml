@@ -2,7 +2,8 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 
-// The recording HUD: a compact status pill on the recorded monitor.
+// The recording HUD: a compact status pill on the recorded source, absorbing
+// what used to be OverlayDiagnostics.qml's separate window.
 //
 // Capture-excluded and unconditionally click-through.
 //
@@ -23,6 +24,18 @@ import QtQuick
 // WHICH TEXT APPEARS is a user preference resolved by
 // models::OverlayContentPolicy, never decided here — this file binds the
 // resolved booleans and lays them out.
+//
+// ONE WINDOW, TWO INDEPENDENT SECTIONS
+// -------------------------------------
+// The recording section (glyph, elapsed, output size, source name) and the
+// diagnostics section (fps/drop/drift tokens, muted-source glyphs) are gated
+// by two separate settings, exactly as they were as two windows: "recording
+// off, diagnostics on" still shows only the diagnostics tokens. Merging the
+// surface does not couple the settings. The status glyph and the elapsed
+// clock stay anchored to the pill's right edge — the one thing a user is
+// looking at during a capture never shifts position — and the diagnostics
+// tokens are prepended to its LEFT, growing the pill leftward when present
+// rather than pushing the clock sideways.
 Window {
     id: root
 
@@ -34,10 +47,11 @@ Window {
     // that happens to create it.
     objectName: "quickOverlayRecording"
 
-    // ── Business inputs ──────────────────────────────────────────────────────
-    // Geometry of the monitor being recorded, in virtual-desktop coordinates.
-    // An empty rect falls back to this window's own screen, the way the Widgets
-    // overlays fell back to the primary screen before a target was resolved.
+    // ── Business inputs: recording section ───────────────────────────────────
+    // Geometry of the actually-recorded source, in virtual-desktop coordinates
+    // (OverlayAdapter::recordedSourceGeometry — the region rect in Region
+    // mode, the live window rect in Window mode, the monitor rect in Monitor
+    // mode). An empty rect falls back to this window's own screen.
     property rect monitorGeometry: Qt.rect(0, 0, 0, 0)
     // An OverlayAdapter.State value. Compared against that enum by name below
     // rather than against 1/2/3: the adapter exports the enum to QML precisely
@@ -57,9 +71,66 @@ Window {
     property bool showOutputSize: false
     property bool showSourceName: false
 
+    // ── Business inputs: diagnostics section ─────────────────────────────────
+    property bool diagnosticsActive: false
+
+    property string fpsText: ""
+    property string dropText: ""
+    property string driftText: ""
+    property bool micMuted: false
+    property bool sysMuted: false
+
+    property bool showFps: false
+    property bool showDrop: true
+    property bool showDrift: true
+    // The diagnostics preset's own "size" toggle. Rendered through the same
+    // outputSizeText field the recording section already carries rather than
+    // as a second token: one value, shown once, if EITHER setting asks for it.
+    property bool showDiagnosticsSize: false
+    property bool showMutedSources: true
+
+    readonly property bool showSize: root.showOutputSize || root.showDiagnosticsSize
+
     readonly property rect effectiveGeometry: root.monitorGeometry.width > 0 && root.monitorGeometry.height > 0
                                               ? root.monitorGeometry
                                               : Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height)
+
+    readonly property string unavailable: "—"
+
+    // The configured diagnostics tokens, in a fixed reading order, LABELS ONLY.
+    // Built here rather than as conditional Items so the separators can be
+    // positioned from the list index, and kept as an array of labels rather
+    // than resolved values so the array changes only when the CONTENT POLICY
+    // changes (a user toggling a token in Settings) and not on every value tick
+    // — a `var` property compares by identity, so a value-carrying array would
+    // make every fps/drop/drift/size update a full model replacement, tearing
+    // down and rebuilding the token delegates several times a second on the
+    // same GUI thread as the DXGI preview and this pill's own clock.
+    readonly property var diagnosticsTokens: {
+        const list = [];
+        if (root.showFps)
+            list.push("fps");
+        if (root.showDrop)
+            list.push("drop");
+        if (root.showDrift)
+            list.push("drift");
+        return list;
+    }
+
+    function diagnosticsTokenValue(label: string): string {
+        switch (label) {
+        case "fps":
+            return root.fpsText;
+        case "drop":
+            return root.dropText;
+        case "drift":
+            return root.driftText;
+        }
+        return "";
+    }
+
+    readonly property bool anyMutedGlyph: root.showMutedSources && (root.micMuted || root.sysMuted)
+    readonly property bool diagnosticsContentPresent: root.diagnosticsTokens.length > 0 || root.anyMutedGlyph
 
     // Paused and Warning used to share caution amber, which made a deliberate
     // pause look like a fault to a user glancing at the corner of a full-screen
@@ -92,7 +163,7 @@ Window {
 
     // No transient parent: a Window declared inside another Window inherits it
     // and then follows it into the tray on minimise. An overlay that disappears
-    // when the app window is minimised fails exactly the case it exists for —
+    // when the app window is minimised fails exactly the case it exists for --
     // the user recording full-screen with ExoSnap out of the way.
     transientParent: null
 
@@ -112,7 +183,9 @@ Window {
 
     // Fail-closed as a binding: `granted` is false until a platform call proved
     // otherwise, so no evaluation order can put this window on screen unexcluded.
-    visible: exclusion.granted && root.overlayActive
+    // Either section can carry the pill alone -- "recording off, diagnostics
+    // on" is the same independence the two separate windows used to have.
+    visible: exclusion.granted && (root.overlayActive || (root.diagnosticsActive && root.diagnosticsContentPresent))
 
     width: pill.implicitWidth
     height: pill.implicitHeight
@@ -228,6 +301,64 @@ Window {
         }
     }
 
+    // Muted-source indicators are drawn rather than typed: the Widgets original
+    // moved off font glyphs because combining characters rendered inconsistently
+    // across the installed mono faces.
+    component MutedGlyph: Canvas {
+        id: glyph
+
+        property string kind: "mic"
+        property color tone: ExoTheme.overlayInkSecondary
+
+        width: 15
+        height: 15
+        onKindChanged: requestPaint()
+        onToneChanged: requestPaint()
+        onPaint: {
+            const ctx = getContext("2d");
+            ctx.reset();
+            ctx.strokeStyle = glyph.tone;
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+            ctx.lineWidth = 1.2;
+
+            const cx = width / 2;
+            const cy = height / 2;
+
+            if (glyph.kind === "mic") {
+                // Capsule body, U-shaped base, stem.
+                ctx.beginPath();
+                ctx.roundedRect(cx - 2.5, cy - 5.5, 5, 7, 2.5, 2.5);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(cx, cy + 1, 4.5, 0, Math.PI, false);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(cx, cy + 1.5);
+                ctx.lineTo(cx, cy + 4.5);
+                ctx.stroke();
+            } else {
+                // Speaker body plus cone.
+                ctx.beginPath();
+                ctx.rect(cx - 5, cy - 3, 3.5, 6);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(cx - 1.5, cy - 3);
+                ctx.lineTo(cx + 2.5, cy - 4.8);
+                ctx.lineTo(cx + 2.5, cy + 4.8);
+                ctx.lineTo(cx - 1.5, cy + 3);
+                ctx.stroke();
+            }
+
+            // Slash: top-right to bottom-left, marking the source as muted.
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.moveTo(cx + 5.25, cy - 6);
+            ctx.lineTo(cx - 5.25, cy + 6);
+            ctx.stroke();
+        }
+    }
+
     Rectangle {
         id: pill
 
@@ -237,14 +368,116 @@ Window {
         color: root.pillBackground
         radius: height / 2
 
+        // Anchored to the pill's right edge rather than centred: the recording
+        // glyph and clock are the rightmost group, and the diagnostics tokens
+        // are prepended before them in the row's child order. Growing the
+        // diagnostics section widens the row to the LEFT, leaving the clock's
+        // own screen position untouched -- centering the whole row would instead
+        // shift the clock sideways by half of whatever the diagnostics section
+        // grew by.
         Row {
             id: row
 
-            anchors.centerIn: parent
+            objectName: "overlayTokenRow"
+
+            anchors {
+                right: parent.right
+                rightMargin: 12
+                verticalCenter: parent.verticalCenter
+            }
             spacing: 8
+
+            Repeater {
+                objectName: "overlayTokenRepeater"
+
+                model: root.diagnosticsTokens
+
+                delegate: Row {
+                    id: tokenRow
+
+                    required property string modelData
+                    required property int index
+
+                    readonly property string resolvedValue: {
+                        const raw = root.diagnosticsTokenValue(tokenRow.modelData);
+                        return raw.length > 0 ? raw : root.unavailable;
+                    }
+                    // Zero dropped frames is the one measured "all good" state
+                    // this pill reports in green. Any other count stays neutral
+                    // rather than alarming -- the diagnostics tone is calm,
+                    // never alarmist, and a dropped frame is reported, not
+                    // shouted about.
+                    readonly property bool good: tokenRow.modelData === "drop" && root.dropText === "0"
+
+                    visible: root.diagnosticsActive
+                    spacing: 7
+
+                    Text {
+                        text: tokenRow.modelData
+                        textFormat: Text.PlainText
+                        color: ExoTheme.overlayInkMuted
+                        font {
+                            family: ExoTheme.monoFamily
+                            pixelSize: 13
+                        }
+                    }
+
+                    Text {
+                        text: tokenRow.resolvedValue
+                        textFormat: Text.PlainText
+                        color: tokenRow.good ? ExoTheme.overlaySuccess : ExoTheme.overlayInk
+                        font {
+                            family: ExoTheme.monoFamily
+                            pixelSize: 13
+                        }
+                    }
+
+                    // Interpunct separator ahead of the NEXT token, carried by
+                    // whichever element (a diagnostics token or the recording
+                    // glyph) follows this one -- so the separator only appears
+                    // between two things that are both actually showing.
+                    Text {
+                        visible: tokenRow.index < root.diagnosticsTokens.length - 1 || root.anyMutedGlyph
+                                 || root.overlayActive
+                        text: "·"
+                        textFormat: Text.PlainText
+                        color: ExoTheme.overlayInkMuted
+                        font {
+                            family: ExoTheme.monoFamily
+                            pixelSize: 13
+                        }
+                    }
+                }
+            }
+
+            // A Row owns its children's x; y stays free, so centre by hand
+            // rather than anchoring into the positioner.
+            MutedGlyph {
+                kind: "mic"
+                visible: root.diagnosticsActive && root.showMutedSources && root.micMuted
+                y: (row.height - height) / 2
+            }
+
+            MutedGlyph {
+                kind: "sys"
+                visible: root.diagnosticsActive && root.showMutedSources && root.sysMuted
+                y: (row.height - height) / 2
+            }
+
+            Text {
+                visible: root.anyMutedGlyph && root.overlayActive
+                text: "·"
+                textFormat: Text.PlainText
+                color: ExoTheme.overlayInkMuted
+                font {
+                    family: ExoTheme.monoFamily
+                    pixelSize: 13
+                }
+            }
 
             StateGlyph {
                 anchors.verticalCenter: parent.verticalCenter
+                visible: root.overlayActive
                 kind: {
                     switch (root.overlayState) {
                     case OverlayAdapter.Paused:
@@ -261,7 +494,7 @@ Window {
                 id: elapsedLabel
 
                 anchors.verticalCenter: parent.verticalCenter
-                visible: root.showElapsed
+                visible: root.overlayActive && root.showElapsed
                 // Fixed to the widest clock so digit changes do not reflow the
                 // pill; right-aligned inside that box so the colons stay put.
                 width: visible ? clockMetrics.width : 0
@@ -278,7 +511,7 @@ Window {
 
             Text {
                 anchors.verticalCenter: parent.verticalCenter
-                visible: root.showOutputSize && root.outputSizeText.length > 0
+                visible: root.overlayActive && root.showSize && root.outputSizeText.length > 0
                 text: root.outputSizeText
                 textFormat: Text.PlainText
                 color: ExoTheme.overlayInkSecondary
@@ -290,7 +523,7 @@ Window {
 
             Text {
                 anchors.verticalCenter: parent.verticalCenter
-                visible: root.showSourceName && root.sourceNameText.length > 0
+                visible: root.overlayActive && root.showSourceName && root.sourceNameText.length > 0
                 // Bounded: a window title can be arbitrarily long and this pill
                 // must not grow across the recorded screen.
                 width: Math.min(implicitWidth, 220)

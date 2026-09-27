@@ -3,25 +3,27 @@ import QtTest
 
 import ExoSnap.Quick.TestControls
 
-// QCR-606. The diagnostics HUD's token list is keyed on the CONTENT POLICY, not
-// on the measured values.
+// QCR-606. The diagnostics section's token list is keyed on the CONTENT
+// POLICY, not on the measured values.
 //
 // It used to build an array of object literals carrying each token's resolved
-// text, so the array depended on fpsText/dropText/driftText/sizeText — four
-// properties the diagnostics callback moves roughly four times a second while
-// recording. A `var` property compares by identity, so every one of those was a
-// model assignment: QQmlDelegateModel tore down and rebuilt two to four Rows and
-// six to twelve Texts, each with a fresh font-metric layout, on the same GUI
+// text, so the array depended on fpsText/dropText/driftText — properties the
+// diagnostics callback moves roughly four times a second while recording. A
+// `var` property compares by identity, so every one of those was a model
+// assignment: QQmlDelegateModel tore down and rebuilt two to four Rows and six
+// to twelve Texts, each with a fresh font-metric layout, on the same GUI
 // thread as the DXGI preview.
 //
-// The overlay Window is never shown here: `visible` is gated on
+// OverlayDiagnostics.qml was absorbed into OverlayRecording.qml (one window,
+// two independently-gated sections); this test now targets that component
+// directly. The window is never shown here: `visible` is gated on
 // CaptureExclusion.granted, which is false in a test, and none of what is
-// asserted needs it on screen — the delegates exist either way, which is exactly
-// the cost this item is about.
+// asserted needs it on screen — the delegates exist either way, which is
+// exactly the cost this item is about.
 TestCase {
     id: testCase
 
-    name: "OverlayDiagnosticsTokens"
+    name: "OverlayRecordingDiagnosticsTokens"
     when: windowShown
     width: 400
     height: 200
@@ -30,17 +32,19 @@ TestCase {
     Component {
         id: overlayComponent
 
-        OverlayDiagnostics {
-            overlayActive: true
+        OverlayRecording {
+            overlayActive: false
+            diagnosticsActive: true
             showFps: true
             showDrop: true
             showDrift: true
-            showSize: false
+            showOutputSize: false
+            showDiagnosticsSize: false
             showMutedSources: false
             fpsText: "60"
             dropText: "0"
             driftText: "+1 ms"
-            sizeText: "42 MB"
+            outputSizeText: "42 MB"
         }
     }
 
@@ -54,10 +58,10 @@ TestCase {
         let overlay = createTemporaryObject(overlayComponent, testCase);
         verify(overlay);
 
-        compare(overlay.tokens.length, 3);
-        compare(overlay.tokens[0], "fps");
-        compare(overlay.tokens[1], "drop");
-        compare(overlay.tokens[2], "drift");
+        compare(overlay.diagnosticsTokens.length, 3);
+        compare(overlay.diagnosticsTokens[0], "fps");
+        compare(overlay.diagnosticsTokens[1], "drop");
+        compare(overlay.diagnosticsTokens[2], "drift");
     }
 
     function test_a_measured_value_moving_keeps_the_same_delegates() {
@@ -120,17 +124,54 @@ TestCase {
         verify(row);
         compare(row.count, 3);
 
-        overlay.showSize = true;
-
-        tryCompare(row, "count", 4);
-        compare(overlay.tokens.length, 4);
-        compare(row.itemAt(3).resolvedValue, "42 MB");
-
         overlay.showFps = false;
-        tryCompare(row, "count", 3);
+        tryCompare(row, "count", 2);
         // The first token never carries the interpunct separator, whichever token
         // it happens to be.
         compare(row.itemAt(0).index, 0);
         compare(row.itemAt(0).modelData, "drop");
+    }
+
+    // The recording section and the diagnostics section are gated
+    // independently — merging the two windows into one must not couple their
+    // settings. "Recording off, diagnostics on" is the same independence the
+    // two separate windows used to have.
+    function test_recording_off_diagnostics_on_shows_only_diagnostics() {
+        let overlay = createTemporaryObject(overlayComponent, testCase);
+        verify(overlay);
+
+        compare(overlay.overlayActive, false);
+        compare(overlay.diagnosticsActive, true);
+        // `visible` itself is gated on CaptureExclusion.granted, which is
+        // false in this headless test; diagnosticsContentPresent is the part
+        // of that gate this test can actually observe.
+        compare(overlay.diagnosticsContentPresent, true);
+
+        let row = tokens(overlay);
+        verify(row);
+        compare(row.count, 3);
+    }
+
+    // The output-size field is shared between the recording section's own
+    // toggle and the diagnostics preset's "size" element: one value, rendered
+    // once, whichever setting (or both) asks for it. It never becomes a fourth
+    // diagnostics token.
+    function test_output_size_is_one_shared_value_not_a_diagnostics_token() {
+        let overlay = createTemporaryObject(overlayComponent, testCase);
+        verify(overlay);
+
+        compare(overlay.showSize, false);
+        overlay.showDiagnosticsSize = true;
+        compare(overlay.showSize, true);
+
+        let row = tokens(overlay);
+        verify(row);
+        // Still just fps/drop/drift — "size" is never in this list.
+        compare(row.count, 3);
+        compare(overlay.diagnosticsTokens.indexOf("size"), -1);
+
+        overlay.showDiagnosticsSize = false;
+        overlay.showOutputSize = true;
+        compare(overlay.showSize, true);
     }
 }

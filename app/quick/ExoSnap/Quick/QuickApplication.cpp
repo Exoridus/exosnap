@@ -2620,6 +2620,13 @@ void QuickApplication::wireSettingsCommands() {
         applyCrashReportPolicy();
         applyShowNotifications();
         applyWindowCaptureExclusion();
+        // Without this, a show_recording_overlay/show_diagnostics_overlay/
+        // show_quick_controls edit made here never reaches the overlay windows:
+        // OverlayAdapter reads its own cached copy of the settings struct, and
+        // synchronize() only re-evaluates on a recording-state change, not on a
+        // settings edit alone. A toggle made this way could silently stay inert
+        // for the rest of the recording it was meant to affect.
+        overlay_adapter_.setAppSettings(settings_);
     });
 
     QObject::connect(&settings_adapter_, &SettingsAdapter::presetSelected, &settings_adapter_,

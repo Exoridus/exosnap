@@ -189,11 +189,7 @@ fn capture_overlays(ctx: &mut Context) -> Step {
         ctx,
         &mut app,
         "recordingOverlays",
-        &[
-            "quickOverlayRecording",
-            "quickOverlayDiagnostics",
-            "quickOverlayQuickControls",
-        ],
+        &["quickOverlayRecording", "quickOverlayQuickControls"],
     )?;
     common::stop_recording(&mut app)?;
     app.kill_for_cleanup()?;

@@ -310,7 +310,13 @@ ApplicationWindow {
         }
     }
 
-    Binding { target: overlayRecordingLoader.item; property: "monitorGeometry"; value: root.overlays.recordedMonitorGeometry }
+    // OverlayRecording absorbed what used to be OverlayDiagnostics.qml's
+    // separate window: one HWND, two independently-gated sections (see the
+    // header comment in OverlayRecording.qml). recordedSourceGeometry, not
+    // recordedMonitorGeometry: those two disagree exactly in Window and Region
+    // mode, which is why the pill used to drift off the actually-recorded
+    // picture in those modes.
+    Binding { target: overlayRecordingLoader.item; property: "monitorGeometry"; value: root.overlays.recordedSourceGeometry }
     Binding { target: overlayRecordingLoader.item; property: "overlayState"; value: root.overlays.recordingState }
     Binding { target: overlayRecordingLoader.item; property: "overlayActive"; value: root.overlays.recordingOverlayActive }
     Binding { target: overlayRecordingLoader.item; property: "elapsedText"; value: root.recordViewModel.elapsedText }
@@ -320,41 +326,23 @@ ApplicationWindow {
     Binding { target: overlayRecordingLoader.item; property: "showOutputSize"; value: root.settingsAdapter.recordingOverlayOutputSize }
     Binding { target: overlayRecordingLoader.item; property: "showSourceName"; value: root.settingsAdapter.recordingOverlaySourceName }
 
-    Loader {
-        id: overlayDiagnosticsLoader
-
-        property bool sourceLoaded: false
-
-        active: root.recordingOverlaysArmed
-        asynchronous: true
-
-        onActiveChanged: {
-            if (!overlayDiagnosticsLoader.active || overlayDiagnosticsLoader.sourceLoaded)
-                return;
-            overlayDiagnosticsLoader.sourceLoaded = true;
-            overlayDiagnosticsLoader.setSource(Qt.resolvedUrl("OverlayDiagnostics.qml"));
-        }
-    }
-
-    Binding { target: overlayDiagnosticsLoader.item; property: "monitorGeometry"; value: root.overlays.recordedMonitorGeometry }
-    Binding { target: overlayDiagnosticsLoader.item; property: "overlayActive"; value: root.overlays.diagnosticsOverlayActive }
-    Binding { target: overlayDiagnosticsLoader.item; property: "fpsText"; value: root.recordViewModel.capturedFpsText }
-    Binding { target: overlayDiagnosticsLoader.item; property: "dropText"; value: root.recordViewModel.droppedFramesText }
-    Binding { target: overlayDiagnosticsLoader.item; property: "driftText"; value: root.recordViewModel.driftText }
-    Binding { target: overlayDiagnosticsLoader.item; property: "sizeText"; value: root.recordViewModel.outputSizeText }
+    Binding { target: overlayRecordingLoader.item; property: "diagnosticsActive"; value: root.overlays.diagnosticsOverlayActive }
+    Binding { target: overlayRecordingLoader.item; property: "fpsText"; value: root.recordViewModel.capturedFpsText }
+    Binding { target: overlayRecordingLoader.item; property: "dropText"; value: root.recordViewModel.droppedFramesText }
+    Binding { target: overlayRecordingLoader.item; property: "driftText"; value: root.recordViewModel.driftText }
     // "Muted" means the source is NOT part of this recording, which is what the
     // Widgets overlay reported too (its meter callback passed the `*_show`
     // flags, derived from audio_active_*, not the RMS level). Deliberately not
     // derived from the meter: a level of zero is a silent moment, and a glyph
     // that appears every time the user stops talking would report a problem
     // that is not there.
-    Binding { target: overlayDiagnosticsLoader.item; property: "micMuted"; value: !root.recordViewModel.microphoneEnabled }
-    Binding { target: overlayDiagnosticsLoader.item; property: "sysMuted"; value: !root.recordViewModel.systemAudioEnabled }
-    Binding { target: overlayDiagnosticsLoader.item; property: "showFps"; value: root.settingsAdapter.diagnosticsOverlayFps }
-    Binding { target: overlayDiagnosticsLoader.item; property: "showDrop"; value: root.settingsAdapter.diagnosticsOverlayDrop }
-    Binding { target: overlayDiagnosticsLoader.item; property: "showDrift"; value: root.settingsAdapter.diagnosticsOverlayDrift }
-    Binding { target: overlayDiagnosticsLoader.item; property: "showSize"; value: root.settingsAdapter.diagnosticsOverlaySize }
-    Binding { target: overlayDiagnosticsLoader.item; property: "showMutedSources"; value: root.settingsAdapter.diagnosticsOverlayMutedSources }
+    Binding { target: overlayRecordingLoader.item; property: "micMuted"; value: !root.recordViewModel.microphoneEnabled }
+    Binding { target: overlayRecordingLoader.item; property: "sysMuted"; value: !root.recordViewModel.systemAudioEnabled }
+    Binding { target: overlayRecordingLoader.item; property: "showFps"; value: root.settingsAdapter.diagnosticsOverlayFps }
+    Binding { target: overlayRecordingLoader.item; property: "showDrop"; value: root.settingsAdapter.diagnosticsOverlayDrop }
+    Binding { target: overlayRecordingLoader.item; property: "showDrift"; value: root.settingsAdapter.diagnosticsOverlayDrift }
+    Binding { target: overlayRecordingLoader.item; property: "showDiagnosticsSize"; value: root.settingsAdapter.diagnosticsOverlaySize }
+    Binding { target: overlayRecordingLoader.item; property: "showMutedSources"; value: root.settingsAdapter.diagnosticsOverlayMutedSources }
 
     Loader {
         id: overlayCountdownLoader
@@ -397,7 +385,13 @@ ApplicationWindow {
         }
     }
 
-    Binding { target: overlayQuickControlsLoader.item; property: "workAreaGeometry"; value: root.overlays.recordedMonitorWorkArea }
+    // The full monitor rectangle is the dock's movement boundary; the source
+    // rect is only a placement preference (see OverlayQuickControlPill.qml) --
+    // binding the boundary to the work area (as this used to) enforced a
+    // taskbar safety margin the product no longer wants.
+    Binding { target: overlayQuickControlsLoader.item; property: "monitorGeometry"; value: root.overlays.recordedMonitorGeometry }
+    Binding { target: overlayQuickControlsLoader.item; property: "sourceGeometry"; value: root.overlays.recordedSourceGeometry }
+    Binding { target: overlayQuickControlsLoader.item; property: "sourceIsRegion"; value: root.overlays.recordedSourceIsRegion }
     Binding { target: overlayQuickControlsLoader.item; property: "overlayActive"; value: root.overlays.quickControlsActive }
     Binding { target: overlayQuickControlsLoader.item; property: "paused"; value: root.recordViewModel.paused }
 

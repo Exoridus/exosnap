@@ -745,8 +745,6 @@ TEST(WindowIdentity, EveryOverlayObjectNameMapsToItsOwnRole) {
     EXPECT_EQ(WindowRoleForObjectName(QString(), true), QStringLiteral("main"));
     EXPECT_EQ(WindowRoleForObjectName(QStringLiteral("quickOverlayRecording"), false),
               QStringLiteral("recordingOverlay"));
-    EXPECT_EQ(WindowRoleForObjectName(QStringLiteral("quickOverlayDiagnostics"), false),
-              QStringLiteral("diagnosticsOverlay"));
     EXPECT_EQ(WindowRoleForObjectName(QStringLiteral("quickOverlayQuickControls"), false),
               QStringLiteral("quickControls"));
     EXPECT_EQ(WindowRoleForObjectName(QStringLiteral("quickOverlayNotificationToast"), false),
@@ -808,15 +806,16 @@ TEST(WindowIdentity, TwoTopLevelWindowsSharingATitleIsReportedRatherThanHidden) 
     EXPECT_FALSE(json.value(QStringLiteral("titlesUnique")).toBool());
 }
 
-// Main.qml defers four of these five behind a Loader; the notification toast is
-// eager. Every consumer that walks "what overlays exist" has to know the
+// Main.qml defers three of these four behind a Loader; the notification toast
+// is eager. Every consumer that walks "what overlays exist" has to know the
 // complete, closed set to say which ones have not been created yet rather than
 // silently dropping them.
 TEST(WindowIdentity, AllOverlayObjectNamesIsTheCompleteClosedSet) {
     const std::vector<QString>& names = AllOverlayObjectNames();
     const std::vector<QString> expected = {
-        QStringLiteral("quickOverlayRecording"),         QStringLiteral("quickOverlayDiagnostics"),
-        QStringLiteral("quickOverlayCountdown"),         QStringLiteral("quickOverlayQuickControls"),
+        QStringLiteral("quickOverlayRecording"),
+        QStringLiteral("quickOverlayCountdown"),
+        QStringLiteral("quickOverlayQuickControls"),
         QStringLiteral("quickOverlayNotificationToast"),
     };
     EXPECT_EQ(names, expected);
