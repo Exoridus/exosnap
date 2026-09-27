@@ -157,7 +157,7 @@ jobs:
             Select-Object -ExpandProperty FullName -First 1
           if (-not $cppcheck) { $cppcheck = (Get-Command cppcheck -ErrorAction SilentlyContinue)?.Source }
           if (-not $cppcheck) {
-            winget install --id Cppcheck.Cppcheck --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null
+            choco install cppcheck --yes --no-progress 2>&1 | Out-Null
             $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
               -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
               Select-Object -ExpandProperty FullName -First 1
