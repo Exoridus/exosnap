@@ -1355,40 +1355,24 @@ target_compile_definitions(brand_geometry_tests PRIVATE
 # either -- so the next person to run it would have silently reverted a shipped
 # correction. --check writes nothing and exits non-zero on drift.
 #
-# Resolution order mirrors FindExoDevExe() in the C++ gtests that shell out to
-# this same binary (see libs/engine/tests/test_analyze_encode_perf.cpp):
-# EXOSNAP_TEST_TOOL_EXE first, then the cargo workspace's known debug/release
-# output directories. Unlike a gtest's _popen call, add_test's COMMAND does not
-# go through cmd.exe, so it needs none of that quoting workaround.
-if(DEFINED ENV{EXOSNAP_TEST_TOOL_EXE} AND EXISTS "$ENV{EXOSNAP_TEST_TOOL_EXE}")
-    set(EXOSNAP_EXO_DEV_EXE "$ENV{EXOSNAP_TEST_TOOL_EXE}")
-else()
-    set(EXOSNAP_EXO_DEV_EXE "EXOSNAP_EXO_DEV_EXE-NOTFOUND")
-    foreach(config debug release)
-        foreach(target tools/target/exo-dev-host tools/target)
-            set(candidate "${CMAKE_SOURCE_DIR}/${target}/${config}/exo-dev.exe")
-            if(NOT EXOSNAP_EXO_DEV_EXE AND EXISTS "${candidate}")
-                set(EXOSNAP_EXO_DEV_EXE "${candidate}")
-            endif()
-        endforeach()
-    endforeach()
-endif()
-if(EXOSNAP_EXO_DEV_EXE)
-    add_test(
-        NAME brand.geometry.marks_match_the_generator
-        COMMAND "${EXOSNAP_EXO_DEV_EXE}" generate-brand-marks --check
-    )
-    set_tests_properties(brand.geometry.marks_match_the_generator PROPERTIES TIMEOUT 60)
-    exosnap_set_test_phase(brand.geometry.marks_match_the_generator hermetic)
-elseif(EXOSNAP_REQUIRE_TEST_TOOLS)
-    message(FATAL_ERROR
-        "No exo-dev.exe was found, so brand.geometry.marks_match_the_generator would not be "
-        "registered and the suite would pass without it. Build tools/exo-dev first, set "
-        "EXOSNAP_TEST_TOOL_EXE, or configure with -DEXOSNAP_REQUIRE_TEST_TOOLS=OFF to accept "
-        "a reduced suite.")
-else()
-    message(STATUS "No exo-dev.exe found: the brand geometry generator check will not be registered.")
-endif()
+# Always registered: exo-dev.exe is resolved by cmake/run-exo-dev-tool.cmake at
+# CTest run time, not here at configure time. A workflow that configures and
+# builds only a subset of targets (crash-capture-build never builds
+# tools/exo-dev) must still be able to configure; a workflow that does select
+# this test without the tool built gets a normal test FAIL, not a refusal to
+# configure at all. Resolution order mirrors FindExoDevExe() in the C++ gtests
+# that shell out to this same binary (see
+# libs/engine/tests/test_analyze_encode_perf.cpp): EXOSNAP_TEST_TOOL_EXE
+# first, then the cargo workspace's known debug/release output directories.
+add_test(
+    NAME brand.geometry.marks_match_the_generator
+    COMMAND "${CMAKE_COMMAND}"
+        "-DEXOSNAP_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DEXOSNAP_TOOL_ARGS=generate-brand-marks;--check"
+        -P "${CMAKE_SOURCE_DIR}/cmake/run-exo-dev-tool.cmake"
+)
+set_tests_properties(brand.geometry.marks_match_the_generator PROPERTIES TIMEOUT 60)
+exosnap_set_test_phase(brand.geometry.marks_match_the_generator hermetic)
 
 # Pure unit tests for HumanizeEngineDetail (RecordingErrorPanel's raw-enum → canon
 # label mapping). Dependency-light: QString only.
