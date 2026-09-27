@@ -40,9 +40,13 @@ Modal recovery/crash/error requests are queued rather than replacing one another
 
 ## Overlays and theme ownership
 
-Webcam PiP is recorded content. Recording status, diagnostics, countdown, quick controls and notification toasts are separate capture-excluded top-level windows. Their opacity in a scene-graph grab does not prove desktop composition or capture exclusion. The exclusion API and a human desktop check answer different questions.
+Webcam PiP is recorded content. The recording pill (which also carries the diagnostics tokens), countdown, quick controls and notification toasts are separate capture-excluded top-level windows. Their opacity in a scene-graph grab does not prove desktop composition or capture exclusion. The exclusion API and a human desktop check answer different questions.
 
-The first three overlay types are click-through. Quick controls and toast actions are intentionally interactive and do not steal keyboard focus. Failed capture exclusion hides an overlay; the optional exclusion of the main window instead fails visibly and logs the refusal rather than hiding the application's only control surface.
+The recording pill and countdown are click-through. Quick controls and toast actions are intentionally interactive and do not steal keyboard focus. Failed capture exclusion hides an overlay; the optional exclusion of the main window instead fails visibly and logs the refusal rather than hiding the application's only control surface.
+
+The overlays' native window styles are part of that contract. Qt marks every translucent overlay `WS_EX_LAYERED` when it is shown. [Capture exclusion](../../app/quick/ExoSnap/Quick/CaptureExclusion.cpp) removes the bit from the interactive overlays after every show, because a layered window composed from its redirection surface appears as a white plate over the DirectComposition content. The click-through overlays keep it: a click passes through to another process's window only when `WS_EX_TRANSPARENT` is paired with `WS_EX_LAYERED`. Answering `HTTRANSPARENT` from `WM_NCHITTEST` forwards input only within the same thread and is not a substitute.
+
+The toast keeps its gaps between cards click-through with a window region (`QWindow::setMask()`) rather than `Qt::WindowTransparentForInput`, which would disable the cards too. Its window is created before the first toast and is raised on every show; otherwise a topmost window that appeared in between keeps the toast's clicks.
 
 Semantic theme roles separate accent from recording/error, warning/paused and ready/success. Appearance and accent resolve through shared token data. Shell-owned surfaces such as native tray menus and desktop notifications follow the relevant Windows appearance; in-app surfaces follow the selected application appearance. Do not duplicate palette literals or reuse a warning tone for an ordinary selection.
 

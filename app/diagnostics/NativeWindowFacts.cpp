@@ -45,6 +45,7 @@ NativeWindowFacts QueryNativeWindowFacts(void* hwnd) {
         return facts;
 
     facts.valid = true;
+    facts.hwnd = reinterpret_cast<quint64>(window_handle);
     facts.style = static_cast<quint64>(GetWindowLongPtrW(window_handle, GWL_STYLE));
     facts.ex_style = static_cast<quint64>(GetWindowLongPtrW(window_handle, GWL_EXSTYLE));
     facts.layered = (facts.ex_style & WS_EX_LAYERED) != 0;

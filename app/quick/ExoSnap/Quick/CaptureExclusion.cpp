@@ -28,37 +28,27 @@ CaptureExclusion::AffinityFunction& affinityOverride() {
 }
 
 #if defined(Q_OS_WIN)
-// Drops WS_EX_LAYERED from an overlay window that is about to be composed by
-// DirectComposition -- for the INTERACTIVE overlays only (quick controls,
-// toast). Never called for a click-through overlay; see the note below on
-// why this used to be unconditional and no longer is.
+// Drops WS_EX_LAYERED from an interactive overlay window (quick controls,
+// toast) that is about to be composed by DirectComposition.
 //
 // The overlays are translucent (`color: "transparent"` plus a clear colour
-// with alpha), so Qt requests an alpha channel for them and — as its own log
-// says — creates a Direct Composition device, "needed for semi-transparent
-// windows". The scene graph then renders into a composition swapchain whose
-// visual tree is bound to this HWND.
+// with alpha), so Qt requests an alpha channel for them and creates a Direct
+// Composition device, "needed for semi-transparent windows" as its own log
+// says. The scene graph then renders into a composition swapchain whose visual
+// tree is bound to this HWND.
 //
-// Windows' platform plugin ALSO marks a translucent window WS_EX_LAYERED, which
-// is the other, older way to get per-pixel alpha. Historically the two were
-// found to conflict for these overlays: DWM composing from the layered
-// redirection surface instead of the DXGI flip-model swapchain, producing a
-// white plate with the pill or the countdown circle drawn on it instead of a
-// shape floating over the desktop -- which is what this function existed to
-// correct, for every overlay, unconditionally.
+// Windows' platform plugin ALSO marks a translucent window WS_EX_LAYERED, the
+// older way to get per-pixel alpha. When DWM composes such a window from its
+// layered redirection surface instead of the flip-model swapchain, the overlay
+// shows as a white plate with its content drawn on it.
 //
-// It no longer runs for a click-through overlay because WS_EX_LAYERED turns
-// out to be exactly what real cross-process click-through needs: Microsoft
-// documents WS_EX_TRANSPARENT's hit-testing pass-through as intended to pair
-// with WS_EX_LAYERED, and a live cross-process measurement (a real
-// SendInput click, not just WindowFromPoint) confirms the pairing is what
-// actually works on this Qt/Windows combination -- stripping the bit here
-// was the reason a real click never reached the window underneath. Whether
-// today's Qt/DirectComposition path still needs the strip for these two
-// windows specifically was re-measured at the same time: it renders
-// correctly with the bit left in place. If a white plate is ever observed on
-// a click-through overlay again, that finding is now stale and this
-// function's scope needs revisiting, not just re-enabling the strip blind.
+// Click-through overlays must keep the bit. Real input passes through to a
+// window of another process only when WS_EX_TRANSPARENT is paired with
+// WS_EX_LAYERED; without it, WindowFromPoint still reports the window beneath
+// while an actual click stays with the overlay. Those overlays render correctly
+// with the bit in place, and `overlay.operable-hit-test` pins both styles. If a
+// white plate ever appears on a click-through overlay, the fix must preserve
+// real pass-through, which that scenario checks.
 //
 // Must be re-applied on every show. Qt does not set WS_EX_LAYERED when it
 // creates the HWND — measured at create() time, the bit is absent — it sets it
@@ -138,20 +128,16 @@ void CaptureExclusion::setTarget(QQuickWindow* window) {
                                   .arg(ok ? QStringLiteral("granted") : QStringLiteral("REFUSED"), overlay_name));
 
 #if defined(Q_OS_WIN)
-    // Never for a click-through overlay: WS_EX_LAYERED is exactly what its
-    // real cross-process click-through needs (see dropLayeredAttribute's
-    // comment). Qt applies WS_EX_LAYERED on the way to the screen, so for the
-    // interactive overlays the correction has to ride every show rather than
-    // happening once here -- they are shown and hidden repeatedly across a
-    // session (each recording, each result).
+    // Never for a click-through overlay (see dropLayeredAttribute). Qt applies
+    // WS_EX_LAYERED on the way to the screen, so for the interactive overlays
+    // the correction has to ride every show rather than happening once here.
+    // They are shown and hidden repeatedly across a session.
     //
-    // window->flags() is read INSIDE the handler, not captured once here: at
-    // setTarget() time the QML `flags:` property on the enclosing Window has
-    // not necessarily been applied to the real QWindow yet (QML finalizes an
-    // object's own property assignments in the same pass as its children's,
-    // and this CaptureExclusion is one of those children) -- captured early,
-    // this read measured `flags` as 0 for every overlay, every time. By the
-    // first real visibleChanged(true), construction is long finished.
+    // window->flags() must be read inside the handler. At setTarget() time the
+    // enclosing QML Window's `flags:` assignment may not have reached the
+    // QWindow yet, because QML finalizes an object's own properties in the same
+    // pass as its children's and this CaptureExclusion is one of them. An early
+    // read reports no flags for every overlay.
     QObject::connect(window, &QWindow::visibleChanged, this, [this, window](bool visible) {
         const bool is_click_through = (window->flags() & Qt::WindowTransparentForInput) != 0;
         if (is_click_through || !visible || window->winId() == 0)

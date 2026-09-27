@@ -90,12 +90,10 @@ Window {
     transientParent: null
 
     // No Qt.WindowTransparentForInput: the mask above is what keeps the gaps
-    // between cards click-through, and the flag would defeat the cards too.
-    // It was set here regardless, which made every toast unoperable on the real
-    // desktop -- dismiss, Edit and Show in folder all dead, and a toast the user
-    // could not get rid of. WindowDoesNotAcceptFocus stays: the toast must not
-    // steal focus from whatever is being recorded, and it does not prevent
-    // clicks (OverlayQuickControlPill ships the same combination).
+    // between cards click-through, and the flag would make dismiss, Edit and
+    // Show in folder unreachable too. WindowDoesNotAcceptFocus stays: the toast
+    // must not steal focus from whatever is being recorded, and it does not
+    // prevent clicks (OverlayQuickControlPill ships the same combination).
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
            | Qt.WindowDoesNotAcceptFocus
 
@@ -107,6 +105,10 @@ Window {
 
     visible: exclusion.granted && stack.count > 0
 
+    // The window is created before the first toast and keeps its place in the
+    // topmost band. A topmost window that came up in the meantime, such as a
+    // fullscreen app being recorded, would otherwise stay above it and receive
+    // the toast's clicks.
     onVisibleChanged: {
         if (visible)
             root.raise()

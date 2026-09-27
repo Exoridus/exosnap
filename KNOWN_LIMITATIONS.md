@@ -82,7 +82,7 @@ Markers are not container chapters. Export writes a `<stem>.markers.json` only f
 
 ## Overlays, diagnostics and support
 
-The recording, diagnostics, countdown, quick-control and toast windows are capture-excluded. A failed exclusion call hides the overlay rather than contaminating the recording. This is not a guarantee against every third-party capture technique. Scene-graph screenshots cannot prove their actual desktop composition. The quick control and toast are interactive; the other three are click-through.
+The recording pill (including its diagnostics section), countdown, quick-control and toast windows are capture-excluded. A failed exclusion call hides the overlay rather than contaminating the recording. This is not a guarantee against every third-party capture technique. Scene-graph screenshots cannot prove their actual desktop composition. The quick control and toast are interactive; the recording pill and countdown are click-through.
 
 Present/DPC diagnostics are optional, session-scoped and elevation-gated. Unavailable/dead traces withdraw measurements. DPC driver attribution is best effort. Capture/encode rate, CPU submission time, GPU query time and present cadence are different measurements and must not be conflated. A session ledger records occurrences, not a frame-by-frame timestamp history of every drop.
 

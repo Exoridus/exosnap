@@ -17,6 +17,8 @@ This document owns what each verifier can establish and what release readiness m
 
 A test must use a verifier strong enough for the claim. A source-level invariant is not a GPU result, a screenshot is not an HWND audit, and a control-channel command is not proof its visible button is wired.
 
+A proxy observation needs a stated gap. `WindowFromPoint` reports the window a hit test finds, not where real input is delivered: it can name the window beneath a click-through overlay while an actual click stays with the overlay. A same-process probe of cross-process behavior can pass for the same reason. Where a proxy cannot see the failure, the oracle also asserts the structural precondition the real mechanism needs, such as the window-style pair for click-through. Oracles derive expectations from the state Windows holds (a window's region, its styles) rather than re-deriving a layout from QML that can drift from it. A scenario over several subjects judges all of them before failing, so that one subject's failure cannot hide another's.
+
 ## Product control channel
 
 The shipping executable includes a dormant local control server because acceptance must exercise the same bytes users receive. Only `--live-verify-control <run-id>` arms the application endpoint; the updater uses `--automation-control <run-id>`. A normal launch creates neither endpoint nor its worker. A malformed request fails rather than silently starting an uncontrolled application.
