@@ -13,10 +13,6 @@
 #endif
 #endif
 
-#include <QAbstractNativeEventFilter>
-#include <QByteArray>
-#include <QCoreApplication>
-
 namespace exosnap::quick {
 
 namespace {
@@ -33,24 +29,36 @@ CaptureExclusion::AffinityFunction& affinityOverride() {
 
 #if defined(Q_OS_WIN)
 // Drops WS_EX_LAYERED from an overlay window that is about to be composed by
-// DirectComposition.
+// DirectComposition -- for the INTERACTIVE overlays only (quick controls,
+// toast). Never called for a click-through overlay; see the note below on
+// why this used to be unconditional and no longer is.
 //
-// The five overlays are translucent (`color: "transparent"` plus a clear colour
+// The overlays are translucent (`color: "transparent"` plus a clear colour
 // with alpha), so Qt requests an alpha channel for them and — as its own log
 // says — creates a Direct Composition device, "needed for semi-transparent
 // windows". The scene graph then renders into a composition swapchain whose
 // visual tree is bound to this HWND.
 //
 // Windows' platform plugin ALSO marks a translucent window WS_EX_LAYERED, which
-// is the other, older way to get per-pixel alpha. The two are mutually
-// exclusive: DWM composes a layered window from its redirection surface, and a
-// DXGI flip-model swapchain never writes there. The result is that the overlay
-// appears as the window class's unwritten background — a white plate with the
-// pill or the countdown circle drawn on it, instead of a shape floating over
-// the desktop.
+// is the other, older way to get per-pixel alpha. Historically the two were
+// found to conflict for these overlays: DWM composing from the layered
+// redirection surface instead of the DXGI flip-model swapchain, producing a
+// white plate with the pill or the countdown circle drawn on it instead of a
+// shape floating over the desktop -- which is what this function existed to
+// correct, for every overlay, unconditionally.
 //
-// Removing the bit leaves DirectComposition as the single compositing path,
-// which is the one Qt already set up.
+// It no longer runs for a click-through overlay because WS_EX_LAYERED turns
+// out to be exactly what real cross-process click-through needs: Microsoft
+// documents WS_EX_TRANSPARENT's hit-testing pass-through as intended to pair
+// with WS_EX_LAYERED, and a live cross-process measurement (a real
+// SendInput click, not just WindowFromPoint) confirms the pairing is what
+// actually works on this Qt/Windows combination -- stripping the bit here
+// was the reason a real click never reached the window underneath. Whether
+// today's Qt/DirectComposition path still needs the strip for these two
+// windows specifically was re-measured at the same time: it renders
+// correctly with the bit left in place. If a white plate is ever observed on
+// a click-through overlay again, that finding is now stale and this
+// function's scope needs revisiting, not just re-enabling the strip blind.
 //
 // Must be re-applied on every show. Qt does not set WS_EX_LAYERED when it
 // creates the HWND — measured at create() time, the bit is absent — it sets it
@@ -76,69 +84,11 @@ bool dropLayeredAttribute(HWND hwnd) {
                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
     return true;
 }
-
-// Forces WM_NCHITTEST to answer HTTRANSPARENT for one click-through overlay
-// HWND, ahead of Qt's own window procedure.
-//
-// Qt::WindowTransparentForInput sets WS_EX_TRANSPARENT, but Qt's own Windows
-// platform window answers WM_NCHITTEST itself before DefWindowProc's implicit
-// WS_EX_TRANSPARENT handling ever gets a turn -- the same routing precedence
-// QuickWindowChrome relies on to answer WM_NCHITTEST for the main window's
-// title band (with the opposite answer, HTCLIENT). Left alone, that leaves a
-// "click-through" overlay silently keeping every click that lands on its
-// HWND instead of forwarding it: Qt's own hit-test answer is the one that
-// actually ships, and it never says HTTRANSPARENT for this window.
-//
-// Microsoft's own documentation of HTTRANSPARENT and WM_NCHITTEST does not
-// spell out cross-process routing in so many words, and its WS_EX_TRANSPARENT
-// page suggests pairing with WS_EX_LAYERED for hit-testing -- a pairing this
-// window deliberately does not carry, because WS_EX_LAYERED conflicts with
-// the DirectComposition path Qt already uses for this translucent window (see
-// dropLayeredAttribute above). This filter's actual justification is
-// `overlay.operable-hit-test` in exo-verify: with it installed, a probe point
-// over this overlay resolves (via WindowFromPoint, the same z-order hit-test
-// walk real mouse dispatch uses) to the window beneath it in another process,
-// not to this HWND. That measured result is the evidence, not a cited Win32
-// guarantee -- re-verify against a live desktop if this filter's target set
-// or its ordering relative to dropLayeredAttribute ever changes.
-//
-// A process-wide QAbstractNativeEventFilter, not a per-window virtual: Qt
-// Quick windows have no nativeEvent() override point of their own, and this
-// filter is the same mechanism QuickWindowChrome and the hotkey/updater
-// filters already use for other HWNDs in this process.
-class ClickThroughHitTestFilter : public QAbstractNativeEventFilter {
-  public:
-    explicit ClickThroughHitTestFilter(HWND hwnd) : hwnd_(hwnd) {
-    }
-
-    bool nativeEventFilter(const QByteArray& event_type, void* message, qintptr* result) override {
-        if (event_type != QByteArrayLiteral("windows_generic_MSG") &&
-            event_type != QByteArrayLiteral("windows_dispatcher_MSG")) {
-            return false;
-        }
-        auto* msg = static_cast<MSG*>(message);
-        if (msg->hwnd != hwnd_ || msg->message != WM_NCHITTEST)
-            return false;
-        if (result != nullptr)
-            *result = static_cast<qintptr>(HTTRANSPARENT);
-        return true;
-    }
-
-  private:
-    HWND hwnd_;
-};
 #endif
 
 } // namespace
 
 CaptureExclusion::CaptureExclusion(QObject* parent) : QObject(parent) {
-}
-
-CaptureExclusion::~CaptureExclusion() {
-#if defined(Q_OS_WIN)
-    if (click_through_filter_)
-        QCoreApplication::instance()->removeNativeEventFilter(click_through_filter_.get());
-#endif
 }
 
 QQuickWindow* CaptureExclusion::target() const noexcept {
@@ -148,13 +98,6 @@ QQuickWindow* CaptureExclusion::target() const noexcept {
 void CaptureExclusion::setTarget(QQuickWindow* window) {
     if (target_ == window)
         return;
-
-#if defined(Q_OS_WIN)
-    if (click_through_filter_) {
-        QCoreApplication::instance()->removeNativeEventFilter(click_through_filter_.get());
-        click_through_filter_.reset();
-    }
-#endif
 
     target_ = window;
     emit targetChanged();
@@ -177,17 +120,6 @@ void CaptureExclusion::setTarget(QQuickWindow* window) {
     // affinity to — and equally, nothing that could have been captured yet.
     window->create();
 
-#if defined(Q_OS_WIN)
-    // Only the overlays declared unconditionally click-through carry this
-    // flag (see CaptureExclusion.h): the quick-controls dock and the
-    // notification toast take input by design and must never answer
-    // HTTRANSPARENT.
-    if ((window->flags() & Qt::WindowTransparentForInput) != 0 && window->winId() != 0) {
-        click_through_filter_ = std::make_unique<ClickThroughHitTestFilter>(reinterpret_cast<HWND>(window->winId()));
-        QCoreApplication::instance()->installNativeEventFilter(click_through_filter_.get());
-    }
-#endif
-
     const bool ok = latched_failure ? false : applyAffinity(window);
 
     markResolved();
@@ -206,11 +138,23 @@ void CaptureExclusion::setTarget(QQuickWindow* window) {
                                   .arg(ok ? QStringLiteral("granted") : QStringLiteral("REFUSED"), overlay_name));
 
 #if defined(Q_OS_WIN)
-    // Qt applies WS_EX_LAYERED on the way to the screen, so the correction has
-    // to ride every show rather than happening once here. The overlays are shown
-    // and hidden repeatedly across a session (each recording, each countdown).
+    // Never for a click-through overlay: WS_EX_LAYERED is exactly what its
+    // real cross-process click-through needs (see dropLayeredAttribute's
+    // comment). Qt applies WS_EX_LAYERED on the way to the screen, so for the
+    // interactive overlays the correction has to ride every show rather than
+    // happening once here -- they are shown and hidden repeatedly across a
+    // session (each recording, each result).
+    //
+    // window->flags() is read INSIDE the handler, not captured once here: at
+    // setTarget() time the QML `flags:` property on the enclosing Window has
+    // not necessarily been applied to the real QWindow yet (QML finalizes an
+    // object's own property assignments in the same pass as its children's,
+    // and this CaptureExclusion is one of those children) -- captured early,
+    // this read measured `flags` as 0 for every overlay, every time. By the
+    // first real visibleChanged(true), construction is long finished.
     QObject::connect(window, &QWindow::visibleChanged, this, [this, window](bool visible) {
-        if (!visible || window->winId() == 0)
+        const bool is_click_through = (window->flags() & Qt::WindowTransparentForInput) != 0;
+        if (is_click_through || !visible || window->winId() == 0)
             return;
         if (!dropLayeredAttribute(reinterpret_cast<HWND>(window->winId())))
             return;
@@ -230,15 +174,6 @@ void CaptureExclusion::setTarget(QQuickWindow* window) {
 #endif
 
     if (!ok) {
-#if defined(Q_OS_WIN)
-        // The HWND this filter was keyed to is about to be destroyed and its
-        // value may be reused by an unrelated window; a stale filter must not
-        // outlive the handle it matches against.
-        if (click_through_filter_) {
-            QCoreApplication::instance()->removeNativeEventFilter(click_through_filter_.get());
-            click_through_filter_.reset();
-        }
-#endif
         // Second safeguard, independent of the QML `visible` binding: with the
         // platform window destroyed there is nothing for the compositor to put
         // on screen even if a later edit accidentally makes `visible` true.

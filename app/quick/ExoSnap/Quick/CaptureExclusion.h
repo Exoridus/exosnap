@@ -8,9 +8,6 @@
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <functional>
-#include <memory>
-
-class QAbstractNativeEventFilter;
 
 namespace exosnap::quick {
 
@@ -51,7 +48,6 @@ class CaptureExclusion : public QObject {
     using AffinityFunction = std::function<bool(void* hwnd, quint32 affinity)>;
 
     explicit CaptureExclusion(QObject* parent = nullptr);
-    ~CaptureExclusion() override;
 
     [[nodiscard]] QQuickWindow* target() const noexcept;
 
@@ -71,8 +67,8 @@ class CaptureExclusion : public QObject {
     // Restricts the window's input region to the union of `rects` (window
     // coordinates), so clicks in the transparent gaps fall through to whatever
     // is behind. An empty list clears the mask. Used by the notification toast,
-    // whose one window spans a stack of separate cards; the four fully
-    // click-through overlays use Qt::WindowTransparentForInput instead.
+    // whose one window spans a stack of separate cards; the recording pill and
+    // countdown overlays use Qt::WindowTransparentForInput instead.
     Q_INVOKABLE void setClickThroughRegion(const QList<QRectF>& rects);
 
     // ── Test seam ────────────────────────────────────────────────────────────
@@ -103,14 +99,11 @@ class CaptureExclusion : public QObject {
     QPointer<QQuickWindow> target_;
     bool granted_ = false;
     bool resolved_ = false;
-    // The WS_EX_LAYERED correction runs on every show; the log line for it runs
-    // once, so a session with twenty recordings does not carry twenty copies.
+    // The WS_EX_LAYERED correction runs on every show (for the interactive
+    // overlays only -- see dropLayeredAttribute in the .cpp); the log line
+    // for it runs once, so a session with twenty recordings does not carry
+    // twenty copies.
     bool composition_logged_ = false;
-    // Installed only for a target carrying Qt::WindowTransparentForInput; see
-    // ClickThroughHitTestFilter in the .cpp. Removed and replaced whenever the
-    // target changes, so a torn-down overlay window never leaves a filter
-    // running against a stale HWND.
-    std::unique_ptr<QAbstractNativeEventFilter> click_through_filter_;
 };
 
 } // namespace exosnap::quick

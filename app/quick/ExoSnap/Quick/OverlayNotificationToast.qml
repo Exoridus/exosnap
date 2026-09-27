@@ -107,6 +107,11 @@ Window {
 
     visible: exclusion.granted && stack.count > 0
 
+    onVisibleChanged: {
+        if (visible)
+            root.raise()
+    }
+
     width: root.cardWidth + 2 * root.shadowMargin
     height: stack.contentHeight + 2 * root.shadowMargin
     x: root.effectiveGeometry.x + root.effectiveGeometry.width - width - 20
