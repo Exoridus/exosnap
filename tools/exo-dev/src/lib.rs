@@ -31,6 +31,7 @@ pub mod report;
 pub mod rulesets;
 pub mod run;
 pub mod scope;
+pub mod screenshot;
 pub mod source_hygiene;
 pub mod step;
 pub mod test;

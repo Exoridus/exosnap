@@ -217,6 +217,10 @@ PresentSample PresentMonEtwSession::Latest() const {
             mapped.discarded_count = static_cast<uint32_t>(accumulator_.discarded_count);
             mapped.mode_flip_count = static_cast<uint32_t>(accumulator_.mode_flip_count);
             std::lock_guard lk(sample_mutex_);
+            mapped.metadata.observed_at = std::chrono::steady_clock::now();
+            mapped.metadata.source = "PresentMon ETW";
+            if (want_pid != 0)
+                mapped.metadata.process_id = want_pid;
             latest_ = mapped;
         }
         {

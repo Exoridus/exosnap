@@ -34,7 +34,7 @@ Modal scrims cover the shell, including its title band; the content card remains
 
 ### Encode device
 
-There is no encoder-device/backend selector. The recording device is determined by capture, and NVENC opens on that D3D11 device. Adapter cards in Diagnostics are inspection only. Settings can display the selected/observed encode adapter as read-only information; it must not imply an independently selectable cross-GPU path. Unsupported future backends do not appear as available hardware.
+Expert Settings offers an encoding-device row: Auto (default) or one enumerated physical adapter, shown as device name plus its backend. Auto encodes on the capture adapter when that adapter has a compatible, implemented backend; it never picks a different GPU. An explicit device is executable only when it is the capture adapter, because the current pipeline encodes the capture device's surfaces; a device on another adapter is shown unavailable with its reason. Explicit AMD/Intel devices have no implemented backend in this build and are never silently redirected to NVIDIA. The persisted preference stores a PCI fingerprint, not the boot-scoped adapter LUID; a missing or ambiguous device resolves to an honest failure rather than a guessed adapter. Adapter cards in Diagnostics remain inspection surfaces.
 
 ### Appearance
 
@@ -54,6 +54,7 @@ Unavailable controls retain labels/current values, drop interactive emphasis and
 | First-run video reconciliation | Best supported encoder: AV1, then HEVC, then H.264 |
 | Frame timing | CFR 60 fps |
 | Quality | High, canonical CQ 19 |
+| Encoding device | Auto (capture adapter) |
 | NVENC preset | P4 |
 | Frame pacing | Phase-correct where the selected capture path supports it |
 | Color range | Limited |
@@ -142,7 +143,7 @@ A clean stop drains resampler and encoder tails. A failed/timed-out drain is not
 
 An endpoint lost during recording silences the affected source while video and other sources continue. Reopening retries on the same declared identity. Fixed-device input stays fixed; semantic-default capture resolves the current Windows default when it reopens. Merely changing the default does not guarantee an existing stream moves to it. A default-input change during a running session is reported with the fact that the session retains its current device. A process target that exits is not replaced by another process with the same PID.
 
-A fully unavailable track is held on an elapsed-time silence timeline. The completed-reactivation path includes reopening time. Exact accounting when only some sources recover from a total multi-source outage remains a validation boundary; no universal sample-exact partial-recovery guarantee is made. An ordinary quiet but connected loopback source is not labeled lost. Diagnostics and standing notifications identify real degradation and clear when it ends; the report records that a gap occurred. No system can recover sound that was not captured.
+Merged sources share one QPC-aligned output timeline after normalization to 48 kHz stereo. A bounded 30 ms arrival horizon fills missing intervals with silence, including quiet sources and endpoint outages. Rejoining sources occupy their timestamped intervals rather than extending the track. Single-source loss retains elapsed-time silence accounting. Long-running independent device clocks and physical partial recovery require hardware validation. An ordinary quiet but connected loopback source is not labeled lost. Diagnostics and standing notifications identify real degradation and clear when it ends; the report records that a gap occurred. No system can recover sound that was not captured.
 
 Clock slaving is on by default. It gently resamples a measurable single-device track to the video/QPC clock. It engages from drift above roughly 15 ms or a measured drift rate likely to exceed that within ten minutes. The displayed drift is the residual after actual correction; raw drift and applied rate are also diagnostic data. Correction is capped at ±500 ppm. Within that envelope the residual can approach zero; at/beyond the cap it can remain or grow. Multi-source merged tracks are not slaved because they have several clocks.
 
@@ -164,7 +165,7 @@ Default mode presents named quality tiers. Expert replaces them with CQ/VBR/CBR 
 
 Expert CQ spans 1–51; the native mapping is displayed beneath it. AV1 uses the calibrated curve, with interpolation between points. These tiers aim at comparable quality, not pixel equivalence between codecs. Adaptive quantization, B-frames and lookahead are not active product controls. Unsupported Lossless is not offered.
 
-The Expert NVENC preset control offers P1–P7, default P4 for all codecs, taking effect on the next recording. Higher preset numbers are a computation/quality trade-off, not guaranteed improvement on every workload.
+The Expert encoding-device row offers Auto or a specific adapter and applies from the next recording; codec and format choices follow the selected device's capabilities. The Expert NVENC preset control offers P1–P7, default P4 for all codecs, taking effect on the next recording. It appears only for an NVENC device; the stored value is retained while another device or backend is selected and is never applied to a non-NVENC backend. Higher preset numbers are a computation/quality trade-off, not guaranteed improvement on every workload.
 
 ### Frame rate and timing
 
@@ -192,7 +193,7 @@ An HDR-active source exposes HDR handling in Default mode: tone-map to SDR by de
 
 Mastering metadata is carried in the container and on keyframes in-band. Measured MaxCLL/MaxFALL is container-level, not promised as final in-band maxima during a recording. Split values can accumulate across the session rather than describe independently reset per-file analysis.
 
-Tone-map exposure follows measured source luminance with smoothing. SDR overlays use Windows' SDR-content brightness, with a fallback when unavailable. Color notifications or polling refresh changes, so a short interval can retain old exposure. SDR Advanced Color/scRGB with HDR off is not automatically treated as HDR content merely because its texture is FP16.
+Tone-map exposure follows measured luminance inside the selected source region with smoothing. Off-region pixels do not contribute to luminance histograms or MaxCLL/MaxFALL. Measurements retain source resolution before output scaling and letterboxing; they are not downsampled output-peak measurements. SDR overlays use Windows' SDR-content brightness, with a fallback when unavailable. Color notifications or polling refresh changes, so a short interval can retain old exposure. SDR Advanced Color/scRGB with HDR off is not automatically treated as HDR content merely because its texture is FP16.
 
 Toggling the captured display's Windows HDR state ends the current recording cleanly once detected, keeping the footage and requesting a new recording. Moving a window between HDR/SDR displays retains the session's initial color decision. No seamless color rollover, HLG or general wide-gamut management beyond the implemented BT.2020 path is promised.
 
@@ -200,13 +201,15 @@ Native-HDR recording preview and Edit playback are SDR approximations. Edit uses
 
 ## 7. Capture targets and webcam
 
-The target kinds are Display, Window and Region. Source selection is a named list, not a live-thumbnail gallery. Windows are filtered for useful capturable targets; unavailable targets explain their status rather than pretending they can be selected. Display labels use sequential user-facing numbering rather than exposing gaps in GDI names. A shared label resolver supplies picker, transport, recent targets, notifications and filename context.
+The target kinds are Display, Window and Region. Source selection is a named list with contained target stills, not a motion-preview gallery. The picker keeps cards in place as stills refresh. Each card contains its still within a fixed-dark 16:9 thumbnail surface; window cards show app name above window title. Its header places the source-kind tabs beside the title; the Window tab shows a count and scrolls without a search field. Windows are filtered for useful capturable targets; unavailable targets explain their status rather than pretending they can be selected. Display labels use sequential user-facing numbering rather than exposing gaps in GDI names. A shared label resolver supplies picker, transport, recent targets, notifications and filename context.
 
-Region selection offers Draw custom first, then 16:9, 9:16, 1:1 and 4:5 starting shapes. Presets create editable rectangles rather than immediately committing an immutable crop. Move/resize stays inside the anchor monitor in physical virtual-screen pixels, including negative origins; minimum geometry is 64 × 64. Selection handles and dimensions stay editable until recording locks/hides them.
+Region selection offers Draw custom first, then 16:9, 9:16, 1:1 and 4:5 starting shapes in physical monitor pixels. Presets create editable rectangles rather than immediately committing an immutable crop. The selection window covers the anchored desktop monitor, independently of the Record window and preview canvas. The outside is dimmed while the selected area remains transparent. Move/resize stays inside the anchor monitor in physical virtual-screen pixels, including negative origins; minimum geometry is 64 × 64. Selection handles and dimensions stay editable until recording locks/hides them.
 
-The Record preview box content-fits the current source aspect ratio and follows target/region/source-size changes while idle. Its border stays a neutral structural line; state belongs to the local pill/timer/actions. On-screen metadata is drawn above the video and PiP but is not part of recordings or frame screenshots.
+The Record preview canvas fills the available page area with the same inset and gap as the transport dock. The source image remains centered and contained at its own aspect ratio as the target or region changes. Its border stays a neutral structural line; state belongs to the local pill/timer/actions. On-screen metadata is drawn above the video and PiP but is not part of recordings or frame screenshots.
 
 Idle display preview uses the selected capture hub and holds through transient loss. Window/region idle preview uses WGC. Preview stops when Record is no longer actually displayed. During recording it normally switches to the engine's composited image and stops independent capture, without a black flash during handoff. Cross-adapter sharing failure and the already-PQ path are explicit exceptions, so WYSIWYG is not unconditional on every configuration.
+
+Preview frame rate is a global preference under Video quality & timing: Off, 15, 30, 60 or 120 fps, default 60. Unsupported display-derived choices remain visible but disabled. It caps idle acquisition/publication and preview presentation independently of recording cadence. Off releases the idle capture subscription and shows Preview off; framing and webcam placement cannot be checked there while disabled. Recording and its composited tap continue. The preference is not part of a recording preset.
 
 Preview redraw is producer-driven. A published frame missed during screen movement/exposure/scene reconstruction is presented when rendering is usable again without another frame or mouse event. Ready screenshots remain disabled until a usable preview frame exists.
 
@@ -238,7 +241,7 @@ Every start route enforces blockers, even if Diagnostics was never opened. A mis
 
 Countdown is Off/3/5/10 seconds and blocks incompatible configuration edits. Cancel, Escape and the record hotkey cancel it without starting a session. Preparing exposes asynchronous validation/resource work and remains responsive. Its hotkey cancellation is cooperative. Stopping/finalizing/saving are distinct from a playable Saved result; no transient callback may report success before those operations finish.
 
-The Record layout is a stable context strip, aspect-fitted preview and bottom transport dock. Status/error/success messages do not shrink the preview or move the dock. Locks preserve action slots and provide reason tooltips/accessibility descriptions. The source toggles, elapsed time and action group retain their relative positions.
+The Record layout has a full preview canvas with persistent context chrome and a bottom transport dock. The top-left pill shows resolution, codec, CFR rate or VFR, and HDR10 where selected. The top-right stateful Source Picker button names the display, app or region, including active region selection. It retains the existing pending-selection/commit picker. The bottom-left pill appears only with live recording metrics: canonical real Drops, residual A/V drift after correction and actual output size. All three use fixed-dark overlay surfaces and ink. Webcam composition remains in the recorded source rectangle at bottom-right. Status/error/success messages do not shrink the preview or move the dock. Locks preserve action slots and provide reason tooltips/accessibility descriptions. The source toggles, elapsed time and action group retain their relative positions.
 
 | State | Recommended action and behavior |
 |---|---|
@@ -255,9 +258,9 @@ A split/missing/failed recording does not display a permanently dead Edit action
 
 ### Runtime health and duration
 
-Low-cost live readings include real dropped/duplicated frames, A/V drift, output bytes, storage risk and pipeline status. Real drops are backpressure, processing failure and unemitted ring eviction. Deliberate coalescing and empty pre-first-frame CFR slots are not counted as picture loss. All visible summaries share that distinction.
+Low-cost live readings include real dropped/duplicated frames, A/V drift, output bytes, storage risk and pipeline status. Real drops are backpressure, processing failure and undrained encoder output. Deliberate coalescing and empty pre-first-frame CFR slots are not counted as picture loss. All visible summaries share that distinction.
 
-The live timer measures the running session and continues while paused. Finished duration uses the media file, excluding pause and finalization tail; split duration sums media segments. The post-flight report includes drop percentage, measured drift and pipeline health without inventing timestamps for individual drops.
+The live timer measures the running session and continues while paused. Paused Diagnostics shows session health up to pause and the frozen last measured pipeline state. Finished duration uses the media file, excluding pause and finalization tail; split duration sums media segments. The post-flight report includes drop percentage, measured drift and pipeline health without inventing timestamps for individual drops.
 
 ### Destination, splitting and disk protection
 
@@ -265,7 +268,7 @@ The destination is a folder chip opening the native picker, with its identifying
 
 Live valuable artifacts stay on the configured output volume with a `.partial` suffix. Disposable remux/repair staging is separate, and successful output is published by a same-volume atomic replacement. A failed repair preserves its valuable input. The default Videos Known Folder respects redirection.
 
-Automatic duration and file-size splitting are independent, whichever comes first. Controls are Default-visible and reveal values only while enabled. Disabling an axis preserves its configured interval/size. Size is approximate and keyframe-safe. MKV/WebM/MP4 automatic splitting is supported; the manual transport action follows its own format gate. Completed MP4 segments remux in the background, and session completion waits for required jobs.
+Automatic duration and file-size splitting are independent, whichever comes first. Controls are Default-visible and reveal values only while enabled. Disabling an axis preserves its configured interval/size. Size is approximate and keyframe-safe. MKV/WebM/MP4 automatic splitting is supported; the manual transport action follows its own format gate. Completed MP4 segments queue for one background storage worker, and session completion waits for required jobs. Queued sources remain protected recovery artifacts and count toward storage reserve.
 
 Default free-space warning is about 2 GB; the hard-stop threshold is about 500 MB and grows for remux coexistence/pending jobs. Low space warns or stops gracefully as appropriate. An admitted writable destination whose space cannot be queried proceeds with a logged inactive-protection warning; measured zero space is blocked. FAT32 raises an advisory for its per-file limit. There is no implicit split at 4 GiB.
 
@@ -344,9 +347,11 @@ Controls have keyboard focus indication and accessible names; buttons/toggles us
 
 The Edit timeline is one tab stop: Left/Right moves one second, Shift ten seconds, Ctrl a tenth; Home/End reaches bounds; `[`/`]` chooses playhead/in/out manipulation; I/O sets trim at the playhead; Space toggles playback. Focus and accessibility tests establish specific contracts, not blanket proof of every assistive-technology combination.
 
+The top bar retains three noninteractive source-health indicators across every page: application/system audio together, microphone and webcam. Active included sources use success ink; intentionally muted/off or unconfigured sources remain dim/neutral. Recovering expected sources are amber; actual failures are coral. Recording lock is not a health condition. Accessible descriptions include individual APP/SYS states and any silence substituted during device recovery.
+
 ## 11. Diagnostics and fix actions
 
-Diagnostics is state-ordered, not a separate Simple/Expert mode. The Expert toggle belongs only to Settings.
+Diagnostics keeps four main live tiles: Frame pacing, Encoder, Storage and Audio sync. The recording verdict and ledger describe measured impact. Raw timing, presentation, GPU/memory and kernel evidence stays in grouped In-depth details; missing PresentMon is neutral. Compensated condition periods stay in In-depth/reports. Diagnostics is state-ordered, not a separate Simple/Expert mode. The Expert toggle belongs only to Settings.
 
 | State | Main contents |
 |---|---|
@@ -358,9 +363,9 @@ Self-test, Hardware capabilities, Environment & configuration and Support bundle
 
 Each diagnosis declares both severity (Pass/Notice/Blocker) and tier: Blocker, Measured problem, Optimization or Fact. Blockers prevent start. Measured problems remain represented and attention-colored. Optimization tips bundle quietly and cannot alone make readiness amber. Facts are neutral reference and do not count in the verdict.
 
-Issue cards expose diagnostic ID, reason, measured value/budget and a typed fix. Evidence/log excerpts are secondary. Session ledger entries need distinct consecutive observations, retain active/quiet state and worst values, and remain until stop. Static configuration conditions do not become runtime incidents. Last session reports drops, achieved rate, drift and file status plus actual ledger occurrences. Individual frame drops have no fabricated timestamp marks.
+Issue cards expose diagnostic ID, reason, measured value/budget and a typed fix. Evidence/log excerpts are secondary. Session ledger entries need distinct consecutive observations, retain active/quiet state and worst values, and remain until stop. Static configuration conditions do not become runtime incidents. Last session reports real frame loss, affected pacing slots, audio interruptions, peak residual drift and finalization status, plus actual ledger occurrences. Individual frame drops have no fabricated timestamp marks.
 
-In-depth diagnostics is a session-only header switch, off each launch, unavailable while recording. It adds present/health/DPC/GPU-related readings only where their producers can measure. Unmeasured tiles state why. Opt-in and elevation are separate: switching on in a standard process offers Restart as administrator but does not itself prompt. UAC decline is recoverable and does not persist consent. A successful elevated successor returns to Diagnostics with the requested session observation enabled.
+In-depth diagnostics is a session-only header switch, off each launch and viewable while recording. It adds present/health/DPC/GPU-related readings only where their producers can measure. Unmeasured tiles state why. Opt-in and elevation are separate: switching on in a standard process offers Restart as administrator but does not itself prompt. UAC decline is recoverable and does not persist consent. A successful elevated successor returns to Diagnostics with the requested session observation enabled.
 
 Present/tearing/DPC traces are optional. Standard capture/cadence diagnosis remains useful without them. Present data describes the current attribution/recording and becomes unavailable when its process/trace ends. It must not carry a previous recording's totals into a new one. Driver attribution and legacy-FSE detection remain evidence-qualified.
 

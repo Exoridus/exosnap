@@ -87,6 +87,7 @@ struct SessionImpl {
     bool finished = false; // guarded by finish_mutex
 
     std::mutex acc_mutex; // guards everything below
+    std::chrono::steady_clock::time_point observed_at{};
     double max_us = 0.0;
     double sum_us = 0.0;
     uint64_t count = 0;
@@ -168,6 +169,7 @@ void WINAPI DpcEventRecordCallback(EVENT_RECORD* record) {
         std::lock_guard<std::mutex> lk(s->acc_mutex);
         s->sum_us += us;
         ++s->count;
+        s->observed_at = std::chrono::steady_clock::now();
         if (us > s->max_us) {
             s->max_us = us;
             s->worst_routine = routine;
@@ -318,6 +320,8 @@ DpcLatencyReading DpcLatencyProvider::Read() const {
     std::lock_guard<std::mutex> lk(s->acc_mutex);
     DpcLatencyReading r;
     r.available = s->count > 0;
+    r.metadata.observed_at = s->observed_at;
+    r.metadata.source = "DPC/ISR ETW";
     r.max_latency_us = s->max_us;
     r.avg_latency_us = s->count != 0 ? s->sum_us / static_cast<double>(s->count) : 0.0;
     if (s->worst_routine != 0) {

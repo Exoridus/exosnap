@@ -191,6 +191,12 @@ pub fn utc_now() -> String {
     format_utc(since.as_secs(), since.subsec_nanos())
 }
 
+/// `time` in the same round-trip form as [`utc_now`].
+pub fn format_system_time(time: SystemTime) -> String {
+    let since = time.duration_since(UNIX_EPOCH).unwrap_or_default();
+    format_utc(since.as_secs(), since.subsec_nanos())
+}
+
 fn format_utc(seconds: u64, nanos: u32) -> String {
     let days = seconds / 86_400;
     let rest = seconds % 86_400;

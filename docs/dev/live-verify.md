@@ -47,6 +47,38 @@ Protocol 2 adds a monotonic `stateRevision` when published product state changes
 
 `invalid_state` means the operation has no valid current context. `blocked` means a product rule refuses an otherwise applicable operation. `operation_failed` means an admitted operation did not achieve its postcondition. Protocol 1 maps the applicable refusal cases to its older envelope; do not parse human text to reconstruct protocol-2 fields.
 
+## Capture and webcam scenarios
+
+The reusable capture stimulus (`tools/exo-verify/src/stimulus.rs`) owns the
+window: a stable title, a per-frame barcode, a QPC log, deterministic
+move/resize/freeze/restore/minimize commands and clean shutdown. A scenario
+never spawns a shell-loop stand-in.
+
+| Scenario | Interaction | What it protects |
+|---|---|---|
+| `capture.window-geometry-live` | semantic IPC | a moving WGC window keeps recording, and a client-size change ends the session with the structured size-change reason or encodes the new size |
+| `capture.region-contract` | semantic IPC (`record.selectRegion`) | an exact physical-pixel region records exactly those dimensions with changing content |
+| `capture.region-selector-interaction` | real pointer drag, commit click and Escape | the selector overlay turns the dragged rectangle into the product's reported region and cancels cleanly |
+| `webcam.overlay-live` | semantic IPC, physical camera | the camera advances generations during a recording, the overlay rect reads back exactly, and disable/re-enable round-trips |
+
+```powershell
+exo-verify run --profile preflight --product <build tree>\app --out <run dir> --only capture.window-geometry-live
+exo-verify run --profile preflight --product <build tree>\app --out <run dir> --only capture.region-contract
+exo-verify run --profile preflight --product <build tree>\app --out <run dir> --only webcam.overlay-live
+```
+
+`capture.window-geometry-live`, `capture.region-contract` and
+`capture.region-selector-interaction` are GPU-lane release scenarios that also
+run in preflight against local bytes. `webcam.overlay-live` is a hardware
+scenario: without a probed camera it reports UNAVAILABLE, never FAIL, so a
+camera-free CI machine is not blocked. Every process a scenario starts is
+adopted by its kill-on-close job object, so PASS, FAIL, timeout and error paths
+all leave no stimulus behind.
+
+Cross-monitor and mixed-DPI region checks stay VM/sandbox or hardware-lane
+work (`Capability::MultiMonitor`, `Capability::MixedDpi`); they must not
+capture the operator's other display locally.
+
 ## Application surfaces
 
 | Surface | Use |
@@ -56,7 +88,7 @@ Protocol 2 adds a monotonic `stateRevision` when published product state changes
 | `app.quit` | The tray Quit's close-guard chain; an accepted quit ends through the normal shutdown that records a clean exit, and completion is the process ending |
 | `window.snapshot`, `window.moveToScreen` | Native style/geometry/affinity and application-owned placement; use a screen name returned by snapshot |
 | `preview.snapshot` | Publication/render counters and outstanding-frame debt |
-| `record.snapshot`, `record.selectTarget`, `record.start/pause/resume/stop/split/captureFrame`, `record.result` | Real source/transport/result flow with the same admission guards as UI |
+| `record.snapshot`, `record.selectTarget`, `record.selectRegion`, `record.openRegionSelector`, `record.start/pause/resume/stop/split/captureFrame`, `record.result` | Real source/transport/result flow with the same admission guards as UI. `record.selectRegion` applies an exact physical-pixel rect and `record.openRegionSelector` opens the real selector overlay; neither simulates a gesture, so a scenario can test region geometry and leave the drag/commit/Escape work to real pointer input |
 | `ui.navigate`, `ui.reveal`, `ui.scrollHome`, `ui.scrollEnd` | Guarded navigation and actual visibility/scroll postconditions |
 | `edit.open`, `edit.playPause/seek/setTrimIn/setTrimOut/timelineHome/timelineEnd/close` | Existing edit session operations; only open creates a session |
 | `sourcePicker.open/close`, `notificationHub.open/close`, `notification.clearAll` | Application popups and hub state |

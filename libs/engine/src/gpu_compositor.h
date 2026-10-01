@@ -8,6 +8,7 @@
 #include <winrt/base.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace exosnap::engine {
@@ -51,7 +52,8 @@ class GpuCompositor {
     // opacity: uniform overlay opacity [0,1] multiplied onto the sprite's alpha
     // after chroma keying (1.0 = fully opaque). Values outside [0,1] are clamped.
     bool DrawWebcam(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, bool mirror,
-                    const ChromaKeyParams& chroma, std::string& err, float opacity = 1.0f);
+                    const ChromaKeyParams& chroma, std::string& err, float opacity = 1.0f,
+                    std::optional<uint64_t> generation = std::nullopt);
     bool DrawCursor(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, std::string& err);
 
     // The inverting plane of a mask cursor, drawn after DrawCursor and over the
@@ -72,6 +74,10 @@ class GpuCompositor {
 
     [[nodiscard]] ID3D11Texture2D* Result() const noexcept {
         return composite_tex_.get();
+    }
+
+    [[nodiscard]] uint64_t WebcamUploadCount() const noexcept {
+        return webcam_upload_count_;
     }
 
   private:
@@ -106,6 +112,8 @@ class GpuCompositor {
     winrt::com_ptr<ID3D11Buffer> constants_;
 
     TextureResource webcam_tex_;
+    std::optional<uint64_t> webcam_generation_;
+    uint64_t webcam_upload_count_ = 0;
     TextureResource cursor_tex_;
     TextureResource cursor_invert_tex_;
 };

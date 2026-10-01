@@ -1122,6 +1122,49 @@ MatroskaStreamConfig MakeReservedHdrConfig(const std::string& path) {
 constexpr uint64_t kMaxCllId = 0x55BCULL;
 constexpr uint64_t kMaxFallId = 0x55BDULL;
 
+TEST_F(StreamWriterTest, MaterialFlushAndCloseFailuresFailFinalizationAndKeepSource) {
+    using exosnap::engine::OutputIoOperation;
+    for (auto operation : {OutputIoOperation::PayloadWrite, OutputIoOperation::ClusterWrite,
+                           OutputIoOperation::TrailerWrite, OutputIoOperation::CrtFlush, OutputIoOperation::Close}) {
+        SCOPED_TRACE(static_cast<int>(operation));
+        std::remove(tmp_.c_str());
+        MatroskaStreamWriter writer;
+        auto config = MakeConfig(tmp_, true, false);
+        bool armed = false;
+        config.fail_io = [&](OutputIoOperation candidate) { return armed && candidate == operation; };
+        ASSERT_TRUE(writer.Open(config));
+        FeedSeconds(writer, 8.0, 30, 32);
+        ASSERT_GT(writer.flush_count(), 0u);
+        armed = true;
+        EXPECT_FALSE(writer.Finalize());
+        EXPECT_TRUE(writer.failed());
+        EXPECT_FALSE(writer.error().empty());
+        const auto bytes = ReadFile(tmp_);
+        EXPECT_FALSE(bytes.empty());
+        AVFormatContext* input = nullptr;
+        ASSERT_EQ(avformat_open_input(&input, tmp_.c_str(), nullptr, nullptr), 0);
+        AVPacket* packet = av_packet_alloc();
+        EXPECT_EQ(av_read_frame(input, packet), 0);
+        EXPECT_GT(packet->size, 0);
+        av_packet_free(&packet);
+        avformat_close_input(&input);
+    }
+}
+
+TEST_F(StreamWriterTest, DurabilityOnlyFailureDoesNotMisreportStreamFailure) {
+    using exosnap::engine::OutputIoOperation;
+    MatroskaStreamWriter writer;
+    auto config = MakeConfig(tmp_, true, false);
+    config.fail_io = [](OutputIoOperation candidate) { return candidate == OutputIoOperation::DurabilityFlush; };
+    ASSERT_TRUE(writer.Open(config));
+    FeedSeconds(writer, 0.1, 30, 32);
+    EXPECT_TRUE(writer.Finalize()) << writer.error();
+    EXPECT_FALSE(writer.failed());
+    EXPECT_GT(writer.io_timings().durability_failures, 0u);
+    EXPECT_GE(writer.io_timings().crt_flush_ms, 0.0);
+    EXPECT_TRUE(HasLevel1(ReadFile(tmp_), kIdCues));
+}
+
 } // namespace
 
 // The whole point of the reservation: MaxCLL and MaxFALL are maxima over the

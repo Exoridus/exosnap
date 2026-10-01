@@ -584,7 +584,10 @@ TEST(RecommendationEngineTest, Generate_LiveJitter_HighConfidenceJudder) {
     config.frame_rate_den = 1;
 
     // monitor_refresh = 0 (unknown) → static arm suppressed; the live judder arm fires alone.
-    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.pacing.recent_affected_slots = 3;
+    live.pacing.affected_slots = 3;
     RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
@@ -593,7 +596,7 @@ TEST(RecommendationEngineTest, Generate_LiveJitter_HighConfidenceJudder) {
         if (r.id == "rec.001") {
             found = true;
             EXPECT_EQ(r.severity, DiagnosticSeverity::Notice);
-            EXPECT_NE(r.title.find("judder"), std::string::npos);
+            EXPECT_NE(r.title.find("pacing"), std::string::npos);
             ASSERT_TRUE(r.fix_action.has_value());
             EXPECT_EQ(r.fix_action->id, "fix.fps.cap");
         }
@@ -654,7 +657,10 @@ TEST(DiagnosticTierTest, MeasuredJudderIsTier2) {
     config.video_codec = capability::VideoCodec::Av1;
     config.audio_codec = capability::AudioCodec::Opus;
     config.color_range = capability::ColorRange::Limited;
-    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/11.4, /*coalesce_ratio=*/1.0);
+    auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/11.4, /*coalesce_ratio=*/1.0);
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.pacing.recent_affected_slots = 3;
+    live.pacing.affected_slots = 3;
     RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
@@ -1570,7 +1576,7 @@ TEST(RecommendationEngineTest, ExclusiveFullscreenRaisesBorderlessFixAction) {
     ASSERT_NE(it, list.results.end());
     ASSERT_TRUE(it->fix_action.has_value());
     EXPECT_EQ(it->fix_action->id, "fix.present.borderless");
-    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::Assisted);
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::External);
 }
 
 TEST(RecommendationEngineTest, ComposedPresentRaisesNoExclusiveCheck) {
@@ -1586,7 +1592,7 @@ TEST(RecommendationEngineTest, ComposedPresentRaisesNoExclusiveCheck) {
                              [](const DiagnosticResult& r) { return r.id == "rec.present.exclusive"; }));
 }
 
-TEST(RecommendationEngineTest, HighDiscardRatioRaisesDiscardedNotice) {
+TEST(RecommendationEngineTest, HighDiscardRatioIsNeutralEvidence) {
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
     PresentSample present;
@@ -1600,8 +1606,8 @@ TEST(RecommendationEngineTest, HighDiscardRatioRaisesDiscardedNotice) {
     const auto it = std::find_if(list.results.begin(), list.results.end(),
                                  [](const DiagnosticResult& r) { return r.id == "rec.present.discarded"; });
     ASSERT_NE(it, list.results.end());
-    ASSERT_TRUE(it->fix_action.has_value());
-    EXPECT_EQ(it->fix_action->id, "fix.present.discarded");
+    EXPECT_EQ(it->tier, DiagnosticTier::Fact);
+    EXPECT_FALSE(it->fix_action);
 }
 
 TEST(RecommendationEngineTest, LowDiscardRatioAndTinySampleRaiseNoDiscardedNotice) {
@@ -1659,6 +1665,8 @@ TEST(RecommendationEngineTest, HighDiskWriteLatencyRaisesWriteStallNotice) {
     using namespace exosnap::diagnostics;
     exosnap::engine::RecordingDiagnosticsSnapshot snap;
     snap.valid = true;
+    snap.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    snap.bottleneck = exosnap::engine::PipelineBottleneck::Disk;
     snap.disk.latency_availability = exosnap::engine::MetricAvailability::Available;
     snap.disk.peak_write_ms = 150.0; // > 100 ms threshold
     capability::CapabilitySet caps;
@@ -1694,7 +1702,7 @@ TEST(RecommendationEngineTest, LowOrUnavailableDiskWriteRaisesNoWriteStallNotice
                              [](const DiagnosticResult& r) { return r.id == "rec.disk.writestall"; }));
 }
 
-TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
+TEST(RecommendationEngineTest, PresentModeDoesNotProvePacingImpact) {
     using namespace exosnap::diagnostics;
     exosnap::engine::RecordingDiagnosticsSnapshot snap;
     snap.valid = true;
@@ -1715,11 +1723,10 @@ TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
     const DiagnosticChecklist list = engine.Generate();
     const auto it = std::find_if(list.results.begin(), list.results.end(),
                                  [](const DiagnosticResult& r) { return r.id == "rec.001"; });
-    ASSERT_NE(it, list.results.end());
-    EXPECT_NE(it->detail.find("independent flip"), std::string::npos);
+    EXPECT_EQ(it, list.results.end());
 }
 
-TEST(RecommendationEngineTest, HighDpcLatencyNamesDriverExternalFix) {
+TEST(RecommendationEngineTest, HighDpcLatencyNamesDriverWithoutCausalClaim) {
     using namespace exosnap::diagnostics;
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
@@ -1731,8 +1738,8 @@ TEST(RecommendationEngineTest, HighDpcLatencyNamesDriverExternalFix) {
                                  [](const DiagnosticResult& r) { return r.id == "rec.dpc.latency"; });
     ASSERT_NE(it, list.results.end());
     EXPECT_NE(it->detail.find("nvlddmkm.sys"), std::string::npos);
-    ASSERT_TRUE(it->fix_action.has_value());
-    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::External);
+    EXPECT_EQ(it->tier, DiagnosticTier::Fact);
+    EXPECT_FALSE(it->fix_action);
 }
 
 TEST(RecommendationEngineTest, LowDpcLatencyRaisesNothing) {
@@ -1760,7 +1767,10 @@ TEST(RecommendationEngineTest, JudderInNewestOffersSmoothPacingAutoFix) {
     config.frame_rate_den = 1;
     config.frame_pacing = exosnap::engine::FramePacingMode::Newest; // triggers the pacing result
 
-    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.pacing.recent_affected_slots = 3;
+    live.pacing.affected_slots = 3;
     RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     const auto checklist = engine.Generate();
 
@@ -1786,7 +1796,10 @@ TEST(RecommendationEngineTest, JudderInSmoothOffersNoPacingFix) {
     config.frame_rate_den = 1;
     config.frame_pacing = exosnap::engine::FramePacingMode::Smooth; // already correct — no fix offered
 
-    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.pacing.recent_affected_slots = 3;
+    live.pacing.affected_slots = 3;
     RecommendationEngine engine(caps, config, std::nullopt, true, "", &live);
     const auto checklist = engine.Generate();
 
@@ -2002,7 +2015,7 @@ TEST(ExclusiveWindowCard, ProvenBlackRaisesBlockerWithMonitorFix) {
     EXPECT_FALSE(r->fix_action->changes_summary.empty());
 }
 
-TEST(ExclusiveWindowCard, SuspectedWithQunsRaisesNotice) {
+TEST(ExclusiveWindowCard, SuspectedWithHealthyCaptureIsAnOptionalTip) {
     const capability::CapabilitySet caps = ExclusiveCaps();
     const capability::UserRecorderConfig config = ExclusiveConfig();
     RecommendationEngine engine(caps, config, std::nullopt, true);
@@ -2012,8 +2025,9 @@ TEST(ExclusiveWindowCard, SuspectedWithQunsRaisesNotice) {
     const DiagnosticChecklist list = engine.Generate();
     const DiagnosticResult* r = FindResult(list, "rec.capture.exclusive_window");
     ASSERT_NE(r, nullptr);
-    EXPECT_EQ(r->severity, DiagnosticSeverity::Notice);
-    EXPECT_TRUE(list.has_notice);
+    EXPECT_EQ(r->severity, DiagnosticSeverity::Pass);
+    EXPECT_EQ(r->tier, DiagnosticTier::Optimisation);
+    EXPECT_FALSE(list.has_notice);
 }
 
 TEST(ExclusiveWindowCard, BorderlessThatWorksIsSilent) {
@@ -2274,7 +2288,7 @@ TEST(RecommendationEngineTest, GpuBottleneckRaisesContentionCard) {
 
 namespace exosnap::diagnostics {
 
-TEST(RecommendationEngineTest, SteadyDuplicateShareRaisesPacingNotice) {
+TEST(RecommendationEngineTest, SteadyDuplicateShareIsNeutralSourceEvidence) {
     using namespace exosnap::diagnostics;
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
@@ -2289,7 +2303,7 @@ TEST(RecommendationEngineTest, SteadyDuplicateShareRaisesPacingNotice) {
     const auto it = std::find_if(list.results.begin(), list.results.end(),
                                  [](const DiagnosticResult& r) { return r.id == "rec.pacing.duplication"; });
     ASSERT_NE(it, list.results.end());
-    EXPECT_EQ(it->tier, DiagnosticTier::MeasuredProblem);
+    EXPECT_EQ(it->tier, DiagnosticTier::Fact);
 
     // A full stall is the stall notice's story, not a pacing card.
     live.capture.capture_starved = true;
@@ -2374,16 +2388,18 @@ TEST(RecommendationEngineLive, JudderCarriesNumericMeasurementAndBudget) {
     capability::UserRecorderConfig config;
     config.frame_rate_num = 60;
     config.frame_rate_den = 1;
-    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.pacing.recent_affected_slots = 3;
+    live.pacing.affected_slots = 3;
     const DiagnosticChecklist list = RecommendationEngine(caps, config, std::nullopt, true, "", &live).Generate();
     const auto it = std::find_if(list.results.begin(), list.results.end(),
                                  [](const DiagnosticResult& r) { return r.id == "rec.001"; });
     ASSERT_NE(it, list.results.end());
     ASSERT_TRUE(it->measured_value.has_value());
-    EXPECT_DOUBLE_EQ(*it->measured_value, 9.0);
-    ASSERT_TRUE(it->budget_value.has_value());
-    EXPECT_DOUBLE_EQ(*it->budget_value, 8.0);
-    EXPECT_EQ(it->value_unit, "ms");
+    EXPECT_DOUBLE_EQ(*it->measured_value, 3.0);
+    EXPECT_FALSE(it->budget_value.has_value());
+    EXPECT_EQ(it->value_unit, "slots");
 }
 
 TEST(RecommendationEngineLive, GpuContentionCarriesP99AgainstTheFrameBudget) {
@@ -2419,8 +2435,8 @@ TEST(RecommendationEngineLive, DiskWriteStallCarriesPeakWriteAgainstItsThreshold
     ASSERT_NE(it, list.results.end());
     ASSERT_TRUE(it->measured_value.has_value());
     EXPECT_DOUBLE_EQ(*it->measured_value, 150.0);
-    ASSERT_TRUE(it->budget_value.has_value());
-    EXPECT_DOUBLE_EQ(*it->budget_value, 100.0);
+    EXPECT_FALSE(it->budget_value.has_value());
+    EXPECT_EQ(it->tier, DiagnosticTier::Fact);
     EXPECT_EQ(it->value_unit, "ms");
 }
 
@@ -2435,8 +2451,8 @@ TEST(RecommendationEngineLive, DpcLatencyCarriesMicrosecondsAgainstOneMillisecon
     ASSERT_NE(it, list.results.end());
     ASSERT_TRUE(it->measured_value.has_value());
     EXPECT_DOUBLE_EQ(*it->measured_value, 2500.0);
-    ASSERT_TRUE(it->budget_value.has_value());
-    EXPECT_DOUBLE_EQ(*it->budget_value, 1000.0);
+    EXPECT_FALSE(it->budget_value.has_value());
+    EXPECT_EQ(it->tier, DiagnosticTier::Fact);
     EXPECT_EQ(it->value_unit, "us");
 }
 
@@ -2454,8 +2470,8 @@ TEST(RecommendationEngineLive, DiscardedPresentsCarryAPercentageAgainstItsThresh
     ASSERT_NE(it, list.results.end());
     ASSERT_TRUE(it->measured_value.has_value());
     EXPECT_DOUBLE_EQ(*it->measured_value, 50.0);
-    ASSERT_TRUE(it->budget_value.has_value());
-    EXPECT_DOUBLE_EQ(*it->budget_value, 5.0);
+    EXPECT_FALSE(it->budget_value.has_value());
+    EXPECT_EQ(it->tier, DiagnosticTier::Fact);
     EXPECT_EQ(it->value_unit, "%");
 }
 
@@ -2494,9 +2510,98 @@ TEST(RecommendationEngineLive, PacingDuplicationCarriesTheRepeatShareAgainstItsT
     ASSERT_NE(it, list.results.end());
     ASSERT_TRUE(it->measured_value.has_value());
     EXPECT_DOUBLE_EQ(*it->measured_value, 40.0);
-    ASSERT_TRUE(it->budget_value.has_value());
-    EXPECT_DOUBLE_EQ(*it->budget_value, 25.0);
+    EXPECT_FALSE(it->budget_value.has_value());
+    EXPECT_EQ(it->tier, DiagnosticTier::Fact);
     EXPECT_EQ(it->value_unit, "%");
 }
 
+} // namespace exosnap::diagnostics
+
+namespace exosnap::diagnostics {
+TEST(RecordingOutcome, RawAnomaliesWithHealthyOutputNeverCreateMeasuredIncidents) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.video_encoder.cfr = true;
+    live.capture.present_cadence_availability = exosnap::engine::MetricAvailability::Available;
+    live.capture.source_present_jitter_ms = 30.0;
+    live.capture.frames_emitted = 600;
+    live.capture.frames_duplicated = 300;
+    live.capture.target_fps = 60;
+    live.disk.latency_availability = exosnap::engine::MetricAvailability::Available;
+    live.disk.peak_write_ms = 120;
+    PresentSample present;
+    present.available = present.attributed = true;
+    present.present_count = 1000;
+    present.discarded_count = 500;
+    present.mode_flip_count = 20;
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", &live, &present);
+    engine.SetDpcLatency({2500, 100, "driver.sys", true});
+    const auto result = engine.Generate();
+    for (const auto& r : result.results) {
+        if (r.id == "rec.001" || r.id == "rec.present.discarded" || r.id == "rec.present.modeflip" ||
+            r.id == "rec.disk.writestall" || r.id == "rec.dpc.latency" || r.id == "rec.pacing.duplication") {
+            EXPECT_NE(r.tier, DiagnosticTier::MeasuredProblem) << r.id;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Pass) << r.id;
+        }
+    }
+}
+} // namespace exosnap::diagnostics
+
+namespace exosnap::diagnostics {
+TEST(RecordingOutcome, SchedulerLatenessEnrichesMeasuredPacingWithoutBlamingSource) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.video_encoder.cfr = true;
+    live.capture.target_fps = 60;
+    live.pacing.recent_affected_slots = 4;
+    live.pacing.worker_lateness.samples = 10;
+    live.pacing.worker_lateness.p95_ms = 40;
+    const auto result = RecommendationEngine(caps, config, std::nullopt, true, "NTFS", &live).Generate();
+    const auto it =
+        std::find_if(result.results.begin(), result.results.end(), [](const auto& r) { return r.id == "rec.001"; });
+    ASSERT_NE(it, result.results.end());
+    EXPECT_EQ(it->tier, DiagnosticTier::MeasuredProblem);
+    EXPECT_NE(it->detail.find("schedul"), std::string::npos);
+    EXPECT_TRUE(it->likely_cause.empty());
+}
+TEST(RecordingOutcome, RealLossIsIndependentOfPresentationTelemetry) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    live.pacing.recent_frame_loss = 2;
+    const auto result = RecommendationEngine(caps, config, std::nullopt, true, "NTFS", &live).Generate();
+    const auto it = std::find_if(result.results.begin(), result.results.end(),
+                                 [](const auto& r) { return r.id == "rec.output.loss"; });
+    ASSERT_NE(it, result.results.end());
+    EXPECT_EQ(it->measured_value, 2);
+    EXPECT_EQ(it->tier, DiagnosticTier::MeasuredProblem);
+}
+TEST(RecordingOutcome, MemoryPressureWithoutOutputImpactAddsNoWarning) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    exosnap::engine::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.lifecycle = exosnap::engine::DiagnosticsLifecycle::Recording;
+    RecommendationEngine engine(caps, config, std::nullopt, true, "NTFS", &live);
+    const auto before = engine.Generate();
+    VideoMemoryReading memory;
+    memory.local = VideoMemoryBudget{200, 100, 0, 0};
+    GpuTelemetryReading gpu;
+    gpu.encoder_utilization_percent = 100;
+    engine.SetGpuEvidence(gpu, memory);
+    const auto after = engine.Generate();
+    ASSERT_EQ(after.results.size(), before.results.size());
+    for (size_t i = 0; i < after.results.size(); ++i) {
+        EXPECT_EQ(after.results[i].id, before.results[i].id);
+        EXPECT_EQ(after.results[i].severity, before.results[i].severity);
+    }
+}
 } // namespace exosnap::diagnostics

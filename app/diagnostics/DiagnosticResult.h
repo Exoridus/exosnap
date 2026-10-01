@@ -89,6 +89,9 @@ struct DiagnosticResult {
     std::string title;
     std::string summary;
     std::string detail;
+    std::string impact;
+    std::string compensation;
+    std::string likely_cause;
     std::string current_value;
     // Numeric twin of current_value for checks that compare a measurement with a
     // budget; the session ledger and the value tint read these, the card reads the

@@ -505,6 +505,28 @@ const QVector<CommandDescriptor>& AllCommands() {
          {Param("kind", "enum", true, {QStringLiteral("monitor"), QStringLiteral("window")}),
           Param("titleFilter", "string", false)},
          &CanSelectTarget},
+        // Region geometry without the selector gesture. `x`/`y`/`width`/`height`
+        // are physical pixels relative to the monitor origin, the same contract
+        // the product stores; the capture-contract scenario asserts output
+        // dimensions against them. `display` is an optional \\.\DISPLAYn.
+        {QStringLiteral("record.selectRegion"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("display", "string", false), Param("x", "int", true), Param("y", "int", true),
+          Param("width", "int", true), Param("height", "int", true)},
+         &CanSelectTarget},
+        // Opens the real selector overlay without committing anything, so the
+        // pointer-interaction scenario owns only the drag/commit gesture and
+        // reads the resulting product state back semantically.
+        {QStringLiteral("record.openRegionSelector"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("display", "string", false)},
+         &CanSelectTarget},
         {QStringLiteral("record.start"), 1, true, false, Settle::Asynchronous, {}, &CanStartRecording},
         {QStringLiteral("record.pause"), 1, true, false, Settle::Asynchronous, {}, &CanPause},
         {QStringLiteral("record.resume"), 1, true, false, Settle::Asynchronous, {}, &CanResume},

@@ -24,6 +24,19 @@ QString TempSettingsPath(const QTemporaryDir& temp_dir) {
 // PersistedAppSettings round-trips (hotkeys + window geometry only)
 // ---------------------------------------------------------------------------
 
+TEST(AppSettingsStoreTest, PreviewRatesRoundTripAndInvalidValuesFallBack) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    AppSettingsStore store(TempSettingsPath(directory));
+    EXPECT_EQ(store.Load().preview_frame_rate, 60);
+    for (int rate : {0, 15, 30, 60, 120, -1, 144}) {
+        PersistedAppSettings settings;
+        settings.preview_frame_rate = rate;
+        ASSERT_TRUE(store.Save(settings));
+        EXPECT_EQ(store.Load().preview_frame_rate, NormalizePreviewRate(rate));
+    }
+}
+
 TEST(AppSettingsStoreTest, AppSettingsStore_LoadMissingFile_ReturnsDefaults) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());

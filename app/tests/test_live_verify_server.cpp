@@ -221,6 +221,12 @@ class StubSource final : public LiveVerifySource {
     bool SelectRecordTarget(const QString&, const QString&, QString*) override {
         return true;
     }
+    bool SelectRecordRegion(const QString&, int, int, int, int, QString*) override {
+        return true;
+    }
+    bool OpenRegionSelector(const QString&, QString*) override {
+        return true;
+    }
     bool RecordStart(QString*) override {
         ++record_starts;
         return true;

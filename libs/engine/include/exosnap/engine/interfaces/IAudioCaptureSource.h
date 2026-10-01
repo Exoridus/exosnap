@@ -121,6 +121,13 @@ class IAudioCaptureSource {
         return false;
     }
 
+    // QPC origin of the exposed samples, including resampler delay. A merged
+    // timeline can provide this without claiming one physical device clock.
+    virtual uint64_t LastBufferQpcNs() const {
+        AudioDeviceTiming timing{};
+        return LastBufferDeviceTiming(timing) ? timing.qpc_position_ns : 0;
+    }
+
     // Optional event-driven mode: a Win32 auto-reset event (HANDLE as void* to
     // keep this header platform-agnostic) the audio engine signals when a
     // capture buffer becomes ready (AUDCLNT_STREAMFLAGS_EVENTCALLBACK +

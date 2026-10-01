@@ -1,4 +1,6 @@
 #include "video_thread.h"
+#include "webcam_frame_observation.h"
+#include <exosnap/engine/gpu_surface_inventory.h>
 
 #include "annexb_to_avcc.h"
 #include "annexb_to_hvcc.h"
@@ -325,6 +327,7 @@ void VideoThread::Run() {
     // unsupported. Distinct from the existing CPU-submission windows.
     GpuStageTimer compositeGpuTimer;
     GpuStageTimer tonemapGpuTimer;
+    GpuStageTimer luminanceGpuTimer;
     GpuStageTimer vpbltGpuTimer;
     winrt::com_ptr<ID3D11VideoContext> videoContext;
     // Optional newer interface: VideoProcessorSet{Stream,Output}ColorSpace1 takes
@@ -555,10 +558,10 @@ void VideoThread::Run() {
          << ", capture.visibleContentSize=" << sourceWidthSigned << "x" << sourceHeightSigned
          << ", capture.modeDescFormat=" << preInitFormatName << ", videoCodec="
          << (m_state.config.video_codec == VideoCodec::H264
-                 ? "H264_NVENC"
-                 : (m_state.config.video_codec == VideoCodec::Hevc ? "HEVC_NVENC" : "AV1_NVENC"))
+                 ? "H264"
+                 : (m_state.config.video_codec == VideoCodec::Hevc ? "HEVC" : "AV1"))
          << ", chroma=4:2:0, bitDepth=8, frameRate=" << m_state.config.frame_rate_num << "/"
-         << m_state.config.frame_rate_den << ", nvencInputBufferFormat=NV_ENC_BUFFER_FORMAT_NV12";
+         << m_state.config.frame_rate_den;
 
     if (target.kind == CaptureTarget::Kind::Window) {
         diag << ", window.handleValid=" << BoolText(windowHandleValid) << ", window.visible=" << BoolText(windowVisible)
@@ -704,15 +707,37 @@ void VideoThread::Run() {
         m_state.stats.audio_codec = m_state.config.audio_codec;
     }
 
-    // --- NVENC encoder ---
-    // Encoder dispatch (IVideoEncoder-refactor design spec). Vendor is
-    // hard-coded to Nvidia until the AMD wave threads real device selection
-    // from libs/capability through to this call.
-    std::unique_ptr<IVideoEncoder> encoder =
-        m_state.video_encoder_factory->Create(exosnap::capability::AdapterVendor::Nvidia);
+    winrt::com_ptr<IDXGIDevice> dxgiDevice;
+    winrt::com_ptr<IDXGIAdapter> recordingAdapter;
+    DXGI_ADAPTER_DESC adapterDesc{};
+    if (FAILED(d3dDevice->QueryInterface(IID_PPV_ARGS(dxgiDevice.put()))) ||
+        FAILED(dxgiDevice->GetAdapter(recordingAdapter.put())) || FAILED(recordingAdapter->GetDesc(&adapterDesc))) {
+        m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "Cannot identify the recording graphics adapter");
+        return;
+    }
+    const int64_t captureAdapterLuid =
+        exosnap::capability::PackAdapterLuid(adapterDesc.AdapterLuid.HighPart, adapterDesc.AdapterLuid.LowPart);
+    m_state.diagnostics.SetCaptureAdapter(captureAdapterLuid, adapterDesc.VendorId);
+
+    // The surfaces belong to the capture D3D device, so an explicit device that
+    // resolved elsewhere (or failed to resolve) is refused with its structured
+    // reason rather than silently rerouted to another GPU. Auto resolves to the
+    // capture adapter, so it always passes here.
+    const EncoderDeviceValidation device_validation = ValidateEncoderDeviceForCapture(
+        m_state.config.encoder_device, m_state.config.resolved_encoder_device, captureAdapterLuid);
+    if (!device_validation.ok) {
+        m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, device_validation.reason);
+        return;
+    }
+    // Composition and color conversion run on the recording device in the only
+    // executable topology, so the processing role reports the same adapter while
+    // staying a separate field a future split can populate truthfully.
+    m_state.diagnostics.SetProcessingAdapter(captureAdapterLuid, adapterDesc.VendorId);
+    m_state.diagnostics.SetEncoderAdapter(captureAdapterLuid, adapterDesc.VendorId);
+    std::string encoderError;
+    auto encoder = m_state.video_encoder_factory->CreateForAdapter(adapterDesc.VendorId, m_state.config, encoderError);
     if (!encoder) {
-        m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare,
-                              "No video encoder available for the configured adapter vendor");
+        m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, encoderError);
         return;
     }
     {
@@ -720,18 +745,16 @@ void VideoThread::Run() {
         encoder->SetBitDepth(m_state.config.bit_depth);
         encoder->SetChroma(m_state.config.chroma);
         encoder->SetCq(m_state.config.cq);
-        encoder->SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
-        encoder->SetPreset(m_state.config.nvenc_preset);
+        encoder->SetRateControl(m_state.config.rate_control_mode, m_state.config.target_bitrate_kbps);
         // Keyframe interval (Settings → Advanced → Video). Must be set before
         // Configure() so InitEncoder derives gopLength/idrPeriod from it; without
         // this the encoder silently stays at its 2 s default and the selector has
         // no effect.
         encoder->SetKeyframeIntervalSecs(m_state.config.keyframe_interval_secs);
         // Submission regime. The keyframe cadence is media-time based either way;
-        // this only decides whether NVENC's frame-counting gopLength/idrPeriod
-        // backstop stays armed. Under VFR the loop below submits every frame the
-        // source produces, so a source faster than the configured rate would trip
-        // that counter before the media-time boundary — see ComputeNvencGopBackstop.
+        // this controls whether the backend's frame-count backstop stays armed. Under VFR the loop below submits every
+        // frame the source produces, so a source faster than the configured rate would trip that counter before the
+        // media-time boundary.
         encoder->SetConstantFrameRate(m_state.config.cfr);
         // Color signaling (fix for color-range-signaling bug): the encoded
         // bitstream itself must carry the same color description as the
@@ -744,13 +767,13 @@ void VideoThread::Run() {
 
         std::string err;
         if (!encoder->Open(d3dDevice.get(), err)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC open: " + err);
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "Video encoder open: " + err);
             return;
         }
         if (!encoder->Configure(encodeWidth, encodeHeight, m_state.config.frame_rate_num, m_state.config.frame_rate_den,
                                 err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
-                                  "NVENC configure: " + err + "; preInit={" + diag.str() + "}");
+                                  "Video encoder configure: " + err + "; preInit={" + diag.str() + "}");
             return;
         }
 
@@ -769,7 +792,7 @@ void VideoThread::Run() {
                                                                                      : "lossless";
         const std::vector<exosnap::engine::logging::LogField> init_fields = {
             {"codec", std::to_string(static_cast<int>(enc_init.codec))},
-            {"preset", std::to_string(static_cast<int>(enc_init.preset))},
+            {"preset", std::string(enc_init.backend_preset)},
             {"rc", rc_name},
             {"target_kbps", std::to_string(enc_init.target_bitrate_kbps)},
             {"max_kbps", std::to_string(enc_init.max_bitrate_kbps)},
@@ -791,20 +814,23 @@ void VideoThread::Run() {
 
     // Expert 4:4:4 (8-bit H.264/HEVC): the VideoProcessor cannot emit 4:4:4, so it
     // performs geometry (crop/scale/letterbox) into a full-range BGRA intermediate,
-    // and a compute shader converts that into the packed AYUV surface NVENC
-    // consumes (NV_ENC_BUFFER_FORMAT_AYUV). The 4:2:0 path is untouched. 4:4:4 is
+    // and a compute shader converts that into the packed AYUV encoder surface. The 4:2:0 path is untouched. 4:4:4 is
     // 8-bit only and mutually exclusive with 10-bit / native HDR (blocked upstream).
     const bool chroma444 = (m_state.config.chroma == ChromaSubsampling::Cs444);
-    // Encode texture registered with NVENC: NV12/P010 for 4:2:0, AYUV for 4:4:4.
+    // Native encoder input texture: NV12/P010 for 4:2:0, AYUV for 4:4:4.
     const DXGI_FORMAT encodeFormat = chroma444 ? DXGI_FORMAT_AYUV : (tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12);
 
     // Number of pipelined capture/encode slots (shared by every per-slot texture array).
-    static constexpr int32_t kSlotCount = 8;
+    const int32_t kSlotCount = encoder->SlotCount();
+    if (kSlotCount <= 0) {
+        m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "Video encoder exposes no input slots");
+        return;
+    }
 
     // 4:4:4: the VideoProcessor output is a separate BGRA intermediate (RGB, geometry
     // only); the shader then writes AYUV into the encode textures. RgbToAyuvConverter
     // carries the BT.709 + range conversion the VideoProcessor does for 4:2:0.
-    winrt::com_ptr<ID3D11Texture2D> vpRgbTextures[kSlotCount];
+    std::vector<winrt::com_ptr<ID3D11Texture2D>> vpRgbTextures(static_cast<size_t>(kSlotCount));
     RgbToAyuvConverter rgbToAyuv;
     if (chroma444) {
         const bool fullRange = m_state.config.color.range != ColorRange::Limited;
@@ -835,10 +861,10 @@ void VideoThread::Run() {
         return;
     }
 
-    winrt::com_ptr<ID3D11Texture2D> nv12Textures[kSlotCount];
+    std::vector<winrt::com_ptr<ID3D11Texture2D>> nv12Textures(static_cast<size_t>(kSlotCount));
     winrt::com_ptr<ID3D11VideoProcessorEnumerator> videoEnum;
     winrt::com_ptr<ID3D11VideoProcessor> videoProcessor;
-    winrt::com_ptr<ID3D11VideoProcessorOutputView> videoOutputViews[kSlotCount];
+    std::vector<winrt::com_ptr<ID3D11VideoProcessorOutputView>> videoOutputViews(static_cast<size_t>(kSlotCount));
 
     {
         // Video processor enumerator (shared across all slots)
@@ -883,7 +909,8 @@ void VideoThread::Run() {
             // for frame duplication; NV12/P010 are VideoProcessorBlt render targets.
             desc.BindFlags = chroma444 ? D3D11_BIND_UNORDERED_ACCESS : D3D11_BIND_RENDER_TARGET;
 
-            hr = d3dDevice->CreateTexture2D(&desc, nullptr, nv12Textures[i].put());
+            hr = exosnap::engine::CreateTrackedTexture2D(d3dDevice.get(), &desc, nullptr, nv12Textures[i].put(),
+                                                         exosnap::engine::GpuSurfaceOwner::EncoderInputs);
             if (FAILED(hr)) {
                 char buf[96];
                 snprintf(buf, sizeof(buf), "CreateTexture2D(%s[%d]) failed 0x%08lX",
@@ -900,7 +927,8 @@ void VideoThread::Run() {
                 D3D11_TEXTURE2D_DESC rgbDesc = desc;
                 rgbDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
                 rgbDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-                hr = d3dDevice->CreateTexture2D(&rgbDesc, nullptr, vpRgbTextures[i].put());
+                hr = exosnap::engine::CreateTrackedTexture2D(d3dDevice.get(), &rgbDesc, nullptr, vpRgbTextures[i].put(),
+                                                             exosnap::engine::GpuSurfaceOwner::EncoderInputs);
                 if (FAILED(hr)) {
                     char buf[96];
                     snprintf(buf, sizeof(buf), "CreateTexture2D(vpRgb[%d]) failed 0x%08lX", static_cast<int>(i),
@@ -927,7 +955,7 @@ void VideoThread::Run() {
 
             std::string err;
             if (!encoder->RegisterSlotTexture(i, nv12Textures[i].get(), err)) {
-                m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC register slot: " + err);
+                m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "Video encoder register slot: " + err);
                 return;
             }
         }
@@ -1216,8 +1244,6 @@ void VideoThread::Run() {
     };
     VisualFrameKey lastCompositedKey{};
     bool haveLastCompositedKey = false;
-    uint64_t lastWebcamFrameGeneration = 0;
-    bool haveWebcamFrameGeneration = false;
     WebcamOverlayLive lastOverlaySnapshot{};
     bool haveOverlaySnapshot = false;
 
@@ -1430,7 +1456,8 @@ void VideoThread::Run() {
         // odCapturedTex/ring as a shader resource, so bind for SRV instead.
         desc.BindFlags = needsSrvSource ? D3D11_BIND_SHADER_RESOURCE : D3D11_BIND_RENDER_TARGET;
 
-        HRESULT odHr = d3dDevice->CreateTexture2D(&desc, nullptr, odCapturedTex.put());
+        HRESULT odHr = exosnap::engine::CreateTrackedTexture2D(d3dDevice.get(), &desc, nullptr, odCapturedTex.put(),
+                                                               exosnap::engine::GpuSurfaceOwner::CaptureHeld);
         if (FAILED(odHr)) {
             char buf[80];
             snprintf(buf, sizeof(buf), "CreateTexture2D(odCapturedTex) failed 0x%08lX",
@@ -1471,7 +1498,16 @@ void VideoThread::Run() {
     GpuCompositor gpuCompositor;
     bool gpuCompositorReady = false;
 
-    std::vector<uint8_t> camBgra;
+    WebcamFrameObservation webcamObservation;
+    const auto& webcamFrame = webcamObservation.Frame();
+    auto observeWebcam = [&](const WebcamOverlayLive& overlay) {
+        const auto previous = visualGenerations.webcam;
+        const auto key = webcamObservation.Observe(visualGenerations, m_state.config.webcam.frame_provider,
+                                                   overlay.enabled && webcamProviderAvailable);
+        if (webcamFrame && key.webcam_generation != previous)
+            m_state.diagnostics.OnWebcamGenerationChanged();
+        return key;
+    };
     auto webcamRectFor = [&](const WebcamOverlayLive& overlay) {
         WebcamPlacement placement;
         placement.x = overlay.overlay_x_norm;
@@ -1494,29 +1530,12 @@ void VideoThread::Run() {
             return true;
         }
 
-        int camW = 0;
-        int camH = 0;
-        // The provider delivers a converted BGRA frame (source pixel format ->
-        // BGRA, e.g. NV12/MJPEG decode). Time that CPU conversion+copy from the
-        // engine's side; the upload of camBgra to the GPU is part of the composite
-        // pass measured by compositeGpuTimer.
-        const auto cam_t0 = std::chrono::steady_clock::now();
-        uint64_t camGeneration = 0;
-        const bool gotCam = m_state.config.webcam.frame_provider->TryGetFrame(camW, camH, camBgra, camGeneration);
-        const auto cam_t1 = std::chrono::steady_clock::now();
-        if (gotCam) {
-            m_state.diagnostics.OnWebcamConvert(cam_t1,
-                                                std::chrono::duration<double, std::milli>(cam_t1 - cam_t0).count());
-        }
-        if (gotCam && (!haveWebcamFrameGeneration || camGeneration != lastWebcamFrameGeneration)) {
-            haveWebcamFrameGeneration = true;
-            lastWebcamFrameGeneration = camGeneration;
-            ++visualGenerations.webcam;
-            m_state.diagnostics.OnWebcamGenerationChanged();
-        }
-        if (!gotCam) {
+        if (!webcamFrame) {
             return true;
         }
+        const int camW = webcamFrame->width;
+        const int camH = webcamFrame->height;
+        const auto& camBgra = webcamFrame->bgra;
         const size_t required = (camW > 0 && camH > 0) ? static_cast<size_t>(camW) * camH * 4 : 0;
         if (camW <= 0 || camH <= 0 || camBgra.size() < required) {
             return true;
@@ -1538,7 +1557,7 @@ void VideoThread::Run() {
 
         std::string compErr;
         if (!gpuCompositor.DrawWebcam(camBgra.data(), camW, camH, rect, overlay.mirror, chroma, compErr,
-                                      overlay.opacity)) {
+                                      overlay.opacity, webcamFrame->generation)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU webcam composite: " + compErr);
             return false;
         }
@@ -1812,6 +1831,7 @@ void VideoThread::Run() {
     // queries — measurement is best-effort and never a hard dependency.
     compositeGpuTimer.Init(d3dDevice.get());
     tonemapGpuTimer.Init(d3dDevice.get());
+    luminanceGpuTimer.Init(d3dDevice.get());
     vpbltGpuTimer.Init(d3dDevice.get());
 
     // Measure one pre-encode frame. Inert until Init has run, which only happens
@@ -1827,7 +1847,12 @@ void VideoThread::Run() {
             return;
         }
         std::string lumErr;
-        if (frameLuminance.Dispatch(source, lumErr)) {
+        luminanceGpuTimer.Begin(d3dContext.get());
+        const bool measured = frameLuminance.Dispatch(source, lumErr);
+        luminanceGpuTimer.End(d3dContext.get());
+        if (const auto gpu_ms = luminanceGpuTimer.Poll(d3dContext.get()))
+            m_state.diagnostics.OnHdrLuminanceGpuTime(std::chrono::steady_clock::now(), *gpu_ms);
+        if (measured) {
             return;
         }
         frameLuminance.Reset();
@@ -2231,7 +2256,9 @@ void VideoThread::Run() {
             // the VideoProcessor from a render-target texture.
             desc.BindFlags =
                 (hdrToneMapActive || hdrNativeActive) ? D3D11_BIND_SHADER_RESOURCE : D3D11_BIND_RENDER_TARGET;
-            const HRESULT copyHr = d3dDevice->CreateTexture2D(&desc, nullptr, wgcCapturedTex[target].put());
+            const HRESULT copyHr =
+                exosnap::engine::CreateTrackedTexture2D(d3dDevice.get(), &desc, nullptr, wgcCapturedTex[target].put(),
+                                                        exosnap::engine::GpuSurfaceOwner::CaptureHeld);
             if (FAILED(copyHr)) {
                 char buf[80];
                 snprintf(buf, sizeof(buf), "CreateTexture2D(wgcCapturedTex) failed 0x%08lX",
@@ -2589,7 +2616,8 @@ void VideoThread::Run() {
         sdrDesc.SampleDesc = {1, 0};
         sdrDesc.Usage = D3D11_USAGE_DEFAULT;
         sdrDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-        HRESULT sdrHr = d3dDevice->CreateTexture2D(&sdrDesc, nullptr, hdrSdrTex.put());
+        HRESULT sdrHr = exosnap::engine::CreateTrackedTexture2D(d3dDevice.get(), &sdrDesc, nullptr, hdrSdrTex.put(),
+                                                                exosnap::engine::GpuSurfaceOwner::Hdr);
         // Graceful fallback: a device that rejects R10G10B10A2 as a render target
         // reverts to BGRA8 rather than failing the recording. BGRA8 VP-input support
         // is assumed here (universal in practice), not re-checked: negotiation only
@@ -2602,7 +2630,8 @@ void VideoThread::Run() {
             toneMapIntermediateFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
             sdrDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
             hdrSdrTex = nullptr;
-            sdrHr = d3dDevice->CreateTexture2D(&sdrDesc, nullptr, hdrSdrTex.put());
+            sdrHr = exosnap::engine::CreateTrackedTexture2D(d3dDevice.get(), &sdrDesc, nullptr, hdrSdrTex.put(),
+                                                            exosnap::engine::GpuSurfaceOwner::Hdr);
         }
         std::string tmErr;
         if (FAILED(sdrHr)) {
@@ -2730,10 +2759,13 @@ void VideoThread::Run() {
         // sourceHeight (the compositor is sized from the same pair). Only the
         // encoding differs, and only for the desktops duplication hands out as
         // PQ R10G10B10A2 instead of linear FP16.
+        const RECT luminanceRegion = {hasCrop ? cropX : 0, hasCrop ? cropY : 0,
+                                      (hasCrop ? cropX : 0) + static_cast<LONG>(sourceContentWidth),
+                                      (hasCrop ? cropY : 0) + static_cast<LONG>(sourceContentHeight)};
         const bool luminancePqSource = hdrNativeActive ? hdrPqInputIsPq : hdrToneMapPqSource;
         std::string lumErr;
         if (!frameLuminance.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, luminancePqSource,
-                                 lumErr)) {
+                                 lumErr, &luminanceRegion)) {
             frameLuminanceFailedLogged = true;
             logging::log(logging::LogLevel::Warn, "video_thread",
                          "per-frame luminance analysis is unavailable on this device; the tone-map knee keeps its "
@@ -3064,7 +3096,7 @@ void VideoThread::Run() {
         std::vector<EncodedVideoPacket> reaped;
         std::string reapErr;
         if (!encoder->ReapCompleted(reaped, reapErr, wait_head_ms)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC async reap: " + reapErr);
+            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "Video encoder async reap: " + reapErr);
             return false;
         }
         const auto reap_t = std::chrono::steady_clock::now();
@@ -3125,7 +3157,8 @@ void VideoThread::Run() {
             sd.Usage = D3D11_USAGE_STAGING;
             sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
             sd.BindFlags = 0;
-            HRESULT shr = d3dDevice->CreateTexture2D(&sd, nullptr, snapshotStagingTex.put());
+            HRESULT shr = exosnap::engine::CreateTrackedTexture2D(
+                d3dDevice.get(), &sd, nullptr, snapshotStagingTex.put(), exosnap::engine::GpuSurfaceOwner::Readback);
             if (FAILED(shr)) {
                 char errbuf[80];
                 snprintf(errbuf, sizeof(errbuf), "snapshot staging tex failed 0x%08lX",
@@ -3449,14 +3482,10 @@ void VideoThread::Run() {
         bool refNv12Valid = false;
         VisualFrameKey refNv12Key{}; // what refNv12 currently contains, once refNv12Valid
 
-        // Per-slot content tracking: what generation each NVENC ring slot
-        // currently holds, so a duplicate tick can skip the CopyResource
-        // entirely when the slot already contains refNv12Key (CV-RETAIN-004).
-        // Sized to match the hardcoded NVENC ring size (nvenc_encoder.h,
-        // NvencEncoder::m_slots) and this file's own nv12Textures array;
-        // making that size dynamic is CV-PERF-007, out of scope here.
-        std::array<VisualFrameKey, 8> slotContainedKey{};
-        std::array<bool, 8> slotContainedValid{};
+        // A duplicate can reuse an input surface only when that slot already
+        // contains the same composited image. Slot capacity belongs to the backend.
+        std::vector<VisualFrameKey> slotContainedKey(static_cast<size_t>(kSlotCount));
+        std::vector<bool> slotContainedValid(static_cast<size_t>(kSlotCount));
 
         {
             D3D11_TEXTURE2D_DESC refDesc{};
@@ -3469,7 +3498,8 @@ void VideoThread::Run() {
             refDesc.Usage = D3D11_USAGE_DEFAULT;
             refDesc.BindFlags = 0; // only used as CopyResource source/dest
 
-            HRESULT refHr = d3dDevice->CreateTexture2D(&refDesc, nullptr, refNv12.put());
+            HRESULT refHr = exosnap::engine::CreateTrackedTexture2D(d3dDevice.get(), &refDesc, nullptr, refNv12.put(),
+                                                                    exosnap::engine::GpuSurfaceOwner::EncoderInputs);
             if (FAILED(refHr)) {
                 // Non-fatal: refNv12 stays null; duplication silently drops ticks
                 // without a reference frame (until the first real frame arrives).
@@ -3552,7 +3582,8 @@ void VideoThread::Run() {
             presentQpcsAscending.reserve(ringN);
             liveIndexToRingSlot.reserve(ringN);
             for (auto& entry : captureRing) {
-                HRESULT ringHr = d3dDevice->CreateTexture2D(&ringDesc, nullptr, entry.tex.put());
+                HRESULT ringHr = exosnap::engine::CreateTrackedTexture2D(
+                    d3dDevice.get(), &ringDesc, nullptr, entry.tex.put(), exosnap::engine::GpuSurfaceOwner::PacingRing);
                 if (FAILED(ringHr)) {
                     // Non-fatal: disable phase-correct for the session and fall back to
                     // the single-texture newest-at-tick path. Recording must never fail
@@ -3565,6 +3596,7 @@ void VideoThread::Run() {
         }
 
         while (!m_state.stop_requested.load()) {
+            const uint64_t workerWake100ns = Qpc100ns(qpcFreq);
             if (!useOdCapture) {
                 MSG msg{};
                 while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -3849,6 +3881,7 @@ void VideoThread::Run() {
                 continue;
             }
             if (cfr_was_paused) {
+                m_state.diagnostics.OnPacingResumed();
                 epochQpc100ns += Qpc100ns(qpcFreq) - cfr_pause_start_100ns;
                 cfr_was_paused = false;
             }
@@ -3877,6 +3910,11 @@ void VideoThread::Run() {
                 continue;
             }
 
+            if (workerWake100ns >= epochQpc100ns + next_tick_100ns) {
+                m_state.diagnostics.OnWorkerWake(
+                    std::chrono::steady_clock::now(),
+                    static_cast<double>(workerWake100ns - epochQpc100ns - next_tick_100ns) / 10000.0);
+            }
             const uint64_t currentElapsed100ns = Qpc100ns(qpcFreq) - epochQpc100ns;
             bool anyWork = false;
 
@@ -3901,6 +3939,7 @@ void VideoThread::Run() {
                     cfr_frame_idx += skip;
                     next_tick_100ns += skip * frame_interval_100ns;
                     droppedFrames += skip;
+                    m_state.diagnostics.OnPacingSlotsSkipped(std::chrono::steady_clock::now(), skip);
                     for (uint64_t d = 0; d < skip; ++d)
                         m_state.diagnostics.OnFrameDroppedBackpressure();
                     logging::LogField fields[] = {{"skipped_frames", std::to_string(skip)},
@@ -3934,11 +3973,14 @@ void VideoThread::Run() {
                 if (slot < 0) {
                     ++slotStallCount;
                     m_state.diagnostics.OnSlotStall();
-                    m_state.diagnostics.OnFrameDroppedBackpressure();
                     break; // retry this tick next outer iteration once a slot is free
                 }
 
                 bool frameWritten = false;
+                uint64_t selectedPresentNs = 0;
+                uint64_t idealSlotNs = 0;
+                bool freshSelection = false;
+                uint32_t ringOccupancy = 0;
 
                 // Determine source texture for this tick
                 ID3D11Texture2D* rawSourceTex = nullptr;
@@ -3965,13 +4007,16 @@ void VideoThread::Run() {
                     const uint64_t slotRelRawQpc =
                         (slotRel100ns / 10000000ULL) * qpcFreq + (slotRel100ns % 10000000ULL) * qpcFreq / 10000000ULL;
                     const uint64_t slotQpc = epochRawQpc + slotRelRawQpc;
+                    idealSlotNs = (epochQpc100ns + slotRel100ns) * 100;
+                    ringOccupancy = static_cast<uint32_t>(presentQpcsAscending.size());
 
                     const PacingDecision dec = SelectFrameForSlot(presentQpcsAscending, slotQpc, lastEmittedPresentQpc,
                                                                   FramePacingMode::Smooth);
-                    // Fresh entries older than the chosen one were skipped: real drops.
+                    // Unselected source updates are ordinary frame-rate coalescing.
                     droppedFrames += dec.newly_dropped;
                     for (uint32_t d = 0; d < dec.newly_dropped; ++d)
                         m_state.diagnostics.OnFrameDroppedCoalesced();
+                    freshSelection = dec.emit;
                     if (dec.emit) {
                         lastEmittedPresentQpc = presentQpcsAscending[dec.index];
                         // Consume the emitted entry and every skipped/older one so they
@@ -3988,6 +4033,10 @@ void VideoThread::Run() {
                     } else {
                         // No fresh frame near this slot -> existing duplicate / CFR-skip path.
                         rawSourceTex = nullptr;
+                    }
+                    if (lastEmittedPresentQpc != 0) {
+                        selectedPresentNs = (lastEmittedPresentQpc / qpcFreq) * 1000000000ULL +
+                                            (lastEmittedPresentQpc % qpcFreq) * 1000000000ULL / qpcFreq;
                     }
                     // Seed: until a reference NV12 exists (session start) the
                     // ring may be empty while odCapturedTex already holds the
@@ -4017,7 +4066,7 @@ void VideoThread::Run() {
                 // edit lands in this tick's key instead of the next one's.
                 sampleWgcCursor();
                 const WebcamOverlayLive overlay = sampleOverlay();
-                const VisualFrameKey currentVisualKey = MakeVisualFrameKey(visualGenerations);
+                const VisualFrameKey currentVisualKey = observeWebcam(overlay);
                 const bool cursorOverlayMoved =
                     !haveLastCompositedKey ||
                     currentVisualKey.cursor_generation != lastCompositedKey.cursor_generation ||
@@ -4261,10 +4310,13 @@ void VideoThread::Run() {
                     reportPacketDiagnostics(pkt, enc_t1);
 
                 if (!encOk) {
-                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode (CFR): " + encErr);
+                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "Video encoder encode (CFR): " + encErr);
                     goto end_encode_loop;
                 }
 
+                m_state.diagnostics.OnCfrOutput(enc_t1, idealSlotNs, selectedPresentNs,
+                                                usePhaseCorrect ? freshSelection : frameWritten, ringOccupancy,
+                                                frame_interval_ns, Qpc100ns(qpcFreq) * 100);
                 ++videoFramesCaptured;
                 lastVideoPts = pts_ns;
 
@@ -4645,6 +4697,7 @@ void VideoThread::Run() {
                     // FP16, then convert straight into the P010 slot.
                     sampleWgcCursor();
                     const WebcamOverlayLive overlay = sampleOverlay();
+                    observeWebcam(overlay);
                     const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* nativeSrc = compositeFrameGpu(latestTex.get(), overlay);
                     const auto comp_t1 = std::chrono::steady_clock::now();
@@ -4688,7 +4741,7 @@ void VideoThread::Run() {
                     for (const EncodedVideoPacket& pkt : pkts)
                         reportPacketDiagnostics(pkt, enc_t1);
                     if (!encOk) {
-                        m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
+                        m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "Video encoder encode: " + encErr);
                         break;
                     }
                     ++videoFramesCaptured;
@@ -4702,6 +4755,7 @@ void VideoThread::Run() {
                 } else if (slot >= 0) {
                     sampleWgcCursor();
                     const WebcamOverlayLive overlay = sampleOverlay();
+                    observeWebcam(overlay);
                     const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* sdrSourceTex = toneMapIfHdr(latestTex.get());
                     if (sdrSourceTex == nullptr) {
@@ -4775,7 +4829,8 @@ void VideoThread::Run() {
                                 reportPacketDiagnostics(pkt, enc_t1);
 
                             if (!encOk) {
-                                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
+                                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                                      "Video encoder encode: " + encErr);
                                 break;
                             }
 
@@ -4888,6 +4943,7 @@ end_encode_loop:
             {"samples", std::to_string(overlayTrace.samples)},
             {"generation_changes", std::to_string(overlayTrace.generation_changes)},
             {"webcam_generation_changes", std::to_string(overlayTrace.webcam_generation_changes)},
+            {"webcam_gpu_uploads", std::to_string(gpuCompositor.WebcamUploadCount())},
             {"hold_opportunities", std::to_string(overlayTrace.hold_opportunities)},
             {"recomposited_for_overlay", std::to_string(overlayTrace.recomposited_for_overlay)},
             {"composited_with_overlay", std::to_string(overlayTrace.composited_with_overlay)},
@@ -4921,7 +4977,7 @@ end_encode_loop:
                      std::span<const logging::LogField>(fields, std::size(fields)));
     }
 
-    // --- Flush NVENC EOS ---
+    // --- Flush encoder EOS ---
     {
         std::vector<EncodedVideoPacket> drainPkts;
         std::string flushErr;
@@ -4995,7 +5051,7 @@ end_encode_loop:
         }
     }
 
-    // --- Unregister NVENC resources + destroy ---
+    // --- Unregister encoder resources + destroy ---
     encoder->Destroy();
 
     // --- Update final stats ---

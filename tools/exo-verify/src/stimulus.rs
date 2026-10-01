@@ -6,7 +6,7 @@
 //! anchor recordings to this log, never to the product's own timestamps.
 //!
 //! Commands arrive one per line on stdin: `freeze`, `thaw`, `minimize`,
-//! `restore`, `destroy`, `quit`.
+//! `restore`, `move`, `resize`, `destroy`, `quit`.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -80,6 +80,7 @@ pub enum LogEvent {
         hwnd: u64,
         monitor: String,
         rect: [i32; 4],
+        client: [i32; 2],
         qpc_frequency: i64,
         dpi: u32,
     },
@@ -89,6 +90,14 @@ pub enum LogEvent {
     Beep { qpc: i64 },
     #[serde(rename_all = "camelCase")]
     Cursor { id: u32, x: i32, y: i32, qpc: i64 },
+    /// Window geometry ground truth after `move`/`resize`: outer window rect in
+    /// virtual-screen physical pixels plus the client size the capture owns.
+    #[serde(rename_all = "camelCase")]
+    Geometry {
+        rect: [i32; 4],
+        client: [i32; 2],
+        qpc: i64,
+    },
     #[serde(rename_all = "camelCase")]
     State { state: String, qpc: i64 },
     #[serde(rename_all = "camelCase")]
@@ -250,6 +259,33 @@ mod imp {
             let _ = QueryPerformanceCounter(&mut v);
         }
         v
+    }
+
+    fn client_size(hwnd: HWND) -> [i32; 2] {
+        let mut c = RECT::default();
+        unsafe {
+            let _ = GetClientRect(hwnd, &mut c);
+        }
+        [c.right - c.left, c.bottom - c.top]
+    }
+
+    /// Logs the `state` lifecycle edge plus the window geometry it produced, so
+    /// a capture scenario can assert against the exact rectangle the stimulus
+    /// moved to rather than reconstructing it.
+    fn report_geometry(log: &mut Log, hwnd: HWND, state: &str) {
+        let mut r = RECT::default();
+        unsafe {
+            let _ = GetWindowRect(hwnd, &mut r);
+        }
+        log.write(&LogEvent::State {
+            state: state.into(),
+            qpc: qpc(),
+        });
+        log.write(&LogEvent::Geometry {
+            rect: [r.left, r.top, r.right, r.bottom],
+            client: client_size(hwnd),
+            qpc: qpc(),
+        });
     }
 
     /// The cursor shown over the window, as a raw handle value.
@@ -471,6 +507,7 @@ mod imp {
             hwnd: hwnd.0 as u64,
             monitor: monitor.clone(),
             rect: [rect.left, rect.top, rect.right, rect.bottom],
+            client: client_size(hwnd),
             qpc_frequency: freq,
             dpi,
         });
@@ -490,6 +527,8 @@ mod imp {
                         "restore" => 4,
                         "destroy" => 5,
                         "quit" => 6,
+                        "move" => 7,
+                        "resize" => 8,
                         _ => 0,
                     };
                     command.store(code, Ordering::SeqCst);
@@ -526,6 +565,12 @@ mod imp {
         };
         paint(&state, true);
         let deadline = start + (args.seconds * freq as f64) as i64;
+        // Styles are fixed at creation, so the outer-minus-client delta is
+        // constant and a resize can ask for an exact client size.
+        let frame_delta_w = (frame.right - frame.left) - w as i32;
+        let frame_delta_h = (frame.bottom - frame.top) - h as i32;
+        let mut moved = false;
+        let mut resized = false;
         let mut msg = MSG::default();
         loop {
             while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
@@ -565,6 +610,46 @@ mod imp {
                         state: "restored".into(),
                         qpc: qpc(),
                     });
+                },
+                7 => unsafe {
+                    // Deterministic relocate: the initial position and one
+                    // offset from it, clamped to the monitor, alternating so a
+                    // scenario can move the window more than once.
+                    moved = !moved;
+                    let mut current = RECT::default();
+                    let _ = GetWindowRect(hwnd, &mut current);
+                    let outer_w = current.right - current.left;
+                    let outer_h = current.bottom - current.top;
+                    let (nx, ny) = if moved {
+                        (rect.left + 160, rect.top + 120)
+                    } else {
+                        (rect.left, rect.top)
+                    };
+                    let nx = nx.min(mrect.right - outer_w).max(mrect.left);
+                    let ny = ny.min(mrect.bottom - outer_h).max(mrect.top);
+                    let _ = MoveWindow(hwnd, nx, ny, outer_w, outer_h, true);
+                    report_geometry(&mut log, hwnd, "moved");
+                },
+                8 => unsafe {
+                    // Deterministic resize: the creation client size and half of
+                    // it, alternating, so a scenario can exercise both.
+                    resized = !resized;
+                    let (cw, ch) = if resized {
+                        ((w / 2).max(320), (h / 2).max(180))
+                    } else {
+                        (w, h)
+                    };
+                    let mut current = RECT::default();
+                    let _ = GetWindowRect(hwnd, &mut current);
+                    let _ = MoveWindow(
+                        hwnd,
+                        current.left,
+                        current.top,
+                        cw as i32 + frame_delta_w,
+                        ch as i32 + frame_delta_h,
+                        true,
+                    );
+                    report_geometry(&mut log, hwnd, "resized");
                 },
                 5 => unsafe {
                     let _ = DestroyWindow(hwnd);

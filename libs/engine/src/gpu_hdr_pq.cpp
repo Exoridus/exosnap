@@ -1,6 +1,6 @@
 #include "gpu_hdr_pq.h"
 
-#include <d3dcompiler.h>
+#include "measured_shader_compile.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -145,8 +145,8 @@ bool CompilePs(ID3D11Device* device, const std::string& src, const char* name, I
                std::string& err) {
     winrt::com_ptr<ID3DBlob> blob;
     winrt::com_ptr<ID3DBlob> error_blob;
-    HRESULT hr = D3DCompile(src.c_str(), src.size(), name, nullptr, nullptr, "main", "ps_5_0",
-                            D3DCOMPILE_ENABLE_STRICTNESS, 0, blob.put(), error_blob.put());
+    HRESULT hr = MeasuredD3DCompile(src.c_str(), src.size(), name, nullptr, nullptr, "main", "ps_5_0",
+                                    D3DCOMPILE_ENABLE_STRICTNESS, 0, blob.put(), error_blob.put());
     if (FAILED(hr)) {
         SetHResultError(err, "D3DCompile(hdr_pq pixel shader)", hr);
         return false;
@@ -175,8 +175,8 @@ bool HdrPqConverter::Init(ID3D11Device* device, ID3D11DeviceContext* context, co
 
     winrt::com_ptr<ID3DBlob> vs_blob;
     winrt::com_ptr<ID3DBlob> error_blob;
-    HRESULT hr = D3DCompile(kVertexShaderSrc, std::strlen(kVertexShaderSrc), "hdr_pq_vs", nullptr, nullptr, "main",
-                            "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs_blob.put(), error_blob.put());
+    HRESULT hr = MeasuredD3DCompile(kVertexShaderSrc, std::strlen(kVertexShaderSrc), "hdr_pq_vs", nullptr, nullptr,
+                                    "main", "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs_blob.put(), error_blob.put());
     if (FAILED(hr)) {
         SetHResultError(err, "D3DCompile(hdr_pq vertex shader)", hr);
         return false;

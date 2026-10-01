@@ -1,3 +1,4 @@
+#include "models/WebcamFrameMailbox.h"
 // What "static" has to mean for the source that makes 091-55 measurable, on both
 // axes: the pixels and the generation. Each is pinned against a deliberate
 // counter-example, because a provider failing either one does not look broken --
@@ -161,4 +162,26 @@ TEST(StaticWebcamPattern, ADegenerateSizeYieldsNoFrameRatherThanAnEmptyOne) {
     uint64_t generation = 0;
     EXPECT_FALSE(source.TryGetFrame(w, h, bgra, generation))
         << "a provider that answers true with nothing in it composites a hole";
+}
+
+TEST(WebcamFrameMailbox, RetainedSnapshotsAreImmutableAndSteadyPublicationReusesBuffers) {
+    exosnap::WebcamFrameMailbox mailbox;
+    std::vector<uint8_t> pixels(16, 1);
+    mailbox.Publish(2, 2, pixels, 1);
+    auto held = mailbox.Snapshot();
+    for (uint64_t generation = 2; generation < 100; ++generation) {
+        pixels.assign(16, static_cast<uint8_t>(generation));
+        mailbox.Publish(2, 2, pixels, generation);
+        const auto current = mailbox.Snapshot();
+        EXPECT_EQ(current->generation, generation);
+        EXPECT_EQ(current->bgra[0], generation);
+        EXPECT_EQ(held->generation, 1u);
+        EXPECT_EQ(held->bgra[0], 1u);
+    }
+    EXPECT_EQ(mailbox.ReadMetrics().buffers_created, 3u);
+    EXPECT_EQ(mailbox.ReadMetrics().legacy_copies, 0u);
+    EXPECT_EQ(mailbox.ReadMetrics().payload_bytes, 99u * 16);
+    mailbox.Reset();
+    EXPECT_FALSE(mailbox.Snapshot());
+    EXPECT_EQ(held->bgra[0], 1u);
 }

@@ -12,7 +12,6 @@
 | How do I build, test or debug it? | [Build and test](dev/build-and-test.md), [harnesses and tracing](dev/harness-and-tracing.md) |
 | How do I verify and release it? | [Release checklist](release-checklist.md), [release verification](dev/release-verify.md) |
 | What should happen next? | [Roadmap](roadmap.md) |
-| Which accepted design is not implemented? | [Preview frame-rate cap](design/preview-frame-rate-cap.md) |
 | How do I resolve a recording problem? | [Troubleshooting](troubleshooting.md) |
 | What leaves the machine? | [Privacy policy](../PRIVACY.md), [privacy review](privacy-review.md) |
 

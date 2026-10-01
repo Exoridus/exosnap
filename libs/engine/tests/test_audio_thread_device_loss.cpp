@@ -580,6 +580,8 @@ FullOutageRun RunFullOutage(AudioCodec codec, bool merged, std::chrono::millisec
     opts.post = 3;
     opts.min_outage = std::chrono::milliseconds(200); // recovers on the first 500 ms poll
     opts.reinit_delay = reinit_delay;
+    // Shared intervals require packets paced and timestamped like a real endpoint.
+    opts.report_device_timing = true;
 
     std::vector<OutageSource*> sources;
     auto first = std::make_unique<OutageSource>(opts, &state.stop_requested);

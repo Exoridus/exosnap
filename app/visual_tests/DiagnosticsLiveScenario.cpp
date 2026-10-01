@@ -55,7 +55,7 @@ RecordingDiagnosticsSnapshot Baseline() {
 
     s.encoder_init.valid = true;
     s.encoder_init.codec = exosnap::engine::VideoCodec::Av1;
-    s.encoder_init.preset = exosnap::engine::NvencPreset::P6;
+    s.encoder_init.backend_preset = "P6";
     s.encoder_init.rc_mode = exosnap::engine::RateControlMode::ConstantQuality;
     s.encoder_init.cq = 17;
     s.encoder_init.gop_length = 120;

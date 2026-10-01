@@ -30,6 +30,9 @@ struct LedgerEntry {
     std::string title;
     std::string summary;
     std::string log_excerpt;
+    std::string compensation;
+    std::string fix_id;
+    std::string fix_label;
     std::optional<double> worst; // max measured_value seen this session
     std::optional<double> budget;
     std::string unit;
@@ -79,6 +82,9 @@ class SessionLedger {
     void Freeze(double end_s);
 
     [[nodiscard]] const std::vector<LedgerEntry>& entries() const noexcept;
+    [[nodiscard]] const std::vector<LedgerEntry>& compensated() const noexcept {
+        return compensated_;
+    }
     [[nodiscard]] int activeCount() const noexcept;
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] uint64_t generation() const noexcept;
@@ -98,6 +104,7 @@ class SessionLedger {
     LedgerEntry* Find(const std::string& id);
 
     std::vector<LedgerEntry> entries_; // insertion order == first seen; never re-sorted
+    std::vector<LedgerEntry> compensated_;
     std::unordered_map<std::string, Pending> pending_;
     uint64_t generation_ = 0;
 };

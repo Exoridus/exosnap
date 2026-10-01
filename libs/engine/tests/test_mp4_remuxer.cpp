@@ -1085,4 +1085,22 @@ TEST_F(MkvRemuxerTest, MkvBadInputReturnsStructuredError) {
     EXPECT_FALSE(result.message.empty());
 }
 
+TEST_F(MkvRemuxerTest, CloseFailureCannotPublishSuccessAndRetainsSource) {
+    ASSERT_FALSE(BuildTestMkv(src_mkv_path_).empty());
+    exosnap::engine::RemuxIoFaults faults;
+    faults.fail_output_close = true;
+    bool reported_complete = false;
+    const auto result = RemuxToMkv(
+        src_mkv_path_, out_mkv_path_,
+        [&](float progress) {
+            reported_complete |= progress >= 1.0f;
+            return true;
+        },
+        {}, &faults);
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.av_error_code, 0);
+    EXPECT_FALSE(reported_complete);
+    EXPECT_TRUE(std::filesystem::exists(src_mkv_path_));
+}
+
 } // namespace

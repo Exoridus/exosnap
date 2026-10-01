@@ -1,7 +1,14 @@
 #include <gtest/gtest.h>
 
+#include "matroska_stream_writer.h"
 #include "mixed_audio_src.h"
+#include "test_unique_temp.h"
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+}
 #include "output_format_audio_src.h"
+#include <filesystem>
 
 #include <algorithm>
 #include <cmath>
@@ -123,6 +130,17 @@ static std::vector<float> MakeUnityGains(size_t count) {
 // drains a real source.
 class QueueMockSource final : public IAudioCaptureSource {
   public:
+    void EnableTiming(uint32_t rate = 48000) {
+        timed_ = true;
+        rate_ = rate;
+    }
+    bool LastBufferDeviceTiming(AudioDeviceTiming& timing) const override {
+        if (!timed_ || queue_.empty())
+            return false;
+        timing = {DeviceFramesToNs(queue_.front().start, rate_),
+                  1'000'000'000 + DeviceFramesToNs(queue_.front().start, rate_)};
+        return true;
+    }
     // Enqueue `frames` of interleaved-stereo Float32 whose left and right sample
     // at global frame index (start_frame + i) both equal value_at(start_frame + i).
     // Lets a test lay a single continuous ramp across many differently sized
@@ -134,7 +152,7 @@ class QueueMockSource final : public IAudioCaptureSource {
             buf[(i * 2) + 0] = v;
             buf[(i * 2) + 1] = v;
         }
-        queue_.push_back(Packet{frames, std::move(buf)});
+        queue_.push_back(Packet{frames, start_frame, std::move(buf)});
     }
 
     uint32_t PendingFrameCount() override {
@@ -162,7 +180,7 @@ class QueueMockSource final : public IAudioCaptureSource {
         return true;
     }
     uint32_t SampleRate() const override {
-        return 48000;
+        return rate_;
     }
     uint32_t Channels() const override {
         return 2;
@@ -179,8 +197,11 @@ class QueueMockSource final : public IAudioCaptureSource {
   private:
     struct Packet {
         uint32_t frames;
+        uint32_t start;
         std::vector<float> data;
     };
+    bool timed_ = false;
+    uint32_t rate_ = 48000;
     std::deque<Packet> queue_;
     bool held_ = false;
     std::string name_{"queue-mock"};
@@ -277,6 +298,11 @@ TEST(MixedAudioSrcTest, MixedAudioSrc_OneSourceData_OtherSilent_OutputIsHalfScal
 
     RawAudioBuffer buf{};
     ASSERT_TRUE(mixer.AcquireBuffer(buf, err));
+    EXPECT_EQ(buf.num_frames, 0u);
+    mixer.ReleaseBuffer();
+    mixer.BeginDrain();
+    ASSERT_TRUE(mixer.AcquireBuffer(buf, err));
+    ASSERT_EQ(buf.num_frames, MixedAudioSrc::kMixFrameCount);
     const float* samples = reinterpret_cast<const float*>(buf.bytes);
     for (uint32_t i = 0; i < MixedAudioSrc::kMixFrameCount * 2u; ++i) {
         EXPECT_NEAR(samples[i], 0.5f, 1e-5f) << "at index " << i;
@@ -495,6 +521,7 @@ TEST(MixedAudioSrcTest, MixedAudioSrc_Int16Conversion) {
 
     RawAudioBuffer buf{};
     ASSERT_TRUE(mixer.AcquireBuffer(buf, err));
+    ASSERT_EQ(buf.num_frames, MixedAudioSrc::kMixFrameCount);
     const float* samples = reinterpret_cast<const float*>(buf.bytes);
     for (uint32_t i = 0; i < MixedAudioSrc::kMixFrameCount * 2u; ++i) {
         EXPECT_NEAR(samples[i], 0.5f, 1e-5f) << "at index " << i;
@@ -825,6 +852,13 @@ TEST(MixedAudioSrcTest, MixedAudioSrc_IdleSourceDoesNotStallActiveSource) {
     std::string err;
     ASSERT_TRUE(mixer.Init(err));
 
+    for (size_t i = 0; i < std::size(sizes); ++i) {
+        RawAudioBuffer pending{};
+        ASSERT_TRUE(mixer.AcquireBuffer(pending, err));
+        EXPECT_EQ(pending.num_frames, 0u);
+        mixer.ReleaseBuffer();
+    }
+    mixer.BeginDrain();
     const std::vector<float> out = DrainMixer(mixer);
     ASSERT_EQ(out.size(), static_cast<size_t>(total) * 2u);
     for (uint32_t f = 0; f < total; ++f) {
@@ -982,6 +1016,238 @@ TEST(MixedAudioSrcTest, TwoSources_GapNotForwarded) {
     EXPECT_EQ(buf.gap_frames, 0u); // merges mix several clocks; no single gap axis
     mixer.ReleaseBuffer();
     mixer.Shutdown();
+}
+
+void VerifyDecodedMixedDuration(const std::vector<float>& samples) {
+    const auto path = exosnap_test::UniqueTempPath("mixed_timeline.mkv");
+    MatroskaStreamConfig config;
+    config.output_path = path.string();
+    config.video_codec_id = "V_AV1";
+    config.video_codec_private = {0x81, 0, 0, 0};
+    config.encode_width = config.encode_height = 16;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+    config.audio_codec = StreamAudioCodec::Pcm;
+    config.audio_track_count = 1;
+    config.audio_bit_depth = 32;
+    config.audio_float = true;
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config)) << writer.error();
+    for (size_t offset = 0; offset < samples.size(); offset += 960) {
+        MuxPacket packet;
+        packet.track_num = 2;
+        packet.is_key = true;
+        packet.pts_ns = DeviceFramesToNs(offset / 2, 48000);
+        const auto* begin = reinterpret_cast<const uint8_t*>(samples.data() + offset);
+        packet.bytes.assign(begin, begin + std::min<size_t>(960, samples.size() - offset) * sizeof(float));
+        ASSERT_TRUE(writer.Push(std::move(packet)));
+    }
+    ASSERT_TRUE(writer.Finalize()) << writer.error();
+    AVFormatContext* format = nullptr;
+    ASSERT_EQ(avformat_open_input(&format, config.output_path.c_str(), nullptr, nullptr), 0);
+    int stream = -1;
+    for (unsigned i = 0; i < format->nb_streams; ++i)
+        if (format->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+            stream = static_cast<int>(i);
+    ASSERT_GE(stream, 0);
+    AVCodecContext* decoder = avcodec_alloc_context3(avcodec_find_decoder(AV_CODEC_ID_PCM_F32LE));
+    ASSERT_NE(decoder, nullptr);
+    ASSERT_EQ(avcodec_parameters_to_context(decoder, format->streams[stream]->codecpar), 0);
+    ASSERT_EQ(avcodec_open2(decoder, avcodec_find_decoder(AV_CODEC_ID_PCM_F32LE), nullptr), 0);
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    size_t decoded_samples = 0;
+    while (av_read_frame(format, packet) == 0) {
+        if (packet->stream_index == stream) {
+            ASSERT_EQ(avcodec_send_packet(decoder, packet), 0);
+            while (avcodec_receive_frame(decoder, frame) == 0) {
+                ASSERT_EQ(frame->format, AV_SAMPLE_FMT_FLT);
+                const auto count = static_cast<size_t>(frame->nb_samples) * 2;
+                ASSERT_LE(decoded_samples + count, samples.size());
+                EXPECT_EQ(std::memcmp(frame->data[0], samples.data() + decoded_samples, count * sizeof(float)), 0);
+                decoded_samples += count;
+                av_frame_unref(frame);
+            }
+        }
+        av_packet_unref(packet);
+    }
+    EXPECT_EQ(decoded_samples, samples.size());
+    EXPECT_DOUBLE_EQ(double(decoded_samples / 2) / 48000, 1.4);
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    avcodec_free_context(&decoder);
+    avformat_close_input(&format);
+    std::filesystem::remove(path);
+}
+
+TEST(MixedAudioSrcTest, TimestampedPhasesAndUnequalPeriodsPreserveSamplesAndPulseAlignment) {
+    for (uint32_t phase : {0u, 1u, 5u, 9u}) {
+        for (uint32_t period_b : {10u, 7u, 20u}) {
+            SCOPED_TRACE(phase);
+            SCOPED_TRACE(period_b);
+            auto* a = new QueueMockSource();
+            auto* b = new QueueMockSource();
+            a->EnableTiming();
+            b->EnableTiming();
+            uint64_t now = 1'000'000'000;
+            std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+            sources.emplace_back(a);
+            sources.emplace_back(b);
+            MixedAudioSrc mixer(std::move(sources), MakeUnityGains(2), false, 1.0f, [&] { return now; });
+            std::string error;
+            ASSERT_TRUE(mixer.Init(error));
+            std::vector<float> output;
+            uint64_t first_pts = 0, last_end = 0;
+            auto drain = [&] {
+                while (mixer.PendingFrameCount() > 0) {
+                    RawAudioBuffer packet{};
+                    EXPECT_TRUE(mixer.AcquireBuffer(packet, error));
+                    if (packet.num_frames != 0) {
+                        if (output.empty())
+                            first_pts = mixer.LastBufferQpcNs();
+                        last_end = mixer.LastBufferQpcNs() + DeviceFramesToNs(packet.num_frames, 48000);
+                        const auto* samples = reinterpret_cast<const float*>(packet.bytes);
+                        output.insert(output.end(), samples, samples + packet.num_frames * 2);
+                    }
+                    mixer.ReleaseBuffer();
+                    if (packet.num_frames == 0)
+                        break;
+                }
+            };
+            const auto pulse = [](uint32_t frame) { return frame % 4800 < 48 ? 0.8f : 0.0f; };
+            // 1400 ms is divisible by all three packet periods.
+            for (uint32_t ms = 0; ms <= 1400 + phase; ++ms) {
+                now = 1'000'000'000 + uint64_t(ms) * 1'000'000;
+                if (ms > 0 && ms <= 1400 && ms % 10 == 0)
+                    a->EnqueueRamp(480, (ms - 10) * 48, pulse);
+                if (ms > phase && ms - phase <= 1400 && (ms - phase) % period_b == 0)
+                    b->EnqueueRamp(period_b * 48, (ms - phase - period_b) * 48, pulse);
+                drain();
+            }
+            mixer.BeginDrain();
+            drain();
+            ASSERT_EQ(output.size(), 67200u * 2);
+            if (phase == 5 && period_b == 10)
+                VerifyDecodedMixedDuration(output);
+            EXPECT_NEAR(double(last_end - first_pts), 1'400'000'000.0, 1.0);
+            for (uint32_t f = 0; f < 67200; ++f)
+                EXPECT_NEAR(output[f * 2], pulse(f), 1e-6f) << f;
+        }
+    }
+}
+
+TEST(MixedAudioSrcTest, StaggeredSourcesShareAnIntervalBeforeMixing) {
+    auto* a = new QueueMockSource();
+    auto* b = new QueueMockSource();
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.emplace_back(a);
+    sources.emplace_back(b);
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(2));
+    std::string error;
+    ASSERT_TRUE(mixer.Init(error));
+    a->EnqueueRamp(480, 0, [](uint32_t) { return 0.25f; });
+    RawAudioBuffer first{};
+    ASSERT_TRUE(mixer.AcquireBuffer(first, error));
+    EXPECT_EQ(first.num_frames, 0u) << "The other source still has its bounded arrival interval";
+    mixer.ReleaseBuffer();
+    b->EnqueueRamp(480, 0, [](uint32_t) { return 0.75f; });
+    RawAudioBuffer second{};
+    ASSERT_TRUE(mixer.AcquireBuffer(second, error));
+    ASSERT_EQ(second.num_frames, 480u);
+    const auto* samples = reinterpret_cast<const float*>(second.bytes);
+    for (uint32_t i = 0; i < 960; ++i)
+        EXPECT_FLOAT_EQ(samples[i], 0.5f);
+    EXPECT_EQ(first.num_frames + second.num_frames, 480u);
+}
+
+TEST(MixedAudioSrcTest, UnequalSampleRatesHaveOneSecondOfOutput) {
+    auto* a = new QueueMockSource();
+    auto* b = new QueueMockSource();
+    a->EnableTiming(48000);
+    b->EnableTiming(44100);
+    uint64_t now = 1'000'000'000;
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.emplace_back(a);
+    sources.emplace_back(b);
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(2), false, 1.0f, [&] { return now; });
+    std::string error;
+    ASSERT_TRUE(mixer.Init(error));
+    std::vector<float> output;
+    for (uint32_t n = 0; n < 100; ++n) {
+        now += 10'000'000;
+        a->EnqueueRamp(480, n * 480, [](uint32_t) { return 0.4f; });
+        b->EnqueueRamp(441, n * 441, [](uint32_t) { return 0.4f; });
+        auto part = DrainMixer(mixer);
+        output.insert(output.end(), part.begin(), part.end());
+    }
+    mixer.BeginDrain();
+    auto tail = DrainMixer(mixer);
+    output.insert(output.end(), tail.begin(), tail.end());
+    ASSERT_EQ(output.size(), 48000u * 2);
+    for (size_t f = 100; f < 47900; ++f)
+        EXPECT_NEAR(output[f * 2], 0.4f, 1e-4f) << f;
+}
+
+TEST(MixedAudioSrcTest, QuietSourceDeadlineAndRejoinDoNotExtendTimeline) {
+    auto* a = new QueueMockSource();
+    auto* b = new QueueMockSource();
+    a->EnableTiming();
+    b->EnableTiming();
+    uint64_t now = 1'000'000'000;
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.emplace_back(a);
+    sources.emplace_back(b);
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(2), false, 1.0f, [&] { return now; });
+    std::string error;
+    ASSERT_TRUE(mixer.Init(error));
+    size_t frames = 0;
+    for (uint32_t n = 0; n < 30; ++n) {
+        now += 10'000'000;
+        a->EnqueueRamp(480, n * 480, [](uint32_t) { return 0.4f; });
+        if (n >= 10)
+            b->EnqueueRamp(480, n * 480, [](uint32_t) { return 0.8f; });
+        mixer.SetSourceMuted(1, n >= 15 && n < 20);
+        auto part = DrainMixer(mixer);
+        frames += part.size() / 2;
+        if (n == 8)
+            EXPECT_GE(frames, 6u * 480);
+        if (n > 10 && n < 15 && !part.empty())
+            EXPECT_FLOAT_EQ(part.back(), 0.6f);
+        if (n > 15 && n < 20 && !part.empty())
+            EXPECT_FLOAT_EQ(part.back(), 0.2f);
+        if (n > 20 && !part.empty())
+            EXPECT_FLOAT_EQ(part.back(), 0.6f);
+    }
+    mixer.BeginDrain();
+    frames += DrainMixer(mixer).size() / 2;
+    EXPECT_EQ(frames, 30u * 480);
+}
+
+TEST(MixedAudioSrcTest, EntirelyQuietTrackOwnsBoundedTimelineBeforeFirstPacket) {
+    auto* a = new QueueMockSource();
+    auto* b = new QueueMockSource();
+    a->EnableTiming();
+    b->EnableTiming();
+    uint64_t now = 1'000'000'000;
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.emplace_back(a);
+    sources.emplace_back(b);
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(2), false, 1.0f, [&] { return now; });
+    std::string error;
+    ASSERT_TRUE(mixer.Init(error));
+    EXPECT_EQ(mixer.PendingFrameCount(), 0u);
+    now += 40'000'000;
+    const auto silence = DrainMixer(mixer);
+    ASSERT_EQ(silence.size(), 480u * 2);
+    EXPECT_TRUE(std::all_of(silence.begin(), silence.end(), [](float value) { return value == 0; }));
+    EXPECT_EQ(mixer.LastBufferQpcNs(), 1'000'000'000u);
+    a->EnqueueRamp(480, 1440, [](uint32_t) { return 0.4f; });
+    b->EnqueueRamp(480, 1440, [](uint32_t) { return 0.8f; });
+    const auto joined = DrainMixer(mixer);
+    ASSERT_EQ(joined.size(), 1440u * 2);
+    EXPECT_FLOAT_EQ(joined.back(), 0.6f);
+    mixer.BeginDrain();
+    EXPECT_TRUE(DrainMixer(mixer).empty());
 }
 
 } // namespace

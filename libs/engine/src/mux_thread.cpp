@@ -269,6 +269,7 @@ void MuxThread::Run() {
 
         MatroskaStreamConfig cfg = sw_config_template;
         cfg.output_path = seg.path.string();
+        cfg.fail_io = m_state.output_io_failure;
         // Only segment 0 keeps the base path the caller reserved; DeriveSegmentPath
         // mints every later one, so those are the writer's to create exclusively.
         cfg.path_pre_reserved = index == 0 && m_state.config.output_path_pre_reserved;
@@ -304,6 +305,17 @@ void MuxThread::Run() {
         const double finalize_ms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - finalize_t0).count();
         const std::string err = seg.writer->error();
+        const auto& io = seg.writer->io_timings();
+        m_state.diagnostics.OnOutputIoFinalized(io.write_ms, io.crt_flush_ms, io.durability_flush_ms,
+                                                io.durability_failures);
+        const logging::LogField io_fields[] = {{"segment_index", std::to_string(seg.index)},
+                                               {"write_ms", std::to_string(io.write_ms)},
+                                               {"crt_flush_ms", std::to_string(io.crt_flush_ms)},
+                                               {"durability_flush_ms", std::to_string(io.durability_flush_ms)},
+                                               {"durability_failures", std::to_string(io.durability_failures)},
+                                               {"finalize_ms", std::to_string(finalize_ms)}};
+        logging::log(logging::LogLevel::Info, "mux_thread", "output I/O timing",
+                     std::span<const logging::LogField>(io_fields, std::size(io_fields)));
         seg.writer.reset();
         m_state.diagnostics.OnSegmentFinalized(finalize_ms, ok);
 

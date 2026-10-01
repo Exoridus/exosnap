@@ -6,10 +6,10 @@ import QtTest
 import ExoSnap.Quick.RecordPickerTestControls
 
 // The source picker's behavioural contract: three tabs, a Windows tab that
-// reports its count, filters by search and scrolls visibly when it overflows,
+// reports its count and scrolls visibly when it overflows,
 // full-card selection confirmed by Enter or a double click, a fixed footer with
-// Cancel and the named confirm action, an accessible refresh control, and
-// cards that reflow from two columns to one at the narrow layout. The Region
+// Cancel and the named confirm action, and cards that reflow from two columns
+// to one at the narrow layout. The Region
 // tab lists Draw custom first, then the aspect presets, and confirms into
 // region mode through the adapter's preset boundary.
 TestCase {
@@ -37,6 +37,28 @@ TestCase {
 
                 recordViewModel: recordDriver.adapter
                 hostPage: page
+            }
+        }
+    }
+
+    Component {
+        id: regionSelectorComponent
+
+        Item {
+            property alias overlay: regionOverlay
+            width: 800
+            height: 600
+
+            Rectangle {
+                anchors.fill: parent
+                color: "white"
+            }
+
+            RegionSelectionOverlay {
+                id: regionOverlay
+                recordViewModel: recordDriver.adapter
+                sourcePixelSize: Qt.size(1920, 1080)
+                anchors.fill: parent
             }
         }
     }
@@ -110,6 +132,12 @@ TestCase {
         compare(tabs.options[0], "Displays");
         compare(tabs.options[1], "Windows");
         compare(tabs.options[2], "Region");
+        const title = pick(page, "pickerTitle");
+        verify(tabs.mapToItem(page.picker.contentItem, 0, 0).x >
+               title.mapToItem(page.picker.contentItem, title.width, 0).x);
+        const header = pick(page, "pickerHeader");
+        verify(tabs.mapToItem(header, tabs.width, 0).x < header.width);
+        verify(header.width > page.picker.contentItem.width * 0.9);
         compare(page.picker.currentTab, 0);
         verify(pick(page, "displaysPage").visible);
 
@@ -123,39 +151,25 @@ TestCase {
         compare(page.picker.currentTab, 2);
     }
 
-    // ExoSearchField is a frameless rectangle over its inner TextField, so the
-    // typed input has to go to that field -- what a click or Tab lands on.
-    function focusInnerTextField(container) {
-        for (let i = 0; i < container.children.length; ++i) {
-            const child = container.children[i];
-            if (child.toString().indexOf("TextField") !== -1) {
-                child.forceActiveFocus();
-                return child;
-            }
-            const found = focusInnerTextField(child);
-            if (found)
-                return found;
-        }
-        return null;
-    }
-
-    function test_windows_tab_reports_count_and_search_filters() {
+    function test_windows_tab_reports_count_without_search() {
         let page = makePage();
         recordDriver.seedTargets(1, ["Claude Design - Brave", "Task Manager", "Steam Library", "Notepad", "Terminal"]);
         showTab(page, 1);
         const count = pick(page, "windowsCount");
         compare(count.text, "5 windows");
+        const card = pick(page, "targetCard-window:100");
+        compare(card.primaryLabel, "Brave");
+        compare(card.secondaryLabel, "Claude Design");
+        const thumbnail = findVisual(card, "targetThumbnail");
+        verify(thumbnail.width <= card.width);
+        compare(Math.round(thumbnail.width * 9 / 16), Math.round(thumbnail.height));
+        compare(thumbnail.border.width, 0);
         const grid = pick(page, "windowsGrid");
         compare(grid.count, 5);
+        compare(grid.height % grid.cellHeight, 0);
 
-        const search = pick(page, "windowSearch");
-        verify(!!focusInnerTextField(search), "Object exists");
-        keyClick(Qt.Key_T);
-        keyClick(Qt.Key_A);
-        keyClick(Qt.Key_S);
-        keyClick(Qt.Key_K);
-        tryCompare(grid, "count", 1);
-        compare(count.text, "1 window");
+        verify(!findVisual(page.picker.contentItem, "windowSearch"));
+        compare(page.picker.windowRows.length, 5);
     }
 
     function test_window_list_shows_a_scrollbar_only_when_it_overflows() {
@@ -250,10 +264,10 @@ TestCase {
 
     function test_a_stale_still_keeps_its_image_and_its_geometry() {
         let page = makePage();
+        const card = pick(page, "targetCard-display:2");
         recordDriver.deliverStill("display:2", "image://capture-target/display-2/1");
-        // Re-picked after every change: republishing the option rows rebuilds
-        // the delegates, so a card captured once is a stale object handle.
-        const state = () => pick(page, "targetCard-display:2").modelData.thumbnailState;
+        const state = () => card.thumbnailState;
+        tryVerify(() => pick(page, "targetCard-display:2") === card);
         const box = pick(page, "displaysGrid").cellHeight;
         tryVerify(() => state() === "ready");
 
@@ -261,8 +275,9 @@ TestCase {
         tryVerify(() => state() === "stale");
         // The still survives the loss: nothing reverts to the placeholder glyph,
         // and the card does not resize under it.
-        compare(pick(page, "targetCard-display:2").modelData.thumbnailSource,
-                "image://capture-target/display-2/1");
+        compare(card.thumbnailSource, "image://capture-target/display-2/1");
+        verify(pick(page, "targetCard-display:2") === card);
+        compare(findVisual(card, "targetThumbnailImage").fillMode, Image.PreserveAspectFit);
         compare(pick(page, "displaysGrid").cellHeight, box);
     }
 
@@ -310,6 +325,40 @@ TestCase {
         tryCompare(presetSpy, "count", 1);
         compare(presetSpy.signalArguments[0][0], "9:16");
         tryCompare(page.picker, "opened", false);
+    }
+
+    function test_region_selector_uses_monitor_pixels_and_keeps_preset() {
+        const selectorHost = createTemporaryObject(regionSelectorComponent, testCase, {});
+        verify(selectorHost);
+        const selector = selectorHost.overlay;
+
+        recordDriver.adapter.requestRegionPreset("16:9");
+        verify(selector.selectionNormalized.width > 0);
+        const preset = selector.selectionNormalized;
+        const physicalAspect = preset.width * selector.sourcePixelSize.width
+                               / (preset.height * selector.sourcePixelSize.height);
+        verify(Math.abs(physicalAspect - 16 / 9) < 0.001);
+        selector.visible = false;
+        selector.visible = true;
+        compare(selector.selectionNormalized, preset);
+
+        recordDriver.adapter.requestRegionPreset("9:16");
+        const portrait = selector.selectionNormalized;
+        const portraitAspect = portrait.width * selector.sourcePixelSize.width
+                               / (portrait.height * selector.sourcePixelSize.height);
+        verify(Math.abs(portraitAspect - 9 / 16) < 0.001);
+
+        selector.setSelectionEdges(0.99, 0.99, 0.99, 0.99);
+        verify(selector.selectionNormalized.width >= 64 / 1920);
+        verify(selector.selectionNormalized.height >= 64 / 1080);
+        verify(selector.selectionNormalized.x + selector.selectionNormalized.width <= 1);
+        verify(selector.selectionNormalized.y + selector.selectionNormalized.height <= 1);
+
+        selector.setSelectionEdges(0.25, 0.25, 0.75, 0.75);
+        waitForRendering(selector);
+        const image = grabImage(selectorHost);
+        compare(image.red(400, 300), 255);
+        verify(image.red(10, 10) >= 120 && image.red(10, 10) <= 136);
     }
 
     function test_draw_custom_confirms_the_custom_preset_key() {

@@ -1,7 +1,9 @@
 #include "DiagnosticsProbe.h"
 
 #include "DiskSpaceProvider.h"
+#include "DxgiVideoMemoryProvider.h"
 #include "FilesystemProvider.h"
+#include "NvidiaGpuTelemetryProvider.h"
 #include "SelfTestRunner.h"
 
 #include <QStorageInfo>
@@ -44,6 +46,24 @@ DiagnosticsController::ProbeResult RunDiagnosticsProbe(const DiagnosticsProbeReq
         result.self_test_valid = true;
     }
 
+    result.session_generation = request.session_generation;
+    if (!request.telemetry_targets.empty()) {
+        NvidiaGpuTelemetryProvider gpu;
+        DxgiVideoMemoryProvider memory;
+        result.adapter_telemetry = CollectAdapterTelemetry(request.telemetry_targets, gpu, memory);
+        // The recommendation engine's single GPU/memory evidence has always
+        // described the processing/encoder adapter. Keep filling it from that
+        // target; every other unique adapter is available per-target.
+        const AdapterTelemetryReading* primary = &result.adapter_telemetry.front();
+        for (const AdapterTelemetryReading& reading : result.adapter_telemetry) {
+            if (exosnap::engine::HasRole(reading.target.roles, exosnap::engine::PipelineRole::Encoder)) {
+                primary = &reading;
+                break;
+            }
+        }
+        result.gpu = primary->gpu;
+        result.video_memory = primary->memory;
+    }
     return result;
 }
 

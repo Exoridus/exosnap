@@ -19,7 +19,6 @@ Maintain repeatable privacy review and symbol delivery for official crash report
 | Direction | Boundary |
 |---|---|
 | German localization | Translate through Qt's normal translation pipeline, preserving English fallback and keyboard/accessibility coverage. Do not publish untranslated surfaces as complete localization. |
-| Preview performance control | The [accepted preview cap design](design/preview-frame-rate-cap.md) adds an independent preview limit/off preference without changing recording cadence. |
 | Cold navigation responsiveness | Explore lightweight page shells and asynchronous section construction without layout jumps, blank pages or a second notion of selected state. |
 | Capture-format rollover | Consider ending one segment and rebuilding capture/color/encoder state when HDR or source dimensions change. Existing mux-only split does not rebuild those resources. Current behavior remains an explicit stop. |
 | Replay and richer editing | Replay buffering and richer edit operations are capability gaps, not controls that should be advertised as working. Lossless keyframe trim remains the current editing boundary. |

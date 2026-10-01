@@ -179,6 +179,7 @@ TEST(LiveVerifyPolicy, ReadyOnRecordOffersExactlyTheActionsTheSurfaceOffers) {
     const QStringList actions = AvailableActions(Ready());
     for (const QString& expected :
          {QStringLiteral("ui.navigate"), QStringLiteral("record.start"), QStringLiteral("record.selectTarget"),
+          QStringLiteral("record.selectRegion"), QStringLiteral("record.openRegionSelector"),
           QStringLiteral("sourcePicker.open"), QStringLiteral("notificationHub.open")}) {
         EXPECT_TRUE(actions.contains(expected)) << expected.toStdString();
     }

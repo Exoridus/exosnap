@@ -101,7 +101,10 @@
 // assertion held (regardless of what the pure measurement steps themselves
 // show), 1 on a hard failure (bad args, Open failed, or step E's assertion).
 
+#include <exosnap/engine/edit_frame_gpu_converter.h>
 #include <exosnap/engine/edit_player_engine.h>
+#include <exosnap/engine/gpu_surface_inventory.h>
+#include <winrt/base.h>
 
 #include "step_g_simd.h"
 #include "yuv_to_bgra.h"
@@ -121,6 +124,7 @@ extern "C" {
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <exosnap/engine/performance_measurements.h>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -156,17 +160,50 @@ bool StepA_Open(exosnap::engine::EditPlayerEngine& engine, const std::string& pa
 }
 
 // ---- Step B: real playback-decode throughput, max speed, 10s wall clock ----
-void StepB_PlaybackThroughput(exosnap::engine::EditPlayerEngine& engine, int64_t kStartUs) {
+void StepB_PlaybackThroughput(exosnap::engine::EditPlayerEngine& engine, int64_t kStartUs, bool upload = false) {
     printf("=== [B] Playback-decode throughput (start_us=%lld, 10s wall clock, no pacing) ===\n",
            static_cast<long long>(kStartUs));
 
+    std::atomic<int64_t> last_frame_ns{0};
     std::atomic<uint64_t> videoFrames{0};
     std::atomic<uint64_t> audioBlocks{0};
     std::atomic<bool> gotFirstFrame{false};
     std::atomic<uint32_t> firstWidth{0};
     std::atomic<uint32_t> firstHeight{0};
 
+    winrt::com_ptr<ID3D11Device> device;
+    winrt::com_ptr<ID3D11DeviceContext> context;
+    winrt::com_ptr<ID3D11Texture2D> target;
+    exosnap::engine::EditFrameGpuConverter converter;
     auto onVideo = [&](exosnap::engine::RawDecodedVideoFrame frame) {
+        if (upload) {
+            std::string error;
+            if (!device) {
+                D3D_FEATURE_LEVEL level{};
+                if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0,
+                                             D3D11_SDK_VERSION, device.put(), &level, context.put())) ||
+                    !converter.Init(device.get(), context.get(), error)) {
+                    fprintf(stderr, "GPU upload initialization failed: %s\n", error.c_str());
+                    std::abort();
+                }
+                D3D11_TEXTURE2D_DESC desc{};
+                desc.Width = frame.width;
+                desc.Height = frame.height;
+                desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+                desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                if (FAILED(exosnap::engine::CreateTrackedTexture2D(device.get(), &desc, nullptr, target.put(),
+                                                                   exosnap::engine::GpuSurfaceOwner::Editor)))
+                    std::abort();
+            }
+            if (!converter.Convert(frame, target.get(), 12.5f, error)) {
+                fprintf(stderr, "GPU conversion failed: %s\n", error.c_str());
+                std::abort();
+            }
+        }
+        last_frame_ns.store(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count());
         videoFrames.fetch_add(1, std::memory_order_relaxed);
         bool expected = false;
         if (gotFirstFrame.compare_exchange_strong(expected, true)) {
@@ -190,12 +227,17 @@ void StepB_PlaybackThroughput(exosnap::engine::EditPlayerEngine& engine, int64_t
     engine.StopPlaybackDecode();
     const auto t1 = std::chrono::steady_clock::now();
 
-    const double elapsedSec = std::chrono::duration<double>(t1 - t0).count();
+    const double elapsedSec =
+        last_frame_ns.load() > 0
+            ? (last_frame_ns.load() -
+               std::chrono::duration_cast<std::chrono::nanoseconds>(t0.time_since_epoch()).count()) /
+                  1e9
+            : std::chrono::duration<double>(t1 - t0).count();
     const uint64_t vf = videoFrames.load();
     const uint64_t ab = audioBlocks.load();
     const double fps = (elapsedSec > 0.0) ? static_cast<double>(vf) / elapsedSec : 0.0;
 
-    printf("[B] wall_clock_elapsed=%.3fs\n", elapsedSec);
+    printf("[B] decode_to_last_frame_elapsed=%.3fs\n", elapsedSec);
     printf("[B] video_frames_delivered=%llu fps=%.2f\n", static_cast<unsigned long long>(vf), fps);
     printf("[B] audio_blocks_delivered=%llu\n", static_cast<unsigned long long>(ab));
     if (gotFirstFrame.load()) {
@@ -203,11 +245,7 @@ void StepB_PlaybackThroughput(exosnap::engine::EditPlayerEngine& engine, int64_t
     } else {
         printf("[B] first_frame_resolution=N/A (no video frame delivered)\n");
     }
-    if (fps < 60.0) {
-        printf("[B] VERDICT: fps < 60 -> this path CANNOT sustain real-time playback of 60fps source material.\n");
-    } else {
-        printf("[B] VERDICT: fps >= 60 -> this path CAN sustain real-time playback of 60fps source material.\n");
-    }
+    printf("[B] Headless callback throughput excludes display synchronization and seek-to-visible latency.\n");
 }
 
 // ---- Step B2: repeated start/stop on one open engine ----
@@ -226,11 +264,13 @@ void StepB2_RepeatedStartStop(exosnap::engine::EditPlayerEngine& engine, int64_t
         std::atomic<uint64_t> audioBlocks{0};
         const auto t0 = std::chrono::steady_clock::now();
         engine.StartPlaybackDecode(
-            kStartUs, [&](exosnap::engine::RawDecodedVideoFrame) { videoFrames.fetch_add(1, std::memory_order_relaxed); },
+            kStartUs,
+            [&](exosnap::engine::RawDecodedVideoFrame) { videoFrames.fetch_add(1, std::memory_order_relaxed); },
             [&](exosnap::engine::DecodedAudioBlock) { audioBlocks.fetch_add(1, std::memory_order_relaxed); }, {});
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         engine.StopPlaybackDecode();
-        const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        const double elapsedMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         printf("[B2] cycle %d/%d: terminated after %.1fms, video_frames=%llu audio_blocks=%llu\n", cycle, kCycles,
                elapsedMs, static_cast<unsigned long long>(videoFrames.load()),
                static_cast<unsigned long long>(audioBlocks.load()));
@@ -437,8 +477,8 @@ bool StepE_FfmpegThreading(const std::string& path) {
 
     printf("[E] decoder=%s\n", codec->name);
     printf("[E] ctx->thread_count=%d\n", ctx->thread_count);
-    printf("[E] ctx->active_thread_type=%d (FF_THREAD_FRAME=%d, FF_THREAD_SLICE=%d, 0=none)\n",
-           ctx->active_thread_type, FF_THREAD_FRAME, FF_THREAD_SLICE);
+    printf("[E] ctx->active_thread_type=%d (FF_THREAD_FRAME=%d, FF_THREAD_SLICE=%d, 0=none)\n", ctx->active_thread_type,
+           FF_THREAD_FRAME, FF_THREAD_SLICE);
 
     // On a single-core host there is nothing to parallelize across and
     // libavcodec legitimately resolves thread_count to 1 -- the assertion is
@@ -493,8 +533,7 @@ void PrintHwConfigsForCodec(const char* label, enum AVCodecID codecId) {
                (cfg->methods & AV_CODEC_HW_CONFIG_METHOD_AD_HOC) != 0);
     }
     if (!any)
-        printf("[F] %s: keine (avcodec_get_hw_config returns nullptr at index 0 -- no hw config compiled in)\n",
-               label);
+        printf("[F] %s: keine (avcodec_get_hw_config returns nullptr at index 0 -- no hw config compiled in)\n", label);
 }
 
 void TryCreateHwDevice(const char* label, enum AVHWDeviceType type) {
@@ -552,7 +591,7 @@ struct BgraDiff {
 };
 
 BgraDiff CompareBgra(const uint8_t* baseline, const uint8_t* variant, uint32_t width, uint32_t height,
-                      uint32_t strideBytes) {
+                     uint32_t strideBytes) {
     BgraDiff result;
     for (uint32_t row = 0; row < height; ++row) {
         const uint8_t* rowA = baseline + static_cast<size_t>(row) * strideBytes;
@@ -640,8 +679,8 @@ void StepG_SimdVariants() {
         return std::chrono::duration<double, std::milli>(t1 - t0).count() / kIters;
     };
 
-    const double msBaseline = timeIt(
-        [&] { exosnap::engine::ConvertFullPlanarYuv420ToBgra(src, params, outBaseline.data(), kWidth * 4u); });
+    const double msBaseline =
+        timeIt([&] { exosnap::engine::ConvertFullPlanarYuv420ToBgra(src, params, outBaseline.data(), kWidth * 4u); });
     const double msAutoVec =
         timeIt([&] { probe_g::ConvertFullPlanarYuv420ToBgra_AutoVec(src, params, outAutoVec.data(), kWidth * 4u); });
     const double msSse =
@@ -650,8 +689,7 @@ void StepG_SimdVariants() {
     const bool avx2Supported = probe_g::CpuSupportsAvx2();
     double msAvx2 = -1.0;
     if (avx2Supported) {
-        msAvx2 =
-            timeIt([&] { probe_g::ConvertFullPlanarYuv420ToBgra_AVX2(src, params, outAvx2.data(), kWidth * 4u); });
+        msAvx2 = timeIt([&] { probe_g::ConvertFullPlanarYuv420ToBgra_AVX2(src, params, outAvx2.data(), kWidth * 4u); });
     }
 
     printf("[G] cpu_supports_avx2=%s\n", avx2Supported ? "true" : "false");
@@ -667,10 +705,12 @@ void StepG_SimdVariants() {
         printf("[G] 4_avx2_intrinsics:    SKIPPED -- this CPU does not report AVX2 support\n");
     }
 
-    PrintCompare("2_autovec_arch_avx2", CompareBgra(outBaseline.data(), outAutoVec.data(), kWidth, kHeight, kWidth * 4u));
+    PrintCompare("2_autovec_arch_avx2",
+                 CompareBgra(outBaseline.data(), outAutoVec.data(), kWidth, kHeight, kWidth * 4u));
     PrintCompare("3_sse_intrinsics", CompareBgra(outBaseline.data(), outSse.data(), kWidth, kHeight, kWidth * 4u));
     if (avx2Supported) {
-        PrintCompare("4_avx2_intrinsics", CompareBgra(outBaseline.data(), outAvx2.data(), kWidth, kHeight, kWidth * 4u));
+        PrintCompare("4_avx2_intrinsics",
+                     CompareBgra(outBaseline.data(), outAvx2.data(), kWidth, kHeight, kWidth * 4u));
     } else {
         printf("[G] 4_avx2_intrinsics vs baseline: SKIPPED -- not run (CPU lacks AVX2)\n");
     }
@@ -928,12 +968,22 @@ int main(int argc, char** argv) {
     }
     printf("[probe] path=%s start_us=%lld\n", path.c_str(), static_cast<long long>(startUs));
 
+    exosnap::engine::EnablePerformanceMeasurements(true);
     exosnap::engine::EditPlayerEngine engine;
     if (!StepA_Open(engine, path)) {
         return 1;
     }
 
-    StepB_PlaybackThroughput(engine, startUs);
+    StepB_PlaybackThroughput(engine, startUs, argc >= 4 && std::string(argv[3]) == "--decode-upload");
+    if (argc >= 4 && (std::string(argv[3]) == "--decode-only" || std::string(argv[3]) == "--decode-upload")) {
+        using namespace exosnap::engine;
+        for (size_t i = 0; i < static_cast<size_t>(PerformanceStage::Count); ++i) {
+            const auto m = ReadPerformanceMeasurement(static_cast<PerformanceStage>(i));
+            printf("[measurement] %s calls=%llu total_ms=%.3f max_ms=%.3f\n", kPerformanceStageNames[i],
+                   static_cast<unsigned long long>(m.calls), m.total_ns / 1e6, m.max_ns / 1e6);
+        }
+        return 0;
+    }
     StepB2_RepeatedStartStop(engine, startUs);
     StepC_ConvertCost();
     StepC2_Convert444CostAt(2560, 1440);

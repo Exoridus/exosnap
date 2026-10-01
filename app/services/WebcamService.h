@@ -1,4 +1,5 @@
 #pragma once
+#include "models/WebcamFrameMailbox.h"
 
 #include <QImage>
 #include <QObject>
@@ -199,6 +200,7 @@ class WebcamService : public exosnap::engine::WebcamFrameProvider {
     [[nodiscard]] bool IsRunning() const noexcept;
 
     // WebcamFrameProvider — called by VideoThread (thread-safe).
+    std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> Snapshot() override;
     bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra,
                      uint64_t& out_generation) override;
 
@@ -214,7 +216,7 @@ class WebcamService : public exosnap::engine::WebcamFrameProvider {
 
   private:
     void ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop);
-    void StoreFrame(int width, int height, std::vector<uint8_t> bgra);
+    void StoreFrame(int width, int height, const std::vector<uint8_t>& bgra);
     // Body of Stop(); caller must hold control_mutex_.
     void StopLocked();
 
@@ -255,10 +257,7 @@ class WebcamService : public exosnap::engine::WebcamFrameProvider {
 
     // Latest captured frame — written by capture thread, read by VideoThread or main thread.
     mutable std::mutex frame_mutex_;
-    std::vector<uint8_t> latest_bgra_;
-    int frame_width_ = 0;
-    int frame_height_ = 0;
-    bool has_frame_ = false;
+    WebcamFrameMailbox frame_mailbox_;
     uint64_t frame_generation_ = 0;
 };
 

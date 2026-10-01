@@ -64,6 +64,7 @@ class DiagnosticsAdapter : public QObject {
     // The page is ordered by this: readiness answers "may I start", which stops
     // being the question the moment something is running.
     Q_PROPERTY(bool recording READ recording NOTIFY recordingChanged FINAL)
+    Q_PROPERTY(bool paused READ paused NOTIFY recordingChanged FINAL)
 
     // Declared as the Qt base type: qmltyperegistrar records the concrete subclass
     // under its namespaced C++ name while moc writes the property type unqualified,
@@ -120,6 +121,7 @@ class DiagnosticsAdapter : public QObject {
     [[nodiscard]] bool hasLastRecording() const noexcept;
     [[nodiscard]] bool elevated() const noexcept;
     [[nodiscard]] bool recording() const noexcept;
+    [[nodiscard]] bool paused() const noexcept;
     [[nodiscard]] QAbstractListModel* issues() noexcept;
     [[nodiscard]] QAbstractListModel* ledger() noexcept;
     [[nodiscard]] int ledgerCount() const noexcept;
@@ -192,6 +194,9 @@ class DiagnosticsAdapter : public QObject {
     void applyLiveDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
     // The frozen ledger of the recording that just ended, for the session report.
     [[nodiscard]] std::vector<diagnostics::LedgerEntry> frozenLedger() const;
+    [[nodiscard]] const std::vector<diagnostics::LedgerEntry>& compensatedConditions() const noexcept {
+        return controller_.ledger().compensated();
+    }
     // Builds and publishes the Last session card from a finished recording. The
     // ledger has already been frozen by the terminal live snapshot, which the
     // coordinator delivers before the result.

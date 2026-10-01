@@ -671,10 +671,16 @@ void WebcamService::StopLocked() {
     running_.store(false);
     {
         std::lock_guard lk(frame_mutex_);
-        has_frame_ = false;
-        latest_bgra_.clear();
-        frame_width_ = 0;
-        frame_height_ = 0;
+        const auto metrics = frame_mailbox_.ReadMetrics();
+        if (metrics.generations > 0) {
+            diagnostics::logEvent(diagnostics::LogSeverity::Info, "webcam", "webcam.frame_copies",
+                                  {{"generations", std::to_string(metrics.generations)},
+                                   {"snapshots", std::to_string(metrics.snapshots)},
+                                   {"legacy_copies", std::to_string(metrics.legacy_copies)},
+                                   {"payload_bytes", std::to_string(metrics.payload_bytes)},
+                                   {"buffers_created", std::to_string(metrics.buffers_created)}});
+        }
+        frame_mailbox_.Reset();
     }
 }
 
@@ -685,13 +691,12 @@ bool WebcamService::IsRunning() const noexcept {
 bool WebcamService::TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra,
                                 uint64_t& out_generation) {
     std::lock_guard lk(frame_mutex_);
-    if (!has_frame_)
-        return false;
-    out_width = frame_width_;
-    out_height = frame_height_;
-    out_bgra = latest_bgra_;
-    out_generation = frame_generation_;
-    return true;
+    return frame_mailbox_.Copy(out_width, out_height, out_bgra, out_generation);
+}
+
+std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> WebcamService::Snapshot() {
+    std::lock_guard lk(frame_mutex_);
+    return frame_mailbox_.Snapshot();
 }
 
 void WebcamService::ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop) {
@@ -842,13 +847,9 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
     running_.store(false);
 }
 
-void WebcamService::StoreFrame(int w, int h, std::vector<uint8_t> bgra) {
+void WebcamService::StoreFrame(int w, int h, const std::vector<uint8_t>& bgra) {
     std::lock_guard lk(frame_mutex_);
-    frame_width_ = w;
-    frame_height_ = h;
-    latest_bgra_ = std::move(bgra);
-    has_frame_ = true;
-    ++frame_generation_;
+    frame_mailbox_.Publish(w, h, bgra, ++frame_generation_);
 }
 
 void WebcamService::PostFrame(QImage img) {

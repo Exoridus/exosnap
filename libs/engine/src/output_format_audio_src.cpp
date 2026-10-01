@@ -210,6 +210,12 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
         return false;
     }
 
+    output_qpc_ns_ = inner_->LastBufferQpcNs();
+    if (output_qpc_ns_ != 0 && swr_ != nullptr) {
+        const auto delay_ns = static_cast<uint64_t>(swr_get_delay(swr_, 1'000'000'000));
+        output_qpc_ns_ = output_qpc_ns_ > delay_ns ? output_qpc_ns_ - delay_ns : 0;
+    }
+
     // ---- Passthrough mode (target rate/channels == inner) ----
     if (passthrough_) {
         // Float32 inner: hand the bytes through unchanged (zero-copy).
@@ -260,13 +266,12 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
 
     // Prepare source pointer (null for silent — swr_convert will generate silence).
     const uint8_t* in_ptr = nullptr;
-    std::vector<float> silence_buf;
     if (!src_buf.silent && src_buf.bytes != nullptr) {
         in_ptr = src_buf.bytes;
     } else {
         // Feed zero-valued samples (silence) so swr keeps its internal clock.
-        silence_buf.assign(static_cast<size_t>(in_frames) * inner_channels, 0.0f);
-        in_ptr = reinterpret_cast<const uint8_t*>(silence_buf.data());
+        silence_buf_.assign(static_cast<size_t>(in_frames) * inner_channels, 0.0f);
+        in_ptr = reinterpret_cast<const uint8_t*>(silence_buf_.data());
     }
 
     // Re-arm the clock-slaving compensation window before every convert while a
@@ -286,11 +291,9 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
     const int produced = swr_convert(swr_, &out_ptr, max_out_frames, &in_ptr, in_frames);
 
     if (produced < 0) {
-        // Conversion error: emit the raw source buffer in degraded mode (wrong
-        // rate/channels) rather than crashing the recording. This should never
-        // happen in practice given vetted inputs.
-        out_buf = src_buf;
-        return true;
+        out_error = "Audio sample-rate conversion failed";
+        inner_->ReleaseBuffer();
+        return false;
     }
 
     // Real frame accounting for the applied-compensation metric (A). Counts on

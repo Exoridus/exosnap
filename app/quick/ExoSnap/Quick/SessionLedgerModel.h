@@ -20,6 +20,9 @@ struct SessionLedgerRow {
     QString title;
     QString summary;
     QString logExcerpt;
+    QString compensation;
+    QString fixId;
+    QString fixLabel;
     bool active = false;
     int count = 0;
     QString firstSeenText;
@@ -53,6 +56,9 @@ class SessionLedgerModel : public QAbstractListModel {
         TitleRole,
         SummaryRole,
         LogExcerptRole,
+        CompensationRole,
+        FixIdRole,
+        FixLabelRole,
         ActiveRole,
         CountRole,
         FirstSeenTextRole,

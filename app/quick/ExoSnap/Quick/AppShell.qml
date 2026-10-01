@@ -530,6 +530,11 @@ Item {
                 // Widgets shell established. Deliberately NOT registered as an
                 // interactive rect: it is a readout, so the band stays draggable
                 // across it.
+                SourceConfidence {
+                    indicators: root.recordViewModel.confidenceIndicators
+                    Layout.alignment: Qt.AlignVCenter
+                }
+
                 ExoStatusPill {
                     text: root.recordViewModel.stateText
                     tone: root.recordViewModel.stateTone

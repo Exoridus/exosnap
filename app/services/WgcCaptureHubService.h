@@ -3,6 +3,7 @@
 #include "services/CaptureHubCommandQueue.h"
 #include "services/CaptureSourceKey.h"
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <thread>
@@ -29,6 +30,9 @@ class WgcCaptureHubService {
     WgcCaptureHubService& operator=(const WgcCaptureHubService&) = delete;
 
     bool Subscribe(CaptureSourceKey key, HandleSink sink, FramePublishedSink frame_sink);
+    void SetPreviewFrameRate(int rate) noexcept {
+        preview_frame_rate_.store(rate);
+    }
     void Unsubscribe();
     void RequestEngineLease();
     void ReturnEngineLease();
@@ -48,6 +52,7 @@ class WgcCaptureHubService {
     // the two services share one semantic contract by construction. See
     // CaptureHubCommandQueue.h and CaptureHubGate.h.
     CaptureHubCommandQueue<SubscribePayload> commands_;
+    std::atomic<int> preview_frame_rate_{60};
     std::jthread worker_;
 };
 

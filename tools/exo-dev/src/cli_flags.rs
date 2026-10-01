@@ -41,6 +41,9 @@ const PARSER_SOURCES: &[&str] = &[
 
 const EXO_VERIFY_SRC_PREFIX: &str = "tools/exo-verify/src/";
 
+/// The one source where `exo-dev screenshot` spells the app options it passes.
+const SCREENSHOT_INVOCATION: &str = "tools/exo-dev/src/screenshot/invocation.rs";
+
 #[derive(Debug)]
 pub struct UnregisteredFlag {
     pub flag: String,
@@ -53,6 +56,7 @@ pub struct CliFlagsReport {
     pub duplicate_flags: Vec<String>,
     pub unregistered_in_parsers: Vec<UnregisteredFlag>,
     pub unregistered_in_exo_verify: Vec<UnregisteredFlag>,
+    pub unregistered_in_screenshot: Vec<UnregisteredFlag>,
 }
 
 impl CliFlagsReport {
@@ -60,6 +64,7 @@ impl CliFlagsReport {
         self.duplicate_flags.is_empty()
             && self.unregistered_in_parsers.is_empty()
             && self.unregistered_in_exo_verify.is_empty()
+            && self.unregistered_in_screenshot.is_empty()
     }
 }
 
@@ -113,11 +118,25 @@ pub fn check(repo_root: &Path) -> anyhow::Result<CliFlagsReport> {
         }
     }
 
+    let text =
+        std::fs::read_to_string(repo_root.join(SCREENSHOT_INVOCATION)).with_context(|| {
+            format!("caller source '{SCREENSHOT_INVOCATION}' does not exist; update this check")
+        })?;
+    let unregistered_in_screenshot = quoted_double(&text)
+        .into_iter()
+        .filter(|flag| !registered.contains(flag))
+        .map(|flag| UnregisteredFlag {
+            flag,
+            source: SCREENSHOT_INVOCATION.to_string(),
+        })
+        .collect();
+
     Ok(CliFlagsReport {
         registered_count: registered.len(),
         duplicate_flags,
         unregistered_in_parsers,
         unregistered_in_exo_verify,
+        unregistered_in_screenshot,
     })
 }
 
@@ -309,6 +328,10 @@ mod tests {
             ("app/services/ElevatedRelaunch.h", ""),
             ("app/services/UpdateFeedOverride.h", ""),
             ("app/services/VerifyReinstallMode.h", ""),
+            (
+                "tools/exo-dev/src/screenshot/invocation.rs",
+                "args.push(\"--not-a-harness-flag\")",
+            ),
         ]);
         let report = check(dir.path()).unwrap();
         assert!(
@@ -317,6 +340,13 @@ mod tests {
                 .iter()
                 .any(|e| e.flag == "--definitely-not-registered"),
             "the scanner did not detect the fixture flag"
+        );
+        assert!(
+            report
+                .unregistered_in_screenshot
+                .iter()
+                .any(|e| e.flag == "--not-a-harness-flag"),
+            "the screenshot scan did not detect the fixture flag"
         );
     }
 
@@ -366,6 +396,10 @@ mod tests {
             ("app/services/ElevatedRelaunch.h", ""),
             ("app/services/UpdateFeedOverride.h", ""),
             ("app/services/VerifyReinstallMode.h", ""),
+            (
+                "tools/exo-dev/src/screenshot/invocation.rs",
+                "args.push(\"--not-a-harness-flag\")",
+            ),
         ]);
         let report = check(dir.path()).unwrap();
         assert_eq!(report.duplicate_flags, vec!["--duplicate-flag".to_string()]);
@@ -387,6 +421,10 @@ mod tests {
             ("app/services/ElevatedRelaunch.h", ""),
             ("app/services/UpdateFeedOverride.h", ""),
             ("app/services/VerifyReinstallMode.h", ""),
+            (
+                "tools/exo-dev/src/screenshot/invocation.rs",
+                "args.push(\"--not-a-harness-flag\")",
+            ),
             (
                 "tools/exo-verify/src/scenarios/fixture.rs",
                 "let mut app = ctx.launch(&[\"--bogus\"])?;\n",

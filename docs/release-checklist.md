@@ -89,7 +89,7 @@ Use `exo-verify list` to inspect the source registry and lane requirements. Sour
 | Capture | Display, window and region; motion, quiet source, resize, reconnect, GPU failure handling; display/HDR transitions finalize rather than corrupt; exclusive-window and stall notices distinguish evidence from cause |
 | Audio routing | APP only on a window, SYS and MIC, separate and merged tracks, live mute, 44.1 kHz endpoint with converted output; real playback and track counts |
 | Audio outages | Lost endpoint versus connected silence; full and partial merged-source recovery; every track preserves the intended elapsed timeline, including reopen duration; no silent switch to an unrelated fixed device |
-| Pacing | High-refresh to lower CFR coalescing is benign; ring eviction, processing and backpressure losses agree on all surfaces; VFR static start establishes a valid epoch |
+| Pacing | High-refresh to lower CFR coalescing is benign; source ring evictions stay neutral; processing/backpressure/tail losses agree on all surfaces; VFR static start establishes a valid epoch |
 | Webcam | Actual selected device/mode, negotiated rate, live mirror/opacity/chroma/PiP parity, continued movement over a still desktop, loss/reconnect and unavailable-MF behavior |
 | Color | SDR range and tags, HEVC/AV1 10-bit, native HDR10/tone-map, container plus bitstream metadata, actual playback; no false HDR interpretation of SDR FP16 surfaces |
 | Edit/export | Real decoded video/audio, hardware/software decode, 4:4:4 and HDR preview, seek/scrub/trim, closed-session resource release, immutable running export, destination errors and marker-sidecar lifecycle |

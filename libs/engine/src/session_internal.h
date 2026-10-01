@@ -135,7 +135,10 @@ enum class MuxQueueWait {
 // SessionState — central shared state passed to worker threads
 // ---------------------------------------------------------------------------
 
+enum class OutputIoOperation;
+
 struct SessionState {
+    std::function<bool(OutputIoOperation)> output_io_failure;
     SessionState() : stop_event(CreateEventW(nullptr, /*manual reset*/ TRUE, FALSE, nullptr)) {
     }
 
@@ -381,22 +384,28 @@ struct SessionState {
         if (!full()) {
             return MuxQueueWait::Ready;
         }
+        const auto started = std::chrono::steady_clock::now();
+        const auto finish = [&](MuxQueueWait result) {
+            const auto now = std::chrono::steady_clock::now();
+            diagnostics.OnMuxProducerWait(now, std::chrono::duration<double, std::milli>(now - started).count());
+            return result;
+        };
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(mux_queue_full_timeout_ms);
         while (full()) {
             if (HasFailure()) {
-                return MuxQueueWait::Failed; // teardown in progress — never deadlock a producer on the bound
+                return finish(MuxQueueWait::Failed); // teardown in progress — never deadlock a producer on the bound
             }
             if (mux_space_cv.wait_until(lk, deadline) == std::cv_status::timeout) {
                 if (!full()) {
-                    return MuxQueueWait::Ready;
+                    return finish(MuxQueueWait::Ready);
                 }
                 if (HasFailure()) {
-                    return MuxQueueWait::Failed;
+                    return finish(MuxQueueWait::Failed);
                 }
-                return stop_requested.load() ? MuxQueueWait::Stopping : MuxQueueWait::TimedOut;
+                return finish(stop_requested.load() ? MuxQueueWait::Stopping : MuxQueueWait::TimedOut);
             }
         }
-        return MuxQueueWait::Ready;
+        return finish(MuxQueueWait::Ready);
     }
 
     // Live stats (written by worker threads, read by stats timer)

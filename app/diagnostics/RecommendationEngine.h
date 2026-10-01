@@ -1,8 +1,11 @@
 #pragma once
 
 #include "DiagnosticResult.h"
+#include "DpcLatencyProvider.h"
 #include "FilesystemProvider.h"
+#include "GpuTelemetryProvider.h"
 #include "PresentProvider.h"
+#include "VideoMemoryProvider.h"
 #include "WindowTargetFacts.h"
 
 #include <capability/capability_set.h>
@@ -15,13 +18,6 @@
 #include <vector>
 
 namespace exosnap::diagnostics {
-
-struct DpcLatencyReading {
-    double max_latency_us = 0.0;
-    double avg_latency_us = 0.0;
-    std::string worst_driver;
-    bool available = false;
-};
 
 class RecommendationEngine {
   public:
@@ -129,6 +125,10 @@ class RecommendationEngine {
         return evidence.known && capture_adapter_luid != 0 && encoder_adapter_luid != 0 &&
                evidence.capture_adapter_luid == capture_adapter_luid &&
                evidence.encoder_adapter_luid == encoder_adapter_luid;
+    }
+    void SetGpuEvidence(GpuTelemetryReading gpu, VideoMemoryReading memory) {
+        gpu_ = std::move(gpu);
+        video_memory_ = std::move(memory);
     }
     void SetCaptureTargetAdapter(CaptureTargetAdapterFacts facts) {
         capture_target_adapter_ = std::move(facts);
@@ -244,6 +244,10 @@ class RecommendationEngine {
     CaptureTargetAdapterFacts capture_target_adapter_;
     EncoderReachabilityEvidence reachability_evidence_;
     DriveKind output_drive_kind_ = DriveKind::Unknown;
+    exosnap::engine::PacingDiagnostics live_pacing_;
+    GpuTelemetryReading gpu_;
+    VideoMemoryReading video_memory_;
+    bool live_disk_pressure_ = false;
     bool live_gpu_contention_ = false;
     double live_gpu_exec_p99_ms_ = 0.0;
     double live_target_fps_for_gpu_ = 0.0;

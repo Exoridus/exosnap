@@ -58,6 +58,7 @@ struct SessionReportInputs {
     // went wrong, and the report then carries no ledger key at all -- an empty
     // array and "the build has no ledger" would read the same.
     std::vector<LedgerEntry> ledger;
+    std::vector<LedgerEntry> compensated;
 };
 
 // Pure: serialize the inputs to the canonical session-report JSON (Qt JSON, not

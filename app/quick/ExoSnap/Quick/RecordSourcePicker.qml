@@ -22,20 +22,13 @@ Popup {
     property string pendingPresetKey: ""
 
     property int currentTab: 0
-    property string filterQuery: ""
 
     readonly property var regionPresetRows: recordViewModel.regionPresetOptions
 
     readonly property string windowsCountText: windowRows.length === 1 ? qsTr("1 window")
                                                                        : qsTr("%1 windows").arg(windowRows.length)
 
-    // filteredTargetOptions is an invokable, so the binding cannot see its
-    // dependencies; reading the target list into the result is what re-derives
-    // the rows on a target refresh as well as on a query edit.
-    readonly property var windowRows: {
-        const all = recordViewModel.targetOptions
-        return all.length >= 0 ? recordViewModel.filteredTargetOptions("window", filterQuery) : []
-    }
+    readonly property var windowRows: recordViewModel.windowTargetOptions
 
     // The identities the two grids currently have inside their viewport, in
     // layout order. The still service walks exactly this list, so a card that
@@ -69,13 +62,8 @@ Popup {
     readonly property int pickerColumns: columnsForWidth(width - 2 * padding)
 
     parent: Overlay.overlay
-    width: Math.min(680, parent ? parent.width - 48 : 680)
-    // Tall enough for a long window list, no taller than what is being shown:
-    // two monitors under a 560 box left a third of the surface empty, which
-    // reads as a list that failed to load rather than as a short one. The floor
-    // keeps the dialog from resizing noticeably as the tabs are stepped through.
-    readonly property real preferredHeight: pickerContent.implicitHeight + topPadding + bottomPadding
-    height: Math.min(560, Math.max(420, preferredHeight), parent ? parent.height - 48 : 560)
+    width: Math.min(900, parent ? parent.width - 48 : 900)
+    height: Math.min(650, parent ? parent.height - 48 : 650)
     anchors.centerIn: parent
     modal: true
     // The style's own modal veil lightens the shell in the dark palette, which
@@ -86,7 +74,7 @@ Popup {
     }
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    padding: ExoTheme.spacingXl
+    padding: ExoTheme.spacingMd
 
     // Through the delay like every other trigger: the page that just became
     // current has no laid-out viewport yet, and publishing an empty set in that
@@ -124,8 +112,6 @@ Popup {
         pendingTargetIndex = recordViewModel.selectedTargetIndex
         pendingCaptureMode = recordViewModel.captureMode
         pendingPresetKey = ""
-        filterQuery = ""
-        windowSearch.text = ""
     }
 
     // Not onAboutToShow: the popup is not visible yet there, and the grids have
@@ -187,110 +173,128 @@ Popup {
 
         spacing: ExoTheme.spacingLg
 
-        Label {
-            text: qsTr("Choose capture source")
-            textFormat: Text.PlainText
-            color: ExoTheme.text
+        Rectangle {
+            objectName: "pickerHeader"
             Layout.fillWidth: true
-            font {
-                family: ExoTheme.sansFamily
-                pixelSize: ExoTheme.fontPageTitle
-                weight: Font.DemiBold
-            }
-        }
+            implicitHeight: 72
+            color: ExoTheme.accentTint(ExoTheme.surfaceRaised, 0.05)
+            border.width: 1
+            border.color: ExoTheme.lineStrong
+            radius: ExoTheme.radiusSm
 
-        ExoSegmentedControl {
-            id: tabsControl
-
-            objectName: "tabs"
-            options: [qsTr("Displays"), qsTr("Windows"), qsTr("Region")]
-            currentIndex: root.currentTab
-            onSelected: index => root.currentTab = index
-        }
-
-        Item {
-            id: displaysPage
-
-            objectName: "displaysPage"
-            visible: root.currentTab === 0
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            // The grid's own content is the only thing here that knows how tall
-            // this tab wants to be; a GridView reports no implicit height.
-            Layout.preferredHeight: displaysGrid.contentHeight
-
-            GridView {
-                id: displaysGrid
-
-                objectName: "displaysGrid"
+            RowLayout {
                 anchors.fill: parent
-                clip: true
-                model: root.recordViewModel.displayTargetOptions
-                // GridView has no spacing: the gap lives in the cell math and
-                // the delegate draws its card one gap short of the cell.
-                readonly property real cardGap: ExoTheme.spacingSm
-                cellWidth: Math.floor((width - cardGap * (root.pickerColumns - 1)) / root.pickerColumns)
-                cellHeight: 148
-                boundsBehavior: Flickable.StopAtBounds
-                onContentYChanged: visiblePublishDelay.restart()
-                onHeightChanged: visiblePublishDelay.restart()
-                ScrollBar.vertical: ExoScrollBar {
-                }
-
-                delegate: TargetCard {
-                    captureMode: 0
-                    width: GridView.view.cellWidth - GridView.view.cardGap
-                    height: GridView.view.cellHeight - GridView.view.cardGap
-                }
-            }
-        }
-
-        Item {
-            id: windowsPage
-
-            objectName: "windowsPage"
-            visible: root.currentTab === 1
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-
-            ColumnLayout {
-                anchors.fill: parent
+                anchors.margins: ExoTheme.spacingMd
                 spacing: ExoTheme.spacingMd
 
-                RowLayout {
-                    Layout.fillWidth: true
+                ColumnLayout {
+                    spacing: ExoTheme.spacingXs
 
-                    ExoSearchField {
-                        id: windowSearch
-
-                        objectName: "windowSearch"
-                        placeholderText: qsTr("Search windows")
-                        Layout.fillWidth: true
-                        onSearchEdited: query => root.filterQuery = query
+                    Label {
+                        objectName: "pickerTitle"
+                        text: qsTr("Choose capture source")
+                        textFormat: Text.PlainText
+                        color: ExoTheme.text
+                        font.family: ExoTheme.sansFamily
+                        font.pixelSize: ExoTheme.fontSectionTitle
+                        font.weight: Font.DemiBold
                     }
 
                     Label {
-                        objectName: "windowsCount"
-
-                        text: root.windowsCountText
+                        text: qsTr("Pick a display, window, or region.")
                         textFormat: Text.PlainText
                         color: ExoTheme.textSecondary
-                        font.family: ExoTheme.monoFamily
+                        font.family: ExoTheme.sansFamily
                         font.pixelSize: ExoTheme.fontSecondary
                     }
                 }
+
+                Item {
+                    Layout.fillWidth: true
+                }
+
+                ExoSegmentedControl {
+                    id: tabsControl
+
+                    objectName: "tabs"
+                    Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                    options: [qsTr("Displays"), qsTr("Windows"), qsTr("Region")]
+                    currentIndex: root.currentTab
+                    onSelected: index => root.currentTab = index
+                }
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            color: ExoTheme.surface
+            border.width: 1
+            border.color: ExoTheme.lineStrong
+            radius: ExoTheme.radiusSm
+
+            Item {
+                id: displaysPage
+
+                objectName: "displaysPage"
+                visible: root.currentTab === 0
+                anchors.fill: parent
+                anchors.margins: ExoTheme.spacingMd
+
+                GridView {
+                    id: displaysGrid
+
+                    objectName: "displaysGrid"
+                    anchors {
+                        top: parent.top
+                        left: parent.left
+                        right: parent.right
+                    }
+                    height: Math.floor(parent.height / cellHeight) * cellHeight
+                    clip: true
+                    model: root.recordViewModel.displayTargetOptions
+                    // GridView has no spacing: the gap lives in the cell math and
+                    // the delegate draws its card one gap short of the cell.
+                    readonly property real cardGap: ExoTheme.spacingSm
+                    cellWidth: Math.floor((width - cardGap * (root.pickerColumns - 1)) / root.pickerColumns)
+                    cellHeight: 218
+                    boundsBehavior: Flickable.StopAtBounds
+                    onContentYChanged: visiblePublishDelay.restart()
+                    onHeightChanged: visiblePublishDelay.restart()
+                    ScrollBar.vertical: ExoScrollBar {
+                    }
+
+                    delegate: TargetCard {
+                        captureMode: 0
+                        width: GridView.view.cellWidth - GridView.view.cardGap
+                        height: GridView.view.cellHeight - GridView.view.cardGap
+                    }
+                }
+            }
+
+            Item {
+                id: windowsPage
+
+                objectName: "windowsPage"
+                visible: root.currentTab === 1
+                anchors.fill: parent
+                anchors.margins: ExoTheme.spacingMd
 
                 GridView {
                     id: windowsGrid
 
                     objectName: "windowsGrid"
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    anchors {
+                        top: parent.top
+                        left: parent.left
+                        right: parent.right
+                    }
+                    height: Math.floor(parent.height / cellHeight) * cellHeight
                     clip: true
                     model: root.windowRows
                     readonly property real cardGap: ExoTheme.spacingSm
                     cellWidth: Math.floor((width - cardGap * (root.pickerColumns - 1)) / root.pickerColumns)
-                    cellHeight: 148
+                    cellHeight: 218
                     boundsBehavior: Flickable.StopAtBounds
                     onContentYChanged: visiblePublishDelay.restart()
                     onHeightChanged: visiblePublishDelay.restart()
@@ -305,58 +309,68 @@ Popup {
                     }
                 }
             }
-        }
 
-        Item {
-            id: regionPage
+            Item {
+                id: regionPage
 
-            objectName: "regionPage"
-            visible: root.currentTab === 2
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-
-            ColumnLayout {
+                objectName: "regionPage"
+                visible: root.currentTab === 2
                 anchors.fill: parent
-                spacing: ExoTheme.spacingMd
+                anchors.margins: ExoTheme.spacingMd
 
-                Label {
-                    objectName: "regionCaption"
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: ExoTheme.spacingMd
 
-                    text: {
-                        const anchor = root.regionAnchorRow()
-                        return anchor ? qsTr("A preset starts an editable rectangle on %1.").arg(anchor.regionLabel)
-                                      : qsTr("Select a display first.")
+                    Label {
+                        objectName: "regionCaption"
+
+                        text: {
+                            const anchor = root.regionAnchorRow()
+                            return anchor ? qsTr("A preset starts an editable rectangle on %1.").arg(anchor.regionLabel)
+                                          : qsTr("Select a display first.")
+                        }
+                        textFormat: Text.PlainText
+                        wrapMode: Text.WordWrap
+                        color: ExoTheme.textSecondary
+                        Layout.fillWidth: true
+                        font.family: ExoTheme.sansFamily
+                        font.pixelSize: ExoTheme.fontSecondary
                     }
-                    textFormat: Text.PlainText
-                    wrapMode: Text.WordWrap
-                    color: ExoTheme.textSecondary
-                    Layout.fillWidth: true
-                    font.family: ExoTheme.sansFamily
-                    font.pixelSize: ExoTheme.fontSecondary
-                }
 
-                Flow {
-                    spacing: ExoTheme.spacingSm
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    Flow {
+                        spacing: ExoTheme.spacingSm
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
 
-                    Repeater {
-                        model: root.regionPresetRows
+                        Repeater {
+                            model: root.regionPresetRows
 
-                        delegate: PresetCard {
-                            width: Math.min(190, (regionPage.width - 2 * ExoTheme.spacingSm) / 3)
-                            height: 128
+                            delegate: PresetCard {
+                                width: Math.min(190, (regionPage.width - 2 * ExoTheme.spacingSm) / 3)
+                                height: 128
+                            }
                         }
                     }
                 }
             }
+
         }
 
         RowLayout {
             Layout.fillWidth: true
 
-            Item {
+            Label {
+                objectName: "windowsCount"
                 Layout.fillWidth: true
+                text: root.currentTab === 0 ? qsTr("Select a display to capture")
+                      : root.currentTab === 1 ? root.windowsCountText
+                                              : qsTr("Select a region preset")
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                color: ExoTheme.textSecondary
+                font.family: ExoTheme.sansFamily
+                font.pixelSize: ExoTheme.fontSecondary
             }
 
             ExoButton {
@@ -390,17 +404,23 @@ Popup {
         readonly property string identity: card.modelData.identity
         readonly property string label: card.modelData.label
         readonly property string kind: card.modelData.kind
-        readonly property string thumbnailState: card.modelData.thumbnailState
-        readonly property string thumbnailSource: card.modelData.thumbnailSource
+        readonly property string primaryLabel: card.kind === "window" && card.modelData.appName
+                                               ? card.modelData.appName : card.label
+        readonly property string secondaryLabel: card.kind === "window" ? card.modelData.windowTitle : ""
+        readonly property var still: root.recordViewModel.targetStillOptions[card.identity]
+        readonly property string thumbnailState: card.still ? card.still.state : "placeholder"
+        readonly property string thumbnailSource: card.still ? card.still.source : ""
 
         property int captureMode: 0
         readonly property bool pending: root.pendingTargetIndex === card.targetIndex
                                         && root.pendingCaptureMode === card.captureMode
 
         objectName: "targetCard-" + card.identity
-        color: card.pending ? ExoTheme.surfaceHover : ExoTheme.surface
-        border.width: card.pending ? 2 : 1
-        border.color: card.pending ? ExoTheme.accent : ExoTheme.line
+        color: card.pending ? ExoTheme.accentTint(ExoTheme.surfaceRaised, 0.14)
+                            : cardHover.hovered ? ExoTheme.surfaceHover : ExoTheme.surfaceRaised
+        border.width: 1
+        border.color: card.pending ? ExoTheme.accent
+                      : cardHover.hovered ? ExoTheme.lineStrong : ExoTheme.line
         radius: ExoTheme.radiusSm
         activeFocusOnTab: true
         Accessible.role: Accessible.ListItem
@@ -421,6 +441,7 @@ Popup {
         }
 
         HoverHandler {
+            id: cardHover
             cursorShape: Qt.PointingHandCursor
         }
 
@@ -436,26 +457,30 @@ Popup {
         Rectangle {
             id: thumbnail
 
-            anchors {
-                top: parent.top
-                left: parent.left
-                right: parent.right
-                margins: ExoTheme.spacingSm
-            }
-            height: 84
-            color: ExoTheme.surfaceRaised
+            objectName: "targetThumbnail"
+            anchors.top: parent.top
+            anchors.topMargin: ExoTheme.spacingSm
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: Math.min(304, parent.width - 2 * ExoTheme.spacingSm,
+                            (parent.height - 72) * 16 / 9)
+            height: width * 9 / 16
+            color: ExoTheme.overlaySurface
+            border.width: 0
             radius: ExoTheme.radiusXs
 
             Image {
+                objectName: "targetThumbnailImage"
                 anchors.fill: parent
+                anchors.margins: 2
                 source: card.thumbnailSource
                 visible: card.thumbnailState !== "placeholder"
                 // A target that stopped being capturable keeps its last still,
                 // dimmed. Clearing it would resize nothing but would make every
                 // minimized window flicker back to a glyph and out again.
                 opacity: card.thumbnailState === "stale" ? 0.45 : 1.0
-                fillMode: Image.PreserveAspectCrop
+                fillMode: Image.PreserveAspectFit
                 asynchronous: true
+                retainWhileLoading: true
                 sourceSize: Qt.size(width, height)
             }
 
@@ -463,7 +488,7 @@ Popup {
                 anchors.centerIn: parent
                 kind: card.kind === "window" ? ExoGlyph.AppWindow : ExoGlyph.Display
                 visible: card.thumbnailState === "placeholder"
-                color: ExoTheme.textDim
+                color: ExoTheme.overlayInkDim
                 width: 22
                 height: 22
             }
@@ -482,21 +507,44 @@ Popup {
             }
         }
 
-        Label {
+        Item {
             anchors {
-                top: thumbnail.bottom
                 left: parent.left
                 right: parent.right
-                margins: ExoTheme.spacingSm
+                bottom: parent.bottom
+                leftMargin: ExoTheme.spacingMd
+                rightMargin: ExoTheme.spacingMd
+                bottomMargin: ExoTheme.spacingSm
             }
-            text: card.label
-            textFormat: Text.PlainText
-            elide: Text.ElideRight
-            maximumLineCount: 2
-            wrapMode: Text.Wrap
-            color: card.pending ? ExoTheme.text : ExoTheme.textSecondary
-            font.family: ExoTheme.sansFamily
-            font.pixelSize: ExoTheme.fontSecondary
+            height: 48
+
+            Column {
+                anchors.centerIn: parent
+                width: parent.width
+                spacing: ExoTheme.spacingXs
+
+                Label {
+                    width: parent.width
+                    text: card.primaryLabel
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    color: ExoTheme.text
+                    font.family: ExoTheme.sansFamily
+                    font.pixelSize: ExoTheme.fontBody
+                    font.weight: Font.DemiBold
+                }
+
+                Label {
+                    width: parent.width
+                    visible: card.secondaryLabel !== ""
+                    text: card.secondaryLabel
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    color: ExoTheme.textSecondary
+                    font.family: ExoTheme.sansFamily
+                    font.pixelSize: ExoTheme.fontCaption
+                }
+            }
         }
     }
 

@@ -340,7 +340,8 @@ QJsonObject RunningJson(const exosnap::engine::EncoderInitInfo& init, bool live)
     if (!init.valid)
         return json;
     json.insert(QStringLiteral("videoCodec"), ui::videoCodecLabel(init.codec));
-    json.insert(QStringLiteral("encoderPreset"), EncoderPresetName(init.preset));
+    json.insert(QStringLiteral("encoderPreset"),
+                QString::fromUtf8(init.backend_preset.data(), static_cast<qsizetype>(init.backend_preset.size())));
     json.insert(QStringLiteral("rateControl"), RateControlName(init.rc_mode));
     json.insert(QStringLiteral("cq"), static_cast<double>(init.cq));
     json.insert(QStringLiteral("targetBitrateKbps"), static_cast<double>(init.target_bitrate_kbps));

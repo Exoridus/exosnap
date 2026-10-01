@@ -26,6 +26,7 @@ void RecordWorst(std::optional<double>& worst, std::string& worst_text, const Di
 
 void SessionLedger::Reset(uint64_t generation) {
     entries_.clear();
+    compensated_.clear();
     pending_.clear();
     generation_ = generation;
 }
@@ -45,6 +46,32 @@ void SessionLedger::CloseOccurrence(LedgerEntry& entry, double end_s) {
 }
 
 void SessionLedger::Observe(const std::vector<DiagnosticResult>& results, double now_s) {
+    std::unordered_set<std::string> neutral_firing;
+    for (const auto& result : results) {
+        if (result.tier != DiagnosticTier::Fact || result.compensation.empty())
+            continue;
+        neutral_firing.insert(result.id);
+        auto it =
+            std::find_if(compensated_.begin(), compensated_.end(), [&](const auto& e) { return e.id == result.id; });
+        if (it == compensated_.end()) {
+            LedgerEntry entry;
+            entry.id = result.id;
+            entry.title = result.title;
+            entry.summary = result.summary;
+            entry.compensation = result.compensation;
+            entry.first_seen_s = now_s;
+            compensated_.push_back(std::move(entry));
+            it = std::prev(compensated_.end());
+        }
+        if (!it->active)
+            ++it->count;
+        it->active = true;
+        it->last_seen_s = now_s;
+        RecordWorst(it->worst, it->worst_text, result);
+    }
+    for (auto& entry : compensated_)
+        if (!neutral_firing.contains(entry.id))
+            entry.active = false;
     std::unordered_set<std::string> firing;
     for (const DiagnosticResult& result : results) {
         if (result.tier != DiagnosticTier::MeasuredProblem)
@@ -82,7 +109,12 @@ void SessionLedger::Observe(const std::vector<DiagnosticResult>& results, double
         LedgerEntry entry;
         entry.id = result.id;
         entry.title = result.title;
-        entry.summary = result.summary;
+        entry.summary = result.impact.empty() ? result.summary : result.impact;
+        entry.compensation = result.compensation;
+        if (result.fix_action && result.fix_action->safety == FixAction::Safety::Assisted) {
+            entry.fix_id = result.fix_action->id;
+            entry.fix_label = result.fix_action->label;
+        }
         entry.log_excerpt = result.detail;
         entry.worst = pending.worst;
         entry.worst_text = pending.worst_text;
@@ -108,6 +140,8 @@ void SessionLedger::Observe(const std::vector<DiagnosticResult>& results, double
 }
 
 void SessionLedger::Freeze(double end_s) {
+    for (auto& entry : compensated_)
+        entry.active = false;
     for (LedgerEntry& entry : entries_) {
         if (entry.active)
             CloseOccurrence(entry, end_s);

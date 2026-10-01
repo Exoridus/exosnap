@@ -1,4 +1,5 @@
 #include "audio_thread.h"
+#include <exosnap/engine/performance_measurements.h>
 
 #include "audio_clock_drift.h"
 #include "audio_device_loss_policy.h"
@@ -524,10 +525,14 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         if (event_driven) {
             WaitForMultipleObjects(2, wait_handles, FALSE, kEventWaitTimeoutMs);
         } else {
+            RecordPerformanceEvent(PerformanceStage::AudioPollWake);
             Sleep(1);
         }
     };
 
+    // A merged source owns both captured and missing intervals on its QPC timeline.
+    // A second wall-clock filler would count an endpoint outage twice.
+    const bool source_owns_timeline = mixed_src_ != nullptr && mixed_src_->CaptureSourceCount() > 1;
     // --- Capture / encode loop ---
     while (!m_state.stop_requested.load()) {
         if (m_state.pause_requested.load()) {
@@ -631,7 +636,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                 // order), so the silence covers the outage right up to the
                 // moment the track comes back.
                 const bool fully_degraded = (total_sources > 0 && degraded_sources == total_sources);
-                if (fully_degraded) {
+                if (fully_degraded && !source_owns_timeline) {
                     if (!emitSilenceForElapsed()) {
                         failed = true;
                         break;
@@ -644,7 +649,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                     const AudioReactivateDecision decision =
                         DecideAudioDeviceLoss(ok, kAudioReactivatePollDelay, kAudioReactivatePollDelay);
                     lastReinitAttempt = nowtp;
-                    if (fully_degraded && decision.action == AudioReactivateAction::Reactivated) {
+                    if (fully_degraded && !source_owns_timeline &&
+                        decision.action == AudioReactivateAction::Reactivated) {
                         // The track was silent-and-clock-driven and is live again.
                         // Re-align it the same way a bare source is re-aligned:
                         // the reacquired stream restarts its device position near
@@ -684,7 +690,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             // is held, once the quiet has lasted past ordinary packet cadence.
             // Once stalled, keep filling every iteration so the anchor tracks
             // the clock closely and the resume loses at most one poll.
-            if (silent_stalled || IsSilentStall(QpcNowNs(), lastAccountedQpcNs)) {
+            if (!source_owns_timeline && (silent_stalled || IsSilentStall(QpcNowNs(), lastAccountedQpcNs))) {
                 silent_stalled = true;
                 if (!emitSilenceForElapsed()) {
                     failed = true;
@@ -757,6 +763,9 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             // silence the track does not contain.
             const uint32_t gapFramesToFeed = RemainingGapFrames(raw.gap_frames, silenceFilledFramesSincePacket);
 
+            if (raw.num_frames > 0 && source_->LastBufferQpcNs() != 0)
+                publishAudioEpoch(source_->LastBufferQpcNs(), encoderAccumulatedFrames + gapFramesToFeed);
+
             {
                 AudioDeviceTiming timing{};
                 if (source_->LastBufferDeviceTiming(timing)) {
@@ -768,9 +777,6 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                     // to place the track against video; assuming it started when
                     // Record() was called makes the whole track lead the picture
                     // by however long the device took to open.
-                    if (raw.num_frames > 0) {
-                        publishAudioEpoch(timing.qpc_position_ns, encoderAccumulatedFrames + gapFramesToFeed);
-                    }
                     drift_estimator.AddObservation(timing.device_position_ns, timing.qpc_position_ns);
                     const double raw_drift = drift_estimator.DriftMs();
                     double residual = raw_drift; // no slaving => residual is the raw drift
@@ -918,6 +924,37 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
 
         if (!anyWork)
             waitForCaptureWork();
+    }
+
+    if (mixed_src_ != nullptr && !failed) {
+        mixed_src_->BeginDrain();
+        while (source_->PendingFrameCount() > 0) {
+            RawAudioBuffer tail{};
+            std::string error;
+            if (!source_->AcquireBuffer(tail, error)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture, error);
+                failed = true;
+                break;
+            }
+            std::vector<EncodedAudioPacket> packets;
+            if (tail.num_frames > 0) {
+                enc.FeedFloat32(reinterpret_cast<const float*>(tail.bytes),
+                                static_cast<size_t>(tail.num_frames) * channels, 0, encoderAccumulatedFrames,
+                                sample_rate, channels, packets);
+            }
+            source_->ReleaseBuffer();
+            {
+                std::lock_guard slk(m_state.stats_mutex);
+                for (const auto& packet : packets) {
+                    ++m_state.stats.audio_packets;
+                    m_state.stats.audio_bytes += packet.bytes.size();
+                }
+            }
+            if (!routeAudioPackets(packets)) {
+                failed = true;
+                break;
+            }
+        }
     }
 
     // --- Drain the resampler before the source (and its SwrContext) goes away ---

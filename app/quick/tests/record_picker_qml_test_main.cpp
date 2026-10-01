@@ -56,15 +56,18 @@ class RecordPickerTestDriver final : public QObject {
         adapter_.setSource(&source_);
     }
 
-    // "ready", "recording", or anything else for the view model's initial
+    // "ready", "recording", "paused", or anything else for the view model's initial
     // LoadingCapabilities state.
     Q_INVOKABLE void setRecordingState(const QString& state) {
         if (state == QLatin1String("ready"))
             source_.state = exosnap::UiRecordingState::Ready;
         else if (state == QLatin1String("recording"))
             source_.state = exosnap::UiRecordingState::Recording;
+        else if (state == QLatin1String("paused"))
+            source_.state = exosnap::UiRecordingState::Paused;
         else
             source_.state = exosnap::UiRecordingState::LoadingCapabilities;
+        source_.elapsed_text = state == QLatin1String("paused") ? L"12:34" : L"";
         adapter_.setSource(&source_);
     }
 

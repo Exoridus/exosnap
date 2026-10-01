@@ -1,5 +1,7 @@
 #pragma once
 
+#include "MeasurementMetadata.h"
+
 #include <cstdint>
 #include <vector>
 
@@ -16,11 +18,10 @@ enum class PresentMode {
     ExclusiveFullscreen,
 };
 
-// One sampled present observation. `available` is false whenever the provider has
-// no real ETW-backed datum to report (not elevated, opt-in off, ETW session not
-// open, or no present seen yet) — UI then shows a neutral em-dash rather than a
-// fabricated zero, mirroring the Sentinel-degrade posture of DiskSpaceProvider.
+// Optional presentation enrichment. Unavailable observations remain neutral.
+// Consumers do not depend on the transport (direct ETW or a service).
 struct PresentSample {
+    MeasurementMetadata metadata;
     PresentMode mode = PresentMode::Unknown;
     bool tearing = false;
     double present_interval_ms = 0.0;
@@ -48,9 +49,8 @@ struct PresentSample {
     std::vector<unsigned long> trace_related_process_ids;
 };
 
-// Injectable interface for present/tearing diagnostics. Production code will use
-// the in-process PresentMon ETW consumer (vendored in a later slice); tests inject
-// a stub. Mirrors the provider pattern of IDiskSpaceProvider / IElevationProvider.
+// Presentation measurements, independent of the provider transport and privilege
+// requirements. Core recording health uses engine-owned outcome measurements.
 class IPresentProvider {
   public:
     virtual ~IPresentProvider() = default;
@@ -59,8 +59,8 @@ class IPresentProvider {
     // IsAvailable) this returns a default sample with available == false.
     [[nodiscard]] virtual PresentSample Sample() const = 0;
 
-    // True only when the provider can produce real present data this session
-    // (elevation + opt-in + an open ETW session). Gates UI presentation.
+    // Whether the provider can produce observations. Each sample separately
+    // declares whether it contains a measured, attributed value.
     [[nodiscard]] virtual bool IsAvailable() const = 0;
 };
 

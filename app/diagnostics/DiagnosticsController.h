@@ -1,12 +1,15 @@
 #pragma once
 
+#include "AdapterTelemetryTargets.h"
 #include "CapabilitySummary.h"
 #include "ConfigSummary.h"
 #include "DiagnosticResult.h"
 #include "FilesystemProvider.h"
+#include "GpuTelemetryProvider.h"
 #include "PresentProvider.h"
 #include "RecommendationEngine.h"
 #include "SessionLedger.h"
+#include "VideoMemoryProvider.h"
 #include "WindowTargetFacts.h"
 
 #include <capability/audio_ui_state.h>
@@ -289,6 +292,8 @@ struct LiveTileInputs {
     std::optional<PresentSample> present;
     std::optional<DpcLatencyReading> dpc;
     double gpu_exec_p99_ms = 0.0;
+    GpuTelemetryReading gpu;
+    VideoMemoryReading video_memory;
 };
 
 // Pure. Returns an empty list unless the snapshot describes a pipeline that is
@@ -338,6 +343,7 @@ struct TimelineMark {
 // which is the frozen ledger, not by what the machine can do next.
 struct LastSession {
     bool valid = false;
+    std::string outcome;
     std::string file_name; // name only, never a path
     // The session clock the marks are placed on: how long the recording ran.
     double duration_s = 0.0;
@@ -347,7 +353,7 @@ struct LastSession {
     double media_duration_s = 0.0;
     std::string started_at_text;
     std::string ended_at_text;
-    std::vector<LastSessionFact> facts; // exactly: dropped, achieved, drift, file
+    std::vector<LastSessionFact> facts; // recording outcome facts
     std::vector<LedgerEntry> ledger;    // frozen
     std::vector<TimelineMark> marks;
     int problems = 0;
@@ -538,6 +544,14 @@ class DiagnosticsController {
     };
 
     struct ProbeResult {
+        uint64_t session_generation = 0;
+        // One reading per unique active physical adapter, role-attributed.
+        std::vector<AdapterTelemetryReading> adapter_telemetry;
+        // The processing/encoder target's reading, kept as the single evidence
+        // the recommendation engine consumes. Identical to the entry in
+        // adapter_telemetry whose target carries the Encoder role.
+        GpuTelemetryReading gpu;
+        VideoMemoryReading video_memory;
         std::optional<uint64_t> free_bytes;
         uint64_t total_bytes = 0;
         std::string filesystem_name;
@@ -556,6 +570,9 @@ class DiagnosticsController {
 
     void SetConfig(Config config);
     void SetProbeResult(ProbeResult probe);
+    [[nodiscard]] const ProbeResult& probeResult() const noexcept {
+        return probe_;
+    }
     void SetDisplayFacts(DisplayFacts facts) noexcept;
     void SetSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target,
                                   std::string presented_label = {});

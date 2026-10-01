@@ -1,4 +1,5 @@
 #include "ExoEditPlayerItem.h"
+#include <exosnap/engine/gpu_surface_inventory.h>
 
 #include "EditPlayerAdapter.h"
 #include "QuickPreviewRgbaConverter.h"
@@ -99,12 +100,14 @@ class EditPlayerTextureNode final : public QSGNode {
         // pass (QuickPreviewRgbaConverter, already used by the Record preview)
         // bridges the two rather than forking the shared converter.
         desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        if (FAILED(device_->CreateTexture2D(&desc, nullptr, converted_texture_.GetAddressOf()))) {
+        if (FAILED(exosnap::engine::CreateTrackedTexture2D(device_, &desc, nullptr, converted_texture_.GetAddressOf(),
+                                                           exosnap::engine::GpuSurfaceOwner::Editor))) {
             error = QStringLiteral("Allocating the editor colour-conversion target failed.");
             return false;
         }
         desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        if (FAILED(device_->CreateTexture2D(&desc, nullptr, display_texture_.GetAddressOf()))) {
+        if (FAILED(exosnap::engine::CreateTrackedTexture2D(device_, &desc, nullptr, display_texture_.GetAddressOf(),
+                                                           exosnap::engine::GpuSurfaceOwner::Editor))) {
             error = QStringLiteral("Allocating the editor presentation target failed.");
             return false;
         }
@@ -311,11 +314,15 @@ void ExoEditPlayerItem::presentFrame(exosnap::engine::RawDecodedVideoFrame frame
     // Present-gate, ahead of any GPU work: the playback clock has already passed
     // this frame's own timestamp, so drawing it would show the past.
     const int64_t clock = clock_us_.load(std::memory_order_relaxed);
-    if (clock >= 0 && frame.pts_us < clock)
+    if (clock >= 0 && frame.pts_us < clock) {
+        exosnap::engine::RecordPerformanceEvent(exosnap::engine::PerformanceStage::PresentDropped);
         return;
+    }
 
     {
         QMutexLocker lock(&pending_mutex_);
+        if (pending_.frame)
+            exosnap::engine::RecordPerformanceEvent(exosnap::engine::PerformanceStage::MailboxReplaced);
         pending_.frame = std::move(frame);
         pending_.clear = false;
         pending_.generation = next_generation_++;

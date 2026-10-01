@@ -952,6 +952,15 @@ bool QuickLiveVerifySource::SelectRecordTarget(const QString& kind, const QStrin
     return true;
 }
 
+bool QuickLiveVerifySource::SelectRecordRegion(const QString& display_device, int x, int y, int width, int height,
+                                               QString* error) {
+    return application_.applyRegionForAutomation(display_device, x, y, width, height, error);
+}
+
+bool QuickLiveVerifySource::OpenRegionSelector(const QString& display_device, QString* error) {
+    return application_.openRegionSelectorForAutomation(display_device, error);
+}
+
 namespace {
 
 // The transport intents share one shape: press the Q_INVOKABLE the button

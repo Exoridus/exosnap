@@ -1,4 +1,5 @@
 #include "services/WgcSourceProducer.h"
+#include <exosnap/engine/gpu_surface_inventory.h>
 
 #include <utility>
 
@@ -199,7 +200,8 @@ ProducerPoll WgcSourceProducer::PollFrame(HubFrame& out) {
             copy_desc.SampleDesc.Count = 1;
             copy_desc.Usage = D3D11_USAGE_DEFAULT;
             copy_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            winrt::check_hresult(device_->CreateTexture2D(&copy_desc, nullptr, copy_texture_.put()));
+            winrt::check_hresult(exosnap::engine::CreateTrackedTexture2D(
+                device_.get(), &copy_desc, nullptr, copy_texture_.put(), exosnap::engine::GpuSurfaceOwner::Preview));
             copy_width_ = desc.Width;
             copy_height_ = desc.Height;
         }

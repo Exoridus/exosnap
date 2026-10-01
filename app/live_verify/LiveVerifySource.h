@@ -193,6 +193,20 @@ class LiveVerifySource {
     // `kind` is "monitor" | "window"; `title_filter` is ignored for monitors.
     virtual bool SelectRecordTarget(const QString& kind, const QString& title_filter, QString* error) = 0;
 
+    // Applies an exact physical-pixel region on a monitor through the same
+    // mode switch and selectRegion() path a source-picker region choice takes.
+    // The rect is relative to the monitor's own origin. `display_device` is a
+    // \\.\DISPLAYn name; empty keeps the currently selected monitor. This
+    // expresses the capture contract, not the selector gesture, so a scenario
+    // can prove region geometry without synthesised pointer input.
+    virtual bool SelectRecordRegion(const QString& display_device, int x, int y, int width, int height,
+                                    QString* error) = 0;
+
+    // Enters Region mode and opens the real selector overlay, exactly as
+    // choosing the Region tab and "Use source" does, without committing a
+    // region. The overlay's gesture, commit and cancel remain pointer work.
+    virtual bool OpenRegionSelector(const QString& display_device, QString* error) = 0;
+
     virtual bool RecordStart(QString* error) = 0;
     virtual bool RecordPause(QString* error) = 0;
     virtual bool RecordResume(QString* error) = 0;

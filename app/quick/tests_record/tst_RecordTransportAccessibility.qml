@@ -92,4 +92,25 @@ TestCase {
         verify(!!dock, "the transport dock exists");
         compare(findAccessible(dock, qsTr("Pause recording")), null);
     }
+
+    function test_paused_clock_clears_actions_at_minimum_width() {
+        recordDriver.setRecordingState("paused");
+        const dock = createTemporaryObject(dockComponent, testCase);
+        verify(!!dock);
+        dock.width = 828;
+        waitForRendering(dock);
+
+        let clock = null;
+        let actions = null;
+        for (const child of dock.children) {
+            if (child.objectName === "recordTransportClock")
+                clock = child;
+            if (child.objectName === "recordTransportActions")
+                actions = child;
+        }
+        verify(clock && actions);
+        compare(clock.text, "00:12:34");
+        verify(clock.x + clock.width + 8 <= actions.x,
+               "the paused clock must not overlap the action cluster");
+    }
 }

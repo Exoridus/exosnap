@@ -294,6 +294,11 @@ ApplicationWindow {
         restoreMode: Binding.RestoreNone
     }
 
+    RegionSelectionWindow {
+        recordViewModel: root.recordViewModel
+        monitorGeometry: root.overlays.recordedMonitorGeometry
+    }
+
     Loader {
         id: overlayRecordingLoader
 

@@ -21,6 +21,7 @@ mod package;
 mod pattern;
 mod pe;
 mod plan;
+mod pointer;
 mod report;
 mod runner;
 mod samples;

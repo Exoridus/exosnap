@@ -58,13 +58,15 @@ namespace exosnap {
 // both sides hold by shared_ptr means neither holds a pointer to the other.
 class SessionLedgerSink {
   public:
-    void Set(std::vector<diagnostics::LedgerEntry> ledger);
+    void Set(std::vector<diagnostics::LedgerEntry> ledger, std::vector<diagnostics::LedgerEntry> compensated = {});
     void Clear();
     [[nodiscard]] std::vector<diagnostics::LedgerEntry> Get() const;
+    [[nodiscard]] std::vector<diagnostics::LedgerEntry> GetCompensated() const;
 
   private:
     mutable std::mutex mutex_;
     std::vector<diagnostics::LedgerEntry> ledger_;
+    std::vector<diagnostics::LedgerEntry> compensated_;
 };
 
 // Whether the physical webcam capture should be running.
@@ -355,6 +357,11 @@ class RecordingCoordinator {
     std::filesystem::path CurrentOutputPath() const;
     void SetOutputSettings(const OutputSettingsModel& settings);
     void SetVideoSettings(const VideoSettingsModel& settings);
+    // The runtime resolution of VideoSettingsModel::encoder_device against the
+    // adapters present and the selected capture target. The frontend owns the
+    // adapter scan, so it resolves and passes the answer here; the engine
+    // verifies it again against the actual capture adapter at start.
+    void SetEncoderDeviceResolution(const exosnap::engine::ResolvedEncoderDevice& resolved);
     void SetOutputTargetContext(const FilenameTargetContext& context);
 
     // Returns the recording output directory in effect at the moment of the call.
@@ -511,6 +518,7 @@ class RecordingCoordinator {
         OutputSettingsModel output_settings;
         exosnap::engine::RecordingSplitSettings split_settings;
         VideoSettingsModel video_settings;
+        exosnap::engine::ResolvedEncoderDevice resolved_encoder_device;
         WebcamSettings webcam_settings;
         capability::UserRecorderConfig resolved_user_config;
         FilenameTargetContext output_target_context;
@@ -684,6 +692,7 @@ class RecordingCoordinator {
     exosnap::capability::UserRecorderConfig resolved_user_config_;
     OutputSettingsModel output_settings_;
     VideoSettingsModel video_settings_;
+    exosnap::engine::ResolvedEncoderDevice resolved_encoder_device_;
     WebcamSettings webcam_settings_;
     WebcamService webcam_service_;
     // Owned rather than borrowed: it must outlive any session that composites
@@ -771,10 +780,10 @@ class RecordingCoordinator {
     void RunRemuxJob(const std::filesystem::path& transient_mkv, const std::filesystem::path& final_mp4,
                      UiRecordingResult base_result);
 
-    // MP4-SPLIT-REMUX-R1: per-segment background remux jobs.
+    // Per-segment background remux jobs.
     //
     // When container == MP4 and split is active, each completed MKV segment is
-    // remuxed concurrently in a background thread while recording continues into
+    // queued on a single storage worker while recording continues into
     // the next segment.  The final segment is handled the same way; the recording
     // thread waits for all jobs to complete before posting "Saved"/"Failed".
     //
@@ -793,22 +802,10 @@ class RecordingCoordinator {
         std::filesystem::path transient_mkv; // input .mkv.tmp
         std::filesystem::path output_mp4;    // desired final .mp4
         QString manifest_id;                 // recovery manifest entry for this segment
-        // Background remux thread. jthread (not thread) so that a future
-        // early-return destroying this job (or the vector holding it) while the
-        // thread is still running joins safely in the destructor instead of
-        // calling std::terminate.
-        std::jthread thread;
-        // The job's explicit lifecycle flag: false = running, true = the thread
-        // body has finished and the job is ready to be joined and dropped.
-        //
-        // thread.joinable() is NOT this flag (QCR-107): a jthread stays joinable
-        // from construction until it is joined, so it reads "running" for the whole
-        // session for a job that finished seconds after it started. The disk
-        // monitor's remux reserve believed exactly that, and a FAILED remux — whose
-        // transient MKV is deliberately kept forever as the only trustworthy
-        // artefact — was reserved against for the rest of the session.
+        // Published only after work stops accessing this job. Reaping may
+        // destroy it immediately after observing completion.
         std::atomic<bool> completed{false};
-        // Written by the thread before it sets `completed`; read after the join.
+        // Published by the release store to completed; read after acquiring completion.
         bool succeeded = false;
         int av_error_code = 0;
         std::string error_message;
@@ -824,6 +821,8 @@ class RecordingCoordinator {
     // locks would let a job be queued against an id nobody owns yet.
     mutable std::mutex segment_remux_mutex_;
     std::vector<std::unique_ptr<SegmentRemuxJob>> segment_remux_jobs_;
+    QThreadPool segment_remux_pool_;
+    std::atomic<uint64_t> pending_segment_remux_jobs_{0};
     // Latches when a reaped job had failed. Reaping removes the job before the
     // end-of-session drain can inspect it, so without this a failed intermediate
     // segment would be reported as a fully successful split session. Reset at
@@ -837,30 +836,30 @@ class RecordingCoordinator {
     QString pending_segment_manifest_id_;
 
     // Schedule a background remux job for one MKV segment → MP4.
-    // Creates a SegmentRemuxJob and starts its thread.  Called on the recording
+    // Creates and queues a SegmentRemuxJob.  Called on the recording
     // thread (for the final segment) or from OnSegmentCompleted via ScheduleSegmentRemux.
     // `work` performs the actual remux and returns whether it succeeded; the
     // completion bookkeeping around it belongs to this function, so a test body
     // and the real remuxer follow the identical lifecycle.
-    void StartSegmentRemuxThread(SegmentRemuxJob& job, std::function<bool()> work);
+    void QueueSegmentRemux(SegmentRemuxJob& job, std::function<bool()> work);
     // The production remux body for one segment (remux → atomic move → transient
-    // cleanup → manifest removal), as handed to StartSegmentRemuxThread.
+    // cleanup → manifest removal), as handed to QueueSegmentRemux.
     bool RunSegmentRemuxWork(const std::filesystem::path& transient_mkv, const std::filesystem::path& output_mp4,
                              const QString& manifest_id);
 
-    // Join and drop every job whose thread has already finished, latching any
+    // Drop every completed job after acquiring its completion flag, latching any
     // failure into reaped_segment_remux_failed_. Opportunistic: it never waits on
     // a running job, so it is not a barrier at a split boundary. Called from
     // OnSegmentCompleted, which is the natural rhythm of a split session.
     void ReapFinishedSegmentRemuxJobs();
 
-    // Join all segment remux jobs and return false if any failed (including the
+    // Wait for all segment remux jobs and return false if any failed (including the
     // ones already reaped). cancel=true requests cancellation of any running remux.
     // Called on the recording thread after Record() returns — the final safety-net
-    // join that guarantees no remux thread outlives the session.
+    // wait that guarantees no remux job outlives the session.
     bool DrainSegmentRemuxJobs(bool cancel);
 
-    // Total bytes across all transient MKV files whose remux job is still RUNNING.
+    // Total bytes across all transient MKV files whose remux job is pending or running.
     // Used by the disk monitor for a conservative reserve. A finished job — success
     // or failure — is not transient work and must not inflate the reserve.
     // Thread-safe (acquires segment_remux_mutex_).

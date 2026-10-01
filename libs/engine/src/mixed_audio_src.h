@@ -6,6 +6,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -16,22 +18,9 @@ namespace exosnap::engine {
 // Output is always kOutputSampleRate Hz, kOutputChannels channels, Float32.
 // Each source uses gain: (1.0f / source_count) * source_gain_multipliers[i].
 //
-// Frame accounting (sample-count preserving)
-// ------------------------------------------
-// Each source is drained into its own FIFO; the mixer emits only frames that a
-// source actually delivered — it never fabricates trailing silence to reach a
-// fixed block size, and it never discards a source packet's tail. Per call it
-// emits N = the smallest FIFO depth among the sources that currently hold
-// samples ("min-of-ready"); longer sources keep their surplus buffered for the
-// next call (no discarding), and sources that are momentarily idle contribute
-// silence for the N frames without stalling the others (a WASAPI loopback
-// endpoint delivers no packets at all while the system is silent, so waiting on
-// every source would stall a live mic). num_frames on the emitted buffer is the
-// real N, so the sample-count-based PTS downstream stays continuous and free of
-// the drift that a fixed 480-frame block introduced on non-10 ms device
-// periods. The invariant is: per source, Σ delivered frames == Σ mixed frames
-// (up to at most one device period held in flight), with no inserted silence
-// and no dropped samples.
+// Multi-source packets are placed on one QPC sample timeline before mixing.
+// Missing intervals become silence after a bounded arrival horizon. A late
+// packet cannot append an interval that has already been emitted.
 class MixedAudioSrc final : public IAudioCaptureSource {
   public:
     // Nominal device-period frame count (48 kHz * 10 ms). Retained as the
@@ -41,11 +30,8 @@ class MixedAudioSrc final : public IAudioCaptureSource {
     static constexpr uint32_t kOutputSampleRate = 48000;
     static constexpr uint32_t kOutputChannels = 2;
 
-    // Safety valve against unbounded buffering under a sustained capture-clock
-    // mismatch between sources (each source is an independent, non-resampled
-    // clock). Normal packet-boundary jitter stays far below this; only real
-    // drift accumulates, and dropping the oldest surplus past ~500 ms bounds
-    // latency and memory rather than growing without limit.
+    // Bounds retained source data. Multi-source packets are normalized to the
+    // output format and tagged by their QPC interval, including after rejoin.
     static constexpr uint32_t kMaxFifoFrames = kOutputSampleRate / 2;
 
     // sources must be non-empty and source_gain_multipliers.size() must match sources.size().
@@ -56,7 +42,7 @@ class MixedAudioSrc final : public IAudioCaptureSource {
     // preserves the legacy hard-clamp-at-1.0 behavior for existing callers/tests.
     explicit MixedAudioSrc(std::vector<std::unique_ptr<IAudioCaptureSource>> sources,
                            std::vector<float> source_gain_multipliers, bool limiter_enabled = false,
-                           float limiter_ceiling_linear = 1.0f);
+                           float limiter_ceiling_linear = 1.0f, std::function<uint64_t()> clock_now_ns = {});
 
     // Live mute of one inner source. A muted inner contributes silence exactly
     // as a silent packet does, so the mix keeps its cadence and the surviving
@@ -94,8 +80,32 @@ class MixedAudioSrc final : public IAudioCaptureSource {
     bool LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const override;
 
     void Shutdown() override;
+    void BeginDrain();
+    [[nodiscard]] uint64_t LastBufferQpcNs() const override {
+        return sources_.size() == 1 ? sources_[0]->LastBufferQpcNs() : last_output_qpc_ns_;
+    }
+    static constexpr uint64_t kArrivalHorizonNs = 30'000'000;
 
   private:
+    struct TimelineSource {
+        std::vector<float> samples;
+        std::vector<int64_t> tags;
+        int64_t end = 0;
+        bool seen = false;
+    };
+    std::vector<TimelineSource> timeline_sources_;
+    std::function<uint64_t()> clock_now_ns_;
+    int64_t output_frame_ = 0;
+    int64_t latest_frame_ = 0;
+    bool timeline_started_ = false;
+    bool timeline_emitted_ = false;
+    bool draining_ = false;
+    bool timeline_discontinuity_pending_ = false;
+    uint64_t last_output_qpc_ns_ = 0;
+    void StoreTimelinePacket(size_t index, const RawAudioBuffer& packet, bool tail = false);
+    uint32_t TimelineFramesReady() const;
+    void MixTimeline(uint32_t frames);
+
     // Pull at most one packet from each source into its FIFO (gain-applied,
     // converted to Float32 stereo). Records discontinuity for this call.
     void PumpOnePacketPerSource(bool& any_discontinuity);

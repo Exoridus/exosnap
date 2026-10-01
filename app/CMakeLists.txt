@@ -1517,3 +1517,11 @@ endif()
 #
 # Unconditional: this subdirectory defines `exosnap`, the shipped application.
 add_subdirectory(quick/ExoSnap/Quick)
+
+exosnap_add_gtest(
+    NAME gpu_telemetry_tests
+    TEST_PREFIX diagnostics.
+    SOURCES tests/test_gpu_telemetry.cpp diagnostics/GpuTelemetryProviders.cpp
+    LIBRARIES dxgi
+)
+target_include_directories(gpu_telemetry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/libs/engine/include)

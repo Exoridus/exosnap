@@ -1,4 +1,5 @@
 #include "edit_player_hw_decode.h"
+#include <exosnap/engine/performance_measurements.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -36,6 +37,7 @@ void DeinterleaveChromaRow10(const uint8_t* uv_bytes, uint8_t* u_bytes, uint8_t*
 } // namespace
 
 AVFrame* DeinterleaveHwReadbackFrame(const AVFrame* src) {
+    ScopedPerformanceMeasurement measurement(PerformanceStage::DecodeNormalize);
     if (src == nullptr || !IsSupportedHwReadbackFormat(src->format) || src->width <= 0 || src->height <= 0)
         return nullptr;
 
@@ -47,7 +49,7 @@ AVFrame* DeinterleaveHwReadbackFrame(const AVFrame* src) {
     dst->format = ten_bit ? AV_PIX_FMT_YUV420P10LE : AV_PIX_FMT_YUV420P;
     dst->width = src->width;
     dst->height = src->height;
-    if (av_frame_get_buffer(dst, 0) < 0) {
+    if (av_frame_get_buffer(dst, 0) < 0 || av_frame_copy_props(dst, src) < 0) {
         av_frame_free(&dst);
         return nullptr;
     }

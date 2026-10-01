@@ -145,6 +145,9 @@ SessionLedgerRow LedgerRow(const diagnostics::LedgerEntry& entry, double now_s, 
     row.title = Text(entry.title);
     row.summary = Text(entry.summary);
     row.logExcerpt = Text(entry.log_excerpt);
+    row.compensation = Text(entry.compensation);
+    row.fixId = Text(entry.fix_id);
+    row.fixLabel = Text(entry.fix_label);
     row.active = entry.active;
     row.count = static_cast<int>(entry.count);
     row.firstSeenText = clock(entry.first_seen_s);
@@ -236,11 +239,21 @@ QString DiagnosticsAdapter::verdictState() const {
     return checking_ ? QStringLiteral("checking") : Key(diagnostics::VerdictStateKey(verdict_state_));
 }
 
+bool DiagnosticsAdapter::paused() const noexcept {
+    return controller_.liveSnapshot().valid &&
+           controller_.liveSnapshot().lifecycle == exosnap::engine::DiagnosticsLifecycle::Paused;
+}
+
 QString DiagnosticsAdapter::verdictHeadline() const {
+    if (paused())
+        return verdict_state_ == diagnostics::VerdictState::Ready ? tr("PAUSED · HEALTHY SO FAR")
+                                                                  : tr("PAUSED · Problems observed");
     return checking_ ? QStringLiteral("Checking\xe2\x80\xa6") : verdict_headline_;
 }
 
 QString DiagnosticsAdapter::verdictSubline() const {
+    if (paused() && verdict_state_ == diagnostics::VerdictState::Ready)
+        return tr("No recording-impacting problems observed up to pause.");
     return checking_ ? QStringLiteral("Check in progress.") : verdict_subline_;
 }
 
@@ -253,6 +266,8 @@ int DiagnosticsAdapter::noticeCount() const noexcept {
 }
 
 QString DiagnosticsAdapter::lastCheckText() const {
+    if (paused())
+        return tr("Paused · last measured state frozen");
     // While recording the band reports the session, so its stamp says since when
     // and at what rate rather than when the readiness probe last ran.
     if (recording_) {
@@ -321,21 +336,14 @@ void DiagnosticsAdapter::setInDepthEnabledFromUi(bool enabled) {
 }
 
 QString DiagnosticsAdapter::inDepthStateText() const {
-    // The switch is session state and elevation is a process property, so both
-    // halves of the gate are answered here. With the switch on in a standard
-    // process no ETW session exists and no in-depth tile has a reading, so the
-    // sub-text names the gate rather than claiming traces that are not running.
-    if (in_depth_enabled_) {
-        return controller_.elevated() ? QStringLiteral("On \xc2\xb7 elevated \xc2\xb7 PresentMon + DPC/ISR trace")
-                                      : QStringLiteral("On \xc2\xb7 not measuring \xc2\xb7 needs an admin relaunch");
-    }
-    if (recording_)
-        return QStringLiteral("Off \xc2\xb7 cannot change while recording");
-    return QStringLiteral("Off \xc2\xb7 needs an admin relaunch");
+    if (in_depth_enabled_)
+        return controller_.elevated() ? tr("On · including optional presentation and kernel traces")
+                                      : tr("On · enhanced presentation telemetry unavailable");
+    return tr("Off · core recording health remains active");
 }
 
 bool DiagnosticsAdapter::inDepthAvailable() const noexcept {
-    return !recording_;
+    return true;
 }
 
 const QVariantList& DiagnosticsAdapter::tiles() const noexcept {
@@ -349,12 +357,25 @@ const QVariantList& DiagnosticsAdapter::liveTiles() const noexcept {
 void DiagnosticsAdapter::refreshLiveTiles() {
     const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot = controller_.liveSnapshot();
     diagnostics::LiveTileInputs inputs{snapshot, controller_.ledger()};
-    // Elevation is half the gate: with the opt-in on but the process standard,
-    // no trace is running and there is nothing for the extra tiles to report.
-    inputs.in_depth = in_depth_enabled_ && controller_.elevated();
+    // Engine and unprivileged evidence remain available without optional ETW traces.
+    inputs.in_depth = in_depth_enabled_;
     inputs.present = present_sample_;
     inputs.dpc = dpc_reading_;
     inputs.gpu_exec_p99_ms = snapshot.compositor.gpu_exec_p99_ms;
+    const auto& probe = controller_.probeResult();
+    const auto now = std::chrono::steady_clock::now();
+    if (inputs.present && inputs.present->metadata.observed_at != std::chrono::steady_clock::time_point{} &&
+        !inputs.present->metadata.Fresh(now))
+        inputs.present.reset();
+    if (inputs.dpc && inputs.dpc->metadata.observed_at != std::chrono::steady_clock::time_point{} &&
+        !inputs.dpc->metadata.Fresh(now))
+        inputs.dpc.reset();
+    if (probe.session_generation == snapshot.session_generation) {
+        if (probe.gpu.metadata.FreshForAdapter(snapshot.encoder_adapter_luid, now))
+            inputs.gpu = probe.gpu;
+        if (probe.video_memory.metadata.FreshForAdapter(snapshot.encoder_adapter_luid, now))
+            inputs.video_memory = probe.video_memory;
+    }
 
     std::vector<diagnostics::LiveTile> next = diagnostics::BuildLiveTiles(inputs);
     // The tiles can be identical while the sparklines have moved on, so the
@@ -379,7 +400,7 @@ void DiagnosticsAdapter::refreshLiveTiles() {
         // there is nothing for a session figure to sit under, and the detail
         // keeps saying why a measurement is missing.
         QString detail = QString::fromStdString(tile.detail);
-        if (!series.isEmpty() && !session_detail.isEmpty())
+        if (tile.key != "framePacing" && !series.isEmpty() && !session_detail.isEmpty())
             detail = session_detail;
 
         QVariantMap entry;
@@ -707,7 +728,12 @@ void DiagnosticsAdapter::setLastSession(const exosnap::UiRecordingResult& result
 }
 
 void DiagnosticsAdapter::applyLiveDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
+    const bool was_paused = paused();
     controller_.SetLiveSnapshot(snapshot);
+    if (was_paused != paused()) {
+        emit recordingChanged();
+        emit lastCheckChanged();
+    }
     const bool live = controller_.liveRecording();
 
     if (live) {
@@ -720,7 +746,8 @@ void DiagnosticsAdapter::applyLiveDiagnostics(const exosnap::engine::RecordingDi
             session_start_ =
                 QDateTime::currentDateTime().addMSecs(-static_cast<qint64>(snapshot.elapsed_seconds * 1000.0));
         }
-        appendSeriesSamples(snapshot);
+        if (!paused())
+            appendSeriesSamples(snapshot);
     }
 
     const bool left_recording = recording_ && !live;
@@ -800,9 +827,19 @@ void DiagnosticsAdapter::startProbe(bool run_self_test) {
     setChecking(true);
     emit lastCheckChanged();
 
+    const exosnap::engine::RecordingDiagnosticsSnapshot& live = controller_.liveSnapshot();
     diagnostics::DiagnosticsProbeRequest request;
     request.output_folder = std::filesystem::path(controller_.outputFolder());
     request.run_self_test = run_self_test;
+    // The engine publishes one LUID per pipeline role; dedupe them into unique
+    // physical polling targets so a single-GPU session reads NVML and DXGI once.
+    exosnap::engine::PipelineAdapterAssignment assignment;
+    assignment.capture = {live.capture_adapter_luid != 0, live.capture_adapter_luid, live.capture_adapter_vendor_id};
+    assignment.processing = {live.processing_adapter_luid != 0, live.processing_adapter_luid,
+                             live.processing_adapter_vendor_id};
+    assignment.encoder = {live.encoder_adapter_luid != 0, live.encoder_adapter_luid, live.encoder_adapter_vendor_id};
+    request.telemetry_targets = diagnostics::BuildAdapterTelemetryTargets(assignment);
+    request.session_generation = live.session_generation;
 
     // Volume query, output-path write probe and the self-test (DXGI factory +
     // LoadLibraryW + temp file + COM audio enumeration) all run here, off the GUI
@@ -913,7 +950,7 @@ void DiagnosticsAdapter::refreshLastSessionMap() {
     if (!session.valid)
         return;
 
-    const QString saved = QStringLiteral("Recording saved");
+    const QString saved = tr("Last recording") + QStringLiteral(" · ") + Text(session.outcome);
     last_session_.insert(QStringLiteral("headerText"),
                          session.problems > 0 ? QStringLiteral("%1 %2 %3 problem%4 observed")
                                                     .arg(saved, QString::fromUtf8(kMiddot))

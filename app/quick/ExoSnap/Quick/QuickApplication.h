@@ -142,6 +142,18 @@ class QuickApplication {
     // what lets the frontend A/B benchmark put both frontends in the same state.
     [[nodiscard]] bool selectCaptureTargetForAutomation(exosnap::engine::CaptureTarget::Kind kind,
                                                         const QString& title_filter);
+    // Automation only (Live Verify). Applies an exact physical-pixel region on
+    // a monitor through the source picker's own mode switch and selectRegion()
+    // path. `display_device` empty keeps the current monitor target; the rect is
+    // relative to that monitor's origin. Returns false with a reason when the
+    // monitor or rect cannot be applied.
+    [[nodiscard]] bool applyRegionForAutomation(const QString& display_device, int x, int y, int width, int height,
+                                                QString* error);
+    // Automation only (Live Verify). Enters Region mode on a monitor and opens
+    // the real selector overlay with no committed region, exactly as choosing
+    // the Region tab and "Use source" does. The drag/commit/cancel gesture
+    // stays user input.
+    [[nodiscard]] bool openRegionSelectorForAutomation(const QString& display_device, QString* error);
     // Automation only (--auto-edit chained onto --auto-record). Opens the Editor
     // on the recording this process just finished, through the same
     // openEditorForCurrentRecording() the production completion path calls.
@@ -595,6 +607,11 @@ class QuickApplication {
     void noteDefaultInputEndpoint(const AudioDeviceSnapshot& snapshot);
     static diagnostics::RecommendationEngine::CaptureTargetAdapterFacts
     captureTargetAdapterFacts(const std::optional<exosnap::engine::CaptureTarget>& target);
+    // Resolves the persisted encoder-device preference against the current
+    // adapter scan and the selected target's capture adapter. Pure; the result
+    // is verified again by the engine against the actual capture device.
+    exosnap::engine::ResolvedEncoderDevice
+    resolveEncoderDeviceFor(const std::optional<exosnap::engine::CaptureTarget>& target) const;
     // The deferred half of updateMeterServices(): opens the endpoints the current
     // state wants. Re-checks the stop condition, because it runs one debounce
     // interval after the decision that scheduled it.

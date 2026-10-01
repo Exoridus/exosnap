@@ -1,6 +1,6 @@
 #include "gpu_frame_luminance.h"
 
-#include <d3dcompiler.h>
+#include "measured_shader_compile.h"
 
 #include <algorithm>
 #include <cmath>
@@ -55,6 +55,8 @@ cbuffer LuminanceConstants : register(b0) {
     uint2 gSize;      // analysed region; threads outside contribute nothing
     uint gSumDivisor; // scales each group's sum into the global accumulator
     uint gPqSource;   // 1 when the source is PQ-encoded BT.2020 rather than scRGB
+    uint2 gOrigin;
+    uint2 gPadding;
 };
 
 static const uint kBins = 64;
@@ -102,7 +104,7 @@ void main(uint3 dtid : SV_DispatchThreadID, uint gi : SV_GroupIndex) {
     GroupMemoryBarrierWithGroupSync();
 
     if (dtid.x < gSize.x && dtid.y < gSize.y) {
-        float3 c = srcTex.Load(int3(int2(dtid.xy), 0)).rgb;
+        float3 c = srcTex.Load(int3(int2(dtid.xy + gOrigin), 0)).rgb;
         if (gPqSource != 0) {
             c = Bt2020ToBt709(float3(PqToScRgb(c.r), PqToScRgb(c.g), PqToScRgb(c.b)));
         }
@@ -147,6 +149,8 @@ struct LuminanceConstants {
     uint32_t size[2];
     uint32_t sum_divisor;
     uint32_t pq_source;
+    uint32_t origin[2];
+    uint32_t padding[2];
 };
 
 void SetHResultError(std::string& err, const char* what, HRESULT hr) {
@@ -164,13 +168,24 @@ float BitsToNits(uint32_t bits) noexcept {
 } // namespace
 
 bool FrameLuminanceAnalyzer::Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height,
-                                  bool pq_source, std::string& err) {
+                                  bool pq_source, std::string& err, const RECT* region) {
     if (device == nullptr || context == nullptr || width == 0 || height == 0) {
         err = "FrameLuminanceAnalyzer::Init invalid arguments";
         return false;
     }
     Reset();
 
+    if (region != nullptr) {
+        if (region->left < 0 || region->top < 0 || region->right <= region->left || region->bottom <= region->top ||
+            static_cast<UINT>(region->right) > width || static_cast<UINT>(region->bottom) > height) {
+            err = "Luminance region lies outside the source";
+            return false;
+        }
+        origin_x_ = static_cast<UINT>(region->left);
+        origin_y_ = static_cast<UINT>(region->top);
+        width = static_cast<UINT>(region->right - region->left);
+        height = static_cast<UINT>(region->bottom - region->top);
+    }
     device_ = device;
     context_ = context;
     width_ = width;
@@ -190,8 +205,9 @@ bool FrameLuminanceAnalyzer::Init(ID3D11Device* device, ID3D11DeviceContext* con
 
     winrt::com_ptr<ID3DBlob> cs_blob;
     winrt::com_ptr<ID3DBlob> error_blob;
-    HRESULT hr = D3DCompile(kComputeShaderSrc, std::strlen(kComputeShaderSrc), "frame_luminance_cs", nullptr, nullptr,
-                            "main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, cs_blob.put(), error_blob.put());
+    HRESULT hr =
+        MeasuredD3DCompile(kComputeShaderSrc, std::strlen(kComputeShaderSrc), "frame_luminance_cs", nullptr, nullptr,
+                           "main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, cs_blob.put(), error_blob.put());
     if (FAILED(hr)) {
         SetHResultError(err, "D3DCompile(frame-luminance compute shader)", hr);
         if (error_blob != nullptr && error_blob->GetBufferPointer() != nullptr) {
@@ -214,6 +230,8 @@ bool FrameLuminanceAnalyzer::Init(ID3D11Device* device, ID3D11DeviceContext* con
     lc.size[1] = height_;
     lc.sum_divisor = sum_divisor_;
     lc.pq_source = pq_source_ ? 1u : 0u;
+    lc.origin[0] = origin_x_;
+    lc.origin[1] = origin_y_;
     D3D11_BUFFER_DESC const_desc{};
     const_desc.ByteWidth = sizeof(LuminanceConstants);
     const_desc.Usage = D3D11_USAGE_DEFAULT;
@@ -288,6 +306,7 @@ void FrameLuminanceAnalyzer::Reset() noexcept {
     compute_shader_ = nullptr;
     device_ = nullptr;
     context_ = nullptr;
+    origin_x_ = origin_y_ = 0;
     width_ = 0;
     height_ = 0;
     sum_divisor_ = 1;

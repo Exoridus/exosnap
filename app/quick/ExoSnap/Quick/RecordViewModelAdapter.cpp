@@ -193,11 +193,9 @@ QString RecordViewModelAdapter::droppedFramesText() const {
 QString RecordViewModelAdapter::driftText() const {
     if (source_ == nullptr || !source_->live_stats_available || !source_->av_drift_available)
         return QStringLiteral("—");
-    // Rounded to whole milliseconds, so anything in (-0.5, 0) formats as "-0".
-    // A residual below half a millisecond is zero drift, and a minus sign in front
-    // of it reads as a direction that was never measured.
-    const double drift = std::abs(source_->av_drift_ms) < 0.5 ? 0.0 : source_->av_drift_ms;
-    return QStringLiteral("%1 ms").arg(drift, 0, 'f', 0);
+    // Suppress a negative sign when rounding the residual to zero.
+    const double drift = std::abs(source_->av_drift_ms) < 0.05 ? 0.0 : source_->av_drift_ms;
+    return QStringLiteral("%1%2 ms").arg(drift > 0 ? QStringLiteral("+") : QString()).arg(drift, 0, 'f', 1);
 }
 
 bool RecordViewModelAdapter::liveStatsAvailable() const noexcept {
@@ -324,6 +322,17 @@ const QVariantList& RecordViewModelAdapter::windowTargetOptions() const noexcept
     return window_target_options_;
 }
 
+QVariantMap RecordViewModelAdapter::targetStillOptions() const {
+    QVariantMap options;
+    for (auto it = target_stills_.cbegin(); it != target_stills_.cend(); ++it) {
+        options.insert(it.key(), QVariantMap{{QStringLiteral("source"), it.value()},
+                                             {QStringLiteral("state"), stale_target_stills_.contains(it.key())
+                                                                           ? QStringLiteral("stale")
+                                                                           : QStringLiteral("ready")}});
+    }
+    return options;
+}
+
 int RecordViewModelAdapter::targetCount() const noexcept {
     return target_options_.size();
 }
@@ -386,6 +395,75 @@ const QString& RecordViewModelAdapter::sourceDetailText() const noexcept {
 
 const QString& RecordViewModelAdapter::formatText() const noexcept {
     return format_text_;
+}
+
+QString RecordViewModelAdapter::sourceButtonText() const {
+    if (!source_)
+        return tr("Select source");
+    if (source_->capture_mode == CaptureMode::Region) {
+        if (region_selection_needed_ || source_->state == UiRecordingState::RegionSelecting)
+            return tr("Selecting region…");
+        if (source_->has_region && source_->region.IsValid())
+            return tr("Region: %1×%2").arg(source_->region.width).arg(source_->region.height);
+        return tr("Select source");
+    }
+    if (source_->selected_target_index < 0 ||
+        source_->selected_target_index >= static_cast<int>(source_->targets.size()))
+        return tr("Select source");
+    const bool window = source_->capture_mode == CaptureMode::Window;
+    const auto presentation = ResolveCaptureTargetPresentation(
+        source_->targets[static_cast<size_t>(source_->selected_target_index)],
+        window ? CaptureTargetPresentationKind::Window : CaptureTargetPresentationKind::Display);
+    return window ? tr("App: %1").arg(QString::fromStdString(presentation.label))
+                  : tr("Screen: %1").arg(QString::fromStdString(presentation.title).section(QLatin1Char(':'), 0, 0));
+}
+
+void RecordViewModelAdapter::setAudioSourceHealth(uint32_t degraded_kinds) {
+    if (degraded_audio_kinds_ == degraded_kinds)
+        return;
+    degraded_audio_kinds_ = degraded_kinds;
+    emit changed();
+}
+
+QVariantList RecordViewModelAdapter::confidenceIndicators() const {
+    using engine::AudioSourceKind;
+    using engine::AudioSourceKindBit;
+    const auto degraded = [this](AudioSourceKind kind) {
+        return (recording() || paused()) && (degraded_audio_kinds_ & AudioSourceKindBit(kind)) != 0;
+    };
+    const auto audioState = [&degraded](bool enabled, bool available, AudioSourceKind kind) {
+        if (!enabled)
+            return 0;
+        return !available || degraded(kind) ? 1 : 2;
+    };
+    const int app = audioState(appAudioEnabled(), true, AudioSourceKind::App);
+    const int sys = audioState(systemAudioEnabled(), !degraded(AudioSourceKind::SystemOutput), AudioSourceKind::Sys);
+    const int mic = audioState(microphoneEnabled(), microphoneAvailable(), AudioSourceKind::Mic);
+    const auto label = [this](int state) {
+        return state == 0   ? tr("Muted")
+               : state == 1 ? tr("Recovering; recording continues with silence")
+                            : tr("Active");
+    };
+    const auto item = [](const QString& key, const QString& description, bool included, bool warning, bool failed) {
+        return QVariantMap{{"key", key},
+                           {"description", description},
+                           {"included", included},
+                           {"tone", failed     ? "error"
+                                    : warning  ? "warning"
+                                    : included ? "success"
+                                               : "neutral"}};
+    };
+    const bool speakerWarning =
+        app == 1 || sys == 1 || (systemAudioEnabled() && degraded(AudioSourceKind::SystemOutput));
+    return {item(QStringLiteral("speaker"), tr("Application audio: %1. System audio: %2").arg(label(app), label(sys)),
+                 app != 0 || sys != 0, speakerWarning, false),
+            item(QStringLiteral("microphone"), tr("Microphone: %1").arg(label(mic)), mic != 0, mic == 1, false),
+            item(QStringLiteral("webcam"),
+                 !webcamEnabled()     ? tr("Camera off")
+                 : webcamError()      ? tr("Camera failed: %1").arg(webcamErrorText())
+                 : !webcamAvailable() ? tr("Camera unavailable; reconnect the device")
+                                      : tr("Camera active"),
+                 webcamEnabled(), webcamEnabled() && !webcamAvailable(), webcamEnabled() && webcamError())};
 }
 
 QRectF RecordViewModelAdapter::normalizedSourceRect() const noexcept {
@@ -778,10 +856,6 @@ void RecordViewModelAdapter::rebuildPresentation() {
                 window ? QString{}
                        : QString::fromStdString(
                              ResolveCaptureTargetPresentation(target, CaptureTargetPresentationKind::Region).label);
-            const QString thumbnail_source = target_stills_.value(identity);
-            const QString thumbnail_state = thumbnail_source.isEmpty()                ? QStringLiteral("placeholder")
-                                            : stale_target_stills_.contains(identity) ? QStringLiteral("stale")
-                                                                                      : QStringLiteral("ready");
             const QVariantMap option{
                 {QStringLiteral("targetIndex"), index},
                 {QStringLiteral("identity"), identity},
@@ -791,10 +865,10 @@ void RecordViewModelAdapter::rebuildPresentation() {
                 // against what an automated caller was told to record.
                 {QStringLiteral("device"), QString::fromStdString(target.description)},
                 {QStringLiteral("label"), QString::fromStdString(presentation.label)},
+                {QStringLiteral("appName"), QString::fromStdString(presentation.app_name)},
+                {QStringLiteral("windowTitle"), QString::fromStdString(presentation.title)},
                 {QStringLiteral("kind"), window ? QStringLiteral("window") : QStringLiteral("display")},
                 {QStringLiteral("regionLabel"), region_label},
-                {QStringLiteral("thumbnailState"), thumbnail_state},
-                {QStringLiteral("thumbnailSource"), thumbnail_source},
                 {QStringLiteral("selected"), index == selected_index},
             };
             target_options.push_back(option);
@@ -867,6 +941,8 @@ QString RecordViewModelAdapter::TargetIdentity(const exosnap::engine::CaptureTar
     return kind + QLatin1Char(':') + QString::number(static_cast<qulonglong>(target.native_id));
 }
 
+// Still arrivals update card content without resetting the GridView model.
+// Resetting the QVariantList would recreate every delegate and flash the picker.
 void RecordViewModelAdapter::setTargetStill(QString identity, QString source) {
     if (identity.isEmpty() || source.isEmpty())
         return;
@@ -874,8 +950,7 @@ void RecordViewModelAdapter::setTargetStill(QString identity, QString source) {
     if (!was_stale && target_stills_.value(identity) == source)
         return;
     target_stills_.insert(std::move(identity), std::move(source));
-    target_options_revision_.reset();
-    rebuildPresentation();
+    emit targetStillOptionsChanged();
 }
 
 void RecordViewModelAdapter::setTargetStillUnavailable(const QString& identity) {
@@ -886,8 +961,7 @@ void RecordViewModelAdapter::setTargetStillUnavailable(const QString& identity) 
     if (stale_target_stills_.contains(identity))
         return;
     stale_target_stills_.insert(identity);
-    target_options_revision_.reset();
-    rebuildPresentation();
+    emit targetStillOptionsChanged();
 }
 
 void RecordViewModelAdapter::setVisibleTargetIdentities(const QStringList& identities) {

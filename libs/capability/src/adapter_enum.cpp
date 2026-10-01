@@ -43,20 +43,6 @@ std::string NarrowFromWide(const wchar_t* wide) {
 
 } // namespace
 
-AdapterVendor ClassifyVendor(uint32_t vendor_id) noexcept {
-    switch (vendor_id) {
-    case 0x10DEu:
-        return AdapterVendor::Nvidia;
-    case 0x1002u: // AMD/ATI
-    case 0x1022u: // AMD (some APU SKUs report the CPU vendor ID on the iGPU function)
-        return AdapterVendor::Amd;
-    case 0x8086u:
-        return AdapterVendor::Intel;
-    default:
-        return AdapterVendor::Other;
-    }
-}
-
 AdapterKind ClassifyKind(uint64_t dedicated_video_memory_bytes, uint64_t shared_system_memory_bytes) noexcept {
     if (dedicated_video_memory_bytes == 0 && shared_system_memory_bytes == 0)
         return AdapterKind::Unknown;
@@ -96,6 +82,7 @@ std::vector<AdapterInfo> EnumerateAdapters() {
         info.name = NarrowFromWide(desc.Description);
         info.vendor_id = desc.VendorId;
         info.device_id = desc.DeviceId;
+        info.subsystem_id = desc.SubSysId;
         info.vendor = ClassifyVendor(desc.VendorId);
         info.luid = PackAdapterLuid(desc.AdapterLuid.HighPart, desc.AdapterLuid.LowPart);
         info.dedicated_video_memory_bytes = static_cast<uint64_t>(desc.DedicatedVideoMemory);

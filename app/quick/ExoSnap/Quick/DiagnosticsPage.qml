@@ -389,8 +389,8 @@ Item {
                     Layout.fillWidth: true
 
                     DiagnosticsSectionHeader {
-                        title: qsTr("LIVE PIPELINE")
-                        meta: qsTr("measured from the running recording")
+                        title: root.diagnostics.paused ? qsTr("PAUSED PIPELINE") : qsTr("LIVE PIPELINE")
+                        meta: root.diagnostics.paused ? qsTr("frozen last measured state") : qsTr("measured from the running recording")
                         Layout.fillWidth: true
                     }
 
@@ -468,6 +468,10 @@ Item {
                             budgetText: ledgerCard.model.budgetText
                             totalActiveText: ledgerCard.model.totalActiveText
                             logExcerpt: ledgerCard.model.logExcerpt
+                            compensation: ledgerCard.model.compensation
+                            fixId: ledgerCard.model.fixId
+                            fixLabel: ledgerCard.model.fixLabel
+                            onAssistedFixRequested: fixId => root.diagnostics.openAssistedFix(fixId)
                             occurrences: ledgerCard.model.occurrences
                             // Firing right now is the card; gone quiet is the row.
                             expanded: ledgerCard.model.active

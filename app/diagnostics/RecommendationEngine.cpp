@@ -58,7 +58,9 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
         live_present_jitter_ms_ = live_snapshot->capture.source_present_jitter_ms;
     }
     // Consume the optional present-mode sample only when the provider has a real observation.
-    if (present != nullptr && present->available) {
+    if (present != nullptr && present->available &&
+        (present->metadata.observed_at == std::chrono::steady_clock::time_point{} ||
+         present->metadata.Fresh(std::chrono::steady_clock::now()))) {
         present_ = *present;
     }
     // Consume live disk-write latency only when the writer reports it (streaming Matroska;
@@ -73,6 +75,9 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
     if (live_snapshot != nullptr && live_snapshot->valid &&
         live_snapshot->lifecycle == exosnap::engine::DiagnosticsLifecycle::Recording) {
         live_capture_available_ = true;
+        live_cfr_ = live_snapshot->video_encoder.cfr;
+        live_pacing_ = live_snapshot->pacing;
+        live_disk_pressure_ = live_snapshot->bottleneck == exosnap::engine::PipelineBottleneck::Disk;
         live_capture_starved_ = live_snapshot->capture.capture_starved;
         live_frames_emitted_ = live_snapshot->capture.frames_emitted;
         live_frames_duplicated_ = live_snapshot->capture.frames_duplicated;
@@ -104,6 +109,19 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
 
 DiagnosticChecklist RecommendationEngine::Generate() const {
     DiagnosticChecklist checklist;
+    if (live_pacing_.recent_frame_loss > 0) {
+        auto impact = MakeResult(
+            "rec.output.loss", DiagnosticGroup::Performance, DiagnosticSeverity::Notice,
+            DiagnosticTier::MeasuredProblem, "Recording frames lost", "Real output frame loss was measured.",
+            "Counts processing failures and skipped output slots; excludes selection, coalescing and preview drops.",
+            std::to_string(live_pacing_.recent_frame_loss) + " frames lost");
+        impact.impact = impact.current_value;
+        impact.measured_value = static_cast<double>(live_pacing_.recent_frame_loss);
+        impact.value_unit = "frames";
+        impact.fix_action = FixAction{"settings/video/frame-rate", "Review frame rate", FixAction::Safety::Assisted,
+                                      true, "Open the output frame-rate control."};
+        checklist.results.push_back(std::move(impact));
+    }
     checkRefreshRateMismatch(checklist);
     checkExclusiveWindowTarget(checklist);
     checkExclusiveFullscreen(checklist);
@@ -132,99 +150,55 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
 }
 
 void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checklist) const {
-    // Measured-symptom only — NO static config nag. The Smooth phase-correct frame selection
-    // (default pacing) already absorbs the common high-refresh / VRR → CFR case, so
-    // a static "144 Hz + 60 fps" warning would just nag on a setup that records fine. We fire
-    // ONLY on measured residual present-time jitter: irregular source delivery that even
-    // best-frame selection at a fixed output rate cannot fully smooth. Sustained coalescing
-    // (source presenting faster than the CFR tick) is NORMAL for high-refresh sources and is
-    // exactly what the resampler handles — so it is no longer a trigger either.
-    //
-    //   kJitterMs = 8.0 ms — the spread of the DELIVERING present intervals, p95 minus
-    //     p5. Raised from the pre-resampler 4 ms: the resampler absorbs moderate
-    //     jitter, so only a sustained spread approaching half a 60 fps output interval
-    //     (~8.3 ms) signals judder it could not hide. The threshold belongs to the
-    //     OUTPUT period and does not scale with the source: a faster source is easier
-    //     for frame selection to smooth, not harder.
-    //
-    //     The measurement used to be peak-minus-average over every interval, which
-    //     fired on any source that paused. A 30-minute recording of a mostly still
-    //     144 Hz desktop raised this 203 times, worst "judder" 1045 ms -- one second
-    //     of nothing happening. The aggregator now excludes stalled intervals and
-    //     reports a quantile spread, so this fires on uneven delivery and stays quiet
-    //     on no delivery.
-    constexpr double kJitterMs = 8.0;
-    const bool live_judder = live_present_available_ && live_cfr_ && live_present_jitter_ms_ > kJitterMs;
-    if (!live_judder) {
+    if (!live_cfr_)
+        return;
+    if (live_pacing_.recent_affected_slots == 0) {
+        if (live_pacing_.selection_samples > 0 && live_present_jitter_ms_ > 8.0) {
+            auto fact = MakeResult("rec.pacing.compensated", DiagnosticGroup::Recommendation, DiagnosticSeverity::Pass,
+                                   DiagnosticTier::Fact, "Source timing irregularity",
+                                   "No output slots affected in the measured window.",
+                                   "Source variation is retained as evidence, not recording loss.",
+                                   std::to_string(live_present_jitter_ms_) + " ms source variation");
+            fact.compensation = "Phase-correct selection remained within one output period.";
+            checklist.results.push_back(std::move(fact));
+        }
         return;
     }
-
-    const std::string jitter_str = std::to_string(live_present_jitter_ms_).substr(0, 4);
-    const std::string detail =
-        "Live capture telemetry shows present-time jitter of " + jitter_str +
-        " ms during constant-frame-rate recording. The source presents with variable / refresh-driven "
-        "timing (e.g. VRR) irregular enough that even phase-correct frame selection cannot fully smooth "
-        "it at a fixed output rate, producing residual judder.";
-    DiagnosticResult r =
+    const auto count = std::to_string(live_pacing_.recent_affected_slots);
+    const bool delayed = live_pacing_.worker_lateness.samples > 0 && live_target_fps_ > 0 &&
+                         live_pacing_.worker_lateness.p95_ms > 1000.0 / live_target_fps_;
+    auto r =
         MakeResult("rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                   DiagnosticTier::MeasuredProblem, "VRR / refresh-induced judder detected",
-                   "Live present-pacing measurements indicate uneven frame delivery from the source.", detail,
-                   "Measured present jitter " + jitter_str + " ms during CFR capture",
-                   "Cap your game's frame rate (e.g. 60 or 120 fps) or disable VRR while recording for "
-                   "smoother pacing.");
-    r.measured_value = live_present_jitter_ms_;
-    r.budget_value = kJitterMs;
-    r.value_unit = "ms";
-
-    // Present-mode attribution (PresentMon): when available, name *how* the source
-    // presents so the diagnosis reads as a root cause, not just a number.
-    if (present_.has_value()) {
-        switch (present_->mode) {
-        case PresentMode::IndependentFlip:
-            r.detail += " The source is presenting via independent flip (variable-rate "
-                        "flip-model), which the fixed CFR cadence cannot phase-match.";
-            break;
-        case PresentMode::ExclusiveFullscreen:
-            r.detail += " The source is in exclusive fullscreen; its present cadence is "
-                        "independent of the desktop refresh.";
-            break;
-        default:
-            break;
-        }
-    }
-
-    FixAction fa;
-    fa.id = "fix.fps.cap";
-    fa.label = "Set recording FPS to match monitor";
-    fa.safety = FixAction::Safety::Assisted;
-    fa.reversible = true;
-    fa.changes_summary =
-        "Opens Video settings to adjust the recording frame rate to better match your monitor's refresh rate.";
-    r.fix_action = fa;
+                   DiagnosticTier::MeasuredProblem, "Frame pacing degraded", count + " output slots were affected.",
+                   "Fresh frame selection exceeded one output period, or output slots were skipped. "
+                   "Source variation and expected duplicate frames do not count as recording loss.",
+                   count + " affected output slots", "Review frame pacing and recording frame rate.");
+    r.impact = r.summary;
+    if (video_memory_.local && video_memory_.local->current_usage_bytes > video_memory_.local->budget_bytes)
+        r.detail += " Process video-memory usage exceeded its DXGI budget in the polling window; timing does not "
+                    "establish causality.";
+    if (gpu_.encoder_utilization_percent)
+        r.detail +=
+            " Device encoder utilization: " + std::to_string(static_cast<int>(*gpu_.encoder_utilization_percent)) +
+            "%; utilization alone is not a bottleneck.";
+    r.measured_value = static_cast<double>(live_pacing_.recent_affected_slots);
+    r.value_unit = "slots";
+    if (delayed)
+        r.detail +=
+            " The recording worker also woke more than one output period late. "
+            "This may include scheduling pressure or preceding recorder work; source jitter alone does not explain it.";
+    r.compensation = "CFR frame selection remained active. Expected source-rate duplicates are excluded.";
+    r.fix_action = FixAction{"fix.fps.cap", "Review frame pacing", FixAction::Safety::Assisted, true,
+                             "Opens the existing frame pacing control."};
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
-
-    // when judder fires AND the user is on Newest pacing, offer a second
-    // result (one primary fix_action per result) to switch to Smooth (phase-correct) pacing.
-    // Smooth is the default and already eliminates this class of judder, so no fix is needed
-    // when the user is already on Smooth.
     if (config_.frame_pacing == exosnap::engine::FramePacingMode::Newest) {
-        DiagnosticResult pr = MakeResult(
-            "rec.pacing.smooth", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-            DiagnosticTier::MeasuredProblem, "Phase-correct frame pacing recommended",
-            "Phase-correct pacing removes judder from high-refresh / VRR sources.",
-            "Your recording uses Lowest latency frame pacing; the measured judder is exactly what "
-            "Phase-correct pacing fixes.",
-            "Frame pacing: Lowest latency", "Switch to Phase-correct frame pacing in Advanced Video settings.");
-        FixAction pfa;
-        pfa.id = "fix.frame_pacing.smooth";
-        pfa.label = "Switch to Phase-correct pacing";
-        pfa.safety = FixAction::Safety::Auto; // safe, reversible, config-only
-        pfa.reversible = true;
-        pfa.changes_summary = "Sets video frame pacing to Phase-correct. Reversible in Advanced Video settings.";
-        pr.fix_action = pfa;
-        checklist.has_notice = true;
-        checklist.results.push_back(std::move(pr));
+        auto hint = MakeResult("rec.pacing.smooth", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+                               DiagnosticTier::Optimisation, "Phase-correct pacing available",
+                               "Nearest-frame selection may reduce source timing error.");
+        hint.fix_action = FixAction{"fix.frame_pacing.smooth", "Use phase-correct pacing", FixAction::Safety::Auto,
+                                    true, "Sets frame pacing to Phase-correct."};
+        checklist.results.push_back(std::move(hint));
     }
 }
 
@@ -676,14 +650,12 @@ void RecommendationEngine::checkExclusiveWindowTarget(DiagnosticChecklist& check
 
     DiagnosticResult r = MakeResult(
         "rec.capture.exclusive_window", DiagnosticGroup::Recommendation,
-        proven ? DiagnosticSeverity::Blocker : DiagnosticSeverity::Notice,
-        // Honest capture problem: proven-black gates the start (Tier-1), a suspected
-        // exclusive window is a measured Tier-2 problem — never an optimisation/fact.
-        proven ? DiagnosticTier::Blocker : DiagnosticTier::MeasuredProblem,
+        proven ? DiagnosticSeverity::Blocker : DiagnosticSeverity::Pass,
+        proven ? DiagnosticTier::Blocker : DiagnosticTier::Optimisation,
         proven ? "Selected window is in exclusive fullscreen and produces no frames"
                : "Selected window may be in exclusive fullscreen",
         proven ? "The selected window is in exclusive fullscreen; window capture records a black/frozen frame."
-               : "The selected window looks like exclusive fullscreen, which window capture cannot reliably record.",
+               : "A fullscreen hint was observed; no capture failure has been established.",
         proven ? "The window capture API (WGC) produced no usable frame for the selected window — a legacy "
                  "exclusive-fullscreen application bypasses the desktop compositor, so window capture records "
                  "a black or frozen picture. Record the monitor instead (which can capture exclusive "
@@ -709,8 +681,6 @@ void RecommendationEngine::checkExclusiveWindowTarget(DiagnosticChecklist& check
 
     if (proven) {
         checklist.has_blocker = true;
-    } else {
-        checklist.has_notice = true;
     }
     checklist.results.push_back(std::move(r));
 }
@@ -727,8 +697,8 @@ void RecommendationEngine::checkExclusiveFullscreen(DiagnosticChecklist& checkli
     DiagnosticResult r;
     r.id = "rec.present.exclusive";
     r.group = DiagnosticGroup::Recommendation;
-    r.severity = DiagnosticSeverity::Notice;
-    r.tier = DiagnosticTier::MeasuredProblem;
+    r.severity = DiagnosticSeverity::Pass;
+    r.tier = DiagnosticTier::Fact;
     r.title = "Captured source is in exclusive fullscreen";
     r.summary = "Captured source is in exclusive fullscreen";
     r.detail = "The source presents in legacy exclusive fullscreen. Desktop/window capture often records "
@@ -741,155 +711,80 @@ void RecommendationEngine::checkExclusiveFullscreen(DiagnosticChecklist& checkli
     FixAction fa;
     fa.id = "fix.present.borderless";
     fa.label = "How to switch to borderless";
-    fa.safety = FixAction::Safety::Assisted; // app cannot flip a foreign game's display mode
+    fa.safety = FixAction::Safety::External; // Only the source application owns its display mode.
     fa.reversible = true;
     fa.changes_summary = "Opens guidance for switching the captured game to borderless fullscreen (the app cannot "
                          "change another application's display mode for you).";
     r.fix_action = fa;
-    checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
 }
 
 void RecommendationEngine::checkDpcLatency(DiagnosticChecklist& checklist) const {
-    constexpr double kDpcThresholdUs = 1000.0; // 1 ms sustained DPC = audible/stutter risk
-    if (!dpc_.has_value() || !dpc_->available || dpc_->max_latency_us <= kDpcThresholdUs) {
+    if (!dpc_ || !dpc_->available || dpc_->max_latency_us <= 1000.0)
         return;
-    }
-    const std::string driver = dpc_->worst_driver.empty() ? "an unidentified kernel driver" : dpc_->worst_driver;
-    const std::string max_str = std::to_string(static_cast<long>(dpc_->max_latency_us));
-    DiagnosticResult r = MakeResult(
-        "rec.dpc.latency", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, DiagnosticTier::MeasuredProblem,
-        "High kernel DPC/ISR latency detected",
-        "Kernel driver latency can cause recording stutter even when the game feels smooth.",
-        "Peak DPC latency reached " + max_str + " us, attributed to " + driver +
-            ". High DPC latency causes recording stutter/audio crackle even when the game itself "
-            "feels smooth.",
-        "Max DPC: " + max_str + " us", "Update or roll back " + driver + " (GPU/audio/network/chipset driver).");
+    auto r = MakeResult("rec.dpc.latency", DiagnosticGroup::Performance, DiagnosticSeverity::Pass, DiagnosticTier::Fact,
+                        "Kernel latency evidence", "A DPC/ISR latency peak was observed.",
+                        "A cumulative peak cannot establish temporal correlation or the cause of recording impact.",
+                        std::to_string(static_cast<long>(dpc_->max_latency_us)) + " us");
     r.measured_value = dpc_->max_latency_us;
-    r.budget_value = kDpcThresholdUs;
     r.value_unit = "us";
-    FixAction fa;
-    fa.id = "fix.dpc.driver";
-    fa.label = "Driver latency guidance";
-    fa.safety = FixAction::Safety::External; // app cannot change kernel drivers
-    fa.reversible = false;
-    fa.changes_summary = "Shows which driver to update/roll back; the app cannot change it for you.";
-    r.fix_action = fa;
-    checklist.has_notice = true;
+    if (!dpc_->worst_driver.empty())
+        r.detail += " Peak driver: " + dpc_->worst_driver + ".";
     checklist.results.push_back(std::move(r));
 }
 
 void RecommendationEngine::checkDiscardedPresents(DiagnosticChecklist& checklist) const {
-    // The desktop compositor (DWM) discarded a notable share of the source's presents.
-    // Discarded presents never reach capture, so the recording looks choppier than the game.
-    constexpr uint32_t kMinSamples = 200;           // ignore warm-up / tiny samples
-    constexpr double kDiscardRatioThreshold = 0.05; // 5% discarded sustained
-    // An unattributed sample spans every process on the desktop; what it says
-    // about discards is not a statement about the recorded content.
-    if (!present_.has_value() || !present_->attributed || present_->present_count < kMinSamples) {
+    if (!present_ || !present_->attributed || present_->present_count < 200)
         return;
-    }
-    const double ratio = static_cast<double>(present_->discarded_count) / static_cast<double>(present_->present_count);
-    if (ratio < kDiscardRatioThreshold) {
+    const double ratio = static_cast<double>(present_->discarded_count) / present_->present_count;
+    if (ratio < 0.05)
         return;
-    }
-    const std::string pct = std::to_string(static_cast<long>(ratio * 100.0 + 0.5));
-    DiagnosticResult r = MakeResult(
-        "rec.present.discarded", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-        DiagnosticTier::MeasuredProblem, "Compositor is discarding presents",
-        "The desktop compositor dropped a notable share of the source's frames before capture.",
-        "About " + pct +
-            "% of the captured source's presents were discarded by the compositor (DWM). "
-            "Discarded presents never reach capture, so the recording can look choppier than the game. This "
-            "usually means the source presents faster than the display refresh, or an overlay forces recomposition.",
-        "Discarded presents: " + pct + "%",
-        "Cap the source frame rate to the display refresh, or enable V-Sync in the captured app.");
+    auto r = MakeResult(
+        "rec.present.discarded", DiagnosticGroup::Display, DiagnosticSeverity::Pass, DiagnosticTier::Fact,
+        "Discarded source presents", "Presentation evidence, independent of recording loss.",
+        "The compositor discarded source presents. These counts do not establish damage to recorded output.");
     r.measured_value = ratio * 100.0;
-    r.budget_value = kDiscardRatioThreshold * 100.0;
     r.value_unit = "%";
-    FixAction fa;
-    fa.id = "fix.present.discarded";
-    fa.label = "Reduce discarded presents";
-    fa.safety = FixAction::Safety::Assisted; // app cannot change a foreign source's pacing
-    fa.reversible = true;
-    fa.changes_summary = "Opens guidance for capping the source frame rate / enabling V-Sync so fewer presents "
-                         "are discarded by the compositor.";
-    r.fix_action = fa;
-    checklist.has_notice = true;
+    r.current_value = std::to_string(static_cast<long>(ratio * 100.0)) + "% discarded";
     checklist.results.push_back(std::move(r));
 }
 
 void RecommendationEngine::checkPresentModeFlips(DiagnosticChecklist& checklist) const {
-    // The source repeatedly switched presentation mode (composed / independent-flip / exclusive).
-    // A one-off enter/exit is benign; repeated flipping causes momentary capture hitches.
-    constexpr uint32_t kFlipThreshold = 5;
-    if (!present_.has_value() || !present_->attributed || present_->mode_flip_count < kFlipThreshold) {
+    if (!present_ || !present_->attributed || present_->mode_flip_count < 5)
         return;
-    }
-    const std::string n = std::to_string(present_->mode_flip_count);
-    DiagnosticResult r = MakeResult(
-        "rec.present.modeflip", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-        DiagnosticTier::MeasuredProblem, "Captured source keeps changing present mode",
-        "The source repeatedly switched presentation mode, which can cause capture hitches.",
-        "The captured source changed presentation mode " + n +
-            " times this session (e.g. flipping between "
-            "composed, independent-flip and exclusive fullscreen). Frequent mode changes can momentarily stutter "
-            "or drop capture. A toggling overlay, alt-tabbing, or a borderless/fullscreen toggle is the usual cause.",
-        "Present-mode changes: " + n,
-        "Keep the captured app in one stable presentation mode (e.g. consistent borderless fullscreen).");
-    // A count of mode changes, with no budget: kFlipThreshold is the entry
-    // threshold for the card, not headroom the recording is spending.
+    auto r = MakeResult("rec.present.modeflip", DiagnosticGroup::Display, DiagnosticSeverity::Pass,
+                        DiagnosticTier::Fact, "Presentation mode changes", "The source changed presentation mode.",
+                        "Mode changes alone do not establish capture or recording impact.");
     r.measured_value = static_cast<double>(present_->mode_flip_count);
-    FixAction fa;
-    fa.id = "fix.present.modeflip";
-    fa.label = "Stabilize present mode";
-    fa.safety = FixAction::Safety::Assisted;
-    fa.reversible = true;
-    fa.changes_summary = "Opens guidance for keeping the captured source in a single stable presentation mode.";
-    r.fix_action = fa;
-    checklist.has_notice = true;
+    r.current_value = std::to_string(present_->mode_flip_count) + " changes";
     checklist.results.push_back(std::move(r));
 }
 
 void RecommendationEngine::checkDiskWriteStall(DiagnosticChecklist& checklist) const {
-    // A single buffered write of the recording blocked long enough to risk backing up the
-    // encoder output queue and dropping frames. Streaming Matroska only (MP4 is post-stop remux).
-    constexpr double kWriteStallMs = 100.0;
-    if (!live_disk_write_available_ || live_disk_peak_write_ms_ <= kWriteStallMs) {
+    if (!live_disk_write_available_ || live_disk_peak_write_ms_ <= 100.0)
         return;
-    }
-    const std::string ms = std::to_string(static_cast<long>(live_disk_peak_write_ms_));
-    DiagnosticResult r = MakeResult(
-        "rec.disk.writestall", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-        DiagnosticTier::MeasuredProblem, "Disk write stalls detected",
-        "Writing the recording to disk stalled, which can drop frames at high bitrates.",
-        "A single write of the recording to disk took up to " + ms +
-            " ms. When disk writes stall longer than "
-            "the encoder can buffer, the mux queue backs up and frames can be dropped. A slow or busy drive, "
-            "antivirus scanning the output, or a network/USB target is the usual cause.",
-        "Peak disk write: " + ms + " ms",
-        "Record to a fast local drive (SSD), or exclude the output folder from real-time antivirus scanning.");
+    auto r = MakeResult(
+        "rec.disk.writestall", DiagnosticGroup::Storage,
+        live_disk_pressure_ ? DiagnosticSeverity::Notice : DiagnosticSeverity::Pass,
+        live_disk_pressure_ ? DiagnosticTier::MeasuredProblem : DiagnosticTier::Fact,
+        live_disk_pressure_ ? "Storage backpressure" : "Storage latency spike",
+        live_disk_pressure_ ? "The recording output queue is under write pressure." : "No measured queue impact.",
+        "Buffered write latency is measured at the file writer. It does not measure physical disk latency.",
+        std::to_string(static_cast<long>(live_disk_peak_write_ms_)) + " ms peak write");
     r.measured_value = live_disk_peak_write_ms_;
-    r.budget_value = kWriteStallMs;
     r.value_unit = "ms";
-    FixAction fa;
-    fa.id = "fix.disk.writestall";
-    fa.label = "Reduce disk write stalls";
-    fa.safety = FixAction::Safety::Assisted;
-    fa.reversible = true;
-    fa.changes_summary = "Opens guidance for choosing a faster output drive / excluding the output folder from "
-                         "antivirus scanning.";
-    r.fix_action = fa;
-    checklist.has_notice = true;
+    if (live_disk_pressure_) {
+        r.impact = r.summary;
+        r.recommendation = "Review the recording folder and available drive throughput.";
+        r.fix_action = FixAction{"fix.disk.writestall", "Review output folder", FixAction::Safety::Assisted, true,
+                                 "Opens the output folder setting."};
+        checklist.has_notice = true;
+    } else {
+        r.compensation = "The output buffers absorbed the measured write spike.";
+    }
     checklist.results.push_back(std::move(r));
 }
 
-// ---------------------------------------------------------------------------
-// Saved display not found — calm Display notice (stable-display-identity).
-// Fires ONLY when a concretely-saved capture target could not be matched to any
-// connected display. Not a blocker: recording the primary/current display still
-// works; only the stored preference is missing.
-// ---------------------------------------------------------------------------
 void RecommendationEngine::checkUnresolvedSavedDisplay(DiagnosticChecklist& checklist) const {
     if (!saved_display_unresolved_) {
         return;
@@ -992,9 +887,9 @@ std::vector<DiagnosticResult> RecommendationEngine::GenerateEnvironmentFacts() c
     // Truthful, measured elevation baseline (queried by the caller via IElevationProvider —
     // the same gate PresentMonProvider uses). Elevated unlocks the PresentMon ETW present
     // diagnostics; Standard keeps the DXGI / NVAPI baseline (judder is still measured live).
-    const std::string elevation_summary = elevated_
-                                              ? "Elevated — PresentMon ETW present diagnostics available"
-                                              : "Standard — DXGI / NVAPI baseline · present diagnostics need elevation";
+    const std::string elevation_summary =
+        elevated_ ? "Elevated — PresentMon ETW present diagnostics available"
+                  : "Standard — core recording health available; presentation details are optional";
     facts.push_back(MakeResult("fact.elevation", DiagnosticGroup::ConfigSnapshot, DiagnosticSeverity::Pass,
                                DiagnosticTier::Fact, "Elevation", elevation_summary));
     if (live_audio_format_available_) {
@@ -1007,37 +902,19 @@ std::vector<DiagnosticResult> RecommendationEngine::GenerateEnvironmentFacts() c
 }
 
 void RecommendationEngine::checkFramePacingDuplication(DiagnosticChecklist& checklist) const {
-    // Repeats are the CFR pacer's answer to a source that produced nothing new
-    // for a tick. A steady share of them means the source runs below the
-    // recording rate; the file plays with judder no encoder setting can fix. A
-    // full stall is the stall notice's story, not this card's.
-    constexpr double kDuplicateRatioThreshold = 0.25;
-    constexpr uint64_t kMinEmittedFrames = 300; // five seconds at 60 fps: past warm-up
-    if (!live_capture_available_ || !live_cfr_ || live_capture_starved_ || live_frames_emitted_ < kMinEmittedFrames) {
+    if (!live_capture_available_ || !live_cfr_ || live_frames_emitted_ < 300 || live_frames_duplicated_ == 0)
         return;
-    }
-    const double ratio = static_cast<double>(live_frames_duplicated_) / static_cast<double>(live_frames_emitted_);
-    if (ratio < kDuplicateRatioThreshold) {
+    const double ratio = static_cast<double>(live_frames_duplicated_) / live_frames_emitted_;
+    if (ratio < 0.25 || live_capture_starved_)
         return;
-    }
-    const std::string pct = std::to_string(static_cast<long>(ratio * 100.0 + 0.5));
-    const std::string fps = std::to_string(static_cast<long>(live_target_fps_ + 0.5));
-    DiagnosticResult r = MakeResult(
-        "rec.pacing.duplication", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-        DiagnosticTier::MeasuredProblem, "Source delivers fewer frames than the recording rate",
-        "About " + pct + "% of the recorded frames are repeats of the previous one.",
-        "The source produced no new frame for " + pct + "% of the " + fps +
-            " fps recording ticks, so the recorder repeated the last picture to keep the file at a constant rate. "
-            "The recording plays with judder that no encoder setting changes; the source itself is running below "
-            "the recording rate.",
-        pct + "% repeated frames at " + fps + " fps",
-        "Lower the recording frame rate to what the source can sustain (30 fps for a source below 60), or raise "
-        "the game's frame rate. If the source is a video player or a game capped below the recording rate, this "
-        "is expected.");
+    auto r =
+        MakeResult("rec.pacing.duplication", DiagnosticGroup::Performance, DiagnosticSeverity::Pass,
+                   DiagnosticTier::Fact, "Source frames held for CFR", "Expected for static or slower sources.",
+                   "Repeating the previous picture preserves output cadence. Duplicate frames are not encoder loss.");
     r.measured_value = ratio * 100.0;
-    r.budget_value = kDuplicateRatioThreshold * 100.0;
     r.value_unit = "%";
-    checklist.has_notice = true;
+    r.current_value = std::to_string(live_frames_duplicated_) + " repeated frames";
+    r.compensation = "CFR output continued using the most recent picture.";
     checklist.results.push_back(std::move(r));
 }
 
@@ -1153,17 +1030,16 @@ void RecommendationEngine::checkGpuContention(DiagnosticChecklist& checklist) co
     const std::string gpu_ms = std::to_string(live_gpu_exec_p99_ms_).substr(0, 4);
     const std::string budget =
         live_target_fps_for_gpu_ > 0.0 ? std::to_string(1000.0 / live_target_fps_for_gpu_).substr(0, 4) : "the";
-    DiagnosticResult r =
-        MakeResult("rec.gpu.contention", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                   DiagnosticTier::MeasuredProblem, "The graphics card is saturated by the captured application",
-                   "The GPU finishes the recorder's frame work later than the frame budget while the recorder's own "
-                   "submissions stay cheap.",
-                   "Measured on the GPU with timestamp queries: the recorder's passes take " + gpu_ms +
-                       " ms (p99) against " + budget +
-                       " ms per frame, while submitting them costs almost nothing. The card is busy with the captured "
-                       "application's work; the recorder waits behind it.",
-                   "GPU frame work " + gpu_ms + " ms p99 vs " + budget + " ms budget",
-                   "Cap the game's frame rate, lower its graphics settings, or lower the recording resolution.");
+    DiagnosticResult r = MakeResult(
+        "rec.gpu.contention", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        DiagnosticTier::MeasuredProblem, "Recorder GPU work exceeded its frame budget",
+        "The GPU finishes the recorder's frame work later than the frame budget while the recorder's own "
+        "submissions stay cheap.",
+        "Measured on the GPU with timestamp queries: the recorder's passes take " + gpu_ms + " ms (p99) against " +
+            budget +
+            " ms per frame. Recorder GPU timestamps do not identify which application or driver caused the delay.",
+        "GPU frame work " + gpu_ms + " ms p99 vs " + budget + " ms budget",
+        "Cap the game's frame rate, lower its graphics settings, or lower the recording resolution.");
     r.measured_value = live_gpu_exec_p99_ms_;
     if (live_target_fps_for_gpu_ > 0.0)
         r.budget_value = 1000.0 / live_target_fps_for_gpu_;
@@ -1215,8 +1091,9 @@ bool RecommendationEngine::IsLiveMeasuredCheck(std::string_view id) noexcept {
     // readiness surface could not have shown it -- the window was borderless when
     // the recording started.
     static constexpr std::string_view kLiveMeasuredIds[] = {
-        "rec.001",                      // present-cadence judder
-        "rec.gpu.contention",           // captured application saturating the GPU
+        "rec.output.loss",              // canonical real output loss
+        "rec.001",                      // measured CFR outcome
+        "rec.gpu.contention",           // recorder GPU delay correlated with output impact
         "rec.disk.writestall",          // write stalls during the run
         "rec.dpc.latency",              // kernel DPC/ISR latency during the run
         "rec.present.discarded",        // compositor discarding presents
