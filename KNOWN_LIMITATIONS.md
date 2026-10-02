@@ -1,6 +1,6 @@
-# ExoSnap 0.10.0: Known limitations
+# ExoSnap 0.10.1: Known limitations
 
-ExoSnap 0.10.0 is pre-1.0 Windows preview software. This page qualifies the [product contract](docs/product-spec.md), not a list of every theoretical capability of its dependencies. Settings, presets and recording-history schemas are not frozen; keep backups before switching preview versions.
+ExoSnap 0.10.1 is pre-1.0 Windows preview software. This page qualifies the [product contract](docs/product-spec.md), not a list of every theoretical capability of its dependencies. Settings, presets and recording-history schemas are not frozen; keep backups before switching preview versions.
 
 ## Platform and encoding
 
@@ -96,4 +96,4 @@ Portable restore is attempted when appropriate, but can fail and must be reporte
 
 Crash reports are next-launch, consent-controlled and official-build upload only. Local minidumps can exist without upload. Structured events are scrubbed; native minidump module paths can include a portable install's username segment. See [Privacy](PRIVACY.md). Symbols are separate release artifacts; symbol delivery must be checked for the release rather than assumed from a captured dump.
 
-Portable/MSI builds are not yet Authenticode-signed in this source's documented distribution state. SmartScreen may warn. Signed update metadata is a different security mechanism. No replay buffer, immediate in-session crash-report UI or unsupported encoder backend is implied by this preview.
+Setup, MSI and portable builds are not yet Authenticode-signed in this source's documented distribution state. SmartScreen may warn. Signed update metadata is a different security mechanism. No replay buffer, immediate in-session crash-report UI or unsupported encoder backend is implied by this preview.

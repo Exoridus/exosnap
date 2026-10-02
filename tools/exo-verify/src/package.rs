@@ -72,9 +72,17 @@ pub struct PackageResult {
 pub const VC_REDIST_URL: &str = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
 pub const VC_REDIST_SHA256: &str =
     "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b";
-/// The runtime floor the product's toolset requires; Burn skips the embedded
-/// redistributable only when the installed runtime meets or exceeds it.
+/// The runtime floor the product's toolset requires. Burn skips the embedded
+/// redistributable only when the installed runtime meets or exceeds it, and the
+/// raw MSI's file-version search refuses to install below it; both read this
+/// one value.
 pub const VC_REDIST_MIN_VERSION: &str = "v14.44.35211.0";
+
+/// The floor without Burn's `v` prefix, which is the form the Windows
+/// Installer's `FileSearch/@MinVersion` expects.
+fn vc_redist_floor() -> &'static str {
+    VC_REDIST_MIN_VERSION.trim_start_matches(['v', 'V'])
+}
 
 pub fn portable_dir_name(version: &str) -> String {
     format!("ExoSnap-{version}-{PLATFORM}-portable")
@@ -613,6 +621,10 @@ fn build_setup(
     );
     let icon = repo_root.join("app/assets/brand/exosnap-app.ico");
     ensure!(icon.is_file(), "product icon missing: {}", icon.display());
+    let theme = repo_root.join("packaging/burn/ExoSnapTheme.xml");
+    ensure!(theme.is_file(), "Setup theme missing: {}", theme.display());
+    let logo = repo_root.join("packaging/burn/exosnap-logo.png");
+    ensure!(logo.is_file(), "Setup logo missing: {}", logo.display());
     let bundle = out.join(format!("ExoSnap-{base}-Setup.exe"));
     println!("==> {}", bundle.display());
     println!(
@@ -641,6 +653,10 @@ fn build_setup(
             .arg(format!("MsiPath={}", msi.display()))
             .arg("-d")
             .arg(format!("IconPath={}", icon.display()))
+            .arg("-d")
+            .arg(format!("ThemePath={}", theme.display()))
+            .arg("-d")
+            .arg(format!("LogoPath={}", logo.display()))
             .arg("-d")
             .arg("LicenseUrl=https://github.com/Exoridus/exosnap/blob/main/LICENSE")
             .arg(repo_root.join("packaging/burn/Setup.wxs")),
@@ -781,10 +797,19 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
         // lives in the file name and the executables' ProductVersion string.
         run_checked(
             Command::new(wix)
-                .args(["build", "-arch", "x64", "-o"])
+                .args([
+                    "build",
+                    "-arch",
+                    "x64",
+                    "-ext",
+                    "WixToolset.Util.wixext/4.0.5",
+                    "-o",
+                ])
                 .arg(&msi)
                 .arg("-d")
                 .arg(format!("ProductVersion={base}"))
+                .arg("-d")
+                .arg(format!("VCRedistMinVersion={}", vc_redist_floor()))
                 .arg("-d")
                 .arg(format!(
                     "AppIconPath={}",
@@ -1025,5 +1050,64 @@ mod tests {
         let bytes = fs::read(&archive).unwrap();
         assert_eq!(&bytes[..4], b"PK\x03\x04");
         assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 20);
+    }
+
+    fn packaging_source(relative: &str) -> String {
+        fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(relative),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_msi_identity_floor_and_off_by_default_options_are_pinned() {
+        let package = packaging_source("packaging/msi/Package.wxs");
+        assert!(
+            package.contains(r#"UpgradeCode="8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D""#),
+            "the permanent MSI UpgradeCode moved"
+        );
+        assert!(
+            package.contains(r#"MinVersion="$(var.VCRedistMinVersion)""#),
+            "the raw MSI must enforce the shared runtime floor"
+        );
+        assert!(package.contains(r#"Property Id="EXOSNAP_DESKTOP_SHORTCUT" Value="0""#));
+        assert!(package.contains(r#"Property Id="EXOSNAP_REMOVE_USER_DATA" Value="0""#));
+        assert!(package.contains(r#"Value="%LOCALAPPDATA%\ExoSnap""#));
+        assert!(
+            !package.contains("VCREDISTX64_INSTALLED"),
+            "presence without a version floor is not a sufficient prerequisite check"
+        );
+    }
+
+    #[test]
+    fn the_setup_passes_the_direct_options_and_keeps_the_runtime_for_repair() {
+        let setup = packaging_source("packaging/burn/Setup.wxs");
+        assert!(setup.contains(r#"<MsiProperty Name="ARPSYSTEMCOMPONENT" Value="1" />"#));
+        assert!(setup.contains(
+            r#"<MsiProperty Name="EXOSNAP_DESKTOP_SHORTCUT" Value="[ExoSnapDesktopShortcut]" />"#
+        ));
+        assert!(setup.contains(
+            r#"<MsiProperty Name="EXOSNAP_REMOVE_USER_DATA" Value="[ExoSnapRemoveUserData]" />"#
+        ));
+        assert!(setup.contains(r#"Name="ExoSnapDesktopShortcut" Type="numeric" Value="0""#));
+        assert!(setup.contains(r#"Name="ExoSnapRemoveUserData" Type="numeric" Value="0""#));
+        assert!(setup.contains(r#"Permanent="yes""#));
+        assert!(
+            !setup.contains(r#"Cache="remove""#),
+            "a repair after the original Setup.exe is gone must still restore the runtime"
+        );
+        assert!(setup.contains(r#"ThemeFile="$(var.ThemePath)""#));
+    }
+
+    #[test]
+    fn the_setup_theme_binds_the_two_exosnap_options() {
+        let theme = packaging_source("packaging/burn/ExoSnapTheme.xml");
+        assert!(theme.contains(r#"Name="ExoSnapDesktopShortcut""#));
+        assert!(theme.contains(r#"Name="ExoSnapRemoveUserData""#));
+        assert!(theme.contains(r#"Name="InstallButton""#));
+        assert!(theme.contains(r#"Name="UninstallButton""#));
+        assert!(theme.contains(r#"Name="LaunchButton""#));
     }
 }

@@ -3,6 +3,7 @@
 use anyhow::Result;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -23,25 +24,46 @@ pub(crate) const INSTALL_KEY: &str = r"HKLM\SOFTWARE\ExoSnap";
 pub(crate) const USER_KEY: &str = r"HKCU\SOFTWARE\ExoSnap";
 
 pub fn scenarios() -> Vec<Scenario> {
-    vec![Scenario {
-        id: "install.msi-cycle",
-        revision: 1,
-        title: "The MSI installs, starts, uninstalls and reinstalls cleanly",
-        class: ScenarioClass::Installer,
-        contract: "on a clean disposable Windows machine, the MSI installs the portable bytes, first and second starts are healthy, uninstall preserves user settings, and reinstall restores the product",
-        lane: Lane::CiInstall,
-        also: &[],
-        tier: Tier::Required,
-        requires: &[
-            Capability::Windows,
-            Capability::Admin,
-            Capability::InteractiveDesktop,
-            Capability::DisposableOs,
-            Capability::MsvcRuntime,
-        ],
-        timeout: secs(900.0),
-        run: msi_cycle,
-    }]
+    vec![
+        Scenario {
+            id: "install.msi-cycle",
+            revision: 1,
+            title: "The MSI installs, starts, uninstalls and reinstalls cleanly",
+            class: ScenarioClass::Installer,
+            contract: "on a clean disposable Windows machine, the MSI installs the portable bytes, first and second starts are healthy, uninstall preserves user settings, and reinstall restores the product",
+            lane: Lane::CiInstall,
+            also: &[],
+            tier: Tier::Required,
+            requires: &[
+                Capability::Windows,
+                Capability::Admin,
+                Capability::InteractiveDesktop,
+                Capability::DisposableOs,
+                Capability::MsvcRuntime,
+            ],
+            timeout: secs(900.0),
+            run: msi_cycle,
+        },
+        Scenario {
+            id: "install.msi-user-data-removal",
+            revision: 1,
+            title: "An explicit uninstall removes only the current user's local data",
+            class: ScenarioClass::Installer,
+            contract: "on a disposable Windows machine, an MSI uninstall with EXOSNAP_REMOVE_USER_DATA=1 removes the current user's %LOCALAPPDATA%\\ExoSnap and leaves recordings outside it byte-identical, then restores an installed product",
+            lane: Lane::CiInstall,
+            also: &[],
+            tier: Tier::Required,
+            requires: &[
+                Capability::Windows,
+                Capability::Admin,
+                Capability::InteractiveDesktop,
+                Capability::DisposableOs,
+                Capability::MsvcRuntime,
+            ],
+            timeout: secs(900.0),
+            run: msi_user_data_removal,
+        },
+    ]
 }
 
 /// Reads one value from [`INSTALL_KEY`], the product's own registry state.
@@ -112,6 +134,11 @@ fn msi(ctx: &mut Context, verb: &str, path: &Path, log_name: &str) -> Step {
         log.display()
     );
     Ok(())
+}
+
+/// The all-users desktop shortcut the Setup option may create.
+fn desktop_shortcut() -> Result<PathBuf> {
+    Ok(PathBuf::from(std::env::var("PUBLIC")?).join(r"Desktop\ExoSnap.lnk"))
 }
 
 fn run_start(ctx: &mut Context, exe: &Path, version: &str, commit: &str) -> Step {
@@ -230,6 +257,14 @@ fn msi_cycle(ctx: &mut Context) -> Step {
         shortcut.is_file(),
         "MSI did not create the Start Menu shortcut"
     );
+    product_ensure!(
+        !desktop_shortcut()?.exists(),
+        "the raw MSI created a desktop shortcut without EXOSNAP_DESKTOP_SHORTCUT=1"
+    );
+    product_ensure!(
+        !reg_key_exists(r"HKLM\SOFTWARE\Codexo\ExoSnap")?,
+        "a fresh install wrote the legacy product key"
+    );
     let exe = root.join("exosnap.exe");
     run_start(ctx, &exe, &version, &commit)?;
     run_start(ctx, &exe, &version, &commit)?;
@@ -251,6 +286,69 @@ fn msi_cycle(ctx: &mut Context) -> Step {
     ctx.evidence.put("installedFiles", expected.len());
     ctx.evidence
         .put("preservedConfigFiles", config_before.len());
+    Ok(())
+}
+
+/// Uninstall with the explicit local-data flag must remove exactly the current
+/// user's `%LOCALAPPDATA%\ExoSnap` and must not reach recordings that live
+/// outside it. The MSI is then reinstalled so later disposable-machine gates
+/// still find an installed product.
+fn msi_user_data_removal(ctx: &mut Context) -> Step {
+    let bundle = ctx.bundle()?;
+    let version = bundle.inventory.product_version.clone();
+    let commit = bundle.inventory.source_commit.clone();
+    let installer = ctx.package(FileRole::Installer)?;
+    let config = PathBuf::from(std::env::var("LOCALAPPDATA")?).join("ExoSnap");
+    let recordings = PathBuf::from(std::env::var("USERPROFILE")?)
+        .join("Videos")
+        .join("ExoSnap");
+
+    if reg_value("installed")?.is_none() {
+        msi(ctx, "/i", &installer, "removal-install.log")?;
+    }
+    fs::create_dir_all(&config)?;
+    fs::write(config.join("settings.ini"), b"removal scenario probe")?;
+    fs::create_dir_all(&recordings)?;
+    let recording = recordings.join("removal-scenario.mkv");
+    fs::write(&recording, b"recording bytes must survive an uninstall")?;
+    let (recording_hash, _) = sha256_file(&recording)?;
+    let config_files = tree_hashes(&config)?.len();
+
+    let log = ctx.scenario_dir.join("removal-uninstall.log");
+    let out = crate::tools::run(
+        Command::new("msiexec.exe")
+            .arg("/x")
+            .arg(&installer)
+            .args(["/qn", "/norestart", "EXOSNAP_REMOVE_USER_DATA=1", "/l*v"])
+            .arg(&log),
+        secs(360.0),
+    )?;
+    ctx.keep(&log);
+    product_ensure!(
+        out.code() == Some(0),
+        "msiexec /x with EXOSNAP_REMOVE_USER_DATA=1 exited {:?}; log: {}",
+        out.code(),
+        log.display()
+    );
+    product_ensure!(
+        !config.exists(),
+        "the explicit uninstall left {} in place",
+        config.display()
+    );
+    product_ensure!(
+        sha256_file(&recording)?.0 == recording_hash,
+        "the explicit uninstall modified a recording outside the local data folder"
+    );
+
+    msi(ctx, "/i", &installer, "removal-restore.log")?;
+    let exe = PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe");
+    product_ensure!(
+        exe.is_file() && reg_value("installed")?.is_some(),
+        "the product was not restored after the removal scenario"
+    );
+    run_start(ctx, &exe, &version, &commit)?;
+    ctx.evidence.put("removedConfigFiles", config_files);
+    ctx.evidence.put("recordingSha256", recording_hash);
     Ok(())
 }
 

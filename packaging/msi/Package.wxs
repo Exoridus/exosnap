@@ -1,4 +1,5 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <!--
     ExoSnap MSI Installer
@@ -22,7 +23,8 @@
     The build script also runs a post-build MSI content assertion (msiexec /a
     extraction) to catch any drift before a release can ship.
 
-    User data is NOT installed or removed by this MSI.
+    User data is never installed by this MSI and is preserved on uninstall
+    unless the caller explicitly sets EXOSNAP_REMOVE_USER_DATA=1.
   -->
 
   <Package Name="ExoSnap"
@@ -36,6 +38,18 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of ExoSnap is already installed."
                   AllowSameVersionUpgrades="yes" />
 
+    <!-- Detects an upgrade from the 0.10.0 product or older. The legacy
+         handoff component below needs exactly that transition, not every
+         future upgrade. -->
+    <Upgrade Id="8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D">
+      <UpgradeVersion Minimum="0.0.0"
+                      Maximum="0.10.0"
+                      IncludeMinimum="yes"
+                      IncludeMaximum="yes"
+                      OnlyDetect="yes"
+                      Property="EXOSNAP_V010_OR_OLDER" />
+    </Upgrade>
+
     <Media Id="1" Cabinet="exosnap.cab" EmbedCab="yes" />
 
     <!-- Add/Remove Programs uses the product icon, not the executable's. -->
@@ -44,20 +58,24 @@
 
     <!-- A direct `msiexec /i` on a machine without the shared Visual C++
          runtime would succeed and then leave an application that cannot start.
-         Refuse before anything is installed. `Installed` keeps uninstall and
-         maintenance working on machines where the runtime is already gone.
-         The Setup bootstrapper and the package-manager dependencies satisfy
-         this requirement before this package runs. -->
-    <Property Id="VCREDISTX64_INSTALLED">
-      <RegistrySearch Id="VCRedistX64Installed"
-                      Type="raw"
-                      Root="HKLM"
-                      Key="SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
-                      Name="Installed"
-                      Bitness="always64" />
+         Refuse before anything is installed. The Windows Installer cannot
+         compare version strings in a condition and raw DWORD searches carry a
+         `#` prefix that never converts to an integer, so the floor is enforced
+         by the installer's own file-version search: `vcruntime140.dll` in
+         System32 only satisfies the search at or above the same minimum Burn
+         enforces. `Installed` keeps uninstall and maintenance working on
+         machines where the runtime is already gone. The Setup bootstrapper and
+         the package-manager dependencies satisfy this requirement before this
+         package runs. -->
+    <Property Id="VCREDISTX64_RUNTIME">
+      <DirectorySearch Id="VCRedistX64System64Search" Path="[System64Folder]">
+        <FileSearch Id="VCRuntime140X64Search"
+                    Name="vcruntime140.dll"
+                    MinVersion="$(var.VCRedistMinVersion)" />
+      </DirectorySearch>
     </Property>
-    <Launch Condition='Installed OR VCREDISTX64_INSTALLED = "#1"'
-            Message="ExoSnap requires the Microsoft Visual C++ 2015-2022 x64 Redistributable. Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe, or use ExoSnap Setup, and run this installer again." />
+    <Launch Condition="Installed OR VCREDISTX64_RUNTIME"
+            Message="ExoSnap requires the Microsoft Visual C++ 2015-2022 x64 Redistributable version $(var.VCRedistMinVersion) or newer. Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe, or use ExoSnap Setup, and run this installer again." />
 
     <!-- Install-root directory skeleton. The product installs directly under
          Program Files; there is no vendor directory and no repeated ExoSnap
@@ -85,13 +103,107 @@
                        Name="InstallPath"
                        Value="[INSTALLFOLDER]"
                        Type="string" />
-        <!-- v0.10.0 wrote its product marker under the vendor key. Remove that
-             key during the upgrade so no ExoSnap-owned legacy state survives;
-             the runtime's installed-mode detection also accepts it as a
-             fallback while an old version is still present. -->
+        <!-- Clear any stale v0.10.0 product marker under the vendor key. A
+             legacy handoff component below rewrites only the two values the
+             immutable v0.10.0 updater reads after its handoff; the runtime's
+             installed-mode detection also accepts the legacy key as a fallback
+             while an old version is still present. -->
         <RemoveRegistryKey Root="HKLM" Key="Software\Codexo\ExoSnap" Action="removeOnInstall" />
       </Component>
     </StandardDirectory>
+
+    <!-- The immutable v0.10.0 updater re-reads InstallPath from the legacy
+         product key after its MSI handoff and relaunches that directory. A
+         v0.10.0 -> 0.10.1 upgrade moves the product, so the old updater can
+         only complete its verify/relaunch if the legacy key names the new
+         location. This component writes that handoff once, for upgrades from
+         0.10.0 or older, after the stale key was cleared above; the v0.10.1
+         runtime always prefers HKLM\Software\ExoSnap. The values are removed
+         when the product is uninstalled. -->
+    <Component Id="LegacyHandoff"
+               Guid="{EA1AE131-D32E-422C-A610-3BFB1C4E642A}"
+               Directory="INSTALLFOLDER"
+               Condition="EXOSNAP_V010_OR_OLDER">
+      <RegistryValue Root="HKLM"
+                     Key="Software\Codexo\ExoSnap"
+                     Name="installed"
+                     Value="1"
+                     Type="integer"
+                     KeyPath="yes" />
+      <RegistryValue Root="HKLM"
+                     Key="Software\Codexo\ExoSnap"
+                     Name="InstallPath"
+                     Value="[INSTALLFOLDER]"
+                     Type="string" />
+    </Component>
+
+    <!-- Optional desktop shortcut. The offline Setup renders an unchecked
+         "Create a desktop shortcut" option; the raw MSI and every package
+         manager leave it absent. `DesktopShortcut` under the product key
+         remembers a chosen shortcut across a major upgrade, where the old
+         product is removed before the new product is costed. -->
+    <Property Id="EXOSNAP_DESKTOP_SHORTCUT" Value="0" Secure="yes" />
+    <Property Id="EXOSNAP_DESKTOP_SHORTCUT_REMEMBERED">
+      <RegistrySearch Id="ExoSnapDesktopShortcutRemembered"
+                      Type="raw"
+                      Root="HKLM"
+                      Key="Software\ExoSnap"
+                      Name="DesktopShortcut"
+                      Bitness="always64" />
+    </Property>
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut"
+                 Guid="{9BEDB693-BF11-4589-B5A4-AD17A96F1F7E}"
+                 Condition='EXOSNAP_DESKTOP_SHORTCUT = 1 OR EXOSNAP_DESKTOP_SHORTCUT_REMEMBERED = "#1"'>
+        <Shortcut Id="DesktopExoSnap"
+                  Name="ExoSnap"
+                  Description="Windows-native screen, window and region recorder"
+                  Target="[INSTALLFOLDER]exosnap.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="ExoSnapAppIcon" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\ExoSnap"
+                       Name="DesktopShortcut"
+                       Value="1"
+                       Type="integer"
+                       KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- Optional local-data removal on uninstall. The offline Setup renders an
+         unchecked option and is the only caller that passes the flag; the raw
+         MSI and every package manager preserve user data unless an
+         administrator explicitly sets EXOSNAP_REMOVE_USER_DATA=1.
+
+         The elevated MSI must never delete a caller-supplied path. The
+         property setter below overwrites EXOSNAP_USER_DATA_DIR with the fixed
+         %LOCALAPPDATA%\ExoSnap template before RemoveFolderEx reads it, so a
+         command-line override can never redirect the removal. The directory is
+         removed only while this component is being uninstalled, which keeps
+         install, repair and major upgrades non-destructive. Recordings live
+         under the Videos known folder and are never this target. -->
+    <Property Id="EXOSNAP_REMOVE_USER_DATA" Value="0" Secure="yes" />
+    <Property Id="EXOSNAP_USER_DATA_DIR" Secure="yes" />
+    <CustomAction Id="SetExoSnapUserDataDir"
+                  Property="EXOSNAP_USER_DATA_DIR"
+                  Value="%LOCALAPPDATA%\ExoSnap" />
+    <InstallExecuteSequence>
+      <Custom Action="SetExoSnapUserDataDir" Before="CostInitialize" Condition="EXOSNAP_REMOVE_USER_DATA = 1" />
+    </InstallExecuteSequence>
+    <Component Id="ExoSnapUserDataCleanup"
+               Guid="{E8E337A2-AAEA-43AE-AC1F-9FB82D6377B5}"
+               Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKLM"
+                     Key="Software\ExoSnap"
+                     Name="UserDataCleanup"
+                     Value="1"
+                     Type="integer"
+                     KeyPath="yes" />
+      <util:RemoveFolderEx Id="ExoSnapUserDataFolder"
+                           On="uninstall"
+                           Property="EXOSNAP_USER_DATA_DIR"
+                           Condition="EXOSNAP_REMOVE_USER_DATA = 1" />
+    </Component>
 
     <!-- ARP (Add/Remove Programs) metadata.
          The description matches docs/product-spec.md and the other package
@@ -126,6 +238,9 @@
              Description="ExoSnap recording application">
       <ComponentGroupRef Id="StagingFiles" />
       <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="LegacyHandoff" />
+      <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="ExoSnapUserDataCleanup" />
     </Feature>
 
   </Package>

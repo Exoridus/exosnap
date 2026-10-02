@@ -16,9 +16,10 @@
     has one owner.
 
     The redistributable is Permanent: removing ExoSnap must never remove a
-    shared system runtime. Cache="remove" keeps the embedded prerequisite out
-    of the permanent package cache, while the MSI keeps Burn's default cache
-    so repair, modify and uninstall work without the original Setup.exe.
+    shared system runtime. Its package is cached like the MSI's, because a
+    Burn repair after the original Setup.exe is gone must be able to restore a
+    runtime that was removed later; the two payloads together are the price of
+    an offline repair.
   -->
 
   <Bundle Name="ExoSnap"
@@ -43,9 +44,17 @@
                          Result="value"
                          Bitness="always64" />
 
+    <!-- Direct Setup options. Both default off and are passed to the MSI as
+         properties; the MSI owns the shortcut component and the local-data
+         removal, so nothing here is a second implementation. -->
+    <Variable Name="ExoSnapDesktopShortcut" Type="numeric" Value="0" />
+    <Variable Name="ExoSnapRemoveUserData" Type="numeric" Value="0" />
+
     <BootstrapperApplication>
       <bal:WixStandardBootstrapperApplication
           Theme="hyperlinkLicense"
+          ThemeFile="$(var.ThemePath)"
+          LogoFile="$(var.LogoPath)"
           LicenseUrl="$(var.LicenseUrl)"
           ShowVersion="yes"
           LaunchTarget="[ProgramFiles64Folder]ExoSnap\exosnap.exe"
@@ -58,7 +67,6 @@
                   Compressed="yes"
                   Vital="yes"
                   Permanent="yes"
-                  Cache="remove"
                   InstallArguments="/install /quiet /norestart"
                   DetectCondition="VCRedistVersion &gt;= $(var.VCRedistMinVersion)">
         <!-- A newer runtime already present is success, not failure. -->
@@ -72,7 +80,14 @@
                   SourceFile="$(var.MsiPath)"
                   Compressed="yes"
                   Vital="yes"
-                  Visible="no" />
+                  Visible="no">
+        <!-- The bundle owns the single Installed Apps entry; the chained MSI
+             is still fully registered with Windows Installer for repair and
+             upgrade. A raw MSI install keeps its normal ARP entry. -->
+        <MsiProperty Name="ARPSYSTEMCOMPONENT" Value="1" />
+        <MsiProperty Name="EXOSNAP_DESKTOP_SHORTCUT" Value="[ExoSnapDesktopShortcut]" />
+        <MsiProperty Name="EXOSNAP_REMOVE_USER_DATA" Value="[ExoSnapRemoveUserData]" />
+      </MsiPackage>
     </Chain>
   </Bundle>
 </Wix>

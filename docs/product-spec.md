@@ -448,6 +448,8 @@ Windows 10/11 x64 is supported, with Windows 11 primary and Windows 10 best-effo
 
 The dynamic Visual C++ x64 runtime is required. No application artifact bundles it. ExoSnap Setup embeds the pinned Microsoft redistributable and installs it only when the machine's runtime is missing or older; the raw MSI refuses a direct install without it and names the prerequisite; WinGet and Chocolatey declare it as a dependency; the portable ZIP and Scoop entry expect it on the machine. Keep the portable runtime files together.
 
+Windows installation is per-machine under `C:\Program Files\ExoSnap`, with the product marker at `HKLM\Software\ExoSnap` and an all-users Start Menu entry. The desktop shortcut is an unchecked Setup option and is absent for MSI and package-manager installs. Uninstalling preserves the current user's `%LOCALAPPDATA%\ExoSnap` unless the operator explicitly asks Setup to remove that local data; recordings and other output files are never removed by an uninstall.
+
 Replay buffer, arbitrary frame-accurate re-encode cuts, project/multitrack editing, embedded chapters, surround output, HLG, 4:2:2, 10-bit 4:4:4 and cross-vendor encoding are not current features. See [known limitations](../KNOWN_LIMITATIONS.md) for narrower behavioral and verification boundaries, and [roadmap](roadmap.md) for explicitly future work.
 
 ExoSnap is GPL-3.0-or-later. Bundled components retain their own notices and license terms in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
