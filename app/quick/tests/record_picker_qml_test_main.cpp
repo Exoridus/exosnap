@@ -18,6 +18,8 @@
 #include <QQmlEngine>
 #include <QQuickStyle>
 #include <QStringList>
+#include <QVariantList>
+#include <QVariantMap>
 #include <QtQuickTest>
 
 #include <cstdint>
@@ -56,15 +58,35 @@ class RecordPickerTestDriver final : public QObject {
         adapter_.setSource(&source_);
     }
 
-    // "ready", "recording", or anything else for the view model's initial
+    // A rescan that keeps the native handles of the windows the caller names,
+    // so a test can prove the pending selection follows its identity through an
+    // insert or a reorder instead of the index it happened to have.
+    Q_INVOKABLE void seedWindowTargets(const QVariantList& windows) {
+        source_.targets.clear();
+        for (const QVariant& value : windows) {
+            const QVariantMap row = value.toMap();
+            source_.targets.push_back({exosnap::engine::CaptureTarget::Kind::Window,
+                                       row.value(QStringLiteral("id")).toULongLong(),
+                                       row.value(QStringLiteral("label")).toString().toStdString()});
+        }
+        if (source_.selected_target_index >= static_cast<int>(source_.targets.size()))
+            source_.selected_target_index = source_.targets.empty() ? -1 : 0;
+        ++source_.targets_revision;
+        adapter_.setSource(&source_);
+    }
+
+    // "ready", "recording", "paused", or anything else for the view model's initial
     // LoadingCapabilities state.
     Q_INVOKABLE void setRecordingState(const QString& state) {
         if (state == QLatin1String("ready"))
             source_.state = exosnap::UiRecordingState::Ready;
         else if (state == QLatin1String("recording"))
             source_.state = exosnap::UiRecordingState::Recording;
+        else if (state == QLatin1String("paused"))
+            source_.state = exosnap::UiRecordingState::Paused;
         else
             source_.state = exosnap::UiRecordingState::LoadingCapabilities;
+        source_.elapsed_text = state == QLatin1String("paused") ? L"12:34" : L"";
         adapter_.setSource(&source_);
     }
 

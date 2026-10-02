@@ -23,13 +23,9 @@ Rectangle {
     // horizontal centre makes the position a property of the bar instead of a
     // by-product of what is currently visible.
     //
-    // The 860 px minimum window runs the transport one control rung down, and
-    // with it every gap below. The action cluster is inherently the wider of the
-    // two (four icons plus the Stop pill while recording), and the timer is
-    // pinned to the bar's geometric centre rather than laid out between the
-    // clusters — so what the compact rung protects is the lane the timer has
-    // left. Widening the gaps at 860 closes it: measured, the shutter button
-    // came to rest against the last digit.
+    // At the minimum width, Paused adds both Resume and Stop. The clock stays
+    // centered until that action cluster reaches it, then shifts just enough
+    // to leave one compact gap rather than drawing beneath a button.
     readonly property bool compactControls: !ExoTheme.isRegular(root.width)
 
     // Three gaps, three roles, and at the regular rung they are 16 / 12 / 16:
@@ -178,6 +174,8 @@ Rectangle {
     // while recording, and at 18 px it carried the same weight as the button
     // labels either side of it.
     Label {
+        id: elapsedTimer
+        objectName: "recordTransportClock"
         text: root.recordViewModel.countdownActive
               ? root.recordViewModel.countdownRemaining.toString()
               : root.recordViewModel.elapsedText.length > 0 ? root.recordViewModel.elapsedText : qsTr("0:00")
@@ -191,6 +189,8 @@ Rectangle {
                                               : root.recordViewModel.paused ? ExoTheme.paused : ExoTheme.text
         anchors {
             horizontalCenter: parent.horizontalCenter
+            horizontalCenterOffset: Math.min(0, rightActions.x - root.width / 2
+                                             - elapsedTimer.implicitWidth / 2 - ExoTheme.spacingSm)
             verticalCenter: parent.verticalCenter
         }
         font {
@@ -207,6 +207,8 @@ Rectangle {
 
     // ── Right: secondary actions, then the one recommended action ────────────
     RowLayout {
+        id: rightActions
+        objectName: "recordTransportActions"
         spacing: root.clusterSpacing
         anchors {
             right: parent.right

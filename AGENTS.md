@@ -2,7 +2,7 @@
 
 ## Product and architecture
 
-ExoSnap is a Windows-native C++ recording engine with a Qt 6 / Qt Quick frontend. Business/product policy stays in C++; QML owns presentation, layout and interaction. Qt Widgets remains for the main application's native tray integration and the separate updater, not a second product frontend.
+ExoSnap is a Windows-native C++ recording engine with a Qt 6 / Qt Quick frontend. Business/product policy stays in C++; QML owns presentation, layout and interaction. Qt Widgets remains for the main application's native tray integration and for native OS surfaces (file dialogs, installers), not a second product frontend; the standalone updater renders with Qt Quick.
 
 Read relevant source/tests first. [Product specification](docs/product-spec.md) owns behavior, defaults, navigation and terminology; update it in the same change when behavior moves. [Architecture overview](docs/architecture/overview.md) maps subsystem constraints. Do not duplicate product policy in agent instructions.
 

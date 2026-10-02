@@ -509,6 +509,17 @@ TEST(CaptureTargetPresentationTest, BraveCombinesStableAppNameWithDocumentTitle)
     EXPECT_EQ(presentation.label, "Brave - Claude Design");
 }
 
+TEST(CaptureTargetPresentationTest, WindowsEnDashSeparatesAppFromTitle) {
+    const exosnap::engine::CaptureTarget target{exosnap::engine::CaptureTarget::Kind::Window, 21,
+                                                "Downloads \xE2\x80\x93 Explorer"};
+    const CaptureTargetPresentation presentation =
+        ResolveCaptureTargetPresentation(target, CaptureTargetPresentationKind::Window);
+
+    EXPECT_EQ(presentation.app_name, "Explorer");
+    EXPECT_EQ(presentation.title, "Downloads");
+    EXPECT_EQ(presentation.label, "Explorer - Downloads");
+}
+
 TEST(CaptureTargetPresentationTest, RawApplicationTitlesRemainUsefulLabels) {
     const exosnap::engine::CaptureTarget task_manager{exosnap::engine::CaptureTarget::Kind::Window, 18, "Task Manager"};
     const exosnap::engine::CaptureTarget steam{exosnap::engine::CaptureTarget::Kind::Window, 19, "Steam"};

@@ -50,9 +50,6 @@ class FakeVideoEncoder : public IVideoEncoder {
     void SetCq(uint32_t cq) noexcept override {
         cq_ = cq;
     }
-    void SetPreset(NvencPreset preset) noexcept override {
-        preset_ = preset;
-    }
     void SetRateControl(RateControlMode mode, uint32_t bitrate_kbps) noexcept override {
         rc_mode_ = mode;
         bitrate_kbps_ = bitrate_kbps;
@@ -95,7 +92,6 @@ class FakeVideoEncoder : public IVideoEncoder {
 
         init_info_.valid = true;
         init_info_.codec = codec_;
-        init_info_.preset = preset_;
         init_info_.rc_mode = rc_mode_;
         init_info_.target_bitrate_kbps = bitrate_kbps_;
         init_info_.max_bitrate_kbps = bitrate_kbps_;
@@ -224,7 +220,6 @@ class FakeVideoEncoder : public IVideoEncoder {
     BitDepth bit_depth_ = BitDepth::Bit8;
     ChromaSubsampling chroma_ = ChromaSubsampling::Cs420;
     uint32_t cq_ = 0;
-    NvencPreset preset_ = NvencPreset::P4;
     RateControlMode rc_mode_ = RateControlMode::ConstantQuality;
     uint32_t bitrate_kbps_ = 0;
     ColorMetadata color_{};

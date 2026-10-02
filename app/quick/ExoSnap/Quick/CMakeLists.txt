@@ -56,6 +56,7 @@ qt_add_qml_module(exosnap
         DeviceCapabilityRow.qml
         DeviceCodecChip.qml
         DiagnosticsPage.qml
+        DiagnosticsWorkspace.qml
         DiagnosticsSectionHeader.qml
         DiagnosticsSelfTestRow.qml
         EditDetailsRail.qml
@@ -73,6 +74,8 @@ qt_add_qml_module(exosnap
         ExoConfirmDialog.qml
         ExoDisclosure.qml
         ExoGlyph.qml
+        RecordPreviewChrome.qml
+        SourceConfidence.qml
         ExoIssueCard.qml
         ExoKeyValueTable.qml
         ExoLastSessionCard.qml
@@ -116,6 +119,7 @@ qt_add_qml_module(exosnap
         OverlayQuickControlPill.qml
         OverlayRecording.qml
         PreviewMetricsOverlay.qml
+        PreviewTestCard.qml
         RecordActionButton.qml
         RecordPage.qml
         RecordingErrorOverlay.qml
@@ -125,6 +129,7 @@ qt_add_qml_module(exosnap
         RecordTransportDock.qml
         RecoveryOverlay.qml
         RegionSelectionOverlay.qml
+        RegionSelectionWindow.qml
         SettingsAppearanceSection.qml
         SettingsAudioEncodingSection.qml
         SettingsAudioSourcesSection.qml
@@ -338,6 +343,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/GpuTelemetryProviders.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.h
@@ -953,6 +959,8 @@ qt_add_qml_module(record_controls_qml_tests
         # the test module has to carry it as well — without it qmllint resolves
         # nothing inside either component and reports the whole icon block.
         ExoGlyph.qml
+        RecordPreviewChrome.qml
+        SourceConfidence.qml
         # The log viewer, for its selection contract: a selection identifies
         # entries by sequence, so it has to survive an append, front eviction
         # and a filter change without ever sliding onto another entry. Driven
@@ -1234,6 +1242,7 @@ qt_add_qml_module(record_source_picker_qml_tests
         RecordSourceToggle.qml
         RecordSplitButton.qml
         RecordTransportDock.qml
+        RegionSelectionOverlay.qml
 )
 
 target_compile_definitions(record_source_picker_qml_tests
@@ -1574,6 +1583,7 @@ exosnap_add_gtest(
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/GpuTelemetryProviders.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
     LIBRARIES
         Qt6::Core
@@ -1719,6 +1729,7 @@ exosnap_add_gtest(
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/GpuTelemetryProviders.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/LogViewPolicy.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/ElevationProvider.cpp

@@ -1,0 +1,275 @@
+name: Publish qualified release
+
+on:
+  push:
+    branches: [next]
+    tags: ['v*']
+    paths:
+      - .github/workflows/publish-release.yml
+  workflow_dispatch:
+    inputs:
+      candidate_run:
+        description: Successful official candidate Actions run ID
+        required: true
+        type: string
+      candidate_id:
+        description: Candidate ID from that run
+        required: true
+        type: string
+      qualification_sha256:
+        description: SHA-256 from exo-verify publication encode
+        required: true
+        type: string
+      qualification_base64:
+        description: Encoded qualification from exo-verify publication encode
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_RUN: ${{ inputs.candidate_run }}
+  CANDIDATE_ID: ${{ inputs.candidate_id }}
+  QUALIFICATION_SHA256: ${{ inputs.qualification_sha256 }}
+
+jobs:
+  verify:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/next' && github.repository == 'Exoridus/exosnap'
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build release tools from the trusted workflow revision
+        run: cargo build --locked --manifest-path tools/Cargo.toml -p exo-verify -p exo-dev
+      - name: Download official candidate bundle and frozen plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run }}
+          name: candidate-${{ inputs.candidate_id }}
+          path: candidate
+      - name: Download all hosted lane attempts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run }}
+          pattern: candidate-results-*-${{ inputs.candidate_id }}-attempt-*
+          path: hosted-results
+      - name: Obtain candidate run provenance
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/Exoridus/exosnap/actions/runs/$env:CANDIDATE_RUN" > candidate-run.json
+      - name: Decode frozen external qualification
+        shell: pwsh
+        env:
+          EXOSNAP_QUALIFICATION: ${{ inputs.qualification_base64 }}
+        run: >-
+          ./tools/target/debug/exo-verify.exe publication unpack
+          --sha256 "$env:QUALIFICATION_SHA256" --out qualification
+      - name: Check exact candidate publication preconditions
+        id: qualification
+        shell: pwsh
+        run: >-
+          ./tools/target/debug/exo-verify.exe publication check
+          --bundle candidate/candidate-bundle --plan candidate/candidate-plan.json
+          --report qualification/release-report.json --decisions qualification/decisions.json
+          --results hosted-results --results qualification/results
+          --run-metadata candidate-run.json --candidate-id "$env:CANDIDATE_ID"
+          --source-commit "$env:GITHUB_SHA" --out verified-assets --github-output "$env:GITHUB_OUTPUT"
+      - name: Assemble the release cut from integrated history
+        shell: pwsh
+        env:
+          EXOSNAP_CHANGELOG_CUT: '1'
+          RELEASE_VERSION: ${{ steps.qualification.outputs.version }}
+        run: >-
+          ./tools/target/debug/exo-dev.exe release changelog
+          --until "$env:GITHUB_SHA" --version "$env:RELEASE_VERSION" --apply
+      - name: Render release notes from the release cut
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.qualification.outputs.version }}
+        run: >-
+          ./tools/target/debug/exo-dev.exe release release-notes
+          --version "$env:RELEASE_VERSION" --commit "$env:GITHUB_SHA" --out-file release-notes.md
+      - name: Preserve frozen publication inputs for environment approval
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: publication-inputs
+          path: |
+            candidate-run.json
+            hosted-results/**/*.result.json
+            qualification/
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'Exoridus/exosnap'
+    environment: release
+    runs-on: windows-2022
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build only the verifier from the tagged source
+        run: cargo build --locked --manifest-path tools/Cargo.toml -p exo-verify
+      - name: Obtain the administrator-created annotated tag
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tagObject = git rev-parse "$env:GITHUB_REF"
+          gh api "repos/Exoridus/exosnap/git/tags/$tagObject" > release-tag.json
+      - name: Read the frozen qualification binding
+        id: tag
+        shell: pwsh
+        run: |
+          $source = git rev-parse "${env:GITHUB_REF}^{commit}"
+          ./tools/target/debug/exo-verify.exe publication tag-input --tag-metadata release-tag.json --tag "$env:GITHUB_REF_NAME" --source-commit "$source" --github-output "$env:GITHUB_OUTPUT"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.tag.outputs.preparation_run }}
+          name: publication-inputs
+      - name: Download exact official candidate artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.tag.outputs.candidate_run }}
+          name: candidate-${{ steps.tag.outputs.candidate_id }}
+          path: candidate
+      - name: Obtain frozen preparation provenance
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARATION_RUN: ${{ steps.tag.outputs.preparation_run }}
+        run: gh api "repos/Exoridus/exosnap/actions/runs/$env:PREPARATION_RUN" > preparation-run.json
+      - name: Fetch every current official lane attempt
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.tag.outputs.candidate_run }}
+          pattern: candidate-results-*-${{ steps.tag.outputs.candidate_id }}-attempt-*
+          path: current-hosted-results
+      - name: Refresh official candidate provenance
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ steps.tag.outputs.candidate_run }}
+        run: gh api "repos/Exoridus/exosnap/actions/runs/$env:CANDIDATE_RUN" > candidate-run.json
+      - name: Recheck frozen qualification after environment approval
+        id: qualification
+        shell: pwsh
+        env:
+          CANDIDATE_ID: ${{ steps.tag.outputs.candidate_id }}
+          SOURCE_COMMIT: ${{ steps.tag.outputs.source }}
+        run: >-
+          ./tools/target/debug/exo-verify.exe publication check
+          --bundle candidate/candidate-bundle --plan candidate/candidate-plan.json
+          --report qualification/release-report.json --decisions qualification/decisions.json
+          --results current-hosted-results --results qualification/results
+          --run-metadata candidate-run.json --candidate-id "$env:CANDIDATE_ID"
+          --source-commit "$env:SOURCE_COMMIT" --tag "$env:GITHUB_REF_NAME"
+          --tag-metadata release-tag.json --preparation-run-metadata preparation-run.json
+          --out release-assets --github-output "$env:GITHUB_OUTPUT"
+      - name: Sign production update manifest for qualified package hashes
+        shell: pwsh
+        env:
+          EXOSNAP_UPDATE_SIGNING_KEY: ${{ secrets.EXOSNAP_UPDATE_SIGNING_KEY }}
+          UPDATE_PUBLIC_KEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+          RELEASE_TAG: ${{ steps.qualification.outputs.tag }}
+          INSTALLER: ${{ steps.qualification.outputs.installer }}
+          PORTABLE: ${{ steps.qualification.outputs.portable }}
+        run: >-
+          ./tools/target/debug/exo-verify.exe manifest sign --bundle candidate/candidate-bundle
+          --installer-url "https://github.com/Exoridus/exosnap/releases/download/$env:RELEASE_TAG/$env:INSTALLER"
+          --portable-url "https://github.com/Exoridus/exosnap/releases/download/$env:RELEASE_TAG/$env:PORTABLE"
+          --out release-assets --public-key-hex "$env:UPDATE_PUBLIC_KEY"
+      - name: Create draft release and upload unchanged candidate assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.qualification.outputs.tag }}
+        run: >-
+          gh release create "$env:RELEASE_TAG" --repo Exoridus/exosnap --verify-tag
+          --title "$env:RELEASE_TAG" --notes-file release-notes.md --draft
+          @(Get-ChildItem -LiteralPath release-assets -File | ForEach-Object FullName)
+      - name: Download uploaded assets independently
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.qualification.outputs.tag }}
+        run: gh release download "$env:RELEASE_TAG" --repo Exoridus/exosnap --dir uploaded-assets
+      - name: Obtain draft release identity
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.qualification.outputs.tag }}
+        run: gh api "repos/Exoridus/exosnap/releases/tags/$env:RELEASE_TAG" > release.json
+      - name: Verify uploaded assets before making the release public
+        shell: pwsh
+        env:
+          UPDATE_PUBLIC_KEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+        run: >-
+          ./tools/target/debug/exo-verify.exe publication verify-uploaded
+          --bundle candidate/candidate-bundle --assets uploaded-assets
+          --public-key-hex "$env:UPDATE_PUBLIC_KEY" --tag-metadata release-tag.json --release-metadata release.json
+      - name: Publish the verified release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.qualification.outputs.tag }}
+        run: gh release edit "$env:RELEASE_TAG" --repo Exoridus/exosnap --draft=false --latest
+      - name: Download public release assets independently
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.qualification.outputs.tag }}
+        run: gh release download "$env:RELEASE_TAG" --repo Exoridus/exosnap --dir public-assets
+      - name: Obtain public release identity
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.qualification.outputs.tag }}
+        run: gh api "repos/Exoridus/exosnap/releases/tags/$env:RELEASE_TAG" > public-release.json
+      - name: Verify final publication
+        shell: pwsh
+        env:
+          UPDATE_PUBLIC_KEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+        run: >-
+          ./tools/target/debug/exo-verify.exe publication verify-uploaded
+          --bundle candidate/candidate-bundle --assets public-assets
+          --public-key-hex "$env:UPDATE_PUBLIC_KEY" --tag-metadata release-tag.json
+          --release-metadata public-release.json --published
+      - name: Retain publication records
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: publication-records
+          path: |
+            qualification/
+            candidate-run.json
+            candidate/candidate-bundle/bundle.json
+            release-assets/*.json
+            release-assets/*.sig
+            release-assets/*.sha256
+            release-tag.json
+            public-release.json
+            release-notes.md
+          if-no-files-found: warn
+          retention-days: 90

@@ -334,10 +334,14 @@ TEST(RecordViewModelAdapterTest, PickerRowsExposeStableIdentityPresentationAndSe
     const QVariantMap window = adapter.targetOptions().at(1).toMap();
     EXPECT_EQ(display.value(QStringLiteral("identity")).toString(), QStringLiteral("display:41"));
     EXPECT_EQ(display.value(QStringLiteral("kind")).toString(), QStringLiteral("display"));
-    EXPECT_EQ(display.value(QStringLiteral("thumbnailState")).toString(), QStringLiteral("placeholder"));
+    EXPECT_FALSE(adapter.targetStillOptions().contains(QStringLiteral("display:41")));
     EXPECT_FALSE(display.value(QStringLiteral("selected")).toBool());
+    EXPECT_EQ(display.value(QStringLiteral("title")).toString(), QStringLiteral("Display 1"));
     EXPECT_EQ(window.value(QStringLiteral("identity")).toString(), QStringLiteral("window:73"));
     EXPECT_EQ(window.value(QStringLiteral("label")).toString(), QStringLiteral("Brave - Claude Design"));
+    EXPECT_EQ(window.value(QStringLiteral("title")).toString(), QStringLiteral("Claude Design"));
+    EXPECT_EQ(window.value(QStringLiteral("appName")).toString(), QStringLiteral("Brave"));
+    EXPECT_EQ(window.value(QStringLiteral("windowTitle")).toString(), QStringLiteral("Claude Design"));
     EXPECT_TRUE(window.value(QStringLiteral("selected")).toBool());
     EXPECT_EQ(adapter.selectedTargetIdentity(), QStringLiteral("window:73"));
     EXPECT_TRUE(adapter.selectedTargetAvailable());
@@ -365,18 +369,21 @@ TEST(RecordViewModelAdapterTest, CachedStillSurvivesRefreshAndOtherTargetsKeepAP
         {exosnap::engine::CaptureTarget::Kind::Window, 74, "Task Manager"},
     };
     RecordViewModelAdapter adapter(&source);
+    int list_changes = 0;
+    QObject::connect(&adapter, &RecordViewModelAdapter::targetOptionsChanged, [&list_changes]() { ++list_changes; });
     adapter.setTargetStill(QStringLiteral("window:73"), QStringLiteral("image://capture-target/window-73/1"));
+    EXPECT_EQ(list_changes, 0);
 
     source.targets[0].description = "Renamed document - Brave";
     ++source.targets_revision;
     adapter.synchronize();
 
-    EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("thumbnailState")).toString(),
-              QStringLiteral("ready"));
-    EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("thumbnailSource")).toString(),
+    const QVariantMap stills = adapter.targetStillOptions();
+    const QVariantMap captured = stills.value(QStringLiteral("window:73")).toMap();
+    EXPECT_EQ(captured.value(QStringLiteral("state")).toString(), QStringLiteral("ready"));
+    EXPECT_EQ(captured.value(QStringLiteral("source")).toString(),
               QStringLiteral("image://capture-target/window-73/1"));
-    EXPECT_EQ(adapter.targetOptions().at(1).toMap().value(QStringLiteral("thumbnailState")).toString(),
-              QStringLiteral("placeholder"));
+    EXPECT_FALSE(stills.contains(QStringLiteral("window:74")));
 }
 
 TEST(RecordViewModelAdapterTest, VisibleIdentitiesAreForwardedOnceInLayoutOrder) {
@@ -416,15 +423,19 @@ TEST(RecordViewModelAdapterTest, AnUnavailableTargetKeepsItsStillAndGoesStale) {
     // placeholder rather than announcing a failure the card cannot show.
     adapter.setTargetStillUnavailable(QStringLiteral("window:74"));
 
-    EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("thumbnailState")).toString(),
-              QStringLiteral("stale"));
-    EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("thumbnailSource")).toString(),
+    const QVariantMap stills = adapter.targetStillOptions();
+    const QVariantMap captured = stills.value(QStringLiteral("window:73")).toMap();
+    EXPECT_EQ(captured.value(QStringLiteral("state")).toString(), QStringLiteral("stale"));
+    EXPECT_EQ(captured.value(QStringLiteral("source")).toString(),
               QStringLiteral("image://capture-target/window-73/1"));
-    EXPECT_EQ(adapter.targetOptions().at(1).toMap().value(QStringLiteral("thumbnailState")).toString(),
-              QStringLiteral("placeholder"));
+    EXPECT_FALSE(stills.contains(QStringLiteral("window:74")));
 
     adapter.setTargetStill(QStringLiteral("window:73"), QStringLiteral("image://capture-target/window-73/2"));
-    EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("thumbnailState")).toString(),
+    EXPECT_EQ(adapter.targetStillOptions()
+                  .value(QStringLiteral("window:73"))
+                  .toMap()
+                  .value(QStringLiteral("state"))
+                  .toString(),
               QStringLiteral("ready"));
 }
 
@@ -654,7 +665,7 @@ TEST(RecordViewModelAdapterTest, FormatsLiveDiagnosticsAtAdapterCadence) {
 
     EXPECT_EQ(adapter.bitrateText(), QStringLiteral("10.0 Mb/s"));
     EXPECT_EQ(adapter.droppedFramesText(), QStringLiteral("3"));
-    EXPECT_EQ(adapter.driftText(), QStringLiteral("-5 ms"));
+    EXPECT_EQ(adapter.driftText(), QStringLiteral("-4.6 ms"));
 }
 
 TEST(RecordViewModelAdapterTest, RoutesNarrowCommandsWithoutServiceExposure) {
@@ -729,5 +740,62 @@ TEST(RecordViewModelAdapterTest, SavingProgressStartsUnknownAndClampsToUnit) {
     EXPECT_DOUBLE_EQ(adapter.savingProgress(), -1.0);
 }
 
+TEST(RecordViewModelAdapterTest, SourceButtonStatesPreserveSelectedIdentity) {
+    RecordViewModel source;
+    source.selected_target_index = -1;
+    RecordViewModelAdapter adapter(&source);
+    EXPECT_EQ(adapter.sourceButtonText(), QStringLiteral("Select source"));
+    source.targets = {{exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 2560x1440 at (0, 0)"},
+                      {exosnap::engine::CaptureTarget::Kind::Window, 2, "Google Chrome"}};
+    ++source.targets_revision;
+    source.selected_target_index = 0;
+    adapter.synchronize();
+    EXPECT_EQ(adapter.sourceButtonText(), QStringLiteral("Screen: Display 1"));
+    source.capture_mode = CaptureMode::Window;
+    source.selected_target_index = 1;
+    adapter.synchronize();
+    EXPECT_EQ(adapter.sourceButtonText(), QStringLiteral("App: Google Chrome"));
+    source.capture_mode = CaptureMode::Region;
+    adapter.setRegionState({}, true);
+    EXPECT_EQ(adapter.sourceButtonText(), QStringLiteral("Selecting region…"));
+    source.has_region = true;
+    source.region = {0, 0, 1920, 1080};
+    adapter.setRegionState({}, false);
+    EXPECT_EQ(adapter.sourceButtonText(), QStringLiteral("Region: 1920×1080"));
+}
+
+TEST(RecordViewModelAdapterTest, ConfidenceIndicatorsRemainDecorativeAndIntentionalOffIsNeutral) {
+    RecordViewModel source;
+    RecordViewModelAdapter adapter(&source);
+    const auto indicators = adapter.confidenceIndicators();
+    ASSERT_EQ(indicators.size(), 3);
+    for (const auto& indicator : indicators) {
+        const auto item = indicator.toMap();
+        EXPECT_FALSE(item.value("description").toString().isEmpty());
+        if (!item.value("included").toBool())
+            EXPECT_EQ(item.value("tone").toString(), QStringLiteral("neutral"));
+    }
+}
+
 } // namespace
 } // namespace exosnap::quick
+
+TEST(SourceConfidencePolicy, ExpectedLossAndIntentionalMuteRemainDistinct) {
+    using namespace exosnap;
+    using namespace exosnap::quick;
+    RecordViewModel source;
+    source.state = UiRecordingState::Recording;
+    source.audio_ui_state.source_rows = {{engine::AudioSourceKind::Sys, true, false},
+                                         {engine::AudioSourceKind::Mic, true, false}};
+    RecordViewModelAdapter adapter(&source);
+    adapter.setDeviceState(true, true, true);
+    EXPECT_EQ(adapter.confidenceIndicators()[0].toMap().value("tone").toString(), "success");
+    adapter.setAudioSourceHealth(engine::AudioSourceKindBit(engine::AudioSourceKind::Mic));
+    EXPECT_EQ(adapter.confidenceIndicators()[1].toMap().value("tone").toString(), "warning");
+    source.audio_ui_state.source_rows[1].enabled = false;
+    EXPECT_EQ(adapter.confidenceIndicators()[1].toMap().value("tone").toString(), "neutral");
+    adapter.setDeviceState(true, false, true, QStringLiteral("Camera unavailable"));
+    EXPECT_EQ(adapter.confidenceIndicators()[2].toMap().value("tone").toString(), "error");
+    adapter.setDeviceState(true, false, false, QStringLiteral("Camera unavailable"));
+    EXPECT_EQ(adapter.confidenceIndicators()[2].toMap().value("tone").toString(), "neutral");
+}

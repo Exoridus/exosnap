@@ -3,7 +3,9 @@
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/color_metadata.h>
 
+#include "backend_tuning.h"
 #include "codec_types.h"
+#include "encoder_device.h"
 #include "error_types.h"
 #include "frame_pacing.h"
 #include "hdr_native.h"
@@ -15,6 +17,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -29,6 +32,13 @@ namespace exosnap::engine {
 // Called by VideoThread to pull the latest webcam BGRA frame.
 // Implementations must be thread-safe: TryGetFrame is called from VideoThread.
 // The provider must remain alive for the duration of Record().
+struct WebcamFrameSnapshot {
+    int width = 0;
+    int height = 0;
+    uint64_t generation = 0;
+    std::vector<uint8_t> bgra;
+};
+
 struct WebcamFrameProvider {
     // Returns true and fills out_width/out_height/out_bgra with the LATEST captured
     // frame. out_bgra is BGRA (B8G8R8A8 byte order), row-major.
@@ -45,6 +55,14 @@ struct WebcamFrameProvider {
     // recomposition when the webcam has not produced a new sample since last tick.
     virtual bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra,
                              uint64_t& out_generation) = 0;
+    // Pixels and generation remain paired for the lifetime of the snapshot.
+    // Providers should override this to share their immutable published frame.
+    virtual std::shared_ptr<const WebcamFrameSnapshot> Snapshot() {
+        auto frame = std::make_shared<WebcamFrameSnapshot>();
+        if (!TryGetFrame(frame->width, frame->height, frame->bgra, frame->generation))
+            return {};
+        return frame;
+    }
     virtual ~WebcamFrameProvider() = default;
 };
 
@@ -376,15 +394,26 @@ struct RecorderConfig {
     uint32_t cq = CanonicalCq(QualityPreset::Balanced);
 
     // Canonical rate-control mode. Defaults to ConstantQuality (existing behavior).
-    RateControlMode nvenc_rate_control = RateControlMode::ConstantQuality;
+    RateControlMode rate_control_mode = RateControlMode::ConstantQuality;
 
-    // NVENC P1-P7 speed/quality trade-off, independent of rate control and CQ.
-    // P4 is the default for all supported codecs.
-    NvencPreset nvenc_preset = NvencPreset::P4;
+    // Which physical adapter should encode, as the user chose it. Auto (the
+    // default) resolves at session start; an Explicit selection names a
+    // fingerprint and is never silently redirected to a different GPU. The
+    // boot-scoped LUID is not part of this preference.
+    EncoderDevicePreference encoder_device;
+
+    // Runtime resolution of `encoder_device` for this session, produced against
+    // the adapters present now. Empty means "not resolved here": Auto then uses
+    // the capture adapter, which is the only executable path in this build.
+    ResolvedEncoderDevice resolved_encoder_device;
+
+    // Backend-specific tuning for the selected encoder. Generic configuration
+    // above stays backend-independent; NVENC's P1-P7 lives in NvencTuning.
+    BackendTuning backend_tuning;
 
     // Target bitrate in kbps — used for VariableBitrate and ConstantBitrate modes.
     // Ignored (and zero-ed by the encoder) when mode is ConstantQuality.
-    uint32_t nvenc_bitrate_kbps = 20000;
+    uint32_t target_bitrate_kbps = 20000;
 
     // ---------------------------------------------------------------------------
     // Audio encoding parameters

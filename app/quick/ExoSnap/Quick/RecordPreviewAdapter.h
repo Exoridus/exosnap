@@ -4,6 +4,7 @@
 #include "PreviewUpdateScheduler.h"
 #include "ReadyFrameCaptureService.h"
 
+#include <QElapsedTimer>
 #include <QObject>
 #include <QPointer>
 #include <QSize>
@@ -45,6 +46,7 @@ class RecordPreviewAdapter : public QObject {
     // shared texture and armed a scene update per frame for a window that cannot
     // render. See setSurfaceVisible() for the one case that is deliberately NOT
     // suspended.
+    Q_PROPERTY(int previewFrameRate READ previewFrameRate NOTIFY previewFrameRateChanged FINAL)
     Q_PROPERTY(bool surfaceVisible READ surfaceVisible WRITE setSurfaceVisible NOTIFY surfaceVisibleChanged FINAL)
     Q_PROPERTY(bool sourceAvailable READ sourceAvailable NOTIFY sourceAvailableChanged FINAL)
     Q_PROPERTY(bool frameReady READ frameReady NOTIFY frameReadyChanged FINAL)
@@ -62,6 +64,9 @@ class RecordPreviewAdapter : public QObject {
     Q_PROPERTY(bool recordingActive READ recordingActive NOTIFY recordingStateChanged FINAL)
     Q_PROPERTY(QString recordingStateText READ recordingStateText NOTIFY recordingStateChanged FINAL)
     Q_PROPERTY(qulonglong recordingDroppedFrames READ recordingDroppedFrames NOTIFY metricsChanged FINAL)
+    // Harness-only: the preview shows a synthetic test card instead of a live
+    // capture, so a screenshot never carries the developer's desktop.
+    Q_PROPERTY(bool harnessTestCard READ harnessTestCard NOTIFY harnessTestCardChanged FINAL)
 
   public:
     explicit RecordPreviewAdapter(QObject* parent = nullptr);
@@ -69,6 +74,10 @@ class RecordPreviewAdapter : public QObject {
 
     [[nodiscard]] bool active() const noexcept;
     void setActive(bool active);
+    int previewFrameRate() const noexcept {
+        return preview_frame_rate_;
+    }
+    void setPreviewFrameRate(int rate);
 
     [[nodiscard]] bool surfaceVisible() const noexcept;
     // Suspends/resumes the preview's own capture subscription. The engine-fed
@@ -103,6 +112,11 @@ class RecordPreviewAdapter : public QObject {
     [[nodiscard]] bool recordingActive() const noexcept;
     [[nodiscard]] const QString& recordingStateText() const noexcept;
     [[nodiscard]] qulonglong recordingDroppedFrames() const noexcept;
+    [[nodiscard]] bool harnessTestCard() const noexcept;
+    // While enabled, a selected source is reported as a 1920x1080 frame that is
+    // ready, and no DXGI or WGC capture is opened. Without a selected source the
+    // preview stays in its empty state either way.
+    void setHarnessTestCard(bool enabled);
 
     [[nodiscard]] QVariantMap benchmarkSnapshot() const;
     // Typed read of the attached preview item's instrumentation. The frontend A/B
@@ -124,6 +138,7 @@ class RecordPreviewAdapter : public QObject {
 
   signals:
     void activeChanged();
+    void previewFrameRateChanged();
     void surfaceVisibleChanged();
     void sourceAvailableChanged();
     void frameReadyChanged();
@@ -133,6 +148,7 @@ class RecordPreviewAdapter : public QObject {
     void sourceSizeChanged();
     void metricsChanged();
     void recordingStateChanged();
+    void harnessTestCardChanged();
 
   private:
     // The one place `active` and `surfaceVisible` are resolved into "is the
@@ -167,6 +183,10 @@ class RecordPreviewAdapter : public QObject {
     std::optional<exosnap::engine::CaptureTarget> selected_target_;
     QPointer<ExoPreviewItem> item_;
     QTimer metrics_timer_;
+    QTimer preview_update_timer_;
+    QElapsedTimer last_preview_update_;
+    int preview_frame_rate_ = 60;
+    void requestPreviewUpdate();
     std::atomic<quint64> source_epoch_{0};
     bool active_ = false;
     // Defaults to true so a host that never sets it (the QML tests, the render
@@ -188,6 +208,7 @@ class RecordPreviewAdapter : public QObject {
     qulonglong mutex_misses_ = 0;
     std::atomic<bool> engine_feed_expected_{false};
     bool recording_active_ = false;
+    bool harness_test_card_ = false;
     QString recording_state_text_ = QStringLiteral("Ready");
     qulonglong recording_dropped_frames_ = 0;
     qulonglong recording_captured_frames_ = 0;

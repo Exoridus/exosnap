@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/encoder_device.h>
 #include <exosnap/engine/frame_pacing.h>
 
 namespace exosnap {
@@ -26,6 +27,10 @@ struct VideoSettingsModel {
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;
     KeyframeIntervalMode keyframe_interval = KeyframeIntervalMode::Seconds2; // default 2 s
+    // Which physical adapter should encode. Auto (default) resolves at session
+    // start; an explicit selection stores a hardware fingerprint, never the
+    // boot-scoped adapter LUID.
+    exosnap::engine::EncoderDevicePreference encoder_device;
 
     static VideoSettingsModel Defaults() {
         return {};

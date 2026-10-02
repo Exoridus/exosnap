@@ -1172,13 +1172,14 @@ TEST(OutputSettingsTest, MergeFormatSelection_CarriesHdrMode) {
 // still never reach the NVENC encoder at recording start.
 TEST(OutputSettingsTest, ApplyOutputSettingsToRecorderConfig_CarriesNvencPreset) {
     exosnap::engine::RecorderConfig config{};
-    config.nvenc_preset = exosnap::engine::NvencPreset::P4;
 
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
     settings.nvenc_preset = exosnap::engine::NvencPreset::P1;
 
     ApplyOutputSettingsToRecorderConfig(config, settings);
-    EXPECT_EQ(config.nvenc_preset, exosnap::engine::NvencPreset::P1);
+    const auto* tuning = exosnap::engine::GetNvencTuning(config.backend_tuning);
+    ASSERT_NE(tuning, nullptr) << "the NVENC alternative must carry the preset";
+    EXPECT_EQ(tuning->preset, exosnap::engine::NvencPreset::P1);
 }
 
 // ── EXOSNAP_OUTPUT_DIR override (DF-HISTORY) ─────────────────────────────────

@@ -40,7 +40,7 @@ class FrameLuminanceAnalyzer {
     // PQ-encoded BT.2020 R10G10B10A2 surface duplication hands out when it offers
     // no FP16 surface on an HDR desktop.
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, bool pq_source,
-              std::string& err);
+              std::string& err, const RECT* region = nullptr);
 
     [[nodiscard]] bool Initialised() const noexcept {
         return compute_shader_ != nullptr;
@@ -83,6 +83,8 @@ class FrameLuminanceAnalyzer {
 
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;
+    UINT origin_x_ = 0;
+    UINT origin_y_ = 0;
     UINT width_ = 0;
     UINT height_ = 0;
     bool pq_source_ = false;

@@ -153,23 +153,46 @@ QJsonObject PresentJson(const PresentObservation& present) {
     json.insert(QStringLiteral("elevated"), present.elevated);
     json.insert(QStringLiteral("available"), present.available);
 
-    // WHY it is off, in the order the gate applies it. A runner branches on this
-    // instead of inferring a cause from an absent number.
-    QString state;
-    if (present.available && present.sample.has_value() && present.sample->available)
-        state = QString::fromLatin1(availability::kAvailable);
-    else if (!present.opt_in)
-        state = QString::fromLatin1(availability::kRequiresOptIn);
-    else if (!present.elevated)
-        state = QString::fromLatin1(availability::kRequiresElevation);
-    else
-        state = QString::fromLatin1(availability::kUnavailable);
-    json.insert(QStringLiteral("availability"), state);
-    json.insert(QStringLiteral("reason"), state == QLatin1String(availability::kUnavailable)
-                                              ? QJsonValue(QStringLiteral("noPresentObserved"))
-                                              : QJsonValue(QJsonValue::Null));
-
+    // WHY it is off, from the provider's own state -- not from a privilege
+    // prediction. A runner branches on this instead of inferring a cause from an
+    // absent number.
     const bool sampled = present.sample.has_value() && present.sample->available;
+    QString state;
+    QJsonValue reason(QJsonValue::Null);
+    if (sampled) {
+        state = QString::fromLatin1(availability::kAvailable);
+    } else {
+        switch (present.state) {
+        case diagnostics::PresentProviderState::NotRequested:
+            state = QString::fromLatin1(availability::kRequiresOptIn);
+            break;
+        case diagnostics::PresentProviderState::AccessDenied:
+            state = QString::fromLatin1(availability::kAccessDenied);
+            reason = QStringLiteral("traceAccessDenied");
+            break;
+        case diagnostics::PresentProviderState::SessionConflict:
+            state = QString::fromLatin1(availability::kConflict);
+            reason = QStringLiteral("traceSessionConflict");
+            break;
+        case diagnostics::PresentProviderState::NotBuilt:
+        case diagnostics::PresentProviderState::NotSupported:
+            state = QString::fromLatin1(availability::kUnsupported);
+            reason = QStringLiteral("presentTraceUnsupported");
+            break;
+        case diagnostics::PresentProviderState::Starting:
+        case diagnostics::PresentProviderState::OpenNoData:
+        case diagnostics::PresentProviderState::Measuring:
+        case diagnostics::PresentProviderState::Failed:
+        case diagnostics::PresentProviderState::Stopped:
+            state = QString::fromLatin1(availability::kUnavailable);
+            reason = QStringLiteral("noPresentObserved");
+            break;
+        }
+    }
+    json.insert(QStringLiteral("state"), QString::fromLatin1(diagnostics::PresentProviderStateKey(present.state)));
+    json.insert(QStringLiteral("availability"), state);
+    json.insert(QStringLiteral("reason"), reason);
+
     const diagnostics::PresentSample sample = present.sample.value_or(diagnostics::PresentSample{});
     json.insert(QStringLiteral("mode"),
                 sampled ? QJsonValue(PresentModeName(sample.mode)) : QJsonValue(QJsonValue::Null));

@@ -3,8 +3,11 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 
-// Logs nav area: the raw event stream behind the diagnostics, plus the startup
-// trace so start-up regressions are visible instead of buried in log lines.
+// The full log surface inside the Diagnostics destination: the raw event
+// stream behind the diagnostics, plus the startup trace so start-up regressions
+// are visible instead of buried in log lines. Not a navigation destination of
+// its own any more -- the Diagnostics workspace swaps this in over the
+// overview, so the object name and every log capability stay the same.
 //
 // The history is diagnostics::AppLog's bounded deque, surfaced once through
 // LogEntryModel and filtered by a proxy — the view holds no copy of its own.
@@ -12,8 +15,20 @@ Item {
     id: root
 
     required property LogsAdapter logs
+    // True when hosted by the Diagnostics workspace. Kept as a property rather
+    // than assumed so a future standalone use does not inherit a Back control
+    // that leads nowhere.
+    property bool embedded: false
+
+    signal backRequested()
 
     objectName: "quickLogsPage"
+
+    // The DestinationReady contract and a direct logs request both wait on this
+    // surface existing, and the workspace focuses it once it does.
+    function focusPrimary(): void {
+        logView.forceActiveFocus();
+    }
 
     // The log has no addressable landmarks — every row is the same kind of thing
     // and which one is interesting depends on the run — so ui.reveal has nothing
@@ -76,8 +91,19 @@ Item {
             Layout.fillWidth: true
             Layout.bottomMargin: ExoTheme.spacingXs
 
+            ExoButton {
+                objectName: "logsBackButton"
+
+                visible: root.embedded
+                text: qsTr("Back to overview")
+                leadingGlyph: ExoGlyph.Back
+                quiet: true
+                compact: true
+                onClicked: root.backRequested()
+            }
+
             Label {
-                text: qsTr("Logs")
+                text: root.embedded ? qsTr("Diagnostics / Logs") : qsTr("Logs")
                 textFormat: Text.PlainText
                 color: ExoTheme.text
                 font {
@@ -100,6 +126,57 @@ Item {
                 font {
                     family: ExoTheme.sansFamily
                     pixelSize: ExoTheme.fontSecondary
+                }
+            }
+        }
+
+        // A "Show in log" request temporarily overrides the severity filter and
+        // the search so the requested entry cannot be hidden by whatever the
+        // user had set. The banner names that state and is the one way back to
+        // the previous filter; nothing is restored silently underneath it.
+        Rectangle {
+            id: revealBanner
+
+            objectName: "logRevealBanner"
+            visible: root.logs.revealActive
+            Layout.fillWidth: true
+            implicitHeight: revealBannerRow.implicitHeight + 2 * ExoTheme.spacingSm
+            color: root.logs.revealMissing ? ExoTheme.warningSurface : ExoTheme.surfaceRaised
+            border.width: 1
+            border.color: root.logs.revealMissing ? ExoTheme.warning : ExoTheme.line
+            radius: ExoTheme.radiusSm
+
+            RowLayout {
+                id: revealBannerRow
+
+                anchors {
+                    fill: parent
+                    margins: ExoTheme.spacingSm
+                }
+                spacing: ExoTheme.spacingSm
+
+                Label {
+                    objectName: "logRevealMessage"
+                    text: root.logs.revealMissing
+                          ? qsTr("This entry is no longer in the current log buffer.")
+                          : qsTr("Showing the log entry for \"%1\".").arg(root.logs.revealEntryId)
+                    textFormat: Text.PlainText
+                    wrapMode: Text.WordWrap
+                    color: ExoTheme.text
+                    Layout.fillWidth: true
+                    font {
+                        family: ExoTheme.sansFamily
+                        pixelSize: ExoTheme.fontSecondary
+                    }
+                }
+
+                ExoButton {
+                    objectName: "logRevealClearButton"
+
+                    text: qsTr("Restore previous filter")
+                    quiet: true
+                    compact: true
+                    onClicked: root.logs.clearReveal()
                 }
             }
         }
@@ -127,11 +204,27 @@ Item {
                 }
 
                 ExoSearchField {
+                    id: logSearchField
+
+                    objectName: "logSearch"
                     placeholderText: qsTr("Search category or message")
                     Layout.fillWidth: true
                     Layout.minimumWidth: 120
                     onSearchEdited: function (query) {
                         root.logs.searchQuery = query;
+                    }
+
+                    // The adapter can set the query itself -- a "Show in log"
+                    // reveal and its restore both do. Imperative sync rather
+                    // than a binding, so the user's own typing is not fighting
+                    // a binding for ownership of the field's text.
+                    Connections {
+                        target: root.logs
+
+                        function onSearchQueryChanged(): void {
+                            if (logSearchField.text !== root.logs.searchQuery)
+                                logSearchField.text = root.logs.searchQuery;
+                        }
                     }
                 }
 

@@ -79,6 +79,14 @@ No machine paths, private workspace references, or agent and session history in 
 
 Two branches that both add a line to the top of the same section conflict on every second merge, which is the whole reason the file is off limits between cuts. `exo-dev check commit-policy` fails a branch that writes it; `cargo exo-dev release changelog` previews what the cut would add. The release notes are rendered from the same section by `cargo exo-dev release release-notes` through `.github/templates/release-notes.md`, so the releases page and the file cannot disagree.
 
+## Text and path conventions
+
+Repository text uses LF. `.gitattributes` is authoritative, and `.editorconfig` mirrors it. Preserve explicit tool-owned CRLF exceptions, including `.sln` and `.vcxproj*`. Do not normalize binary or generated assets. Keep a mechanical normalization separate from functional edits when preparing review or commits.
+
+Use `/` in repository-relative paths, source references, CMake paths and portable serialized relative paths in JSON, reports, evidence and tooling logs. Construct paths with the language's path API (`std::filesystem::path`, `Path.Combine`, Rust `Path`/`PathBuf`, or PowerShell `Join-Path`). Convert to portable spelling only at a serialization or presentation boundary that requires it.
+
+Preserve native Windows contracts verbatim: extended/device and named-pipe paths, UNC paths, GDI/display identifiers, registry paths and paths passed to tools or APIs requiring native syntax. A global backslash replacement is not a path conversion.
+
 ## Prose is written in long lines
 
 Prose — pull request descriptions, `docs/`, READMEs, release notes, commit bodies where there is one — is written in long lines. Break a line where a paragraph ends or where the break carries meaning, never at a column. Text wrapped at column 80 reads as a wall everywhere it is rendered at another width, and an edit to one sentence reflows every line after it, so a one-line change arrives as a whole-paragraph diff.

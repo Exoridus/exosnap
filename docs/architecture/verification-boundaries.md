@@ -69,6 +69,26 @@ A golden VM is never written by a campaign. A differencing disk contains its cha
 
 `Fail` means an observed product failure. Infrastructure error means the harness could not establish the observation. Unavailable, blocked, deferred, skipped and stale are not passes. Product outcome and environment-restore outcome are separate: a successful product test can still leave an unacceptable machine state. Operator attestation can state that an action occurred, but it cannot manufacture the verifying consequence or substitute for another person's visual judgment.
 
+## Regression qualification and evidence reuse
+
+Regression qualification is driven by the implementation delta and its risks. Release verification is bound to the exact final artifacts.
+
+Start with the last qualified baseline and identify which product contracts the changed implementation, dependencies or environment can affect. Repeat those qualification lanes using the cheapest sufficient evidence. A concrete finding can expand the scope. A new version number alone does not require repeating every earlier hardware lane.
+
+| Change surface | Qualification scope |
+|---|---|
+| UI, text or settings | Affected UI and short functional regressions |
+| Audio or device handling | Affected audio and device scenarios |
+| Capture, timing or encoder | Affected recording lanes; endurance only when the risk warrants it |
+| Overlays | Visibility, capture exclusion and presentation impact where relevant |
+| Updater or packages | Installation, update and restoration |
+
+Hardware results remain comparison and risk evidence for unchanged subsystems, with their original binary identity, hardware, driver, Windows version and limitations attached. They do not prove that a later binary passed the same scenario. Relevant dependency or environment changes can invalidate an assumption even when product code is unchanged.
+
+Repeat manual physical steps only when the relevant implementation or dependency changed, the environment changed in a way that affects the contract, or new evidence provides a concrete reason. Use automated or lighter checks first where they can establish the same contract. Record why a manual repeat is needed.
+
+The final MSI, portable ZIP and other release artifacts still require all artifact-bound checks mandated by the release checklist and frozen candidate plan. Baseline reuse cannot satisfy a required result for a different bundle hash or silently remove a scenario from that plan. Any unavailable required result needs the explicit maintainer decision described in the release runbook.
+
 ## Candidate readiness and publication
 
 The official candidate build compiles the final release identity once. Its bundle inventories the exact executable, MSI, portable ZIP and verifier bytes. The frozen plan binds the source registry and required scenario revisions to that bundle. Lane results carry the bundle hash, and report verification re-derives required results from the plan and source registry. Missing, duplicated or mismatched evidence cannot establish readiness. A maintainer may explicitly accept an unavailable scenario or an observed product failure, with a reason and author visible in the report. An infrastructure error is not a product judgment.

@@ -8,7 +8,7 @@ This document owns the Qt/QML boundary, native window ownership, render integrat
 
 `SettingsAdapter` funnels edits through reconciliation and sanitization. Option lists contain values, labels, availability and the owner's reason. An incomplete custom-resolution entry is transient adapter state until it can become a valid model value; it must not weaken the sanitizer or persist a half-entered format.
 
-Diagnostics has an application controller, async probe and fix dispatcher. Logs use a list model over the bounded `AppLog` history, with insert/remove notifications and a filtering proxy. Do not introduce another full history copy or one permanent visual item per log entry. Support-bundle collection and compression run asynchronously.
+Diagnostics has an application controller, async probe and fix dispatcher. Logs is the full log view hosted by the Diagnostics workspace: it is not a top-level destination, and it keeps the same list model over the bounded `AppLog` history, with insert/remove notifications and a filtering proxy. Do not introduce another full history copy or one permanent visual item per log entry. Support-bundle collection and compression run asynchronously.
 
 A settings change is persisted by the composition owner, not by QML. File/folder dialogs use the native Qt Quick dialog integration and hand their result to C++ for path conversion. Capability scans, hash computation, file open, keyframe indexing and device probing do not belong on the GUI thread.
 
@@ -20,7 +20,7 @@ C++ owns first show. QML loads hidden, final style is reasserted after QML flags
 
 The technical window title and application identity are shared constants used by activation, updater handoff and storage. They are not translatable product copy. All actual user-facing copy follows the translation policy; native identity must stay stable across locales.
 
-The Widgets dependency is bounded to system-tray integration in the main process. The separate updater's Widgets UI is a separate process boundary, not a second main frontend.
+The Widgets dependency is bounded to system-tray integration in the main process. The separate updater process renders its window with Qt Quick (the `ExoSnap.Updater` module compiled into `exosnap-updater.exe`), sharing only the theme/leaf QML components with the application; it is a separate process boundary, not a second main frontend.
 
 ## Preview and editor rendering
 

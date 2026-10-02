@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 
 namespace exosnap::engine {
 
@@ -99,6 +100,41 @@ enum class DiagnosticsSplitTrigger : uint8_t {
 // recording to salvage.
 inline constexpr double kCaptureStarveSeconds = 10.0;
 
+struct TimingDistribution {
+    uint64_t samples = 0;
+    double p50_ms = 0.0;
+    double p95_ms = 0.0;
+    double p99_ms = 0.0;
+    double latest_ms = 0.0;
+};
+
+// CFR outcome measurements. Empty distributions are unavailable. Residuals
+// describe fresh phase-correct selections only; holding a static or slow source
+// is expected and does not imply picture loss. Cadence measures worker submits,
+// not encoded media PTS or display playback.
+struct PacingDiagnostics {
+    uint64_t selection_samples = 0;
+    uint64_t worker_wakes = 0;
+    uint64_t recent_frame_loss = 0;
+    TimingDistribution selection_residual;
+    TimingDistribution absolute_residual;
+    TimingDistribution selected_frame_age;
+    TimingDistribution worker_lateness;
+    TimingDistribution output_cadence;
+    uint64_t scheduled_slot_ns = 0;
+    uint64_t selected_present_ns = 0;
+    uint64_t output_slots = 0;
+    uint64_t affected_slots = 0;
+    uint64_t recent_affected_slots = 0;
+    uint64_t skipped_output_slots = 0;
+    uint64_t duplicate_run = 0;
+    uint64_t longest_duplicate_run = 0;
+    uint64_t ring_misses = 0;
+    uint32_t ring_occupancy = 0;
+    double worst_absolute_residual_ms = 0.0;
+    double worst_worker_lateness_ms = 0.0;
+};
+
 struct CaptureDiagnostics {
     double target_fps = 0.0;
     double actual_fps = 0.0;                        // emitted frames Δ / elapsed Δ between publishes
@@ -168,7 +204,7 @@ struct CaptureDiagnostics {
     // card, review panel, live tile, dropped-frames notification), so the two can
     // never disagree about whether a session dropped frames.
     [[nodiscard]] uint64_t frames_dropped_problem() const noexcept {
-        return frames_dropped_processing_failure + frames_dropped_backpressure + frames_dropped_ring_eviction;
+        return frames_dropped_processing_failure + frames_dropped_backpressure;
     }
 };
 
@@ -251,7 +287,9 @@ struct EncoderDiagnostics {
 struct EncoderInitInfo {
     bool valid = false;
     VideoCodec codec = VideoCodec::Av1;
-    NvencPreset preset = NvencPreset::P4;
+    // Backend-owned, process-lifetime tokens; no cross-backend quality equivalence.
+    std::string_view backend_id;
+    std::string_view backend_preset;
     RateControlMode rc_mode = RateControlMode::ConstantQuality;
     uint32_t target_bitrate_kbps = 0; // averageBitRate (0 for pure CQ)
     uint32_t max_bitrate_kbps = 0;    // maxBitRate
@@ -329,6 +367,7 @@ struct AudioDiagnostics {
 };
 
 struct QueueDiagnostics {
+    TimingDistribution producer_wait;
     uint32_t current_depth = 0;
     uint32_t peak_depth = 0;
     uint32_t capacity = 0; // 0 == unbounded / not fixed
@@ -366,6 +405,11 @@ struct MuxDiagnostics {
 };
 
 struct DiskDiagnostics {
+    uint64_t finalized_io_segments = 0;
+    double crt_write_total_ms = 0.0;
+    double crt_flush_total_ms = 0.0;
+    double durability_flush_total_ms = 0.0;
+    uint64_t durability_flush_failures = 0;
     uint64_t bytes_written = 0;
     double throughput_mib_s = 0.0;
     double latest_write_ms = 0.0; // write-call latency, NOT physical disk latency
@@ -445,6 +489,20 @@ struct PreviewTapDiagnostics {
 };
 
 struct RecordingDiagnosticsSnapshot {
+    [[nodiscard]] uint64_t real_frame_loss() const noexcept {
+        return capture.frames_dropped_problem() + video_encoder.undrained_frames;
+    }
+    PacingDiagnostics pacing;
+    // Capture, processing and encoder adapters are different role facts even
+    // when they are the same physical GPU (the only executable path in this
+    // build): telemetry must be attributable to the role it describes, not to a
+    // shared field. Consumers dedupe by LUID before polling.
+    int64_t capture_adapter_luid = 0;
+    uint32_t capture_adapter_vendor_id = 0;
+    int64_t processing_adapter_luid = 0;
+    uint32_t processing_adapter_vendor_id = 0;
+    int64_t encoder_adapter_luid = 0;
+    uint32_t encoder_adapter_vendor_id = 0;
     uint64_t session_generation = 0;
     DiagnosticsLifecycle lifecycle = DiagnosticsLifecycle::Idle;
     double elapsed_seconds = 0.0;

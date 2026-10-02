@@ -1,6 +1,6 @@
 # Soak, A/V synchronization and recovery drills
 
-This runbook operates the endurance, signal-analysis and interruption tools. [Recording pipeline](../architecture/recording-pipeline.md) and [timing](../architecture/timing-and-cfr.md) own the system contracts. The [release checklist](../release-checklist.md#long-duration-audiocapture-gate) owns mandatory acceptance thresholds; other tool budgets are diagnostic unless explicitly adopted there.
+This runbook operates the endurance, signal-analysis and interruption tools. [Recording pipeline](../architecture/recording-pipeline.md) and [timing](../architecture/timing-and-cfr.md) own the system contracts. The [release checklist](../release-checklist.md#long-duration-audiocapture-gate) owns the change-triggered selection criteria and acceptance thresholds when selected; other tool budgets are diagnostic unless explicitly adopted there.
 
 ## Engine soak
 

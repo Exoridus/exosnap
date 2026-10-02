@@ -104,6 +104,9 @@ enum Command {
         #[command(subcommand)]
         benchmark: BenchmarkCommand,
     },
+    /// Deterministic screenshots of the Qt Quick frontend through the app's
+    /// own --visual-test harness, with a manifest and a contact sheet.
+    Screenshot(Box<exo_dev::screenshot::ScreenshotArgs>),
     /// Regenerates exosnap-app.ico, the thumbnail-toolbar glyph .ico files
     /// and exosnap-logo.svg from the canonical mark geometry.
     #[cfg(feature = "dev-tools")]
@@ -958,6 +961,7 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 output_root,
             } => benchmark_scene_survey(scenes, &superposition_cli, &output_root),
         },
+        Command::Screenshot(args) => exo_dev::screenshot::run(&repo_root, *args),
         #[cfg(feature = "dev-tools")]
         Command::GenerateAppIcons => {
             exo_dev::brand::icons::generate(&repo_root)?;

@@ -73,6 +73,9 @@ class DxgiCaptureHubService {
     // Close the capture (refcount to zero -> the duplication closes). Safe to
     // call when nothing is subscribed. Frames already in flight to the sink may
     // still arrive; the sink owner guards its own lifetime (QPointer marshal).
+    void SetPreviewFrameRate(int rate) noexcept {
+        preview_frame_rate_.store(rate);
+    }
     void Unsubscribe();
 
     // The recording engine is about to duplicate the previewed output. Takes
@@ -108,6 +111,7 @@ class DxgiCaptureHubService {
 
     CaptureHubCommandQueue<SubscribePayload> commands_;
 
+    std::atomic<int> preview_frame_rate_{60};
     std::jthread worker_;
     std::atomic<uint64_t> publish_attempts_{0};
     std::atomic<uint64_t> published_frames_{0};

@@ -71,6 +71,8 @@ PersistedAppSettings AppSettingsStore::Load() const {
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("overlay"));
+    persisted.preview_frame_rate =
+        NormalizePreviewRate(settings.value(QStringLiteral("preview_frame_rate"), 60).toInt());
     persisted.show_recording_overlay = settings.value(QStringLiteral("show_recording_overlay"), true).toBool();
     // DIAGNOSTICS-OVERLAY-R1: diagnostics overlay toggle (default OFF).
     // Pre-1.0: no migration; missing key defaults to false.
@@ -241,6 +243,7 @@ bool AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("overlay"));
+    settings.setValue(QStringLiteral("preview_frame_rate"), NormalizePreviewRate(settings_snapshot.preview_frame_rate));
     settings.setValue(QStringLiteral("show_recording_overlay"), settings_snapshot.show_recording_overlay);
     // DIAGNOSTICS-OVERLAY-R1: diagnostics overlay toggle.
     settings.setValue(QStringLiteral("show_diagnostics_overlay"), settings_snapshot.show_diagnostics_overlay);

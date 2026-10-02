@@ -179,6 +179,20 @@ QString NvencPresetToString(exosnap::engine::NvencPreset v) {
     return QStringLiteral("p4");
 }
 
+QString EncoderDeviceModeToString(exosnap::engine::EncoderDevicePreference::Mode mode) {
+    return mode == exosnap::engine::EncoderDevicePreference::Mode::Explicit ? QStringLiteral("explicit")
+                                                                            : QStringLiteral("auto");
+}
+
+std::optional<exosnap::engine::EncoderDevicePreference::Mode> EncoderDeviceModeFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("auto"))
+        return exosnap::engine::EncoderDevicePreference::Mode::Auto;
+    if (n == QStringLiteral("explicit"))
+        return exosnap::engine::EncoderDevicePreference::Mode::Explicit;
+    return std::nullopt;
+}
+
 std::optional<exosnap::engine::NvencPreset> NvencPresetFromString(QStringView s) {
     const QString n = s.trimmed().toString().toLower();
     if (n == QStringLiteral("p1"))
@@ -619,6 +633,14 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     vid_tbl.emplace("capture_cursor", vid.capture_cursor);
     vid_tbl.emplace("frame_rate_num", static_cast<int64_t>(vid.frame_rate_num));
     vid_tbl.emplace("frame_rate_den", static_cast<int64_t>(vid.frame_rate_den));
+    // Encoder-device preference. Additive fields: files without them keep the
+    // Auto default. The boot-scoped LUID is deliberately not persisted; the
+    // fingerprint is the PCI identity plus display context.
+    vid_tbl.emplace("encoder_device", EncoderDeviceModeToString(vid.encoder_device.mode).toStdString());
+    vid_tbl.emplace("encoder_device_vendor_id", static_cast<int64_t>(vid.encoder_device.device.vendor_id));
+    vid_tbl.emplace("encoder_device_id", static_cast<int64_t>(vid.encoder_device.device.device_id));
+    vid_tbl.emplace("encoder_device_subsystem_id", static_cast<int64_t>(vid.encoder_device.device.subsystem_id));
+    vid_tbl.emplace("encoder_device_name", vid.encoder_device.device.name);
     tbl.emplace("video", std::move(vid_tbl));
 
     // --- Audio ---
@@ -868,6 +890,25 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     }
     // CFR frame pacing. Default 0 = Smooth; out-of-range clamped by SanitizePresetConfig.
     vid.frame_pacing = static_cast<exosnap::engine::FramePacingMode>(TomlInt(tbl["video"]["frame_pacing"], 0));
+    {
+        // Additive: a missing key leaves the Auto default. An explicit entry
+        // with no PCI vendor cannot match any adapter and stays explicit, so
+        // the resolver reports it as absent instead of binding another GPU.
+        const auto mode = EncoderDeviceModeFromString(QString::fromStdString(TomlStr(tbl["video"]["encoder_device"])));
+        if (mode.has_value()) {
+            vid.encoder_device.mode = *mode;
+        }
+        const int64_t vendor_id = TomlInt(tbl["video"]["encoder_device_vendor_id"], 0);
+        const int64_t device_id = TomlInt(tbl["video"]["encoder_device_id"], 0);
+        const int64_t subsystem_id = TomlInt(tbl["video"]["encoder_device_subsystem_id"], 0);
+        if (vendor_id > 0)
+            vid.encoder_device.device.vendor_id = static_cast<uint32_t>(vendor_id);
+        if (device_id > 0)
+            vid.encoder_device.device.device_id = static_cast<uint32_t>(device_id);
+        if (subsystem_id > 0)
+            vid.encoder_device.device.subsystem_id = static_cast<uint32_t>(subsystem_id);
+        vid.encoder_device.device.name = TomlStr(tbl["video"]["encoder_device_name"]);
+    }
 
     // --- Audio ---
     auto& aud = config.audio;

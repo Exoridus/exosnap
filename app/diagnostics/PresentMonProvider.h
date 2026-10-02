@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ElevationProvider.h"
 #include "PresentMonEtwSession.h"
 #include "PresentProvider.h"
 #include "PresentTraceBackend.h"
@@ -12,33 +11,41 @@ namespace exosnap::diagnostics {
 
 // PresentMon-backed present/tearing diagnostics provider.
 //
-// GateOpen() is the pre-session condition: opt_in && elevation.IsElevated().
-// IsAvailable() additionally requires the ETW session to be open.
-// SetOptIn() starts or stops the session to match the gate.
+// The opt-in is the request; the actual controlled ETW open attempt decides
+// availability. Elevation is deliberately NOT part of the gate: a standard token
+// that holds the trace right (for example Performance Log Users) can measure,
+// and an elevated process can still meet a session conflict. `state()` reports
+// the real answer, including access denied and conflicts, instead of a
+// privilege prediction.
 class PresentMonProvider final : public IPresentProvider {
   public:
-    // The elevation provider is borrowed (must outlive this object). `opt_in` is
-    // the session-scoped in-depth diagnostics switch, never a persisted setting.
-    PresentMonProvider(const IElevationProvider& elevation, bool opt_in);
+    // `opt_in` is the session-scoped in-depth diagnostics switch, never a
+    // persisted setting.
+    explicit PresentMonProvider(bool opt_in);
 
     // Test seam. Passed straight to the session, so a test can drive the whole
     // availability truth table without a real trace.
     //
-    // Tests MUST use this. An elevated+opt-in provider built with the default factory
-    // opens a real system-wide ETW session named ExoSnapPresentMon and first calls
-    // StopNamedSession on it -- which would tear the session out from under a running
-    // ExoSnap on the same machine. A unit test may not do that to a developer's desktop.
-    PresentMonProvider(const IElevationProvider& elevation, bool opt_in,
-                       std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory);
+    // Tests MUST use this. An opt-in provider built with the default factory
+    // opens a real system-wide ETW session named ExoSnapPresentMon. Start() no
+    // longer stops a same-named session -- a conflict is reported instead -- but
+    // a test must not create one on a developer's desktop either.
+    PresentMonProvider(bool opt_in, std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory);
 
     [[nodiscard]] PresentSample Sample() const override;
 
-    // opt_in AND elevation AND session open.
+    // The trace is open and its consumer alive. Availability says nothing about
+    // whether fresh data has arrived; that is what state() and the sample's own
+    // `available` flag answer.
     [[nodiscard]] bool IsAvailable() const override;
 
-    // Pre-session gate: opt_in AND elevation.IsElevated().
-    // Drives whether SetOptIn starts the ETW session.
+    // opt-in requested, from the user's switch.
     [[nodiscard]] bool GateOpen() const;
+
+    // The honest three-fact projection: request, OS answer, fresh measurement.
+    [[nodiscard]] PresentProviderState state() const;
+    // Why the last open ended as it did, regardless of the current opt-in.
+    [[nodiscard]] PresentTraceOpenResult openResult() const;
 
     // Updates the opt-in and starts/stops the ETW session to match the gate.
     void SetOptIn(bool opt_in);
@@ -51,7 +58,6 @@ class PresentMonProvider final : public IPresentProvider {
     }
 
   private:
-    const IElevationProvider& elevation_;
     bool opt_in_;
     mutable PresentMonEtwSession session_;
 };

@@ -160,5 +160,25 @@ TEST_F(SessionReportHandoffTest, TheNextRecordingDoesNotInheritTheLedger) {
     EXPECT_FALSE(report.contains(QStringLiteral("ledger")));
 }
 
+TEST_F(SessionReportHandoffTest, FailedOutputRemainsFailedInPersistedLastSession) {
+    int argc = 0;
+    QCoreApplication app(argc, nullptr);
+    RecordingCoordinator coordinator;
+    coordinator.BeginReportSessionForTest(QStringLiteral("rec-output-failed"));
+    auto snapshot = TerminalSnapshot();
+    snapshot.lifecycle = exosnap::engine::DiagnosticsLifecycle::Failed;
+    snapshot.mux.failures = 1;
+    coordinator.PostDiagnosticsForTest(snapshot);
+    auto result = CompletedResult();
+    result.succeeded = false;
+    result.error_phase = L"Mux";
+    result.error_detail = L"Output close failed";
+    coordinator.PostResultForTest(result);
+    QCoreApplication::processEvents();
+    const auto report = ReadOnlyReport(reports_dir_);
+    ASSERT_FALSE(report.isEmpty());
+    EXPECT_FALSE(report.value(QStringLiteral("succeeded")).toBool(true));
+}
+
 } // namespace
 } // namespace exosnap

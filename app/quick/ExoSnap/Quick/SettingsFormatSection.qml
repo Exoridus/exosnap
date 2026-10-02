@@ -131,19 +131,37 @@ ExoCard {
     }
 
     ExoSettingRow {
-        label: qsTr("Encoder preset")
-        hint: qsTr("Speed versus quality inside the encoder")
+        label: qsTr("Encoding device")
+        hint: qsTr("Which GPU runs the encoder")
+        warning: root.settings.encoderDeviceHint
         stacked: root.stacked
-        visible: root.settings.expertMode
+        visible: root.settings.expertMode && root.settings.encoderDeviceOptions.length > 0
         Layout.fillWidth: true
 
         ExoSelect {
-            options: root.settings.encoderPresetOptions
-            value: root.settings.encoderPreset
+            options: root.settings.encoderDeviceOptions
+            value: root.settings.encoderDevice
             enabled: !root.settings.controlsLocked
             Layout.fillWidth: true
-            Accessible.name: qsTr("Encoder preset")
-            onValueActivated: value => root.settings.encoderPreset = value
+            Accessible.name: qsTr("Encoding device")
+            onValueActivated: value => root.settings.encoderDevice = value
+        }
+    }
+
+    ExoSettingRow {
+        label: qsTr("NVENC preset")
+        hint: qsTr("Speed versus quality on NVIDIA GPUs (P1-P7)")
+        stacked: root.stacked
+        visible: root.settings.expertMode && root.settings.nvencPresetOptions.length > 0
+        Layout.fillWidth: true
+
+        ExoSelect {
+            options: root.settings.nvencPresetOptions
+            value: root.settings.nvencPreset
+            enabled: !root.settings.controlsLocked
+            Layout.fillWidth: true
+            Accessible.name: qsTr("NVENC preset")
+            onValueActivated: value => root.settings.nvencPreset = value
         }
     }
 }

@@ -71,6 +71,9 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     uint32_t DegradedSourceCount() const override;
     uint32_t DegradedSourceIndexMask() const override;
     void Shutdown() override;
+    [[nodiscard]] uint64_t LastBufferQpcNs() const override {
+        return output_qpc_ns_;
+    }
 
     // --- A/V clock slaving (H-3) --------------------------------------------
     // Set the resampler's rate compensation in ppm. p > 0 stretches the output
@@ -142,7 +145,8 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     // converted to Float32 on both the passthrough and the swr path.
     AudioSampleFormat inner_format_ = AudioSampleFormat::Float32;
 
-    bool passthrough_ = false;  // true when target rate/channels == inner
+    bool passthrough_ = false; // true when target rate/channels == inner
+    uint64_t output_qpc_ns_ = 0;
     SwrContext* swr_ = nullptr; // null in passthrough mode
 
     // Clock-slaving state. compensation_engaged_ latches true on the first
@@ -161,6 +165,7 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     // In passthrough mode we hand out the inner bytes directly.
     // In resampling mode we convert into resample_buf_ and point out_buf at it.
     std::vector<float> resample_buf_;
+    std::vector<float> silence_buf_;
 
     // Resampled buffer exposed to the caller (non-owning view into resample_buf_).
     RawAudioBuffer exposed_buf_{};

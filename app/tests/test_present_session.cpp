@@ -15,8 +15,8 @@
 // production code, running here unmodified.
 //
 // Two things this file deliberately does NOT do:
-//   * open the real trace. An elevated run would call StopNamedSession on
-//     "ExoSnapPresentMon" and tear the session out from under a running ExoSnap.
+//   * open the real trace. An opt-in run would create a real system-wide ETW
+//     session named "ExoSnapPresentMon" on the developer's desktop.
 //   * sleep to synchronise. Every wait is a bounded poll of an actual condition.
 
 #include <atomic>
@@ -34,20 +34,20 @@
 
 #include <gtest/gtest.h>
 
-#include "diagnostics/ElevationProvider.h"
 #include "diagnostics/PresentMonEtwSession.h"
 #include "diagnostics/PresentMonProvider.h"
 #include "diagnostics/PresentTraceBackend.h"
 
 namespace {
 
-using exosnap::diagnostics::IElevationProvider;
 using exosnap::diagnostics::IPresentTraceBackend;
 using exosnap::diagnostics::MakePresentTraceBackend;
 using exosnap::diagnostics::PresentMode;
 using exosnap::diagnostics::PresentMonEtwSession;
 using exosnap::diagnostics::PresentMonProvider;
+using exosnap::diagnostics::PresentProviderState;
 using exosnap::diagnostics::PresentSample;
+using exosnap::diagnostics::PresentTraceOpenResult;
 using exosnap::diagnostics::TracePresentEvent;
 
 // PresentMon's PresentMode enum values, named here so the intent of a test is legible
@@ -73,7 +73,7 @@ bool WaitUntil(const std::function<bool()>& predicate, std::chrono::milliseconds
 // assertion below meaningless.
 class FakeTraceBackend final : public IPresentTraceBackend {
   public:
-    bool Open() override {
+    PresentTraceOpenResult Open() override {
         open_calls.fetch_add(1);
         return open_result;
     }
@@ -116,7 +116,7 @@ class FakeTraceBackend final : public IPresentTraceBackend {
         Close();
     }
 
-    bool open_result = true;
+    PresentTraceOpenResult open_result = PresentTraceOpenResult::Opened;
     int64_t frequency = 10'000'000; // 100 ns ticks, so 1 ms == 10'000
     std::atomic<int> open_calls{0};
     std::atomic<int> drain_calls{0};
@@ -134,6 +134,11 @@ std::function<std::shared_ptr<IPresentTraceBackend>()> FactoryFor(const std::sha
     return [backend] { return std::static_pointer_cast<IPresentTraceBackend>(backend); };
 }
 
+// No trace at all -- the same answer a build without the vendored consumer gives.
+auto NoBackend() {
+    return [] { return std::shared_ptr<IPresentTraceBackend>{}; };
+}
+
 TracePresentEvent Present(unsigned long pid, uint64_t qpc, int mode_code, bool discarded = false) {
     TracePresentEvent event;
     event.process_id = pid;
@@ -144,18 +149,6 @@ TracePresentEvent Present(unsigned long pid, uint64_t qpc, int mode_code, bool d
     event.discarded = discarded;
     return event;
 }
-
-class StubElevationProvider final : public IElevationProvider {
-  public:
-    explicit StubElevationProvider(bool elevated) : elevated_(elevated) {
-    }
-    [[nodiscard]] bool IsElevated() const override {
-        return elevated_;
-    }
-
-  private:
-    bool elevated_;
-};
 
 // A process this test owns and can kill on demand. `cmd /c pause` blocks on stdin,
 // which is closed here, so it exits on its own even if a test aborts before killing it.
@@ -230,13 +223,29 @@ TEST(PresentSession, StartOpensTheTraceOnceAndTheWorkerBeginsConsuming) {
 
 TEST(PresentSession, ATraceThatRefusesToOpenIsNotAnOpenSession) {
     auto backend = std::make_shared<FakeTraceBackend>();
-    backend->open_result = false; // ERROR_ACCESS_DENIED is the ordinary unelevated answer
+    // ERROR_ACCESS_DENIED is the ordinary answer inside a standard token without
+    // the trace right; the session reports it structurally, not as a generic false.
+    backend->open_result = PresentTraceOpenResult::AccessDenied;
     PresentMonEtwSession session(FactoryFor(backend));
 
     EXPECT_FALSE(session.Start());
     EXPECT_FALSE(session.IsOpen());
     EXPECT_FALSE(session.Latest().available);
+    EXPECT_EQ(session.OpenResult(), PresentTraceOpenResult::AccessDenied);
     EXPECT_FALSE(backend->consume_entered.load()) << "no consumer may run without a trace";
+}
+
+TEST(PresentSession, ATakenSessionNameIsAConflictAndIsNeverStoppedByUs) {
+    // A same-named session may belong to another instance or a test collector. The
+    // backend reports the conflict; nothing in this path stops a session by name.
+    auto backend = std::make_shared<FakeTraceBackend>();
+    backend->open_result = PresentTraceOpenResult::SessionConflict;
+    PresentMonEtwSession session(FactoryFor(backend));
+
+    EXPECT_FALSE(session.Start());
+    EXPECT_FALSE(session.IsOpen());
+    EXPECT_EQ(session.OpenResult(), PresentTraceOpenResult::SessionConflict);
+    EXPECT_FALSE(backend->consume_entered.load());
 }
 
 TEST(PresentSession, ABuildWithoutATraceBackendDegradesInsteadOfBranching) {
@@ -247,6 +256,7 @@ TEST(PresentSession, ABuildWithoutATraceBackendDegradesInsteadOfBranching) {
     EXPECT_FALSE(session.Start());
     EXPECT_FALSE(session.IsOpen());
     EXPECT_FALSE(session.Latest().available);
+    EXPECT_EQ(session.OpenResult(), PresentTraceOpenResult::NotBuilt);
 }
 
 TEST(PresentSession, TheRealBackendIsConstructibleInThisBuild) {
@@ -515,46 +525,59 @@ TEST(PresentSession, ATraceThatEndsWithoutBeingAskedStopsBeingReportedAsCurrent)
 
 // ---------------------------------------------------------------------------
 // 8. Availability truth table, through the provider
+//
+// Elevation appears nowhere in the gate: the opt-in is the request and the
+// controlled open attempt is the answer. A standard token that holds the trace
+// right measures; any token can meet access denied, a session conflict or a
+// build without the consumer, and each gets its own structural state.
 // ---------------------------------------------------------------------------
 
 TEST(PresentProviderAvailability, TruthTable) {
-    const StubElevationProvider elevated(true);
-    const StubElevationProvider not_elevated(false);
-
     {
-        // opt-in off: the gate never opens, so nothing is even attempted.
+        // opt-in off: nothing is attempted and the state says so.
         auto backend = std::make_shared<FakeTraceBackend>();
-        PresentMonProvider provider(elevated, /*opt_in=*/false, FactoryFor(backend));
+        PresentMonProvider provider(/*opt_in=*/false, FactoryFor(backend));
         EXPECT_FALSE(provider.GateOpen());
         EXPECT_FALSE(provider.IsAvailable());
         EXPECT_FALSE(provider.Sample().available);
+        EXPECT_EQ(provider.state(), PresentProviderState::NotRequested);
         EXPECT_EQ(backend->open_calls.load(), 0) << "no trace may be opened before the gate is open";
     }
     {
-        // opt-in on, not elevated: the gate is closed for a different reason, and the
-        // distinction is what lets a client say WHY there is no measurement.
+        // opt-in on, the OS refuses the trace: unavailable for a named reason.
         auto backend = std::make_shared<FakeTraceBackend>();
-        PresentMonProvider provider(not_elevated, /*opt_in=*/true, FactoryFor(backend));
-        EXPECT_FALSE(provider.GateOpen());
-        EXPECT_FALSE(provider.IsAvailable());
-        EXPECT_EQ(backend->open_calls.load(), 0);
-    }
-    {
-        // elevated + opt-in, but the trace refuses: available stays false, truthfully.
-        auto backend = std::make_shared<FakeTraceBackend>();
-        backend->open_result = false;
-        PresentMonProvider provider(elevated, /*opt_in=*/true, FactoryFor(backend));
+        backend->open_result = PresentTraceOpenResult::AccessDenied;
+        PresentMonProvider provider(/*opt_in=*/true, FactoryFor(backend));
         EXPECT_TRUE(provider.GateOpen());
         EXPECT_FALSE(provider.IsAvailable());
+        EXPECT_EQ(provider.state(), PresentProviderState::AccessDenied);
+        EXPECT_FALSE(provider.Sample().available);
         EXPECT_EQ(backend->open_calls.load(), 1);
     }
     {
-        // elevated + opt-in + open trace + no present yet: AVAILABLE as a session,
-        // with a sample that reports nothing. These are two different questions and
-        // the provider answers both.
+        // opt-in on, a session with our name is already there: a conflict, and the
+        // other session was not touched.
         auto backend = std::make_shared<FakeTraceBackend>();
-        PresentMonProvider provider(elevated, /*opt_in=*/true, FactoryFor(backend));
+        backend->open_result = PresentTraceOpenResult::SessionConflict;
+        PresentMonProvider provider(/*opt_in=*/true, FactoryFor(backend));
+        EXPECT_FALSE(provider.IsAvailable());
+        EXPECT_EQ(provider.state(), PresentProviderState::SessionConflict);
+    }
+    {
+        // opt-in on, but this build carries no consumer.
+        PresentMonProvider provider(/*opt_in=*/true, NoBackend());
+        EXPECT_FALSE(provider.IsAvailable());
+        EXPECT_EQ(provider.state(), PresentProviderState::NotBuilt);
+        EXPECT_FALSE(provider.Sample().available);
+    }
+    {
+        // opt-in on + open trace + no present yet: AVAILABLE as a session, with a
+        // sample that reports nothing. These are two different questions and the
+        // provider answers both.
+        auto backend = std::make_shared<FakeTraceBackend>();
+        PresentMonProvider provider(/*opt_in=*/true, FactoryFor(backend));
         ASSERT_TRUE(WaitUntil([&] { return provider.IsAvailable(); }));
+        EXPECT_EQ(provider.state(), PresentProviderState::OpenNoData);
         EXPECT_FALSE(provider.Sample().available) << "no present has been decoded yet";
 
         // ... and once one has been.
@@ -563,18 +586,34 @@ TEST(PresentProviderAvailability, TruthTable) {
         EXPECT_TRUE(sample.available);
         EXPECT_EQ(sample.mode, PresentMode::IndependentFlip);
         EXPECT_EQ(sample.present_count, 1u);
+        EXPECT_EQ(provider.state(), PresentProviderState::Measuring);
     }
 }
 
-TEST(PresentProviderAvailability, TurningTheOptInOffClosesTheTrace) {
-    const StubElevationProvider elevated(true);
+TEST(PresentProviderAvailability, ATraceThatEndsAfterOpeningReportsStoppedNotMeasuring) {
     auto backend = std::make_shared<FakeTraceBackend>();
-    PresentMonProvider provider(elevated, /*opt_in=*/true, FactoryFor(backend));
+    PresentMonProvider provider(/*opt_in=*/true, FactoryFor(backend));
+    ASSERT_TRUE(WaitUntil([&] { return provider.IsAvailable(); }));
+    backend->Publish(Present(0, 1'000'000, kModeHardwareIndependentFlip));
+    ASSERT_TRUE(WaitUntil([&] { return provider.state() == PresentProviderState::Measuring; }));
+
+    backend->EndTraceWithoutBeingAsked();
+
+    EXPECT_TRUE(WaitUntil([&] { return provider.state() == PresentProviderState::Stopped; }))
+        << "a trace that ended is not a measurement";
+    EXPECT_FALSE(provider.IsAvailable());
+    EXPECT_FALSE(provider.Sample().available);
+}
+
+TEST(PresentProviderAvailability, TurningTheOptInOffClosesTheTrace) {
+    auto backend = std::make_shared<FakeTraceBackend>();
+    PresentMonProvider provider(/*opt_in=*/true, FactoryFor(backend));
     ASSERT_TRUE(WaitUntil([&] { return provider.IsAvailable(); }));
 
     provider.SetOptIn(false);
 
     EXPECT_FALSE(provider.IsAvailable());
+    EXPECT_EQ(provider.state(), PresentProviderState::NotRequested);
     EXPECT_TRUE(WaitUntil([&] { return backend->consume_returned.load(); }))
         << "the consumer must not outlive the opt-in that started it";
     EXPECT_FALSE(provider.Sample().available);

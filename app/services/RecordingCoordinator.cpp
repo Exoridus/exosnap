@@ -174,9 +174,10 @@ void ApplyOutputSettingsToRecorderConfig(exosnap::engine::RecorderConfig& config
     // into `config` — overwriting any of those fields from the raw settings
     // would let this copy drift from (and silently undo) a resolver fallback.
     //
-    // OutputSettingsModel::nvenc_preset already uses exosnap::engine::NvencPreset
-    // directly (no capability:: mirror type exists for it), so this is a plain copy.
-    config.nvenc_preset = settings.nvenc_preset;
+    // The NVENC preset is carried as backend-specific tuning. It stays in the
+    // config while a non-NVENC device is selected so switching back restores it,
+    // but only the NVENC factory alternative ever reads it.
+    config.backend_tuning = exosnap::engine::NvencTuning{settings.nvenc_preset};
     config.output_width = 0;
     config.output_height = 0;
     config.output_fit = settings.resolution.fit;
@@ -379,19 +380,27 @@ uint32_t RecordingCoordinator::WindowCaptureStallEpisodes() const noexcept {
     return window_capture_stall_episodes_.load(std::memory_order_relaxed);
 }
 
-void SessionLedgerSink::Set(std::vector<diagnostics::LedgerEntry> ledger) {
+void SessionLedgerSink::Set(std::vector<diagnostics::LedgerEntry> ledger,
+                            std::vector<diagnostics::LedgerEntry> compensated) {
     std::lock_guard<std::mutex> lock(mutex_);
     ledger_ = std::move(ledger);
+    compensated_ = std::move(compensated);
 }
 
 void SessionLedgerSink::Clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     ledger_.clear();
+    compensated_.clear();
 }
 
 std::vector<diagnostics::LedgerEntry> SessionLedgerSink::Get() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return ledger_;
+}
+
+std::vector<diagnostics::LedgerEntry> SessionLedgerSink::GetCompensated() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return compensated_;
 }
 
 std::shared_ptr<SessionLedgerSink> RecordingCoordinator::FrozenLedgerSink() const {
@@ -856,6 +865,7 @@ bool RecordingCoordinator::StartRecording(const exosnap::engine::CaptureTarget& 
     ctx.output_settings = output_settings_;
     ctx.split_settings = split_settings_;
     ctx.video_settings = video_settings_;
+    ctx.resolved_encoder_device = resolved_encoder_device_;
     ctx.webcam_settings = webcam_settings_;
     ctx.resolved_user_config = resolved_user_config_;
     ctx.caps = caps_;
@@ -1079,8 +1089,8 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
 
     auto config = exosnap::capability::ToRecorderCoreConfig(ctx.resolved_user_config, ctx.caps);
     config.cq = ctx.video_settings.cq;
-    config.nvenc_rate_control = ctx.video_settings.rate_control;
-    config.nvenc_bitrate_kbps = ctx.video_settings.bitrate_kbps;
+    config.rate_control_mode = ctx.video_settings.rate_control;
+    config.target_bitrate_kbps = ctx.video_settings.bitrate_kbps;
     config.frame_rate_num = ctx.video_settings.frame_rate_num;
     config.frame_rate_den = ctx.video_settings.frame_rate_den;
     config.cfr_pacing_mode = ctx.video_settings.frame_pacing;
@@ -1110,6 +1120,8 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         }
     }
     config.capture_cursor = ctx.video_settings.capture_cursor;
+    config.encoder_device = ctx.video_settings.encoder_device;
+    config.resolved_encoder_device = ctx.resolved_encoder_device;
     ApplyOutputSettingsToRecorderConfig(config, ctx.output_settings);
     config.target = target;
     config.capture_backend = ctx.capture_backend;
@@ -1852,8 +1864,7 @@ void RecordingCoordinator::OnSegmentCompleted(const exosnap::engine::CompletedSe
                 job->transient_mkv = segment.path;
                 job->output_mp4 = *mp4_segment;
                 job->manifest_id = this_segment_manifest_id;
-                StartSegmentRemuxThread(*job,
-                                        [this, transient = job->transient_mkv, out = job->output_mp4,
+                QueueSegmentRemux(*job, [this, transient = job->transient_mkv, out = job->output_mp4,
                                          id = job->manifest_id] { return RunSegmentRemuxWork(transient, out, id); });
                 segment_remux_jobs_.push_back(std::move(job));
             }
@@ -2168,10 +2179,9 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
                     job->transient_mkv = final_seg.path;
                     job->output_mp4 = *mp4_final;
                     job->manifest_id = current_manifest_id_;
-                    StartSegmentRemuxThread(
-                        *job, [this, transient = job->transient_mkv, out = job->output_mp4, id = job->manifest_id] {
-                            return RunSegmentRemuxWork(transient, out, id);
-                        });
+                    QueueSegmentRemux(*job,
+                                      [this, transient = job->transient_mkv, out = job->output_mp4,
+                                       id = job->manifest_id] { return RunSegmentRemuxWork(transient, out, id); });
                     segment_remux_jobs_.push_back(std::move(job));
                     current_manifest_id_.clear(); // now owned by the job
                 }
@@ -2442,18 +2452,28 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
 // MP4-SPLIT-REMUX-R1: per-segment background remux helpers
 // ---------------------------------------------------------------------------
 
-void RecordingCoordinator::StartSegmentRemuxThread(SegmentRemuxJob& job, std::function<bool()> work) {
-    // job must be fully initialised before this call, and its address must be
-    // stable (it lives in a unique_ptr) — the thread holds a reference to it.
-    //
-    // The thread runs `work`, records the outcome and then, as its LAST action,
-    // publishes job.completed. That ordering is the whole contract: `completed`
-    // is what the reaper and the disk reserve read, and it must never be visible
-    // before job.succeeded is. job.thread is a jthread (RAII joiner) so a future
-    // code path destroying the job before the drain gets to it joins in the
-    // destructor instead of calling std::terminate.
-    job.thread = std::jthread([&job, work = std::move(work)](std::stop_token) {
-        job.succeeded = work();
+void RecordingCoordinator::QueueSegmentRemux(SegmentRemuxJob& job, std::function<bool()> work) {
+    // One storage-heavy job at a time. Queued jobs retain their MKV and
+    // manifest ownership and remain included in the pending storage reserve.
+    segment_remux_pool_.setMaxThreadCount(1);
+    const auto queued_at = std::chrono::steady_clock::now();
+    pending_segment_remux_jobs_.fetch_add(1);
+    segment_remux_pool_.start([this, &job, work = std::move(work), queued_at] {
+        const auto pending = pending_segment_remux_jobs_.fetch_sub(1) - 1;
+        const auto age_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - queued_at).count();
+        diagnostics::AppLog::info(
+            QStringLiteral("remux"),
+            QStringLiteral("segment queue active=1 pending=%1 age_ms=%2").arg(pending).arg(age_ms));
+        try {
+            job.succeeded = work();
+        } catch (const std::exception& error) {
+            job.error_message = error.what();
+            job.succeeded = false;
+        } catch (...) {
+            job.error_message = "Unexpected remux failure";
+            job.succeeded = false;
+        }
         job.completed.store(true, std::memory_order_release);
     });
 }
@@ -2546,7 +2566,7 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
 
 void RecordingCoordinator::ReapFinishedSegmentRemuxJobs() {
     // Opportunistic, never a barrier: only jobs that have already published
-    // `completed` are taken, so the join below returns immediately and a running
+    // `completed` are taken, so removal never blocks and a running
     // remux is left alone. Called at each split boundary, which is the natural
     // rhythm of a split session — without it, every job handle of a multi-hour
     // recording lives until the session ends.
@@ -2562,11 +2582,8 @@ void RecordingCoordinator::ReapFinishedSegmentRemuxJobs() {
         segment_remux_jobs_.erase(it, segment_remux_jobs_.end());
     }
 
-    // Joined outside the lock: nothing else needs to wait on segment_remux_mutex_
-    // while these already-finished threads are collected.
+    // Completion is the worker's last access. No thread join is needed per job.
     for (auto& job : finished) {
-        if (job->thread.joinable())
-            job->thread.join();
         if (!job->succeeded) {
             // Latch it — the end-of-session drain can no longer see this job, and a
             // failed intermediate segment must not be reported as a clean split.
@@ -2594,11 +2611,9 @@ bool RecordingCoordinator::DrainSegmentRemuxJobs(bool cancel) {
 
     // Jobs reaped earlier are gone from the vector but their verdict is not: a
     // failure latched into reaped_segment_remux_failed_ still fails the session.
+    segment_remux_pool_.waitForDone();
     bool all_succeeded = !reaped_segment_remux_failed_.load();
     for (auto& job : jobs) {
-        if (job->thread.joinable()) {
-            job->thread.join();
-        }
         if (!job->succeeded) {
             all_succeeded = false;
         }
@@ -2638,7 +2653,7 @@ void RecordingCoordinator::ScheduleSegmentRemuxForTest(std::filesystem::path tra
     job->transient_mkv = std::move(transient_mkv);
     job->output_mp4 = std::move(output_mp4);
     job->manifest_id = std::move(manifest_id);
-    StartSegmentRemuxThread(*job, std::move(work));
+    QueueSegmentRemux(*job, std::move(work));
     segment_remux_jobs_.push_back(std::move(job));
 }
 
@@ -2785,6 +2800,10 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
     split_settings_.duration_ms = SplitDurationMs(output_settings_.split);
     split_settings_.size_bytes = SplitSizeBytes(output_settings_.split);
 }
+void RecordingCoordinator::SetEncoderDeviceResolution(const exosnap::engine::ResolvedEncoderDevice& resolved) {
+    resolved_encoder_device_ = resolved;
+}
+
 void RecordingCoordinator::SetVideoSettings(const VideoSettingsModel& settings) {
     video_settings_ = settings;
     if (video_settings_.frame_rate_num == 0 || video_settings_.frame_rate_den == 0) {
@@ -3158,6 +3177,7 @@ void RecordingCoordinator::RunSessionReportJob(SessionReportJob job) {
     // report then says nothing about the session ledger rather than writing a
     // record whose last occurrence is still open.
     job.inputs.ledger = job.ledger_sink->Get();
+    job.inputs.compensated = job.ledger_sink->GetCompensated();
 
     QString error;
     if (!diagnostics::WriteSessionReport(job.reports_dir, job.inputs, /*keep_n=*/10, /*out_path=*/nullptr, &error)) {

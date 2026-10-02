@@ -835,7 +835,9 @@ target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
 
 # present-diagnostics provider. PresentMonProvider owns a
-# PresentMonEtwSession and gates on elevation && opt-in before starting it.
+# PresentMonEtwSession and attempts the trace when the session opt-in asks for
+# it; the OS answer (opened, access denied, session conflict, not built) is what
+# decides availability.
 #
 # Attribution, state and lifetime tests exercise the production session with a
 # fake IPresentTraceBackend. The real ETW backend is compiled and linked as well,
@@ -944,6 +946,17 @@ exosnap_add_gtest(
     LIBRARIES Qt6::Core exosnap::update exosnap::control exosnap::update_handoff
 )
 target_include_directories(update_launch_plan_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+
+# The staged-runtime test launches the shipped updater from a copy of exactly the
+# files UpdaterStagingFileList() names, under a sanitized environment. The path
+# goes through a generated header with a RAW string literal, not through a /D
+# define: a Windows path in a normal string literal turns "\Users" into an
+# invalid escape sequence.
+file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/UpdaterExePath.h"
+    CONTENT "#pragma once\n#define EXOSNAP_UPDATER_EXE R\"($<TARGET_FILE:exosnap_updater>)\"\n"
+)
+target_include_directories(update_launch_plan_tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>")
 
 # QCR-202: the pure completion gate behind UpdateService's async check. The
 # service is a thin driver of this resolver, so the interleavings that used to
@@ -1517,3 +1530,11 @@ endif()
 #
 # Unconditional: this subdirectory defines `exosnap`, the shipped application.
 add_subdirectory(quick/ExoSnap/Quick)
+
+exosnap_add_gtest(
+    NAME gpu_telemetry_tests
+    TEST_PREFIX diagnostics.
+    SOURCES tests/test_gpu_telemetry.cpp diagnostics/GpuTelemetryProviders.cpp
+    LIBRARIES dxgi
+)
+target_include_directories(gpu_telemetry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/libs/engine/include)

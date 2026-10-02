@@ -210,6 +210,21 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         return Succeeded(source.RecordSnapshot());
     }
 
+    if (command.name == QLatin1String("record.selectRegion")) {
+        if (!source.SelectRecordRegion(ParamString(params, "display"), static_cast<int>(ParamInt(params, "x")),
+                                       static_cast<int>(ParamInt(params, "y")),
+                                       static_cast<int>(ParamInt(params, "width")),
+                                       static_cast<int>(ParamInt(params, "height")), &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.RecordSnapshot());
+    }
+
+    if (command.name == QLatin1String("record.openRegionSelector")) {
+        if (!source.OpenRegionSelector(ParamString(params, "display"), &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.RecordSnapshot());
+    }
+
     // The six transport intents. Asynchronous by nature: the returned snapshot
     // describes the state at the moment the intent was accepted, and the
     // authoritative confirmation is the record.stateChanged event or the next

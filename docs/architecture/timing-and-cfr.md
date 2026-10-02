@@ -24,9 +24,15 @@ Nearest-time selection and newest-frame selection trade phase regularity against
 
 A system that cannot meet the schedule needs bounded catch-up. The worker cannot replay an unbounded queue of past ticks or compress elapsed time by renumbering a late submission as an earlier one. Late-slot skipping and encoder pressure are accounted as real loss where appropriate.
 
+## Pacing outcome measurements
+
+The recording worker records scheduled CFR slots, selected DXGI present times, signed and absolute residuals, selected frame age, worker deadline lateness, submission cadence, duplicate runs and ring occupancy/misses. Fixed-capacity rolling windows provide p50/p95/p99 without per-frame allocations or synchronous GPU readback. Session totals and worst values survive window expiry; session generation resets them. Resume clears cadence/wake windows so a deliberate pause is not scheduler damage.
+
+A fresh selection displaced by more than a full output period, or an explicitly skipped output slot, is coarse measured pacing impact. Sub-period motion quality has no calibrated warning threshold yet. Startup pictures predating the recording epoch and expected held frames (including 30-to-60 CFR) do not count as affected slots or encoder loss. Selection residuals require present timestamps; WGC/newest paths leave them unavailable. Submission cadence measures worker delivery to the encoder, not container PTS variation. Worker lateness includes scheduling and preceding recorder work; it does not prove CPU starvation by itself.
+
 ## Drop semantics
 
-Real picture loss includes encoder backpressure, processing failure and phase-ring eviction before a frame could be emitted. Deliberate source coalescing and empty CFR slots before any first frame exists are separate benign counters. Every product surface must use the same real-drop definition.
+Real picture loss includes skipped output slots under backpressure, conversion/processing failure and undrained encoded output. A slot acquisition retry is pressure, not a lost frame. Phase-ring eviction is retained as source-selection evidence; it does not itself mean an output picture was lost. Deliberate source coalescing and empty CFR slots before any first frame exists are separate benign counters. Every product surface must use the same real-drop definition.
 
 A held-frame duplicate is not necessarily a defect. A static desktop legitimately produces no new frame. Likewise an emitted rate at target does not prove that capture progressed: a stalled source can be duplicated at 60 fps indefinitely. Stall diagnosis reads capture progress and relevant environment facts, not the output rate alone.
 
@@ -37,6 +43,12 @@ WASAPI device-position/QPC pairs measure clock drift against the video reference
 Positive reported drift means audio leads video. The compensation layer reports its **actually applied** sample-count adjustment. Residual drift is raw device-clock drift minus that applied adjustment, not an integral of a requested control value.
 
 Multi-source merged tracks have no single device clock and report drift unavailable. A single gain-adjusted source can forward its original timing through a mixer and remain measurable. Implausible device observations latch a measurement fault; they must not silently reappear as healthy measurements.
+
+### Shared mixed-track intervals
+
+Multi-source packets are normalized to 48 kHz stereo and assigned QPC sample positions before summation. A 30 ms arrival horizon bounds waiting for quiet or missing sources. Every emitted interval has one output position, including silence; late packets cannot append an already emitted interval. A bounded timestamp-tagged ring holds source data. Source mute changes amplitude, not placement. Rejoin uses the packet clock rather than the amount of queued data. Stop drains normalization tails to the latest occupied interval without adding another horizon.
+
+The mixer owns silence during multi-source outages. The outer audio worker must not add wall-clock silence a second time. Presentation QPC remains available independently of device-drift measurement; several device clocks must not be reported as one physical clock.
 
 ### Clock slaving
 

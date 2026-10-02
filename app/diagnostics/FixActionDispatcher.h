@@ -27,9 +27,16 @@ enum class FixOutcome {
     SettingsChanged,
     // rec.capture.exclusive_window: retarget capture to the window's hosting monitor.
     RetargetToHostingMonitor,
+    NavigateSourcePicker,
     // Assisted fixes: open Settings and scroll to the named section.
     NavigateSettingsOutput,
     NavigateSettingsFormat,
+    NavigateFramePacing,
+    NavigateFrameRate,
+    NavigateResolution,
+    NavigateQuality,
+    NavigateMicrophone,
+    NavigateClockSlaving,
 };
 
 struct FixResult {
@@ -45,13 +52,10 @@ struct FixResult {
 [[nodiscard]] FixResult ApplyAutoFix(std::string_view fix_id, const capability::CapabilitySet& caps,
                                      OutputSettingsModel& output, VideoSettingsModel& video);
 
-// Resolves which Settings section an Assisted fix should open. Every assisted id
-// resolves to a section — output-path fixes to Output, everything else to Format —
-// so the user always lands somewhere relevant.
+// Resolves a supported Assisted action to its existing control. Unknown ids fail closed.
 [[nodiscard]] FixResult ResolveAssistedFix(std::string_view fix_id);
 
-// The Settings section anchor for a navigation outcome ("settings/output" /
-// "settings/format"), or an empty string for a non-navigating outcome.
+// Stable Settings target for a navigation outcome, or empty for a non-navigation action.
 [[nodiscard]] std::string_view SettingsSectionFor(FixOutcome outcome) noexcept;
 
 } // namespace exosnap::diagnostics

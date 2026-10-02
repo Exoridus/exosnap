@@ -6,7 +6,7 @@ This document owns source identity at runtime, frame-resource ownership, capture
 
 Normal display recording uses DXGI Output Duplication. Window recording uses Windows Graphics Capture (WGC). A region records a display with a physical-pixel crop. A developer-only backend override can measure WGC against a monitor; it is not a user-selectable recording backend.
 
-The D3D11 capture device determines the device on which NVENC opens. There is no independent encode-adapter choice or implicit cross-adapter transfer. A display driven by an incompatible adapter must produce an honest admission error, not an encoder selector that cannot take effect.
+The actual D3D11 capture adapter is the capture role. The persisted encoder-device preference names the preferred post-capture processing plus encoding device, and the resolver builds the full role assignment; it is not an independent hardcoded encoder pin. There is no implicit cross-adapter transfer: this build executes only the all-on-one-adapter topology, and a different explicit device is refused through the transport policy (`CrossAdapterUnsupported`) with an honest admission error, never silently redirected. A display driven by an incompatible adapter produces that error, not an encoder selector that cannot take effect. [Encoding and containers](encoding-and-containers.md#pipeline-adapter-roles) owns the role model.
 
 Use the acquired texture's description for dimensions and format. A duplication mode description is not sufficient evidence of the actual texture layout. The encoder and conversion resources are configured for the admitted source dimensions and color state. A size or incompatible color-state change ends that session rather than interpreting new pixels using old resources or metadata.
 
@@ -36,7 +36,7 @@ Keeping duplication open can affect desktop presentation paths on some systems. 
 
 The normal mid-session duplication reopen has no give-up deadline. Waiting does not recover lost pictures, but it permits audio and a stable held picture to continue. Runtime reopening uses its runtime display identifier. The stronger persisted display matcher described in [configuration](configuration-and-persistence.md#display-identity) is a separate concern; it must not be advertised as an absolute guarantee of physical identity during every topology mutation.
 
-During capture-loss recovery, hold the composed picture. During a merely static but healthy desktop, recompose the held desktop with the current camera image on CFR ticks so the webcam continues to move.
+During capture-loss recovery, hold the composed picture. On a static healthy display or window, observe the immutable webcam snapshot before comparing visual keys. Recompose only when a visual generation changes. Upload camera pixels only for a new generation or a replaced texture. The camera mailbox reuses unreferenced payload buffers and preserves snapshots still held by a consumer.
 
 ## Exclusive fullscreen and stalls
 
@@ -69,3 +69,24 @@ A one-shot Ready screenshot copies the retained preview source into its own boun
 ## Implementation and tests
 
 See [video worker](../../libs/engine/src/video_thread.cpp), [preview tap](../../libs/engine/include/exosnap/engine/preview_tap.h), [Quick preview item](../../app/quick/ExoSnap/Quick/ExoPreviewItem.h), [composition](../../app/quick/ExoSnap/Quick/QuickApplication.cpp), and the capture/preview tests under [engine tests](../../libs/engine/tests) and [Quick tests](../../app/quick/tests). Use the [tracing guide](../dev/harness-and-tracing.md) for presentation debt and native-window checks.
+
+## Preview resource budget
+
+The global preview rate is independent of recording cadence: Off, 15, 30, 60 or 120 fps, default 60. Idle hub workers gate acquisition, ownership copies and publication at that rate. Off releases the idle subscription. Engine-fed preview retains the recording producer and its pre-encode tap, while consumption follows the preview cap. A pending frame retains presentation debt until one deadline wake can deliver it. Disabling and re-enabling preview rebuilds the current source-generation view.
+
+## Pixel transfers and ownership
+
+The normal hardware recording path is D3D11 capture, owned held/ring surfaces, GPU composition and color processing, GPU encoder-format conversion, then native D3D11 hardware encoder inputs. The backend interface accepts native surfaces, including future AMF/QSV implementations, without requiring CPU planes.
+
+| Transfer | Contract |
+|---|---|
+| Capture pool to held surface or phase ring | GPU ownership copy protects pixels from producer reuse |
+| Composition, HDR and RGB/YUV conversion | GPU format and overlay processing |
+| Encoder input slots | Retained GPU resources remain valid until encoder completion |
+| Shared preview to private render texture | GPU copy releases the producer mutex before Qt rendering |
+| HDR statistics | Small asynchronous GPU-to-CPU measurement, not full-frame readback |
+| Screenshot | Requested one-shot readback for image encoding |
+| Webcam | Camera-owned CPU payload is copied into an immutable mailbox generation, then uploaded once per changed generation |
+| Hardware editor decode | GPU-to-CPU readback and normalization followed by renderer upload remain the compatibility bridge between independently owned FFmpeg and Qt devices |
+
+The surface inventory attributes logical owned texels by subsystem across adapters. It excludes external capture/decoder pools and driver overhead, and is not DXGI residency. Provider sampling stays off time-sensitive workers. Required lifetime copies and encoder slot counts must not be reduced merely to lower these numbers.

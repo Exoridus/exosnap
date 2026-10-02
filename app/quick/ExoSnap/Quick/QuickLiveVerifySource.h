@@ -75,6 +75,9 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
 
     bool MoveWindowToScreen(const QString& screen_name, QString* error) override;
     bool SelectRecordTarget(const QString& kind, const QString& title_filter, QString* error) override;
+    bool SelectRecordRegion(const QString& display_device, int x, int y, int width, int height,
+                            QString* error) override;
+    bool OpenRegionSelector(const QString& display_device, QString* error) override;
     bool RecordStart(QString* error) override;
     bool RecordPause(QString* error) override;
     bool RecordResume(QString* error) override;

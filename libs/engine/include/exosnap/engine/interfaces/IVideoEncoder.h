@@ -25,14 +25,10 @@ class IVideoEncoder {
     virtual ~IVideoEncoder() = default;
 
     // --- Configuration, before Open()/Configure() ---
-    // NvencPreset stays the parameter type here (not a vendor-neutral scale) —
-    // see the IVideoEncoder-refactor design spec: canonicalizing it would only
-    // be checked against itself until a second vendor is really wired in.
     virtual void SetCodec(VideoCodec codec) noexcept = 0;
     virtual void SetBitDepth(BitDepth depth) noexcept = 0;
     virtual void SetChroma(ChromaSubsampling chroma) noexcept = 0;
     virtual void SetCq(uint32_t cq) noexcept = 0;
-    virtual void SetPreset(NvencPreset preset) noexcept = 0;
     virtual void SetRateControl(RateControlMode mode, uint32_t bitrate_kbps) noexcept = 0;
     virtual void SetColor(const ColorMetadata& color) noexcept = 0;
     virtual void SetKeyframeIntervalSecs(float secs) noexcept = 0;

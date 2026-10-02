@@ -1,4 +1,7 @@
 #include "exosnap/engine/edit_player_engine.h"
+#include <cstdlib>
+#include <exosnap/engine/performance_measurements.h>
+#include <string_view>
 
 #include "edit_audio_mix.h"
 #include "edit_playback_pacing.h"
@@ -267,6 +270,7 @@ class PacketQueue {
                 return false;
             if (ShouldAdmitDemuxedPacket(AdmissionStateLocked(), kPacketQueueLimits))
                 break;
+            ScopedPerformanceMeasurement measurement(PerformanceStage::QueueWait);
             not_full_.wait_for(lock, kPacketQueuePushRecheckInterval);
         }
         AVPacket* owned = av_packet_alloc();
@@ -632,7 +636,9 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
         // itself, so a hardware-incompatible stream simply fails to open
         // here and falls back once, cleanly, to the exact call this codebase
         // already made before hardware decode existed.
-        TryAttachD3D11VA(vctx);
+        const char* software_decode = std::getenv("EXOSNAP_EDIT_SOFTWARE_DECODE");
+        if (!software_decode || std::string_view(software_decode) != "1")
+            TryAttachD3D11VA(vctx);
         vctx_ready = avcodec_open2(vctx, vcodec, nullptr) >= 0;
         if (!vctx_ready && vctx->hw_device_ctx != nullptr) {
             av_buffer_unref(&vctx->hw_device_ctx);
@@ -785,8 +791,12 @@ bool IsConvertibleFrame(const AVFrame* frame) noexcept {
 void NormalizeHwFrame(AVFrame* frame) {
     if (frame->format != AV_PIX_FMT_D3D11)
         return;
+    const auto transfer = [](AVFrame* destination, AVFrame* source) {
+        ScopedPerformanceMeasurement measurement(PerformanceStage::DecodeReadback);
+        return av_hwframe_transfer_data(destination, source, 0);
+    };
     FrameGuard sw(av_frame_alloc());
-    if (sw.frame == nullptr || av_hwframe_transfer_data(sw.frame, frame, 0) < 0) {
+    if (sw.frame == nullptr || transfer(sw.frame, frame) < 0 || av_frame_copy_props(sw.frame, frame) < 0) {
         av_frame_unref(frame);
         return;
     }
@@ -807,6 +817,7 @@ void NormalizeHwFrame(AVFrame* frame) {
 // conversion, which would render PQ material flat and washed out.
 DecodedVideoFrame ConvertToDecodedFrame(const AVFrame* frame, int64_t pts_us, MatrixCoefficients matrix,
                                         ColorRange range, const P010PqMonitorConverter* pq) {
+    ScopedPerformanceMeasurement measurement(PerformanceStage::CpuConversion);
     YuvToBgraParams params;
     params.matrix = matrix;
     params.range = range;
@@ -1425,11 +1436,6 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                         if (recv_ret < 0)
                             break; // EAGAIN (need more input) or EOF (fully drained)
 
-                        // Hardware readback normalizes back to a plain
-                        // software pixel format before anything below
-                        // inspects frame.frame->format.
-                        NormalizeHwFrame(frame.frame);
-
                         const int64_t pts_us = FramePtsUs(frame.frame, vtb);
                         // A negative clock reading means "nobody is presenting
                         // this" -- then nothing is known to be late and nothing is
@@ -1444,9 +1450,13 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                         const bool preroll = pts_us < start_us;
                         if (worth_converting)
                             late_streak = 0;
-                        else if (!preroll)
+                        else if (!preroll) {
                             ++late_streak;
+                            RecordPerformanceEvent(PerformanceStage::DecodeDropped);
+                        }
 
+                        if (worth_converting)
+                            NormalizeHwFrame(frame.frame);
                         if (worth_converting && IsConvertibleFrame(frame.frame)) {
                             // Wrap and release the decoder's frame BEFORE
                             // handing the result on: on_video is allowed to

@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include "annexb_to_avcc.h"
+#include "matroska_stream_writer.h"
 #include "mux_thread.h"
 #include "session_internal.h"
 
@@ -123,6 +124,32 @@ TEST(MuxAnnexBConversionFailure, ConvertibleH264PacketKeepsTheRecordingHealthy) 
     EXPECT_FALSE(state->HasFailure());
 
     RemoveQuietly(out);
+}
+
+TEST(MuxOutputFailure, FinalFlushAndClosePropagateToSessionAndSegment) {
+    using exosnap::engine::OutputIoOperation;
+    for (const auto operation :
+         {OutputIoOperation::CrtFlush, OutputIoOperation::Close, OutputIoOperation::DurabilityFlush}) {
+        const auto out = exosnap_test::UniqueTempPath("mux_io_failure.mkv");
+        auto state = MakeH264State(out);
+        state->output_io_failure = [operation](OutputIoOperation actual) { return actual == operation; };
+        std::vector<exosnap::engine::CompletedSegment> segments;
+        state->segment_callback = [&](const auto& segment) { segments.push_back(segment); };
+        auto mux = std::make_shared<MuxThread>(state);
+        mux->Start();
+        PushVideo(*state, MakeAnnexBAccessUnit(), 0);
+        PushVideoEos(*state);
+        ASSERT_TRUE(mux->Join(10000));
+        const bool material = operation != OutputIoOperation::DurabilityFlush;
+        EXPECT_EQ(state->HasFailure(), material);
+        ASSERT_EQ(segments.size(), 1u);
+        EXPECT_EQ(segments[0].succeeded, !material);
+        EXPECT_TRUE(std::filesystem::exists(out));
+        EXPECT_GT(std::filesystem::file_size(out), 0u);
+        if (material)
+            EXPECT_EQ(state->failure.error_phase, ErrorPhase::Mux);
+        RemoveQuietly(out);
+    }
 }
 
 } // namespace

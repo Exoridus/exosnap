@@ -1,6 +1,6 @@
 #include "gpu_rgb_to_ayuv.h"
 
-#include <d3dcompiler.h>
+#include "measured_shader_compile.h"
 
 #include <cstdio>
 #include <cstring>
@@ -97,8 +97,9 @@ bool RgbToAyuvConverter::Init(ID3D11Device* device, ID3D11DeviceContext* context
 
     winrt::com_ptr<ID3DBlob> cs_blob;
     winrt::com_ptr<ID3DBlob> error_blob;
-    HRESULT hr = D3DCompile(kComputeShaderSrc, std::strlen(kComputeShaderSrc), "rgb_to_ayuv_cs", nullptr, nullptr,
-                            "main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, cs_blob.put(), error_blob.put());
+    HRESULT hr =
+        MeasuredD3DCompile(kComputeShaderSrc, std::strlen(kComputeShaderSrc), "rgb_to_ayuv_cs", nullptr, nullptr,
+                           "main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, cs_blob.put(), error_blob.put());
     if (FAILED(hr)) {
         SetHResultError(err, "D3DCompile(rgb->ayuv compute shader)", hr);
         return false;

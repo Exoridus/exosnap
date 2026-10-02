@@ -192,6 +192,23 @@ TEST_F(SettingsAdapterTest, EditEmitsConfigEditedOnceAndNoOpDoesNot) {
     EXPECT_EQ(spy.count(), 1);
 }
 
+TEST_F(SettingsAdapterTest, PreviewRateIsValidatedAndIndependentOfRecordingPresets) {
+    SignalCounter config_spy(adapter, &SettingsAdapter::configEdited);
+    EXPECT_EQ(adapter.previewFrameRate(), 60);
+    for (int rate : {0, 15, 30, 60, 120}) {
+        adapter.setPreviewFrameRate(rate);
+        adapter.setConfig(MakeDefaultPreset().config);
+        EXPECT_EQ(adapter.previewFrameRate(), rate);
+    }
+    adapter.setPreviewFrameRate(144);
+    EXPECT_EQ(adapter.previewFrameRate(), 60);
+    EXPECT_EQ(config_spy.count(), 0);
+    adapter.setMaxFrameRate(60);
+    const auto options = adapter.previewFrameRateOptions();
+    EXPECT_EQ(options.size(), 5);
+    EXPECT_EQ(options.back().toMap().value(QStringLiteral("value")).toInt(), 120);
+}
+
 TEST_F(SettingsAdapterTest, AppSettingsEditIsSeparateFromConfigEdit) {
     SignalCounter config_spy(adapter, &SettingsAdapter::configEdited);
     SignalCounter app_spy(adapter, &SettingsAdapter::appSettingsEdited);
@@ -1024,6 +1041,88 @@ TEST_F(SettingsAdapterTest, UnchangedMeterReadingsDoNotRepublish) {
     // fuzzy compare has no answer for it, and republishing on every tick would
     // rebuild three rows at meter cadence.
     EXPECT_EQ(meters.count(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Encoding-device selector
+// ---------------------------------------------------------------------------
+
+namespace {
+
+capability::AdapterInfo MakeDevice(const char* name, capability::AdapterVendor vendor, int64_t luid) {
+    capability::AdapterInfo info;
+    info.name = name;
+    info.vendor = vendor;
+    info.vendor_id = vendor == capability::AdapterVendor::Nvidia  ? 0x10DEu
+                     : vendor == capability::AdapterVendor::Intel ? 0x8086u
+                                                                  : 0x1002u;
+    info.device_id = static_cast<uint32_t>(0x1000 + luid);
+    info.subsystem_id = static_cast<uint32_t>(0x2000 + luid);
+    info.luid = luid;
+    info.kind = capability::AdapterKind::Discrete;
+    return info;
+}
+
+capability::AdapterEncoderCapability MakeNvencProbe() {
+    capability::AdapterEncoderCapability capability;
+    capability.probed = true;
+    capability.backend_label = "NVENC";
+    capability.provenance = "probed via NVENC encode GUIDs";
+    capability.h264 = true;
+    capability.hevc = true;
+    capability.av1 = true;
+    capability.yuv444_h264 = true;
+    capability.yuv444_hevc = true;
+    return capability;
+}
+
+} // namespace
+
+TEST_F(SettingsAdapterTest, NvencPresetRowAppearsOnlyWhenEveryUsableDeviceIsNvenc) {
+    adapter.setEncoderDevices({MakeDevice("RTX 5070 Ti", capability::AdapterVendor::Nvidia, 1)}, {MakeNvencProbe()});
+    EXPECT_FALSE(adapter.nvencPresetOptions().isEmpty());
+
+    adapter.setEncoderDevices({MakeDevice("UHD 770", capability::AdapterVendor::Intel, 2)},
+                              {capability::AdapterEncoderCapability{}});
+    EXPECT_TRUE(adapter.nvencPresetOptions().isEmpty());
+}
+
+TEST_F(SettingsAdapterTest, UnavailableDeviceRowCarriesItsReason) {
+    adapter.setEncoderDevices({MakeDevice("Radeon RX 7900", capability::AdapterVendor::Amd, 3)},
+                              {capability::AdapterEncoderCapability{}});
+
+    const QVariantMap row = optionFor(adapter.encoderDeviceOptions(), 1);
+    ASSERT_FALSE(row.isEmpty());
+    EXPECT_FALSE(row.value(QStringLiteral("selectable")).toBool());
+    EXPECT_FALSE(row.value(QStringLiteral("reason")).toString().isEmpty());
+    EXPECT_TRUE(adapter.nvencPresetOptions().isEmpty());
+}
+
+TEST_F(SettingsAdapterTest, NvencTuningSurvivesSwitchingAwayAndBack) {
+    adapter.setEncoderDevices({MakeDevice("RTX 5070 Ti", capability::AdapterVendor::Nvidia, 1),
+                               MakeDevice("UHD 770", capability::AdapterVendor::Intel, 2)},
+                              {MakeNvencProbe(), capability::AdapterEncoderCapability{}});
+
+    adapter.setEncoderDevice(1); // explicit NVIDIA
+    adapter.setNvencPreset(static_cast<int>(exosnap::engine::NvencPreset::P6));
+    ASSERT_EQ(adapter.nvencPreset(), static_cast<int>(exosnap::engine::NvencPreset::P6));
+
+    adapter.setEncoderDevice(2); // explicit Intel: no NVENC backend
+    EXPECT_TRUE(adapter.nvencPresetOptions().isEmpty());
+    EXPECT_EQ(adapter.nvencPreset(), static_cast<int>(exosnap::engine::NvencPreset::P6))
+        << "inactive NVENC tuning must be retained, not cleared";
+
+    adapter.setEncoderDevice(1);
+    EXPECT_FALSE(adapter.nvencPresetOptions().isEmpty());
+    EXPECT_EQ(adapter.nvencPreset(), static_cast<int>(exosnap::engine::NvencPreset::P6));
+}
+
+TEST_F(SettingsAdapterTest, EncoderDeviceOptionsStartWithAuto) {
+    adapter.setEncoderDevices({MakeDevice("RTX 5070 Ti", capability::AdapterVendor::Nvidia, 1)}, {MakeNvencProbe()});
+    const QVariantMap auto_row = optionFor(adapter.encoderDeviceOptions(), 0);
+    ASSERT_FALSE(auto_row.isEmpty());
+    EXPECT_TRUE(auto_row.value(QStringLiteral("selectable")).toBool());
+    EXPECT_EQ(adapter.encoderDevice(), 0);
 }
 
 } // namespace

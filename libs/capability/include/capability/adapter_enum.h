@@ -34,11 +34,27 @@ struct AdapterInfo {
     int64_t luid = 0;
     uint64_t dedicated_video_memory_bytes = 0;
     uint64_t shared_system_memory_bytes = 0;
+    // DXGI_ADAPTER_DESC1::SubSysId. PCI subsystem identity, stable across
+    // reboots (unlike the LUID) and part of the best-effort persisted device
+    // fingerprint. 0 when the driver did not report one.
+    uint32_t subsystem_id = 0;
 };
 
 // Classifies a PCI vendor ID into an AdapterVendor. Pure function, no probing.
 // Known IDs: NVIDIA 0x10DE, AMD 0x1002 (also 0x1022 for some APUs), Intel 0x8086.
-AdapterVendor ClassifyVendor(uint32_t vendor_id) noexcept;
+inline AdapterVendor ClassifyVendor(uint32_t vendor_id) noexcept {
+    switch (vendor_id) {
+    case 0x10DEu:
+        return AdapterVendor::Nvidia;
+    case 0x1002u:
+    case 0x1022u:
+        return AdapterVendor::Amd;
+    case 0x8086u:
+        return AdapterVendor::Intel;
+    default:
+        return AdapterVendor::Other;
+    }
+}
 
 // Packs a Windows LUID (HighPart, LowPart) into the AdapterInfo::luid layout
 // (LowPart in the low 32 bits, HighPart in the high 32 bits). Takes plain

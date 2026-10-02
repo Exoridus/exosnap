@@ -1,4 +1,5 @@
 #include "services/WgcCaptureHubService.h"
+#include "models/PreviewRatePolicy.h"
 
 #include "diagnostics/AppLog.h"
 #include "services/CaptureHubRegistry.h"
@@ -17,8 +18,6 @@
 
 namespace exosnap {
 namespace {
-
-constexpr std::chrono::milliseconds kPumpTick{15};
 
 winrt::com_ptr<ID3D11Device> createDevice() {
     winrt::com_ptr<ID3D11Device> device;
@@ -197,6 +196,7 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
 
     std::vector<CaptureHubCommandQueue<SubscribePayload>::Entry> batch;
 
+    PreviewRateGate acquisition_gate;
     while (!stop_token.stop_requested()) {
         // WgcSourceProducer's contract (see its header) is that the owning thread
         // is an STA *that pumps messages*: Windows.Graphics.Capture delivers both
@@ -211,7 +211,10 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
             DispatchMessageW(&message);
         }
 
-        commands_.WaitAndDrain(kPumpTick, batch);
+        const int rate = preview_frame_rate_.load();
+        const auto wait = subscription && rate > 0 ? std::chrono::milliseconds((1000 + rate - 1) / rate)
+                                                   : std::chrono::milliseconds(1000);
+        commands_.WaitAndDrain(wait, batch);
         if (stop_token.stop_requested())
             break;
 
@@ -253,7 +256,8 @@ void WgcCaptureHubService::WorkerProc(std::stop_token stop_token) {
                 commands_.PublishLeaseRelease(command.serial);
             }
         }
-        registry.PumpAll();
+        if (acquisition_gate.Take(std::chrono::steady_clock::now(), preview_frame_rate_.load()))
+            registry.PumpAll();
 
         // (a) The device died under a live subscription. The hub gave up on the
         // source (its producer reported Fatal) and will not retry, because the

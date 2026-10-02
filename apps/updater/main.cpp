@@ -20,10 +20,13 @@
 // event. Retry routing per the failure matrix re-enters the worker at
 // RetryEntryStep(case).
 //
-// A dev-only `--preview-state <download|progress|amber|red|green|reboot>`
+// A dev-only `--preview-state <idle|checking|available|ready|uptodate|cancelled|
+// download|progress|verifying|success|amber|red|green|reboot|reinstall|long>`
 // short-circuits all engine work and renders a canned UpdaterUiState so the
 // canon looks can be inspected (and screenshotted) without a real
-// download/install in flight.
+// download/install in flight. `--appearance dark|light` sets the shared theme
+// singleton for those renders, and `--screenshot <path>` grabs the real Quick
+// window and exits -- the updater's evidence path.
 //
 // The process exit code is the run's outcome, not "did the event loop end" --
 // see UpdaterExitCode.h.
@@ -33,15 +36,21 @@
 #include <windows.h>
 // clang-format on
 
-#include <QApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QImage>
+#include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QQmlError>
+#include <QQuickStyle>
+#include <QQuickWindow>
 #include <QScreen>
 #include <QString>
 #include <QStringList>
 #include <QThread>
 #include <QTimer>
+#include <QWindow>
 
 #include <cstdio>
 #include <cstdlib>
@@ -58,13 +67,14 @@
 #include <update/update_types.h>
 #include <update_handoff/handoff.h>
 
+#include "quick/ExoSnap/Quick/QuickThemeTokens.h"
 #include "UpdaterArgs.h"
 #include "UpdaterAutomation.h"
 #include "UpdaterCommandPolicy.h"
 #include "UpdaterControlDispatcher.h"
 #include "UpdaterController.h"
 #include "UpdaterExitCode.h"
-#include "UpdaterWindow.h"
+#include "UpdaterViewAdapter.h"
 #include "UpdaterWorker.h"
 #include "WindowPlacement.h"
 
@@ -86,7 +96,43 @@ constexpr int kSuccessAutoCloseMs = 1500;
 // copies of it had already drifted apart once.
 std::optional<UpdaterUiState> MakePreviewState(const QString& which) {
     UpdaterController c(QString::fromLatin1(kPreviewFrom), QString::fromLatin1(kPreviewTo));
+    const auto manual_start = [&c] {
+        c.setMode(exosnap::update::UpdaterMode::Manual);
+        c.setContext(exosnap::update::InstallMode::Portable, true);
+    };
 
+    if (which == QStringLiteral("idle")) {
+        manual_start();
+        c.onIdle();
+        return c.state();
+    }
+    if (which == QStringLiteral("checking")) {
+        manual_start();
+        c.onCheckStarted();
+        return c.state();
+    }
+    if (which == QStringLiteral("available")) {
+        manual_start();
+        c.onUpdateAvailable(QString::fromLatin1(kPreviewTo));
+        return c.state();
+    }
+    if (which == QStringLiteral("ready")) {
+        manual_start();
+        c.onUpdateAvailable(QString::fromLatin1(kPreviewTo));
+        c.onReadyToApply();
+        return c.state();
+    }
+    if (which == QStringLiteral("uptodate")) {
+        manual_start();
+        c.onUpToDate();
+        return c.state();
+    }
+    if (which == QStringLiteral("cancelled")) {
+        c.onStepStarted(UpStep::Download);
+        c.onDownloadProgress(21, 100);
+        c.onCancelled();
+        return c.state();
+    }
     if (which == QStringLiteral("download")) {
         c.onStepStarted(UpStep::Download);
         c.onDownloadProgress(38, 100);
@@ -98,6 +144,43 @@ std::optional<UpdaterUiState> MakePreviewState(const QString& which) {
         c.onStepStarted(UpStep::Install);
         UpdaterUiState s = c.state();
         s.ring = 0.72; // mid-install for a readable arc/percent
+        return s;
+    }
+    if (which == QStringLiteral("verifying")) {
+        c.onStepDone(UpStep::Download);
+        c.onStepDone(UpStep::CloseApp);
+        c.onStepDone(UpStep::Install);
+        c.onStepStarted(UpStep::Verify);
+        UpdaterUiState s = c.state();
+        s.ring = 0.9;
+        return s;
+    }
+    if (which == QStringLiteral("success")) {
+        c.onStepDone(UpStep::Download);
+        c.onStepDone(UpStep::CloseApp);
+        c.onStepDone(UpStep::Install);
+        c.onStepDone(UpStep::Verify);
+        c.onStepDone(UpStep::Launch);
+        c.onAllDone();
+        return c.state();
+    }
+    if (which == QStringLiteral("reinstall")) {
+        c.setVerificationReinstall(true);
+        c.onStepStarted(UpStep::Download);
+        c.onDownloadProgress(64, 100);
+        return c.state();
+    }
+    if (which == QStringLiteral("long")) {
+        c.onStepDone(UpStep::Download);
+        c.onStepDone(UpStep::CloseApp);
+        c.onStepStarted(UpStep::Install);
+        c.onFailure(FailureCase::InstallFailed, QString());
+        UpdaterUiState s = c.state();
+        s.from_version = QStringLiteral("0.10.0-rc1+20261001.abcdef123456.windows-x64-portable");
+        s.to_version = QStringLiteral("0.10.0-rc2+20261015.fedcba654321.windows-x64-portable");
+        s.detail_text = QStringLiteral("Windows Installer returned 1603: the installation failed because a "
+                                       "required file could not be replaced while another process still held it "
+                                       "open; close every ExoSnap window and try again.");
         return s;
     }
     if (which == QStringLiteral("amber")) {
@@ -137,10 +220,10 @@ std::optional<UpdaterUiState> MakePreviewState(const QString& which) {
     return std::nullopt;
 }
 
-void CenterOnScreen(QWidget& w) {
-    if (QScreen* screen = QApplication::primaryScreen()) {
+void CenterOnScreen(QWindow& w) {
+    if (QScreen* screen = QGuiApplication::primaryScreen()) {
         const QRect avail = screen->availableGeometry();
-        w.move(avail.center() - QPoint(w.width() / 2, w.height() / 2));
+        w.setPosition(avail.center() - QPoint(w.width() / 2, w.height() / 2));
     }
 }
 
@@ -152,7 +235,7 @@ void CenterOnScreen(QWidget& w) {
 // CenterOnScreen when app_pid is 0 (every manual start), the window can't be
 // found (already closed, verify-reinstall's own app pid replaced by a stale
 // one, ...), or no screen contains it.
-void PlaceNearAppWindow(QWidget& w, quint32 app_pid) {
+void PlaceNearAppWindow(QWindow& w, quint32 app_pid) {
     if (app_pid != 0) {
         const auto hwnd = reinterpret_cast<HWND>(exosnap::update::FindTopLevelWindowForProcess(app_pid, L"ExoSnap"));
         if (hwnd != nullptr) {
@@ -161,10 +244,10 @@ void PlaceNearAppWindow(QWidget& w, quint32 app_pid) {
                 const QPoint anchor_center((r.left + r.right) / 2, (r.top + r.bottom) / 2);
                 QScreen* screen = QGuiApplication::screenAt(anchor_center);
                 if (screen == nullptr)
-                    screen = QApplication::primaryScreen();
+                    screen = QGuiApplication::primaryScreen();
                 if (screen != nullptr) {
                     const QRect placed = PlaceWindowNearAnchor(w.size(), anchor_center, screen->availableGeometry());
-                    w.move(placed.topLeft());
+                    w.setPosition(placed.topLeft());
                     return;
                 }
             }
@@ -287,7 +370,10 @@ void FillManualContext(UpdaterArgs& args) {
 } // namespace
 
 int main(int argc, char** argv) {
-    QApplication app(argc, argv);
+    // The updater's frontend is Qt Quick; no Widgets and no QApplication are
+    // needed for it to render. The application's own QApplication stays where it
+    // is (the tray integration), in the other process.
+    QGuiApplication app(argc, argv);
 
     const QStringList arguments = QCoreApplication::arguments();
 
@@ -300,7 +386,37 @@ int main(int argc, char** argv) {
     constexpr int kPreviewSmokeCloseMs = 2000;
 
     // Dev preview short-circuit: render a canned state and skip engine work.
+    const auto option_value = [&arguments](const QString& option) {
+        const int index = arguments.indexOf(option);
+        return index >= 0 && index + 1 < arguments.size() ? arguments.at(index + 1) : QString{};
+    };
     const int previewIdx = arguments.indexOf(QStringLiteral("--preview-state"));
+    const QString appearance = option_value(QStringLiteral("--appearance"));
+    const QString screenshot_path = option_value(QStringLiteral("--screenshot"));
+    // Loads ExoSnap.Updater/UpdaterMain with the adapter as an initial property.
+    // The engine is owned by the caller: the QML root object is the window, so an
+    // engine parented to it would be deleted by it (and the engine deletes its
+    // root objects) -- one ownership, held from outside.
+    const auto load_updater_ui = [&](QQmlApplicationEngine& engine, UpdaterViewAdapter& adapter) -> QQuickWindow* {
+        QQuickStyle::setStyle(QStringLiteral("Basic"));
+        engine.setInitialProperties({{QStringLiteral("adapter"), QVariant::fromValue(&adapter)}});
+        engine.loadFromModule(QStringLiteral("ExoSnap.Updater"), QStringLiteral("UpdaterMain"));
+        if (engine.rootObjects().isEmpty()) {
+            std::fprintf(stderr, "exosnap-updater: the update window failed to load (no QML root object)\n");
+            return nullptr;
+        }
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst());
+        if (window == nullptr) {
+            std::fprintf(stderr, "exosnap-updater: the update window is not a Quick window\n");
+            return nullptr;
+        }
+        if (!appearance.isEmpty()) {
+            if (auto* tokens = engine.singletonInstance<exosnap::quick::QuickThemeTokens*>(
+                    QStringLiteral("ExoSnap.Updater"), QStringLiteral("QuickThemeTokens")))
+                tokens->setAppearance(appearance, tokens->accentId());
+        }
+        return window;
+    };
     if (previewIdx >= 0) {
         const QString which = previewIdx + 1 < arguments.size() ? arguments.at(previewIdx + 1) : QString();
         const std::optional<UpdaterUiState> state = IsKnownPreviewState(which) ? MakePreviewState(which) : std::nullopt;
@@ -309,11 +425,28 @@ int main(int argc, char** argv) {
                          qPrintable(PreviewStateNames().join(QLatin1Char('|'))));
             return static_cast<int>(UpdaterExit::UsageError);
         }
-        UpdaterWindow window;
-        window.render(*state);
-        window.show();
-        CenterOnScreen(window);
-        if (previewSmoke) {
+        UpdaterViewAdapter adapter;
+        adapter.render(*state);
+        QQmlApplicationEngine engine;
+        QQuickWindow* window = load_updater_ui(engine, adapter);
+        if (window == nullptr)
+            return static_cast<int>(UpdaterExit::UsageError);
+        window->show();
+        CenterOnScreen(*window);
+        if (!screenshot_path.isEmpty()) {
+            // A dev/evidence capture of the real Quick window: wait for the
+            // first rendered frame, grab it, and leave. The image is written
+            // where the caller asked; nothing here reads or mutates update
+            // state.
+            const QString path = screenshot_path;
+            QTimer::singleShot(300, &app, [window, path]() {
+                const QImage image = window->grabWindow();
+                if (image.isNull() || !image.save(path))
+                    std::fprintf(stderr, "exosnap-updater: failed to save the window capture to %s\n",
+                                 qPrintable(path));
+                QCoreApplication::exit(0);
+            });
+        } else if (previewSmoke) {
             // exit(), not quit(): quit() is a REQUEST that Qt refuses while a
             // window is still open, and the preview window is open by design.
             // exit() ends the loop unconditionally; see the same choice on the
@@ -397,7 +530,11 @@ int main(int argc, char** argv) {
     // queue a second run onto the worker. Cleared only on a terminal state.
     bool in_flight = false;
 
-    UpdaterWindow window;
+    UpdaterViewAdapter view_adapter;
+    QQmlApplicationEngine engine;
+    QQuickWindow* window = load_updater_ui(engine, view_adapter);
+    if (window == nullptr)
+        return static_cast<int>(UpdaterExit::UsageError);
 
     // Armed only by --automation-control. Declared here so `render` can publish
     // through it; both stay null on every ordinary launch.
@@ -407,7 +544,7 @@ int main(int argc, char** argv) {
 
     const auto render = [&] {
         UpdaterUiState s = controller->state();
-        window.render(s);
+        view_adapter.render(s);
         if (!automation)
             return;
         // The window and the channel are rendered from the SAME controller
@@ -430,19 +567,19 @@ int main(int argc, char** argv) {
     worker.moveToThread(&worker_thread);
     worker_thread.start();
 
-    QObject::connect(&worker, &UpdaterWorker::stepStarted, &window, [&](UpStep step) {
+    QObject::connect(&worker, &UpdaterWorker::stepStarted, &view_adapter, [&](UpStep step) {
         controller->onStepStarted(step);
         render();
     });
-    QObject::connect(&worker, &UpdaterWorker::downloadProgress, &window, [&](quint64 received, quint64 total) {
+    QObject::connect(&worker, &UpdaterWorker::downloadProgress, &view_adapter, [&](quint64 received, quint64 total) {
         controller->onDownloadProgress(received, total);
         render();
     });
-    QObject::connect(&worker, &UpdaterWorker::stepDone, &window, [&](UpStep step) {
+    QObject::connect(&worker, &UpdaterWorker::stepDone, &view_adapter, [&](UpStep step) {
         controller->onStepDone(step);
         render();
     });
-    QObject::connect(&worker, &UpdaterWorker::releaseResolved, &window, [&](const QString& version) {
+    QObject::connect(&worker, &UpdaterWorker::releaseResolved, &view_adapter, [&](const QString& version) {
         // With a pinned target this only ever confirms what is already on the
         // pill (anything else is refused by the target gate a moment later).
         // Without one it is the first time this process knows the version, so
@@ -455,7 +592,7 @@ int main(int argc, char** argv) {
         controller->onStepStarted(UpStep::Download);
         render();
     });
-    QObject::connect(&worker, &UpdaterWorker::allDone, &window, [&] {
+    QObject::connect(&worker, &UpdaterWorker::allDone, &view_adapter, [&] {
         in_flight = false;
         // The transaction is over and it succeeded: this process consumed the
         // document, so this process disposes of it. On every other outcome the
@@ -473,7 +610,7 @@ int main(int argc, char** argv) {
         // Success footer: "this window closes automatically".
         QTimer::singleShot(kSuccessAutoCloseMs, &app, &QCoreApplication::quit);
     });
-    QObject::connect(&worker, &UpdaterWorker::failed, &window, [&](FailureCase c, const QString& detail) {
+    QObject::connect(&worker, &UpdaterWorker::failed, &view_adapter, [&](FailureCase c, const QString& detail) {
         in_flight = false;
         last_failure = c;
         controller->onFailure(c, detail);
@@ -485,35 +622,35 @@ int main(int argc, char** argv) {
         render();
     });
 
-    QObject::connect(&worker, &UpdaterWorker::cancelled, &window, [&] {
+    QObject::connect(&worker, &UpdaterWorker::cancelled, &view_adapter, [&] {
         in_flight = false;
         controller->onCancelled();
         render();
     });
 
     // ── Manual-mode results ──────────────────────────────────────────────────
-    QObject::connect(&worker, &UpdaterWorker::checkStarted, &window, [&] {
+    QObject::connect(&worker, &UpdaterWorker::checkStarted, &view_adapter, [&] {
         controller->onCheckStarted();
         render();
     });
-    QObject::connect(&worker, &UpdaterWorker::upToDate, &window, [&] {
+    QObject::connect(&worker, &UpdaterWorker::upToDate, &view_adapter, [&] {
         in_flight = false;
         to_version.clear();
         controller->onUpToDate();
         render();
     });
-    QObject::connect(&worker, &UpdaterWorker::updateAvailable, &window, [&](const QString& version) {
+    QObject::connect(&worker, &UpdaterWorker::updateAvailable, &view_adapter, [&](const QString& version) {
         in_flight = false;
         to_version = version;
         controller->onUpdateAvailable(version);
         render();
     });
-    QObject::connect(&worker, &UpdaterWorker::readyToApply, &window, [&] {
+    QObject::connect(&worker, &UpdaterWorker::readyToApply, &view_adapter, [&] {
         in_flight = false;
         controller->onReadyToApply();
         render();
     });
-    QObject::connect(&worker, &UpdaterWorker::checkBlocked, &window, [&](const QString& reason) {
+    QObject::connect(&worker, &UpdaterWorker::checkBlocked, &view_adapter, [&](const QString& reason) {
         in_flight = false;
         controller->onCheckBlocked(reason);
         render();
@@ -537,10 +674,10 @@ int main(int argc, char** argv) {
         render();
         return start(&UpdaterWorker::check);
     };
-    QObject::connect(&window, &UpdaterWindow::checkRequested, &window, [&] { (void)doCheck(); });
-    QObject::connect(&window, &UpdaterWindow::downloadRequested, &window,
+    QObject::connect(&view_adapter, &UpdaterViewAdapter::checkRequested, &view_adapter, [&] { (void)doCheck(); });
+    QObject::connect(&view_adapter, &UpdaterViewAdapter::downloadRequested, &view_adapter,
                      [&] { (void)start(&UpdaterWorker::download); });
-    QObject::connect(&window, &UpdaterWindow::applyRequested, &window, [&] { (void)start(&UpdaterWorker::apply); });
+    QObject::connect(&view_adapter, &UpdaterViewAdapter::applyRequested, &view_adapter, [&] { (void)start(&UpdaterWorker::apply); });
 
     const auto doRetry = [&] {
         if (in_flight) {
@@ -575,7 +712,7 @@ int main(int argc, char** argv) {
         QMetaObject::invokeMethod(&worker, [&worker, entry] { worker.run(entry); }, Qt::QueuedConnection);
         return true;
     };
-    QObject::connect(&window, &UpdaterWindow::retryRequested, &window, [&] { (void)doRetry(); });
+    QObject::connect(&view_adapter, &UpdaterViewAdapter::retryRequested, &view_adapter, [&] { (void)doRetry(); });
     // Every way out of this process ends the event loop with exit(), never
     // quit(). quit() asks the application whether it may quit, and Qt says no
     // while a window is open or refuses a close (the window ignores WM_CLOSE
@@ -585,12 +722,12 @@ int main(int argc, char** argv) {
     // Manager. The window's own guards have already been consulted by the
     // time these fire, so the decision to leave has been made.
     const auto exitNow = [] { QCoreApplication::exit(0); };
-    QObject::connect(&window, &UpdaterWindow::closeRequested, &app, exitNow);
+    QObject::connect(&view_adapter, &UpdaterViewAdapter::closeRequested, &app, exitNow);
     const auto openAndQuit = [&] {
         (void)LaunchExoSnapFrom(ResolveOpenDir(args));
         exitNow();
     };
-    QObject::connect(&window, &UpdaterWindow::openExoSnapRequested, &window, openAndQuit);
+    QObject::connect(&view_adapter, &UpdaterViewAdapter::openExoSnapRequested, &view_adapter, openAndQuit);
 
     // ── Automation endpoint ──────────────────────────────────────────────────
     // Only when explicitly armed. The intents below route to the SAME functions
@@ -677,22 +814,22 @@ int main(int argc, char** argv) {
         last_failure = FailureCase::HandoffRejected;
         controller->onFailure(FailureCase::HandoffRejected, handoff_rejection);
         render();
-        window.show();
-        CenterOnScreen(window);
+        window->show();
+        CenterOnScreen(*window);
     } else if (manual) {
         // The resting entry point. Nothing is fetched, nothing is contacted and
         // nothing is replaced until the primary action is pressed.
         controller->onIdle();
         render();
-        window.show();
-        CenterOnScreen(window);
+        window->show();
+        CenterOnScreen(*window);
     } else {
         // First paint mirrors the pipeline's first event so the window never
         // shows an all-queued limbo state.
         controller->onStepStarted(UpStep::Download);
         render();
-        window.show();
-        PlaceNearAppWindow(window, args.app_pid);
+        window->show();
+        PlaceNearAppWindow(*window, args.app_pid);
 
         in_flight = true;
         QMetaObject::invokeMethod(&worker, [&worker] { worker.run(UpStep::Download); }, Qt::QueuedConnection);

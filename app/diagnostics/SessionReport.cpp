@@ -46,14 +46,13 @@ QString RateControlLabel(exosnap::engine::RateControlMode mode) {
     return QStringLiteral("CQ");
 }
 
-QString PresetLabel(exosnap::engine::NvencPreset preset) {
-    return QStringLiteral("P%1").arg(static_cast<int>(preset) + 1);
-}
-
 QJsonObject BuildEncoderInit(const exosnap::engine::EncoderInitInfo& init) {
     QJsonObject o;
+    o[QStringLiteral("backend")] =
+        QString::fromUtf8(init.backend_id.data(), static_cast<qsizetype>(init.backend_id.size()));
     o[QStringLiteral("codec")] = ui::videoCodecLabel(init.codec);
-    o[QStringLiteral("preset")] = PresetLabel(init.preset);
+    o[QStringLiteral("preset")] =
+        QString::fromUtf8(init.backend_preset.data(), static_cast<qsizetype>(init.backend_preset.size()));
     o[QStringLiteral("rate_control")] = RateControlLabel(init.rc_mode);
     o[QStringLiteral("target_bitrate_kbps")] = static_cast<double>(init.target_bitrate_kbps);
     o[QStringLiteral("max_bitrate_kbps")] = static_cast<double>(init.max_bitrate_kbps);
@@ -153,6 +152,17 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         root[QStringLiteral("ledger")] = entries;
     }
 
+    QJsonArray compensated;
+    for (const auto& fact : inputs.compensated) {
+        QJsonObject item;
+        item[QStringLiteral("id")] = QString::fromStdString(fact.id);
+        item[QStringLiteral("title")] = QString::fromStdString(fact.title);
+        item[QStringLiteral("observed_periods")] = static_cast<double>(fact.count);
+        item[QStringLiteral("compensation")] = QString::fromStdString(fact.compensation);
+        compensated.append(item);
+    }
+    root[QStringLiteral("compensated_conditions")] = compensated;
+
     // ---- Requested config (independent of the snapshot) ----
     {
         QJsonObject cfg;
@@ -182,6 +192,7 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         drops[QStringLiteral("backpressure")] = static_cast<double>(s.capture.frames_dropped_backpressure);
         drops[QStringLiteral("processing_failure")] = static_cast<double>(s.capture.frames_dropped_processing_failure);
         counters[QStringLiteral("frames_dropped")] = drops;
+        counters[QStringLiteral("real_frame_loss")] = static_cast<double>(s.real_frame_loss());
         counters[QStringLiteral("frames_duplicated")] = static_cast<double>(s.capture.frames_duplicated);
         counters[QStringLiteral("frames_captured")] = static_cast<double>(s.capture.frames_captured);
         counters[QStringLiteral("frames_emitted")] = static_cast<double>(s.capture.frames_emitted);
@@ -225,6 +236,15 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         counters[QStringLiteral("encoder_keyframe_prediction_mismatches")] =
             static_cast<double>(s.video_encoder.keyframe_prediction_mismatches);
         counters[QStringLiteral("mux_failures")] = static_cast<double>(s.mux.failures);
+        if (s.disk.finalized_io_segments > 0) {
+            QJsonObject io;
+            io[QStringLiteral("finalized_segments")] = static_cast<double>(s.disk.finalized_io_segments);
+            io[QStringLiteral("crt_write_total_ms")] = s.disk.crt_write_total_ms;
+            io[QStringLiteral("crt_flush_total_ms")] = s.disk.crt_flush_total_ms;
+            io[QStringLiteral("durability_flush_total_ms")] = s.disk.durability_flush_total_ms;
+            io[QStringLiteral("durability_flush_failures")] = static_cast<double>(s.disk.durability_flush_failures);
+            root[QStringLiteral("output_io")] = io;
+        }
 
         counters[QStringLiteral("duration_skew_ms")] =
             MetricOrUnavailable(s.duration_skew_ms, s.duration_skew_availability);
@@ -310,6 +330,35 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
             // report publishes "unavailable" there rather than echoing 1000/target_fps.
             pacing[QStringLiteral("frame_interval_ms")] =
                 MetricOrUnavailable(s.capture.frame_interval_ms, s.capture.interval_observed);
+            pacing[QStringLiteral("output_slots")] = static_cast<double>(s.pacing.output_slots);
+            pacing[QStringLiteral("affected_slots")] = static_cast<double>(s.pacing.affected_slots);
+            pacing[QStringLiteral("skipped_output_slots")] = static_cast<double>(s.pacing.skipped_output_slots);
+            pacing[QStringLiteral("longest_duplicate_run")] = static_cast<double>(s.pacing.longest_duplicate_run);
+            pacing[QStringLiteral("ring_misses")] = static_cast<double>(s.pacing.ring_misses);
+            pacing[QStringLiteral("ring_evictions")] = static_cast<double>(s.capture.frames_dropped_ring_eviction);
+            pacing[QStringLiteral("worst_selection_residual_ms")] = MetricOrUnavailable(
+                s.pacing.worst_absolute_residual_ms,
+                s.pacing.selection_samples ? MetricAvailability::Available : MetricAvailability::Unavailable);
+            pacing[QStringLiteral("worst_worker_lateness_ms")] = MetricOrUnavailable(
+                s.pacing.worst_worker_lateness_ms,
+                s.pacing.worker_wakes ? MetricAvailability::Available : MetricAvailability::Unavailable);
+            const auto distribution = [&pacing](const char* key, const exosnap::engine::TimingDistribution& d) {
+                if (d.samples == 0) {
+                    pacing[QLatin1String(key)] = QStringLiteral("unavailable");
+                    return;
+                }
+                QJsonObject value;
+                value[QStringLiteral("samples")] = static_cast<double>(d.samples);
+                value[QStringLiteral("p50_ms")] = d.p50_ms;
+                value[QStringLiteral("p95_ms")] = d.p95_ms;
+                value[QStringLiteral("p99_ms")] = d.p99_ms;
+                pacing[QLatin1String(key)] = value;
+            };
+            distribution("selection_residual", s.pacing.selection_residual);
+            distribution("absolute_residual", s.pacing.absolute_residual);
+            distribution("selected_frame_age", s.pacing.selected_frame_age);
+            distribution("worker_lateness", s.pacing.worker_lateness);
+            distribution("submission_cadence", s.pacing.output_cadence);
             root[QStringLiteral("video_pacing")] = pacing;
         }
     } else {

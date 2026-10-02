@@ -6,6 +6,7 @@
 #include <string>
 
 #include "../models/CrashReportPolicy.h"
+#include "../models/PreviewRatePolicy.h"
 
 namespace exosnap {
 
@@ -74,6 +75,7 @@ enum class SettingsWriteDecision : uint8_t {
 }
 
 struct PersistedAppSettings {
+    int preview_frame_rate = 60;
     // Indexed by HotkeyAction: ToggleRecording, TogglePause, CaptureFrame,
     // AddMarker, SplitRecording. Size must match kHotkeyActionCount.
     std::array<QString, 5> hotkey_bindings = {

@@ -1,4 +1,5 @@
 #include "RecordPreviewAdapter.h"
+#include "models/PreviewRatePolicy.h"
 
 #include "ExoPreviewItem.h"
 #include "PreviewPercentile.h"
@@ -99,6 +100,9 @@ QString stateTextFor(UiRecordingState state) {
 RecordPreviewAdapter::RecordPreviewAdapter(QObject* parent)
     : QObject(parent), dxgi_source_(std::make_unique<DxgiCaptureHubService>()),
       wgc_source_(std::make_unique<WgcCaptureHubService>()) {
+    preview_update_timer_.setSingleShot(true);
+    preview_update_timer_.setTimerType(Qt::PreciseTimer);
+    connect(&preview_update_timer_, &QTimer::timeout, this, &RecordPreviewAdapter::requestPreviewUpdate);
     metrics_timer_.setInterval(250);
     metrics_timer_.setTimerType(Qt::CoarseTimer);
     connect(&metrics_timer_, &QTimer::timeout, this, &RecordPreviewAdapter::updateMetrics);
@@ -138,6 +142,46 @@ void RecordPreviewAdapter::setSurfaceVisible(bool visible) {
     applyPreviewRunState();
 }
 
+void RecordPreviewAdapter::setPreviewFrameRate(int rate) {
+    rate = NormalizePreviewRate(rate);
+    if (preview_frame_rate_ == rate)
+        return;
+    preview_frame_rate_ = rate;
+    dxgi_source_->SetPreviewFrameRate(rate);
+    wgc_source_->SetPreviewFrameRate(rate);
+    preview_update_timer_.stop();
+    last_preview_update_.invalidate();
+    if (rate == 0) {
+        preview_running_ = false;
+        stopPreview();
+        setStatus(tr("Preview off"));
+    } else {
+        applyPreviewRunState();
+        presentEngineSourceIfPossible();
+        if (engine_feed_expected_.load(std::memory_order_acquire))
+            metrics_timer_.start();
+        requestPreviewUpdate();
+    }
+    emit previewFrameRateChanged();
+}
+
+void RecordPreviewAdapter::requestPreviewUpdate() {
+    if (preview_frame_rate_ == 0 || !active_ || !surface_visible_ || item_ == nullptr)
+        return;
+    const int interval = (1000 + preview_frame_rate_ - 1) / preview_frame_rate_;
+    const int remaining =
+        last_preview_update_.isValid() ? interval - static_cast<int>(last_preview_update_.elapsed()) : 0;
+    if (remaining > 0) {
+        if (!preview_update_timer_.isActive())
+            preview_update_timer_.start(remaining);
+        return;
+    }
+    preview_update_timer_.stop();
+    last_preview_update_.start();
+    update_scheduler_->RecordSceneUpdateRequested();
+    item_->requestSceneUpdate();
+}
+
 void RecordPreviewAdapter::applyPreviewRunState() {
     // While the engine owns the capture, the preview draws the recording's own
     // WYSIWYG texture, which arrives through acceptRecordingTexture() and needs
@@ -150,7 +194,7 @@ void RecordPreviewAdapter::applyPreviewRunState() {
     // written from the coordinator's release hook, on whichever thread that runs.
     if (engine_feed_expected_.load(std::memory_order_acquire))
         return;
-    const bool want_running = active_ && surface_visible_;
+    const bool want_running = active_ && surface_visible_ && preview_frame_rate_ > 0;
     if (want_running == preview_running_)
         return;
     preview_running_ = want_running;
@@ -222,6 +266,19 @@ const QString& RecordPreviewAdapter::recordingStateText() const noexcept {
 
 qulonglong RecordPreviewAdapter::recordingDroppedFrames() const noexcept {
     return recording_dropped_frames_;
+}
+
+bool RecordPreviewAdapter::harnessTestCard() const noexcept {
+    return harness_test_card_;
+}
+
+void RecordPreviewAdapter::setHarnessTestCard(bool enabled) {
+    if (harness_test_card_ == enabled)
+        return;
+    harness_test_card_ = enabled;
+    emit harnessTestCardChanged();
+    if (preview_running_)
+        startPreview();
 }
 
 QVariantMap RecordPreviewAdapter::benchmarkSnapshot() const {
@@ -509,8 +566,7 @@ std::function<void()> RecordPreviewAdapter::makeFramePublishedSink() {
                 scheduler->DisarmWake();
                 if (safe_self == nullptr || safe_self->item_ == nullptr)
                     return;
-                scheduler->RecordSceneUpdateRequested();
-                safe_self->item_->requestSceneUpdate();
+                safe_self->requestPreviewUpdate();
             },
             Qt::QueuedConnection);
     };
@@ -553,7 +609,7 @@ void RecordPreviewAdapter::acceptRecordingTexture(void* handle, uint32_t width, 
 void RecordPreviewAdapter::presentEngineSourceIfPossible() {
     if (engine_source_.handle == nullptr)
         return;
-    if (!active_ || item_ == nullptr) {
+    if (!active_ || item_ == nullptr || preview_frame_rate_ == 0) {
         // Held, not dropped. Counted apart from an announcement that never
         // arrived, because the two need completely different investigations.
         ++engine_source_deferrals_;
@@ -588,7 +644,7 @@ void RecordPreviewAdapter::releaseEngineSource() {
 
 void RecordPreviewAdapter::startPreview() {
     stopPreview();
-    if (!active_ || item_ == nullptr)
+    if (!active_ || item_ == nullptr || preview_frame_rate_ == 0)
         return;
 
     exosnap::engine::CaptureTarget target;
@@ -619,6 +675,17 @@ void RecordPreviewAdapter::startPreview() {
         emit sourceNameChanged();
     }
     setError({});
+    if (harness_test_card_) {
+        // The page reads readiness and the source size from here, not from the
+        // item, so this alone gives the stage the aspect and state of a live
+        // 1080p source.
+        frame_ready_ = true;
+        emit frameReadyChanged();
+        source_size_ = QSize(1920, 1080);
+        emit sourceSizeChanged();
+        setStatus(QStringLiteral("Harness test card"));
+        return;
+    }
     setStatus(QStringLiteral("Opening real DXGI preview source…"));
     const quint64 epoch = source_epoch_.fetch_add(1, std::memory_order_acq_rel) + 1;
     QPointer<RecordPreviewAdapter> safe_self(this);
@@ -711,7 +778,7 @@ void RecordPreviewAdapter::stopPreview() {
 }
 
 void RecordPreviewAdapter::synchronizeItemState() {
-    if (item_ == nullptr)
+    if (item_ == nullptr || harness_test_card_)
         return;
     const bool ready = item_->frameReady();
     if (frame_ready_ != ready) {

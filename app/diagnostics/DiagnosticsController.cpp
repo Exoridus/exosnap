@@ -64,10 +64,14 @@ IssueCard CardFromResult(const DiagnosticResult& result) {
     card.id = result.id;
     card.tone = ToneOf(result.severity);
     card.title = result.title;
-    card.summary = result.summary;
+    card.summary = result.impact.empty() ? result.summary : result.impact;
     card.why = result.recommendation;
     card.measured = result.current_value;
     card.log_excerpt = result.detail;
+    if (!result.compensation.empty())
+        card.log_excerpt += "\nCompensation: " + result.compensation;
+    if (!result.likely_cause.empty())
+        card.log_excerpt += "\nLikely cause: " + result.likely_cause;
     card.needs_elevation = NeedsElevation(result.id);
     if (result.fix_action.has_value()) {
         const FixAction& fix = *result.fix_action;
@@ -254,26 +258,6 @@ std::string CodecName(exosnap::engine::VideoCodec codec) {
     return "AV1";
 }
 
-std::string PresetName(exosnap::engine::NvencPreset preset) {
-    switch (preset) {
-    case exosnap::engine::NvencPreset::P1:
-        return "P1";
-    case exosnap::engine::NvencPreset::P2:
-        return "P2";
-    case exosnap::engine::NvencPreset::P3:
-        return "P3";
-    case exosnap::engine::NvencPreset::P4:
-        return "P4";
-    case exosnap::engine::NvencPreset::P5:
-        return "P5";
-    case exosnap::engine::NvencPreset::P6:
-        return "P6";
-    case exosnap::engine::NvencPreset::P7:
-        return "P7";
-    }
-    return "P4";
-}
-
 std::string PresentModeLabel(exosnap::engine::PresentMode mode) {
     switch (mode) {
     case exosnap::engine::PresentMode::Composed:
@@ -378,26 +362,13 @@ LiveTile FramePacingTile(const LiveTileInputs& in) {
     tile.key = "framePacing";
     tile.title = "Frame pacing";
     tile.value = Number(s.capture.actual_fps, 2) + " fps";
-    tile.sub = "Target " + Number(s.capture.target_fps, 0) + " fps";
-    if (s.capture.present_cadence_availability == exosnap::engine::MetricAvailability::Available) {
-        tile.sub_tinted = "jitter " + Number(s.capture.source_present_jitter_ms, 1) + " ms";
-        tile.sub = Join(tile.sub, tile.sub_tinted);
-        tile.sub_tone = OwnedTone(in.ledger, {"rec.001"}, /*sticky=*/true);
-    }
-
-    if (s.capture.present_mode_availability == exosnap::engine::MetricAvailability::Available) {
-        tile.detail = Join(PresentModeLabel(s.capture.source_present_mode),
-                           s.capture.source_tearing ? std::string("tearing active") : std::string("no tearing"));
-    } else {
-        // Named, not blank: "unavailable" without a cause reads as a defect, and
-        // the cause is an opt-in the user controls.
-        tile.detail = "Present diagnostics unavailable (elevation + opt-in)";
-    }
+    tile.sub = Number(s.pacing.affected_slots) + " affected output slots";
     tile.tone =
         ToneOfStage(s, {exosnap::engine::PipelineBottleneck::Capture, exosnap::engine::PipelineBottleneck::Compositor});
-    tile.value_tone = OwnedTone(in.ledger, {"rec.001", "rec.pacing.duplication"}, /*sticky=*/false);
-    if (s.capture.target_fps > 0.0)
-        tile.budget = s.capture.target_fps;
+    tile.value_tone = OwnedTone(in.ledger, {"rec.001"}, false);
+    if (s.pacing.recent_affected_slots > 0)
+        tile.tone = TileTone::Notice;
+    tile.detail = tile.tone == TileTone::Neutral ? "Healthy" : "Recording pacing affected";
     if (s.elapsed_seconds > 0.0) {
         tile.session_detail =
             "session avg " + Number(static_cast<double>(s.capture.frames_emitted) / s.elapsed_seconds, 2) + " fps";
@@ -414,13 +385,7 @@ LiveTile EncoderTile(const LiveTileInputs& in) {
     // What is ACTUALLY running, from the encoder's initialization record. Falls
     // back to the codec the diagnostics stream reports when no encoder has been
     // configured -- never to the configured preset, which is a request.
-    if (s.encoder_init.valid) {
-        tile.value = CodecName(s.encoder_init.codec) + " " + kMiddot + " " + PresetName(s.encoder_init.preset);
-        if (s.encoder_init.rc_mode == exosnap::engine::RateControlMode::ConstantQuality)
-            tile.value += std::string(" ") + kMiddot + " CQ " + Number(static_cast<uint64_t>(s.encoder_init.cq));
-    } else {
-        tile.value = CodecName(s.video_encoder.codec);
-    }
+    tile.value = CodecName(s.encoder_init.valid ? s.encoder_init.codec : s.video_encoder.codec);
 
     if (s.video_encoder.frames_encoded > 0) {
         tile.sub_tinted = "p99 " + Number(s.video_encoder.p99_ms, 1) + " ms";
@@ -547,13 +512,13 @@ LiveTile StorageTile(const LiveTileInputs& in) {
 // Why an in-depth tile has no number, said in the tile itself. The row is full
 // whenever the switch is on, so a tile with no reading has to account for itself
 // rather than leave a gap where the reader expects a measurement.
-constexpr const char* kNoPresentTrace = "PresentMon trace is not reporting";
+constexpr const char* kNoPresentTrace = "Enhanced presentation telemetry unavailable";
 constexpr const char* kNoDpcTrace = "DPC/ISR trace is not reporting";
 
 LiveTile PresentModeTile(const LiveTileInputs& in) {
     LiveTile tile;
     tile.key = "presentMode";
-    tile.title = "Present mode";
+    tile.title = "Presentation / Mode";
     if (!in.present.has_value() || !in.present->available) {
         tile.value = kDash;
         tile.detail = kNoPresentTrace;
@@ -570,7 +535,7 @@ LiveTile PresentModeTile(const LiveTileInputs& in) {
 LiveTile PresentHealthTile(const LiveTileInputs& in) {
     LiveTile tile;
     tile.key = "presentHealth";
-    tile.title = "Present health";
+    tile.title = "Presentation / Discards";
     if (!in.present.has_value() || !in.present->available) {
         tile.value = kDash;
         tile.detail = kNoPresentTrace;
@@ -582,7 +547,7 @@ LiveTile PresentHealthTile(const LiveTileInputs& in) {
                             : 0.0;
     tile.value = Number(discarded_pct, 1) + "% discarded";
     tile.value_tone = OwnedTone(in.ledger, {"rec.present.discarded"}, /*sticky=*/false);
-    tile.budget = 5.0;
+
     tile.sub_tinted = Number(static_cast<uint64_t>(p.mode_flip_count)) + " mode flips";
     tile.sub = Join(tile.sub_tinted, Number(static_cast<uint64_t>(p.present_count)) + " presents");
     tile.sub_tone = OwnedTone(in.ledger, {"rec.present.modeflip"}, /*sticky=*/true);
@@ -593,7 +558,7 @@ LiveTile PresentHealthTile(const LiveTileInputs& in) {
 LiveTile DpcLatencyTile(const LiveTileInputs& in) {
     LiveTile tile;
     tile.key = "dpcLatency";
-    tile.title = "DPC / ISR latency";
+    tile.title = "System latency / DPC / ISR";
     if (!in.dpc.has_value() || !in.dpc->available) {
         tile.value = kDash;
         tile.detail = kNoDpcTrace;
@@ -602,9 +567,8 @@ LiveTile DpcLatencyTile(const LiveTileInputs& in) {
     const DpcLatencyReading& d = *in.dpc;
     tile.value = Number(d.max_latency_us, 0) + " " + kMicro + "s";
     tile.value_tone = OwnedTone(in.ledger, {"rec.dpc.latency"}, /*sticky=*/false);
-    tile.budget = 1000.0;
-    tile.sub =
-        Join("avg " + Number(d.avg_latency_us, 0) + " " + kMicro + "s", "budget 1000 " + std::string(kMicro) + "s");
+
+    tile.sub = Join("avg " + Number(d.avg_latency_us, 0) + " " + kMicro + "s", "raw peak; impact assessed separately");
     tile.detail = d.worst_driver.empty() ? std::string("no driver attributed") : "worst " + d.worst_driver;
     return tile;
 }
@@ -612,8 +576,8 @@ LiveTile DpcLatencyTile(const LiveTileInputs& in) {
 LiveTile GpuTimeTile(const LiveTileInputs& in) {
     LiveTile tile;
     tile.key = "gpuTime";
-    tile.title = "GPU time";
-    tile.value = Number(in.gpu_exec_p99_ms, 2) + " ms";
+    tile.title = "GPU / Recorder execution";
+    tile.value = in.gpu_exec_p99_ms > 0.0 ? Number(in.gpu_exec_p99_ms, 2) + " ms" : kDash;
     tile.value_tone = OwnedTone(in.ledger, {"rec.gpu.contention"}, /*sticky=*/false);
     const double budget = FrameBudgetMs(in.snapshot);
     if (budget > 0.0) {
@@ -637,14 +601,84 @@ std::vector<LiveTile> BuildLiveTiles(const LiveTileInputs& in) {
     if (!in.in_depth)
         return tiles;
 
-    // All four, always. The tile row is four or two columns wide, so a group that
-    // appears only when its trace is reporting leaves a ragged row; a tile with no
-    // reading shows an em dash and names why in its detail line, which is what the
-    // rest of the product does with an unmeasured value.
+    const auto evidence = [&tiles](std::string key, std::string title, std::string value, std::string detail) {
+        LiveTile tile;
+        tile.key = std::move(key);
+        tile.title = std::move(title);
+        tile.value = std::move(value);
+        tile.detail = std::move(detail);
+        tiles.push_back(std::move(tile));
+    };
+    const auto timing = [&evidence](const char* key, const char* title, const exosnap::engine::TimingDistribution& d) {
+        evidence(key, title, d.samples ? Number(d.p95_ms, 2) + " ms p95" : kDash,
+                 d.samples ? "p50 " + Number(d.p50_ms, 2) + " / p99 " + Number(d.p99_ms, 2) + " ms" : "Not measured");
+    };
+    timing("selectionResidual", "Timing / Selection residual", snapshot.pacing.absolute_residual);
+    timing("selectedAge", "Timing / Selected frame age", snapshot.pacing.selected_frame_age);
+    timing("scheduler", "Timing / Worker lateness", snapshot.pacing.worker_lateness);
+    evidence("sourceTiming", "Timing / Source",
+             snapshot.capture.present_cadence_availability == exosnap::engine::MetricAvailability::Available
+                 ? Number(snapshot.capture.source_present_jitter_ms, 2) + " ms variation"
+                 : kDash,
+             "Raw source variation is not output loss");
+    evidence("ring", "Timing / Selection ring",
+             snapshot.pacing.selection_samples ? Number(snapshot.pacing.ring_occupancy) + " frames" : kDash,
+             snapshot.pacing.selection_samples
+                 ? Number(snapshot.pacing.ring_misses) + " misses; longest duplicate run " +
+                       Number(snapshot.pacing.longest_duplicate_run)
+                 : "Present-time selection unavailable");
+    tiles.push_back(GpuTimeTile(in));
+    const auto percent = [](const std::optional<double>& v) { return v ? Number(*v, 0) + "%" : std::string(kDash); };
+    evidence("gpuUtilization", "GPU / Device utilization", percent(in.gpu.utilization_percent),
+             "Device-wide; high usage alone is not a problem");
+    evidence("encoderUtilization", "GPU / Encoder utilization", percent(in.gpu.encoder_utilization_percent),
+             in.gpu.metadata.source);
+    evidence("gpuTemperature", "GPU / Temperature",
+             in.gpu.temperature_celsius ? Number(static_cast<uint64_t>(*in.gpu.temperature_celsius)) + " C" : kDash,
+             in.gpu.graphics_clock_mhz ? Number(static_cast<uint64_t>(*in.gpu.graphics_clock_mhz)) + " MHz"
+                                       : "Clock unavailable");
+    evidence("videoMemory", "GPU / Process local memory",
+             in.video_memory.local ? Number(in.video_memory.local->current_usage_bytes / (1024 * 1024)) + " MiB"
+                                   : kDash,
+             in.video_memory.local
+                 ? "Budget " + Number(in.video_memory.local->budget_bytes / (1024 * 1024)) + " MiB; headroom " +
+                       Number(in.video_memory.local->headroom_bytes() / (1024 * 1024)) + " MiB"
+                 : "DXGI budget unavailable");
+    std::string ownership;
+    uint64_t logical_bytes = 0;
+    for (const auto& surface : in.video_memory.logical_surfaces) {
+        if (!surface.owner || surface.surfaces == 0)
+            continue;
+        logical_bytes += surface.bytes;
+        if (!ownership.empty())
+            ownership += "; ";
+        ownership += std::string(surface.owner) + " " + Number(surface.bytes / (1024 * 1024)) + " MiB";
+    }
+    evidence("gpuSurfaceOwnership", "GPU / Tracked surface texels",
+             in.video_memory.logical_surfaces_sampled ? Number(logical_bytes / (1024 * 1024)) + " MiB" : kDash,
+             "All process adapters; excludes driver storage and external pools. " + ownership);
+    evidence("encoderDeviceStats", "GPU / Device encoder sessions",
+             in.gpu.encoder_sessions ? Number(static_cast<uint64_t>(*in.gpu.encoder_sessions)) : kDash,
+             in.gpu.encoder_average_latency_us
+                 ? "Average latency " + Number(static_cast<uint64_t>(*in.gpu.encoder_average_latency_us)) +
+                       " us (all encoder sessions)"
+                 : "Session latency unavailable");
+    evidence("gpuPowerState", "GPU / Performance state",
+             in.gpu.performance_state ? "P" + Number(static_cast<uint64_t>(*in.gpu.performance_state)) : kDash,
+             "Read-only device performance state; no thermal or power cause inferred");
     tiles.push_back(PresentModeTile(in));
     tiles.push_back(PresentHealthTile(in));
     tiles.push_back(DpcLatencyTile(in));
-    tiles.push_back(GpuTimeTile(in));
+    evidence("storageLatency", "Storage / Write latency",
+             snapshot.disk.latency_availability == exosnap::engine::MetricAvailability::Available
+                 ? Number(snapshot.disk.peak_write_ms, 1) + " ms peak"
+                 : kDash,
+             snapshot.bottleneck == exosnap::engine::PipelineBottleneck::Disk ? "Storage pressure affected the pipeline"
+                                                                              : "No measured storage backpressure");
+    timing("producerWait", "Storage / Producer wait", snapshot.video_queue.producer_wait);
+    for (const auto& fact : in.ledger.compensated())
+        evidence("compensated/" + fact.id, "Compensated / " + fact.title,
+                 Number(static_cast<uint64_t>(fact.count)) + " observed periods", fact.compensation);
     return tiles;
 }
 
@@ -791,8 +825,8 @@ Verdict ComputeRecordingVerdict(const DiagnosticChecklist& live_results, const S
     verdict.notices = static_cast<int>(entries.size());
     if (entries.empty()) {
         verdict.state = VerdictState::Ready;
-        verdict.headline = std::string("Recording ") + kDash + " no problems measured";
-        verdict.subline = "Every measured check has stayed inside its budget this session.";
+        verdict.headline = "RECORDING HEALTHY";
+        verdict.subline = "No recording-impacting problems detected.";
         return verdict;
     }
 
@@ -800,7 +834,7 @@ Verdict ComputeRecordingVerdict(const DiagnosticChecklist& live_results, const S
     verdict.state = VerdictState::Warn;
     // Counts only. A headline that moved with the measurement would rewrite
     // itself twice a second on a band the reader is trying to read.
-    verdict.headline = std::string("Recording ") + kDash + " " + std::to_string(verdict.notices) +
+    verdict.headline = std::string("RECORDING DEGRADED ") + kDash + " " + std::to_string(verdict.notices) +
                        (verdict.notices == 1 ? " problem observed" : " problems observed") +
                        (active > 0 ? ", " + std::to_string(active) + " active" : std::string(", quiet now"));
 
@@ -905,14 +939,20 @@ LastSession BuildLastSession(const UiRecordingResult& result, const exosnap::eng
     session.problems = static_cast<int>(frozen_ledger.size());
 
     const bool measured = s.valid;
-    const uint64_t drops = measured ? s.capture.frames_dropped_problem() : 0;
+    const uint64_t drops = measured ? s.real_frame_loss() : 0;
+    const bool degraded = drops > 0 || s.pacing.affected_slots > 0 || s.audio.source_degraded_occurred ||
+                          s.audio.discontinuities > 0 || !frozen_ledger.empty();
+    session.outcome = !result.succeeded ? "Failed"
+                      : !measured       ? "Outcome unavailable"
+                      : degraded        ? "Degraded"
+                                        : "Healthy";
 
     // The four facts, in a fixed order. A card whose rows move between recordings
     // cannot be read at a glance, and these are read at a glance or not at all.
     {
         LastSessionFact fact;
         fact.key = "dropped";
-        fact.label = "Frames dropped";
+        fact.label = "Real frame loss";
         fact.value = measured ? Number(drops) : std::string(kDash);
         if (measured)
             fact.sub = "of " + Number(s.capture.frames_captured) + " captured";
@@ -939,7 +979,7 @@ LastSession BuildLastSession(const UiRecordingResult& result, const exosnap::eng
     {
         LastSessionFact fact;
         fact.key = "drift";
-        fact.label = "A/V drift";
+        fact.label = "Peak residual drift";
         // The device-clock residual after correction, not the file's alignment.
         // Nothing here claims the recording is out of sync, so nothing tints it.
         if (measured && s.peak_av_drift_availability == exosnap::engine::MetricAvailability::Available) {
@@ -955,11 +995,27 @@ LastSession BuildLastSession(const UiRecordingResult& result, const exosnap::eng
         LastSessionFact fact;
         fact.key = "file";
         fact.label = "File";
-        fact.value = result.succeeded ? "Valid" : "Failed";
+        fact.value = result.succeeded ? "Finalized successfully" : "Failed";
         fact.sub = Join(HumanBytes(result.output_file_bytes), CodecName(result.video_codec));
         fact.tone = result.succeeded ? ValueTone::Ok : ValueTone::Critical;
         session.facts.push_back(std::move(fact));
     }
+
+    LastSessionFact pacing;
+    pacing.key = "pacing";
+    pacing.label = "Affected pacing slots";
+    pacing.value = measured && s.pacing.output_slots > 0 ? Number(s.pacing.affected_slots) : kDash;
+    pacing.tone = measured && s.pacing.affected_slots > 0 ? ValueTone::Warn : ValueTone::Neutral;
+    session.facts.push_back(std::move(pacing));
+    LastSessionFact interruptions;
+    interruptions.key = "interruptions";
+    interruptions.label = "Audio interruptions";
+    interruptions.value = measured && s.audio.active &&
+                                  s.audio.discontinuity_availability == exosnap::engine::MetricAvailability::Available
+                              ? Number(s.audio.discontinuities)
+                              : kDash;
+    interruptions.sub = s.audio.source_degraded_occurred ? "Audio source loss occurred" : "";
+    session.facts.push_back(std::move(interruptions));
 
     for (const LedgerEntry& entry : frozen_ledger) {
         for (const LedgerOccurrence& occurrence : entry.occurrences) {
@@ -990,10 +1046,9 @@ std::vector<KeyValueRow> BuildEnvironmentRows(const std::vector<DiagnosticResult
     // today, so this is a defensive fallback that still mirrors the measured state
     // rather than a fixed string.
     if (rows.empty()) {
-        rows.push_back(
-            {"Elevation", elevated ? std::string("Elevated ") + kDash + " PresentMon ETW present diagnostics available"
-                                   : std::string("Standard ") + kDash + " DXGI / NVAPI baseline " + kMiddot +
-                                         " present diagnostics need elevation"});
+        rows.push_back({"Elevation", elevated ? std::string("Elevated ") + kDash + " optional kernel traces may start"
+                                              : std::string("Standard ") + kDash + " core recording health available " +
+                                                    kMiddot + " optional traces depend on the token's rights"});
     }
     return rows;
 }
@@ -1251,7 +1306,7 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
     // session; the capture stage's health verdict needs drops since the previous
     // sample. The baseline resets whenever session_generation changes, because a new
     // recording restarts the counter from zero.
-    const uint64_t problem_drops = s.capture.frames_dropped_problem();
+    const uint64_t problem_drops = s.real_frame_loss();
     if (!seeded_ || s.session_generation != last_generation_) {
         seeded_ = true;
         last_generation_ = s.session_generation;
@@ -1432,6 +1487,10 @@ void DiagnosticsController::SetConfig(Config config) {
 }
 
 void DiagnosticsController::SetProbeResult(ProbeResult probe) {
+    if (probe.session_generation != live_.session_generation) {
+        probe.gpu = {};
+        probe.video_memory = {};
+    }
     probe_ = std::move(probe);
     if (probe_.self_test_valid)
         self_test_ = BuildSelfTestReport(probe_.self_test);
@@ -1603,6 +1662,13 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
     engine.SetOutputPathWritable(probe_.output_path_writable);
     engine.SetElevated(elevated_);
     engine.SetCaptureTargetHdrActive(capture_target_hdr_active_);
+    if (probe_.session_generation == live_.session_generation) {
+        const auto now = std::chrono::steady_clock::now();
+        engine.SetGpuEvidence(
+            probe_.gpu.metadata.FreshForAdapter(live_.encoder_adapter_luid, now) ? probe_.gpu : GpuTelemetryReading{},
+            probe_.video_memory.metadata.FreshForAdapter(live_.encoder_adapter_luid, now) ? probe_.video_memory
+                                                                                          : VideoMemoryReading{});
+    }
     engine.SetCaptureTargetAdapter(capture_target_adapter_);
     engine.SetOutputDriveKind(probe_.drive_kind);
     engine.SetSavedDisplayUnresolved(saved_display_unresolved_, saved_display_label_);

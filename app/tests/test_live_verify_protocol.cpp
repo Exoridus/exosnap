@@ -318,6 +318,16 @@ class FakeSource final : public LiveVerifySource {
         calls.append(QStringLiteral("selectTarget:%1/%2").arg(kind, title_filter));
         return Outcome(error);
     }
+    bool SelectRecordRegion(const QString& display_device, int x, int y, int width, int height,
+                            QString* error) override {
+        calls.append(
+            QStringLiteral("selectRegion:%1/%2,%3 %4x%5").arg(display_device).arg(x).arg(y).arg(width).arg(height));
+        return Outcome(error);
+    }
+    bool OpenRegionSelector(const QString& display_device, QString* error) override {
+        calls.append(QStringLiteral("openRegionSelector:%1").arg(display_device));
+        return Outcome(error);
+    }
     bool RecordStart(QString* error) override {
         calls.append(QStringLiteral("start"));
         return Outcome(error);
@@ -1463,6 +1473,33 @@ TEST(LiveVerifyDispatcher, ParameterValidationRunsBeforeTheIntent) {
             QStringLiteral("edit.seek"), QJsonObject{{QStringLiteral("positionMs"), QStringLiteral("halfway")}}))),
         QString::fromLatin1(error_code::kInvalidParams));
     EXPECT_TRUE(source.calls.isEmpty());
+}
+
+TEST(LiveVerifyDispatcher, RegionCommandsCarryTheRectAndDisplayToTheSource) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject selected =
+        dispatcher.Dispatch(RequestV2(QStringLiteral("record.selectRegion"),
+                                      QJsonObject{{QStringLiteral("display"), QStringLiteral("\\\\.\\DISPLAY2")},
+                                                  {QStringLiteral("x"), 100},
+                                                  {QStringLiteral("y"), 50},
+                                                  {QStringLiteral("width"), 640},
+                                                  {QStringLiteral("height"), 360}}));
+    ASSERT_TRUE(Ok(selected)) << selected.value(QStringLiteral("error")).toString().toStdString();
+    const QJsonObject opened = dispatcher.Dispatch(RequestV2(QStringLiteral("record.openRegionSelector")));
+    ASSERT_TRUE(Ok(opened)) << opened.value(QStringLiteral("error")).toString().toStdString();
+
+    ASSERT_EQ(source.calls.size(), 2);
+    EXPECT_EQ(source.calls[0], QStringLiteral("selectRegion:\\\\.\\DISPLAY2/100,50 640x360"));
+    EXPECT_EQ(source.calls[1], QStringLiteral("openRegionSelector:"));
+    // The rect parameters are required: a payload missing them is a client
+    // error answered before the intent runs.
+    EXPECT_EQ(ErrorCode(dispatcher.Dispatch(
+                  RequestV2(QStringLiteral("record.selectRegion"), QJsonObject{{QStringLiteral("x"), 0}}))),
+              QString::fromLatin1(error_code::kInvalidParams));
+    EXPECT_EQ(source.calls.size(), 2);
 }
 
 TEST(LiveVerifyDispatcher, CapabilitiesMatchTheCommandsThatWillBeAccepted) {

@@ -24,6 +24,12 @@ QVariant SessionLedgerModel::data(const QModelIndex& index, int role) const {
         return row.summary;
     case LogExcerptRole:
         return row.logExcerpt;
+    case CompensationRole:
+        return row.compensation;
+    case FixIdRole:
+        return row.fixId;
+    case FixLabelRole:
+        return row.fixLabel;
     case ActiveRole:
         return row.active;
     case CountRole:
@@ -52,6 +58,9 @@ QHash<int, QByteArray> SessionLedgerModel::roleNames() const {
         {TitleRole, "title"},
         {SummaryRole, "summary"},
         {LogExcerptRole, "logExcerpt"},
+        {CompensationRole, "compensation"},
+        {FixIdRole, "fixId"},
+        {FixLabelRole, "fixLabel"},
         {ActiveRole, "active"},
         {CountRole, "count"},
         {FirstSeenTextRole, "firstSeenText"},

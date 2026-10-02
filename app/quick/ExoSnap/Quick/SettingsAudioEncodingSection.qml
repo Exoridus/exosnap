@@ -9,6 +9,9 @@ import QtQuick.Layouts
 ExoCard {
     id: root
 
+    property bool revealClock: false
+    function focusControl(target: int): var { revealClock = true; return clockControl; }
+
     required property SettingsAdapter settings
     required property bool stacked
 
@@ -189,10 +192,11 @@ ExoCard {
         info: qsTr("The audio device and the video capture run off different clocks and drift apart by a few parts per million. Slaving resamples audio onto the video clock so a multi-hour recording stays in sync. Turn it off only when you need bit-exact audio samples.")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
-        visible: root.settings.expertMode
+        visible: root.settings.expertMode || root.revealClock
         Layout.fillWidth: true
 
         ExoSwitch {
+            id: clockControl
             checked: root.settings.clockSlavingEnabled
             enabled: !root.settings.controlsLocked
             Accessible.name: qsTr("Audio/video clock slaving")

@@ -8,6 +8,16 @@ ExoCard {
     required property SettingsAdapter settings
     required property bool stacked
 
+    property bool revealPacing: false
+    function focusControl(target: int): var {
+        if (target === SettingsAdapter.FramePacing) {
+            revealPacing = true;
+            return framePacingControl;
+        }
+        if (target === SettingsAdapter.FrameRate)
+            return root.settings.expertMode ? frameRateExpert : frameRateControl;
+        return root.settings.expertMode ? qualityExpert : qualityControl;
+    }
     title: qsTr("Video quality & timing")
 
     ExoSettingRow {
@@ -25,6 +35,7 @@ Expert mode replaces this ladder with the rate-control mode and ExoSnap's qualit
         Layout.fillWidth: true
 
         ExoSelect {
+            id: qualityControl
             options: root.settings.qualityPresetOptions
             value: root.settings.qualityPreset
             enabled: !root.settings.controlsLocked
@@ -62,6 +73,7 @@ Screen content with small text degrades earlier than video does, so the useful r
         Layout.fillWidth: true
 
         ExoNumberField {
+            id: qualityExpert
             from: 1
             to: 51
             value: root.settings.cq
@@ -98,6 +110,7 @@ Screen content with small text degrades earlier than video does, so the useful r
         Layout.fillWidth: true
 
         ExoSelect {
+            id: frameRateControl
             options: root.settings.frameRateOptions
             value: root.settings.frameRate
             visible: !root.settings.expertMode
@@ -108,6 +121,7 @@ Screen content with small text degrades earlier than video does, so the useful r
         }
 
         ExoNumberField {
+            id: frameRateExpert
             from: 1
             to: Math.max(1, root.settings.maxFrameRate)
             suffix: qsTr("fps")
@@ -117,6 +131,21 @@ Screen content with small text degrades earlier than video does, so the useful r
             Layout.fillWidth: true
             Accessible.name: qsTr("Frame rate")
             onValueCommitted: value => root.settings.frameRate = value
+        }
+    }
+
+    ExoSettingRow {
+        label: qsTr("Preview frame rate")
+        hint: qsTr("Off hides framing and camera placement. Recording rate is unchanged.")
+        stacked: root.stacked
+        Layout.fillWidth: true
+
+        ExoSelect {
+            options: root.settings.previewFrameRateOptions
+            value: root.settings.previewFrameRate
+            Layout.fillWidth: true
+            Accessible.name: qsTr("Preview frame rate")
+            onValueActivated: value => root.settings.previewFrameRate = value
         }
     }
 
@@ -139,10 +168,11 @@ Screen content with small text degrades earlier than video does, so the useful r
     ExoSettingRow {
         label: qsTr("Frame pacing")
         stacked: root.stacked
-        visible: root.settings.expertMode
+        visible: root.settings.expertMode || root.revealPacing
         Layout.fillWidth: true
 
         ExoSelect {
+            id: framePacingControl
             options: root.settings.framePacingOptions
             value: root.settings.framePacing
             enabled: !root.settings.controlsLocked

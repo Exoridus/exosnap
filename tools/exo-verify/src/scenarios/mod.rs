@@ -22,6 +22,7 @@ pub mod record;
 pub mod schema;
 pub mod update;
 pub mod visual;
+pub mod webcam;
 
 use crate::scenario::Scenario;
 
@@ -45,6 +46,7 @@ pub fn registry() -> Vec<Scenario> {
     all.extend(update::scenarios());
     all.extend(handoff::scenarios());
     all.extend(visual::scenarios());
+    all.extend(webcam::scenarios());
     all
 }
 

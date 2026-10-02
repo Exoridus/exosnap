@@ -626,6 +626,9 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.video.frame_rate_den != b.video.frame_rate_den) {
         return false;
     }
+    if (!(a.video.encoder_device == b.video.encoder_device)) {
+        return false;
+    }
 
     // --- Audio ---
     if (a.audio.target_kind != b.audio.target_kind) {
@@ -904,6 +907,9 @@ std::string_view ConfigDirtyDifference(const RecordingPresetConfig& a, const Rec
     }
     if (a.video.frame_rate_den != b.video.frame_rate_den) {
         return "video.frame_rate_den";
+    }
+    if (!(a.video.encoder_device == b.video.encoder_device)) {
+        return "video.encoder_device";
     }
 
     // --- Audio ---

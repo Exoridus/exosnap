@@ -8,6 +8,7 @@
 #include "settings/AppSettingsStore.h"
 
 #include <capability/capability_set.h>
+#include <capability/encoder_device_resolver.h>
 
 #include <QObject>
 #include <QString>
@@ -48,7 +49,22 @@ class SettingsAdapter : public QObject {
     // Deep-link destinations a notification action can jump to. The page reveals
     // the matching card, marks it as landed on, and only then moves the focus:
     // focusing first scrolls the reveal back out from under itself.
-    enum class FocusTarget { OutputDestination, AudioSources, Format, Webcam, Presence, Appearance, Hotkeys, Updates };
+    enum class FocusTarget {
+        OutputDestination,
+        AudioSources,
+        Format,
+        FramePacing,
+        FrameRate,
+        Resolution,
+        Quality,
+        Microphone,
+        ClockSlaving,
+        Webcam,
+        Presence,
+        Appearance,
+        Hotkeys,
+        Updates
+    };
     Q_ENUM(FocusTarget)
 
     using OutputFolderValidator = std::function<FolderValidationResult(const std::filesystem::path&)>;
@@ -84,8 +100,14 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(int hdrMode READ hdrMode WRITE setHdrMode NOTIFY configChanged FINAL)
     Q_PROPERTY(QString hdrHint READ hdrHint NOTIFY optionsChanged FINAL)
     Q_PROPERTY(bool hdrRelevant READ hdrRelevant NOTIFY optionsChanged FINAL)
-    Q_PROPERTY(QVariantList encoderPresetOptions READ encoderPresetOptions NOTIFY optionsChanged FINAL)
-    Q_PROPERTY(int encoderPreset READ encoderPreset WRITE setEncoderPreset NOTIFY configChanged FINAL)
+    // Encoding device preference: 0 = Auto, i+1 = the i-th scanned adapter.
+    Q_PROPERTY(QVariantList encoderDeviceOptions READ encoderDeviceOptions NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(int encoderDevice READ encoderDevice WRITE setEncoderDevice NOTIFY configChanged FINAL)
+    Q_PROPERTY(QString encoderDeviceHint READ encoderDeviceHint NOTIFY optionsChanged FINAL)
+    // NVENC-only Expert tuning. The property is named after the backend that
+    // owns P1-P7; it is empty when the selected/runtime device is not NVENC.
+    Q_PROPERTY(QVariantList nvencPresetOptions READ nvencPresetOptions NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(int nvencPreset READ nvencPreset WRITE setNvencPreset NOTIFY configChanged FINAL)
     Q_PROPERTY(QString formatSummary READ formatSummary NOTIFY configChanged FINAL)
     Q_PROPERTY(QString compatNotice READ compatNotice NOTIFY configChanged FINAL)
     Q_PROPERTY(bool compatOk READ compatOk NOTIFY configChanged FINAL)
@@ -99,6 +121,8 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(bool bitrateRelevant READ bitrateRelevant NOTIFY configChanged FINAL)
     Q_PROPERTY(QString nativeQuantizerHint READ nativeQuantizerHint NOTIFY configChanged FINAL)
     Q_PROPERTY(int bitrateKbps READ bitrateKbps WRITE setBitrateKbps NOTIFY configChanged FINAL)
+    Q_PROPERTY(int previewFrameRate READ previewFrameRate WRITE setPreviewFrameRate NOTIFY appSettingsChanged FINAL)
+    Q_PROPERTY(QVariantList previewFrameRateOptions READ previewFrameRateOptions NOTIFY optionsChanged FINAL)
     Q_PROPERTY(QVariantList frameRateOptions READ frameRateOptions NOTIFY optionsChanged FINAL)
     Q_PROPERTY(int frameRate READ frameRate WRITE setFrameRate NOTIFY configChanged FINAL)
     Q_PROPERTY(int maxFrameRate READ maxFrameRate NOTIFY optionsChanged FINAL)
@@ -323,6 +347,12 @@ class SettingsAdapter : public QObject {
     void setConfig(RecordingPresetConfig config);
     [[nodiscard]] const RecordingPresetConfig& config() const noexcept;
     void setCapabilities(const capability::CapabilitySet& caps);
+    // The encoder-device catalog from the composition root's adapter scan.
+    // Adapters and capabilities pair by position; setCaptureAdapter lets the
+    // resolver prefer the adapter that owns the selected capture target.
+    void setEncoderDevices(std::vector<capability::AdapterInfo> adapters,
+                           std::vector<capability::AdapterEncoderCapability> capabilities);
+    void setCaptureAdapter(int64_t adapter_luid, bool known);
     void setAppSettings(const PersistedAppSettings& settings);
     [[nodiscard]] const PersistedAppSettings& appSettings() const noexcept;
     void setControlsLocked(bool locked);
@@ -372,8 +402,15 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] int hdrMode() const noexcept;
     [[nodiscard]] const QString& hdrHint() const noexcept;
     [[nodiscard]] bool hdrRelevant() const noexcept;
-    [[nodiscard]] const QVariantList& encoderPresetOptions() const noexcept;
-    [[nodiscard]] int encoderPreset() const noexcept;
+    [[nodiscard]] const QVariantList& encoderDeviceOptions() const noexcept;
+    [[nodiscard]] int encoderDevice() const noexcept;
+    [[nodiscard]] const QString& encoderDeviceHint() const noexcept;
+    [[nodiscard]] const QVariantList& nvencPresetOptions() const noexcept;
+    [[nodiscard]] int nvencPreset() const noexcept;
+    // The runtime resolution the frontend should carry into the session, built
+    // from the same candidate scan the UI shows. Empty/unresolved is a valid
+    // answer and carries its structured reason.
+    [[nodiscard]] exosnap::engine::ResolvedEncoderDevice resolvedEncoderDevice() const;
     [[nodiscard]] const QString& formatSummary() const noexcept;
     [[nodiscard]] const QString& compatNotice() const noexcept;
     [[nodiscard]] bool compatOk() const noexcept;
@@ -573,11 +610,15 @@ class SettingsAdapter : public QObject {
     void setChroma(int value);
     void setColorRange(int value);
     void setHdrMode(int value);
-    void setEncoderPreset(int value);
+    void setEncoderDevice(int value);
+    void setNvencPreset(int value);
     void setQualityPreset(int value);
     void setCq(int value);
     void setRateControl(int value);
     void setBitrateKbps(int value);
+    int previewFrameRate() const noexcept;
+    QVariantList previewFrameRateOptions() const;
+    void setPreviewFrameRate(int value);
     void setFrameRate(int value);
     void setCfr(bool value);
     void setFramePacing(int value);
@@ -723,6 +764,9 @@ class SettingsAdapter : public QObject {
     void applyConfigEdit();
     void rebuildOptions();
     void rebuildDerivedText();
+    // Re-resolves the preference against the scanned catalog and derives the
+    // effective capability view for the selected device. Pure; no I/O.
+    void refreshEncoderDeviceState();
     // The target-dependent half of the audio card: the summary line, the two
     // hints that state what App and Sys mean for THIS target, and the resolved
     // track list. Depends on the capture target as well as on the config, so it
@@ -741,8 +785,19 @@ class SettingsAdapter : public QObject {
     RecordingPresetConfig config_;
     bool active_ = false;
     PersistedAppSettings app_settings_;
+    // caps_ is the effective view for the selected encoder device; base_caps_
+    // is the system-wide answer it is derived from. The device catalog is a
+    // pure-data snapshot of the composition root's adapter scan.
     capability::CapabilitySet caps_;
+    capability::CapabilitySet base_caps_;
     bool caps_set_ = false;
+    std::vector<capability::AdapterInfo> encoder_adapters_;
+    std::vector<capability::AdapterEncoderCapability> encoder_capabilities_;
+    std::vector<capability::EncoderDeviceCandidate> encoder_candidates_;
+    capability::EncoderDeviceResolution encoder_resolution_;
+    exosnap::engine::EncoderBackend resolved_encoder_backend_ = exosnap::engine::EncoderBackend::None;
+    int64_t capture_adapter_luid_ = 0;
+    bool capture_adapter_known_ = false;
     bool controls_locked_ = false;
     bool hdr_display_present_ = false;
     int max_frame_rate_ = 0;
@@ -763,7 +818,9 @@ class SettingsAdapter : public QObject {
     QVariantList chroma_options_;
     QVariantList color_range_options_;
     QVariantList hdr_mode_options_;
-    QVariantList encoder_preset_options_;
+    QVariantList encoder_device_options_;
+    QVariantList nvenc_preset_options_;
+    QString encoder_device_hint_;
     QVariantList quality_preset_options_;
     QVariantList rate_control_options_;
     QVariantList frame_rate_options_;

@@ -16,6 +16,6 @@ ${CHANGELOG_SECTION}
 
 Windows 10 21H2 or newer, x64. Recording needs an NVIDIA GPU with NVENC. Everything else runs without one. Automatic update checks are off by default. An enabled or manual Stable-channel check can offer this release; installation is user-controlled.
 
-Build source: ${COMMIT}. Consult the attached artifact, toolchain and signed qualification/update records for the exact verification evidence. Package-manager availability follows each feed's publication state.
+Build source: ${COMMIT}. The attached signed update manifest identifies the exact package hashes. The approved publication workflow retains the candidate qualification and toolchain records. Package-manager availability follows each feed's publication state.
 
 **Full changelog:** [${PREVIOUS_TAG}...${TAG}](${REPO_URL}/compare/${PREVIOUS_TAG}...${TAG}) · [all releases](${REPO_URL}/releases)

@@ -7,6 +7,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
+#include <QVariantMap>
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <cstdint>
@@ -73,6 +74,7 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(QVariantList targetOptions READ targetOptions NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(QVariantList displayTargetOptions READ displayTargetOptions NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(QVariantList windowTargetOptions READ windowTargetOptions NOTIFY targetOptionsChanged FINAL)
+    Q_PROPERTY(QVariantMap targetStillOptions READ targetStillOptions NOTIFY targetStillOptionsChanged FINAL)
     Q_PROPERTY(int targetCount READ targetCount NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(QString selectedTargetIdentity READ selectedTargetIdentity NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(bool selectedTargetAvailable READ selectedTargetAvailable NOTIFY targetOptionsChanged FINAL)
@@ -82,6 +84,8 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(QString sourceKindText READ sourceKindText NOTIFY changed FINAL)
     Q_PROPERTY(QString sourceDetailText READ sourceDetailText NOTIFY changed FINAL)
     Q_PROPERTY(QString formatText READ formatText NOTIFY changed FINAL)
+    Q_PROPERTY(QString sourceButtonText READ sourceButtonText NOTIFY changed FINAL)
+    Q_PROPERTY(QVariantList confidenceIndicators READ confidenceIndicators NOTIFY changed FINAL)
     Q_PROPERTY(QRectF normalizedSourceRect READ normalizedSourceRect NOTIFY changed FINAL)
     Q_PROPERTY(bool regionSelectionNeeded READ regionSelectionNeeded NOTIFY changed FINAL)
     // Region-tab preset cards, in the order the Region tab shows them: Draw
@@ -186,6 +190,7 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] const QVariantList& targetOptions() const noexcept;
     [[nodiscard]] const QVariantList& displayTargetOptions() const noexcept;
     [[nodiscard]] const QVariantList& windowTargetOptions() const noexcept;
+    [[nodiscard]] QVariantMap targetStillOptions() const;
     [[nodiscard]] int targetCount() const noexcept;
     [[nodiscard]] const QString& selectedTargetIdentity() const noexcept;
     [[nodiscard]] bool selectedTargetAvailable() const noexcept;
@@ -198,6 +203,9 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] const QString& sourceKindText() const noexcept;
     [[nodiscard]] const QString& sourceDetailText() const noexcept;
     [[nodiscard]] const QString& formatText() const noexcept;
+    [[nodiscard]] QString sourceButtonText() const;
+    [[nodiscard]] QVariantList confidenceIndicators() const;
+    void setAudioSourceHealth(uint32_t degraded_kinds);
     [[nodiscard]] QRectF normalizedSourceRect() const noexcept;
     [[nodiscard]] bool regionSelectionNeeded() const noexcept;
     [[nodiscard]] const QVariantList& regionPresetOptions() const noexcept;
@@ -291,6 +299,7 @@ class RecordViewModelAdapter : public QObject {
     void liveStatsAvailableChanged();
     void webcamFrameChanged();
     void targetOptionsChanged();
+    void targetStillOptionsChanged();
     void recentRecordingsChanged();
     void harnessBrandStageChanged();
     void visibleTargetIdentitiesChanged(QStringList identities);
@@ -370,6 +379,7 @@ class RecordViewModelAdapter : public QObject {
     QVariantList region_preset_options_;
     QVariantList recent_recording_options_;
     QStringList live_toggleable_sources_;
+    uint32_t degraded_audio_kinds_ = 0;
     bool microphone_available_ = true;
     bool webcam_available_ = true;
     bool webcam_enabled_ = false;

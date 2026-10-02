@@ -131,41 +131,6 @@ Rectangle {
             }
         }
 
-        // Chromed: this is the remedy for a blocker that is stopping the user
-        // from recording. Quiet, it read as a third line of explanation in a
-        // card that already had two.
-        ExoButton {
-            text: root.fixLabel
-            // Safety class 1 ("Assisted") navigates elsewhere instead of
-            // applying in place; the trailing arrow is what tells them apart.
-            trailingGlyph: root.fixSafety === 1 ? ExoGlyph.ArrowRight : ExoGlyph.Invalid
-            visible: root.hasFix && root.fixSafety !== 2
-            Layout.alignment: Qt.AlignLeft
-            Layout.topMargin: ExoTheme.spacingSm
-            onClicked: {
-                if (root.fixSafety === 0) {
-                    root.applyFixRequested(root.fixId);
-                } else {
-                    root.assistedFixRequested(root.fixId);
-                }
-            }
-        }
-
-        // External fixes cannot be performed by the app (a driver install, say), so
-        // they are stated and given no control at all.
-        Label {
-            text: root.fixLabel
-            textFormat: Text.PlainText
-            wrapMode: Text.WordWrap
-            visible: root.hasFix && root.fixSafety === 2
-            color: ExoTheme.textMuted
-            Layout.fillWidth: true
-            font {
-                family: ExoTheme.sansFamily
-                pixelSize: ExoTheme.fontCaption
-            }
-        }
-
         ExoDisclosure {
             title: qsTr("Evidence")
             visible: root.hasEvidence
@@ -179,8 +144,8 @@ Rectangle {
                     Repeater {
                         model: [
                             { "label": qsTr("Measured"), "value": root.measured },
-                            { "label": qsTr("Why"), "value": root.why },
-                            { "label": qsTr("Log excerpt"), "value": root.logExcerpt }
+                            { "label": qsTr("Evidence and compensation"), "value": root.logExcerpt },
+                            { "label": qsTr("Recommended action"), "value": root.why }
                         ]
 
                         ColumnLayout {
@@ -221,5 +186,41 @@ Rectangle {
                 }
             }
         }
+        // Chromed: this is the remedy for a blocker that is stopping the user
+        // from recording. Quiet, it read as a third line of explanation in a
+        // card that already had two.
+        ExoButton {
+            text: root.fixLabel
+            // Safety class 1 ("Assisted") navigates elsewhere instead of
+            // applying in place; the trailing arrow is what tells them apart.
+            trailingGlyph: root.fixSafety === 1 ? ExoGlyph.ArrowRight : ExoGlyph.Invalid
+            visible: root.hasFix && root.fixSafety !== 2
+            Layout.alignment: Qt.AlignLeft
+            Layout.topMargin: ExoTheme.spacingSm
+            onClicked: {
+                if (root.fixSafety === 0) {
+                    root.applyFixRequested(root.fixId);
+                } else {
+                    root.assistedFixRequested(root.fixId);
+                }
+            }
+        }
+
+        // External fixes cannot be performed by the app (a driver install, say), so
+        // they are stated and given no control at all.
+        Label {
+            text: root.fixLabel
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            visible: root.hasFix && root.fixSafety === 2
+            color: ExoTheme.textMuted
+            Layout.fillWidth: true
+            font {
+                family: ExoTheme.sansFamily
+                pixelSize: ExoTheme.fontCaption
+            }
+        }
+
+
     }
 }

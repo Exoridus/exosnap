@@ -27,6 +27,10 @@ Rectangle {
     required property string budgetText
     required property string totalActiveText
     property string logExcerpt: ""
+    property string compensation: ""
+    property string fixId: ""
+    property string fixLabel: ""
+    signal assistedFixRequested(string fixId)
     // [{ startMs: int, text: string }], time already formatted by the caller.
     property var occurrences: []
     property bool expanded: false
@@ -273,6 +277,18 @@ Rectangle {
             }
         }
 
+        Label {
+            text: qsTr("Compensation: %1").arg(root.compensation)
+            visible: root.expanded && root.compensation.length > 0
+            wrapMode: Text.WordWrap
+            color: ExoTheme.textSecondary
+            Layout.fillWidth: true
+        }
+        ExoButton {
+            text: root.fixLabel
+            visible: root.expanded && root.fixId.length > 0
+            onClicked: root.assistedFixRequested(root.fixId)
+        }
         Label {
             text: root.logExcerpt
             textFormat: Text.PlainText

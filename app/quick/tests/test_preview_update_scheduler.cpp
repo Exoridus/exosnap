@@ -8,6 +8,7 @@
 // stale value.
 
 #include "PreviewUpdateScheduler.h"
+#include "models/PreviewRatePolicy.h"
 
 #include <gtest/gtest.h>
 
@@ -649,4 +650,20 @@ TEST(PreviewUpdateSchedulerTest, ConcurrentPublishingNeverManufacturesWakeups) {
     EXPECT_LE(scheduler.Wakeups(), kFrames);
     EXPECT_EQ(scheduler.PublishSignals(), scheduler.CoalescedSignals() + scheduler.Wakeups())
         << "every publish either coalesced into a pending wake-up or produced exactly one";
+}
+
+TEST(PreviewRatePolicyTest, CapsAcquisitionBeforePublicationAndOffDoesNoWork) {
+    for (int rate : {0, 15, 30, 60, 120}) {
+        exosnap::PreviewRateGate gate;
+        int acquisitions = 0;
+        for (int ms = 0; ms < 1000; ++ms)
+            if (gate.Take(exosnap::PreviewRateGate::Clock::time_point{} + std::chrono::milliseconds(ms), rate))
+                ++acquisitions;
+        EXPECT_LE(acquisitions, rate);
+        EXPECT_GE(acquisitions, rate == 120 ? 110 : rate - 1);
+        gate.Reset();
+        EXPECT_TRUE(gate.Take(exosnap::PreviewRateGate::Clock::time_point{}, 60));
+    }
+    EXPECT_EQ(exosnap::NormalizePreviewRate(-1), 60);
+    EXPECT_EQ(exosnap::NormalizePreviewRate(144), 60);
 }

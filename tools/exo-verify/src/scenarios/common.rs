@@ -179,6 +179,45 @@ impl Stimulus {
         }
     }
 
+    /// Moves the stimulus to its deterministic alternate position. Returns the
+    /// outer window rect the operating system actually produced.
+    pub fn move_window(&mut self) -> Step<[i32; 4]> {
+        self.command("move")?;
+        self.wait_state("moved", secs(5.0))?;
+        self.last_geometry().map(|(rect, _)| rect)
+    }
+
+    /// Resizes the stimulus to its deterministic alternate client size.
+    /// Returns the resulting outer rect and client size.
+    pub fn resize_window(&mut self) -> Step<([i32; 4], [i32; 2])> {
+        self.command("resize")?;
+        self.wait_state("resized", secs(5.0))?;
+        self.last_geometry()
+    }
+
+    /// The client size the stimulus reported at startup. WGC window capture
+    /// records the client area, not the outer frame.
+    pub fn client_size(&self) -> Step<[i32; 2]> {
+        self.events()?
+            .into_iter()
+            .find_map(|event| match event {
+                LogEvent::Ready { client, .. } => Some(client),
+                _ => None,
+            })
+            .ok_or_else(|| Stop::infra("the stimulus ready event carries no client size"))
+    }
+
+    fn last_geometry(&self) -> Step<([i32; 4], [i32; 2])> {
+        self.events()?
+            .into_iter()
+            .rev()
+            .find_map(|event| match event {
+                LogEvent::Geometry { rect, client, .. } => Some((rect, client)),
+                _ => None,
+            })
+            .ok_or_else(|| Stop::infra("the stimulus logged no geometry for its move/resize"))
+    }
+
     pub fn events(&self) -> Step<Vec<LogEvent>> {
         Ok(read_log(&self.log_path)?)
     }

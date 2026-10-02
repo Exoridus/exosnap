@@ -262,8 +262,13 @@ QVector<KeyDescriptor> BuildKeys() {
                         &SettingsAdapter::setFramePacing));
 
     // --- Recording: encoder ---------------------------------------------------
-    keys.append(EnumKey("video.encoderPreset", "NVENC speed/quality preset", kEncoderPresets,
-                        &SettingsAdapter::encoderPreset, &SettingsAdapter::setEncoderPreset));
+    keys.append(EnumKey("video.nvencPreset", "NVENC speed/quality preset", kEncoderPresets,
+                        &SettingsAdapter::nvencPreset, &SettingsAdapter::setNvencPreset));
+    // Deprecated alias: this key always addressed the NVENC preset. It keeps
+    // the same values and meaning, so existing automation scripts are not
+    // silently re-pointed at a different backend.
+    keys.append(EnumKey("video.encoderPreset", "Deprecated alias of video.nvencPreset", kEncoderPresets,
+                        &SettingsAdapter::nvencPreset, &SettingsAdapter::setNvencPreset));
     keys.append(EnumKey("video.rateControl", "Rate-control mode", kRateControls, &SettingsAdapter::rateControl,
                         &SettingsAdapter::setRateControl));
     keys.append(IntKey("video.cq", "ExoSnap quality scale (1 best .. 51 worst); the codec's own quantizer is derived",

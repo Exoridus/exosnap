@@ -3,6 +3,15 @@
 #include <capability/config_types.h>
 
 namespace exosnap::capability {
+std::vector<BackendTuningControl> OptionQuery::GetBackendTuningControls() const {
+    if (caps_.runtime.adapter.vendor_id != 0x10DE)
+        return {};
+    BackendTuningControl preset{"nvenc", "preset", {}};
+    for (int i = 0; i < 7; ++i)
+        preset.choices.push_back({i, "P" + std::to_string(i + 1)});
+    return {std::move(preset)};
+}
+
 namespace {
 
 SupportAnnotation QueryForConfig(const CapabilitySet& caps, const UserRecorderConfig& config) {

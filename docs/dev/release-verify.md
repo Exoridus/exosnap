@@ -2,6 +2,26 @@
 
 A release campaign binds checks to explicit candidate bytes, prepares declared environment state, invokes the real application and validates results with independent instruments. [Release checklist](../release-checklist.md) owns acceptance; [verification boundaries](../architecture/verification-boundaries.md) owns the trust model. [Live Verify](live-verify.md) documents the process protocol.
 
+## Select regression qualification from the delta
+
+Before repeating hardware qualification, record the baseline identity, implementation and environment delta, affected product contracts, selected lanes and remaining limits. Apply the [evidence reuse policy](../architecture/verification-boundaries.md#regression-qualification-and-evidence-reuse): select affected lanes, expand only when findings warrant it, and justify repeated manual operations. Keep reused baseline observations separate from results measured on the new binary.
+
+The source registry in `tools/exo-verify/src/scenarios` is the executable catalog; inspect it with `exo-verify list`. The runner currently distinguishes `Required` (blocks without a result or explicit decision) and `Recommended` (reported, nonblocking). A release lane being bound to a bundle says which bytes a new observation measures; it does not make every scenario in that lane mandatory at every release.
+
+| Qualification | Current registry / instrument | Selection triggers |
+|---|---|---|
+| Physical 44.1 kHz | `audio.endpoint-44100`, Recommended | WASAPI, format/rate negotiation, resampler, mixer, output conversion, clock slaving, rate-sensitive audio encoding or recovery |
+| SYS/MIC endurance | `audio.mixed-clock-soak`, Recommended; longer clapper qualification in the release checklist | Audio/capture clocks, compensation, CFR scheduler, audio FIFO/threading, mix timeline, mux timestamps or pipeline scheduling |
+| Endpoint loss/recovery | `audio.endpoint-degrade`, Recommended | Device discovery/recovery, source silence/timeline handling, default-device policy |
+| HDR and refresh variants | `display.hdr-transaction`, `display.refresh-transaction`, Recommended | Capture/display/color/timing policy, driver or display changes |
+| Webcam endurance | Physical endurance observation; `webcam.overlay-live` is only a short Recommended check | Camera lifecycle, frame generation, composition or scheduling |
+| CPU/GPU/NVENC/storage pressure | Existing workload and pipeline evidence | Related scheduler, encoder, queue, mux, storage or resource-management changes |
+| DPC cause and overlay presentation experiments | Focused investigation | Relevant provider/overlay/composition changes or concrete recording/presentation evidence |
+
+`--only` selects the justified scenarios; avoid invoking an unfiltered hardware lane as a release ritual. Keep the baseline identity, scope rationale and retained limitations with the campaign. The current runner has no automatic source-diff classifier or `SKIPPED_REUSED_BASELINE` verdict: use the real unselected/missing status, and explain baseline reuse separately without inventing a measured PASS.
+
+This selection does not alter an already frozen candidate plan. Several specialist checks, including `diagnostics.present-elevated`, `diagnostics.present-crosscheck` and `preview.cross-monitor`, currently remain Required in the registry. If the reviewed delta does not warrant repeating one, the maintainer records an explicit `exo-verify accept` decision against the new bundle, naming the prior evidence, unchanged contract and reason for reuse. A new observed failure requires `ACCEPTED_RISK`, not a reuse rationale. Recommended checks need no readiness override when unselected. Run all mandated candidate artifact gates against the exact files. Do not copy old hardware results into a new candidate's result set.
+
 ## Candidate and execution lanes
 
 The `Build release candidate` workflow creates one official final-version build from a commit on `next`. Download `candidate-bundle/` and `candidate-plan.json` from the same Actions run. Keep them together with the separately signed disposable test-feed artifact. The bundle inventories the exact MSI, portable ZIP and verifier bytes; the plan freezes the source registry for that candidate.
@@ -15,7 +35,10 @@ exo-verify run --profile release-ci --lane release-ci-core --bundle candidate-bu
 exo-verify run --profile release-ci --lane release-ci-install --bundle candidate-bundle --out results/install
 exo-verify run --profile release-ci --lane release-ci-update --bundle candidate-bundle --out results/update
 exo-verify run --profile release-gpu --bundle candidate-bundle --out results/gpu
-exo-verify run --profile release-hardware --bundle candidate-bundle --out results/hardware
+# Set this list from the reviewed qualification scope; leave empty when none is selected.
+if ($selectedHardwareScenarios) {
+    exo-verify run --profile release-hardware --bundle candidate-bundle --only $selectedHardwareScenarios --out results/hardware
+}
 exo-verify report merge --bundle candidate-bundle --plan candidate-plan.json `
     --results results --out report
 exo-verify status --bundle candidate-bundle --plan candidate-plan.json `
@@ -153,6 +176,27 @@ Extracted package trees and copied executables are working data, not evidence.
 Passing recordings are discarded unless explicitly requested.
 Failures retain available logs, analyzer output, short media, dumps and screenshots.
 
-`READY FOR APPROVAL` is a calculation, not release permission. Publication remains blocked until an approved path checks the frozen report and reuses the exact candidate MSI and ZIP bytes behind the `release` environment. Follow the [release checklist](../release-checklist.md#4-publication-boundary).
+`READY FOR APPROVAL` is a calculation, not release permission. The `Publish qualified release` workflow checks the frozen report and reuses the exact candidate MSI and ZIP bytes behind the `release` environment. Follow the [release checklist](../release-checklist.md#4-publication-boundary).
+
+Prepare its qualification input after the final report is ready:
+
+```powershell
+exo-verify publication encode --bundle candidate-bundle --plan candidate-plan.json `
+    --report report/release-report.json --decisions decisions.json `
+    --results results --out publication-inputs.json
+```
+
+Omit `--decisions` when none were recorded. The output contains `qualification_sha256` and `qualification_base64` for workflow dispatch. Supply them together with `candidate_run` and `candidate_id` to the preparation dispatch, using `next` at the same source revision as the candidate. This dispatch only freezes evidence; an administrator-pushed version tag triggers publication. The encoded document carries the frozen report, explicit decisions and external GPU/hardware result documents. Hosted results are downloaded independently from Actions, including all retained attempts; external input cannot replace those lanes. The input is bounded to the workflow dispatch size limit and never includes executables or signing keys. Preserve the underlying private evidence with the campaign; the workflow retains qualification records as private Actions artifacts.
+
+After the preparation run succeeds, fetch its metadata and the official candidate run metadata with `gh api repos/Exoridus/exosnap/actions/runs/<run-id>`. Generate the public annotation from the same local evidence:
+
+```powershell
+exo-verify publication tag-message --bundle candidate-bundle --plan candidate-plan.json `
+    --report report/release-report.json --decisions decisions.json --results results `
+    --run-metadata candidate-run.json --preparation-run-metadata preparation-run.json `
+    --out release-tag-message.json
+```
+
+Omit `--decisions` if none exist. After explicit tag-push approval, create an annotated final version tag at the qualified source with `git tag -a <vX.Y.Z> <source-sha> -F release-tag-message.json`, and push that exact tag using the administrator identity. The tag must identify the final bundle version and integrated source. The publication workflow never creates the tag. It rechecks every current hosted attempt against the frozen report, so later reruns cannot hide inconsistent evidence. Approve the `release` environment job only for that qualified tag and candidate.
 
 Runner tests use fake environment/tools and hostile inputs to execute real gate logic. They test refusal, restoration, interrupted state, schema and evidence handling without changing the developer's machine. Their success does not claim the hardware or installer under test has been exercised.

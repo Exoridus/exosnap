@@ -1007,6 +1007,7 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 target_include_directories(mixed_audio_src_tests PRIVATE src)
+target_link_libraries(mixed_audio_src_tests PRIVATE FFmpeg::mux)
 
 exosnap_add_gtest(
     NAME test_session_stats_meter

@@ -447,7 +447,9 @@ class NvencEncoder {
         EncoderInitInfo info;
         info.valid = m_gopLength > 0; // set by InitEncoder
         info.codec = m_codec;
-        info.preset = m_preset;
+        info.backend_id = "nvenc";
+        static constexpr std::string_view presets[] = {"P1", "P2", "P3", "P4", "P5", "P6", "P7"};
+        info.backend_preset = presets[static_cast<unsigned>(m_preset)];
         info.rc_mode = m_rateControlMode;
         info.target_bitrate_kbps = m_encodeConfig.rcParams.averageBitRate / 1000;
         info.max_bitrate_kbps = m_encodeConfig.rcParams.maxBitRate / 1000;

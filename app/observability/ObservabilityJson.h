@@ -41,6 +41,12 @@ inline constexpr const char* kUnavailable = "unavailable";
 inline constexpr const char* kUnsupported = "unsupported";
 // The measurement exists but this process cannot take it without elevation.
 inline constexpr const char* kRequiresElevation = "requiresElevation";
+// The optional trace was attempted and the OS refused it in this token. Not
+// "requiresElevation": a standard token may hold the trace right, and an
+// elevated one can still be refused.
+inline constexpr const char* kAccessDenied = "accessDenied";
+// A session with this name already exists and was not touched.
+inline constexpr const char* kConflict = "conflict";
 // The measurement exists but the user has not opted in to it.
 inline constexpr const char* kRequiresOptIn = "requiresOptIn";
 // Sampled, and known to be wrong: the measurement's own preconditions were

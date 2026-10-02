@@ -20,8 +20,12 @@ void ArgError(const QString& message) {
 
 const QStringList& PreviewStateNames() {
     static const QStringList names = {
-        QStringLiteral("download"), QStringLiteral("progress"), QStringLiteral("amber"),
-        QStringLiteral("red"),      QStringLiteral("green"),    QStringLiteral("reboot"),
+        QStringLiteral("idle"),     QStringLiteral("checking"), QStringLiteral("available"),
+        QStringLiteral("ready"),    QStringLiteral("uptodate"), QStringLiteral("cancelled"),
+        QStringLiteral("download"), QStringLiteral("progress"), QStringLiteral("verifying"),
+        QStringLiteral("success"),  QStringLiteral("amber"),    QStringLiteral("red"),
+        QStringLiteral("green"),    QStringLiteral("reboot"),   QStringLiteral("reinstall"),
+        QStringLiteral("long"),
     };
     return names;
 }

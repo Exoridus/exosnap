@@ -1,6 +1,7 @@
 #include "gpu_compositor.h"
+#include <exosnap/engine/gpu_surface_inventory.h>
 
-#include <d3dcompiler.h>
+#include "measured_shader_compile.h"
 
 #include <algorithm>
 #include <cmath>
@@ -51,16 +52,17 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     winrt::com_ptr<ID3DBlob> error_blob;
 
     HRESULT hr =
-        D3DCompile(kOverlayVertexShaderSrc, std::strlen(kOverlayVertexShaderSrc), "gpu_compositor_vs", nullptr, nullptr,
-                   "main", "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs_blob.put(), error_blob.put());
+        MeasuredD3DCompile(kOverlayVertexShaderSrc, std::strlen(kOverlayVertexShaderSrc), "gpu_compositor_vs", nullptr,
+                           nullptr, "main", "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs_blob.put(), error_blob.put());
     if (FAILED(hr)) {
         SetHResultError(err, "D3DCompile(vertex shader)", hr);
         return false;
     }
 
     error_blob = nullptr;
-    hr = D3DCompile(kOverlayPixelShaderSrc, std::strlen(kOverlayPixelShaderSrc), "gpu_compositor_ps", nullptr, nullptr,
-                    "main", "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, ps_blob.put(), error_blob.put());
+    hr =
+        MeasuredD3DCompile(kOverlayPixelShaderSrc, std::strlen(kOverlayPixelShaderSrc), "gpu_compositor_ps", nullptr,
+                           nullptr, "main", "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, ps_blob.put(), error_blob.put());
     if (FAILED(hr)) {
         SetHResultError(err, "D3DCompile(pixel shader)", hr);
         return false;
@@ -91,7 +93,8 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     // PQ pass as an input; harmless for the SDR VideoProcessor path.
     tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
 
-    hr = device_->CreateTexture2D(&tex_desc, nullptr, composite_tex_.put());
+    hr = exosnap::engine::CreateTrackedTexture2D(device_, &tex_desc, nullptr, composite_tex_.put(),
+                                                 exosnap::engine::GpuSurfaceOwner::Compositor);
     if (FAILED(hr)) {
         SetHResultError(err, "CreateTexture2D(composite)", hr);
         return false;
@@ -194,9 +197,14 @@ bool GpuCompositor::BeginFrame(ID3D11Texture2D* background, std::string& err) {
 }
 
 bool GpuCompositor::DrawWebcam(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, bool mirror,
-                               const ChromaKeyParams& chroma, std::string& err, float opacity) {
-    if (!UploadTexture(webcam_tex_, bgra, width, height, static_cast<UINT>(width * 4), err)) {
-        return false;
+                               const ChromaKeyParams& chroma, std::string& err, float opacity,
+                               std::optional<uint64_t> generation) {
+    if (!generation || generation != webcam_generation_ || !webcam_tex_.srv ||
+        webcam_tex_.width != static_cast<UINT>(width) || webcam_tex_.height != static_cast<UINT>(height)) {
+        if (!UploadTexture(webcam_tex_, bgra, width, height, static_cast<UINT>(width * 4), err))
+            return false;
+        webcam_generation_ = generation;
+        ++webcam_upload_count_;
     }
     return DrawTexture(webcam_tex_.srv.get(), rect, mirror, chroma, true, opacity, err);
 }
@@ -252,7 +260,8 @@ bool GpuCompositor::UploadTexture(TextureResource& resource, const uint8_t* bgra
         desc.Usage = D3D11_USAGE_DEFAULT;
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
-        HRESULT hr = device_->CreateTexture2D(&desc, nullptr, resource.texture.put());
+        HRESULT hr = exosnap::engine::CreateTrackedTexture2D(device_, &desc, nullptr, resource.texture.put(),
+                                                             exosnap::engine::GpuSurfaceOwner::WebcamCursor);
         if (FAILED(hr)) {
             SetHResultError(err, "CreateTexture2D(upload)", hr);
             return false;

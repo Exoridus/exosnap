@@ -55,7 +55,7 @@ RecordingDiagnosticsSnapshot Baseline() {
 
     s.encoder_init.valid = true;
     s.encoder_init.codec = exosnap::engine::VideoCodec::Av1;
-    s.encoder_init.preset = exosnap::engine::NvencPreset::P6;
+    s.encoder_init.backend_preset = "P6";
     s.encoder_init.rc_mode = exosnap::engine::RateControlMode::ConstantQuality;
     s.encoder_init.cq = 17;
     s.encoder_init.gop_length = 120;
@@ -311,11 +311,18 @@ exosnap::engine::RecordingDiagnosticsSnapshot MakeDiagnosticsLiveSample(const QS
 
 DiagnosticsLiveExtras MakeDiagnosticsLiveExtras(const QString& kind) {
     DiagnosticsLiveExtras extras;
-    // The opt-in persists across launches and elevation does not, so "on but not
-    // measuring" is a state a user reaches by restarting. It has no readings at
-    // all, which is exactly what the switch's sub-text has to state.
+    // The opt-in persists across launches and privileges do not, so "on but the
+    // OS refused the trace" is a state a user reaches by restarting. The core
+    // measurements stay; the optional sources state their own reasons.
     if (kind == QLatin1String("opt-in-unelevated")) {
         extras.in_depth = true;
+        extras.present_state = diagnostics::PresentProviderState::AccessDenied;
+        return extras;
+    }
+    if (kind == QLatin1String("present-no-data")) {
+        extras.elevated = true;
+        extras.in_depth = true;
+        extras.present_state = diagnostics::PresentProviderState::OpenNoData;
         return extras;
     }
     if (kind != QLatin1String("in-depth"))
@@ -323,6 +330,7 @@ DiagnosticsLiveExtras MakeDiagnosticsLiveExtras(const QString& kind) {
 
     extras.elevated = true;
     extras.in_depth = true;
+    extras.present_state = diagnostics::PresentProviderState::Measuring;
 
     diagnostics::PresentSample present;
     present.available = true;

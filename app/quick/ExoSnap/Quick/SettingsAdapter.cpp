@@ -1,4 +1,5 @@
 #include "SettingsAdapter.h"
+#include <capability/option_query.h>
 
 #include "QuickThemeTokens.h"
 #include "models/FilenameBuilder.h"
@@ -55,6 +56,16 @@ QString fromAnnotation(const capability::SupportAnnotation& annotation) {
     return QString::fromStdString(annotation.reason);
 }
 
+// Physical device name plus the backend this build would run on it. The name
+// alone is not enough (two cards can share one) and the backend alone is not a
+// device; the selector shows both, never a second Backend dropdown.
+QString EncoderDeviceOptionLabel(const capability::AdapterInfo& adapter,
+                                 const capability::AdapterEncoderCapability& capability) {
+    const QString backend = capability.backend_label.empty() ? QStringLiteral("no encoder backend")
+                                                             : QString::fromStdString(capability.backend_label);
+    return QStringLiteral("%1 (%2)").arg(QString::fromStdString(adapter.name), backend);
+}
+
 QString fromWide(const std::wstring& value) {
     return QString::fromWCharArray(value.c_str(), static_cast<int>(value.size()));
 }
@@ -71,26 +82,6 @@ exosnap::engine::VideoCodec toRecorderCodec(VideoCodec codec) noexcept {
         break;
     }
     return exosnap::engine::VideoCodec::Av1;
-}
-
-QString nvencPresetLabel(exosnap::engine::NvencPreset preset) {
-    switch (preset) {
-    case exosnap::engine::NvencPreset::P1:
-        return QObject::tr("P1 · Fastest");
-    case exosnap::engine::NvencPreset::P2:
-        return QStringLiteral("P2");
-    case exosnap::engine::NvencPreset::P3:
-        return QStringLiteral("P3");
-    case exosnap::engine::NvencPreset::P4:
-        return QObject::tr("P4 · Balanced");
-    case exosnap::engine::NvencPreset::P5:
-        return QStringLiteral("P5");
-    case exosnap::engine::NvencPreset::P6:
-        return QStringLiteral("P6");
-    case exosnap::engine::NvencPreset::P7:
-        return QObject::tr("P7 · Best quality");
-    }
-    return QStringLiteral("P4");
 }
 
 QString qualityPresetLabel(exosnap::engine::QualityPreset preset) {
@@ -185,6 +176,7 @@ const RecordingPresetConfig& SettingsAdapter::config() const noexcept {
 }
 
 void SettingsAdapter::setCapabilities(const capability::CapabilitySet& caps) {
+    base_caps_ = caps;
     caps_ = caps;
     caps_set_ = true;
     // A capability delivery can invalidate a selection that was only permitted
@@ -198,8 +190,117 @@ void SettingsAdapter::setCapabilities(const capability::CapabilitySet& caps) {
     emit configChanged();
 }
 
+void SettingsAdapter::setEncoderDevices(std::vector<capability::AdapterInfo> adapters,
+                                        std::vector<capability::AdapterEncoderCapability> capabilities) {
+    encoder_adapters_ = std::move(adapters);
+    encoder_capabilities_ = std::move(capabilities);
+    refreshEncoderDeviceState();
+    rebuildOptions();
+    rebuildDerivedText();
+    emit optionsChanged();
+}
+
+void SettingsAdapter::setCaptureAdapter(int64_t adapter_luid, bool known) {
+    if (capture_adapter_luid_ == adapter_luid && capture_adapter_known_ == known) {
+        return;
+    }
+    capture_adapter_luid_ = adapter_luid;
+    capture_adapter_known_ = known;
+    if (!caps_set_) {
+        return;
+    }
+    refreshEncoderDeviceState();
+    rebuildOptions();
+    rebuildDerivedText();
+    emit optionsChanged();
+}
+
+exosnap::engine::ResolvedEncoderDevice SettingsAdapter::resolvedEncoderDevice() const {
+    exosnap::engine::ResolvedEncoderDevice device;
+    if (encoder_resolution_.candidate_index >= 0 &&
+        static_cast<size_t>(encoder_resolution_.candidate_index) < encoder_candidates_.size()) {
+        const auto& candidate = encoder_candidates_[static_cast<size_t>(encoder_resolution_.candidate_index)];
+        device.valid = encoder_resolution_.resolved;
+        device.adapter_luid = candidate.adapter.luid;
+        device.vendor_id = candidate.adapter.vendor_id;
+        device.backend = candidate.backend;
+        device.device = capability::FingerprintFromAdapter(candidate.adapter);
+    }
+    device.reason = encoder_resolution_.reason;
+    return device;
+}
+
+void SettingsAdapter::refreshEncoderDeviceState() {
+    encoder_candidates_.clear();
+    encoder_resolution_ = {};
+    resolved_encoder_backend_ = exosnap::engine::EncoderBackend::None;
+
+    if (encoder_adapters_.size() == encoder_capabilities_.size() && !encoder_adapters_.empty()) {
+        const capability::EncoderDeviceRequest request{config_.output.video_codec, config_.output.chroma_subsampling,
+                                                       config_.output.bit_depth};
+        encoder_candidates_ =
+            capability::BuildEncoderDeviceCandidates(encoder_adapters_, encoder_capabilities_, request);
+        encoder_resolution_ = capability::ResolveEncoderDevice(encoder_candidates_, config_.video.encoder_device,
+                                                               capture_adapter_luid_, capture_adapter_known_);
+    }
+
+    // The device the view is scoped to: the resolved/selected candidate when
+    // there is one, even if it is currently unusable (the options shown must be
+    // that device's, not another GPU's).
+    const capability::EncoderDeviceCandidate* scoped = nullptr;
+    if (encoder_resolution_.candidate_index >= 0 &&
+        static_cast<size_t>(encoder_resolution_.candidate_index) < encoder_candidates_.size()) {
+        scoped = &encoder_candidates_[static_cast<size_t>(encoder_resolution_.candidate_index)];
+    }
+
+    // Auto without a concrete capture adapter yet: when every usable candidate
+    // shares one backend, that is the backend the Expert row describes, and the
+    // view can be scoped to the first such candidate. Mixed usable backends
+    // leave it unknown rather than guessing. Presentation only, never a
+    // dispatch input.
+    if (scoped == nullptr &&
+        config_.video.encoder_device.mode == exosnap::engine::EncoderDevicePreference::Mode::Auto) {
+        exosnap::engine::EncoderBackend common = exosnap::engine::EncoderBackend::None;
+        bool have_usable = false;
+        bool mixed = false;
+        for (const auto& candidate : encoder_candidates_) {
+            if (!candidate.usable()) {
+                continue;
+            }
+            if (!have_usable) {
+                common = candidate.backend;
+                scoped = &candidate;
+                have_usable = true;
+            } else if (candidate.backend != common) {
+                mixed = true;
+            }
+        }
+        if (mixed) {
+            scoped = nullptr;
+        }
+    }
+
+    if (scoped != nullptr) {
+        resolved_encoder_backend_ = scoped->backend;
+    }
+
+    if (caps_set_) {
+        caps_ = base_caps_;
+        if (scoped != nullptr) {
+            caps_ = capability::CapabilitySetForAdapter(base_caps_, scoped->adapter, scoped->capability);
+        }
+    }
+
+    if (!encoder_resolution_.resolved && !encoder_resolution_.deferred_to_capture) {
+        encoder_device_hint_ = QString::fromStdString(encoder_resolution_.reason);
+    } else {
+        encoder_device_hint_.clear();
+    }
+}
+
 void SettingsAdapter::setAppSettings(const PersistedAppSettings& settings) {
     app_settings_ = settings;
+    app_settings_.preview_frame_rate = NormalizePreviewRate(app_settings_.preview_frame_rate);
     emit appSettingsChanged();
 }
 
@@ -616,6 +717,7 @@ void SettingsAdapter::commitAppSettingsEdit() {
 }
 
 void SettingsAdapter::rebuildOptions() {
+    refreshEncoderDeviceState();
     const auto& out = config_.output;
 
     container_options_.clear();
@@ -715,10 +817,51 @@ void SettingsAdapter::rebuildOptions() {
         }
     }
 
-    encoder_preset_options_.clear();
-    for (int i = static_cast<int>(exosnap::engine::NvencPreset::P1);
-         i <= static_cast<int>(exosnap::engine::NvencPreset::P7); ++i) {
-        encoder_preset_options_.append(makeOption(i, nvencPresetLabel(static_cast<exosnap::engine::NvencPreset>(i))));
+    encoder_device_options_.clear();
+    {
+        QString auto_label = tr("Auto");
+        if (encoder_resolution_.resolved && encoder_resolution_.candidate_index >= 0 &&
+            static_cast<size_t>(encoder_resolution_.candidate_index) < encoder_candidates_.size()) {
+            const auto& resolved = encoder_candidates_[static_cast<size_t>(encoder_resolution_.candidate_index)];
+            auto_label = tr("Auto (%1)").arg(EncoderDeviceOptionLabel(resolved.adapter, resolved.capability));
+        } else if (encoder_resolution_.deferred_to_capture) {
+            auto_label = tr("Auto (capture adapter)");
+        }
+        encoder_device_options_.append(makeOption(0, auto_label));
+    }
+    for (size_t i = 0; i < encoder_candidates_.size(); ++i) {
+        const auto& candidate = encoder_candidates_[i];
+        bool selectable = candidate.usable();
+        QString reason;
+        if (!selectable) {
+            reason = QString::fromStdString(candidate.unavailable_reason);
+        } else if (capture_adapter_known_) {
+            exosnap::engine::PipelineAdapterIdentity capture;
+            capture.known = true;
+            capture.luid = capture_adapter_luid_;
+            exosnap::engine::PipelineAdapterIdentity processing;
+            processing.known = true;
+            processing.luid = candidate.adapter.luid;
+            if (exosnap::engine::CaptureSurfaceTransportFor(capture, processing) !=
+                exosnap::engine::CaptureSurfaceTransport::SameAdapter) {
+                selectable = false;
+                reason =
+                    tr("On a different adapter than the capture source; cross-adapter encoding is not implemented.");
+            }
+        }
+        encoder_device_options_.append(makeOption(static_cast<int>(i) + 1,
+                                                  EncoderDeviceOptionLabel(candidate.adapter, candidate.capability),
+                                                  selectable, reason));
+    }
+
+    nvenc_preset_options_.clear();
+    if (resolved_encoder_backend_ == exosnap::engine::EncoderBackend::Nvenc) {
+        for (const auto& control : capability::OptionQuery(caps_).GetBackendTuningControls()) {
+            if (control.key == "preset") {
+                for (const auto& choice : control.choices)
+                    nvenc_preset_options_.append(makeOption(choice.value, QString::fromStdString(choice.label)));
+            }
+        }
     }
 
     quality_preset_options_.clear();
@@ -1086,10 +1229,28 @@ bool SettingsAdapter::chromaRelevant() const noexcept {
 bool SettingsAdapter::hdrRelevant() const noexcept {
     return hdr_display_present_;
 }
-const QVariantList& SettingsAdapter::encoderPresetOptions() const noexcept {
-    return encoder_preset_options_;
+const QVariantList& SettingsAdapter::encoderDeviceOptions() const noexcept {
+    return encoder_device_options_;
 }
-int SettingsAdapter::encoderPreset() const noexcept {
+int SettingsAdapter::encoderDevice() const noexcept {
+    if (config_.video.encoder_device.mode != exosnap::engine::EncoderDevicePreference::Mode::Explicit) {
+        return 0;
+    }
+    for (size_t i = 0; i < encoder_candidates_.size(); ++i) {
+        if (exosnap::engine::SameHardwareIdentity(capability::FingerprintFromAdapter(encoder_candidates_[i].adapter),
+                                                  config_.video.encoder_device.device)) {
+            return static_cast<int>(i) + 1;
+        }
+    }
+    return -1; // Explicit device is not present; the hint carries the reason.
+}
+const QString& SettingsAdapter::encoderDeviceHint() const noexcept {
+    return encoder_device_hint_;
+}
+const QVariantList& SettingsAdapter::nvencPresetOptions() const noexcept {
+    return nvenc_preset_options_;
+}
+int SettingsAdapter::nvencPreset() const noexcept {
     return static_cast<int>(config_.output.nvenc_preset);
 }
 const QString& SettingsAdapter::formatSummary() const noexcept {
@@ -1819,7 +1980,25 @@ void SettingsAdapter::setHdrMode(int value) {
     applyConfigEdit();
 }
 
-void SettingsAdapter::setEncoderPreset(int value) {
+void SettingsAdapter::setEncoderDevice(int value) {
+    exosnap::engine::EncoderDevicePreference preference = config_.video.encoder_device;
+    if (value > 0 && static_cast<size_t>(value - 1) < encoder_candidates_.size()) {
+        preference.mode = exosnap::engine::EncoderDevicePreference::Mode::Explicit;
+        preference.device =
+            capability::FingerprintFromAdapter(encoder_candidates_[static_cast<size_t>(value - 1)].adapter);
+    } else {
+        // Auto keeps the last explicit fingerprint so switching back is one
+        // choice rather than a re-identification.
+        preference.mode = exosnap::engine::EncoderDevicePreference::Mode::Auto;
+    }
+    if (config_.video.encoder_device == preference) {
+        return;
+    }
+    config_.video.encoder_device = preference;
+    applyConfigEdit();
+}
+
+void SettingsAdapter::setNvencPreset(int value) {
     const auto preset = static_cast<exosnap::engine::NvencPreset>(value);
     if (config_.output.nvenc_preset == preset) {
         return;
@@ -2279,6 +2458,30 @@ void SettingsAdapter::setMicRnnoiseEnabled(bool value) {
     }
     config_.audio.mic_rnnoise_enabled = value;
     applyConfigEdit();
+}
+
+int SettingsAdapter::previewFrameRate() const noexcept {
+    return app_settings_.preview_frame_rate;
+}
+
+QVariantList SettingsAdapter::previewFrameRateOptions() const {
+    QVariantList options;
+    options.append(makeOption(0, tr("Off")));
+    for (int rate : {15, 30, 60, 120}) {
+        const bool available = max_frame_rate_ <= 0 || rate <= max_frame_rate_;
+        options.append(makeOption(
+            rate, tr("%1 fps").arg(rate), available,
+            available ? QString() : tr("Faster than the fastest attached display (%1 Hz)").arg(max_frame_rate_)));
+    }
+    return options;
+}
+
+void SettingsAdapter::setPreviewFrameRate(int value) {
+    value = NormalizePreviewRate(value);
+    if (app_settings_.preview_frame_rate == value)
+        return;
+    app_settings_.preview_frame_rate = value;
+    commitAppSettingsEdit();
 }
 
 void SettingsAdapter::setShowRecordingOverlay(bool value) {

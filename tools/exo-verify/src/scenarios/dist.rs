@@ -392,18 +392,48 @@ fn portable_first_launch(ctx: &mut Context) -> Step {
 }
 
 /// Must match the application's staging list: the updater never runs in place.
-const UPDATER_STAGING: &[&str] = &[
+/// The updater is a Qt Quick application, so this mirrors both halves of
+/// `UpdaterStagingFileList()` -- the Quick runtime DLLs and the QML import trees
+/// (staged recursively, because a module is qmldir + plugin + its own files).
+const UPDATER_STAGING_FILES: &[&str] = &[
     "exosnap-updater.exe",
     "Qt6Core.dll",
     "Qt6Gui.dll",
-    "Qt6Widgets.dll",
+    "Qt6Qml.dll",
+    "Qt6QmlMeta.dll",
+    "Qt6QmlModels.dll",
+    "Qt6QmlWorkerScript.dll",
+    "Qt6Network.dll",
+    "Qt6OpenGL.dll",
+    "Qt6Quick.dll",
+    "Qt6QuickControls2.dll",
+    "Qt6QuickControls2Basic.dll",
+    "Qt6QuickControls2BasicStyleImpl.dll",
+    "Qt6QuickControls2Impl.dll",
+    "Qt6QuickTemplates2.dll",
+    "Qt6QuickLayouts.dll",
+    "Qt6QuickShapes.dll",
+    "Qt6Svg.dll",
     "plugins/platforms/qwindows.dll",
+    "qml/QtQuick/Controls/qmldir",
+    "qml/QtQuick/Controls/plugins.qmltypes",
+    "qml/QtQuick/Controls/qtquickcontrols2plugin.dll",
+];
+
+const UPDATER_STAGING_DIRS: &[&str] = &[
+    "qml/QtQml",
+    "qml/QtQuick/Controls/Basic",
+    "qml/QtQuick/Controls/impl",
+    "qml/QtQuick/Layouts",
+    "qml/QtQuick/Shapes",
+    "qml/QtQuick/Templates",
+    "qml/QtQuick/Window",
 ];
 
 /// Copies the updater's runtime subset out of `product_root` into `stage`, as
 /// the application does before a handoff, and returns the staged updater.
 pub(super) fn stage_updater(product_root: &Path, stage: &Path) -> Step<PathBuf> {
-    for rel in UPDATER_STAGING {
+    for rel in UPDATER_STAGING_FILES {
         let src = product_root.join(rel);
         product_ensure!(
             src.is_file(),
@@ -412,6 +442,19 @@ pub(super) fn stage_updater(product_root: &Path, stage: &Path) -> Step<PathBuf> 
         let dst = stage.join(rel);
         std::fs::create_dir_all(dst.parent().unwrap())?;
         std::fs::copy(&src, &dst)?;
+    }
+    for rel_dir in UPDATER_STAGING_DIRS {
+        let src_root = product_root.join(rel_dir);
+        product_ensure!(
+            src_root.is_dir(),
+            "the package lacks {rel_dir}, which the application stages for its updater"
+        );
+        for file in walk_files(&src_root)? {
+            let rel = file.strip_prefix(&src_root).unwrap_or(&file);
+            let dst = stage.join(rel_dir).join(rel);
+            std::fs::create_dir_all(dst.parent().unwrap())?;
+            std::fs::copy(&file, &dst)?;
+        }
     }
     std::fs::write(stage.join("qt.conf"), "[Paths]\nPlugins = plugins\n")?;
     Ok(stage.join("exosnap-updater.exe"))

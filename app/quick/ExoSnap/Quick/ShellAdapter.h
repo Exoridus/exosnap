@@ -30,10 +30,16 @@ class ShellAdapter : public QObject {
     QML_ELEMENT
     QML_UNCREATABLE("ShellAdapter is provided by the application")
 
-    // Canonical navigation order (product decision, see CLAUDE.md):
-    // Record, Settings, Diagnostics, Logs, About — all five are direct
-    // destinations in the title band, in this order. Named here so a navigation
-    // request never has to spell a bare integer.
+    // Canonical navigation order (product decision):
+    // Record, Settings, Diagnostics, About — four direct destinations in the
+    // title band, in this order. Named here so a navigation request never has
+    // to spell a bare integer.
+    //
+    // LogsPage is retained as the LEGACY request spelling for the Logs view.
+    // The shell normalizes it to DiagnosticsPage plus DiagnosticsLogs, so the
+    // control channel and old callers keep working while the visible band has
+    // no fifth destination. AboutPage keeps its own identity (4); the legacy 3
+    // is never reinterpreted as About.
     //
     // Device is deliberately absent: it owned no user-selectable configuration,
     // and its read-only adapter/encoder capability content now lives in
@@ -41,6 +47,12 @@ class ShellAdapter : public QObject {
   public:
     enum Page { RecordPage = 0, SettingsPage = 1, DiagnosticsPage = 2, LogsPage = 3, AboutPage = 4 };
     Q_ENUM(Page)
+
+    // The Diagnostics destination's internal views: the overview and the full
+    // log surface. Additive state alongside `currentPage`, not a page of its
+    // own -- the visible destination stays Diagnostics either way.
+    enum DiagnosticsSection { DiagnosticsOverview = 0, DiagnosticsLogs = 1 };
+    Q_ENUM(DiagnosticsSection)
 
   private:
     // ── What is on screen, published by the frontend ──────────────────────────
@@ -58,6 +70,11 @@ class ShellAdapter : public QObject {
     // is where the one navigation policy lives (QCR-001) — writing `currentPage`
     // here does not move anything, it records where the shell arrived.
     Q_PROPERTY(int currentPage READ currentPage WRITE setCurrentPage NOTIFY currentPageChanged FINAL)
+    // Which Diagnostics view is on screen. Published from the shell so the
+    // control channel can report the canonical destination plus its subview
+    // instead of a phantom fifth page.
+    Q_PROPERTY(int diagnosticsSection READ diagnosticsSection WRITE setDiagnosticsSection NOTIFY
+                   diagnosticsSectionChanged FINAL)
     // QCR-001 again: an open edit session is state of the Record destination, so
     // "the session is loaded" and "the workspace is on screen" are two different
     // facts. This is the second one.
@@ -82,6 +99,8 @@ class ShellAdapter : public QObject {
 
     [[nodiscard]] int currentPage() const noexcept;
     void setCurrentPage(int page);
+    [[nodiscard]] int diagnosticsSection() const noexcept;
+    void setDiagnosticsSection(int section);
     [[nodiscard]] bool editSurfaceVisible() const noexcept;
     void setEditSurfaceVisible(bool visible);
     [[nodiscard]] bool sourcePickerOpen() const noexcept;
@@ -124,6 +143,7 @@ class ShellAdapter : public QObject {
     void sourcePickerRequested(bool open);
 
     void currentPageChanged();
+    void diagnosticsSectionChanged();
     void editSurfaceVisibleChanged();
     void sourcePickerOpenChanged();
 
@@ -161,6 +181,7 @@ class ShellAdapter : public QObject {
     bool waived_recording_ = false;
     bool active_ = false;
     int current_page_ = RecordPage;
+    int diagnostics_section_ = DiagnosticsOverview;
     bool edit_surface_visible_ = false;
     bool source_picker_open_ = false;
 };

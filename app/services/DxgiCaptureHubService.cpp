@@ -1,4 +1,5 @@
 #include "DxgiCaptureHubService.h"
+#include "models/PreviewRatePolicy.h"
 
 #include "../diagnostics/AppLog.h"
 #include "CaptureHubRegistry.h"
@@ -16,10 +17,6 @@
 
 namespace exosnap {
 namespace {
-
-// Pump cadence. A live preview, not a thumbnail grid: the duplication is
-// polled non-blocking, so a fast tick costs almost nothing on a quiet desktop.
-constexpr std::chrono::milliseconds kPumpTick{15};
 
 // The preview renderer creates its device with D3D11CreateDevice(nullptr,
 // D3D_DRIVER_TYPE_HARDWARE, ...), i.e. on the default adapter. A shared
@@ -233,8 +230,12 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
     color_gate.Start(std::chrono::steady_clock::now(), color_watch.Notified());
     HMONITOR watched_monitor = nullptr;
 
+    PreviewRateGate acquisition_gate;
     while (!stop_token.stop_requested()) {
-        commands_.WaitAndDrain(kPumpTick, batch);
+        const int rate = preview_frame_rate_.load();
+        const auto wait = subscription && rate > 0 ? std::chrono::milliseconds((1000 + rate - 1) / rate)
+                                                   : std::chrono::milliseconds(1000);
+        commands_.WaitAndDrain(wait, batch);
         if (stop_token.stop_requested())
             break;
 
@@ -305,7 +306,8 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
                 diagnostics::AppLog::debug(QStringLiteral("dxgi-hub"), QStringLiteral("lease returned; reopening"));
         }
 
-        registry.PumpAll();
+        if (acquisition_gate.Take(std::chrono::steady_clock::now(), preview_frame_rate_.load()))
+            registry.PumpAll();
     }
 
     // Subscriptions must die before the registry that owns their hubs.

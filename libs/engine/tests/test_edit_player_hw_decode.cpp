@@ -132,3 +132,20 @@ TEST(EditPlayerHwDecode, RejectsNullAndNonPositiveDimensions) {
     src->width = 0;
     EXPECT_EQ(DeinterleaveHwReadbackFrame(src.get()), nullptr);
 }
+
+TEST(EditPlayerHwDecode, DeinterleavePreservesPresentationTimeAndColorMetadata) {
+    FramePtr source = MakeFrame(AV_PIX_FMT_P010LE, 4, 2);
+    ASSERT_NE(source, nullptr);
+    source->pts = 1234;
+    source->best_effort_timestamp = 5678;
+    source->color_trc = AVCOL_TRC_SMPTE2084;
+    source->color_primaries = AVCOL_PRI_BT2020;
+    source->color_range = AVCOL_RANGE_MPEG;
+    FramePtr output(DeinterleaveHwReadbackFrame(source.get()));
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(output->pts, source->pts);
+    EXPECT_EQ(output->best_effort_timestamp, source->best_effort_timestamp);
+    EXPECT_EQ(output->color_trc, source->color_trc);
+    EXPECT_EQ(output->color_primaries, source->color_primaries);
+    EXPECT_EQ(output->color_range, source->color_range);
+}

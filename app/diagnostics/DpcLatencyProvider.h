@@ -1,6 +1,6 @@
 #pragma once
 
-#include "RecommendationEngine.h" // DpcLatencyReading
+#include "MeasurementMetadata.h"
 
 #include <atomic>
 #include <memory>
@@ -8,6 +8,14 @@
 #include <thread>
 
 namespace exosnap::diagnostics {
+
+struct DpcLatencyReading {
+    double max_latency_us = 0.0;
+    double avg_latency_us = 0.0;
+    std::string worst_driver;
+    bool available = false;
+    MeasurementMetadata metadata;
+};
 
 // What a consumer of DPC/ISR latency is allowed to know: one reading, and nothing
 // about how it was obtained. The Diagnostics host layer holds this rather than the

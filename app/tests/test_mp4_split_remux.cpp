@@ -671,6 +671,33 @@ TEST_F(Mp4SplitRemuxTest, DrainReportsSuccessWhenEverySegmentSucceeded) {
     std::filesystem::remove_all(dir, ec);
 }
 
+TEST_F(Mp4SplitRemuxTest, SlowStorageKeepsOnlyOneRemuxActive) {
+    RecordingCoordinator coordinator;
+    std::mutex mutex;
+    std::condition_variable cv;
+    size_t started = 0;
+    bool release = false;
+    for (size_t i = 0; i < 8; ++i) {
+        coordinator.ScheduleSegmentRemuxForTest({}, {}, {}, [&] {
+            std::unique_lock lock(mutex);
+            ++started;
+            cv.notify_all();
+            cv.wait(lock, [&] { return release; });
+            return true;
+        });
+    }
+    {
+        std::unique_lock lock(mutex);
+        cv.wait_for(lock, std::chrono::seconds(2), [&] { return started > 0; });
+        cv.wait_for(lock, std::chrono::milliseconds(50), [&] { return started > 1; });
+        EXPECT_EQ(started, 1u);
+        release = true;
+    }
+    cv.notify_all();
+    EXPECT_TRUE(coordinator.DrainSegmentRemuxJobsForTest(false));
+    EXPECT_EQ(started, 8u);
+}
+
 TEST_F(Mp4SplitRemuxTest, IsArmedFromRecovery_FalseByDefault) {
     RecordingCoordinator coordinator;
     EXPECT_FALSE(coordinator.IsArmedFromRecovery());
