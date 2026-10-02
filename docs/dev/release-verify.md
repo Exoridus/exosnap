@@ -186,6 +186,17 @@ exo-verify publication encode --bundle candidate-bundle --plan candidate-plan.js
     --results results --out publication-inputs.json
 ```
 
-Omit `--decisions` when none were recorded. The output contains `qualification_sha256` and `qualification_base64` for workflow dispatch. Supply them together with `candidate_run` and `candidate_id`, using `next` at the same source revision as the candidate. The encoded document carries the frozen report, explicit decisions and external GPU/hardware result documents. Hosted results are downloaded independently from Actions, including all retained attempts; external input cannot replace those lanes. The input is bounded to the workflow dispatch size limit and never includes executables or signing keys. Preserve the underlying private evidence with the campaign; the workflow retains qualification records as private Actions artifacts.
+Omit `--decisions` when none were recorded. The output contains `qualification_sha256` and `qualification_base64` for workflow dispatch. Supply them together with `candidate_run` and `candidate_id` to the preparation dispatch, using `next` at the same source revision as the candidate. This dispatch only freezes evidence; an administrator-pushed version tag triggers publication. The encoded document carries the frozen report, explicit decisions and external GPU/hardware result documents. Hosted results are downloaded independently from Actions, including all retained attempts; external input cannot replace those lanes. The input is bounded to the workflow dispatch size limit and never includes executables or signing keys. Preserve the underlying private evidence with the campaign; the workflow retains qualification records as private Actions artifacts.
+
+After the preparation run succeeds, fetch its metadata and the official candidate run metadata with `gh api repos/Exoridus/exosnap/actions/runs/<run-id>`. Generate the public annotation from the same local evidence:
+
+```powershell
+exo-verify publication tag-message --bundle candidate-bundle --plan candidate-plan.json `
+    --report report/release-report.json --decisions decisions.json --results results `
+    --run-metadata candidate-run.json --preparation-run-metadata preparation-run.json `
+    --out release-tag-message.json
+```
+
+Omit `--decisions` if none exist. After explicit tag-push approval, create an annotated final version tag at the qualified source with `git tag -a <vX.Y.Z> <source-sha> -F release-tag-message.json`, and push that exact tag using the administrator identity. The tag must identify the final bundle version and integrated source. The publication workflow never creates the tag. It rechecks every current hosted attempt against the frozen report, so later reruns cannot hide inconsistent evidence. Approve the `release` environment job only for that qualified tag and candidate.
 
 Runner tests use fake environment/tools and hostile inputs to execute real gate logic. They test refusal, restoration, interrupted state, schema and evidence handling without changing the developer's machine. Their success does not claim the hardware or installer under test has been exercised.

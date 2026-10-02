@@ -33,6 +33,28 @@ pub struct EvidenceArgs {
 
 #[derive(Subcommand)]
 pub enum PublicationCommand {
+    /// Write an annotated-tag message binding qualified bytes to a frozen preparation run.
+    TagMessage {
+        #[command(flatten)]
+        evidence: EvidenceArgs,
+        #[arg(long)]
+        run_metadata: PathBuf,
+        #[arg(long)]
+        preparation_run_metadata: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Read the admin-created annotated tag for workflow artifact selection.
+    TagInput {
+        #[arg(long)]
+        tag_metadata: PathBuf,
+        #[arg(long)]
+        tag: String,
+        #[arg(long)]
+        source_commit: String,
+        #[arg(long)]
+        github_output: PathBuf,
+    },
     /// Encode reviewed external qualification for workflow dispatch.
     Encode {
         #[command(flatten)]
@@ -61,6 +83,12 @@ pub enum PublicationCommand {
         candidate_id: String,
         #[arg(long)]
         source_commit: String,
+        #[arg(long, requires_all = ["tag_metadata", "preparation_run_metadata"])]
+        tag: Option<String>,
+        #[arg(long, requires = "tag")]
+        tag_metadata: Option<PathBuf>,
+        #[arg(long, requires = "tag")]
+        preparation_run_metadata: Option<PathBuf>,
         /// Fresh directory for exact package copies and hash sidecars.
         #[arg(long)]
         out: PathBuf,
@@ -92,6 +120,67 @@ struct Qualification {
     report: Report,
     decisions: Decisions,
     results: Vec<LaneResult>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TagBinding {
+    candidate_run: u64,
+    preparation_run: u64,
+    candidate_id: String,
+    bundle_sha256: String,
+}
+
+fn validate_preparation(run: &Value, source: &str) -> Result<()> {
+    ensure!(
+        run["repository"]["full_name"] == REPOSITORY
+            && run["path"] == ".github/workflows/publish-release.yml"
+            && run["event"] == "workflow_dispatch"
+            && run["head_branch"] == "next"
+            && run["head_sha"] == source
+            && run["status"] == "completed"
+            && run["conclusion"] == "success",
+        "qualification preparation provenance does not match a successful official run"
+    );
+    Ok(())
+}
+
+fn tag_binding(metadata: &Value, tag: &str, source: &str) -> Result<TagBinding> {
+    ensure!(
+        tag.strip_prefix('v').is_some_and(bundle::is_final_version),
+        "release tag must be final vX.Y.Z"
+    );
+    ensure!(
+        source.len() == 40 && source.bytes().all(|b| b.is_ascii_hexdigit()),
+        "invalid tag source commit"
+    );
+    ensure!(
+        metadata["tag"] == tag
+            && metadata["object"]["type"] == "commit"
+            && metadata["object"]["sha"] == source,
+        "annotated release tag differs from qualified source/version"
+    );
+    let binding: TagBinding = serde_json::from_str(
+        metadata["message"]
+            .as_str()
+            .context("tag lacks qualification binding")?,
+    )?;
+    ensure!(
+        binding.candidate_run > 0
+            && binding.preparation_run > 0
+            && bundle::is_sha256(&binding.bundle_sha256),
+        "invalid release tag binding"
+    );
+    ensure!(
+        !binding.candidate_id.is_empty()
+            && binding.candidate_id.len() <= 64
+            && binding
+                .candidate_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-')),
+        "invalid candidate ID in release tag"
+    );
+    Ok(binding)
 }
 
 fn external_lane(lane: &str) -> bool {
@@ -255,6 +344,51 @@ fn verify_sidecars(bundle: &Bundle, assets: &Path) -> Result<()> {
 
 pub fn run(command: PublicationCommand) -> Result<()> {
     match command {
+        PublicationCommand::TagMessage {
+            evidence,
+            run_metadata,
+            preparation_run_metadata,
+            out,
+        } => {
+            let (bundle, _) = load_evidence(&evidence)?;
+            let candidate: Value = serde_json::from_slice(&fs::read(run_metadata)?)?;
+            let preparation: Value = serde_json::from_slice(&fs::read(preparation_run_metadata)?)?;
+            validate_run(&candidate, &bundle.inventory.source_commit)?;
+            validate_preparation(&preparation, &bundle.inventory.source_commit)?;
+            crate::write_json(
+                &out,
+                &TagBinding {
+                    candidate_run: candidate["id"]
+                        .as_u64()
+                        .filter(|id| *id > 0)
+                        .context("candidate run has no ID")?,
+                    preparation_run: preparation["id"]
+                        .as_u64()
+                        .filter(|id| *id > 0)
+                        .context("preparation run has no ID")?,
+                    candidate_id: bundle.inventory.candidate_id,
+                    bundle_sha256: bundle.sha256,
+                },
+            )?;
+        }
+        PublicationCommand::TagInput {
+            tag_metadata,
+            tag,
+            source_commit,
+            github_output,
+        } => {
+            let metadata: Value = serde_json::from_slice(&fs::read(tag_metadata)?)?;
+            let binding = tag_binding(&metadata, &tag, &source_commit)?;
+            let mut output = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(github_output)?;
+            writeln!(
+                output,
+                "candidate_run={}\npreparation_run={}\ncandidate_id={}\nsource={}",
+                binding.candidate_run, binding.preparation_run, binding.candidate_id, source_commit
+            )?;
+        }
         PublicationCommand::Encode { evidence, out } => {
             let (_, mut qualification) = load_evidence(&evidence)?;
             qualification.results.retain(|r| external_lane(&r.lane));
@@ -296,6 +430,9 @@ pub fn run(command: PublicationCommand) -> Result<()> {
             run_metadata,
             candidate_id,
             source_commit,
+            tag,
+            tag_metadata,
+            preparation_run_metadata,
             out,
             github_output,
         } => {
@@ -307,6 +444,27 @@ pub fn run(command: PublicationCommand) -> Result<()> {
             );
             let metadata: Value = serde_json::from_slice(&fs::read(run_metadata)?)?;
             validate_run(&metadata, &source_commit)?;
+            if let Some(tag) = tag {
+                ensure!(
+                    tag == format!("v{}", bundle.inventory.product_version),
+                    "tag version differs from qualified candidate"
+                );
+                let tag_record: Value = serde_json::from_slice(&fs::read(
+                    tag_metadata.context("tag metadata is required")?,
+                )?)?;
+                let binding = tag_binding(&tag_record, &tag, &source_commit)?;
+                let preparation: Value = serde_json::from_slice(&fs::read(
+                    preparation_run_metadata.context("preparation provenance is required")?,
+                )?)?;
+                validate_preparation(&preparation, &source_commit)?;
+                ensure!(
+                    binding.bundle_sha256 == bundle.sha256
+                        && binding.candidate_id == candidate_id
+                        && metadata["id"].as_u64() == Some(binding.candidate_run)
+                        && preparation["id"].as_u64() == Some(binding.preparation_run),
+                    "tag names different candidate bytes or qualification runs"
+                );
+            }
             ensure!(!out.exists(), "publication output directory must be fresh");
             fs::create_dir_all(&out)?;
             for role in [FileRole::Installer, FileRole::Portable] {
@@ -355,11 +513,11 @@ pub fn run(command: PublicationCommand) -> Result<()> {
             verify_sidecars(&bundle, &assets)?;
             let tag = format!("v{}", bundle.inventory.product_version);
             let tag_record: Value = serde_json::from_slice(&fs::read(tag_metadata)?)?;
+            let binding = tag_binding(&tag_record, &tag, &bundle.inventory.source_commit)?;
             ensure!(
-                tag_record["ref"] == format!("refs/tags/{tag}")
-                    && tag_record["object"]["type"] == "commit"
-                    && tag_record["object"]["sha"] == bundle.inventory.source_commit,
-                "release tag differs from qualified source"
+                binding.bundle_sha256 == bundle.sha256
+                    && binding.candidate_id == bundle.inventory.candidate_id,
+                "release tag differs from qualified candidate"
             );
             let release: Value = serde_json::from_slice(&fs::read(release_metadata)?)?;
             ensure!(
@@ -404,6 +562,54 @@ mod tests {
     use super::*;
     use crate::plan::{PLAN_SCHEMA, PlannedScenario, Tier};
     use serde_json::json;
+
+    #[test]
+    fn admin_tag_binds_source_final_version_and_frozen_run() {
+        let binding = TagBinding {
+            candidate_run: 10,
+            preparation_run: 20,
+            candidate_id: "v010-final".into(),
+            bundle_sha256: "b".repeat(64),
+        };
+        let metadata = json!({"tag": "v0.10.0", "object": {"type": "commit", "sha": "a".repeat(40)}, "message": serde_json::to_string(&binding).unwrap()});
+        assert_eq!(
+            tag_binding(&metadata, "v0.10.0", &"a".repeat(40))
+                .unwrap()
+                .preparation_run,
+            20
+        );
+        assert!(tag_binding(&metadata, "v0.10.1", &"a".repeat(40)).is_err());
+        assert!(tag_binding(&metadata, "v0.10.0", &"c".repeat(40)).is_err());
+        assert!(tag_binding(&metadata, "v0.10.0-rc1", &"a".repeat(40)).is_err());
+        assert!(
+            tag_binding(
+                &json!({"ref": "refs/tags/v0.10.0"}),
+                "v0.10.0",
+                &"a".repeat(40)
+            )
+            .is_err()
+        );
+        let mut other = metadata;
+        other["message"] = json!("unbound release");
+        assert!(tag_binding(&other, "v0.10.0", &"a".repeat(40)).is_err());
+    }
+
+    #[test]
+    fn preparation_must_be_successful_and_from_the_same_next_source() {
+        let original = json!({"path": ".github/workflows/publish-release.yml", "event": "workflow_dispatch", "head_branch": "next", "head_sha": "a".repeat(40), "status": "completed", "conclusion": "success", "repository": {"full_name": REPOSITORY}});
+        validate_preparation(&original, &"a".repeat(40)).unwrap();
+        assert!(validate_preparation(&original, &"b".repeat(40)).is_err());
+        for (field, value) in [
+            ("conclusion", "failure"),
+            ("event", "push"),
+            ("head_branch", "feature"),
+            ("path", "other.yml"),
+        ] {
+            let mut other = original.clone();
+            other[field] = json!(value);
+            assert!(validate_preparation(&other, &"a".repeat(40)).is_err());
+        }
+    }
 
     #[test]
     fn qualification_transport_checks_hash_and_expansion_bound() {
@@ -602,6 +808,9 @@ mod tests {
             run_metadata: run_path,
             candidate_id: bundle.inventory.candidate_id.clone(),
             source_commit: bundle.inventory.source_commit.clone(),
+            tag: None,
+            tag_metadata: None,
+            preparation_run_metadata: None,
             out: out.clone(),
             github_output: None,
         })
@@ -624,7 +833,8 @@ mod tests {
         )
         .unwrap();
         let tag_path = dir.path().join("tag.json");
-        crate::write_json(&tag_path, &json!({"ref": "refs/tags/v0.10.0", "object": {"type": "commit", "sha": bundle.inventory.source_commit}})).unwrap();
+        crate::write_json(&tag_path, &json!({"tag": "v0.10.0", "object": {"type": "commit", "sha": bundle.inventory.source_commit},
+            "message": serde_json::to_string(&TagBinding { candidate_run: 10, preparation_run: 20, candidate_id: bundle.inventory.candidate_id.clone(), bundle_sha256: bundle.sha256.clone() }).unwrap()})).unwrap();
         let release_path = dir.path().join("release.json");
         crate::write_json(
             &release_path,
@@ -662,5 +872,64 @@ mod tests {
         inventory.files[0].sha256 = "0".repeat(64);
         crate::write_json(&inventory_path, &inventory).unwrap();
         assert!(bundle::open(&bundle.root).is_err());
+    }
+
+    #[test]
+    fn tagged_publication_requires_the_exact_candidate_and_preparation() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = evidence_fixture(dir.path());
+        let (bundle, _) = load_evidence(&args).unwrap();
+        let candidate_path = dir.path().join("candidate-run.json");
+        crate::write_json(&candidate_path, &json!({"id": 10, "path": ".github/workflows/release-candidate-next.yml", "head_branch": "next", "head_sha": bundle.inventory.source_commit, "status": "completed", "conclusion": "success", "repository": {"full_name": REPOSITORY}})).unwrap();
+        let preparation_path = dir.path().join("preparation-run.json");
+        crate::write_json(&preparation_path, &json!({"id": 20, "path": ".github/workflows/publish-release.yml", "event": "workflow_dispatch", "head_branch": "next", "head_sha": bundle.inventory.source_commit, "status": "completed", "conclusion": "success", "repository": {"full_name": REPOSITORY}})).unwrap();
+        let evidence = || EvidenceArgs {
+            bundle: args.bundle.clone(),
+            plan: args.plan.clone(),
+            report: args.report.clone(),
+            decisions: None,
+            results: args.results.clone(),
+        };
+        let message_path = dir.path().join("message.json");
+        run(PublicationCommand::TagMessage {
+            evidence: evidence(),
+            run_metadata: candidate_path.clone(),
+            preparation_run_metadata: preparation_path.clone(),
+            out: message_path.clone(),
+        })
+        .unwrap();
+        let mut binding: TagBinding =
+            serde_json::from_slice(&fs::read(message_path).unwrap()).unwrap();
+        let tag_path = dir.path().join("tag.json");
+        let check = |binding: &TagBinding, out: &str| {
+            crate::write_json(&tag_path, &json!({"tag": "v0.10.0", "object": {"type": "commit", "sha": bundle.inventory.source_commit}, "message": serde_json::to_string(binding).unwrap()})).unwrap();
+            run(PublicationCommand::Check {
+                evidence: evidence(),
+                run_metadata: candidate_path.clone(),
+                candidate_id: bundle.inventory.candidate_id.clone(),
+                source_commit: bundle.inventory.source_commit.clone(),
+                tag: Some("v0.10.0".into()),
+                tag_metadata: Some(tag_path.clone()),
+                preparation_run_metadata: Some(preparation_path.clone()),
+                out: dir.path().join(out),
+                github_output: None,
+            })
+        };
+        check(&binding, "matching").unwrap();
+        binding.preparation_run += 1;
+        assert!(
+            check(&binding, "wrong-run")
+                .unwrap_err()
+                .to_string()
+                .contains("tag names different")
+        );
+        binding.preparation_run -= 1;
+        binding.bundle_sha256 = "0".repeat(64);
+        assert!(
+            check(&binding, "wrong-bundle")
+                .unwrap_err()
+                .to_string()
+                .contains("tag names different")
+        );
     }
 }

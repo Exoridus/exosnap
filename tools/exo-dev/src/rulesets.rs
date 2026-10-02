@@ -773,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn main_and_next_have_distinct_protection_and_only_publish_refs_allow_actions_bypass() {
+    fn main_and_next_have_distinct_protection_and_version_tags_require_admin() {
         let dir = repo_rulesets_dir();
         let read = |name: &str| -> Value {
             serde_json::from_str(&std::fs::read_to_string(dir.join(name)).unwrap()).unwrap()
@@ -799,21 +799,23 @@ mod tests {
             "next ruleset does not protect next explicitly"
         );
 
-        for (name, entry) in [("main", &main), ("tags", &tags)] {
-            let has_actions_bypass = entry
-                .get("bypass_actors")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .filter(|a| {
-                    a.get("actor_type").and_then(Value::as_str) == Some("Integration")
-                        && a.get("actor_id").and_then(Value::as_i64) == Some(15368)
-                        && a.get("bypass_mode").and_then(Value::as_str) == Some("always")
-                })
-                .count();
-            assert_eq!(
-                has_actions_bypass, 1,
-                "{name}: publish cannot write using the GitHub Actions integration"
+        let tag_bypass = tags.get("bypass_actors").and_then(Value::as_array).unwrap();
+        assert_eq!(
+            tag_bypass.len(),
+            1,
+            "version tags have an extra bypass actor"
+        );
+        assert_eq!(tag_bypass[0]["actor_type"], "RepositoryRole");
+        assert_eq!(tag_bypass[0]["actor_id"], 5);
+        assert_eq!(tag_bypass[0]["bypass_mode"], "always");
+        for protection in ["creation", "update", "deletion", "non_fast_forward"] {
+            assert!(
+                tags["rules"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|rule| rule["type"] == protection),
+                "version tags lost {protection} protection"
             );
         }
 

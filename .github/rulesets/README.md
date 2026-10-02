@@ -2,7 +2,7 @@
 
 GitHub stores branch and tag protection server-side, where it is invisible to review and drifts without a commit. The files next to this one are the intended state, and `cargo exo-dev check rulesets` reports the difference between them and what the repository actually has.
 
-`next-branch.json` protects the development default. `main-branch.json` protects the latest Stable commit. The `main` payload contains a GitHub Actions integration bypass intended for an approved publish job. The integration ID is 15368. This bypass applies to every workflow token with write permission, so workflows that receive such tokens must be reviewed as release authority. The reviewed `publish-release.yml` workflow uses this bypass only behind the `release` environment.
+`next-branch.json` and `main-branch.json` describe branch protection. Release publication does not update either branch or require a branch-protection bypass. The repository administrator pushes the qualified version tag; the tag-triggered workflow publishes existing candidate bytes behind the `release` environment.
 
 Each file is a ruleset payload in the shape the REST API accepts, so updating an existing one is:
 
@@ -27,4 +27,4 @@ Keeping the decision in the workflow means it is reviewed with the code that mak
 
 ## Why the tag ruleset is not the release authorisation
 
-`version-tags.json` blocks `v*` tags except for a repository admin or the GitHub Actions integration. Publication requires the `release` environment approval and a ready report bound to the candidate bundle. The integration bypass is broad, so only a reviewed publish workflow may request tag-writing permission.
+`version-tags.json` protects version-tag creation, updates and deletion, with the repository Admin role as its always-allowed bypass actor. Only the administrator/user identity creates the final annotated tag. Its message binds the exact candidate bundle to successful candidate and qualification-preparation runs. The workflow does not create or move tags. Publication still requires `release` environment approval and Rust validation of the frozen qualification evidence and package hashes.
