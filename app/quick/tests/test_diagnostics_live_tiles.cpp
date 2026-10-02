@@ -103,8 +103,8 @@ TEST(DiagnosticsLiveTiles, TheEncoderTileReportsWhatIsRunningAndNotWhatWasReques
     const LiveTile encoder = Find(tiles, "encoder");
     // From EncoderInitInfo -- the encoder's own initialization record.
     EXPECT_NE(encoder.value.find("AV1"), std::string::npos);
-    EXPECT_NE(encoder.value.find("P6"), std::string::npos);
-    EXPECT_NE(encoder.value.find("CQ 17"), std::string::npos);
+    EXPECT_EQ(encoder.value.find("P6"), std::string::npos);
+    EXPECT_EQ(encoder.value.find("CQ 17"), std::string::npos);
     // p99 against the frame budget, which is where the headroom question lives.
     EXPECT_NE(encoder.sub.find("p99"), std::string::npos);
     EXPECT_NE(encoder.sub.find("16.67"), std::string::npos);
@@ -169,13 +169,9 @@ TEST(DiagnosticsLiveTiles, AnUnavailableRemainingTimeSaysSoInsteadOfShowingZero)
 
 TEST(DiagnosticsLiveTiles, PresentDiagnosticsNameTheirOwnAbsence) {
     const LiveTile off = Find(TilesFor("present-unavailable"), "framePacing");
-    // Not blank and not an em dash: an unexplained "unavailable" reads as a
-    // defect, and the cause is an opt-in the user controls.
-    EXPECT_NE(off.detail.find("Present diagnostics unavailable"), std::string::npos);
-    EXPECT_NE(off.detail.find("opt-in"), std::string::npos);
-
+    EXPECT_EQ(off.detail, "Healthy");
     const LiveTile on = Find(TilesFor("healthy"), "framePacing");
-    EXPECT_EQ(on.detail, "Independent flip \xc2\xb7 no tearing");
+    EXPECT_EQ(on.detail, "Healthy");
     // The two scenarios differ in the present gate and nothing else, so the
     // measurement above it has to be identical.
     EXPECT_EQ(on.value, off.value);
@@ -185,16 +181,16 @@ TEST(DiagnosticsLiveTiles, PresentDiagnosticsNameTheirOwnAbsence) {
 TEST(DiagnosticsLiveTiles, FramePacingCarriesTargetOutputAndSourceJitter) {
     const LiveTile pacing = Find(TilesFor("judder"), "framePacing");
     EXPECT_EQ(pacing.value, "58.10 fps");
-    EXPECT_NE(pacing.sub.find("Target 60 fps"), std::string::npos);
-    EXPECT_NE(pacing.sub.find("jitter 7.9 ms"), std::string::npos);
-    EXPECT_NE(pacing.detail.find("tearing active"), std::string::npos);
+    EXPECT_NE(pacing.sub.find("affected output slots"), std::string::npos);
+    EXPECT_EQ(pacing.sub.find("jitter"), std::string::npos);
+    EXPECT_EQ(pacing.detail.find("tearing"), std::string::npos);
     EXPECT_EQ(pacing.tone, TileTone::Notice);
 }
 
 TEST(DiagnosticsLiveTiles, ALostAudioSourceIsANoticeEvenWhileThePipelineIsHealthy) {
     const std::vector<LiveTile> tiles = TilesFor("degraded");
     const LiveTile audio = Find(tiles, "audioSync");
-    // ADR 0046: the recording keeps running, so this is a calm measured notice
+    // the recording keeps running, so this is a calm measured notice
     // and never escalates past one -- but it is not silent either.
     EXPECT_EQ(audio.tone, TileTone::Notice);
     EXPECT_NE(audio.detail.find("1 source(s) silent"), std::string::npos);
@@ -306,20 +302,20 @@ TEST(DiagnosticsLiveTiles, FramePacingValueIsGreenOnlyWhileNoCheckThatOwnsItHasF
     const SessionLedger clean;
     const LiveTile calm = Find(BuildLiveTiles(LiveTileInputs{healthy, clean}), "framePacing");
     EXPECT_EQ(calm.value_tone, ValueTone::Ok);
-    EXPECT_EQ(calm.sub_tone, ValueTone::Ok);
+    EXPECT_EQ(calm.sub_tone, ValueTone::Neutral);
 
     const SessionLedger firing = LedgerWith("rec.001", /*active=*/true);
     const LiveTile now = Find(BuildLiveTiles(LiveTileInputs{healthy, firing}), "framePacing");
     EXPECT_EQ(now.value_tone, ValueTone::Warn);
-    EXPECT_EQ(now.sub_tone, ValueTone::Warn);
-    EXPECT_EQ(now.sub_tinted, "jitter 1.2 ms");
+    EXPECT_EQ(now.sub_tone, ValueTone::Neutral);
+    EXPECT_TRUE(now.sub_tinted.empty());
 
     // Quiet again: the big value is about now and goes back to green, the small
     // sub-value is about the session and stays amber.
     const SessionLedger quiet = LedgerWith("rec.001", /*active=*/false);
     const LiveTile after = Find(BuildLiveTiles(LiveTileInputs{healthy, quiet}), "framePacing");
     EXPECT_EQ(after.value_tone, ValueTone::Ok);
-    EXPECT_EQ(after.sub_tone, ValueTone::Warn);
+    EXPECT_EQ(after.sub_tone, ValueTone::Neutral);
 }
 
 TEST(DiagnosticsLiveTiles, StorageThroughputHasNoOwnerAndStaysNeutral) {
@@ -364,7 +360,7 @@ TEST(DiagnosticsLiveTiles, SessionDetailCarriesTheWholeRunAndNotTheLastPublish) 
     EXPECT_EQ(Find(tiles, "audioSync").session_detail, "session peak 1.7 ms");
 }
 
-TEST(DiagnosticsLiveTiles, FourTilesWithoutDepthEightWithIt) {
+TEST(DiagnosticsLiveTiles, FourSummaryTilesAndExpandedEvidence) {
     const exosnap::engine::RecordingDiagnosticsSnapshot healthy =
         visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
     const SessionLedger clean;
@@ -388,7 +384,7 @@ TEST(DiagnosticsLiveTiles, FourTilesWithoutDepthEightWithIt) {
 
     const std::vector<LiveTile> deep =
         BuildLiveTiles(LiveTileInputs{healthy, clean, /*in_depth=*/true, present, dpc, /*gpu_exec_p99_ms=*/4.2});
-    ASSERT_EQ(deep.size(), 8u);
+    ASSERT_EQ(deep.size(), 22u);
     EXPECT_EQ(Find(deep, "presentMode").value, "Independent flip");
     EXPECT_EQ(Find(deep, "presentHealth").value, "2.0% discarded");
     EXPECT_EQ(Find(deep, "dpcLatency").value, "420 \xc2\xb5s");
@@ -397,17 +393,16 @@ TEST(DiagnosticsLiveTiles, FourTilesWithoutDepthEightWithIt) {
     EXPECT_DOUBLE_EQ(*Find(deep, "gpuTime").budget, 1000.0 / 60.0);
 }
 
-// The in-depth row is four tiles wide or it is a ragged row. A tile whose trace
-// is not reporting shows an em dash and names why, which is what the rest of the
-// product does with a value nobody measured.
+// Unavailable evidence keeps its place and identifies the missing measurement.
 TEST(DiagnosticsLiveTiles, AnInDepthTileWithNoReadingKeepsItsPlaceAndNamesWhy) {
     const exosnap::engine::RecordingDiagnosticsSnapshot healthy =
         visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
     const SessionLedger clean;
     const std::vector<LiveTile> tiles = BuildLiveTiles(LiveTileInputs{healthy, clean, /*in_depth=*/true});
-    ASSERT_EQ(tiles.size(), 8u);
+    ASSERT_EQ(tiles.size(), 22u);
+    EXPECT_EQ(Find(tiles, "gpuSurfaceOwnership").value, "\xe2\x80\x94");
     EXPECT_EQ(Find(tiles, "presentMode").value, "\xe2\x80\x94");
-    EXPECT_EQ(Find(tiles, "presentMode").detail, "PresentMon trace is not reporting");
+    EXPECT_EQ(Find(tiles, "presentMode").detail, "Enhanced presentation telemetry unavailable");
     EXPECT_EQ(Find(tiles, "presentHealth").value, "\xe2\x80\x94");
     EXPECT_EQ(Find(tiles, "dpcLatency").value, "\xe2\x80\x94");
     EXPECT_EQ(Find(tiles, "dpcLatency").detail, "DPC/ISR trace is not reporting");

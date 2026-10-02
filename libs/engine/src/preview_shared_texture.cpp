@@ -1,3 +1,4 @@
+#include <exosnap/engine/gpu_surface_inventory.h>
 #include <exosnap/engine/preview_shared_texture.h>
 
 #include <cstdio>
@@ -30,7 +31,8 @@ bool PreviewSharedTexture::Create(ID3D11Device* device, uint32_t width, uint32_t
     desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
 
     winrt::com_ptr<ID3D11Texture2D> tex;
-    HRESULT hr = device->CreateTexture2D(&desc, nullptr, tex.put());
+    HRESULT hr = exosnap::engine::CreateTrackedTexture2D(device, &desc, nullptr, tex.put(),
+                                                         exosnap::engine::GpuSurfaceOwner::Preview);
     if (FAILED(hr)) {
         char buf[96];
         std::snprintf(buf, sizeof(buf), "CreateTexture2D(shared preview) failed 0x%08lX",

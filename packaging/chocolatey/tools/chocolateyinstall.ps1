@@ -10,7 +10,7 @@ if (-not (Get-OSArchitectureWidth -Compare 64) -or $env:ChocolateyForceX86 -eq '
 $packageArgs = @{
   packageName    = $env:ChocolateyPackageName
   fileType       = 'msi'
-  url64bit       = 'https://github.com/Exoridus/exosnap/releases/download/v0.9.1/ExoSnap-0.9.1-windows-x64.msi'
+  url64bit       = 'https://github.com/Exoridus/exosnap/releases/download/v0.10.0/ExoSnap-0.10.0-windows-x64.msi'
   checksum64     = '0000000000000000000000000000000000000000000000000000000000000000'
   checksumType64 = 'sha256'
   softwareName   = 'ExoSnap*'

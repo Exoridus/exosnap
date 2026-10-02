@@ -1,13 +1,44 @@
 #include <gtest/gtest.h>
 #include <update/swap_engine.h>
 #define WIN32_LEAN_AND_MEAN
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <thread>
+#include <vector>
 #include <windows.h> // ::GetCurrentProcessId in the process-wait case
 namespace fs = std::filesystem;
 using namespace exosnap::update;
 
 namespace {
+using namespace std::chrono_literals;
+
+// Replays the scripted Win32 results in order and records every sleep, so the
+// retry schedule is checked without real locks or real waiting.
+struct ScriptedRename {
+    std::vector<unsigned long> results;
+    std::vector<std::chrono::milliseconds> sleeps;
+    size_t calls = 0;
+
+    RenameRetry retry() {
+        RenameRetry r;
+        r.rename = [this](const std::wstring&, const std::wstring&) {
+            const unsigned long result = results[(std::min)(calls, results.size() - 1)];
+            ++calls;
+            return result;
+        };
+        r.sleep = [this](std::chrono::milliseconds delay) { sleeps.push_back(delay); };
+        return r;
+    }
+};
+
+RenameRetry NoRetry() {
+    RenameRetry r;
+    r.budget = 0ms;
+    return r;
+}
+
 struct SwapFixture : ::testing::Test {
     fs::path root, install, staging;
     SwapPlan plan;
@@ -65,12 +96,85 @@ TEST_F(SwapFixture, StageRenameCompensatesWhenPromoteFails) {
     std::ifstream lock(staging / "exosnap.exe");
     ASSERT_TRUE(lock.is_open());
 
-    EXPECT_EQ(StageRename(plan), SwapError::RenameNewFailed);
+    RenameOutcome failed;
+    EXPECT_EQ(StageRename(plan, NoRetry(), &failed), SwapError::RenameNewFailed);
+    EXPECT_TRUE(IsTransientRenameError(failed.error)) << failed.error;
 
     std::ifstream live(install / "exosnap.exe");
     std::string s((std::istreambuf_iterator<char>(live)), {});
     EXPECT_EQ(s, "old");                       // old version restored and live again
     EXPECT_FALSE(fs::exists(plan.backup_dir)); // backup was renamed back
+}
+
+TEST(RenameDirectory, SucceedsWithoutWaiting) {
+    ScriptedRename script{{ERROR_SUCCESS}};
+    const RenameOutcome outcome = RenameDirectory(L"a", L"b", script.retry());
+    EXPECT_TRUE(outcome.ok());
+    EXPECT_EQ(outcome.attempts, 1u);
+    EXPECT_TRUE(script.sleeps.empty());
+}
+
+TEST(RenameDirectory, WaitsOutATransientLock) {
+    ScriptedRename script{{ERROR_SHARING_VIOLATION, ERROR_ACCESS_DENIED, ERROR_SUCCESS}};
+    const RenameOutcome outcome = RenameDirectory(L"a", L"b", script.retry());
+    EXPECT_TRUE(outcome.ok());
+    EXPECT_EQ(outcome.attempts, 3u);
+    EXPECT_EQ(script.sleeps, (std::vector<std::chrono::milliseconds>{50ms, 100ms}));
+}
+
+TEST(RenameDirectory, GivesUpOnAPermanentLockWithinTheBudget) {
+    ScriptedRename script{{ERROR_ACCESS_DENIED}};
+    const RenameOutcome outcome = RenameDirectory(L"a", L"b", script.retry());
+    EXPECT_FALSE(outcome.ok());
+    EXPECT_EQ(outcome.error, static_cast<unsigned long>(ERROR_ACCESS_DENIED));
+    EXPECT_EQ(script.sleeps,
+              (std::vector<std::chrono::milliseconds>{50ms, 100ms, 200ms, 400ms, 800ms, 800ms, 800ms, 800ms, 800ms}));
+    EXPECT_EQ(outcome.attempts, 10u);
+    std::chrono::milliseconds slept{0};
+    for (const auto delay : script.sleeps) {
+        slept += delay;
+    }
+    EXPECT_LE(slept, RenameRetry{}.budget);
+}
+
+TEST(RenameDirectory, FailsImmediatelyOnAnErrorThatCannotClear) {
+    ScriptedRename script{{ERROR_PATH_NOT_FOUND, ERROR_SUCCESS}};
+    const RenameOutcome outcome = RenameDirectory(L"a", L"b", script.retry());
+    EXPECT_EQ(outcome.error, static_cast<unsigned long>(ERROR_PATH_NOT_FOUND));
+    EXPECT_EQ(outcome.attempts, 1u);
+    EXPECT_TRUE(script.sleeps.empty());
+}
+
+TEST_F(SwapFixture, StageRenameWaitsForAHandleInsideTheInstallToClose) {
+    // A handle inside the live install is what a just-exited helper process or a
+    // scanner leaves behind for a moment. The swap must wait it out instead of
+    // failing the whole update.
+    auto lock = std::make_unique<std::ifstream>(install / "data.dll");
+    ASSERT_TRUE(lock->is_open());
+    std::thread release([&] {
+        std::this_thread::sleep_for(150ms);
+        lock.reset();
+    });
+    RenameOutcome failed;
+    const SwapError result = StageRename(plan, {}, &failed);
+    release.join();
+
+    EXPECT_EQ(result, SwapError::None) << failed.error;
+    std::ifstream live(install / "exosnap.exe");
+    std::string s((std::istreambuf_iterator<char>(live)), {});
+    EXPECT_EQ(s, "new");
+}
+
+TEST_F(SwapFixture, StageRenameReportsTheLockWhenItNeverClears) {
+    std::ifstream lock(install / "data.dll");
+    ASSERT_TRUE(lock.is_open());
+
+    RenameOutcome failed;
+    EXPECT_EQ(StageRename(plan, NoRetry(), &failed), SwapError::RenameOldFailed);
+    EXPECT_TRUE(IsTransientRenameError(failed.error)) << failed.error;
+    EXPECT_EQ(failed.attempts, 1u);
+    EXPECT_TRUE(fs::exists(install / "exosnap.exe")); // old install untouched
+    EXPECT_FALSE(fs::exists(plan.backup_dir));
 }
 
 TEST_F(SwapFixture, StagingWithoutExeIsRejectedUntouched) {

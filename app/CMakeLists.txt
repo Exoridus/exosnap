@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.27)
+cmake_minimum_required(VERSION 3.27)
 
 # The local Qt install hint lives in the ROOT CMakeLists.txt, because libs/control
 # calls find_package(Qt6) before this directory is even added. Repeating it here
@@ -175,7 +175,7 @@ add_custom_target(exosnap_build_info
 
 # Windows VERSIONINFO resource — generated from the canonical project version so
 # the shipped exosnap.exe carries coherent File/Product version metadata, which
-# scripts/build-release-artifacts.ps1 asserts against the release identity.
+# `exo-verify package` asserts against the release identity.
 # Generated here rather than inside a target block: the shipping Quick target
 # compiles it from ${PROJECT_BINARY_DIR}/app/exosnap_version.rc, and this file is
 # the directory that owns that path.
@@ -200,7 +200,7 @@ exosnap_add_app_test_support(exosnap_app_log_test_support
 )
 target_link_libraries(exosnap_app_log_test_support PUBLIC Qt6::Core)
 
-# Live Verify control channel (ADR 0066) -- the APPLICATION's half of it: the
+# Live Verify control channel -- the APPLICATION's half of it: the
 # command table, its preconditions, the state it publishes, the intents it
 # executes, and the argv option this executable answers to. The wire format, the
 # policy mechanics, the session state machine and the named-pipe transport are
@@ -282,7 +282,7 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     # frontend drives it from the live diagnostics callback, so it belongs in the
     # library and not only in its own test target.
     diagnostics/WindowCaptureStall.cpp
-    # ADR 0046: the mid-recording audio-degradation latch. Same reason as the two
+    # the mid-recording audio-degradation latch. Same reason as the two
     # above — the shipping frontend drives it from the live diagnostics callback.
     diagnostics/AudioSourceDegradation.cpp
     diagnostics/SelfTestRunner.cpp
@@ -395,7 +395,7 @@ target_include_directories(window_capture_stall_tests PRIVATE ${CMAKE_CURRENT_SO
 target_link_libraries(window_capture_stall_tests PRIVATE dwmapi.lib shell32.lib)
 
 # Mid-recording audio-source degradation: the standing-notification latch over the
-# pipeline's existing AudioDiagnostics health facts (ADR 0046, pure).
+# pipeline's existing AudioDiagnostics health facts (pure).
 exosnap_add_gtest(
     NAME audio_source_degradation_tests
     TEST_PREFIX audio_degraded.
@@ -406,7 +406,7 @@ exosnap_add_gtest(
 )
 target_include_directories(audio_source_degradation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# 0.5.0 video rate-control tests (ADR 0009): ComputeNvencRcParams mapping,
+# Video rate-control tests: ComputeNvencRcParams mapping,
 # preset round-trip, dirty-tracking, sanitize, and capability queries.
 exosnap_add_gtest(
     NAME video_rate_control_tests
@@ -420,7 +420,7 @@ exosnap_add_gtest(
 target_include_directories(video_rate_control_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(video_rate_control_tests PRIVATE ole32.lib shell32.lib)
 
-# 0.5.0 audio encoding param tests (ADR 0019): preset round-trip, dirty-tracking, sanitize bounds.
+# Audio encoding parameter tests: preset round-trip, dirty-tracking, sanitize bounds.
 exosnap_add_gtest(
     NAME audio_encoding_preset_tests
     TEST_PREFIX audio_enc.
@@ -616,7 +616,7 @@ exosnap_add_gtest(
         Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-# ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
+# mfreadwrite.lib removed (MF/SinkWriter path deleted).
 target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
 set_target_properties(output_settings_tests PROPERTIES AUTOMOC ON)
 
@@ -821,7 +821,7 @@ exosnap_add_gtest(
 )
 target_include_directories(codec_labels_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# ELEVATION-FOUNDATION-R1 (ADR 0033): elevation provider stub + relaunch handoff
+# ELEVATION-FOUNDATION-R1: elevation provider stub + relaunch handoff
 # arg builder/parser + RelaunchResult contract. Pure logic; no Win32 invocation.
 exosnap_add_gtest(
     NAME elevation_tests
@@ -834,20 +834,14 @@ exosnap_add_gtest(
 target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
 
-# ADR 0033: present-diagnostics provider. PresentMonProvider owns a
-# PresentMonEtwSession and gates on elevation && opt-in before starting it.
+# present-diagnostics provider. PresentMonProvider owns a
+# PresentMonEtwSession and attempts the trace when the session opt-in asks for
+# it; the OS answer (opened, access denied, session conflict, not built) is what
+# decides availability.
 #
-# This target used to leave EXOSNAP_HAS_PRESENTMON undefined so that
-# PresentMonEtwSession.cpp compiled to a no-op twin -- which meant every contract the
-# session owns (attribution boundaries, accumulator resets, the held process handle,
-# what `available` means) was verified against an implementation that did nothing,
-# while the shipping one was verified by nobody. That is the same shape as the original
-# defect this ADR's Wave D slice fixed, so the session no longer has an ifdef at all:
-# the trace itself lives behind IPresentTraceBackend, and these tests inject a fake one.
-#
-# The define and the vendored consumer are carried anyway, so the REAL backend compiles
-# and links here too. A production translation unit that only ever built inside
-# app/quick is exactly what went unnoticed the first time.
+# Attribution, state and lifetime tests exercise the production session with a
+# fake IPresentTraceBackend. The real ETW backend is compiled and linked as well,
+# so this target cannot pass against a separate no-op session implementation.
 exosnap_add_gtest(
     NAME present_provider_tests
     TEST_PREFIX present.
@@ -952,6 +946,17 @@ exosnap_add_gtest(
     LIBRARIES Qt6::Core exosnap::update exosnap::control exosnap::update_handoff
 )
 target_include_directories(update_launch_plan_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+
+# The staged-runtime test launches the shipped updater from a copy of exactly the
+# files UpdaterStagingFileList() names, under a sanitized environment. The path
+# goes through a generated header with a RAW string literal, not through a /D
+# define: a Windows path in a normal string literal turns "\Users" into an
+# invalid escape sequence.
+file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/UpdaterExePath.h"
+    CONTENT "#pragma once\n#define EXOSNAP_UPDATER_EXE R\"($<TARGET_FILE:exosnap_updater>)\"\n"
+)
+target_include_directories(update_launch_plan_tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>")
 
 # QCR-202: the pure completion gate behind UpdateService's async check. The
 # service is a thin driver of this resolver, so the interleavings that used to
@@ -1267,7 +1272,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     target_include_directories(capture_frame_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(capture_frame_tests PRIVATE
         NOMINMAX EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
-    # ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
+    # mfreadwrite.lib removed (MF/SinkWriter path deleted).
     target_link_libraries(capture_frame_tests PRIVATE
         mfplat.lib mf.lib mfuuid.lib ole32.lib)
     set_target_properties(capture_frame_tests PROPERTIES AUTOMOC ON)
@@ -1362,22 +1367,25 @@ target_compile_definitions(brand_geometry_tests PRIVATE
 # and both stayed consistent while the generator quietly stopped reproducing
 # either -- so the next person to run it would have silently reverted a shipped
 # correction. --check writes nothing and exits non-zero on drift.
-find_package(Python3 COMPONENTS Interpreter QUIET)
-if(Python3_EXECUTABLE)
-    add_test(
-        NAME brand.geometry.marks_match_the_generator
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/generate-brand-marks.py" --check
-    )
-    set_tests_properties(brand.geometry.marks_match_the_generator PROPERTIES TIMEOUT 60)
-    exosnap_set_test_phase(brand.geometry.marks_match_the_generator hermetic)
-elseif(EXOSNAP_REQUIRE_TEST_TOOLS)
-    message(FATAL_ERROR
-        "Python 3 was not found, so brand.geometry.marks_match_the_generator would not be registered "
-        "and the suite would pass without it. Install Python 3 or configure with "
-        "-DEXOSNAP_REQUIRE_TEST_TOOLS=OFF to accept a reduced suite.")
-else()
-    message(STATUS "Python 3 not found: the brand geometry generator check will not be registered.")
-endif()
+#
+# Always registered: exo-dev.exe is resolved by cmake/run-exo-dev-tool.cmake at
+# CTest run time, not here at configure time. A workflow that configures and
+# builds only a subset of targets (crash-capture-build never builds
+# tools/exo-dev) must still be able to configure; a workflow that does select
+# this test without the tool built gets a normal test FAIL, not a refusal to
+# configure at all. Resolution order mirrors FindExoDevExe() in the C++ gtests
+# that shell out to this same binary (see
+# libs/engine/tests/test_analyze_encode_perf.cpp): EXOSNAP_TEST_TOOL_EXE
+# first, then the cargo workspace's known debug/release output directories.
+add_test(
+    NAME brand.geometry.marks_match_the_generator
+    COMMAND "${CMAKE_COMMAND}"
+        "-DEXOSNAP_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DEXOSNAP_TOOL_ARGS=generate-brand-marks;--check"
+        -P "${CMAKE_SOURCE_DIR}/cmake/run-exo-dev-tool.cmake"
+)
+set_tests_properties(brand.geometry.marks_match_the_generator PROPERTIES TIMEOUT 60)
+exosnap_set_test_phase(brand.geometry.marks_match_the_generator hermetic)
 
 # Pure unit tests for HumanizeEngineDetail (RecordingErrorPanel's raw-enum → canon
 # label mapping). Dependency-light: QString only.
@@ -1391,98 +1399,26 @@ exosnap_add_gtest(
 target_include_directories(recording_error_detail_text_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(recording_error_detail_text_tests PROPERTIES AUTOMOC ON)
 
-# The Live Verify runner's own state machine (ADR 0066). Registered here rather
-# than left as a script somebody remembers to run: "an interruption is never
-# mistaken for success" and "a PASS is bound to the artifact it was produced
-# against" are the runner's whole value, and the only way to test them by hand is
-# to kill a real acceptance run.
 find_program(EXOSNAP_PWSH pwsh)
 if(EXOSNAP_PWSH)
-    add_test(NAME live_verify.runner_state
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-state.tests.ps1")
-    set_tests_properties(live_verify.runner_state PROPERTIES TIMEOUT 180 LABELS "live_verify")
-    exosnap_set_test_phase(live_verify.runner_state hermetic)
-
-    # The client's endpoint naming. Registered for the same reason: deriving the
-    # updater child's pipe name wrongly fails as a connect timeout, which is
-    # indistinguishable from "the child never started" -- the most expensive way
-    # to learn about a typo.
+    # The client's endpoint naming. Deriving the updater child's pipe name
+    # wrongly fails as a connect timeout, which is indistinguishable from "the
+    # child never started" -- the most expensive way to learn about a typo.
     add_test(NAME live_verify.endpoint_names
         COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
             "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-endpoints.tests.ps1")
     set_tests_properties(live_verify.endpoint_names PROPERTIES TIMEOUT 120 LABELS "live_verify")
     exosnap_set_test_phase(live_verify.endpoint_names hermetic)
 
-    # Wave D: the release campaign runner and the environment orchestrator. Every
-    # case here runs against a FAKE envctl, which is what makes the interesting
-    # failures reachable at all -- "the setter returned success and the read-back
-    # disagreed" and "the original device vanished before the restore" cannot be
-    # produced on demand by a real display or a real audio endpoint. Nothing in this
-    # suite touches the machine's actual configuration.
-    add_test(NAME live_verify.release_runner
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/release-verify.tests.ps1")
-    set_tests_properties(live_verify.release_runner PROPERTIES TIMEOUT 300 LABELS "live_verify")
-    exosnap_set_test_phase(live_verify.release_runner hermetic)
+    # The packaging version-drift gate is Rust, not PowerShell: the contract is
+    # `cargo test -p exo-dev release::version::`, not a CTest case here.
 
-    # The publish lock: the qualification record a release is promoted on, and the
-    # script the release workflow runs before it may publish anything. Registered
-    # here because its whole value is a refusal -- a missing record, a record about
-    # a different commit, a record about different bytes, a FAIL, an INFRA_ERROR, a
-    # required gate nobody answered -- and every one of those is only reachable from
-    # a fixture. Queries no hardware and reads no real release.
-    add_test(NAME live_verify.release_qualification
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/release-qualification.tests.ps1")
-    set_tests_properties(live_verify.release_qualification PROPERTIES TIMEOUT 300 LABELS "live_verify")
-    exosnap_set_test_phase(live_verify.release_qualification hermetic)
-
-    # The signature the publish lock reads before anything else. Pinned to RFC 8032's
-    # own test vectors, because a verifier that says yes to everything reports a proof
-    # it never had, and nothing downstream could tell.
-    add_test(NAME pipeline.ed25519
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/ed25519.tests.ps1")
-    set_tests_properties(pipeline.ed25519 PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.ed25519 hermetic)
-
-    # Which release candidate a commit may be promoted from. Two gates read that
-    # answer, so a wrong one publishes a release against evidence describing
-    # something else. `gh` is a stub here; nothing reaches the network.
-    add_test(NAME live_verify.find_qualified_rc
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/find-qualified-rc.tests.ps1")
-    set_tests_properties(live_verify.find_qualified_rc PROPERTIES TIMEOUT 180 LABELS "live_verify")
-    exosnap_set_test_phase(live_verify.find_qualified_rc hermetic)
-
-    # The packaging version-drift gate. Every case is the real packaging tree with
-    # exactly one literal edited: a partial bump is the mistake the gate exists for,
-    # and a check that only noticed when everything moved together would notice
-    # nothing.
-    add_test(NAME pipeline.packaging_version
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/packaging-version.tests.ps1")
-    set_tests_properties(pipeline.packaging_version PROPERTIES TIMEOUT 300 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.packaging_version hermetic)
-
-    # The third-party identity the release manifest records. The cases that matter
-    # are the refusals: a pin that has gone missing has to stop the manifest, because
-    # a dependency list that is quietly one entry shorter is the failure nobody sees.
-    add_test(NAME pipeline.dependency_identity
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/dependency-identity.tests.ps1")
-    set_tests_properties(pipeline.dependency_identity PROPERTIES TIMEOUT 300 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.dependency_identity hermetic)
+    # The third-party identity the release manifest records is Rust:
+    # `cargo test -p exo-verify package::dependency_identity`.
 
     # The publication policy, offline half only: what packaging/publication-policy.json
-    # is allowed to say about each channel. The feed half of check-feed-drift.ps1 reads
-    # four public services and is advisory by design, so it is not a test.
-    add_test(NAME pipeline.publication_policy
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/publication-policy.tests.ps1")
-    set_tests_properties(pipeline.publication_policy PROPERTIES TIMEOUT 300 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.publication_policy hermetic)
+    # is allowed to say about each channel. The feed half is advisory by design, so
+    # it is not a test; its contract is `cargo test -p exo-dev release::feed_drift`.
 
     # The Hyper-V verification guest recipe. Registered here for the reason the
     # release-runner cases are: what it is worth testing about a virtual machine is
@@ -1498,114 +1434,46 @@ if(EXOSNAP_PWSH)
     set_tests_properties(live_verify.vm_recipe PROPERTIES TIMEOUT 300 LABELS "live_verify")
     exosnap_set_test_phase(live_verify.vm_recipe hermetic)
 
-    # The local verification pipeline's own contracts. These belong in CTest and
-    # not only in verify.ps1, because verify.ps1 is the thing under test: a
-    # pipeline that reports PASS is worth nothing until it has been shown to
-    # report FAIL when a step fails, and to refuse PASS for a step whose
-    # prerequisite never ran. Running them from inside the pipeline they guard
-    # would let a broken orchestrator pass itself.
+    # The contracts of the checks the local gate runs. These belong in CTest and
+    # not only in `cargo exo-dev verify`, which runs the checks themselves: a
+    # check that reports PASS is worth nothing until it has been shown to report
+    # FAIL when it should, and running its contracts only from inside the gate it
+    # serves would let a broken gate pass itself. The orchestrator's own
+    # contracts are Rust tests, run by cargo directly in CI for the same reason.
     #
     # Label "pipeline", deliberately not "live_verify": these cases guard the
     # local pipeline rather than the Live Verify runner, and nothing here queries
     # hardware.
-    add_test(NAME pipeline.drift_guards
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/check-drift.tests.ps1")
-    set_tests_properties(pipeline.drift_guards PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.drift_guards hermetic)
-
-    add_test(NAME pipeline.verify_orchestrator
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/verify-pipeline.tests.ps1")
-    set_tests_properties(pipeline.verify_orchestrator PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.verify_orchestrator hermetic)
-
-    add_test(NAME pipeline.source_hygiene
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/check-source-hygiene.tests.ps1")
-    set_tests_properties(pipeline.source_hygiene PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.source_hygiene hermetic)
+    #
+    # The Qt/build drift guard (qt-version-consistency, setup-qt-centralized,
+    # no-qmake-project, qt-sdk-path-allowlist) and the source-hygiene
+    # provenance scan are Rust, not PowerShell: their contracts are
+    # `cargo test -p exo-dev drift::` and `cargo test -p exo-dev
+    # source_hygiene::`, not a CTest case here.
 
     # The subject grammar, the changelog assembler and the release-notes
     # renderer share one parser, and the release cut is the first place a
     # disagreement between them would surface -- after the tag is pushed.
-    add_test(NAME pipeline.commit_policy
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/commit-policy.tests.ps1")
-    set_tests_properties(pipeline.commit_policy PROPERTIES TIMEOUT 300 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.commit_policy hermetic)
+    # Their contract is `cargo test -p exo-dev commit_policy::` and
+    # `cargo test -p exo-dev release::changelog`, not a CTest case here.
 
-    # A cost contract, not a code one: that a pull request title correction
-    # cannot re-trigger the Windows build matrix, and that the metadata verdict
-    # is not the same status context as the code verdict.
-    add_test(NAME pipeline.pr_workflow_contract
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/pr-workflow-contract.tests.ps1")
-    set_tests_properties(pipeline.pr_workflow_contract PROPERTIES TIMEOUT 120 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.pr_workflow_contract hermetic)
+    # The cost contract that a pull request title correction cannot re-trigger
+    # the Windows build matrix, and that the metadata verdict is not the same
+    # status context as the code verdict, is `cargo test -p exo-dev pr::`, not
+    # a CTest case here.
 
-    add_test(NAME pipeline.prose_lines
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/prose-lines.tests.ps1")
-    set_tests_properties(pipeline.prose_lines PROPERTIES TIMEOUT 300 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.prose_lines hermetic)
+    # The hard-wrapped prose guard is retired (StepId::ProseLines removed):
+    # scripts/check-prose-lines.ps1 and its test suite no longer exist.
 
-    # Needs clang-tidy, and reports that it is missing rather than passing
-    # without it -- which is the same distinction the guard itself is about.
-    add_test(NAME pipeline.lint_canaries
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/lint-canaries.tests.ps1")
-    set_tests_properties(pipeline.lint_canaries PROPERTIES TIMEOUT 300 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.lint_canaries hermetic)
+    # The entry point every other gate runs the suite through, and the digest a
+    # test result is attributed to, are Rust, not PowerShell: the contracts are
+    # `cargo test -p exo-dev test::runner::` and `cargo test -p exo-dev
+    # test::fingerprint::`, not a CTest case here.
 
-    # The entry point every other gate runs the suite through. What it promises
-    # is negative -- that a label exclusion cannot take a category with it, that
-    # an empty selection is an error rather than a pass, and that a failing
-    # test's own logs survive the cleanup -- and none of that is observable from
-    # a green run of the real suite.
-    # The repository's own statement of what GitHub must enforce, and the
-    # report that compares it with what GitHub actually does. Registered because
-    # both halves are only wrong in one direction that matters -- a live state
-    # weaker than the declared one -- and that is unreachable without fixtures.
-    add_test(NAME pipeline.github_rulesets
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/github-rulesets.tests.ps1")
-    set_tests_properties(pipeline.github_rulesets PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.github_rulesets hermetic)
-
-    add_test(NAME pipeline.run_tests_contract
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/run-tests-contract.tests.ps1")
-    set_tests_properties(pipeline.run_tests_contract PROPERTIES TIMEOUT 420 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.run_tests_contract hermetic)
-
-    # What a test result is attributed to. Every case builds a throwaway git
-    # repository, because the property under test is that two working trees the
-    # build can tell apart are never given the same identity -- and a green run of
-    # the real suite cannot show that.
-    add_test(NAME pipeline.source_fingerprint
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/source-fingerprint.tests.ps1")
-    set_tests_properties(pipeline.source_fingerprint PROPERTIES TIMEOUT 180 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.source_fingerprint hermetic)
-
-    # Which build tree a tool resolves out of. Four trees can hold the same binary
-    # and the selection is only ever wrong quietly -- an old copy runs, reports
-    # success and describes a build nobody asked about.
-    add_test(NAME pipeline.build_artifacts
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/build-artifacts.tests.ps1")
-    set_tests_properties(pipeline.build_artifacts PROPERTIES TIMEOUT 120 LABELS "pipeline")
-    exosnap_set_test_phase(pipeline.build_artifacts hermetic)
-
-    # Holds and contends the real host locks from child processes, so it runs alone:
-    # beside run_tests_contract (which runs run-tests.ps1, which takes the device
-    # lock) its timing assertions would measure the other test's hold.
-    add_test(NAME pipeline.host_resource_lock
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/host-resource-lock.tests.ps1")
-    set_tests_properties(pipeline.host_resource_lock PROPERTIES TIMEOUT 300 LABELS "pipeline" RUN_SERIAL TRUE)
-    exosnap_set_test_phase(pipeline.host_resource_lock hermetic)
+    # The host-wide build/tree/device locks (holds and contention from real
+    # child processes, inheritance to a child, an abandoned holder's release)
+    # are Rust, not PowerShell: the contract is `cargo test -p exo-dev
+    # host_lock::`, not a CTest case here.
 elseif(EXOSNAP_REQUIRE_TEST_TOOLS)
     message(FATAL_ERROR
         "pwsh was not found, so none of the Live Verify and pipeline script tests would be registered "
@@ -1662,3 +1530,11 @@ endif()
 #
 # Unconditional: this subdirectory defines `exosnap`, the shipped application.
 add_subdirectory(quick/ExoSnap/Quick)
+
+exosnap_add_gtest(
+    NAME gpu_telemetry_tests
+    TEST_PREFIX diagnostics.
+    SOURCES tests/test_gpu_telemetry.cpp diagnostics/GpuTelemetryProviders.cpp
+    LIBRARIES dxgi
+)
+target_include_directories(gpu_telemetry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/libs/engine/include)

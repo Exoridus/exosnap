@@ -2,7 +2,10 @@
 
 #include "gpu_compositor.h"
 #include "session_internal.h"
+#include "webcam_frame_observation.h"
 #include <exosnap/engine/dxgi_od_capture_src.h>
+#include <exosnap/engine/frame_pacing.h>
+#include <exosnap/engine/gpu_surface_inventory.h>
 
 #include <d3d11.h>
 #include <winrt/base.h>
@@ -697,3 +700,112 @@ TEST(SessionStateWebcamOverlayLiveTest, SeedUpdateAndSnapshotSanitizeLiveOverlay
 }
 
 } // namespace
+
+TEST(GpuCompositorTest, WebcamGenerationReusesUploadAndUpdatesHeldScreenPixels) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 4, 4, err)) << err;
+    auto background = CreateTexture(d3d.device.get(), 4, 4, SolidBgra(4, 4, 10, 20, 30));
+    const WebcamPixelRect rect{1, 1, 2, 2};
+    GpuCompositor::ChromaKeyParams chroma;
+    auto webcam = SolidBgra(1, 1, 100, 110, 120);
+    for (uint64_t generation : {1u, 1u, 2u, 2u}) {
+        ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+        // A repeated generation must use the retained texture, even without a CPU payload.
+        const bool changed = generation != compositor.WebcamUploadCount();
+        if (generation == 2)
+            webcam = SolidBgra(1, 1, 200, 210, 220);
+        ASSERT_TRUE(
+            compositor.DrawWebcam(changed ? webcam.data() : nullptr, 1, 1, rect, false, chroma, err, 1.0f, generation))
+            << err;
+        const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+        ExpectPixelNear(pixels, 4, 1, 1, generation == 1 ? 100 : 200, generation == 1 ? 110 : 210,
+                        generation == 1 ? 120 : 220, 255);
+        EXPECT_EQ(compositor.WebcamUploadCount(), generation);
+    }
+}
+
+TEST(GpuCompositorTest, StaticBackgroundWithCameraRatesAndDelayedRecoveryHasFreshPixels) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    auto background = CreateTexture(d3d.device.get(), 4, 4, SolidBgra(4, 4, 10, 20, 30));
+    for (uint32_t recordingRate : {60u, 144u, 240u}) {
+        for (uint32_t cameraRate : {15u, 30u, 60u, 144u, 240u}) {
+            SCOPED_TRACE(recordingRate);
+            SCOPED_TRACE(cameraRate);
+            GpuCompositor compositor;
+            std::string error;
+            ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 4, 4, error));
+            struct Provider final : exosnap::engine::WebcamFrameProvider {
+                std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> frame;
+                int payload_copies = 0;
+                std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> Snapshot() override {
+                    return frame;
+                }
+                bool TryGetFrame(int&, int&, std::vector<uint8_t>&, uint64_t&) override {
+                    ++payload_copies;
+                    return false;
+                }
+            } provider;
+            exosnap::engine::WebcamFrameObservation observation;
+            exosnap::engine::VisualGenerations generations;
+            std::optional<exosnap::engine::VisualFrameKey> last_composited;
+            uint64_t previousGeneration = 0, changes = 0;
+            for (uint32_t tick = 0; tick < recordingRate; ++tick) {
+                const bool enabled = !(tick > recordingRate / 3 && tick < recordingRate / 2);
+                const bool available =
+                    tick > recordingRate / 10 && !(tick > recordingRate * 3 / 4 && tick < recordingRate * 4 / 5);
+                const bool visible = enabled && available;
+                const uint64_t generation = 1 + uint64_t(tick) * cameraRate / recordingRate;
+                provider.frame =
+                    !available
+                        ? nullptr
+                        : std::make_shared<const exosnap::engine::WebcamFrameSnapshot>(
+                              exosnap::engine::WebcamFrameSnapshot{
+                                  1, 1, generation, SolidBgra(1, 1, static_cast<uint8_t>(generation), 110, 120)});
+                const auto key = observation.Observe(generations, &provider, enabled);
+                const bool changed = !last_composited || *last_composited != key;
+                if (exosnap::engine::ShouldRecompositeHeldScreen(false, false, changed, true)) {
+                    ASSERT_TRUE(compositor.BeginFrame(background.get(), error));
+                    if (const auto& frame = observation.Frame()) {
+                        ASSERT_TRUE(compositor.DrawWebcam(frame->bgra.data(), 1, 1, WebcamPixelRect{1, 1, 2, 2}, false,
+                                                          {}, error, 1.0f, frame->generation));
+                        if (generation != previousGeneration)
+                            ++changes;
+                        previousGeneration = generation;
+                    }
+                    last_composited = key;
+                }
+                const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+                ExpectPixelNear(pixels, 4, 1, 1, visible ? static_cast<uint8_t>(generation) : 10, visible ? 110 : 20,
+                                visible ? 120 : 30, 255);
+            }
+            EXPECT_EQ(compositor.WebcamUploadCount(), changes);
+            EXPECT_EQ(provider.payload_copies, 0);
+        }
+    }
+}
+
+TEST(GpuSurfaceInventory, TracksResourceLifetimeIncludingExternalReferences) {
+    using namespace exosnap::engine;
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    const auto before = ReadGpuSurfaceUsage(GpuSurfaceOwner::PacingRing);
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = 32;
+    desc.Height = 16;
+    desc.ArraySize = desc.MipLevels = desc.SampleDesc.Count = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    winrt::com_ptr<ID3D11Texture2D> texture;
+    ASSERT_TRUE(SUCCEEDED(
+        CreateTrackedTexture2D(d3d.device.get(), &desc, nullptr, texture.put(), GpuSurfaceOwner::PacingRing)));
+    auto held = texture;
+    texture = nullptr;
+    EXPECT_EQ(ReadGpuSurfaceUsage(GpuSurfaceOwner::PacingRing).bytes, before.bytes + 2048);
+    held = nullptr;
+    EXPECT_EQ(ReadGpuSurfaceUsage(GpuSurfaceOwner::PacingRing).bytes, before.bytes);
+    EXPECT_EQ(ReadGpuSurfaceUsage(GpuSurfaceOwner::PacingRing).surfaces, before.surfaces);
+}

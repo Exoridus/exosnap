@@ -274,8 +274,7 @@ TEST(RecordingPresetStore, VideoBitDepthPersists_DefaultEightBit) {
 }
 
 // ===========================================================================
-// Colour range persists (introduced schema 18; default flipped Full->Limited
-// with the schema-20 migration by fix/color-range-signaling — see ADR 0032)
+// Color range persists independently of the current default.
 // ===========================================================================
 
 // Default preset round-trips as Limited range (the current default).
@@ -562,6 +561,94 @@ TEST(RecordingPresetStore, NvencPresetInvalidValue_DefaultsToP4_NoReset) {
     EXPECT_FALSE(state.repaired);
     ASSERT_EQ(state.user_presets.size(), 1u);
     EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, exosnap::engine::NvencPreset::P4);
+
+    CleanupFile(path);
+}
+
+// A valid legacy NVENC preset value still loads unchanged; the key's meaning is
+// unchanged and remains vendor-specific.
+TEST(RecordingPresetStore, LegacyNvencPresetValueStillLoads) {
+    const QString path = UniqueTempPath();
+    QString toml = MakeSinglePresetToml(kPresetSchemaVersion, QStringLiteral("limited"));
+    toml.replace(QStringLiteral("color_range = \"limited\"\n"),
+                 QStringLiteral("color_range = \"limited\"\nnvenc_preset = \"p1\"\n"));
+    ASSERT_TRUE(WriteTomlString(path, toml));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, exosnap::engine::NvencPreset::P1);
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
+// Encoder-device preference. Additive [video] keys; the persisted identity is
+// the PCI fingerprint and display name, never the boot-scoped adapter LUID.
+// ===========================================================================
+
+TEST(RecordingPresetStore, EncoderDeviceDefaultsToAuto) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Auto device preset";
+    p.config = MakeDefaultPreset().config;
+    EXPECT_EQ(p.config.video.encoder_device.mode, exosnap::engine::EncoderDevicePreference::Mode::Auto);
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.config);
+    }
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.video.encoder_device.mode,
+                  exosnap::engine::EncoderDevicePreference::Mode::Auto);
+    }
+
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, EncoderDeviceExplicitFingerprintRoundTrips) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Explicit device preset";
+    p.config = MakeDefaultPreset().config;
+    p.config.video.encoder_device.mode = exosnap::engine::EncoderDevicePreference::Mode::Explicit;
+    p.config.video.encoder_device.device = {0x10DEu, 0x2684u, 0x16A1u, "NVIDIA GeForce RTX 4090"};
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.config);
+    }
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        const auto& device = state.user_presets[0].config.video.encoder_device;
+        EXPECT_EQ(device.mode, exosnap::engine::EncoderDevicePreference::Mode::Explicit);
+        EXPECT_EQ(device.device.vendor_id, 0x10DEu);
+        EXPECT_EQ(device.device.device_id, 0x2684u);
+        EXPECT_EQ(device.device.subsystem_id, 0x16A1u);
+        EXPECT_EQ(device.device.name, "NVIDIA GeForce RTX 4090");
+    }
+
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, EncoderDeviceMissingKeysDefaultToAuto) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(kPresetSchemaVersion, QStringLiteral("limited"))));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].config.video.encoder_device.mode,
+              exosnap::engine::EncoderDevicePreference::Mode::Auto);
 
     CleanupFile(path);
 }
@@ -1520,7 +1607,7 @@ TEST(RecordingPresetStore, OldSchemaVersion_Load_KeepsData_NotRepaired) {
 }
 
 // ===========================================================================
-// Frame pacing — default Smooth + Newest round-trip (ADR 0035, schema 19)
+// Frame pacing — default Smooth + Newest round-trip (schema 19)
 // ===========================================================================
 
 TEST(RecordingPresetStore, FramePacingRoundtrips) {

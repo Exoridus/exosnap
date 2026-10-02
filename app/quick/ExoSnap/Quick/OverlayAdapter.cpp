@@ -29,7 +29,8 @@ void OverlayAdapter::setSource(const RecordViewModel* source) {
     // carrying the same native id value it happened to be cached against.
     geometry_native_id_ = 0;
     recorded_monitor_geometry_ = QRect();
-    recorded_monitor_work_area_ = QRect();
+    recorded_source_geometry_ = QRect();
+    recorded_source_is_region_ = false;
     synchronize();
 }
 
@@ -42,7 +43,11 @@ void OverlayAdapter::synchronize() {
     // Folded into `moved` below rather than emitting on its own: a signal sent
     // from here would run QML bindings against a half-updated adapter, with the
     // new geometry already readable and the new state not yet written.
-    const bool geometry_moved = refreshMonitorGeometry();
+    const bool monitor_geometry_moved = refreshMonitorGeometry();
+    // Runs after refreshMonitorGeometry(): its Monitor-mode fallback reads
+    // recorded_monitor_geometry_ from that call.
+    const bool source_geometry_moved = refreshSourceGeometry();
+    const bool geometry_moved = monitor_geometry_moved || source_geometry_moved;
 
     models::RecordingOverlayStateInputs inputs;
     bool countdown_running = false;
@@ -124,12 +129,14 @@ bool OverlayAdapter::refreshMonitorGeometry() {
         const int index = source_->selected_target_index;
         if (index >= 0 && index < static_cast<int>(source_->targets.size())) {
             const exosnap::engine::CaptureTarget& target = source_->targets[static_cast<std::size_t>(index)];
-            // Window targets have no monitor rectangle of their own here. The
-            // Widgets overlays fall back to the primary screen in that case and
-            // so do these -- following a window as it is dragged between
-            // displays is a separate feature, not a port detail.
-            if (target.kind == exosnap::engine::CaptureTarget::Kind::Monitor)
-                native_id = target.native_id;
+            // A Window target has no monitor rectangle of its own; resolved via
+            // its HWND's hosting monitor instead, same as FindTargetDisplayFacts
+            // does for the HDR lookup. synchronize() re-resolves this every call,
+            // so dragging the recorded window to another monitor moves the
+            // overlays along with it for free -- the fast path below already
+            // treats a changed HMONITOR as dirty.
+            native_id =
+                ResolveTargetMonitor(target.kind == exosnap::engine::CaptureTarget::Kind::Window, target.native_id);
         }
     }
 
@@ -144,21 +151,17 @@ bool OverlayAdapter::refreshMonitorGeometry() {
     geometry_dirty_ = false;
 
     QRect resolved;
-    QRect resolved_work_area;
     if (native_id != 0) {
         const ScreenPresentation meta =
             presentation_provider_ ? presentation_provider_(native_id) : QueryScreenPresentation(native_id);
         if (meta.available && meta.width > 0 && meta.height > 0)
             resolved = QRect(meta.origin_x, meta.origin_y, meta.width, meta.height);
-        if (meta.available && meta.work_width > 0 && meta.work_height > 0)
-            resolved_work_area = QRect(meta.work_origin_x, meta.work_origin_y, meta.work_width, meta.work_height);
     }
 
-    if (resolved == recorded_monitor_geometry_ && resolved_work_area == recorded_monitor_work_area_)
+    if (resolved == recorded_monitor_geometry_)
         return false;
 
     recorded_monitor_geometry_ = resolved;
-    recorded_monitor_work_area_ = resolved_work_area;
     return true;
 }
 
@@ -171,12 +174,59 @@ void OverlayAdapter::setPresentationProviderForTesting(std::function<ScreenPrese
     geometry_dirty_ = true;
 }
 
+void OverlayAdapter::setWindowRectProviderForTesting(std::function<WindowScreenRect(std::uintptr_t)> provider) {
+    window_rect_provider_ = std::move(provider);
+}
+
+bool OverlayAdapter::refreshSourceGeometry() {
+    QRect resolved;
+    bool is_region = false;
+    if (source_ != nullptr) {
+        // Region mode is a crop layered on top of a monitor target (see
+        // RecordViewModel), so it is checked against the active capture mode
+        // rather than against `has_region` alone -- a stale region left over
+        // from a previous session in a different mode must not outrank
+        // whatever mode is actually running.
+        if (source_->capture_mode == CaptureMode::Region && source_->has_region) {
+            const exosnap::engine::CaptureRegion& region = source_->region;
+            if (region.width > 0 && region.height > 0) {
+                resolved = QRect(region.x, region.y, region.width, region.height);
+                is_region = true;
+            }
+        } else {
+            const int index = source_->selected_target_index;
+            if (index >= 0 && index < static_cast<int>(source_->targets.size())) {
+                const exosnap::engine::CaptureTarget& target = source_->targets[static_cast<std::size_t>(index)];
+                if (target.kind == exosnap::engine::CaptureTarget::Kind::Window) {
+                    const WindowScreenRect rect = window_rect_provider_ ? window_rect_provider_(target.native_id)
+                                                                        : QueryWindowScreenRect(target.native_id);
+                    if (rect.available && rect.width > 0 && rect.height > 0)
+                        resolved = QRect(rect.x, rect.y, rect.width, rect.height);
+                } else {
+                    // Monitor target: already resolved above this call, in the
+                    // same synchronize().
+                    resolved = recorded_monitor_geometry_;
+                }
+            }
+        }
+    }
+
+    const bool changed = resolved != recorded_source_geometry_ || is_region != recorded_source_is_region_;
+    recorded_source_geometry_ = resolved;
+    recorded_source_is_region_ = is_region;
+    return changed;
+}
+
 QRect OverlayAdapter::recordedMonitorGeometry() const noexcept {
     return recorded_monitor_geometry_;
 }
 
-QRect OverlayAdapter::recordedMonitorWorkArea() const noexcept {
-    return recorded_monitor_work_area_;
+QRect OverlayAdapter::recordedSourceGeometry() const noexcept {
+    return recorded_source_geometry_;
+}
+
+bool OverlayAdapter::recordedSourceIsRegion() const noexcept {
+    return recorded_source_is_region_;
 }
 
 int OverlayAdapter::recordingState() const noexcept {

@@ -1,4 +1,4 @@
-// MixedAudioSrc per-source degradation (ADR 0046). The central hole this closes:
+// MixedAudioSrc per-source degradation. The central hole this closes:
 // a merged track used to swallow a dead inner source silently (continue without
 // trace) and never bring it back. Now a lost inner is marked degraded (visible
 // via DegradedSourceCount), the survivors keep mixing, and Reinit reacquires it.

@@ -4,7 +4,7 @@
 //
 // AudioClockMs turns "how many audio frames has the WASAPI render client
 // actually written so far" into a playback position in milliseconds -- this
-// is the playback master clock (see docs/dev/edit-player-architecture.md).
+// is the playback master clock (see docs/architecture/edit-and-export.md).
 //
 // SelectFrameForClock turns "which decoded video frames are queued, and where
 // is the clock now" into "which one to display, and how many older ones to

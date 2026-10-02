@@ -1,6 +1,6 @@
 # probe_encode_file — dev-only probe: reads a Y4M reference clip, encodes it
 # through the real NvencVideoEncoder (the exact class the product uses), and
-# writes a raw elementary stream. Backs scripts/dev/encoder_quality_matrix.py.
+# writes a raw elementary stream. Backs `exo-dev encoder-quality-matrix`.
 # Never packaged.
 #
 # Requires the full exosnap_engine build (NVENC headers present); skipped otherwise.

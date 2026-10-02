@@ -6,12 +6,10 @@
 
 namespace exosnap::diagnostics {
 
-// Pure, reader-side accumulator for the session's present aggregates (ADR 0033
-// extra-checks): total presents, compositor-discarded presents, and classified
-// present-mode transitions. Held by PresentMonEtwSession and Reset() at every
-// attribution boundary (recording start/stop, or an idle capture-target change)
-// so the statistics describe ONLY the currently-targeted source — never carrying
-// a prior recording's or the idle desktop's totals across the boundary.
+// Pure, reader-side accumulator for the session's present aggregates: total presents, compositor-discarded presents,
+// and classified present-mode transitions. Held by PresentMonEtwSession and Reset() at every attribution boundary
+// (recording start/stop, or an idle capture-target change) so the statistics describe ONLY the currently-targeted
+// source — never carrying a prior recording's or the idle desktop's totals across the boundary.
 //
 // Extracted as a pure struct (no Win32/ETW dependency) so the per-recording reset
 // semantics are unit-testable without a live ETW session.

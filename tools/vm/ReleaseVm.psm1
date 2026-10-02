@@ -2783,6 +2783,140 @@ function Invoke-ReleaseVmCommand {
     return $result
 }
 
+function Read-ReleaseVmGuestProgress {
+    <#
+    .SYNOPSIS
+        One bounded read of a running guest campaign: new log lines and whether it finished.
+    .DESCRIPTION
+        The log is read from a byte offset and only complete lines come back, so a line
+        the campaign is still writing arrives whole on a later read. Once the exit file
+        exists the remainder is returned as is. The log is expected to be UTF-8; a
+        rewritten or truncated log restarts at its beginning.
+
+        The read runs as a job with its own timeout because a PowerShell Direct call
+        into a guest that stopped answering has no transport timeout. A timed-out job
+        is abandoned rather than stopped, since stopping it can block just as long; it
+        ends with the calling process.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $VMName,
+        [Parameter(Mandatory)] [System.Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [string] $ExitFile,
+        [string] $LogFile,
+        [long] $Offset = 0,
+        [ValidateRange(5, 600)] [int] $TimeoutSeconds = 60,
+        [ValidateRange(1024, 16777216)] [int] $MaxBytes = 262144
+    )
+    # The guest side runs in the guest's Windows PowerShell 5.1.
+    $job = Invoke-Command -VMName $VMName -Credential $Credential -AsJob -ScriptBlock {
+        param($ExitPath, $LogPath, $From, $Limit)
+        $done = Test-Path -LiteralPath $ExitPath
+        $exitText = $null
+        if ($done) { $exitText = "$(Get-Content -LiteralPath $ExitPath -Raw)".Trim() }
+
+        $text = ''
+        $next = $From
+        if ($LogPath -and (Test-Path -LiteralPath $LogPath)) {
+            $stream = [IO.File]::Open($LogPath, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+                [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+            try {
+                if ($stream.Length -lt $From) { $From = 0 }
+                $count = [int][Math]::Min($stream.Length - $From, $Limit)
+                $bytes = New-Object byte[] $count
+                [void] $stream.Seek($From, [IO.SeekOrigin]::Begin)
+                $read = 0
+                while ($read -lt $count) {
+                    $n = $stream.Read($bytes, $read, $count - $read)
+                    if ($n -le 0) { break }
+                    $read += $n
+                }
+                $take = $read
+                if (-not $done -and $read -gt 0 -and $read -lt $Limit) {
+                    $take = [Array]::LastIndexOf($bytes, [byte] 10, $read - 1) + 1
+                }
+                $skip = 0
+                if ($From -eq 0 -and $take -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                    $skip = 3
+                }
+                $text = [Text.Encoding]::UTF8.GetString($bytes, $skip, $take - $skip)
+                $next = $From + $take
+            }
+            finally {
+                $stream.Dispose()
+            }
+        }
+        [pscustomobject]@{ Text = $text; Offset = $next; Done = $done; ExitText = $exitText }
+    } -ArgumentList $ExitFile, $LogFile, $Offset, $MaxBytes
+
+    if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
+        throw "'$VMName' did not answer a progress read within $TimeoutSeconds second(s)"
+    }
+    try {
+        $result = Receive-Job -Job $job -ErrorAction Stop
+    }
+    finally {
+        Remove-Job -Job $job -Force
+    }
+    if ($null -eq $result) { throw "'$VMName' returned no progress" }
+    return [pscustomobject]@{
+        Text = [string] $result.Text; Offset = [long] $result.Offset
+        Done = [bool] $result.Done; ExitText = $result.ExitText
+    }
+}
+
+function Watch-ReleaseVmGuestRun {
+    <#
+    .SYNOPSIS
+        Follows a guest campaign until it finishes, a deadline passes or the guest stops answering.
+    .DESCRIPTION
+        Every way out is bounded. Each read carries its own timeout, a run of failed
+        reads ends the watch as unreachable, and the deadline ends it whatever the guest
+        does. A campaign waiting on an operator shows as a quiet log, never as a host
+        that hangs. The watch only reads: it neither prompts nor changes the guest.
+
+        -Read receives the next offset and returns an object with Text, Offset, Done and
+        ExitText, as Read-ReleaseVmGuestProgress does. New text is passed to -OnText.
+        The result's Outcome is 'finished', 'deadline' or 'unreachable'.
+    #>
+    param(
+        [Parameter(Mandatory)] [scriptblock] $Read,
+        [Parameter(Mandatory)] [scriptblock] $OnText,
+        [ValidateRange(1, 1440)] [int] $TimeoutMinutes = 90,
+        [ValidateRange(1, 600)] [int] $PollSeconds = 15,
+        [ValidateRange(1, 100)] [int] $MaxConsecutiveFailures = 4,
+        [scriptblock] $Now = { [DateTime]::UtcNow },
+        [scriptblock] $Sleep = { param($Seconds) Start-Sleep -Seconds $Seconds }
+    )
+    $deadline = (& $Now).AddMinutes($TimeoutMinutes)
+    $offset = [long] 0
+    $failures = 0
+    while ((& $Now) -lt $deadline) {
+        try {
+            $progress = & $Read $offset
+            $failures = 0
+            if ($progress.Text) { & $OnText $progress.Text }
+            $offset = [long] $progress.Offset
+            if ($progress.Done) {
+                return [pscustomobject]@{ Outcome = 'finished'; ExitText = $progress.ExitText; Detail = '' }
+            }
+        }
+        catch {
+            $failures++
+            if ($failures -ge $MaxConsecutiveFailures) {
+                return [pscustomobject]@{
+                    Outcome = 'unreachable'; ExitText = $null
+                    Detail = "$failures consecutive reads failed; last: $($_.Exception.Message)"
+                }
+            }
+        }
+        & $Sleep $PollSeconds
+    }
+    return [pscustomobject]@{
+        Outcome = 'deadline'; ExitText = $null
+        Detail = "no exit file within $TimeoutMinutes minute(s); the campaign may still be running"
+    }
+}
+
 function Copy-ReleaseVmDirectoryBack {
     <#
     .SYNOPSIS
@@ -2914,4 +3048,6 @@ Export-ModuleMember -Function @(
     'Assert-ReleaseVmSealed'
     'Invoke-ReleaseVmProvisioning'
     'Invoke-ReleaseVmCommand'
+    'Read-ReleaseVmGuestProgress'
+    'Watch-ReleaseVmGuestRun'
 )

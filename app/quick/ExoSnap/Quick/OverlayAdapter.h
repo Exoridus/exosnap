@@ -50,13 +50,23 @@ class OverlayAdapter : public QObject {
     // target). The overlays fall back to their own screen in that case, matching
     // the Widgets behaviour.
     Q_PROPERTY(QRect recordedMonitorGeometry READ recordedMonitorGeometry NOTIFY changed FINAL)
-    // The same monitor's work area (excludes the taskbar and any docked appbar).
-    // Empty under the same condition as recordedMonitorGeometry above. Only the
-    // quick-controls pill uses this: it is the one overlay that accepts clicks,
-    // so it is the one overlay the taskbar must not cover. The other overlays
-    // are informational, click-through, and positioned over the recorded
-    // picture -- which includes the taskbar -- so they keep the full rectangle.
-    Q_PROPERTY(QRect recordedMonitorWorkArea READ recordedMonitorWorkArea NOTIFY changed FINAL)
+    // The actually-recorded rectangle, keyed off the active capture mode: the
+    // region rect in Region mode, the live window rectangle in Window mode
+    // (DWMWA_EXTENDED_FRAME_BOUNDS, re-resolved every synchronize() so a moved
+    // or resized window keeps this attached), the full monitor rectangle in
+    // Monitor mode. Empty when nothing is resolvable (no target, or a Window
+    // target whose HWND cannot be queried) -- the recording/diagnostics pill
+    // hides rather than falling back to some other monitor. The recording and
+    // diagnostics pill binds to THIS, never to recordedMonitorGeometry: those
+    // two disagree exactly in Window and Region mode, which is the geometry
+    // bug this property exists to fix.
+    Q_PROPERTY(QRect recordedSourceGeometry READ recordedSourceGeometry NOTIFY changed FINAL)
+    // True only when the source rectangle above is a Region-mode crop, as
+    // opposed to a Window-mode rectangle that also happens to be smaller than
+    // its monitor. The quick-controls dock's "prefer below the region" default
+    // placement applies to the first case only; a recorded window is not a
+    // region and gets the plain bottom-of-monitor default instead.
+    Q_PROPERTY(bool recordedSourceIsRegion READ recordedSourceIsRegion NOTIFY changed FINAL)
     Q_PROPERTY(int recordingState READ recordingState NOTIFY changed FINAL)
 
     Q_PROPERTY(bool recordingOverlayActive READ recordingOverlayActive NOTIFY changed FINAL)
@@ -91,7 +101,8 @@ class OverlayAdapter : public QObject {
     void invalidateMonitorGeometry();
 
     [[nodiscard]] QRect recordedMonitorGeometry() const noexcept;
-    [[nodiscard]] QRect recordedMonitorWorkArea() const noexcept;
+    [[nodiscard]] QRect recordedSourceGeometry() const noexcept;
+    [[nodiscard]] bool recordedSourceIsRegion() const noexcept;
     [[nodiscard]] int recordingState() const noexcept;
     [[nodiscard]] bool recordingOverlayActive() const noexcept;
     [[nodiscard]] bool countdownOverlayActive() const noexcept;
@@ -103,6 +114,9 @@ class OverlayAdapter : public QObject {
     // "the same monitor now reports a different size" is otherwise only
     // reachable by physically changing a display.
     void setPresentationProviderForTesting(std::function<ScreenPresentation(std::uintptr_t)> provider);
+    // Same reasoning, for the live window-rectangle query a Window-mode source
+    // rect depends on.
+    void setWindowRectProviderForTesting(std::function<WindowScreenRect(std::uintptr_t)> provider);
 
   signals:
     void changed();
@@ -112,14 +126,18 @@ class OverlayAdapter : public QObject {
     // emitting keeps every notify for one synchronize() in a single signal, sent
     // after all state is written.
     [[nodiscard]] bool refreshMonitorGeometry();
+    // Resolves recorded_source_geometry_ from the active capture mode. Must run
+    // after refreshMonitorGeometry() within the same synchronize(): the
+    // Monitor-mode fallback reads recorded_monitor_geometry_ from that call.
+    // Unlike refreshMonitorGeometry(), not gated behind the same-HMONITOR fast
+    // path: a Window-mode target can move within its hosting monitor, which
+    // does not change the HMONITOR but must still move the source rect.
+    [[nodiscard]] bool refreshSourceGeometry();
 
     const RecordViewModel* source_ = nullptr;
     PersistedAppSettings settings_;
 
     QRect recorded_monitor_geometry_;
-    // The same monitor's work area, refreshed in lockstep with the rectangle
-    // above -- one Win32 query answers both, and they share the same cache key.
-    QRect recorded_monitor_work_area_;
     // The native id the cached geometry was resolved from, so a 4 Hz
     // synchronize() does not call into the monitor API on every tick. Zero means
     // "no monitor target", which is a distinct state from "not yet resolved" —
@@ -129,6 +147,10 @@ class OverlayAdapter : public QObject {
     // the first synchronize() resolves a rectangle at all.
     bool geometry_dirty_ = true;
     std::function<ScreenPresentation(std::uintptr_t)> presentation_provider_;
+    std::function<WindowScreenRect(std::uintptr_t)> window_rect_provider_;
+    // The resolved recording/diagnostics-pill anchor; see recordedSourceGeometry().
+    QRect recorded_source_geometry_;
+    bool recorded_source_is_region_ = false;
 
     models::RecordingOverlayState state_ = models::RecordingOverlayState::Hidden;
     bool recording_overlay_active_ = false;

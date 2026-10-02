@@ -1,6 +1,8 @@
 #include <exosnap/engine/edit_frame_gpu_converter.h>
+#include <exosnap/engine/gpu_surface_inventory.h>
+#include <exosnap/engine/performance_measurements.h>
 
-#include <d3dcompiler.h>
+#include "measured_shader_compile.h"
 
 #include <cstdio>
 #include <cstring>
@@ -253,8 +255,8 @@ bool CompilePixelShader(ID3D11Device* device, const char* src, const char* name,
                         std::string& err) {
     winrt::com_ptr<ID3DBlob> blob;
     winrt::com_ptr<ID3DBlob> error_blob;
-    HRESULT hr = D3DCompile(src, std::strlen(src), name, nullptr, nullptr, "main", "ps_5_0",
-                            D3DCOMPILE_ENABLE_STRICTNESS, 0, blob.put(), error_blob.put());
+    HRESULT hr = MeasuredD3DCompile(src, std::strlen(src), name, nullptr, nullptr, "main", "ps_5_0",
+                                    D3DCOMPILE_ENABLE_STRICTNESS, 0, blob.put(), error_blob.put());
     if (FAILED(hr)) {
         SetHResultError(err, name, hr);
         if (error_blob) {
@@ -283,8 +285,8 @@ bool EditFrameGpuConverter::Init(ID3D11Device* device, ID3D11DeviceContext* cont
 
     winrt::com_ptr<ID3DBlob> vs_blob;
     winrt::com_ptr<ID3DBlob> error_blob;
-    HRESULT hr = D3DCompile(kVertexShaderSrc, std::strlen(kVertexShaderSrc), "edit_frame_vs", nullptr, nullptr, "main",
-                            "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs_blob.put(), error_blob.put());
+    HRESULT hr = MeasuredD3DCompile(kVertexShaderSrc, std::strlen(kVertexShaderSrc), "edit_frame_vs", nullptr, nullptr,
+                                    "main", "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs_blob.put(), error_blob.put());
     if (FAILED(hr)) {
         SetHResultError(err, "D3DCompile(edit frame vertex shader)", hr);
         return false;
@@ -352,7 +354,8 @@ bool EditFrameGpuConverter::UploadPlane(int index, const uint8_t* src, UINT src_
         desc.SampleDesc.Count = 1;
         desc.Usage = D3D11_USAGE_DEFAULT; // written with UpdateSubresource, which honours the source row pitch
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        HRESULT hr = device_->CreateTexture2D(&desc, nullptr, plane.texture.put());
+        HRESULT hr = exosnap::engine::CreateTrackedTexture2D(device_, &desc, nullptr, plane.texture.put(),
+                                                             exosnap::engine::GpuSurfaceOwner::Editor);
         if (FAILED(hr)) {
             SetHResultError(err, "CreateTexture2D(edit frame plane)", hr);
             return false;
@@ -374,6 +377,7 @@ bool EditFrameGpuConverter::UploadPlane(int index, const uint8_t* src, UINT src_
         plane.format = format;
     }
 
+    ScopedPerformanceMeasurement measurement(PerformanceStage::GpuUpload);
     context_->UpdateSubresource(plane.texture.get(), 0, nullptr, src, src_stride_bytes, 0);
     return true;
 }

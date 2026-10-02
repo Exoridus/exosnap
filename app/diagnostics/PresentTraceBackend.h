@@ -1,30 +1,58 @@
 #pragma once
 
-// The non-deterministic Windows boundary of the present session -- and nothing else.
-//
-// This seam exists because of a specific failure. PresentMonEtwSession used to be one
-// translation unit split by `#ifdef EXOSNAP_HAS_PRESENTMON`: the real ETW consumer on
-// one side, a no-op on the other. `present_provider_tests` compiled the no-op side, so
-// every contract the session owns -- attribution boundaries, accumulator resets, the
-// process handle, what `available` means -- was verified against an implementation that
-// did nothing, while the shipping side was verified by nobody. That is the same shape
-// as the original ADR 0033 defect (the sources were compiled ONLY by a test target and
-// the product carried the no-op), and finding it twice is what turned it into a seam.
-//
-// The split is deliberately drawn at what a test genuinely cannot reproduce -- opening
-// a real-time ETW session needs elevation, and `ProcessTrace` blocks on the kernel --
-// and NOT one line further. Everything above this interface is ordinary logic and lives
-// in PresentMonEtwSession, compiled identically for the product and for the tests.
-//
-// This is not a second PresentMon. `MakePresentTraceBackend()` has exactly one real
-// implementation; without the vendored consumer it returns nullptr, which is the same
-// graceful degrade the old no-op branch provided.
+// The native ETW boundary of the present session.
+// Opening a real-time session needs the trace right in this token (elevation
+// usually carries it; Performance Log Users can hold it without elevation) and
+// ProcessTrace blocks on the kernel. Keep only those operations behind this
+// interface. Attribution, lifetime, reset and availability logic stay in
+// PresentMonEtwSession and are compiled identically for product and tests.
+// Testing a no-op substitute for that logic would not verify the shipped
+// implementation. MakePresentTraceBackend has one real implementation; without
+// the vendored consumer it returns nullptr and the caller reports unavailable.
 
 #include <cstdint>
 #include <memory>
 #include <vector>
 
 namespace exosnap::diagnostics {
+
+// Why opening the trace ended the way it did. One small vocabulary, shared by
+// the backend, the session and the provider projection: a bool cannot tell an
+// unelevated process with no trace rights from a name that is already taken by
+// another collector, and the product has to say which one it is.
+enum class PresentTraceOpenResult {
+    Opened,
+    // No trace consumer was compiled into this build.
+    NotBuilt,
+    // The OS refused the session (the ordinary answer inside a standard user
+    // token without Performance Log Users).
+    AccessDenied,
+    // A session with our name exists and was NOT stopped: it may belong to
+    // another ExoSnap instance, a test collector or a crashed run.
+    SessionConflict,
+    // The trace facilities the consumer needs are not present on this system.
+    NotSupported,
+    // Anything else StartTrace/EnableTrace reported.
+    Failed,
+};
+
+[[nodiscard]] inline constexpr const char* PresentTraceOpenResultKey(PresentTraceOpenResult result) noexcept {
+    switch (result) {
+    case PresentTraceOpenResult::Opened:
+        return "opened";
+    case PresentTraceOpenResult::NotBuilt:
+        return "notBuilt";
+    case PresentTraceOpenResult::AccessDenied:
+        return "accessDenied";
+    case PresentTraceOpenResult::SessionConflict:
+        return "sessionConflict";
+    case PresentTraceOpenResult::NotSupported:
+        return "notSupported";
+    case PresentTraceOpenResult::Failed:
+        return "failed";
+    }
+    return "failed";
+}
 
 // One completed present, in OUR vocabulary. The real backend maps PresentMon's
 // `PresentEvent` onto this; a test backend produces them directly. Deliberately raw:
@@ -45,9 +73,11 @@ class IPresentTraceBackend {
   public:
     virtual ~IPresentTraceBackend() = default;
 
-    // Opens the real-time trace. `false` is the ordinary answer on an unelevated
-    // process (ERROR_ACCESS_DENIED), never an error worth reporting to a user.
-    [[nodiscard]] virtual bool Open() = 0;
+    // Opens the real-time trace. The result distinguishes a standard process
+    // without trace rights (AccessDenied) from a name already in use
+    // (SessionConflict) and from a build without the consumer (NotBuilt); a
+    // plain false could tell them apart only by guessing.
+    [[nodiscard]] virtual PresentTraceOpenResult Open() = 0;
 
     // Consumes until Close() unblocks it. Runs on the session's consumer thread and
     // must block for the whole life of the trace -- returning early is precisely the

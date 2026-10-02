@@ -2,10 +2,10 @@
 // generated from them, and the constants the runtime substitutes into it.
 //
 // The suite in app/assets/brand/marks is written by
-// scripts/generate-brand-marks.py from marks/parameters.json. Nothing at build
-// time re-runs that script, so the assets are files somebody can edit -- and the
-// runtime's substitution table is a set of literals that has to keep matching
-// what the generator writes.
+// `cargo exo-dev generate-brand-marks` from marks/parameters.json. Nothing at
+// build time re-runs that command, so the assets are files somebody can edit --
+// and the runtime's substitution table is a set of literals that has to keep
+// matching what the generator writes.
 //
 // So this reads the assets, the parameters and the header AS TEXT. Resolving any
 // of them through the others would produce a test that agrees with itself no
@@ -106,7 +106,7 @@ void ExpectAttribute(const QString& svg, const QString& stem, int circle, const 
     ASSERT_TRUE(ok) << raw.toStdString();
     EXPECT_DOUBLE_EQ(value, expected)
         << stem.toStdString() << ": " << attribute.toStdString() << " on circle " << circle
-        << " no longer matches marks/parameters.json. Re-run scripts/generate-brand-marks.py.";
+        << " no longer matches marks/parameters.json. Re-run `cargo exo-dev generate-brand-marks`.";
 }
 
 } // namespace
@@ -303,11 +303,11 @@ TEST(BrandGeometry, ThePublishedLogoIsTheCanonicalMark) {
     const QString logo = ReadRepoFile(QStringLiteral("assets/brand/exosnap-logo.svg"));
     const QString mark = ReadRepoFile(MarkPath(QStringLiteral("brand")));
     ASSERT_FALSE(logo.isEmpty()) << "assets/brand/exosnap-logo.svg is missing or unreadable";
-    EXPECT_EQ(logo, mark) << "exosnap-logo.svg has drifted from the mark. Re-run scripts/generate-app-icons.py.";
+    EXPECT_EQ(logo, mark) << "exosnap-logo.svg has drifted from the mark. Re-run `cargo exo-dev generate-app-icons`.";
 }
 
 TEST(BrandGeometry, TheGeneratorStillFindsEveryConstantItReads) {
-    // scripts/generate-app-icons.py parses the header rather than restating it,
+    // `cargo exo-dev generate-app-icons` parses the header rather than restating it,
     // which only holds while the header keeps the shape it parses: one `inline
     // constexpr double kName = value;` per line, and designated initializers in
     // the profiles. A rename that broke that would fail at the next icon
@@ -326,7 +326,7 @@ TEST(BrandGeometry, TheGeneratorStillFindsEveryConstantItReads) {
             QStringLiteral("^inline constexpr (?:double|int) %1 = [-\\d.]+;$").arg(name),
             QRegularExpression::MultilineOption);
         EXPECT_TRUE(declaration.match(header).hasMatch())
-            << name.toStdString() << " is not in the one-per-line form scripts/generate-app-icons.py parses";
+            << name.toStdString() << " is not in the one-per-line form `cargo exo-dev generate-app-icons` parses";
     }
 
     for (const QString& profile :

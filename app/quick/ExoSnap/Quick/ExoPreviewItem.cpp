@@ -1,4 +1,5 @@
 #include "ExoPreviewItem.h"
+#include <exosnap/engine/gpu_surface_inventory.h>
 
 #include "PreviewPercentile.h"
 #include "QuickPreviewRgbaConverter.h"
@@ -164,7 +165,8 @@ class PreviewTextureNode final : public QSGNode {
         local_desc.CPUAccessFlags = 0;
         local_desc.Usage = D3D11_USAGE_DEFAULT;
         local_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        hr = device_->CreateTexture2D(&local_desc, nullptr, local_texture_.GetAddressOf());
+        hr = exosnap::engine::CreateTrackedTexture2D(device_.Get(), &local_desc, nullptr, local_texture_.GetAddressOf(),
+                                                     exosnap::engine::GpuSurfaceOwner::Preview);
         if (FAILED(hr)) {
             error = QStringLiteral("Allocating the Qt Quick preview copy failed (0x%1).")
                         .arg(static_cast<unsigned long>(hr), 8, 16, QLatin1Char('0'));
@@ -183,7 +185,8 @@ class PreviewTextureNode final : public QSGNode {
             // BGRA directly, but the Quick-owned display target must be RGBA8.
             sdr_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
             sdr_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-            hr = device_->CreateTexture2D(&sdr_desc, nullptr, sdr_texture_.GetAddressOf());
+            hr = exosnap::engine::CreateTrackedTexture2D(device_.Get(), &sdr_desc, nullptr, sdr_texture_.GetAddressOf(),
+                                                         exosnap::engine::GpuSurfaceOwner::Preview);
             if (FAILED(hr)) {
                 error = QStringLiteral("Allocating the Quick HDR tone-map target failed (0x%1).")
                             .arg(static_cast<unsigned long>(hr), 8, 16, QLatin1Char('0'));
@@ -203,7 +206,9 @@ class PreviewTextureNode final : public QSGNode {
             D3D11_TEXTURE2D_DESC rgba_desc = local_desc;
             rgba_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
             rgba_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-            hr = device_->CreateTexture2D(&rgba_desc, nullptr, sdr_texture_.GetAddressOf());
+            hr =
+                exosnap::engine::CreateTrackedTexture2D(device_.Get(), &rgba_desc, nullptr, sdr_texture_.GetAddressOf(),
+                                                        exosnap::engine::GpuSurfaceOwner::Preview);
             if (FAILED(hr)) {
                 error = QStringLiteral("Allocating the Quick RGBA presentation target failed (0x%1).")
                             .arg(static_cast<unsigned long>(hr), 8, 16, QLatin1Char('0'));

@@ -1,4 +1,4 @@
-// Device-loss policy pins (ADR 0046). Pure, hardware-free: an audio endpoint
+// Device-loss policy pins. Pure, hardware-free: an audio endpoint
 // lost mid-recording degrades the affected SOURCE to honest silence and keeps
 // the recording running, rather than the old fail-closed behavior that ended
 // the whole session. Mirror of test_od_reopen_policy.cpp for the audio path.

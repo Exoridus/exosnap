@@ -26,7 +26,7 @@ struct DisplayInfo {
     // discovery but must NOT be used as a long-lived persistent key. For
     // PERSISTING a capture target across reboots/monitor changes, use the
     // hardware-stable StableDisplayId resolved by DisplayIdentityResolver /
-    // DisplayIdentityEnumerator (device path + EDID; ADR 0047).
+    // DisplayIdentityEnumerator (device path + EDID).
     QString id;
 
     // Human-readable label. Uses manufacturer/model from QScreen if available,

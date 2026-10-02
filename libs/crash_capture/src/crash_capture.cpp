@@ -106,7 +106,7 @@ static sentry_value_t BeforeSendHook(sentry_value_t event, void* /*hint*/, void*
     sentry_value_remove_by_key(event, "breadcrumbs");
 
     // Scrub tags: only allow-listed keys survive. Iterates the SAME array the
-    // set-time path (SetTag/IsAllowedTagKey) uses (ADR 0045) — previously this
+    // set-time path (SetTag/IsAllowedTagKey) uses — previously this
     // was a literal, hand-repeated brace-list that could drift from
     // kAllowedTagKeys in crash_scrubber.h.
     sentry_value_t tags = sentry_value_get_by_key(event, "tags");
@@ -129,7 +129,7 @@ static sentry_value_t BeforeSendHook(sentry_value_t event, void* /*hint*/, void*
         sentry_value_set_by_key(event, "tags", clean_tags);
     }
 
-    // Defensive backstop (ADR 0045 / D3): sentry-native 0.15.0 (the pinned
+    // Defensive backstop : sentry-native 0.15.0 (the pinned
     // version, see cmake/VendorSentry.cmake) does not set server_name or a
     // device context on init, so this is not closing an active leak — it
     // guards against a future sentry-native version (or our own code) adding

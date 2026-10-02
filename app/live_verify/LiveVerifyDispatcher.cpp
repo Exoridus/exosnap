@@ -188,6 +188,16 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
     QString error;
     const QJsonObject& params = request.params;
 
+    if (command.name == QLatin1String("app.quit")) {
+        if (!source.AppQuit(&error))
+            return IntentRefused(command, source, error);
+        // Accepted, not finished: the exit happens after this answer is sent, and
+        // its completion is the process ending.
+        QJsonObject result;
+        result.insert(QStringLiteral("quitting"), true);
+        return Succeeded(result, /*settled=*/false);
+    }
+
     if (command.name == QLatin1String("window.moveToScreen")) {
         if (!source.MoveWindowToScreen(ParamString(params, "screen"), &error))
             return IntentRefused(command, source, error);
@@ -196,6 +206,21 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
 
     if (command.name == QLatin1String("record.selectTarget")) {
         if (!source.SelectRecordTarget(ParamString(params, "kind"), ParamString(params, "titleFilter"), &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.RecordSnapshot());
+    }
+
+    if (command.name == QLatin1String("record.selectRegion")) {
+        if (!source.SelectRecordRegion(ParamString(params, "display"), static_cast<int>(ParamInt(params, "x")),
+                                       static_cast<int>(ParamInt(params, "y")),
+                                       static_cast<int>(ParamInt(params, "width")),
+                                       static_cast<int>(ParamInt(params, "height")), &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.RecordSnapshot());
+    }
+
+    if (command.name == QLatin1String("record.openRegionSelector")) {
+        if (!source.OpenRegionSelector(ParamString(params, "display"), &error))
             return IntentRefused(command, source, error);
         return Succeeded(source.RecordSnapshot());
     }
@@ -240,9 +265,15 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         if (!source.Navigate(page, &error))
             return IntentRefused(command, source, error);
         // The RESULTING page, not the requested one. Navigating to the page you
-        // are already on is a successful no-op, which is the same answer.
+        // are already on is a successful no-op, which is the same answer. The
+        // legacy "logs" request is the one alias: the shell normalizes it to
+        // Diagnostics with the logs subview, so the canonical page is what the
+        // state reports and what satisfies the postcondition.
         const AutomationState after = source.State();
-        if (after.page != page)
+        const bool normalized_logs = page == QLatin1String(page_name::kLogs) &&
+                                     after.page == QLatin1String(page_name::kDiagnostics) &&
+                                     after.diagnostics_section == QLatin1String(diagnostics_section_name::kLogs);
+        if (after.page != page && !normalized_logs)
             return PostconditionMissed(command.name, QStringLiteral("the shell reaching \"%1\"").arg(page));
         QJsonObject result;
         result.insert(QStringLiteral("page"), after.page);

@@ -234,10 +234,14 @@ EffectiveRecordingConfig DescribeEffectiveConfig(const exosnap::engine::Recorder
     builder.Add("color_hdr", config.color.hdr);
 
     // ---- Rate control -------------------------------------------------------
-    builder.Add("rate_control", Name(config.nvenc_rate_control));
+    builder.Add("rate_control", Name(config.rate_control_mode));
     builder.Add("cq", static_cast<qint64>(config.cq));
-    builder.Add("bitrate_kbps", static_cast<qint64>(config.nvenc_bitrate_kbps));
-    builder.Add("encoder_preset", Name(config.nvenc_preset));
+    builder.Add("bitrate_kbps", static_cast<qint64>(config.target_bitrate_kbps));
+    if (const NvencTuning* nvenc = GetNvencTuning(config.backend_tuning)) {
+        builder.Add("nvenc_preset", Name(nvenc->preset));
+    } else {
+        builder.Add("nvenc_preset", QStringLiteral("none"));
+    }
     builder.AddReal("keyframe_interval_secs", config.keyframe_interval_secs, 3);
 
     // ---- Timing / geometry --------------------------------------------------

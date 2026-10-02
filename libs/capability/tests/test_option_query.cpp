@@ -104,3 +104,18 @@ TEST(OptionQueryTest, PreviewChangeMatchesResolverResult) {
 
 } // namespace
 } // namespace exosnap::capability
+
+TEST(BackendTuningSchema, UnsupportedVendorsNeverAdvertiseNvencPresets) {
+    exosnap::capability::CapabilitySet caps;
+    for (const unsigned vendor : {0u, 0x8086u, 0x1002u}) {
+        caps.runtime.adapter.vendor_id = vendor;
+        EXPECT_TRUE(exosnap::capability::OptionQuery(caps).GetBackendTuningControls().empty());
+    }
+    caps.runtime.adapter.vendor_id = 0x10DE;
+    const auto controls = exosnap::capability::OptionQuery(caps).GetBackendTuningControls();
+    ASSERT_EQ(controls.size(), 1u);
+    EXPECT_EQ(controls[0].backend, "nvenc");
+    ASSERT_EQ(controls[0].choices.size(), 7u);
+    EXPECT_EQ(controls[0].choices[3].value, 3);
+    EXPECT_EQ(controls[0].choices[3].label, "P4");
+}

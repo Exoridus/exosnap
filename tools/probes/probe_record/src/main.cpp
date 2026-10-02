@@ -363,7 +363,7 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "[probe_record] ERROR: bad --range (use full|limited)\n");
         return 64;
     }
-    cfg.nvenc_preset = preset;
+    cfg.backend_tuning = NvencTuning{preset};
     cfg.frame_rate_num = 60;
     cfg.frame_rate_den = 1;
     cfg.cfr = true;

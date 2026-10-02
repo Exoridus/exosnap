@@ -20,7 +20,7 @@
 // ONLY assertion that runs for real is the graceful-failure test
 // (Init_MissingEncoder_FailsGracefullyNotCrash). Once the encoder-enabled r5
 // release ships and VendorFFmpeg.cmake is repinned, the skipped tests exercise
-// the real encoder. See ADR 0052.
+// the real encoder.
 // -----------------------------------------------------------------------------
 
 namespace {

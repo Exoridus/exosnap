@@ -460,3 +460,28 @@ TEST(GpuFrameLuminanceTest, ResetDropsEverythingInFlight) {
 }
 
 } // namespace
+
+TEST(GpuFrameLuminanceTest, OffRegionHdrPatchCannotChangeStatistics) {
+    auto dev = CreateWarpDevice();
+    ASSERT_NE(dev.device, nullptr);
+    constexpr UINT width = 64, height = 64;
+    std::vector<Rgb> pixels(width * height, Rgb{1.0f, 1.0f, 1.0f});
+    const RECT region{16, 16, 48, 48};
+    FrameLuminanceAnalyzer analyzer;
+    std::string error;
+    ASSERT_TRUE(analyzer.Init(dev.device.get(), dev.context.get(), width, height, false, error, &region));
+    auto before = CreateFp16Surface(dev.device.get(), width, height, pixels);
+    FrameLuminanceStats baseline;
+    ASSERT_TRUE(DispatchAndTake(analyzer, dev.context.get(), before.get(), &baseline));
+    pixels[0] = Rgb{100.0f, 100.0f, 100.0f};
+    auto after = CreateFp16Surface(dev.device.get(), width, height, pixels);
+    FrameLuminanceStats changed;
+    ASSERT_TRUE(DispatchAndTake(analyzer, dev.context.get(), after.get(), &changed));
+    EXPECT_FLOAT_EQ(baseline.max_nits, changed.max_nits);
+    EXPECT_FLOAT_EQ(baseline.mean_nits, changed.mean_nits);
+    EXPECT_EQ(baseline.histogram, changed.histogram);
+    pixels[20 * width + 20] = Rgb{100.0f, 100.0f, 100.0f};
+    auto inside = CreateFp16Surface(dev.device.get(), width, height, pixels);
+    ASSERT_TRUE(DispatchAndTake(analyzer, dev.context.get(), inside.get(), &changed));
+    EXPECT_GT(changed.max_nits, baseline.max_nits * 90);
+}

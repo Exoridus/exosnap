@@ -1,5 +1,5 @@
 # libs/update_handoff/CMakeLists.txt -- the versioned App -> Updater handoff
-# document (ADR 0068).
+# document.
 #
 # One schema, two processes: exosnap.exe writes the document, exosnap-updater.exe
 # reads it. Both link this library, so producer and consumer cannot drift the way

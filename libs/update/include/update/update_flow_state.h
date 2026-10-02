@@ -182,7 +182,7 @@ struct UpdateFlowState {
 // The updater window's footer and the automation channel's availableActions read
 // this one rule.
 //
-// The MODE is part of the rule, because since ADR 0068 it changes what a retry
+// The MODE is part of the rule, because it changes what a retry
 // would actually do. A retry re-enters at Download, and in AppHandoff mode the
 // manifest and its signature are files that were handed over: re-reading them
 // cannot produce a different answer, so A2 is refused identically every time.

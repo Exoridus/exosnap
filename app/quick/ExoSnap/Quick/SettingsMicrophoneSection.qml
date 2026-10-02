@@ -12,6 +12,8 @@ import QtQuick.Layouts
 ExoCard {
     id: root
 
+    function focusControl(target: int): var { return microphoneControl; }
+
     required property SettingsAdapter settings
     required property bool stacked
 
@@ -30,6 +32,7 @@ ExoCard {
         // opened; a button that repeats what the system already reported bought
         // nothing and cost the select the width a real device name needs.
         ExoSelect {
+            id: microphoneControl
             options: root.settings.microphoneDeviceOptions
             value: root.settings.microphoneDeviceId
             enabled: !root.settings.controlsLocked && root.settings.microphoneConnected
@@ -141,6 +144,12 @@ ExoCard {
 
             function toggle(): void {
                 micPostProcessing.visible = !micPostProcessing.visible;
+            }
+
+            // Harness seam (--visual-expand-all): the open state here is the
+            // group's visibility, not an `expanded` property the harness can set.
+            function harnessExpand(): void {
+                micPostProcessing.visible = true;
             }
 
             Keys.onSpacePressed: event => {

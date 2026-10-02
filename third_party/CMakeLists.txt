@@ -114,7 +114,7 @@ unset(_exosnap_saved_bsl_flac)
 # chain, after HPF -> gate -> AGC). xiph/rnnoise is an autotools project with NO
 # usable CMakeLists, so we Populate the sources and build OUR OWN static target.
 #
-# Two upstream traps, both handled here (see docs/decisions/0029-mic-rnnoise.md):
+# Two upstream traps, both handled here (see docs/architecture/audio.md):
 #  1. The trained model weights are NOT committed to git on master — they are
 #     fetched by download_model.sh as a tarball keyed by `model_version`. We
 #     replicate that: download the pinned model tarball and extract it into the
@@ -328,14 +328,14 @@ if(_ebml_build_dir AND _ebml_src_dir AND EXISTS "${_ebml_build_dir}/ebml_export.
     )
 endif()
 
-# ---- PresentMon ETW present-diagnostics consumer (MIT) — ADR 0033 -----------
+# ---- PresentMon ETW present-diagnostics consumer (MIT) -----------
 # In-process ETW consumer subset (PresentData/ only — NOT the tool repo's main()s).
 # Pinned to a fixed release tag (never a rolling latest — BtbN-pin lesson).
 if(EXOSNAP_WITH_PRESENTMON)
     FetchContent_Declare(
         presentmon
         GIT_REPOSITORY https://github.com/GameTechDev/PresentMon.git
-        GIT_TAG        2ce1158783e570539119f577d894252b395cadca   # == v1.10.0 (pinned by SHA). See ADR 0033.
+        GIT_TAG        2ce1158783e570539119f577d894252b395cadca   # == v1.10.0 (pinned by SHA).
         GIT_SHALLOW    TRUE
     )
     FetchContent_MakeAvailable(presentmon)

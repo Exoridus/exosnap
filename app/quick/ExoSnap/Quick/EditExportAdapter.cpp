@@ -66,7 +66,7 @@ void EditExportAdapter::setSession(EditSessionAdapter* session) {
     connect(session_, &EditSessionAdapter::clipChanged, this, [this]() {
         // A different clip means the last run's result no longer describes it --
         // unless that run is still in flight, which must be found again as it
-        // was when the surface is re-entered (ADR 0022).
+        // was when the surface is re-entered.
         if (!running())
             reset();
         emit optionsChanged();

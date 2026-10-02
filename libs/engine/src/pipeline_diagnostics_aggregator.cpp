@@ -66,6 +66,25 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     generation_ = generation;
     cfg_ = cfg;
 
+    pacing_ = {};
+    capture_adapter_luid_ = 0;
+    capture_adapter_vendor_id_ = 0;
+    processing_adapter_luid_ = 0;
+    processing_adapter_vendor_id_ = 0;
+    encoder_adapter_luid_ = 0;
+    encoder_adapter_vendor_id_ = 0;
+    residual_window_.Clear();
+    absolute_residual_window_.Clear();
+    selected_age_window_.Clear();
+    worker_lateness_window_.Clear();
+    output_cadence_window_.Clear();
+    affected_slots_window_.Clear();
+    frame_loss_window_.Clear();
+    producer_wait_window_.Clear();
+    last_slot_stalls_ = 0;
+    have_output_time_ = false;
+    first_output_slot_ns_ = 0;
+    last_published_frame_loss_ = 0;
     frames_captured_ = 0;
     dropped_coalesced_ = 0;
     dropped_cfr_ = 0;
@@ -97,6 +116,8 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
 
     composition_gpu_window_.Clear();
     composition_gpu_hist_.Clear();
+    hdr_luminance_gpu_window_.Clear();
+    hdr_luminance_gpu_hist_.Clear();
     hdr_tonemap_gpu_window_.Clear();
     hdr_tonemap_gpu_hist_.Clear();
     rgb_to_yuv_gpu_window_.Clear();
@@ -154,6 +175,7 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
 
     mux_packets_ = 0;
     disk_bytes_written_ = 0;
+    finalized_io_ = {};
     write_window_.Clear();
     mux_process_observed_ = false;
     mux_window_.Clear();
@@ -301,6 +323,12 @@ void PipelineDiagnosticsAggregator::OnCompositionGpuTime(time_point now, double 
     composition_gpu_hist_.Add(ms);
 }
 
+void PipelineDiagnosticsAggregator::OnHdrLuminanceGpuTime(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    hdr_luminance_gpu_window_.Add(now, ms);
+    hdr_luminance_gpu_hist_.Add(ms);
+}
+
 void PipelineDiagnosticsAggregator::OnHdrTonemapGpuTime(time_point now, double ms) noexcept {
     std::lock_guard lk(mutex_);
     hdr_tonemap_gpu_window_.Add(now, ms);
@@ -377,6 +405,91 @@ void PipelineDiagnosticsAggregator::OnMuxQueueDelay(time_point now, double ms) n
     std::lock_guard lk(mutex_);
     mux_queue_delay_window_.Add(now, ms);
     mux_queue_delay_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::SetCaptureAdapter(int64_t luid, uint32_t vendor_id) noexcept {
+    std::lock_guard lk(mutex_);
+    capture_adapter_luid_ = luid;
+    capture_adapter_vendor_id_ = vendor_id;
+}
+
+void PipelineDiagnosticsAggregator::SetProcessingAdapter(int64_t luid, uint32_t vendor_id) noexcept {
+    std::lock_guard lk(mutex_);
+    processing_adapter_luid_ = luid;
+    processing_adapter_vendor_id_ = vendor_id;
+}
+
+void PipelineDiagnosticsAggregator::SetEncoderAdapter(int64_t luid, uint32_t vendor_id) noexcept {
+    std::lock_guard lk(mutex_);
+    encoder_adapter_luid_ = luid;
+    encoder_adapter_vendor_id_ = vendor_id;
+}
+
+void PipelineDiagnosticsAggregator::OnMuxProducerWait(time_point now, double milliseconds) noexcept {
+    std::lock_guard lk(mutex_);
+    producer_wait_window_.Add(now, milliseconds);
+}
+
+void PipelineDiagnosticsAggregator::OnPacingResumed() noexcept {
+    std::lock_guard lk(mutex_);
+    have_output_time_ = false;
+    first_output_slot_ns_ = 0;
+    pacing_.duplicate_run = 0;
+    output_cadence_window_.Clear();
+    worker_lateness_window_.Clear();
+}
+
+void PipelineDiagnosticsAggregator::OnWorkerWake(time_point now, double lateness_ms) noexcept {
+    if (!std::isfinite(lateness_ms) || lateness_ms < 0.0)
+        return;
+    std::lock_guard lk(mutex_);
+    ++pacing_.worker_wakes;
+    worker_lateness_window_.Add(now, lateness_ms);
+    pacing_.worst_worker_lateness_ms = std::max(pacing_.worst_worker_lateness_ms, lateness_ms);
+}
+
+void PipelineDiagnosticsAggregator::OnPacingSlotsSkipped(time_point now, uint64_t count) noexcept {
+    std::lock_guard lk(mutex_);
+    pacing_.skipped_output_slots += count;
+    pacing_.affected_slots += count;
+    affected_slots_window_.Add(now, static_cast<double>(count));
+}
+
+void PipelineDiagnosticsAggregator::OnCfrOutput(time_point now, uint64_t ideal_ns, uint64_t selected_ns, bool fresh,
+                                                uint32_t ring_occupancy, uint64_t period_ns,
+                                                uint64_t actual_ns) noexcept {
+    std::lock_guard lk(mutex_);
+    ++pacing_.output_slots;
+    const bool first_slot = first_output_slot_ns_ == 0;
+    if (first_slot)
+        first_output_slot_ns_ = ideal_ns;
+    pacing_.scheduled_slot_ns = ideal_ns;
+    pacing_.selected_present_ns = selected_ns;
+    pacing_.ring_occupancy = ring_occupancy;
+    pacing_.duplicate_run = fresh ? 0 : pacing_.duplicate_run + 1;
+    pacing_.longest_duplicate_run = std::max(pacing_.longest_duplicate_run, pacing_.duplicate_run);
+    if (!fresh && ideal_ns != 0)
+        ++pacing_.ring_misses;
+    if (fresh && !first_slot && ideal_ns != 0 && selected_ns >= first_output_slot_ns_ && period_ns != 0) {
+        const double residual = selected_ns >= ideal_ns ? static_cast<double>(selected_ns - ideal_ns) / 1e6
+                                                        : -static_cast<double>(ideal_ns - selected_ns) / 1e6;
+        ++pacing_.selection_samples;
+        residual_window_.Add(now, residual);
+        absolute_residual_window_.Add(now, std::abs(residual));
+        pacing_.worst_absolute_residual_ms = std::max(pacing_.worst_absolute_residual_ms, std::abs(residual));
+        // A fresh picture displaced by more than a full output period misses
+        // its output slot. No judgement is made about sub-period visual quality.
+        if (std::abs(residual) > static_cast<double>(period_ns) / 1e6) {
+            ++pacing_.affected_slots;
+            affected_slots_window_.Add(now, 1.0);
+        }
+    }
+    if (selected_ns != 0 && actual_ns >= selected_ns)
+        selected_age_window_.Add(now, static_cast<double>(actual_ns - selected_ns) / 1e6);
+    if (have_output_time_ && now >= last_output_time_)
+        output_cadence_window_.Add(now, std::chrono::duration<double, std::milli>(now - last_output_time_).count());
+    last_output_time_ = now;
+    have_output_time_ = true;
 }
 
 void PipelineDiagnosticsAggregator::OnFrameDuplicated() noexcept {
@@ -551,6 +664,16 @@ void PipelineDiagnosticsAggregator::OnMuxPacket(uint64_t bytes) noexcept {
     (void)bytes; // encoded byte total is tracked via SessionStats; mux byte boundary is OnDiskWrite
 }
 
+void PipelineDiagnosticsAggregator::OnOutputIoFinalized(double write_ms, double crt_flush_ms, double durability_ms,
+                                                        uint64_t durability_failures) noexcept {
+    std::lock_guard lk(mutex_);
+    ++finalized_io_.finalized_io_segments;
+    finalized_io_.crt_write_total_ms += write_ms;
+    finalized_io_.crt_flush_total_ms += crt_flush_ms;
+    finalized_io_.durability_flush_total_ms += durability_ms;
+    finalized_io_.durability_flush_failures += durability_failures;
+}
+
 void PipelineDiagnosticsAggregator::OnDiskWrite(time_point now, double ms, uint64_t bytes) noexcept {
     std::lock_guard lk(mutex_);
     disk_bytes_written_ += bytes;
@@ -651,6 +774,33 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
         dt = std::chrono::duration<double>(now - last_publish_time_).count();
     }
     const bool can_rate = have_baseline_ && dt > 1e-6;
+
+    s.capture_adapter_luid = capture_adapter_luid_;
+    s.capture_adapter_vendor_id = capture_adapter_vendor_id_;
+    s.processing_adapter_luid = processing_adapter_luid_;
+    s.processing_adapter_vendor_id = processing_adapter_vendor_id_;
+    s.encoder_adapter_luid = encoder_adapter_luid_;
+    s.encoder_adapter_vendor_id = encoder_adapter_vendor_id_;
+    s.pacing = pacing_;
+    const uint64_t real_loss = dropped_processing_failure_ + dropped_backpressure_;
+    if (real_loss > last_published_frame_loss_)
+        frame_loss_window_.Add(now, static_cast<double>(real_loss - last_published_frame_loss_));
+    last_published_frame_loss_ = real_loss;
+    const auto loss = frame_loss_window_.Compute(now);
+    s.pacing.recent_frame_loss = static_cast<uint64_t>(std::llround(loss.average * loss.count));
+    const auto timing = [now](const RollingTimeWindow& window) {
+        const auto a = window.Compute(now);
+        return TimingDistribution{a.count, window.Percentile(now, 0.50), window.Percentile(now, 0.95),
+                                  window.Percentile(now, 0.99), a.latest};
+    };
+    s.video_queue.producer_wait = timing(producer_wait_window_);
+    s.pacing.selection_residual = timing(residual_window_);
+    s.pacing.absolute_residual = timing(absolute_residual_window_);
+    s.pacing.selected_frame_age = timing(selected_age_window_);
+    s.pacing.worker_lateness = timing(worker_lateness_window_);
+    s.pacing.output_cadence = timing(output_cadence_window_);
+    const auto affected = affected_slots_window_.Compute(now);
+    s.pacing.recent_affected_slots = static_cast<uint64_t>(std::llround(affected.average * affected.count));
 
     // ---- Capture ----
     CaptureDiagnostics& cap = s.capture;
@@ -875,6 +1025,7 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     }
 
     DiskDiagnostics& disk = s.disk;
+    disk = finalized_io_;
     disk.bytes_written = disk_bytes_written_;
     disk.throughput_mib_s = throughput;
     disk.latest_write_ms = wl.latest;
@@ -1032,6 +1183,7 @@ PerfWindowSample PipelineDiagnosticsAggregator::SamplePerfWindow(time_point now)
     p.acquire = SampleStage(acquire_window_, now);
     p.composition_cpu = SampleStage(compositor_window_, now);
     p.composition_gpu = SampleStage(composition_gpu_window_, now);
+    p.hdr_luminance_gpu = SampleStage(hdr_luminance_gpu_window_, now);
     p.hdr_tonemap_gpu = SampleStage(hdr_tonemap_gpu_window_, now);
     p.rgb_to_yuv_cpu = SampleStage(vpblt_window_, now);
     p.rgb_to_yuv_gpu = SampleStage(rgb_to_yuv_gpu_window_, now);
@@ -1061,6 +1213,7 @@ PerfSessionSummary PipelineDiagnosticsAggregator::BuildPerfSummary() const {
     s.acquire = SummarizeStage(acquire_hist_);
     s.composition_cpu = SummarizeStage(compositor_hist_);
     s.composition_gpu = SummarizeStage(composition_gpu_hist_);
+    s.hdr_luminance_gpu = SummarizeStage(hdr_luminance_gpu_hist_);
     s.hdr_tonemap_gpu = SummarizeStage(hdr_tonemap_gpu_hist_);
     s.rgb_to_yuv_cpu = SummarizeStage(vpblt_hist_);
     s.rgb_to_yuv_gpu = SummarizeStage(rgb_to_yuv_gpu_hist_);
@@ -1114,19 +1267,24 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
     const bool audio_disc_rising = s.audio.discontinuities > last_audio_disc_;
 
     const bool downstream_saturated = s.video_queue.current_depth >= thresholds_.mux_queue_warn;
-    const bool cap_cond = s.capture.target_fps > 0.0 && s.capture.actual_fps > 0.0 &&
+    const bool producer_pressure =
+        s.video_queue.producer_wait.samples > 0 && s.video_queue.producer_wait.p99_ms > budget_ms;
+    const bool slot_pressure = slot_stalls_ > last_slot_stalls_;
+    last_slot_stalls_ = slot_stalls_;
+    const bool output_affected = drops_rising || s.pacing.recent_affected_slots > 0;
+    const bool cap_cond = output_affected && s.capture.target_fps > 0.0 && s.capture.actual_fps > 0.0 &&
                           s.capture.actual_fps < s.capture.target_fps * thresholds_.capture_fps_ratio &&
                           !downstream_saturated;
-    const bool comp_cond =
-        s.compositor.active && s.compositor.average_ms > budget_ms * thresholds_.compositor_budget_ratio;
-    // GPU execution past the budget while the recorder's own submission stays
-    // cheap: the card is busy with someone else's work (the captured game).
-    const bool gpu_cond = gpu_exec_p99_ms_ > budget_ms && s.compositor.average_ms < budget_ms * 0.3 &&
-                          s.video_encoder.average_ms < budget_ms * 0.3;
-    const bool enc_cond = s.video_encoder.backlog >= thresholds_.encoder_backlog ||
-                          s.video_encoder.average_ms > budget_ms * thresholds_.encoder_budget_ratio;
-    const bool disk_cond = s.disk.average_write_ms > thresholds_.disk_write_ms_warn;
-    const bool mux_cond = s.video_queue.current_depth >= thresholds_.mux_queue_warn && !disk_cond;
+    const bool comp_cond = output_affected && s.compositor.active &&
+                           s.compositor.average_ms > budget_ms * thresholds_.compositor_budget_ratio;
+    // Recorder GPU timestamps locate delay, but cannot identify another process as its cause.
+    const bool gpu_cond = gpu_exec_p99_ms_ > budget_ms && (drops_rising || s.pacing.recent_affected_slots > 0);
+    const bool enc_cond =
+        (s.video_encoder.backlog >= thresholds_.encoder_backlog && slot_pressure) ||
+        (output_affected && s.video_encoder.average_ms > budget_ms * thresholds_.encoder_budget_ratio);
+    const bool disk_cond = s.disk.average_write_ms > thresholds_.disk_write_ms_warn &&
+                           (producer_pressure || (downstream_saturated && output_affected));
+    const bool mux_cond = producer_pressure && !disk_cond;
     const bool audio_cond = audio_disc_rising || (s.audio_queue.bounded && s.audio_queue.capacity > 0 &&
                                                   static_cast<double>(s.audio_queue.current_depth) >=
                                                       s.audio_queue.capacity * thresholds_.audio_queue_warn_ratio);
@@ -1155,7 +1313,7 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
     // Priority: most-downstream sustained constraint wins (it is the true root).
     if (sustain_disk_ >= n) {
         bottleneck = PipelineBottleneck::Disk;
-        reason = "Write latency high";
+        reason = "Write pressure is backing up the recording queue";
     } else if (sustain_muxer_ >= n) {
         bottleneck = PipelineBottleneck::Muxer;
         reason = "Mux queue backing up";
@@ -1164,7 +1322,7 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
         reason = "Encoder backlog rising";
     } else if (sustain_gpu_ >= n) {
         bottleneck = PipelineBottleneck::Gpu;
-        reason = "GPU finishing frame work late: saturated by the captured application";
+        reason = "Recorder GPU work completed late while output was affected";
     } else if (sustain_compositor_ >= n) {
         bottleneck = PipelineBottleneck::Compositor;
         reason = "Composition near frame budget";
@@ -1190,7 +1348,7 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
     // A starved source is not a bottleneck (nothing in the pipeline is slow), but
     // a card that says Good over a frozen picture would contradict the stall
     // notice the app raises from the same counter.
-    if (s.capture.capture_starved &&
+    if (s.capture.capture_starved && output_affected &&
         (bottleneck == PipelineBottleneck::None || bottleneck == PipelineBottleneck::Unknown)) {
         // Outranks "Gathering data": a source that has been silent for ten
         // seconds is the evidence, not its absence.
@@ -1206,7 +1364,7 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
     if (s.mux.failures > 0 || s.disk.write_failures > 0 || s.split.split_failures > 0 || queue_critical) {
         health = PipelineHealth::Critical;
     } else if ((bottleneck != PipelineBottleneck::None && bottleneck != PipelineBottleneck::Unknown) ||
-               (drops_rising && problem_drops > 0) || skew_significant || s.capture.capture_starved) {
+               (drops_rising && problem_drops > 0) || skew_significant) {
         health = PipelineHealth::Warning;
     } else {
         health = PipelineHealth::Good;

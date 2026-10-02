@@ -76,8 +76,8 @@ class SettingsResolver {
 // ---------------------------------------------------------------------------
 //
 // The resolver owns every reconciliation rule that does not need a probed
-// CapabilitySet: container × codec compatibility (ADR 0010), the 10-bit
-// bit-depth demotion (ADR 0032), the 4:4:4 chroma snap, and the MP4 CFR
+// CapabilitySet: container × codec compatibility, the 10-bit
+// bit-depth demotion, the 4:4:4 chroma snap, and the MP4 CFR
 // timing constraint. App-layer callers (settings intake, preset sanitizing)
 // call ReconcileOutputFormat and copy the answer — they must not re-implement
 // any of these rules. The capability-gated fallbacks (SettingsResolver above)
@@ -119,7 +119,7 @@ struct OutputFormatReconciliation {
 };
 
 // Applies the static rules in canonical order: (1) container × codec
-// compatibility via the ADR 0010 registry, (2) bit-depth demotion — after the
+// compatibility via the compatibility registry, (2) bit-depth demotion — after the
 // container rule so a container-forced H.264 also demotes a stored 10-bit
 // selection, (3) chroma snap — after the bit-depth rule so an 8-bit-demoted
 // selection can still keep 4:4:4, (4) MP4 forces CFR. Pure and idempotent.

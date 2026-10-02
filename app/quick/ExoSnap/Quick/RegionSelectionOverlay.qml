@@ -6,11 +6,8 @@ FocusScope {
 
     required property RecordViewModelAdapter recordViewModel
 
-    // Pixel size of the captured area, so the dimension label reports the
-    // rectangle's size in real recorded pixels: the preview maps the capture
-    // 1:1, so the normalized extent times this size is what the recording will
-    // carry. Zero means unknown, and then the label stays out of the way rather
-    // than report a wrong number.
+    // Physical size of the anchored monitor, which owns the recorded region.
+    // The selector window can use a different logical size under display scaling.
     property size sourcePixelSize: Qt.size(0, 0)
 
     // An empty rect means "nothing selected yet": Draw custom starts there, a
@@ -31,23 +28,24 @@ FocusScope {
     property point dragStart: Qt.point(0, 0)
     property rect dragOriginRect: Qt.rect(0, 0, 0, 0)
 
-    readonly property real minEdge: 0.02
+    readonly property real minWidth: sourcePixelSize.width > 0 ? Math.min(1, 64 / sourcePixelSize.width) : 1
+    readonly property real minHeight: sourcePixelSize.height > 0 ? Math.min(1, 64 / sourcePixelSize.height) : 1
 
     activeFocusOnTab: true
     focus: visible
     Accessible.name: qsTr("Capture region selector")
     Accessible.description: qsTr("Drag with the mouse, or use arrow keys to move the region and Shift plus arrow keys to resize it.")
 
-    onVisibleChanged: {
-        if (visible)
-            beginDraw()
-    }
-
     // The Region tab routes its choice through the adapter rather than through
     // QML-to-QML wiring, so the picker and this overlay share only the C++
     // boundary.
     Connections {
         target: root.recordViewModel
+
+        function onChanged(): void {
+            if (!root.recordViewModel.regionSelectionNeeded)
+                root.beginDraw()
+        }
 
         function onRegionPresetRequested(key: string): void {
             root.applyPreset(key)
@@ -67,14 +65,16 @@ FocusScope {
             if (row.draw) {
                 beginDraw()
             } else {
-                // The largest centred rectangle with the preset's ratio at 70 %
-                // of the limiting dimension: an editable START, not a
-                // committed crop.
+                if (sourcePixelSize.width <= 0 || sourcePixelSize.height <= 0)
+                    return
+                // The ratio is in physical pixels; normalized x and y use
+                // different denominators on a non-square monitor.
+                const monitorAspect = sourcePixelSize.width / sourcePixelSize.height
                 let w = 0.7
-                let h = w / row.aspect
+                let h = w * monitorAspect / row.aspect
                 if (h > 0.7) {
                     h = 0.7
-                    w = h * row.aspect
+                    w = h * row.aspect / monitorAspect
                 }
                 selectionNormalized = Qt.rect((1 - w) / 2, (1 - h) / 2, w, h)
             }
@@ -83,10 +83,10 @@ FocusScope {
     }
 
     function setSelectionEdges(left: real, top: real, right: real, bottom: real): void {
-        const x = Math.max(0, Math.min(left, right))
-        const y = Math.max(0, Math.min(top, bottom))
-        const w = Math.max(minEdge, Math.min(1 - x, Math.abs(right - left)))
-        const h = Math.max(minEdge, Math.min(1 - y, Math.abs(top - bottom)))
+        const w = Math.min(1, Math.max(minWidth, Math.abs(right - left)))
+        const h = Math.min(1, Math.max(minHeight, Math.abs(top - bottom)))
+        const x = Math.max(0, Math.min(1 - w, Math.min(left, right)))
+        const y = Math.max(0, Math.min(1 - h, Math.min(top, bottom)))
         selectionNormalized = Qt.rect(x, y, w, h)
     }
 
@@ -142,11 +142,11 @@ FocusScope {
         let h = selectionNormalized.height
         const resize = Boolean(event.modifiers & Qt.ShiftModifier)
         if (event.key === Qt.Key_Left)
-            resize ? w = Math.max(minEdge, w - step) : x = Math.max(0, x - step)
+            resize ? w = Math.max(minWidth, w - step) : x = Math.max(0, x - step)
         else if (event.key === Qt.Key_Right)
             resize ? w = Math.min(1 - x, w + step) : x = Math.min(1 - w, x + step)
         else if (event.key === Qt.Key_Up)
-            resize ? h = Math.max(minEdge, h - step) : y = Math.max(0, y - step)
+            resize ? h = Math.max(minHeight, h - step) : y = Math.max(0, y - step)
         else if (event.key === Qt.Key_Down)
             resize ? h = Math.min(1 - y, h + step) : y = Math.min(1 - h, y + step)
         else
@@ -156,7 +156,33 @@ FocusScope {
     }
 
     Rectangle {
-        anchors.fill: parent
+        width: parent.width
+        height: root.hasSelection ? root.selection.y : parent.height
+        color: "#80000000"
+    }
+
+    Rectangle {
+        y: root.selection.y
+        width: root.selection.x
+        height: root.selection.height
+        visible: root.hasSelection
+        color: "#80000000"
+    }
+
+    Rectangle {
+        x: root.selection.x + root.selection.width
+        y: root.selection.y
+        width: root.width - x
+        height: root.selection.height
+        visible: root.hasSelection
+        color: "#80000000"
+    }
+
+    Rectangle {
+        y: root.selection.y + root.selection.height
+        width: parent.width
+        height: root.height - y
+        visible: root.hasSelection
         color: "#80000000"
     }
 
@@ -188,7 +214,7 @@ FocusScope {
         width: root.selection.width
         height: root.selection.height
         visible: root.hasSelection
-        color: "#10000000"
+        color: "transparent"
         border.width: 2
         border.color: ExoTheme.accent
 

@@ -179,6 +179,20 @@ QString NvencPresetToString(exosnap::engine::NvencPreset v) {
     return QStringLiteral("p4");
 }
 
+QString EncoderDeviceModeToString(exosnap::engine::EncoderDevicePreference::Mode mode) {
+    return mode == exosnap::engine::EncoderDevicePreference::Mode::Explicit ? QStringLiteral("explicit")
+                                                                            : QStringLiteral("auto");
+}
+
+std::optional<exosnap::engine::EncoderDevicePreference::Mode> EncoderDeviceModeFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("auto"))
+        return exosnap::engine::EncoderDevicePreference::Mode::Auto;
+    if (n == QStringLiteral("explicit"))
+        return exosnap::engine::EncoderDevicePreference::Mode::Explicit;
+    return std::nullopt;
+}
+
 std::optional<exosnap::engine::NvencPreset> NvencPresetFromString(QStringView s) {
     const QString n = s.trimmed().toString().toLower();
     if (n == QStringLiteral("p1"))
@@ -619,6 +633,14 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     vid_tbl.emplace("capture_cursor", vid.capture_cursor);
     vid_tbl.emplace("frame_rate_num", static_cast<int64_t>(vid.frame_rate_num));
     vid_tbl.emplace("frame_rate_den", static_cast<int64_t>(vid.frame_rate_den));
+    // Encoder-device preference. Additive fields: files without them keep the
+    // Auto default. The boot-scoped LUID is deliberately not persisted; the
+    // fingerprint is the PCI identity plus display context.
+    vid_tbl.emplace("encoder_device", EncoderDeviceModeToString(vid.encoder_device.mode).toStdString());
+    vid_tbl.emplace("encoder_device_vendor_id", static_cast<int64_t>(vid.encoder_device.device.vendor_id));
+    vid_tbl.emplace("encoder_device_id", static_cast<int64_t>(vid.encoder_device.device.device_id));
+    vid_tbl.emplace("encoder_device_subsystem_id", static_cast<int64_t>(vid.encoder_device.device.subsystem_id));
+    vid_tbl.emplace("encoder_device_name", vid.encoder_device.device.name);
     tbl.emplace("video", std::move(vid_tbl));
 
     // --- Audio ---
@@ -651,7 +673,7 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     aud_tbl.emplace("mic_agc_target_db", static_cast<double>(aud.mic_agc_target_db));
     // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0). Bool only.
     aud_tbl.emplace("mic_rnnoise_enabled", aud.mic_rnnoise_enabled);
-    // Channel / sample-format model (ADR 0030 -- 0.6.0).
+    // Channel / sample-format model.
     aud_tbl.emplace("audio_sample_rate", static_cast<int64_t>(aud.audio_sample_rate));
     aud_tbl.emplace("audio_channels", static_cast<int64_t>(aud.audio_channels));
     aud_tbl.emplace("audio_bit_depth", static_cast<int64_t>(aud.audio_bit_depth));
@@ -866,8 +888,27 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
             vid.frame_rate_den = static_cast<uint32_t>(den);
         }
     }
-    // CFR frame pacing (ADR 0035). Default 0 = Smooth; out-of-range clamped by SanitizePresetConfig.
+    // CFR frame pacing. Default 0 = Smooth; out-of-range clamped by SanitizePresetConfig.
     vid.frame_pacing = static_cast<exosnap::engine::FramePacingMode>(TomlInt(tbl["video"]["frame_pacing"], 0));
+    {
+        // Additive: a missing key leaves the Auto default. An explicit entry
+        // with no PCI vendor cannot match any adapter and stays explicit, so
+        // the resolver reports it as absent instead of binding another GPU.
+        const auto mode = EncoderDeviceModeFromString(QString::fromStdString(TomlStr(tbl["video"]["encoder_device"])));
+        if (mode.has_value()) {
+            vid.encoder_device.mode = *mode;
+        }
+        const int64_t vendor_id = TomlInt(tbl["video"]["encoder_device_vendor_id"], 0);
+        const int64_t device_id = TomlInt(tbl["video"]["encoder_device_id"], 0);
+        const int64_t subsystem_id = TomlInt(tbl["video"]["encoder_device_subsystem_id"], 0);
+        if (vendor_id > 0)
+            vid.encoder_device.device.vendor_id = static_cast<uint32_t>(vendor_id);
+        if (device_id > 0)
+            vid.encoder_device.device.device_id = static_cast<uint32_t>(device_id);
+        if (subsystem_id > 0)
+            vid.encoder_device.device.subsystem_id = static_cast<uint32_t>(subsystem_id);
+        vid.encoder_device.device.name = TomlStr(tbl["video"]["encoder_device_name"]);
+    }
 
     // --- Audio ---
     auto& aud = config.audio;
@@ -907,7 +948,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
             aud.selected_window_pid = std::nullopt;
         }
     }
-    // Audio encoding params (ADR 0019).
+    // Audio encoding params.
     {
         const int64_t bk = TomlInt(tbl["audio"]["audio_bitrate_kbps"], 160);
         aud.audio_bitrate_kbps = (bk >= 0) ? static_cast<uint32_t>(bk) : 160u;
@@ -955,7 +996,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     {
         aud.mic_rnnoise_enabled = TomlBool(tbl["audio"]["mic_rnnoise_enabled"], false);
     }
-    // Channel / sample-format model (ADR 0030 -- 0.6.0). Older presets default to
+    // Channel / sample-format model. Older presets default to
     // 48000 Hz / stereo / 16-bit / level 5 (no behavior change vs previous fixed values).
     {
         const int64_t sr = TomlInt(tbl["audio"]["audio_sample_rate"], 48000);
@@ -1165,7 +1206,7 @@ PersistedPresetState RecordingPresetStore::Load() const {
     // every field still parses cleanly and nothing is discarded. `repaired`
     // instead tracks whether an item actually had to be dropped below.
     const int64_t schema_version = TomlInt(doc["schema_version"], -1);
-    // Files at or below this schema carry the ADR-0032 targeted color-range
+    // Files at or below this schema carry the targeted color-range
     // rewrite on top of the ordinary field-wise repair (see RecordingPreset.h).
     const bool migrate_color_range = (schema_version >= 0 && schema_version <= kPresetSchemaColorRangeMigratedThrough);
 
@@ -1210,7 +1251,7 @@ PersistedPresetState RecordingPresetStore::Load() const {
             }
             seen_ids.insert(raw.id);
             RecordingPreset sanitized = SanitizePreset(raw);
-            // ADR 0032: under schema <=19 "full" was the materialized old code
+            // under schema <=19 "full" was the materialized old code
             // default — never an informed user choice (the colour-range combo
             // had a hydration bug and always displayed "Full (PC)" regardless
             // of the stored value). Rewrite it to the new Limited default; an
@@ -1223,7 +1264,7 @@ PersistedPresetState RecordingPresetStore::Load() const {
     }
 
     // Shared by both the [live] table and the preset.default carry-over below
-    // — one path applies the ADR-0032 color-range migration and sanitization
+    // — one path applies the color-range migration and sanitization
     // to a parsed config, regardless of which table it came from.
     const auto migrate_and_sanitize_live = [&](RecordingPresetConfig cfg) {
         if (migrate_color_range && cfg.output.color_range == capability::ColorRange::Full) {

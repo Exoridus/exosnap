@@ -38,6 +38,7 @@ static inline const char* av_err2str_cpp(int errnum) noexcept {
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <span>
@@ -128,7 +129,11 @@ struct RemuxOptions {
 // RemuxToMkv delegate here. opts.format_name must not be nullptr.
 // tr is optional: TrimRange{} (both kNoTimestamp) means no trim.
 static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
-                                   RemuxProgressCallback progress_cb, const RemuxOptions& opts, TrimRange tr = {}) {
+                                   RemuxProgressCallback progress_cb, const RemuxOptions& opts, TrimRange tr,
+                                   const RemuxIoFaults* faults) {
+    const auto remux_start = std::chrono::steady_clock::now();
+    double write_ms = 0.0, peak_write_ms = 0.0;
+    int64_t output_bytes = 0;
     const std::string in_str = input_path.string();
     const std::string out_str = output_path.string();
 
@@ -223,7 +228,7 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         // NLEs. 'hvc1' carries the parameter sets out-of-band in the hvcC box —
         // exactly how the transient MKV already stores them (hvcC codec-private),
         // so a plain stream-copy yields a conformant Apple-compatible file
-        // (ADR 0010 / ADR 0014). MKV output ignores codec_tag (it maps tracks by
+        // MKV output ignores codec_tag (it maps tracks by
         // CodecID string), so this is gated to the MP4 muxer only.
         if (out_is_mp4 && out_st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
             out_st->codecpar->codec_id == AV_CODEC_ID_HEVC) {
@@ -234,7 +239,7 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         // identity, not a hardcoded SDR one. avcodec_parameters_copy copies the
         // color_primaries / color_trc / color_space / color_range CICP fields
         // AND the coded_side_data array from the input AVCodecParameters. So a
-        // source MKV written with KaxVideoColour tags (ADR 0032) — SDR BT.709 or
+        // source MKV written with KaxVideoColour tags — SDR BT.709 or
         // HDR10 BT.2020/PQ — round-trips verbatim: the mov muxer emits the colr
         // (nclx) box from the CICP fields and, for HDR sources that carry
         // KaxVideoColourMasterMeta, the mdcv (mastering-display) box from the
@@ -463,7 +468,12 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         const int64_t pkt_pts = pkt->pts;
         const AVRational out_tb = out_st->time_base;
 
+        const auto write_start = std::chrono::steady_clock::now();
         ret = av_interleaved_write_frame(out_ctx, pkt);
+        const double elapsed_write_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - write_start).count();
+        write_ms += elapsed_write_ms;
+        peak_write_ms = std::max(peak_write_ms, elapsed_write_ms);
         // av_interleaved_write_frame takes ownership of the packet data;
         // av_packet_unref is a no-op here but keeps the guard state consistent.
         av_packet_unref(pkt);
@@ -536,6 +546,19 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         }
     }
 
+    if (out_guard.avio_opened && !(out_ctx->oformat->flags & AVFMT_NOFILE)) {
+        avio_flush(out_ctx->pb);
+        const int stream_error = out_ctx->pb->error;
+        output_bytes = out_ctx->pb->bytes_written;
+        int close_error = avio_closep(&out_ctx->pb);
+        if (faults && faults->fail_output_close && close_error >= 0)
+            close_error = AVERROR(EIO);
+        out_guard.avio_opened = false;
+        const int error = stream_error < 0 ? stream_error : close_error;
+        if (error < 0)
+            return RemuxResult::Fail(error, std::string("Output flush/close failed: ") + av_err2str(error));
+    }
+
     // Signal 100% progress.
     if (progress_cb)
         progress_cb(1.0f);
@@ -547,7 +570,15 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     std::error_code size_ec;
     const auto out_size = std::filesystem::file_size(output_path, size_ec);
     {
-        logging::LogField fields[] = {{"output_bytes", size_ec ? std::string("unknown") : std::to_string(out_size)}};
+        logging::LogField fields[] = {
+            {"output_bytes", size_ec ? std::string("unknown") : std::to_string(out_size)},
+            {"logical_read_bytes", in_ctx->pb ? std::to_string(in_ctx->pb->bytes_read) : "unavailable"},
+            {"logical_write_bytes", std::to_string(output_bytes)},
+            {"packet_write_total_ms", std::to_string(write_ms)},
+            {"packet_write_peak_ms", std::to_string(peak_write_ms)},
+            {"remux_ms",
+             std::to_string(
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - remux_start).count())}};
         logging::log(logging::LogLevel::Info, kLogComponent, "Remux complete",
                      std::span<const logging::LogField>(fields, std::size(fields)));
     }
@@ -563,13 +594,13 @@ RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const
 }
 
 RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
-                                  RemuxProgressCallback progress_cb, TrimRange tr) {
+                                  RemuxProgressCallback progress_cb, TrimRange tr, const RemuxIoFaults* faults) {
     // movflags=+faststart: two-pass write that moves moov before mdat.
     static const char* const kMp4Opts[] = {"movflags", "+faststart", nullptr};
     RemuxOptions opts;
     opts.format_name = "mp4";
     opts.extra_opts = kMp4Opts;
-    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts, tr);
+    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts, tr, faults);
 }
 
 RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
@@ -578,13 +609,13 @@ RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::files
 }
 
 RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
-                       RemuxProgressCallback progress_cb, TrimRange tr) {
+                       RemuxProgressCallback progress_cb, TrimRange tr, const RemuxIoFaults* faults) {
     // The matroska muxer writes Cues, SeekHead, and Duration at trailer time.
     // No extra options needed: libavformat defaults are correct for recovery MKV.
     RemuxOptions opts;
     opts.format_name = "matroska";
     opts.extra_opts = nullptr;
-    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts, tr);
+    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts, tr, faults);
 }
 
 std::vector<int64_t> ExtractKeyframeTimestamps(const std::filesystem::path& input_path) {

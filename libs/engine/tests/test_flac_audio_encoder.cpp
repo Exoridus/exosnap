@@ -223,7 +223,7 @@ TEST(FlacAudioEncoder, Feed_MismatchedFormat_NoPacket) {
 }
 
 // ---------------------------------------------------------------------------
-// ADR 0030: SetBitDepth — 24-bit
+// SetBitDepth — 24-bit
 // ---------------------------------------------------------------------------
 
 TEST(FlacAudioEncoder, SetBitDepth24_CodecPrivateStartsWithFlacMarker) {
@@ -258,7 +258,7 @@ TEST(FlacAudioEncoder, SetBitDepth24_ProducesFrames) {
 }
 
 // ---------------------------------------------------------------------------
-// ADR 0030: SetCompressionLevel — non-default level (level 0 = fastest)
+// SetCompressionLevel — non-default level (level 0 = fastest)
 // ---------------------------------------------------------------------------
 
 TEST(FlacAudioEncoder, SetCompressionLevel0_ProducesFrames) {
@@ -282,7 +282,7 @@ TEST(FlacAudioEncoder, SetCompressionLevel0_ProducesFrames) {
 }
 
 // ---------------------------------------------------------------------------
-// ADR 0030: Float32ToInt static helper
+// Float32ToInt static helper
 // ---------------------------------------------------------------------------
 
 TEST(FlacAudioEncoder, Float32ToInt_16bit_SameAsFloat32ToS16) {

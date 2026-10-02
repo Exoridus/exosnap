@@ -9,7 +9,7 @@
 //              surface shows and what is written to disk.
 //   effective  The same configuration after SanitizePresetConfig and the
 //              capability resolver have had their say -- container x codec
-//              reconciliation (ADR 0010), the 10-bit demotion (ADR 0032), the
+//              reconciliation, the 10-bit demotion, the
 //              4:4:4 snap, the MP4 CFR constraint, and the hardware-gated
 //              fallbacks. This is what the next recording would actually use.
 //   running    What the encoder was ACTUALLY initialized with, from

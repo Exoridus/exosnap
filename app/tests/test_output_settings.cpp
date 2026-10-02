@@ -1123,7 +1123,7 @@ TEST(SplitSizeSettingsTest, MergeFormatSelection_CarriesSplitSettings) {
 // NVENC-PRESET-R1: the NVENC encoder speed/quality preset (P1..P7) is a real
 // expert setting, default P4 (balanced) — matches the prior AV1/HEVC hardcoded
 // default (the default profile is AV1, so a fresh install is unaffected);
-// H.264 previously used P6 (visible default change — see ADR 0039).
+// The same preset default applies to H.264, HEVC and AV1.
 TEST(OutputSettingsTest, Defaults_NvencPresetIsP4) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
     EXPECT_EQ(defaults.nvenc_preset, exosnap::engine::NvencPreset::P4);
@@ -1172,13 +1172,14 @@ TEST(OutputSettingsTest, MergeFormatSelection_CarriesHdrMode) {
 // still never reach the NVENC encoder at recording start.
 TEST(OutputSettingsTest, ApplyOutputSettingsToRecorderConfig_CarriesNvencPreset) {
     exosnap::engine::RecorderConfig config{};
-    config.nvenc_preset = exosnap::engine::NvencPreset::P4;
 
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
     settings.nvenc_preset = exosnap::engine::NvencPreset::P1;
 
     ApplyOutputSettingsToRecorderConfig(config, settings);
-    EXPECT_EQ(config.nvenc_preset, exosnap::engine::NvencPreset::P1);
+    const auto* tuning = exosnap::engine::GetNvencTuning(config.backend_tuning);
+    ASSERT_NE(tuning, nullptr) << "the NVENC alternative must carry the preset";
+    EXPECT_EQ(tuning->preset, exosnap::engine::NvencPreset::P1);
 }
 
 // ── EXOSNAP_OUTPUT_DIR override (DF-HISTORY) ─────────────────────────────────

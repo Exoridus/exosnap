@@ -1,7 +1,7 @@
 #pragma once
 
 // Pure pacing predicates for the Edit-page player's three-thread playback
-// topology (docs/dev/edit-player-architecture.md).
+// topology (docs/architecture/edit-and-export.md).
 //
 // Kept here, separate from the FFmpeg-facing engine, so they are unit-testable
 // without a real file or a real audio device.

@@ -1,6 +1,6 @@
 # libs/crash_capture/CMakeLists.txt
 #
-# ExoSnap Crash-Capture Engine (ADR 0017)
+# ExoSnap Crash-Capture Engine
 #
 # This library provides:
 #   - CrashCaptureConfig / Initialize / Shutdown

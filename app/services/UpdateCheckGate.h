@@ -28,7 +28,7 @@ struct UpdateCheckOperation {
     std::uint64_t id = 0;
     // The feed this check actually queried.
     exosnap::update::UpdateChannel channel = exosnap::update::UpdateChannel::Stable;
-    // ADR 0055: whether this check was allowed to offer the running version.
+    // whether this check was allowed to offer the running version.
     // Part of the context because the answer means something different with and
     // without it, and the mode can be toggled while a check is in flight.
     bool verify_reinstall = false;

@@ -1,0 +1,65 @@
+[package]
+name = "exo-dev"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+description = "ExoSnap repository verification: scope, gate order, hooks and CI profiles"
+publish = false
+
+[[bin]]
+name = "exo-dev"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64 = "0.22"
+clap.workspace = true
+# Optional, pulled in only by `dev-tools`: `gen-manifest-fixture` signs a fixed
+# test fixture from a fixed seed. No std/alloc features are needed since it
+# only ever signs one in-memory byte slice with fixed-size key material.
+ed25519-dalek = { version = "2.2", default-features = false, optional = true }
+hex.workspace = true
+regex.workspace = true
+# Optional, pulled in only by `dev-tools`: the brand mark and icon generators
+# rasterize vector geometry to build .ico frames. No text/font/raster-image
+# support is needed since the marks are drawn from primitives only.
+resvg = { version = "0.48.1", default-features = false, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+# Optional, pulled in only by `test-support`: the self-referencing dev-dependency
+# below builds this crate as a plain dependency of its own test targets, where
+# `[dev-dependencies]` is not on the graph, so a fixture helper's tempfile use
+# has to reach it through an ordinary, feature-gated dependency instead.
+tempfile = { workspace = true, optional = true }
+# Optional, pulled in only by `dev-tools`: the .ico frame encoder reads back
+# the rasterized pixels to write both the PNG and the classic-DIB frames.
+tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "png-format"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_ApplicationInstallationAndServicing",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Threading",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# WMI access for the benchmark topology check's EDID monitor identity
+# (root\wmi WmiMonitorID), which Win32 display enumeration cannot read.
+wmi = "0.18"
+
+[features]
+default = ["dev-tools"]
+# Developer-only commands (currently `gen-manifest-fixture`) that a release
+# build of this binary does not need. Kept optional so a build that turns off
+# default features skips their dependency (e.g. curve25519-dalek) entirely.
+dev-tools = ["dep:ed25519-dalek", "dep:tiny-skia", "dep:resvg"]
+# Exposes `test_support` outside this crate's own `#[cfg(test)]` unit tests, for
+# integration tests under `tests/`. Never enabled by a normal build; only the
+# self-referencing dev-dependency below turns it on for test targets.
+test-support = ["dep:tempfile"]
+
+[dev-dependencies]
+exo-dev = { path = ".", features = ["test-support"] }

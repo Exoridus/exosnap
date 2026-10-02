@@ -16,8 +16,10 @@ namespace exosnap::diagnostics {
 
 // Owns a real-time present trace and a consumer worker that feeds the classification.
 // Latest() returns the most recent mapped present (Unavailable until one is seen).
-// The real trace requires elevation; Start() returns false (graceful) when the session
-// cannot be opened, and when this build carries no trace backend at all.
+// The real trace needs the trace right in this token; Start() returns false
+// (graceful) when the session cannot be opened -- access denied and a name
+// already taken are reported as different results -- and when this build carries
+// no trace backend at all.
 //
 // This class contains NO conditional compilation. Everything Windows-specific about the
 // trace itself lives behind IPresentTraceBackend, so the product and the tests compile
@@ -37,6 +39,10 @@ class PresentMonEtwSession {
 
     [[nodiscard]] bool Start();
     void Stop();
+    // Why the last Start() did or did not open the trace. Distinguishes a
+    // standard token without trace rights from a name conflict and from a build
+    // with no consumer, without guessing from IsElevated().
+    [[nodiscard]] PresentTraceOpenResult OpenResult() const;
     // True only while a consumer is actually consuming. Not "Start() succeeded":
     // `open_` is written by Start() and Stop() and by nobody else, so a Consume() that
     // returned for any other reason -- the session torn down by another process, a
@@ -104,6 +110,7 @@ class PresentMonEtwSession {
 
     std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory_;
     std::atomic<bool> open_{false};
+    std::atomic<int> open_result_{static_cast<int>(PresentTraceOpenResult::NotBuilt)};
     std::atomic<unsigned long> target_pid_{0};
     // A SYNCHRONIZE handle on the attributed process, nullptr for pid 0 or for a
     // process this one may not open. HELD rather than re-opened per sample, because
@@ -123,7 +130,7 @@ class PresentMonEtwSession {
     mutable PresentSample latest_;          // guarded by sample_mutex_
     mutable uint64_t last_present_qpc_ = 0; // reader-side drain state (Latest())
     mutable int64_t qpc_freq_ = 0;
-    // ADR 0033 extra-checks: per-recording present aggregates, accumulated on the reader
+    // per-recording present aggregates, accumulated on the reader
     // side across the drain (same single-threaded Latest() access as last_present_qpc_) and
     // Reset() at every attribution boundary via SetTargetProcessId so the statistics measure
     // only the current recording, never the whole session.

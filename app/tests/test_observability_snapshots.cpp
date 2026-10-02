@@ -210,7 +210,7 @@ TEST(PipelineSnapshotJson, EncoderInitIsOmittedUntilAnEncoderWasConfigured) {
     exosnap::engine::RecordingDiagnosticsSnapshot s = HealthyRecording();
     s.encoder_init.valid = true;
     s.encoder_init.codec = exosnap::engine::VideoCodec::Av1;
-    s.encoder_init.preset = exosnap::engine::NvencPreset::P6;
+    s.encoder_init.backend_preset = "P6";
     s.encoder_init.rc_mode = exosnap::engine::RateControlMode::ConstantQuality;
     s.encoder_init.cq = 17;
     s.encoder_init.gop_length = 120;
@@ -401,7 +401,7 @@ TEST(SettingsSnapshotJson, RequestedAndEffectiveDifferencesAreReportedFieldByFie
     inputs.requested.output.video_codec = capability::VideoCodec::Av1;
     inputs.requested.output.audio_codec = capability::AudioCodec::Opus;
 
-    // What MP4 reconciliation actually produces (ADR 0010).
+    // What MP4 reconciliation actually produces.
     inputs.effective = inputs.requested;
     inputs.effective.output.video_codec = capability::VideoCodec::H264;
     inputs.effective.output.audio_codec = capability::AudioCodec::Aac;
@@ -454,7 +454,7 @@ TEST(SettingsSnapshotJson, RunningLevelComesFromTheEncoderAndNotFromASecondCopyO
     EXPECT_FALSE(idle.contains(QStringLiteral("encoderPreset")));
 
     inputs.running.valid = true;
-    inputs.running.preset = exosnap::engine::NvencPreset::P6;
+    inputs.running.backend_preset = "P6";
     inputs.running.cq = 17;
     inputs.running_live = true;
 
@@ -588,6 +588,30 @@ TEST(EnvironmentSnapshotJson, HdrOffAndHdrUnknownAreDifferentPayloads) {
     EXPECT_EQ(measured.value(QStringLiteral("colorAvailability")).toString(), QStringLiteral("available"));
 }
 
+// A monitor capture target is selected by its Windows display device, never by
+// Qt's friendly screen name. The snapshot carries both, and an unread device is
+// null rather than a name standing in for it.
+TEST(EnvironmentSnapshotJson, ScreensCarryTheDisplayDeviceBesideTheFriendlyName) {
+    EnvironmentSnapshotInputs inputs;
+    ScreenFacts known;
+    known.name = QStringLiteral("27GL850");
+    known.device = QStringLiteral("\\\\.\\DISPLAY1");
+    inputs.screens.push_back(known);
+    ScreenFacts unread;
+    unread.name = QStringLiteral("27GL850");
+    inputs.screens.push_back(unread);
+
+    const QJsonArray screens = EnvironmentSnapshotToJson(inputs)
+                                   .value(QStringLiteral("displays"))
+                                   .toObject()
+                                   .value(QStringLiteral("screens"))
+                                   .toArray();
+    ASSERT_EQ(screens.size(), 2);
+    EXPECT_EQ(screens.at(0).toObject().value(QStringLiteral("device")).toString(), QStringLiteral("\\\\.\\DISPLAY1"));
+    EXPECT_EQ(screens.at(0).toObject().value(QStringLiteral("name")).toString(), QStringLiteral("27GL850"));
+    EXPECT_TRUE(screens.at(1).toObject().value(QStringLiteral("device")).isNull());
+}
+
 // The DXGI output walk and Qt's screen list are two independent enumerations of
 // the same monitors. A positional join reads correctly only while the two happen
 // to agree, and reports one monitor's HDR state under the other's name the moment
@@ -663,17 +687,31 @@ TEST(EnvironmentSnapshotJson, AnUnnamedDxgiDisplayMatchesNothingRatherThanItsNei
     EXPECT_EQ(entry.value(QStringLiteral("colorAvailability")).toString(), QStringLiteral("unsupported"));
 }
 
-TEST(EnvironmentSnapshotJson, PresentUnavailabilityNamesItsCauseInGateOrder) {
+TEST(EnvironmentSnapshotJson, PresentUnavailabilityNamesTheProvidersOwnState) {
     EnvironmentSnapshotInputs inputs;
 
     const QJsonObject no_opt_in = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
     EXPECT_EQ(no_opt_in.value(QStringLiteral("availability")).toString(), QStringLiteral("requiresOptIn"));
+    EXPECT_EQ(no_opt_in.value(QStringLiteral("state")).toString(), QStringLiteral("notRequested"));
 
+    // Opted in, and the OS refused the trace in this token. This is NOT
+    // "requiresElevation": a standard token may hold the trace right, and an
+    // elevated one can still be refused.
     inputs.present.opt_in = true;
-    const QJsonObject no_elevation = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
-    EXPECT_EQ(no_elevation.value(QStringLiteral("availability")).toString(), QStringLiteral("requiresElevation"));
+    inputs.present.state = diagnostics::PresentProviderState::AccessDenied;
+    const QJsonObject denied = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
+    EXPECT_EQ(denied.value(QStringLiteral("availability")).toString(), QStringLiteral("accessDenied"));
+    EXPECT_EQ(denied.value(QStringLiteral("state")).toString(), QStringLiteral("accessDenied"));
+    EXPECT_EQ(denied.value(QStringLiteral("reason")).toString(), QStringLiteral("traceAccessDenied"));
 
-    inputs.present.elevated = true;
+    // A session with our name already exists and was left alone.
+    inputs.present.state = diagnostics::PresentProviderState::SessionConflict;
+    const QJsonObject conflict = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
+    EXPECT_EQ(conflict.value(QStringLiteral("availability")).toString(), QStringLiteral("conflict"));
+    EXPECT_EQ(conflict.value(QStringLiteral("reason")).toString(), QStringLiteral("traceSessionConflict"));
+
+    // An open trace with no present yet: unavailable, not a zero measurement.
+    inputs.present.state = diagnostics::PresentProviderState::OpenNoData;
     const QJsonObject nothing_seen = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
     EXPECT_EQ(nothing_seen.value(QStringLiteral("availability")).toString(), QStringLiteral("unavailable"));
     EXPECT_EQ(nothing_seen.value(QStringLiteral("reason")).toString(), QStringLiteral("noPresentObserved"));
@@ -687,10 +725,12 @@ TEST(EnvironmentSnapshotJson, PresentUnavailabilityNamesItsCauseInGateOrder) {
     sample.present_count = 900;
     sample.discarded_count = 0;
     inputs.present.available = true;
+    inputs.present.state = diagnostics::PresentProviderState::Measuring;
     inputs.present.sample = sample;
 
     const QJsonObject measured = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
     EXPECT_EQ(measured.value(QStringLiteral("availability")).toString(), QStringLiteral("available"));
+    EXPECT_EQ(measured.value(QStringLiteral("state")).toString(), QStringLiteral("measuring"));
     EXPECT_EQ(measured.value(QStringLiteral("mode")).toString(), QStringLiteral("independentFlip"));
     EXPECT_TRUE(measured.value(QStringLiteral("tearing")).toBool());
     EXPECT_EQ(measured.value(QStringLiteral("presentCount")).toDouble(), 900.0);
@@ -721,8 +761,6 @@ TEST(WindowIdentity, EveryOverlayObjectNameMapsToItsOwnRole) {
     EXPECT_EQ(WindowRoleForObjectName(QString(), true), QStringLiteral("main"));
     EXPECT_EQ(WindowRoleForObjectName(QStringLiteral("quickOverlayRecording"), false),
               QStringLiteral("recordingOverlay"));
-    EXPECT_EQ(WindowRoleForObjectName(QStringLiteral("quickOverlayDiagnostics"), false),
-              QStringLiteral("diagnosticsOverlay"));
     EXPECT_EQ(WindowRoleForObjectName(QStringLiteral("quickOverlayQuickControls"), false),
               QStringLiteral("quickControls"));
     EXPECT_EQ(WindowRoleForObjectName(QStringLiteral("quickOverlayNotificationToast"), false),
@@ -784,15 +822,16 @@ TEST(WindowIdentity, TwoTopLevelWindowsSharingATitleIsReportedRatherThanHidden) 
     EXPECT_FALSE(json.value(QStringLiteral("titlesUnique")).toBool());
 }
 
-// Main.qml defers four of these five behind a Loader; the notification toast is
-// eager. Every consumer that walks "what overlays exist" has to know the
+// Main.qml defers three of these four behind a Loader; the notification toast
+// is eager. Every consumer that walks "what overlays exist" has to know the
 // complete, closed set to say which ones have not been created yet rather than
 // silently dropping them.
 TEST(WindowIdentity, AllOverlayObjectNamesIsTheCompleteClosedSet) {
     const std::vector<QString>& names = AllOverlayObjectNames();
     const std::vector<QString> expected = {
-        QStringLiteral("quickOverlayRecording"),         QStringLiteral("quickOverlayDiagnostics"),
-        QStringLiteral("quickOverlayCountdown"),         QStringLiteral("quickOverlayQuickControls"),
+        QStringLiteral("quickOverlayRecording"),
+        QStringLiteral("quickOverlayCountdown"),
+        QStringLiteral("quickOverlayQuickControls"),
         QStringLiteral("quickOverlayNotificationToast"),
     };
     EXPECT_EQ(names, expected);

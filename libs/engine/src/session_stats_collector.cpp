@@ -25,26 +25,6 @@ const char* CodecToken(VideoCodec c) noexcept {
     return "unknown";
 }
 
-const char* PresetToken(NvencPreset p) noexcept {
-    switch (p) {
-    case NvencPreset::P1:
-        return "P1";
-    case NvencPreset::P2:
-        return "P2";
-    case NvencPreset::P3:
-        return "P3";
-    case NvencPreset::P4:
-        return "P4";
-    case NvencPreset::P5:
-        return "P5";
-    case NvencPreset::P6:
-        return "P6";
-    case NvencPreset::P7:
-        return "P7";
-    }
-    return "P?";
-}
-
 const char* RateControlToken(RateControlMode m) noexcept {
     switch (m) {
     case RateControlMode::ConstantQuality:
@@ -245,6 +225,7 @@ void SessionStatsCollector::Run() {
                 AddStageWindow(fields, "acquire", p.acquire);
                 AddStageWindow(fields, "composition_cpu", p.composition_cpu);
                 AddStageWindow(fields, "composition_gpu", p.composition_gpu);
+                AddStageWindow(fields, "hdr_luminance_gpu", p.hdr_luminance_gpu);
                 AddStageWindow(fields, "hdr_tonemap_gpu", p.hdr_tonemap_gpu);
                 AddStageWindow(fields, "rgb_to_yuv_cpu", p.rgb_to_yuv_cpu);
                 AddStageWindow(fields, "rgb_to_yuv_gpu", p.rgb_to_yuv_gpu);
@@ -263,7 +244,7 @@ void SessionStatsCollector::Run() {
                 fields.push_back({"duplicated_frames", U64(p.duplicated_frames)});
                 fields.push_back({"slot_stalls", U64(p.slot_stalls)});
                 fields.push_back({"queue_saturation_events", U64(p.queue_saturation_events)});
-                fields.push_back({"preset", PresetToken(init.preset)});
+                fields.push_back({"preset", std::string(init.backend_preset)});
                 fields.push_back({"codec", CodecToken(stats_copy.video_codec)});
                 fields.push_back({"resolution", res});
                 logging::log(logging::LogLevel::Info, "perf", "video-pipeline-window",
@@ -335,6 +316,7 @@ void SessionStatsCollector::EmitSessionPerfSummary() {
     AddStageSummary(fields, "acquire", sum.acquire);
     AddStageSummary(fields, "composition_cpu", sum.composition_cpu);
     AddStageSummary(fields, "composition_gpu", sum.composition_gpu);
+    AddStageSummary(fields, "hdr_luminance_gpu", sum.hdr_luminance_gpu);
     AddStageSummary(fields, "hdr_tonemap_gpu", sum.hdr_tonemap_gpu);
     AddStageSummary(fields, "rgb_to_yuv_cpu", sum.rgb_to_yuv_cpu);
     AddStageSummary(fields, "rgb_to_yuv_gpu", sum.rgb_to_yuv_gpu);
@@ -357,7 +339,7 @@ void SessionStatsCollector::EmitSessionPerfSummary() {
     fields.push_back({"slot_stalls", U64(sum.slot_stalls)});
     fields.push_back({"queue_saturation_events", U64(sum.queue_saturation_events)});
     fields.push_back({"duration_skew_ms", Num(duration_skew_ms)});
-    fields.push_back({"preset", PresetToken(sum.encoder_init.preset)});
+    fields.push_back({"preset", std::string(sum.encoder_init.backend_preset)});
     fields.push_back({"rc_mode", RateControlToken(sum.encoder_init.rc_mode)});
     fields.push_back({"gop_length", U64(sum.encoder_init.gop_length)});
     fields.push_back({"codec", CodecToken(stats_copy.video_codec)});

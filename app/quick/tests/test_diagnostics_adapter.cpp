@@ -154,6 +154,8 @@ exosnap::engine::RecordingDiagnosticsSnapshot JudderSnapshot(double elapsed_s = 
     exosnap::engine::RecordingDiagnosticsSnapshot snapshot =
         visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("judder"));
     snapshot.capture.source_present_jitter_ms = 9.0;
+    snapshot.pacing.recent_affected_slots = 3;
+    snapshot.pacing.affected_slots = 3;
     snapshot.elapsed_seconds = elapsed_s;
     return snapshot;
 }
@@ -363,7 +365,7 @@ TEST(DiagnosticsAdapterTest, HdrTargetFactRaisesTheHdrBlockerCard) {
     EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("cannot record HDR10")));
 }
 
-// ── ADR 0033: the DPC/ISR producer that reached nothing ─────────────────────────
+// ── the DPC/ISR producer that reached nothing ─────────────────────────
 //
 // RecommendationEngine::checkDpcLatency has been correct and covered from the day it
 // landed, and it still never fired in a shipping build: DpcLatencyProvider.cpp was
@@ -412,7 +414,7 @@ TEST(DiagnosticsAdapterTest, MeasuredDpcLatencyRaisesTheDriverCard) {
     provider.setReading(MeasuredSpike());
     adapter.setDpcLatencyProvider(&provider);
 
-    EXPECT_TRUE(HasIssueTitled(adapter, QStringLiteral("DPC/ISR latency")))
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("DPC/ISR latency")))
         << "a measured kernel-latency spike has to reach the Diagnostics surface";
     EXPECT_GE(provider.reads(), 1) << "the provider is sampled where the engine runs";
 }
@@ -425,7 +427,7 @@ TEST(DiagnosticsAdapterTest, DpcLatencyThatStoppedBeingMeasuredStopsBeingReporte
     FakeDpcProvider provider;
     provider.setReading(MeasuredSpike());
     adapter.setDpcLatencyProvider(&provider);
-    ASSERT_TRUE(HasIssueTitled(adapter, QStringLiteral("DPC/ISR latency")));
+    ASSERT_FALSE(HasIssueTitled(adapter, QStringLiteral("DPC/ISR latency")));
 
     // The trace stops (opt-in withdrawn, session torn down by another process, ETW
     // buffer error). What the provider then returns is the default reading: available
@@ -544,12 +546,42 @@ TEST(DiagnosticsAdapterTest, TheInDepthSwitchAsksAndDoesNotDecide) {
 
     adapter.setInDepthEnabled(true);
     EXPECT_TRUE(adapter.inDepthEnabled());
-    // On in a standard process there is no ETW session, and the sub-text is the
-    // one place the spec says the gate is stated.
-    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On \xc2\xb7 not measuring \xc2\xb7 needs an admin relaunch"));
+    // The sub-text states what the request means, never a privilege prediction:
+    // the provider's own state is what says whether an optional source measures.
+    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On · core measurements active"));
 
     adapter.setElevated(true);
-    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On \xc2\xb7 elevated \xc2\xb7 PresentMon + DPC/ISR trace"));
+    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On · core measurements active"));
+}
+
+TEST(DiagnosticsAdapterTest, MeasurementSourcesSeparateTheOptionalProviders) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setInDepthEnabled(true);
+    adapter.setElevated(false);
+    adapter.setPresentProviderState(diagnostics::PresentProviderState::AccessDenied);
+
+    const QVariantList sources = adapter.measurementSources();
+    ASSERT_EQ(sources.size(), 4);
+    const auto stateOf = [&sources](const QString& title) {
+        for (const QVariant& row : sources) {
+            if (row.toMap().value(QStringLiteral("title")).toString() == title)
+                return row.toMap().value(QStringLiteral("state")).toString();
+        }
+        return QString();
+    };
+
+    EXPECT_EQ(adapter.presentProviderState(), QStringLiteral("accessDenied"));
+    EXPECT_TRUE(stateOf(QStringLiteral("Presentation")).contains(QStringLiteral("access denied")));
+    EXPECT_TRUE(stateOf(QStringLiteral("DPC / ISR")).contains(QStringLiteral("elevated kernel trace required")));
+    // The core sources remain their own states; a refused optional trace does
+    // not turn them into failures.
+    EXPECT_FALSE(stateOf(QStringLiteral("Recording pipeline")).isEmpty());
+    EXPECT_FALSE(stateOf(QStringLiteral("GPU / memory")).isEmpty());
+
+    // Present measuring is its own state and does not move the DPC boundary.
+    adapter.setPresentProviderState(diagnostics::PresentProviderState::Measuring);
+    EXPECT_EQ(adapter.presentProviderState(), QStringLiteral("measuring"));
 }
 
 // The switch is session state: off at every start, and the offer to restart
@@ -598,7 +630,7 @@ TEST(DiagnosticsAdapterTest, TurningInDepthOnOffersTheRestartOnlyInAStandardProc
     EXPECT_EQ(offers, 1);
 }
 
-TEST(DiagnosticsAdapterTest, InDepthCannotBeChangedWhileRecording) {
+TEST(DiagnosticsAdapterTest, InDepthCanBeViewedWhileRecording) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeConfig());
@@ -606,11 +638,11 @@ TEST(DiagnosticsAdapterTest, InDepthCannotBeChangedWhileRecording) {
 
     adapter.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy")));
     EXPECT_TRUE(adapter.recording());
-    EXPECT_FALSE(adapter.inDepthAvailable());
-    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("Off \xc2\xb7 cannot change while recording"));
+    EXPECT_TRUE(adapter.inDepthAvailable());
+    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("Off · core recording health remains active"));
 
     adapter.setInDepthEnabledFromUi(true);
-    EXPECT_EQ(toggled.count(), 0);
+    EXPECT_EQ(toggled.count(), 1);
 }
 
 TEST(DiagnosticsAdapterTest, ShowInLogNamesTheDiagnosticThatRaisedIt) {
@@ -919,6 +951,42 @@ TEST(LogsAdapterTest, CopyAndExportGatesFollowTheCounts) {
     EXPECT_TRUE(adapter.canExport());
 }
 
+// A "Show in log" reveal temporarily widens the severity filter so the
+// requested entry cannot be hidden, and the same state is what backs the
+// visible restore affordance.
+TEST(LogsAdapterTest, RevealWidensTheFilterAndRestoresIt) {
+    EnsureApplication();
+    LogsAdapter adapter;
+    adapter.setSyntheticEntries({MakeLogEntry(1, diagnostics::LogSeverity::Info, "started"),
+                                 MakeLogEntry(2, diagnostics::LogSeverity::Error, "failed")});
+    adapter.setSeverityFilter(2); // Issues
+    EXPECT_EQ(adapter.visibleCount(), 1);
+
+    adapter.revealEntry(QStringLiteral("Record"));
+    EXPECT_TRUE(adapter.revealActive());
+    EXPECT_FALSE(adapter.revealMissing());
+    EXPECT_EQ(adapter.severityFilter(), 0);
+    EXPECT_EQ(adapter.searchQuery(), QStringLiteral("Record"));
+    EXPECT_EQ(adapter.visibleCount(), 2);
+
+    adapter.clearReveal();
+    EXPECT_FALSE(adapter.revealActive());
+    EXPECT_EQ(adapter.severityFilter(), 2);
+    EXPECT_EQ(adapter.searchQuery(), QString());
+    EXPECT_EQ(adapter.visibleCount(), 1);
+}
+
+TEST(LogsAdapterTest, RevealReportsAnEntryThatIsNoLongerInTheBuffer) {
+    EnsureApplication();
+    LogsAdapter adapter;
+    adapter.setSyntheticEntries({MakeLogEntry(1, diagnostics::LogSeverity::Info, "started")});
+
+    adapter.revealEntry(QStringLiteral("no-such-entry"));
+    EXPECT_TRUE(adapter.revealActive());
+    EXPECT_TRUE(adapter.revealMissing());
+    EXPECT_EQ(adapter.visibleCount(), 0);
+}
+
 TEST(LogsAdapterTest, AutoScrollIsAPlainToggle) {
     EnsureApplication();
     LogsAdapter adapter;
@@ -1147,4 +1215,28 @@ TEST(DiagnosticIssueModelTest, ClearingEverySurfacedIssueIsStructural) {
 
     EXPECT_EQ(counter.resets(), 1);
     EXPECT_EQ(model.rowCount(), 0);
+}
+
+TEST(DiagnosticsAdapterTest, PauseFreezesCopyAndResumeRestoresLiveSemantics) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    auto config = MakeConfig();
+    config.caps.video_codecs[config.user_config.video_codec] = {capability::SupportLevel::Available, ""};
+    config.caps.audio_codecs[config.user_config.audio_codec] = {capability::SupportLevel::Available, ""};
+    config.caps.containers[config.user_config.container] = {capability::SupportLevel::Available, ""};
+    config.profile_validation.succeeded = true;
+    adapter.setDiagnosticConfig(config);
+    adapter.applyProbeResultForTest(MakeProbe());
+    adapter.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy")));
+    adapter.refreshForTest();
+    adapter.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("paused")));
+    adapter.refreshForTest();
+    EXPECT_TRUE(adapter.paused());
+    EXPECT_EQ(adapter.verdictHeadline(), QStringLiteral("PAUSED · HEALTHY SO FAR"));
+    EXPECT_TRUE(adapter.lastCheckText().contains(QStringLiteral("frozen")));
+    adapter.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy")));
+    adapter.refreshForTest();
+    EXPECT_FALSE(adapter.paused());
+    EXPECT_EQ(adapter.verdictHeadline(), QStringLiteral("RECORDING HEALTHY"));
+    EXPECT_TRUE(adapter.lastCheckText().contains(QStringLiteral("live 5x/s")));
 }

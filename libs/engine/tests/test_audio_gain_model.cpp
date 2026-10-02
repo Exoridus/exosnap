@@ -1,5 +1,5 @@
 // test_audio_gain_model.cpp
-// Unit tests for GainDbToLinear and per-row gain propagation (ADR 0018).
+// Unit tests for GainDbToLinear and per-row gain propagation.
 
 #include <gtest/gtest.h>
 

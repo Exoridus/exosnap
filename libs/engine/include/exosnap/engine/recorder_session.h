@@ -3,7 +3,9 @@
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/color_metadata.h>
 
+#include "backend_tuning.h"
 #include "codec_types.h"
+#include "encoder_device.h"
 #include "error_types.h"
 #include "frame_pacing.h"
 #include "hdr_native.h"
@@ -15,6 +17,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -29,6 +32,13 @@ namespace exosnap::engine {
 // Called by VideoThread to pull the latest webcam BGRA frame.
 // Implementations must be thread-safe: TryGetFrame is called from VideoThread.
 // The provider must remain alive for the duration of Record().
+struct WebcamFrameSnapshot {
+    int width = 0;
+    int height = 0;
+    uint64_t generation = 0;
+    std::vector<uint8_t> bgra;
+};
+
 struct WebcamFrameProvider {
     // Returns true and fills out_width/out_height/out_bgra with the LATEST captured
     // frame. out_bgra is BGRA (B8G8R8A8 byte order), row-major.
@@ -37,7 +47,7 @@ struct WebcamFrameProvider {
     // loss (unplug / driver error) does NOT make this return false — the last
     // captured frame keeps being served (frozen) so the composite holds the last
     // webcam image instead of the PiP vanishing, matching the DXGI monitor recovery
-    // (ADR 0013) and industry practice. The provider recovers live if the device
+    // and industry practice. The provider recovers live if the device
     // returns. Returns false only before the first frame is captured (nothing to
     // show yet) or after the provider is stopped.
     // out_generation is bumped once per newly captured sample (StoreFrame call),
@@ -45,6 +55,14 @@ struct WebcamFrameProvider {
     // recomposition when the webcam has not produced a new sample since last tick.
     virtual bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra,
                              uint64_t& out_generation) = 0;
+    // Pixels and generation remain paired for the lifetime of the snapshot.
+    // Providers should override this to share their immutable published frame.
+    virtual std::shared_ptr<const WebcamFrameSnapshot> Snapshot() {
+        auto frame = std::make_shared<WebcamFrameSnapshot>();
+        if (!TryGetFrame(frame->width, frame->height, frame->bgra, frame->generation))
+            return {};
+        return frame;
+    }
     virtual ~WebcamFrameProvider() = default;
 };
 
@@ -210,7 +228,7 @@ enum class MicChannelMode {
 
 // Engine-level split configuration carried in RecorderConfig.
 //
-// Two independent thresholds (ADR 0021: dual time+size, whichever first):
+// Two independent thresholds (time and size, whichever first):
 //   duration_ms == 0  → time-based splitting disabled
 //   size_bytes   == 0 → size-based splitting disabled
 // Both may be active simultaneously. Manual splits are always available
@@ -308,7 +326,7 @@ using PreviewSharedHandleCallback =
 using PreviewFramePublishedCallback = std::function<void()>;
 
 // ---------------------------------------------------------------------------
-// OpusFrameDuration — configurable Opus frame size (ADR 0019)
+// OpusFrameDuration — configurable Opus frame size
 // ---------------------------------------------------------------------------
 
 // Supported Opus frame durations. Maps to frame-size-in-samples at 48 kHz.
@@ -355,7 +373,7 @@ struct RecorderConfig {
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;
     BitDepth bit_depth = BitDepth::Bit8;
 
-    // Color description for the encoded video (ADR 0032). Default SDR BT.709
+    // Color description for the encoded video. Default SDR BT.709
     // full-range; written into the container and matched by the encoder-input
     // color conversion (range is user-selectable — Full default / Limited). HDR
     // fields stay unset until the HDR slice.
@@ -375,22 +393,30 @@ struct RecorderConfig {
     // quality parameter (NVENC: CQP).
     uint32_t cq = CanonicalCq(QualityPreset::Balanced);
 
-    // Canonical rate-control mode (ADR 0009). Defaults to ConstantQuality (existing behavior).
-    RateControlMode nvenc_rate_control = RateControlMode::ConstantQuality;
+    // Canonical rate-control mode. Defaults to ConstantQuality (existing behavior).
+    RateControlMode rate_control_mode = RateControlMode::ConstantQuality;
 
-    // NVENC speed/quality preset (P1 fastest/lowest quality .. P7 slowest/best
-    // quality). Applies uniformly to all three NVENC codecs; never capability-
-    // gated. Default P4 (balanced) — matches the prior hardcoded AV1/HEVC
-    // default; H.264 previously used P6 (visible default change, expert-
-    // overridable — see ADR 0039).
-    NvencPreset nvenc_preset = NvencPreset::P4;
+    // Which physical adapter should encode, as the user chose it. Auto (the
+    // default) resolves at session start; an Explicit selection names a
+    // fingerprint and is never silently redirected to a different GPU. The
+    // boot-scoped LUID is not part of this preference.
+    EncoderDevicePreference encoder_device;
+
+    // Runtime resolution of `encoder_device` for this session, produced against
+    // the adapters present now. Empty means "not resolved here": Auto then uses
+    // the capture adapter, which is the only executable path in this build.
+    ResolvedEncoderDevice resolved_encoder_device;
+
+    // Backend-specific tuning for the selected encoder. Generic configuration
+    // above stays backend-independent; NVENC's P1-P7 lives in NvencTuning.
+    BackendTuning backend_tuning;
 
     // Target bitrate in kbps — used for VariableBitrate and ConstantBitrate modes.
     // Ignored (and zero-ed by the encoder) when mode is ConstantQuality.
-    uint32_t nvenc_bitrate_kbps = 20000;
+    uint32_t target_bitrate_kbps = 20000;
 
     // ---------------------------------------------------------------------------
-    // Audio encoding parameters (ADR 0019)
+    // Audio encoding parameters
     // ---------------------------------------------------------------------------
 
     // Target audio bitrate in kbps. 0 = use encoder default.
@@ -408,7 +434,7 @@ struct RecorderConfig {
     int opus_complexity = 10;
 
     // ---------------------------------------------------------------------------
-    // Audio format model (ADR 0030 — 0.6.0)
+    // Audio format model
     // ---------------------------------------------------------------------------
 
     // Target sample rate in Hz. Vetted set: 44100, 48000, 96000.
@@ -441,7 +467,7 @@ struct RecorderConfig {
     // When false: VFR passthrough (WGC timestamps used directly as PTS).
     bool cfr = true;
 
-    // CFR frame pacing (ADR 0035). Smooth = phase-correct selection; Newest = newest-at-tick.
+    // CFR frame pacing. Smooth = phase-correct selection; Newest = newest-at-tick.
     // Ignored for VFR and for WGC capture (no LastPresentTime → newest-at-tick).
     FramePacingMode cfr_pacing_mode = FramePacingMode::Smooth;
 

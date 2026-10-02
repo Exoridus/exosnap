@@ -1,4 +1,4 @@
-// Audio-thread device-loss integration (ADR 0046). Drives the real AudioThread
+// Audio-thread device-loss integration. Drives the real AudioThread
 // with fake sources that lose their endpoint mid-recording. The contract:
 //   - the session stays alive (no RecordFailure, stop is not raised by the loss),
 //   - the encoder timeline stays continuous (a silence gap, not a freeze),
@@ -580,6 +580,8 @@ FullOutageRun RunFullOutage(AudioCodec codec, bool merged, std::chrono::millisec
     opts.post = 3;
     opts.min_outage = std::chrono::milliseconds(200); // recovers on the first 500 ms poll
     opts.reinit_delay = reinit_delay;
+    // Shared intervals require packets paced and timestamped like a real endpoint.
+    opts.report_device_timing = true;
 
     std::vector<OutageSource*> sources;
     auto first = std::make_unique<OutageSource>(opts, &state.stop_requested);

@@ -145,6 +145,9 @@ SessionLedgerRow LedgerRow(const diagnostics::LedgerEntry& entry, double now_s, 
     row.title = Text(entry.title);
     row.summary = Text(entry.summary);
     row.logExcerpt = Text(entry.log_excerpt);
+    row.compensation = Text(entry.compensation);
+    row.fixId = Text(entry.fix_id);
+    row.fixLabel = Text(entry.fix_label);
     row.active = entry.active;
     row.count = static_cast<int>(entry.count);
     row.firstSeenText = clock(entry.first_seen_s);
@@ -236,11 +239,21 @@ QString DiagnosticsAdapter::verdictState() const {
     return checking_ ? QStringLiteral("checking") : Key(diagnostics::VerdictStateKey(verdict_state_));
 }
 
+bool DiagnosticsAdapter::paused() const noexcept {
+    return controller_.liveSnapshot().valid &&
+           controller_.liveSnapshot().lifecycle == exosnap::engine::DiagnosticsLifecycle::Paused;
+}
+
 QString DiagnosticsAdapter::verdictHeadline() const {
+    if (paused())
+        return verdict_state_ == diagnostics::VerdictState::Ready ? tr("PAUSED · HEALTHY SO FAR")
+                                                                  : tr("PAUSED · Problems observed");
     return checking_ ? QStringLiteral("Checking\xe2\x80\xa6") : verdict_headline_;
 }
 
 QString DiagnosticsAdapter::verdictSubline() const {
+    if (paused() && verdict_state_ == diagnostics::VerdictState::Ready)
+        return tr("No recording-impacting problems observed up to pause.");
     return checking_ ? QStringLiteral("Check in progress.") : verdict_subline_;
 }
 
@@ -253,6 +266,8 @@ int DiagnosticsAdapter::noticeCount() const noexcept {
 }
 
 QString DiagnosticsAdapter::lastCheckText() const {
+    if (paused())
+        return tr("Paused · last measured state frozen");
     // While recording the band reports the session, so its stamp says since when
     // and at what rate rather than when the readiness probe last ran.
     if (recording_) {
@@ -321,21 +336,92 @@ void DiagnosticsAdapter::setInDepthEnabledFromUi(bool enabled) {
 }
 
 QString DiagnosticsAdapter::inDepthStateText() const {
-    // The switch is session state and elevation is a process property, so both
-    // halves of the gate are answered here. With the switch on in a standard
-    // process no ETW session exists and no in-depth tile has a reading, so the
-    // sub-text names the gate rather than claiming traces that are not running.
-    if (in_depth_enabled_) {
-        return controller_.elevated() ? QStringLiteral("On \xc2\xb7 elevated \xc2\xb7 PresentMon + DPC/ISR trace")
-                                      : QStringLiteral("On \xc2\xb7 not measuring \xc2\xb7 needs an admin relaunch");
-    }
-    if (recording_)
-        return QStringLiteral("Off \xc2\xb7 cannot change while recording");
-    return QStringLiteral("Off \xc2\xb7 needs an admin relaunch");
+    if (in_depth_enabled_)
+        return tr("On · core measurements active");
+    return tr("Off · core recording health remains active");
 }
 
 bool DiagnosticsAdapter::inDepthAvailable() const noexcept {
-    return !recording_;
+    return true;
+}
+
+QString DiagnosticsAdapter::presentProviderState() const {
+    return QString::fromLatin1(diagnostics::PresentProviderStateKey(present_provider_state_));
+}
+
+QVariantList DiagnosticsAdapter::measurementSources() const {
+    const auto now = std::chrono::steady_clock::now();
+    const auto& probe = controller_.probeResult();
+    QVariantList rows;
+    const auto add = [&rows](const QString& title, const QString& state, const QString& tone) {
+        rows.push_back(QVariantMap{
+            {QStringLiteral("title"), title}, {QStringLiteral("state"), state}, {QStringLiteral("tone"), tone}});
+    };
+
+    // The recording pipeline's own measurements. They are engine-owned and never
+    // depend on any optional trace.
+    if (recording_)
+        add(tr("Recording pipeline"), tr("Measuring"), QStringLiteral("measuring"));
+    else
+        add(tr("Recording pipeline"), tr("Waiting for a recording"), QStringLiteral("idle"));
+
+    // GPU telemetry and video memory, field-wise: one usable source keeps the row
+    // partially available rather than collapsing to unavailable.
+    const bool gpu_fresh = probe.gpu.metadata.Fresh(now);
+    const bool memory_fresh = (probe.video_memory.local.has_value() || probe.video_memory.nonlocal.has_value()) &&
+                              probe.video_memory.metadata.Fresh(now);
+    if (gpu_fresh && memory_fresh)
+        add(tr("GPU / memory"), tr("Measuring"), QStringLiteral("measuring"));
+    else if (gpu_fresh || memory_fresh)
+        add(tr("GPU / memory"), tr("Partially available"), QStringLiteral("partial"));
+    else
+        add(tr("GPU / memory"), tr("Unavailable"), QStringLiteral("unavailable"));
+
+    // Presentation: the actual provider state, never an elevation prediction.
+    using diagnostics::PresentProviderState;
+    switch (present_provider_state_) {
+    case PresentProviderState::NotRequested:
+        add(tr("Presentation"), tr("Not requested"), QStringLiteral("idle"));
+        break;
+    case PresentProviderState::Starting:
+        add(tr("Presentation"), tr("Starting"), QStringLiteral("partial"));
+        break;
+    case PresentProviderState::OpenNoData:
+        add(tr("Presentation"), tr("Connected, waiting for data"), QStringLiteral("partial"));
+        break;
+    case PresentProviderState::Measuring:
+        add(tr("Presentation"), tr("Measuring"), QStringLiteral("measuring"));
+        break;
+    case PresentProviderState::AccessDenied:
+        add(tr("Presentation"), tr("Unavailable - access denied"), QStringLiteral("unavailable"));
+        break;
+    case PresentProviderState::SessionConflict:
+        add(tr("Presentation"), tr("Unavailable - session conflict"), QStringLiteral("unavailable"));
+        break;
+    case PresentProviderState::NotBuilt:
+    case PresentProviderState::NotSupported:
+        add(tr("Presentation"), tr("Unavailable - not supported"), QStringLiteral("unavailable"));
+        break;
+    case PresentProviderState::Stopped:
+        add(tr("Presentation"), tr("Stopped"), QStringLiteral("unavailable"));
+        break;
+    case PresentProviderState::Failed:
+        add(tr("Presentation"), tr("Unavailable - trace error"), QStringLiteral("unavailable"));
+        break;
+    }
+
+    // DPC/ISR is a separate kernel-trace boundary. A missing provider is not a
+    // failure of the recording and never turns into a zero reading.
+    if (!in_depth_enabled_)
+        add(tr("DPC / ISR"), tr("Not requested"), QStringLiteral("idle"));
+    else if (!elevated())
+        add(tr("DPC / ISR"), tr("Not running - elevated kernel trace required"), QStringLiteral("unavailable"));
+    else if (dpc_reading_.has_value() && dpc_reading_->available)
+        add(tr("DPC / ISR"), tr("Measuring"), QStringLiteral("measuring"));
+    else
+        add(tr("DPC / ISR"), tr("Unavailable - kernel trace not running"), QStringLiteral("unavailable"));
+
+    return rows;
 }
 
 const QVariantList& DiagnosticsAdapter::tiles() const noexcept {
@@ -349,12 +435,25 @@ const QVariantList& DiagnosticsAdapter::liveTiles() const noexcept {
 void DiagnosticsAdapter::refreshLiveTiles() {
     const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot = controller_.liveSnapshot();
     diagnostics::LiveTileInputs inputs{snapshot, controller_.ledger()};
-    // Elevation is half the gate: with the opt-in on but the process standard,
-    // no trace is running and there is nothing for the extra tiles to report.
-    inputs.in_depth = in_depth_enabled_ && controller_.elevated();
+    // Engine and unprivileged evidence remain available without optional ETW traces.
+    inputs.in_depth = in_depth_enabled_;
     inputs.present = present_sample_;
     inputs.dpc = dpc_reading_;
     inputs.gpu_exec_p99_ms = snapshot.compositor.gpu_exec_p99_ms;
+    const auto& probe = controller_.probeResult();
+    const auto now = std::chrono::steady_clock::now();
+    if (inputs.present && inputs.present->metadata.observed_at != std::chrono::steady_clock::time_point{} &&
+        !inputs.present->metadata.Fresh(now))
+        inputs.present.reset();
+    if (inputs.dpc && inputs.dpc->metadata.observed_at != std::chrono::steady_clock::time_point{} &&
+        !inputs.dpc->metadata.Fresh(now))
+        inputs.dpc.reset();
+    if (probe.session_generation == snapshot.session_generation) {
+        if (probe.gpu.metadata.FreshForAdapter(snapshot.encoder_adapter_luid, now))
+            inputs.gpu = probe.gpu;
+        if (probe.video_memory.metadata.FreshForAdapter(snapshot.encoder_adapter_luid, now))
+            inputs.video_memory = probe.video_memory;
+    }
 
     std::vector<diagnostics::LiveTile> next = diagnostics::BuildLiveTiles(inputs);
     // The tiles can be identical while the sparklines have moved on, so the
@@ -379,7 +478,7 @@ void DiagnosticsAdapter::refreshLiveTiles() {
         // there is nothing for a session figure to sit under, and the detail
         // keeps saying why a measurement is missing.
         QString detail = QString::fromStdString(tile.detail);
-        if (!series.isEmpty() && !session_detail.isEmpty())
+        if (tile.key != "framePacing" && !series.isEmpty() && !session_detail.isEmpty())
             detail = session_detail;
 
         QVariantMap entry;
@@ -656,6 +755,14 @@ void DiagnosticsAdapter::setElevated(bool elevated) {
     controller_.SetElevated(elevated);
     emit environmentChanged();
     emit inDepthChanged();
+    emit changed();
+}
+
+void DiagnosticsAdapter::setPresentProviderState(diagnostics::PresentProviderState state) {
+    if (present_provider_state_ == state)
+        return;
+    present_provider_state_ = state;
+    emit changed();
 }
 
 void DiagnosticsAdapter::setInDepthEnabled(bool enabled) {
@@ -664,6 +771,7 @@ void DiagnosticsAdapter::setInDepthEnabled(bool enabled) {
     in_depth_enabled_ = enabled;
     emit inDepthChanged();
     refreshLiveTiles();
+    emit changed();
 }
 
 void DiagnosticsAdapter::setHasLastRecording(bool has_last_recording) {
@@ -707,7 +815,12 @@ void DiagnosticsAdapter::setLastSession(const exosnap::UiRecordingResult& result
 }
 
 void DiagnosticsAdapter::applyLiveDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
+    const bool was_paused = paused();
     controller_.SetLiveSnapshot(snapshot);
+    if (was_paused != paused()) {
+        emit recordingChanged();
+        emit lastCheckChanged();
+    }
     const bool live = controller_.liveRecording();
 
     if (live) {
@@ -720,7 +833,8 @@ void DiagnosticsAdapter::applyLiveDiagnostics(const exosnap::engine::RecordingDi
             session_start_ =
                 QDateTime::currentDateTime().addMSecs(-static_cast<qint64>(snapshot.elapsed_seconds * 1000.0));
         }
-        appendSeriesSamples(snapshot);
+        if (!paused())
+            appendSeriesSamples(snapshot);
     }
 
     const bool left_recording = recording_ && !live;
@@ -800,9 +914,19 @@ void DiagnosticsAdapter::startProbe(bool run_self_test) {
     setChecking(true);
     emit lastCheckChanged();
 
+    const exosnap::engine::RecordingDiagnosticsSnapshot& live = controller_.liveSnapshot();
     diagnostics::DiagnosticsProbeRequest request;
     request.output_folder = std::filesystem::path(controller_.outputFolder());
     request.run_self_test = run_self_test;
+    // The engine publishes one LUID per pipeline role; dedupe them into unique
+    // physical polling targets so a single-GPU session reads NVML and DXGI once.
+    exosnap::engine::PipelineAdapterAssignment assignment;
+    assignment.capture = {live.capture_adapter_luid != 0, live.capture_adapter_luid, live.capture_adapter_vendor_id};
+    assignment.processing = {live.processing_adapter_luid != 0, live.processing_adapter_luid,
+                             live.processing_adapter_vendor_id};
+    assignment.encoder = {live.encoder_adapter_luid != 0, live.encoder_adapter_luid, live.encoder_adapter_vendor_id};
+    request.telemetry_targets = diagnostics::BuildAdapterTelemetryTargets(assignment);
+    request.session_generation = live.session_generation;
 
     // Volume query, output-path write probe and the self-test (DXGI factory +
     // LoadLibraryW + temp file + COM audio enumeration) all run here, off the GUI
@@ -838,7 +962,7 @@ void DiagnosticsAdapter::applyProbe(diagnostics::DiagnosticsController::ProbeRes
 }
 
 void DiagnosticsAdapter::refreshSnapshot() {
-    // ADR 0033. Read the DPC/ISR producer HERE, where the recommendation engine is about
+    // Read the DPC/ISR producer HERE, where the recommendation engine is about
     // to run, and hand the controller nothing at all unless the kernel trace is actually
     // measuring. An unavailable reading is not a zero one: with no measurement there is
     // no recommendation to make, and the Diagnostics page says nothing about DPC rather
@@ -913,7 +1037,7 @@ void DiagnosticsAdapter::refreshLastSessionMap() {
     if (!session.valid)
         return;
 
-    const QString saved = QStringLiteral("Recording saved");
+    const QString saved = tr("Last recording") + QStringLiteral(" · ") + Text(session.outcome);
     last_session_.insert(QStringLiteral("headerText"),
                          session.problems > 0 ? QStringLiteral("%1 %2 %3 problem%4 observed")
                                                     .arg(saved, QString::fromUtf8(kMiddot))

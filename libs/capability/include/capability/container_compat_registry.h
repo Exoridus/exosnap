@@ -5,7 +5,7 @@
 #include <string_view>
 
 // ---------------------------------------------------------------------------
-// ContainerCompatRegistry — ADR 0010 container × video-codec × audio-codec
+// ContainerCompatRegistry — container × video-codec × audio-codec
 // compatibility classification.
 //
 // This is the single source of truth for whether a container/video/audio
@@ -13,7 +13,7 @@
 // queries this registry for container-level gating; no other component should
 // duplicate these rules.
 //
-// Classification meanings (ADR 0010 §Compatibility classification):
+// Classification meanings:
 //   Recommended   — vetted combination with a tested player/editor matrix
 //   Allowed       — works but with caveats; UI shows a warning
 //   Experimental  — technically possible; not yet tested at scale

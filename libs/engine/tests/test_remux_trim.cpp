@@ -1,5 +1,5 @@
 // test_remux_trim.cpp — unit tests for TrimRange stream-copy and
-//                        ExtractKeyframeTimestamps (ADR-0014 / 0.9.0 S1).
+//                        ExtractKeyframeTimestamps.
 //
 // Test strategy: generate synthetic MKVs via MatroskaStreamWriter (same pattern
 // as test_mp4_remuxer.cpp), then run RemuxToProgressiveMp4 / RemuxToMkv with

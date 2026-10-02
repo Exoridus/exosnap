@@ -69,7 +69,7 @@ SessionReportInputs MakeInputs() {
     s.audio.resampler_undrained_frames = {0, 0, 0};
     s.encoder_init.valid = true;
     s.encoder_init.codec = exosnap::engine::VideoCodec::Av1;
-    s.encoder_init.preset = exosnap::engine::NvencPreset::P5;
+    s.encoder_init.backend_preset = "P5";
     s.encoder_init.rc_mode = exosnap::engine::RateControlMode::VariableBitrate;
     s.encoder_init.target_bitrate_kbps = 20000;
     s.encoder_init.gop_length = 120;
@@ -330,7 +330,7 @@ TEST(SessionReport, OutputTsMismatchesAreNotReportedUnderAnyName) {
         EXPECT_FALSE(it.key().contains(QStringLiteral("output_ts"), Qt::CaseInsensitive))
             << "counters key '" << it.key().toStdString()
             << "' reports the outputTimeStamp mismatch counter, which can never be non-zero "
-               "(the mismatch aborts the encode). See ADR 0053.";
+               "(the mismatch aborts the encode).";
     }
 }
 
@@ -469,3 +469,25 @@ TEST(SessionReport, ALedgerEntryWithoutANumberReportsTheWordAndNotAZero) {
 
 } // namespace
 } // namespace exosnap::diagnostics
+
+TEST(SessionReportOutcomes, PacingAndCompensationAreSeparateFromIncidents) {
+    using namespace exosnap::diagnostics;
+    SessionReportInputs in;
+    in.has_snapshot = true;
+    in.snapshot.valid = true;
+    in.snapshot.pacing.output_slots = 120;
+    in.snapshot.pacing.affected_slots = 0;
+    in.snapshot.capture.frames_dropped_coalesced = 200;
+    in.snapshot.capture.frames_dropped_ring_eviction = 3;
+    LedgerEntry fact;
+    fact.id = "rec.pacing.compensated";
+    fact.compensation = "Output slots unaffected";
+    fact.count = 2;
+    in.compensated.push_back(fact);
+    const auto json = QJsonDocument::fromJson(BuildSessionReportJson(in)).object();
+    EXPECT_FALSE(json.contains("ledger"));
+    EXPECT_EQ(json.value("compensated_conditions").toArray().size(), 1);
+    EXPECT_EQ(json.value("counters").toObject().value("real_frame_loss").toInt(), 0);
+    EXPECT_EQ(json.value("video_pacing").toObject().value("affected_slots").toInt(), 0);
+    EXPECT_EQ(json.value("video_pacing").toObject().value("selection_residual").toString(), "unavailable");
+}

@@ -14,6 +14,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <update/update_types.h>
@@ -115,13 +116,54 @@ struct TopLevelWindow {
 [[nodiscard]] void* FindTopLevelWindowForProcess(uint32_t target_pid, const std::wstring& target_title);
 
 // ---------------------------------------------------------------------------
+// Directory renames. A process that has just exited, the crash handler it
+// started from the install directory, or a file scanner inspecting freshly
+// extracted files can still hold a handle inside a tree for a moment, which
+// makes a directory rename fail with an access or sharing violation. Every
+// rename therefore retries those errors, and only those, within a bounded
+// sleep budget. Any other error ends the rename immediately.
+// ---------------------------------------------------------------------------
+
+// Access denied, sharing violation and lock violation. Access denied is also
+// what a permanent permission problem looks like; that case costs one retry
+// budget and then fails.
+[[nodiscard]] bool IsTransientRenameError(unsigned long win32_error) noexcept;
+
+struct RenameRetry {
+    std::chrono::milliseconds first_delay{50};
+    std::chrono::milliseconds max_delay{800};
+    // Total sleep across all retries of one rename. A retry whose delay would
+    // exceed the remaining budget is not attempted.
+    std::chrono::milliseconds budget{5000};
+    // Returns 0 on success or the Win32 error. Empty means MoveFileExW without
+    // a copy fallback.
+    std::function<unsigned long(const std::wstring& from, const std::wstring& to)> rename;
+    // Empty means std::this_thread::sleep_for.
+    std::function<void(std::chrono::milliseconds)> sleep;
+};
+
+struct RenameOutcome {
+    unsigned long error = 0; // 0 on success, otherwise the last Win32 error
+    unsigned attempts = 0;
+    [[nodiscard]] bool ok() const noexcept {
+        return error == 0;
+    }
+};
+
+[[nodiscard]] RenameOutcome RenameDirectory(const std::wstring& from, const std::wstring& to,
+                                            const RenameRetry& retry = {});
+
+// ---------------------------------------------------------------------------
 // The swap itself.
 // ---------------------------------------------------------------------------
 
 // rename install->backup, staging->install. If the second rename fails the
 // first is undone before returning (RenameNewFailed => old version is live
-// again; RestoreFailed => the compensating rename also failed).
-[[nodiscard]] SwapError StageRename(const SwapPlan& plan);
+// again; RestoreFailed => the compensating rename also failed). On a rename
+// failure `failed_rename`, when given, receives the outcome of the rename that
+// decided the result.
+[[nodiscard]] SwapError StageRename(const SwapPlan& plan, const RenameRetry& retry = {},
+                                    RenameOutcome* failed_rename = nullptr);
 
 // VERSIONINFO FileVersion (major.minor.patch) of an exe; nullopt when unreadable.
 // The numeric FIXEDFILEINFO can never carry a prerelease suffix, so this alone
@@ -146,7 +188,7 @@ struct TopLevelWindow {
 [[nodiscard]] bool VerifyInstalledVersion(const SwapPlan& plan);
 
 // backup->install (undo of a completed swap, or recovery after verify failed).
-[[nodiscard]] SwapError RestoreBackup(const SwapPlan& plan);
+[[nodiscard]] SwapError RestoreBackup(const SwapPlan& plan, const RenameRetry& retry = {});
 
 // Best-effort recursive delete of the backup directory. True on success (or
 // if it was already gone).

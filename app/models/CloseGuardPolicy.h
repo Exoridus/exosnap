@@ -25,7 +25,7 @@ struct CloseGuardState {
     // Container finalize in flight (UiRecordingState::Stopping). Not
     // cancellable — aborting it corrupts the file being written.
     bool finalizing = false;
-    // ADR-0014 MP4 remux after stop (UiRecordingState::Saving). Cancellable;
+    // MP4 remux after stop (UiRecordingState::Saving). Cancellable;
     // the transient MKV survives.
     bool remuxing = false;
     // Stream-copy export from the Edit surface. Cancellable and safe: an export

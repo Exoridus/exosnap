@@ -2055,7 +2055,7 @@ const QVector<VisualScenario> kAboutScenarios = {
     {.id = QStringLiteral("about-page"), .title = QStringLiteral("About / Page"), .page = VisualPage::About},
 };
 
-// Updates card (ADR 0034 Phase A), scrolled into view for below-the-fold capture.
+// Updates card, scrolled into view for below-the-fold capture.
 const QVector<VisualScenario> kUpdatesScenarios = {
     {.id = QStringLiteral("settings-updates-uptodate"),
      .title = QStringLiteral("Settings / Updates / Up to date"),
@@ -2082,8 +2082,7 @@ const QVector<VisualScenario> kDevicePageScenarios = {
      .device_empty_adapters = true},
 };
 
-// Standing audio-degraded notification (AUDIO-DEGRADED-NOTIFY-R1 / ADR 0046
-// follow-up). Drives the SAME production Enqueue() path a live recording uses,
+// Standing audio-degraded notification. Drives the SAME production Enqueue() path a live recording uses,
 // so the visual-test JSON manifest reports the real notification state. The
 // toast itself is a separate top-level window outside the pixel-screenshot
 // harness — like the countdown/recording overlays, it is not composited into

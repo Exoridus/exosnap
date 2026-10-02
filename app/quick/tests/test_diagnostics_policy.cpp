@@ -519,8 +519,8 @@ TEST(FixActionDispatch, CaptureRetargetIsAHostActionNotASettingsChange) {
 }
 
 TEST(FixActionDispatch, AssistedFixesResolveToASettingsSection) {
-    EXPECT_EQ(SettingsSectionFor(ResolveAssistedFix("fix.output.change_folder").outcome), "settings/output");
-    EXPECT_EQ(SettingsSectionFor(ResolveAssistedFix("fix.output.fat32_folder").outcome), "settings/output");
+    EXPECT_EQ(SettingsSectionFor(ResolveAssistedFix("fix.output.change_folder").outcome), "settings/output/folder");
+    EXPECT_EQ(SettingsSectionFor(ResolveAssistedFix("fix.output.fat32_folder").outcome), "settings/output/folder");
     EXPECT_EQ(SettingsSectionFor(ResolveAssistedFix("fix.container.mkv").outcome), "settings/format");
     EXPECT_FALSE(ResolveAssistedFix("").handled());
 }
@@ -533,7 +533,7 @@ TEST(DiagnosticsRecordingVerdict, EmptyLedgerIsReadyWhileRecording) {
     const Verdict verdict = ComputeRecordingVerdict({}, ledger);
     EXPECT_EQ(verdict.state, VerdictState::Ready);
     EXPECT_TRUE(verdict.recording);
-    EXPECT_EQ(verdict.headline, "Recording \xe2\x80\x94 no problems measured");
+    EXPECT_EQ(verdict.headline, "RECORDING HEALTHY");
 }
 
 TEST(DiagnosticsRecordingVerdict, LedgerEntriesWarnAndCountActive) {
@@ -541,7 +541,7 @@ TEST(DiagnosticsRecordingVerdict, LedgerEntriesWarnAndCountActive) {
     const Verdict verdict = ComputeRecordingVerdict({}, ledger, /*now_s=*/2.0);
     EXPECT_EQ(verdict.state, VerdictState::Warn);
     EXPECT_EQ(verdict.notices, 2);
-    EXPECT_EQ(verdict.headline, "Recording \xe2\x80\x94 2 problems observed, 1 active");
+    EXPECT_EQ(verdict.headline, "RECORDING DEGRADED \xe2\x80\x94 2 problems observed, 1 active");
     // The subline names what is happening NOW, which is the one thing the count
     // in the headline cannot say.
     EXPECT_NE(verdict.subline.find("rec.001 title"), std::string::npos);
@@ -551,7 +551,7 @@ TEST(DiagnosticsRecordingVerdict, AQuietLedgerSaysSoAndNamesTheLastProblem) {
     const SessionLedger ledger = LedgerWith({"rec.001"}, /*active_count=*/0);
     const Verdict verdict = ComputeRecordingVerdict({}, ledger, /*now_s=*/12.0);
     EXPECT_EQ(verdict.state, VerdictState::Warn);
-    EXPECT_EQ(verdict.headline, "Recording \xe2\x80\x94 1 problem observed, quiet now");
+    EXPECT_EQ(verdict.headline, "RECORDING DEGRADED \xe2\x80\x94 1 problem observed, quiet now");
     EXPECT_NE(verdict.subline.find("rec.001 title"), std::string::npos);
     EXPECT_NE(verdict.subline.find("last seen"), std::string::npos);
 }
@@ -611,6 +611,8 @@ exosnap::engine::RecordingDiagnosticsSnapshot JudderSnapshot(double elapsed_s) {
     // has to actually fire for the ledger to have anything to record.
     snapshot.capture.source_present_jitter_ms = 9.0;
     snapshot.elapsed_seconds = elapsed_s;
+    snapshot.pacing.recent_affected_slots = 3;
+    snapshot.pacing.affected_slots = 3;
     return snapshot;
 }
 
@@ -720,7 +722,7 @@ TEST(DiagnosticsLastSession, FourFactsInAFixedOrderWithTheFileNameOnly) {
     // shorter by the tail between the last encoded frame and Stop.
     EXPECT_DOUBLE_EQ(session.duration_s, 184.0);
     EXPECT_DOUBLE_EQ(session.media_duration_s, 183.5);
-    ASSERT_EQ(session.facts.size(), 4u);
+    ASSERT_EQ(session.facts.size(), 6u);
     EXPECT_EQ(session.facts[0].key, "dropped");
     EXPECT_EQ(session.facts[1].key, "achieved");
     EXPECT_EQ(session.facts[2].key, "drift");
@@ -778,7 +780,7 @@ TEST(DiagnosticsLastSession, AnUnmeasuredSessionStatesWhatItCannotSayInsteadOfZe
     EXPECT_EQ(session.facts[1].value, "\xe2\x80\x94");
     EXPECT_EQ(session.facts[2].value, "Unavailable");
     // The file itself is a fact of the result, not of the snapshot.
-    EXPECT_EQ(session.facts[3].value, "Valid");
+    EXPECT_EQ(session.facts[3].value, "Finalized successfully");
     EXPECT_EQ(session.facts[3].tone, ValueTone::Ok);
 }
 
@@ -851,4 +853,18 @@ TEST(CanonicalMachineFixture, OneAdapterIsEnumeratedSoTheHardwareRowHasSomething
     ASSERT_EQ(adapters.size(), 1U);
     EXPECT_FALSE(adapters.front().name.empty());
     EXPECT_FALSE(visual::CanonicalMachineAdapterCapabilities().empty());
+}
+
+TEST(AssistedTargets, StableTargetsResolveWithoutMutatingSettings) {
+    using namespace exosnap::diagnostics;
+    for (const auto* target : {"settings/video/frame-pacing", "settings/video/frame-rate", "settings/video/resolution",
+                               "settings/video/quality", "settings/output/folder", "settings/audio/microphone",
+                               "settings/audio/clock-slaving"}) {
+        const auto result = ResolveAssistedFix(target);
+        EXPECT_TRUE(result.handled()) << target;
+        EXPECT_EQ(SettingsSectionFor(result.outcome), target);
+    }
+    EXPECT_EQ(ResolveAssistedFix("fix.display.reselect").outcome, FixOutcome::NavigateSourcePicker);
+    EXPECT_TRUE(SettingsSectionFor(FixOutcome::NavigateSourcePicker).empty());
+    EXPECT_FALSE(ResolveAssistedFix("unknown-action").handled());
 }

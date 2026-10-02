@@ -29,7 +29,7 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 // compatibility.  Every combination of the three enum dimensions is listed
 // explicitly; there are no implicit fall-throughs.
 //
-// ADR 0010 authoritative matrix:
+// authoritative matrix:
 //
 //   MKV  | AV1          | Opus  → Recommended  (primary validated path)
 //   MKV  | AV1          | AAC   → Recommended  (validated M3.2 path)
@@ -54,15 +54,15 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 //                                               Matroska-only, 0.6.0 Audio v2)
 //
 //   MP4  | H.264        | AAC   → Recommended  (primary validated MP4 path,
-//                                               delivered via remux-on-stop ADR 0014)
-//   MP4  | H.264        | Opus  → Prohibited   (ADR 0010: Opus-in-MP4 is Prohibited)
+//                                               delivered via remux-on-stop)
+//   MP4  | H.264        | Opus  → Prohibited   (Opus-in-MP4 is Prohibited)
 //   MP4  | H.264        | PCM   → Experimental (libavformat emits the ipcm sample entry
 //                                               (ISO/IEC 23003-5) for pcm_s16le/s24le/
 //                                               s32le in MP4; ipcm has limited player
 //                                               support — Windows Films & TV, QuickTime,
 //                                               and many NLEs do not play it; deferred
 //                                               until a broadly-compatible sample-entry
-//                                               mapping is validated; ADR 0030)
+//                                               mapping is validated)
 //   MP4  | H.264        | FLAC  → Experimental (FLAC-in-MP4 not specified here)
 //   MP4  | HEVC         | AAC   → Allowed      (0.7.0: HEVC via transient MKV, remuxed to MP4 with
 //                                               the 'hvc1' sample-entry FourCC; Apple/NLE-compatible)
@@ -96,7 +96,7 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 //   - MP4 + HEVC + AAC is promoted to Allowed in 0.7.0: the engine records HEVC to a
 //     transient MKV (hvcC) and the remuxer stream-copies it to MP4 with the 'hvc1'
 //     FourCC (out-of-band parameter sets) for Apple/QuickTime/NLE compatibility
-//     (ADR 0014). MP4 + HEVC + PCM/FLAC stay Experimental — MP4 audio is AAC-only.
+// MP4 + HEVC + PCM/FLAC stay Experimental — MP4 audio is AAC-only.
 // ---------------------------------------------------------------------------
 
 ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCodec video, AudioCodec audio) noexcept {
@@ -123,7 +123,7 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                 return {ContainerCompatLevel::Allowed,
                         "MKV + H.264 + Opus: Matroska carries Opus natively and the Opus-in-MKV write path "
                         "is production-validated (AV1+Opus). A dedicated player-matrix pass for this exact "
-                        "pairing is not yet on file (ADR 0010 Allowed caveat)."};
+                        "pairing is not yet on file (pair-specific compatibility is unvalidated)."};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Allowed,
                         "MKV + H.264 + PCM: uncompressed 16-bit signed little-endian PCM (A_PCM/INT/LIT). "
@@ -156,22 +156,22 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
 
     // --- MP4 ---
     if (container == Container::Mp4) {
-        // Opus-in-MP4 is Prohibited for all video codecs (ADR 0010 + ADR 0014).
+        // Opus-in-MP4 is Prohibited for all video codecs.
         if (audio == AudioCodec::Opus)
             return {ContainerCompatLevel::Prohibited, "Opus audio is not supported in MP4. "
-                                                      "Select AAC for MP4 recordings (ADR 0010)."};
+                                                      "Select AAC for MP4 recordings."};
 
         if (video == VideoCodec::H264) {
             if (audio == AudioCodec::Aac)
                 return {ContainerCompatLevel::Recommended,
-                        "Primary validated MP4 path: H.264 NVENC + AAC via remux-on-stop (ADR 0014)."};
+                        "Primary validated MP4 path: H.264 NVENC + AAC via remux-on-stop."};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Experimental,
                         "MP4 + H.264 + PCM: libavformat writes an ipcm (ISO/IEC 23003-5) sample entry "
                         "for pcm_s16le/pcm_s24le/pcm_s32le in MP4 (confirmed via ffprobe "
                         "codec_tag_string=ipcm). ipcm has limited player support — Windows Films & TV, "
                         "QuickTime, and many NLEs do not play it. Deferred until a broadly-compatible "
-                        "sample-entry mapping (e.g. sowt/in24) is validated; use MKV for PCM (ADR 0030)."};
+                        "sample-entry mapping (e.g. sowt/in24) is validated; use MKV for PCM."};
             if (audio == AudioCodec::Flac)
                 return {ContainerCompatLevel::Experimental,
                         "MP4 + H.264 + FLAC: FLAC-in-MP4 not specified in this build (use MKV for FLAC)."};
@@ -181,7 +181,7 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                 return {ContainerCompatLevel::Allowed,
                         "MP4 + HEVC + AAC: HEVC recorded to a transient MKV and remuxed to MP4 with the "
                         "'hvc1' sample-entry FourCC (parameter sets out-of-band in hvcC) for Apple/QuickTime/"
-                        "NLE compatibility. Implemented in 0.7.0 (ADR 0010/0014)."};
+                        "NLE compatibility."};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Experimental,
                         "MP4 + HEVC + PCM: not implemented (MP4 audio is AAC-only)."};
@@ -203,17 +203,16 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
 
     // --- WebM ---
     if (container == Container::WebM) {
-        // H.264 and HEVC are unconditionally Prohibited in WebM (ADR 0010).
+        // H.264 and HEVC are unconditionally Prohibited in WebM.
         if (video == VideoCodec::H264 || video == VideoCodec::Hevc)
             return {ContainerCompatLevel::Prohibited, "WebM supports only AV1 in ExoSnap's product matrix. "
-                                                      "H.264 and HEVC are prohibited in WebM (ADR 0010)."};
+                                                      "H.264 and HEVC are prohibited in WebM."};
 
         if (video == VideoCodec::Av1) {
             if (audio == AudioCodec::Opus)
                 return {ContainerCompatLevel::Recommended, "Primary validated WebM path: AV1 NVENC + Opus."};
             if (audio == AudioCodec::Aac)
-                return {ContainerCompatLevel::Prohibited,
-                        "WebM does not support AAC. Use Opus for WebM recordings (ADR 0010)."};
+                return {ContainerCompatLevel::Prohibited, "WebM does not support AAC. Use Opus for WebM recordings."};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Prohibited, "WebM does not support PCM. Use Opus for WebM recordings."};
             if (audio == AudioCodec::Flac)

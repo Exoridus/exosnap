@@ -870,7 +870,7 @@ TEST_F(StreamWriterTest, EmptySession_FinalizesValidContainer) {
     EXPECT_EQ(CountCuePoints(d), 0);
 }
 
-// Color metadata (ADR 0032; default flipped Full->Limited by
+// Color metadata (Limited is the default for player compatibility;
 // fix/color-range-signaling): the video track carries an SDR BT.709
 // limited-range 8-bit Colour element by default, so the file is no longer
 // color-ambiguous and no HDR sub-elements are emitted. Limited is the default
@@ -1122,6 +1122,49 @@ MatroskaStreamConfig MakeReservedHdrConfig(const std::string& path) {
 constexpr uint64_t kMaxCllId = 0x55BCULL;
 constexpr uint64_t kMaxFallId = 0x55BDULL;
 
+TEST_F(StreamWriterTest, MaterialFlushAndCloseFailuresFailFinalizationAndKeepSource) {
+    using exosnap::engine::OutputIoOperation;
+    for (auto operation : {OutputIoOperation::PayloadWrite, OutputIoOperation::ClusterWrite,
+                           OutputIoOperation::TrailerWrite, OutputIoOperation::CrtFlush, OutputIoOperation::Close}) {
+        SCOPED_TRACE(static_cast<int>(operation));
+        std::remove(tmp_.c_str());
+        MatroskaStreamWriter writer;
+        auto config = MakeConfig(tmp_, true, false);
+        bool armed = false;
+        config.fail_io = [&](OutputIoOperation candidate) { return armed && candidate == operation; };
+        ASSERT_TRUE(writer.Open(config));
+        FeedSeconds(writer, 8.0, 30, 32);
+        ASSERT_GT(writer.flush_count(), 0u);
+        armed = true;
+        EXPECT_FALSE(writer.Finalize());
+        EXPECT_TRUE(writer.failed());
+        EXPECT_FALSE(writer.error().empty());
+        const auto bytes = ReadFile(tmp_);
+        EXPECT_FALSE(bytes.empty());
+        AVFormatContext* input = nullptr;
+        ASSERT_EQ(avformat_open_input(&input, tmp_.c_str(), nullptr, nullptr), 0);
+        AVPacket* packet = av_packet_alloc();
+        EXPECT_EQ(av_read_frame(input, packet), 0);
+        EXPECT_GT(packet->size, 0);
+        av_packet_free(&packet);
+        avformat_close_input(&input);
+    }
+}
+
+TEST_F(StreamWriterTest, DurabilityOnlyFailureDoesNotMisreportStreamFailure) {
+    using exosnap::engine::OutputIoOperation;
+    MatroskaStreamWriter writer;
+    auto config = MakeConfig(tmp_, true, false);
+    config.fail_io = [](OutputIoOperation candidate) { return candidate == OutputIoOperation::DurabilityFlush; };
+    ASSERT_TRUE(writer.Open(config));
+    FeedSeconds(writer, 0.1, 30, 32);
+    EXPECT_TRUE(writer.Finalize()) << writer.error();
+    EXPECT_FALSE(writer.failed());
+    EXPECT_GT(writer.io_timings().durability_failures, 0u);
+    EXPECT_GE(writer.io_timings().crt_flush_ms, 0.0);
+    EXPECT_TRUE(HasLevel1(ReadFile(tmp_), kIdCues));
+}
+
 } // namespace
 
 // The whole point of the reservation: MaxCLL and MaxFALL are maxima over the
@@ -1320,7 +1363,7 @@ TEST_F(StreamWriterTest, PushAfterFinalize_NoOp) {
     EXPECT_EQ(std::filesystem::file_size(tmp_), before);
 }
 
-// ADR 0030: audio_sample_rate/channels/bit_depth fields are threaded into the
+// audio_sample_rate/channels/bit_depth fields are threaded into the
 // container header. We verify the file opens cleanly with non-default values;
 // byte-level parsing of KaxAudioSamplingFreq/KaxAudioChannels/KaxAudioBitDepth
 // is deferred to the full AV-verification round (requires an EBML node walker
@@ -1337,7 +1380,7 @@ TEST_F(StreamWriterTest, NonDefaultAudioFormat_OpensAndFinalizes) {
     c.audio_codec = StreamAudioCodec::Pcm;
     c.audio_track_count = 1;
     c.audio_tracks[0].codec_private = {}; // PCM has no CodecPrivate
-    // Non-default audio format (ADR 0030).
+    // Non-default audio format.
     c.audio_sample_rate = 44100;
     c.audio_channels = 1;
     c.audio_bit_depth = 24;

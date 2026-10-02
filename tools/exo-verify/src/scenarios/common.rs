@@ -1,0 +1,926 @@
+//! Shared scenario machinery: the stimulus process, the recording lifecycle
+//! driven over the control endpoint, and the recording oracles.
+
+use anyhow::Context as _;
+use serde_json::{Value, json};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::time::{Duration, Instant};
+
+use crate::context::{App, Context, json_path};
+use crate::media::{self, IdTimeline};
+use crate::scenario::{Step, Stop};
+use crate::stimulus::{LogEvent, read_log};
+use crate::{infra_ensure, product_ensure};
+
+pub fn secs(s: f64) -> Duration {
+    Duration::from_secs_f64(s)
+}
+
+// ---------------------------------------------------------------------------
+// Stimulus
+// ---------------------------------------------------------------------------
+
+pub struct Stimulus {
+    pub child: Child,
+    stdin: ChildStdin,
+    pub log_path: PathBuf,
+    pub title: String,
+    pub monitor: String,
+    /// The stimulus window, as the operating system names it.
+    pub hwnd: u64,
+    /// Window rectangle in virtual-screen physical pixels: left, top, right, bottom.
+    pub rect: [i32; 4],
+    pub qpc_frequency: i64,
+    #[allow(dead_code, reason = "Reserved for DPI checks")]
+    pub dpi: u32,
+}
+
+#[derive(Default, Clone)]
+pub struct StimulusOptions {
+    pub fullscreen: bool,
+    pub still: bool,
+    pub cursor: Option<&'static str>,
+    pub cursor_shape: Option<&'static str>,
+    pub marker_interval: Option<f64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub generation: Option<u8>,
+    /// Overrides `target_monitor()` for this one stimulus. Set when a scenario
+    /// needs the stimulus on a *specific* display device rather than whatever
+    /// `EXO_VERIFY_MONITOR`/the system default resolves to, e.g. to match a
+    /// window-target overlay's own screen fallback.
+    pub monitor: Option<String>,
+}
+
+/// The monitor release-gpu scenarios draw on: `EXO_VERIFY_MONITOR`, else the
+/// primary display. A dedicated test machine sets nothing.
+pub fn target_monitor() -> Option<String> {
+    std::env::var("EXO_VERIFY_MONITOR")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+impl Stimulus {
+    pub fn start(ctx: &mut Context, options: StimulusOptions) -> Step<Stimulus> {
+        let nonce = crate::control::new_run_id("stim");
+        let title = format!("ExoVerify Stimulus {nonce}");
+        let log_path = ctx.scenario_dir.join("stimulus.jsonl");
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .arg("stimulus")
+            .arg("--log")
+            .arg(&log_path)
+            .arg("--title")
+            .arg(&title)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Some(m) = options.monitor.clone().or_else(target_monitor) {
+            command.args(["--monitor", &m]);
+        }
+        if options.fullscreen {
+            command.arg("--fullscreen");
+        }
+        if options.still {
+            command.arg("--still");
+        }
+        if let Some(c) = options.cursor {
+            command.args(["--cursor", c]);
+        }
+        if let Some(c) = options.cursor_shape {
+            command.args(["--cursor-shape", c]);
+        }
+        if let Some(i) = options.marker_interval {
+            command.args(["--marker-interval", &i.to_string()]);
+        }
+        if let Some(w) = options.width {
+            command.args(["--width", &w.to_string()]);
+        }
+        if let Some(h) = options.height {
+            command.args(["--height", &h.to_string()]);
+        }
+        if let Some(g) = options.generation {
+            command.args(["--generation", &g.to_string()]);
+        }
+        let mut child = ctx.spawn(&mut command)?;
+        let stdin = child.stdin.take().context("stimulus stdin")?;
+        let deadline = Instant::now() + secs(15.0);
+        loop {
+            if let Ok(events) = read_log(&log_path)
+                && let Some(LogEvent::Ready {
+                    hwnd,
+                    monitor,
+                    rect,
+                    qpc_frequency,
+                    dpi,
+                    ..
+                }) = events
+                    .iter()
+                    .find(|e| matches!(e, LogEvent::Ready { .. }))
+                    .cloned()
+            {
+                ctx.evidence.put(
+                    "stimulus",
+                    json!({ "monitor": monitor, "rect": rect, "dpi": dpi, "title": title }),
+                );
+                return Ok(Stimulus {
+                    child,
+                    stdin,
+                    log_path,
+                    title,
+                    monitor,
+                    hwnd,
+                    rect,
+                    qpc_frequency,
+                    dpi,
+                });
+            }
+            if let Ok(Some(status)) = child.try_wait() {
+                return Err(Stop::infra(format!(
+                    "the stimulus exited during startup ({status})"
+                )));
+            }
+            infra_ensure!(
+                Instant::now() < deadline,
+                "the stimulus window did not report ready within 15 s"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    pub fn command(&mut self, cmd: &str) -> Step {
+        writeln!(self.stdin, "{cmd}")
+            .map_err(|e| Stop::infra(format!("stimulus command {cmd}: {e}")))?;
+        self.stdin.flush()?;
+        Ok(())
+    }
+
+    /// Waits until the stimulus logs `state`, the ground truth for lifecycle
+    /// scenarios (a window really destroyed, really minimised).
+    #[allow(dead_code, reason = "Reserved for stimulus lifecycle scenarios")]
+    pub fn wait_state(&self, state: &str, timeout: Duration) -> Step<i64> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            for e in self.events()? {
+                if let LogEvent::State { state: s, qpc } = e
+                    && s == state
+                {
+                    return Ok(qpc);
+                }
+            }
+            if Instant::now() > deadline {
+                return Err(Stop::infra(format!(
+                    "the stimulus never reported '{state}'"
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Moves the stimulus to its deterministic alternate position. Returns the
+    /// outer window rect the operating system actually produced.
+    pub fn move_window(&mut self) -> Step<[i32; 4]> {
+        self.command("move")?;
+        self.wait_state("moved", secs(5.0))?;
+        self.last_geometry().map(|(rect, _)| rect)
+    }
+
+    /// Resizes the stimulus to its deterministic alternate client size.
+    /// Returns the resulting outer rect and client size.
+    pub fn resize_window(&mut self) -> Step<([i32; 4], [i32; 2])> {
+        self.command("resize")?;
+        self.wait_state("resized", secs(5.0))?;
+        self.last_geometry()
+    }
+
+    /// The client size the stimulus reported at startup. WGC window capture
+    /// records the client area, not the outer frame.
+    pub fn client_size(&self) -> Step<[i32; 2]> {
+        self.events()?
+            .into_iter()
+            .find_map(|event| match event {
+                LogEvent::Ready { client, .. } => Some(client),
+                _ => None,
+            })
+            .ok_or_else(|| Stop::infra("the stimulus ready event carries no client size"))
+    }
+
+    fn last_geometry(&self) -> Step<([i32; 4], [i32; 2])> {
+        self.events()?
+            .into_iter()
+            .rev()
+            .find_map(|event| match event {
+                LogEvent::Geometry { rect, client, .. } => Some((rect, client)),
+                _ => None,
+            })
+            .ok_or_else(|| Stop::infra("the stimulus logged no geometry for its move/resize"))
+    }
+
+    pub fn events(&self) -> Step<Vec<LogEvent>> {
+        Ok(read_log(&self.log_path)?)
+    }
+
+    pub fn frames(&self) -> Step<Vec<(u32, f64, bool)>> {
+        let f = self.qpc_frequency as f64;
+        Ok(self
+            .events()?
+            .into_iter()
+            .filter_map(|e| match e {
+                LogEvent::Frame { id, qpc, flash } => Some((id, qpc as f64 / f, flash)),
+                _ => None,
+            })
+            .collect())
+    }
+
+    pub fn audio_available(&self) -> Step<bool> {
+        Ok(!self
+            .events()?
+            .iter()
+            .any(|e| matches!(e, LogEvent::AudioUnavailable { .. })))
+    }
+
+    /// Mean stimulus frame rate over its log.
+    pub fn frame_rate(&self) -> Step<f64> {
+        let frames = self.frames()?;
+        infra_ensure!(
+            frames.len() > 10,
+            "the stimulus presented too few frames to measure its rate"
+        );
+        let span = frames.last().unwrap().1 - frames.first().unwrap().1;
+        Ok((frames.len() - 1) as f64 / span.max(1e-6))
+    }
+
+    pub fn stop(&mut self) {
+        let _ = self.command("quit");
+        let _ = crate::tools::wait(&mut self.child, secs(3.0));
+        let _ = self.child.kill();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Product configuration and the recording lifecycle
+// ---------------------------------------------------------------------------
+
+/// Applies settings and returns what the product reconciled each to. A
+/// request the product reconciled to something else is reported to the
+/// caller, who decides whether that is a capability limit or a defect.
+pub fn configure(app: &mut App, settings: &[(&str, Value)]) -> Step<Vec<(String, Value, Value)>> {
+    let mut changed = Vec::new();
+    for (key, value) in settings {
+        let result = app
+            .client
+            .request(
+                "settings.set",
+                json!({ "key": key, "value": value }),
+                secs(15.0),
+            )?
+            .map_err(|r| Stop::infra(format!("settings.set {key}={value} refused: {r}")))?;
+        // The answer is the value read back through the same key, not an echo.
+        let applied = result["values"].get(*key).cloned().unwrap_or(Value::Null);
+        if applied != *value {
+            changed.push((key.to_string(), value.clone(), applied));
+        }
+    }
+    Ok(changed)
+}
+
+/// Like `configure`, but a reconciled video/audio codec request means this
+/// machine cannot produce it: the scenario is UNAVAILABLE here.
+pub fn configure_exact(app: &mut App, settings: &[(&str, Value)]) -> Step {
+    let changed = configure(app, settings)?;
+    if let Some((key, wanted, got)) = changed.first() {
+        return Err(Stop::unavailable(format!(
+            "the product reconciled {key} from {wanted} to {got} on this machine"
+        )));
+    }
+    Ok(())
+}
+
+/// Whether `value` is a Windows display device name (`\\.\DISPLAYn`), the
+/// identity `record.selectTarget` matches monitor targets by.
+pub fn is_display_device(value: &str) -> bool {
+    value
+        .strip_prefix(r"\\.\")
+        .is_some_and(|rest| !rest.is_empty())
+}
+
+/// The display device of one `environment.snapshot` screen. The screen's
+/// `name` is Qt's friendly monitor name, shared by identical panels and never
+/// accepted by `record.selectTarget`, so it is not a fallback.
+pub fn screen_device(screen: &Value) -> Step<String> {
+    let device = screen["device"].as_str().ok_or_else(|| {
+        Stop::infra(format!(
+            "environment.snapshot screen {} carries no display device",
+            screen["name"]
+        ))
+    })?;
+    infra_ensure!(
+        is_display_device(device),
+        "environment.snapshot screen {} reports {device:?}, which is not a display device",
+        screen["name"]
+    );
+    Ok(device.to_string())
+}
+
+/// The primary screen of an `environment.snapshot`, or the first one when
+/// `or_first` and no screen is marked primary.
+pub fn primary_screen(environment: &Value, or_first: bool) -> Option<&Value> {
+    let screens = environment["displays"]["screens"].as_array()?;
+    screens
+        .iter()
+        .find(|screen| screen["primary"] == true)
+        .or_else(|| or_first.then(|| screens.first()).flatten())
+}
+
+/// Selects a monitor target by its display device (see [`screen_device`]).
+pub fn select_display(app: &mut App, device: &str) -> Step {
+    infra_ensure!(
+        is_display_device(device),
+        "{device:?} is not a display device; monitor targets are selected by device, not by name"
+    );
+    let snapshot = app
+        .client
+        .request(
+            "record.selectTarget",
+            json!({ "kind": "monitor", "titleFilter": device }),
+            secs(15.0),
+        )?
+        .map_err(|r| Stop::infra(format!("record.selectTarget monitor {device}: {r}")))?;
+    infra_ensure!(
+        snapshot["selectedTargetIndex"].as_i64().unwrap_or(-1) >= 0,
+        "the product did not select display {device}"
+    );
+    Ok(())
+}
+
+pub fn select_window(app: &mut App, title: &str) -> Step {
+    let deadline = Instant::now() + secs(10.0);
+    loop {
+        // The target list refreshes on its own cadence; a window created a
+        // moment ago may not be enumerated yet.
+        let answer = app.client.request(
+            "record.selectTarget",
+            json!({ "kind": "window", "titleFilter": title }),
+            secs(15.0),
+        )?;
+        if let Ok(s) = &answer
+            && s["selectedTargetIndex"].as_i64().unwrap_or(-1) >= 0
+        {
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            return Err(Stop::infra(format!(
+                "the product never offered the window '{title}' as a target"
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// The Qt screen name the main window is on, as `window.moveToScreen` takes it.
+pub fn main_window_screen(window: &Value) -> Step<String> {
+    window["screen"]["name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| Stop::infra(format!("window.snapshot names no screen: {window}")))
+}
+
+/// Discards already delivered `name` events, so a later wait observes only
+/// what happens after this point.
+pub fn drain_events(app: &mut App, name: &str) -> Step<usize> {
+    let mut drained = 0;
+    while app
+        .client
+        .wait_event(name, &json!({}), Duration::ZERO)?
+        .is_some()
+    {
+        drained += 1;
+    }
+    Ok(drained)
+}
+
+/// Moves the main window to `screen` and waits for the product's own
+/// `window.screenChanged` event naming it. Returns that event's window snapshot.
+pub fn move_to_screen(app: &mut App, screen: &str, timeout: Duration) -> Step<Value> {
+    drain_events(app, "window.screenChanged")?;
+    app.client
+        .request(
+            "window.moveToScreen",
+            json!({ "screen": screen }),
+            secs(15.0),
+        )?
+        .map_err(|r| Stop::fail(format!("window.moveToScreen {screen} was refused: {r}")))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match app
+            .client
+            .wait_event("window.screenChanged", &json!({}), remaining)?
+        {
+            Some(event) if event["data"]["screen"]["name"] == screen => {
+                return Ok(event["data"].clone());
+            }
+            Some(_) => {}
+            None => {
+                return Err(Stop::fail(format!(
+                    "the main window reported no move to {screen} within {} s",
+                    timeout.as_secs()
+                )));
+            }
+        }
+    }
+}
+
+pub fn record_snapshot(app: &mut App) -> Step<Value> {
+    Ok(app.call("record.snapshot", json!({}))?)
+}
+
+fn wait_record(
+    app: &mut App,
+    what: &str,
+    timeout: Duration,
+    predicate: impl Fn(&Value) -> bool,
+) -> Step<Value> {
+    match app
+        .client
+        .poll("record.snapshot", json!({}), timeout, predicate)?
+    {
+        Some(v) => Ok(v),
+        None => {
+            let last = record_snapshot(app)?;
+            Err(Stop::fail(format!(
+                "{what} within {} s (state '{}', blocked {}, failed {})",
+                timeout.as_secs(),
+                last["stateText"].as_str().unwrap_or("?"),
+                last["blocked"],
+                last["failed"]
+            )))
+        }
+    }
+}
+
+pub fn start_recording(app: &mut App) -> Step<Instant> {
+    let answer = app.client.request("record.start", json!({}), secs(20.0))?;
+    if let Err(r) = answer {
+        return Err(Stop::fail(format!(
+            "record.start was refused: {r} (requires {}, actual {})",
+            r.requires, r.actual
+        )));
+    }
+    wait_record(app, "the recording did not start", secs(20.0), |s| {
+        s["recording"] == true
+    })?;
+    Ok(Instant::now())
+}
+
+pub fn pause(app: &mut App) -> Step {
+    app.client
+        .request("record.pause", json!({}), secs(10.0))?
+        .map_err(|r| Stop::fail(format!("record.pause refused: {r}")))?;
+    wait_record(app, "the recording did not pause", secs(10.0), |s| {
+        s["paused"] == true
+    })?;
+    Ok(())
+}
+
+pub fn resume(app: &mut App) -> Step {
+    app.client
+        .request("record.resume", json!({}), secs(10.0))?
+        .map_err(|r| Stop::fail(format!("record.resume refused: {r}")))?;
+    wait_record(app, "the recording did not resume", secs(10.0), |s| {
+        s["paused"] == false && s["recording"] == true
+    })?;
+    Ok(())
+}
+
+/// Stops and waits for a finished result. A result that is not a success is
+/// a product failure with the product's own error phase and detail.
+pub fn stop_recording(app: &mut App) -> Step<Value> {
+    app.client
+        .request("record.stop", json!({}), secs(20.0))?
+        .map_err(|r| Stop::fail(format!("record.stop refused: {r}")))?;
+    wait_record(app, "the recording did not finish", secs(120.0), |s| {
+        s["recording"] == false && s["finalizing"] == false && s["preparing"] == false
+    })?;
+    let result = app.call("record.result", json!({}))?;
+    product_ensure!(
+        result["hasResult"] == true,
+        "the product finished without a recording result"
+    );
+    product_ensure!(
+        result["succeeded"] == true,
+        "the recording failed: {} ({} {})",
+        result["statusText"].as_str().unwrap_or(""),
+        result["errorPhase"].as_str().unwrap_or(""),
+        result["errorDetail"].as_str().unwrap_or("")
+    );
+    Ok(result)
+}
+
+pub fn output_path(result: &Value) -> Step<PathBuf> {
+    let p = PathBuf::from(result["outputPath"].as_str().unwrap_or_default());
+    product_ensure!(
+        p.is_file(),
+        "the reported output {} does not exist",
+        p.display()
+    );
+    Ok(p)
+}
+
+/// Records for `seconds` of wall time. The duration is the measurement
+/// window, not a settle delay.
+pub fn record_for(app: &mut App, seconds: f64) -> Step<(Value, PathBuf, f64)> {
+    let started = start_recording(app)?;
+    std::thread::sleep(secs(seconds));
+    let result = stop_recording(app)?;
+    let wall = started.elapsed().as_secs_f64();
+    let path = output_path(&result)?;
+    Ok((result, path, wall))
+}
+
+// ---------------------------------------------------------------------------
+// Oracles
+// ---------------------------------------------------------------------------
+
+pub struct VideoExpectation {
+    pub codec: &'static str,
+    pub fps: f64,
+    /// Longest acceptable stretch of output time over which the stimulus id did not change.
+    pub max_hold_s: f64,
+    /// Minimum fraction of output frames that must show a new stimulus id.
+    pub min_fresh_fraction: f64,
+}
+
+pub struct VideoFacts {
+    pub probe: Value,
+    #[allow(dead_code, reason = "Reserved for recording timeline checks")]
+    pub timeline: IdTimeline,
+    pub frames: Vec<media::LumaFrame>,
+    pub duration: f64,
+}
+
+/// Container, packet and pixel checks common to every recording.
+pub fn judge_video(
+    ctx: &mut Context,
+    file: &Path,
+    stimulus: &Stimulus,
+    expect: &VideoExpectation,
+) -> Step<VideoFacts> {
+    let probe = media::probe(file)?;
+    let videos = media::streams(&probe, "video");
+    product_ensure!(
+        videos.len() == 1,
+        "expected exactly one video stream, found {}",
+        videos.len()
+    );
+    let v = videos[0];
+    let codec = v["codec_name"].as_str().unwrap_or("");
+    product_ensure!(
+        codec == expect.codec,
+        "video codec is {codec}, expected {}",
+        expect.codec
+    );
+    let rate = media::rate(v["r_frame_rate"].as_str().unwrap_or("0/1")).unwrap_or(0.0);
+    product_ensure!(
+        (rate - expect.fps).abs() < 0.01,
+        "stream frame rate is {rate}, expected {}",
+        expect.fps
+    );
+
+    let (frames_n, packets_n) = media::frame_packet_counts(file)?;
+    product_ensure!(
+        frames_n == packets_n,
+        "{packets_n} packets decode to {frames_n} frames"
+    );
+
+    let packets = media::video_packets(file)?;
+    product_ensure!(
+        packets.first().is_some_and(|p| p.key),
+        "the first video packet is not a keyframe"
+    );
+    let step = 1.0 / expect.fps;
+    let irregular = packets
+        .windows(2)
+        .filter(|w| ((w[1].pts - w[0].pts) - step).abs() > step * 0.5)
+        .count();
+    ctx.evidence.put("irregularPtsSteps", irregular);
+
+    let frames = media::luma_frames(file, 480)?;
+    let timeline = media::id_timeline(&frames);
+    ctx.evidence
+        .put("idTimeline", serde_json::to_value(&timeline)?);
+    let duration =
+        frames.last().map(|f| f.pts).unwrap_or(0.0) - frames.first().map(|f| f.pts).unwrap_or(0.0);
+
+    product_ensure!(
+        timeline.absent == 0,
+        "{} of {} frames do not show the stimulus the product was told to capture",
+        timeline.absent,
+        timeline.frames
+    );
+    product_ensure!(
+        timeline.corrupt * 50 <= timeline.frames,
+        "{} of {} frames carry a damaged pattern",
+        timeline.corrupt,
+        timeline.frames
+    );
+    product_ensure!(
+        timeline.reorders == 0,
+        "frames were written out of order ({} reorders)",
+        timeline.reorders
+    );
+    product_ensure!(
+        timeline.longest_hold_s <= expect.max_hold_s,
+        "the captured content stood still for {:.3} s although the stimulus kept changing",
+        timeline.longest_hold_s
+    );
+    let fresh = timeline.unique as f64 / timeline.frames.max(1) as f64;
+    let stimulus_rate = stimulus.frame_rate()?;
+    // A stimulus slower than the output rate caps how fresh the output can be.
+    let achievable = (stimulus_rate / expect.fps).min(1.0);
+    ctx.evidence.put("freshFraction", fresh);
+    ctx.evidence.put("stimulusRate", stimulus_rate);
+    product_ensure!(
+        fresh >= expect.min_fresh_fraction * achievable,
+        "only {:.1}% of output frames show new content (achievable {:.1}%)",
+        fresh * 100.0,
+        achievable * 100.0
+    );
+
+    // Timeline fit: output PTS against the stimulus's own QPC for the same id.
+    let truth: std::collections::HashMap<u32, f64> = stimulus
+        .frames()?
+        .into_iter()
+        .map(|(id, t, _)| (id, t))
+        .collect();
+    let pairs: Vec<(f64, f64)> = timeline
+        .samples
+        .iter()
+        .filter_map(|(pts, id)| truth.get(id).map(|t| (*t, *pts)))
+        .collect();
+    infra_ensure!(
+        pairs.len() >= 20,
+        "too few recorded frames matched the stimulus log to fit a timeline"
+    );
+    let (slope, _) = media::fit(&pairs).ok_or_else(|| Stop::infra("timeline fit failed"))?;
+    ctx.evidence.put("ptsPerStimulusSecond", slope);
+    if pairs.last().unwrap().0 - pairs[0].0 >= 8.0 {
+        product_ensure!(
+            (slope - 1.0).abs() <= 0.005,
+            "recorded timestamps advance {slope:.4} s per real second"
+        );
+    }
+    Ok(VideoFacts {
+        probe,
+        timeline,
+        frames,
+        duration,
+    })
+}
+
+/// Visual marker onsets in a recording, from `(pts, lit)` samples in
+/// presentation order. Only a real leading edge counts: an unlit sample
+/// followed by a lit one. The onset lies between the two, so it is estimated
+/// at their midpoint, within half a sample interval of the truth. A recording
+/// that opens on a lit sample has no observable onset for that pulse.
+pub fn flash_onsets(samples: &[(f64, bool)]) -> Vec<f64> {
+    samples
+        .windows(2)
+        .filter(|pair| !pair[0].1 && pair[1].1)
+        .map(|pair| (pair[0].0 + pair[1].0) / 2.0)
+        .collect()
+}
+
+/// A/V alignment from the stimulus's synchronised flash + beep markers.
+pub fn judge_av_sync(
+    ctx: &mut Context,
+    file: &Path,
+    audio_stream: usize,
+    video: &VideoFacts,
+) -> Step {
+    let samples = media::audio_samples(file, audio_stream, 48_000)?;
+    let onsets = media::tone_onsets(&samples, 48_000, 1000.0, 0.5);
+    let samples: Vec<(f64, bool)> = video
+        .frames
+        .iter()
+        .map(|f| (f.pts, crate::pattern::flash_on(&f.luma())))
+        .collect();
+    let flashes = flash_onsets(&samples);
+    ctx.evidence.put("audioOnsets", json!(onsets));
+    ctx.evidence.put("videoFlashes", json!(flashes));
+    infra_ensure!(
+        flashes.len() >= 3,
+        "fewer than three flash markers were recorded; nothing to align"
+    );
+    product_ensure!(
+        onsets.len() + 1 >= flashes.len(),
+        "{} flash markers but only {} beeps in the audio track",
+        flashes.len(),
+        onsets.len()
+    );
+    let offsets: Vec<f64> = flashes
+        .iter()
+        .filter_map(|v| {
+            onsets
+                .iter()
+                .map(|a| a - v)
+                .min_by(|a, b| a.abs().total_cmp(&b.abs()))
+        })
+        .filter(|o| o.abs() < 1.0)
+        .collect();
+    product_ensure!(offsets.len() >= 3, "beeps could not be paired with flashes");
+    let mut sorted = offsets.clone();
+    sorted.sort_by(f64::total_cmp);
+    let median = sorted[sorted.len() / 2];
+    let spread = sorted.last().unwrap() - sorted.first().unwrap();
+    ctx.evidence.put("avOffsetMedianMs", median * 1000.0);
+    ctx.evidence.put("avOffsetSpreadMs", spread * 1000.0);
+    // The render-side latency of the beep and the display latency of the flash
+    // are both unmeasured here, so the offset is a bounded estimate, not an
+    // exact point. The spread across markers is what reveals drift.
+    product_ensure!(
+        median.abs() <= 0.12,
+        "audio is {:.0} ms away from video",
+        median * 1000.0
+    );
+    product_ensure!(
+        spread <= 0.06,
+        "A/V offset moved by {:.0} ms during the recording",
+        spread * 1000.0
+    );
+    Ok(())
+}
+
+pub fn audio_streams(probe: &Value) -> usize {
+    media::streams(probe, "audio").len()
+}
+
+#[allow(dead_code, reason = "Reserved for control-response assertions")]
+pub fn field<'a>(v: &'a Value, path: &str) -> Step<&'a Value> {
+    json_path(v, path)
+        .ok_or_else(|| Stop::fail(format!("the control surface no longer reports '{path}'")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_display_devices_identify_a_monitor_target() {
+        assert!(is_display_device(r"\\.\DISPLAY1"));
+        assert!(!is_display_device("27GL850"));
+        assert!(!is_display_device("DISPLAY1"));
+        assert!(!is_display_device(r"\\.\"));
+    }
+
+    #[test]
+    fn a_screen_is_selected_by_device_never_by_friendly_name() {
+        let environment = json!({"displays": {"screens": [
+            {"name": "27GL850", "device": r"\\.\DISPLAY2", "primary": false},
+            {"name": "27GL850", "device": r"\\.\DISPLAY1", "primary": true}
+        ]}});
+        let primary = primary_screen(&environment, false).unwrap();
+        assert_eq!(screen_device(primary).unwrap(), r"\\.\DISPLAY1");
+    }
+
+    #[test]
+    fn a_screen_without_a_device_is_not_selected_by_its_name() {
+        for screen in [
+            json!({"name": "27GL850"}),
+            json!({"name": "27GL850", "device": null}),
+            json!({"name": "27GL850", "device": "27GL850"}),
+        ] {
+            assert!(matches!(screen_device(&screen), Err(Stop::Infra(_))));
+        }
+    }
+
+    #[test]
+    fn the_first_screen_stands_in_for_a_missing_primary_only_on_request() {
+        let environment = json!({"displays": {"screens": [
+            {"name": "A", "device": r"\\.\DISPLAY3", "primary": false}
+        ]}});
+        assert!(primary_screen(&environment, false).is_none());
+        assert_eq!(
+            screen_device(primary_screen(&environment, true).unwrap()).unwrap(),
+            r"\\.\DISPLAY3"
+        );
+    }
+
+    use crate::stimulus::{MARKER_PULSE_SECONDS, MarkerSchedule};
+
+    const FREQ: i64 = 10_000_000;
+
+    /// A stimulus presenting at `stimulus_hz` for `span` seconds with pulses
+    /// `pulse` seconds wide, recorded by sampling the screen at `fps` from
+    /// `phase` seconds on. Returns the recorded `(pts, lit)` samples and the
+    /// true onsets (the first lit frame's present time) of every pulse.
+    fn record(
+        stimulus_hz: f64,
+        fps: f64,
+        phase: f64,
+        span: f64,
+        pulse: f64,
+    ) -> (Vec<(f64, bool)>, Vec<f64>) {
+        let mut schedule = MarkerSchedule::new(0, 2 * FREQ, (pulse * FREQ as f64) as i64);
+        let mut presented = Vec::new();
+        let mut truth = Vec::new();
+        let mut index = 0.0;
+        while index / stimulus_hz < span {
+            let at = index / stimulus_hz;
+            let frame = schedule.frame((at * FREQ as f64) as i64);
+            if frame.onset.is_some() {
+                truth.push(at);
+            }
+            presented.push((at, frame.lit));
+            index += 1.0;
+        }
+        let mut samples = Vec::new();
+        let mut shown = 0;
+        let mut k = 0.0;
+        while phase + k / fps < span {
+            let t = phase + k / fps;
+            while shown + 1 < presented.len() && presented[shown + 1].0 <= t {
+                shown += 1;
+            }
+            samples.push((t, presented[shown].1));
+            k += 1.0;
+        }
+        (samples, truth)
+    }
+
+    #[test]
+    fn every_marker_is_observed_at_release_tested_capture_rates() {
+        for stimulus_hz in [60.0, 144.0] {
+            for fps in [30.0, 60.0] {
+                for step in 0..40 {
+                    let phase = step as f64 / 40.0 / fps;
+                    let (samples, truth) =
+                        record(stimulus_hz, fps, phase, 11.0, MARKER_PULSE_SECONDS);
+                    let lit = samples.iter().filter(|(_, on)| *on).count();
+                    assert!(
+                        lit >= 2 * truth.len(),
+                        "{stimulus_hz} Hz stimulus at {fps} fps phase {phase}: {lit} lit samples for {} markers",
+                        truth.len()
+                    );
+                    let onsets = flash_onsets(&samples);
+                    assert_eq!(
+                        onsets.len(),
+                        truth.len(),
+                        "{stimulus_hz} Hz at {fps} fps phase {phase}"
+                    );
+                    // The screen changes only on stimulus frames, so the edge
+                    // is known to one sample interval, plus one stimulus frame
+                    // for the frame the compositor was still showing.
+                    let bound = 0.5 / fps + 1.0 / stimulus_hz + 1e-9;
+                    for (estimate, true_onset) in onsets.iter().zip(&truth) {
+                        assert!(
+                            (estimate - true_onset).abs() <= bound,
+                            "onset {estimate} vs truth {true_onset} at {fps} fps"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_one_frame_impulse_is_missed_at_60_fps() {
+        // Negative control for the pulse width: a flash lit for a single
+        // 144 Hz frame falls between 60 fps samples for most phases.
+        let missed = (0..40)
+            .filter(|step| {
+                let phase = *step as f64 / 40.0 / 60.0;
+                let (samples, truth) = record(144.0, 60.0, phase, 11.0, 1.0 / 144.0);
+                flash_onsets(&samples).len() < truth.len()
+            })
+            .count();
+        assert!(
+            missed > 20,
+            "only {missed} of 40 phases missed a one-frame flash"
+        );
+    }
+
+    #[test]
+    fn only_real_leading_edges_are_onsets() {
+        let samples = [
+            (0.0, true),
+            (0.1, true),
+            (0.2, false),
+            (0.3, false),
+            (0.4, true),
+            (0.5, true),
+            (0.6, false),
+        ];
+        let onsets = flash_onsets(&samples);
+        assert_eq!(
+            onsets.len(),
+            1,
+            "a recording that opens lit has no observable onset"
+        );
+        assert!((onsets[0] - 0.35).abs() < 1e-12);
+        assert!(flash_onsets(&[(0.0, false), (0.1, false)]).is_empty());
+    }
+}

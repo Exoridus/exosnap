@@ -6,17 +6,19 @@
 
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <span>
 #include <string>
 #include <vector>
 
-// End-to-end check of scripts/dev/analyze-encode-perf.py: write a synthetic
-// engine.jsonl fixture through the real logging layer (so the on-disk JSON shape
-// matches production), run the script's --json mode, and assert the percentiles it
-// recomputes from the summary histogram match what the C++ LatencyHistogram would
-// report. Skips gracefully when no Python interpreter is available on the host.
+// End-to-end check of `exo-dev perf-analyze`: write a synthetic engine.jsonl
+// fixture through the real logging layer (so the on-disk JSON shape matches
+// production), run its --json mode, and assert the percentiles it recomputes
+// from the summary histogram match what the C++ LatencyHistogram would
+// report. Invokes the already-built exo-dev binary directly, never `cargo`,
+// so this test cannot trigger a rebuild of a binary that may be running.
 
 namespace {
 
@@ -60,22 +62,38 @@ bool RunCapture(const std::string& cmd, std::string& out) {
     return rc == 0;
 }
 
-// Find a working Python launcher on the host, or empty string.
-std::string FindPython() {
-    for (const char* cand : {"python", "py -3", "python3"}) {
-        std::string out;
-        if (RunCapture(std::string(cand) + " --version", out)) {
-            return cand;
+// The already-built exo-dev binary this test invokes directly: the same
+// resolution order `exo-dev test` uses to hand a CTest child its own path
+// (EXOSNAP_TEST_TOOL_EXE) when this test runs inside `cargo exo-dev test`,
+// falling back to the conventional build locations for a bare `ctest` run.
+// Empty when none of them resolves to an existing file.
+std::string FindExoDevExe() {
+    char* fromEnv = nullptr;
+    std::size_t fromEnvLen = 0;
+    if (_dupenv_s(&fromEnv, &fromEnvLen, "EXOSNAP_TEST_TOOL_EXE") == 0 && fromEnv != nullptr) {
+        std::string value(fromEnv);
+        std::free(fromEnv);
+        if (!value.empty() && std::filesystem::exists(value)) {
+            return value;
+        }
+    }
+    const std::filesystem::path root = EXOSNAP_SOURCE_DIR;
+    for (const char* config : {"debug", "release"}) {
+        for (const char* target : {"tools/target/exo-dev-host", "tools/target"}) {
+            std::filesystem::path candidate = root / target / config / "exo-dev.exe";
+            if (std::filesystem::exists(candidate)) {
+                return candidate.string();
+            }
         }
     }
     return "";
 }
 
-TEST(AnalyzeEncodePerf, SummaryHistogramRoundTripsThroughScript) {
-    const std::string python = FindPython();
-    if (python.empty()) {
-        GTEST_SKIP() << "no Python interpreter on host";
-    }
+TEST(AnalyzeEncodePerf, SummaryHistogramRoundTripsThroughExoDev) {
+    const std::string exoDev = FindExoDevExe();
+    ASSERT_FALSE(exoDev.empty()) << "no exo-dev executable found: set EXOSNAP_TEST_TOOL_EXE, or build "
+                                    "tools/target/exo-dev-host/{debug,release}/exo-dev.exe or "
+                                    "tools/target/{debug,release}/exo-dev.exe";
 
     // Build a known encode-latency distribution and mirror tick times.
     LatencyHistogram encode;
@@ -142,23 +160,26 @@ TEST(AnalyzeEncodePerf, SummaryHistogramRoundTripsThroughScript) {
 
     ASSERT_TRUE(std::filesystem::exists(tmp));
 
-    const std::string script = std::string(EXOSNAP_SOURCE_DIR) + "/scripts/dev/analyze-encode-perf.py";
-    ASSERT_TRUE(std::filesystem::exists(script)) << script;
-
     std::string out;
-    const std::string cmd = python + " \"" + script + "\" \"" + tmp.string() + "\" --json";
-    ASSERT_TRUE(RunCapture(cmd, out)) << "script failed; output:\n" << out;
+    // cmd.exe's own quoting rule for a command line that starts with a quote
+    // pairs the first quote with the LAST one in the whole string rather than
+    // the next one, which breaks a command with more than one quoted
+    // argument. Wrapping the whole line in an extra pair of quotes works
+    // around that: cmd /c strips exactly one matching outer pair before
+    // parsing the rest.
+    const std::string cmd = "\"\"" + exoDev + "\" perf-analyze \"" + tmp.string() + "\" --json\"";
+    ASSERT_TRUE(RunCapture(cmd, out)) << "exo-dev perf-analyze failed; output:\n" << out;
 
     // Coarse assertions on the JSON output (no JSON lib needed in the test): the
-    // script must have found one session with a summary and matching percentiles.
+    // run must have found one session with a summary and matching percentiles.
     EXPECT_NE(out.find("\"sessions\""), std::string::npos) << out;
     EXPECT_NE(out.find("\"has_summary\": true"), std::string::npos) << out;
     EXPECT_NE(out.find("\"codec\": \"av1\""), std::string::npos) << out;
     EXPECT_NE(out.find("\"preset\": \"P4\""), std::string::npos) << out;
 
-    // Extract encode_p50_ms / encode_p99_ms and compare to the C++ histogram — the
-    // script recomputes them from the same buckets, so they must agree exactly
-    // (both use identical geometric-bucket interpolation).
+    // Extract encode_p50_ms / encode_p99_ms and compare to the C++ histogram.
+    // Both recompute from the same buckets with identical geometric-bucket
+    // interpolation, so they must agree exactly.
     auto extract = [&out](const std::string& key) -> double {
         const auto pos = out.find("\"" + key + "\":");
         if (pos == std::string::npos) {

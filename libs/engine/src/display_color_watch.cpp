@@ -90,6 +90,13 @@ void DisplayColorWatch::Worker::Run() noexcept {
     // MTA is documented as acceptable ("The current thread can be MTA or STA")
     // and is what the rest of the engine's worker threads use.
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    // Declare the apartment before every WinRT object so their destructors
+    // release COM references before the apartment is uninitialized.
+    struct ApartmentLifetime {
+        ~ApartmentLifetime() {
+            winrt::uninit_apartment();
+        }
+    } apartment;
 
     // Registration snaps the DispatcherQueue of this thread, and the handler is
     // dispatched through it -- so it must exist BEFORE GetForMonitor and this
@@ -107,21 +114,19 @@ void DisplayColorWatch::Worker::Run() noexcept {
         logging::log(logging::LogLevel::Warn, "display_color_watch",
                      "no dispatcher queue; the display's colour state will be re-read on the polled cadence instead",
                      std::span<const logging::LogField>(fields, std::size(fields)));
-        winrt::uninit_apartment();
         return;
     }
 
-    winrt::com_ptr<IDisplayInformationStaticsInterop> interop;
-    try {
-        interop = winrt::get_activation_factory<DisplayInformation, IDisplayInformationStaticsInterop>();
-    } catch (const winrt::hresult_error&) {
+    // Each worker owns a short-lived apartment. The generic activation-factory
+    // cache can retain this interop interface beyond that apartment's lifetime.
+    auto interop = winrt::try_get_activation_factory<DisplayInformation, IDisplayInformationStaticsInterop>();
+    if (interop == nullptr) {
         // Expected on Windows 10 and on Windows 11 before build 22621: there is no
         // notification for a process without a CoreWindow there, and the polled
         // cadence is the whole mechanism. Info, not a warning -- nothing is wrong.
         logging::log(logging::LogLevel::Info, "display_color_watch",
                      "this Windows build offers no display colour notification; the polled cadence is in use", {});
         ShutdownQueue(controller);
-        winrt::uninit_apartment();
         return;
     }
 
@@ -208,7 +213,6 @@ void DisplayColorWatch::Worker::Run() noexcept {
 
     unsubscribe();
     ShutdownQueue(controller);
-    winrt::uninit_apartment();
 }
 
 DisplayColorWatch::DisplayColorWatch() = default;

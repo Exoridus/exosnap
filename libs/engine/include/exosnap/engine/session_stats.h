@@ -67,7 +67,7 @@ struct SessionStats {
     std::array<uint64_t, 3> per_track_resampler_undrained_frames{};
     bool source_loss = false;
     // True once any audio capture source was lost mid-recording and degraded to
-    // honest silence (ADR 0046). A post-flight fact so the "Saved" report can
+    // honest silence. A post-flight fact so the "Saved" report can
     // note the recording contains a silence gap, rather than surprising the user.
     bool audio_degraded_occurred = false;
     // Set once when a requested webcam PiP / cursor overlay cannot be recorded in

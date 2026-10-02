@@ -95,17 +95,32 @@ Item {
     }
 
     function focusOutputDestination(): void {
-        outputFocusTimer.remainingAttempts = 8;
-        outputFocusTimer.restart();
+        focusControl(outputSection, outputSection.focusControl(SettingsAdapter.OutputDestination));
     }
 
-    // The card is the unit a deep link arrives at. Output is the one destination
-    // that also focuses a field, because its action exists so the user can retype
-    // a folder; the others only have to be found.
+    function focusControl(section: var, control: var): void {
+        root.landOnSection(section);
+        settingsFocusTimer.section = section;
+        settingsFocusTimer.control = control;
+        settingsFocusTimer.remainingAttempts = 8;
+        settingsFocusTimer.restart();
+    }
+
+    // Reveal hidden Expert controls without changing the user's settings tier.
     function sectionForFocusTarget(target: int): var {
         switch (target) {
         case SettingsAdapter.OutputDestination:
             return outputSection;
+        case SettingsAdapter.Resolution:
+            return outputSection;
+        case SettingsAdapter.FramePacing:
+        case SettingsAdapter.FrameRate:
+        case SettingsAdapter.Quality:
+            return qualitySection;
+        case SettingsAdapter.Microphone:
+            return microphoneSection;
+        case SettingsAdapter.ClockSlaving:
+            return audioEncodingSection;
         case SettingsAdapter.AudioSources:
             return audioSourcesSection;
         case SettingsAdapter.Format:
@@ -137,15 +152,21 @@ Item {
     // over several frames. A single reveal can therefore target pre-layout
     // geometry and be reset before the destination field receives focus.
     Timer {
-        id: outputFocusTimer
+        id: settingsFocusTimer
 
         property int remainingAttempts: 0
+        property var section: null
+        property var control: null
 
         interval: 150
         repeat: true
         onTriggered: {
-            scroll.revealItem(outputSection);
-            outputSection.focusDestination();
+            if (control) {
+                scroll.revealItem(control);
+                control.forceActiveFocus(Qt.OtherFocusReason);
+            } else if (section) {
+                scroll.revealItem(section);
+            }
             remainingAttempts -= 1;
             if (remainingAttempts <= 0)
                 stop();
@@ -176,11 +197,9 @@ Item {
         target: root.settings
 
         function onSettingsFocusRequested(target: int): void {
-            root.landOnSection(root.sectionForFocusTarget(target));
-            // Focus AFTER the reveal: focusing first scrolls the field into view
-            // on its own terms and undoes the position the reveal just set.
-            if (target === SettingsAdapter.OutputDestination)
-                root.focusOutputDestination();
+            const section = root.sectionForFocusTarget(target);
+            const control = section && typeof section.focusControl === "function" ? section.focusControl(target) : null;
+            root.focusControl(section, control);
         }
     }
 

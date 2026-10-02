@@ -59,7 +59,7 @@ TEST(UpdateGuard, NotBlockedGuardPassesThrough) {
 
 // ---------------------------------------------------------------------------
 // DecideOffer -- the pure "is this release offerable?" rule CheckForUpdate uses
-// (ADR 0055: verification reinstall).
+// ( verification reinstall).
 // ---------------------------------------------------------------------------
 
 namespace {

@@ -40,7 +40,7 @@ bool BuildClapperSchedule(std::int64_t total_seconds, int marker_count, std::int
     // set by the marker count alone -- a longer run determines the rate better
     // over a proportionally longer span and is no more certain about the total.
     // A budget that frame-accurate edges cannot carry at three markers is
-    // reachable at nine; scripts/dev/av-sync-check.py names the count it needs.
+    // reachable at nine; `cargo exo-dev av-sync-check` names the count it needs.
     if (marker_count < 2) {
         error = "clapper marker count must be at least 2";
         return false;

@@ -26,7 +26,7 @@ namespace exosnap {
 // screen pixels. Pre-1.0, older files simply lack the sub-tables: the field-wise
 // repair leaves the identity empty ("no preference"), the saved display target is
 // dropped once, and the next save writes the new stable form. Not reported as an
-// error (only a real parse failure is). See ADR 0047.
+// error (only a real parse failure is).
 //
 // v24: adds audio.pcm_float (bool) -- 32-bit float PCM (A_PCM/FLOAT/IEEE),
 // opt-in only when audio_codec == Pcm and audio_bit_depth == 32. Older
@@ -55,12 +55,12 @@ namespace exosnap {
 // hydration bug and always displayed "Full (PC)" regardless of the model, so
 // a deliberate Full selection could not exist). A schema-20-and-newer file
 // with explicit "full" is a deliberate post-flip opt-in and is respected.
-// See ADR 0032.
+//
 // ---------------------------------------------------------------------------
 inline constexpr int kPresetSchemaVersion = 25;
 
 // Files at or below this schema get the targeted color_range full->limited
-// rewrite (ADR 0032) on top of the ordinary field-wise repair.
+// rewrite on top of the ordinary field-wise repair.
 inline constexpr int kPresetSchemaColorRangeMigratedThrough = 19;
 
 // Default PiP inset (bottom-right corner), as a fraction of the frame edge.
@@ -157,10 +157,10 @@ struct RecordingPreset {
 // ---------------------------------------------------------------------------
 
 // Reconciles the codec fields of `output` to be valid for its container.
-// Rules (delegated to ContainerCompatRegistry::ReconcileCodecs, ADR 0010):
+// Rules (delegated to ContainerCompatRegistry::ReconcileCodecs):
 //   MP4  → H.264 (Recommended) or HEVC (Allowed via hvc1 remux, 0.7.0) kept;
 //           AV1 is deferred → falls back. Audio forced to Aac (Opus/PCM/FLAC
-//           Prohibited or deferred in MP4 — ADR 0010/0030).
+//           Prohibited or deferred in MP4).
 //   WebM → Av1 + Opus (forced); AAC/PCM/FLAC and H.264/HEVC Prohibited.
 //   MKV  → AV1/H.264/HEVC + Opus/AAC/PCM/FLAC all Allowed or Recommended.
 void ReconcileContainerCodecs(OutputSettingsModel& output);

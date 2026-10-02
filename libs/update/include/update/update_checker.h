@@ -1,7 +1,7 @@
 #pragma once
 // update_checker.h -- GitHub Releases API polling for ExoSnap updates.
 //
-// Rules (from ADR-0012):
+// Rules:
 //   - Public API only; NO authentication token in the client.
 //   - Stable channel  = latest non-prerelease GitHub release.
 //   - Preview channel = latest prerelease.
@@ -37,7 +37,7 @@ struct CheckParams {
     RecordingGuardFn recording_guard{}; // may be nullptr (no guard)
     // Optional: override the API base URL for testing
     std::string api_base_url = "https://api.github.com/repos/Exoridus/exosnap/releases";
-    // ADR 0055 — verification reinstall. Non-persistent, opted into per app run
+    // Verification reinstall. Non-persistent, opted into per app run
     // via the --verify-update-reinstall CLI flag. When true, a release whose tag
     // is byte-identical to current_version_raw is additionally offered, so the
     // full production update path (download -> signature -> hash -> swap) can be

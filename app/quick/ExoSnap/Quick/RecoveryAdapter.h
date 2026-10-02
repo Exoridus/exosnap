@@ -63,7 +63,7 @@ class RecoveryCandidateModel : public QAbstractListModel {
     QVector<RowState> states_;
 };
 
-// Narrow QML boundary for startup recovery (ADR-0014/ADR-0015).
+// Narrow QML boundary for startup recovery.
 //
 // Everything that decides anything stays behind this class: the scan, what
 // counts as a live candidate, which action a candidate may offer, whether a

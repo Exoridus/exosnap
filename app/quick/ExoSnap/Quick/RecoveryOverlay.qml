@@ -4,7 +4,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Startup recovery (ADR-0014/ADR-0015). Shown when the previous run left an
+// Startup recovery. Shown when the previous run left an
 // unfinalized recording behind.
 //
 // Everything here is presentation: which rows exist, which actions a row may

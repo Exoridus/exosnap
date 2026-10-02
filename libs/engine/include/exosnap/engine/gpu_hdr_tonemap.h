@@ -17,7 +17,7 @@ namespace exosnap::engine {
 //
 // Threading: an instance is single-thread — every method runs on the thread that
 // owns the passed device context. The engine's instance is VideoThread-exclusive
-// (ADR-0009); the DXGI preview runs its own instance on its render thread to
+// the DXGI preview runs its own instance on its render thread to
 // display the engine's FP16 tap. The class does not take ownership of the
 // device/context.
 class HdrToneMapper {

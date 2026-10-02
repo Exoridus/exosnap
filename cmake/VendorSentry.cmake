@@ -5,7 +5,7 @@
 # submodules, so GIT_SUBMODULES_RECURSE TRUE is required.  No GN/depot_tools
 # toolchain is involved — CMake builds Crashpad directly.
 #
-# License audit (ADR 0017 § License Gate):
+# Dependency licenses:
 #   sentry-native   MIT
 #   Crashpad        Apache-2.0
 #   mini_chromium   BSD-3-Clause (Chromium default)
@@ -14,7 +14,7 @@
 #              https://github.com/chromium/crashpad (Apache-2.0 headers)
 #              https://github.com/chromium/mini_chromium/blob/main/LICENSE
 #
-# Spike verdict (STEP 0, ADR 0017):
+# Build integration constraints:
 #   - sentry-native does NOT ship a FetchContent-native interface (no
 #     FetchContent_MakeAvailable alias targets baked in), but CMake's
 #     GIT_SUBMODULES_RECURSE causes FetchContent to run "git submodule update
@@ -22,10 +22,8 @@
 #     mini_chromium without any separate tooling.
 #   - add_subdirectory on the fetched source produces the sentry target and
 #     crashpad_handler.exe in the build tree.
-#   - MSVC 2022 + Ninja: no known blockers for Qt apps (WinUI issue #644 does
-#     not apply). PDB symbol upload (#895) is documented as a limitation.
-#   - Conclusion: INTEGRATION IS CLEAN. FetchContent + GIT_SUBMODULES_RECURSE
-#     avoids all GN/depot_tools complexity. Confirmed via ADR 0017 research.
+#   - Archive matching PDBs for symbolication and provision upload credentials
+#     explicitly. A captured dump alone does not prove symbol delivery.
 #
 # Usage in root CMakeLists.txt:
 #

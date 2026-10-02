@@ -33,6 +33,9 @@ struct NonClientInset {
 
 struct NativeWindowFacts {
     bool valid = false;
+    // The queried handle, so an out-of-process verifier can read state that
+    // is not copied into these facts (the window's input region, e.g.).
+    quint64 hwnd = 0;
     quint64 style = 0;
     quint64 ex_style = 0;
     NonClientInset inset;

@@ -42,7 +42,11 @@ namespace exosnap::observability {
 // which is what DXGI sees: the two describe the same monitor from two different
 // APIs and are matched by name where possible, never merged into one guess.
 struct ScreenFacts {
+    // Qt's screen name: the monitor's friendly name, not unique across twins.
     QString name;
+    // The Windows display device (e.g. "\\.\DISPLAY1"): the stable identity a
+    // monitor capture target is selected by. Empty when it could not be read.
+    QString device;
     int x = 0;
     int y = 0;
     int width = 0;
@@ -67,6 +71,10 @@ struct PresentObservation {
     bool opt_in = false;
     bool elevated = false;
     bool available = false;
+    // The provider's own answer: the opt-in is the request, the OS decides the
+    // open, and fresh data decides "measuring". `opt_in` and `elevated` remain
+    // here as facts; neither alone implies this state.
+    diagnostics::PresentProviderState state = diagnostics::PresentProviderState::NotRequested;
     // A real sample, only when `available`.
     std::optional<diagnostics::PresentSample> sample;
 };

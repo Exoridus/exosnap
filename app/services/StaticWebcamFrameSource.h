@@ -47,6 +47,10 @@ class StaticWebcamFrameSource final : public exosnap::engine::WebcamFrameProvide
     inline bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra,
                             uint64_t& out_generation) override;
 
+    std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> Snapshot() override {
+        return snapshot_;
+    }
+
     // For the evidence record: which source produced the pixels, and at which
     // generation they were frozen.
     [[nodiscard]] uint64_t Generation() const noexcept {
@@ -63,7 +67,7 @@ class StaticWebcamFrameSource final : public exosnap::engine::WebcamFrameProvide
     int width_ = 0;
     int height_ = 0;
     uint64_t generation_ = 1;
-    std::vector<uint8_t> bgra_;
+    std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> snapshot_;
 };
 
 // Header-only: every target that links RecordingCoordinator composites through
@@ -125,17 +129,21 @@ inline std::vector<uint8_t> MakeStaticWebcamPattern(int width, int height) {
 }
 
 inline StaticWebcamFrameSource::StaticWebcamFrameSource(int width, int height)
-    : width_(std::max(0, width)), height_(std::max(0, height)), bgra_(MakeStaticWebcamPattern(width_, height_)) {
+    : width_(std::max(0, width)), height_(std::max(0, height)) {
+    auto pixels = MakeStaticWebcamPattern(width_, height_);
+    if (!pixels.empty())
+        snapshot_ = std::make_shared<const exosnap::engine::WebcamFrameSnapshot>(
+            exosnap::engine::WebcamFrameSnapshot{width_, height_, generation_, std::move(pixels)});
 }
 
 inline bool StaticWebcamFrameSource::TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra,
                                                  uint64_t& out_generation) {
-    if (bgra_.empty()) {
+    if (!snapshot_) {
         return false;
     }
     out_width = width_;
     out_height = height_;
-    out_bgra = bgra_;
+    out_bgra = snapshot_->bgra;
     // Not incremented. A generation that advances per call recomposites the frame
     // on the webcam's behalf, which is exactly what would mask a missing overlay
     // generation -- the defect this source exists to expose.

@@ -1,4 +1,5 @@
 #include "audio_thread.h"
+#include <exosnap/engine/performance_measurements.h>
 
 #include "audio_clock_drift.h"
 #include "audio_device_loss_policy.h"
@@ -37,7 +38,7 @@ namespace {
 constexpr float kRmsEmaAlpha = 0.3f;
 
 // Wall-clock now in nanoseconds on the QPC timeline. Used to size the silence
-// that fills an audio source's device-loss outage (ADR 0046): the degraded
+// that fills an audio source's device-loss outage: the degraded
 // source delivers no packets and no device positions, so the gap is measured
 // against the wall clock and fed to the encoder as whole silence frames, keeping
 // PTS (derived from the accumulated frame counter) continuous across the outage.
@@ -85,7 +86,7 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
         // the track is marked ready with empty bytes so the mux thread's
         // codec-private readiness gate releases the pre-mux buffer.
         auto enc = std::make_unique<PcmAudioEncoder>();
-        enc->SetBitDepth(config.audio_bit_depth);    // ADR 0030: configurable depth
+        enc->SetBitDepth(config.audio_bit_depth);    // configurable depth
         enc->SetFloatFormat(config.audio_pcm_float); // Float-PCM: A_PCM/FLOAT/IEEE
         setup.encoder = std::move(enc);
         setup.init_error_prefix = "PCM encoder init: ";
@@ -96,7 +97,7 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
         // (native "fLaC" header + STREAMINFO) is produced during Init() via the
         // write callback and must be non-empty.
         auto enc = std::make_unique<FlacAudioEncoder>();
-        enc->SetBitDepth(config.audio_bit_depth); // ADR 0030: configurable depth + level
+        enc->SetBitDepth(config.audio_bit_depth); // configurable depth + level
         enc->SetCompressionLevel(config.flac_compression_level);
         setup.encoder = std::move(enc);
         setup.init_error_prefix = "FLAC encoder init: ";
@@ -104,7 +105,7 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
         break;
     }
     case AudioCodec::Aac: {
-        // FFmpeg's native AAC-LC encoder (ADR 0052, cut over once
+        // FFmpeg's native AAC-LC encoder (cut over once
         // exosnap-ffmpeg-build r5 shipped an encoder-enabled avcodec DLL).
         auto enc = std::make_unique<FfmpegAacEncoder>();
         enc->SetBitrateKbps(config.audio_bitrate_kbps);
@@ -211,7 +212,7 @@ void AudioThread::Run() {
         return;
     }
 
-    // --- Wrap source in OutputFormatAudioSrc (ADR 0030) ---
+    // --- Wrap source in OutputFormatAudioSrc ---
     // Effective sample rate: Opus is locked to 48 kHz; all other codecs use
     // the configured audio_sample_rate. Channel count and bit depth are always
     // configurable. When target == 48000/stereo (the default), the decorator is
@@ -408,7 +409,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     bool drift_first_qpc_valid = false;
     uint64_t drift_first_qpc_ns = 0;
 
-    // --- Device hot-swap / source-degradation state (ADR 0046) ---
+    // --- Device hot-swap / source-degradation state ---
     // bare_degraded: the sole (non-merged) source lost its endpoint; the thread
     // owns its silence + reactivation. Merged tracks self-report per-inner health
     // (DegradedSourceCount) and reactivate through source_->Reinit() instead.
@@ -524,10 +525,14 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         if (event_driven) {
             WaitForMultipleObjects(2, wait_handles, FALSE, kEventWaitTimeoutMs);
         } else {
+            RecordPerformanceEvent(PerformanceStage::AudioPollWake);
             Sleep(1);
         }
     };
 
+    // A merged source owns both captured and missing intervals on its QPC timeline.
+    // A second wall-clock filler would count an endpoint outage twice.
+    const bool source_owns_timeline = mixed_src_ != nullptr && mixed_src_->CaptureSourceCount() > 1;
     // --- Capture / encode loop ---
     while (!m_state.stop_requested.load()) {
         if (m_state.pause_requested.load()) {
@@ -538,7 +543,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                     source_->ReleaseBuffer();
                 } else {
                     // A device loss while paused degrades the source just the same
-                    // (ADR 0046): mark it so the resume path reactivates it rather
+                    //: mark it so the resume path reactivates it rather
                     // than silently dropping the endpoint.
                     if (!err.empty() &&
                         ClassifyAudioSourceLoss(source_->LastCaptureHresult()) == AudioLossReaction::DegradeSource &&
@@ -560,7 +565,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             continue;
         }
 
-        // Degraded bare source (ADR 0046): keep the encoder timeline honest with
+        // Degraded bare source: keep the encoder timeline honest with
         // wall-clock silence and throttled-reactivate. The dead source is not
         // polled at all until it comes back — polling it would only re-fail.
         if (bare_degraded) {
@@ -609,7 +614,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             continue;
         }
 
-        // Merged-track device-loss health + reactivation (ADR 0046). A merged
+        // Merged-track device-loss health + reactivation. A merged
         // source (MixedAudioSrc) never fails its acquire — it degrades individual
         // inners and keeps mixing the survivors. This runs every iteration (even
         // at 0 pending) so a fully-degraded merged track still reactivates and
@@ -631,7 +636,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                 // order), so the silence covers the outage right up to the
                 // moment the track comes back.
                 const bool fully_degraded = (total_sources > 0 && degraded_sources == total_sources);
-                if (fully_degraded) {
+                if (fully_degraded && !source_owns_timeline) {
                     if (!emitSilenceForElapsed()) {
                         failed = true;
                         break;
@@ -644,7 +649,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                     const AudioReactivateDecision decision =
                         DecideAudioDeviceLoss(ok, kAudioReactivatePollDelay, kAudioReactivatePollDelay);
                     lastReinitAttempt = nowtp;
-                    if (fully_degraded && decision.action == AudioReactivateAction::Reactivated) {
+                    if (fully_degraded && !source_owns_timeline &&
+                        decision.action == AudioReactivateAction::Reactivated) {
                         // The track was silent-and-clock-driven and is live again.
                         // Re-align it the same way a bare source is re-aligned:
                         // the reacquired stream restarts its device position near
@@ -684,7 +690,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             // is held, once the quiet has lasted past ordinary packet cadence.
             // Once stalled, keep filling every iteration so the anchor tracks
             // the clock closely and the resume loses at most one poll.
-            if (silent_stalled || IsSilentStall(QpcNowNs(), lastAccountedQpcNs)) {
+            if (!source_owns_timeline && (silent_stalled || IsSilentStall(QpcNowNs(), lastAccountedQpcNs))) {
                 silent_stalled = true;
                 if (!emitSilenceForElapsed()) {
                     failed = true;
@@ -717,7 +723,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             if (!source_->AcquireBuffer(raw, captureErr)) {
                 if (!captureErr.empty()) {
                     const int32_t captureHr = source_->LastCaptureHresult();
-                    // ADR 0046: an audio endpoint lost mid-recording no longer
+                    // an audio endpoint lost mid-recording no longer
                     // ends the session. Degrade this source to honest silence and
                     // reactivate it (handled by the bare_degraded branch above);
                     // video and every other track keep running. A benign no-data
@@ -757,6 +763,9 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             // silence the track does not contain.
             const uint32_t gapFramesToFeed = RemainingGapFrames(raw.gap_frames, silenceFilledFramesSincePacket);
 
+            if (raw.num_frames > 0 && source_->LastBufferQpcNs() != 0)
+                publishAudioEpoch(source_->LastBufferQpcNs(), encoderAccumulatedFrames + gapFramesToFeed);
+
             {
                 AudioDeviceTiming timing{};
                 if (source_->LastBufferDeviceTiming(timing)) {
@@ -768,9 +777,6 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                     // to place the track against video; assuming it started when
                     // Record() was called makes the whole track lead the picture
                     // by however long the device took to open.
-                    if (raw.num_frames > 0) {
-                        publishAudioEpoch(timing.qpc_position_ns, encoderAccumulatedFrames + gapFramesToFeed);
-                    }
                     drift_estimator.AddObservation(timing.device_position_ns, timing.qpc_position_ns);
                     const double raw_drift = drift_estimator.DriftMs();
                     double residual = raw_drift; // no slaving => residual is the raw drift
@@ -872,7 +878,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
 
             // A packet that carried real frames advances the timeline normally;
             // rebase the silence clock to now so a subsequent outage's silence
-            // fills exactly the gap after this last real audio (ADR 0046).
+            // fills exactly the gap after this last real audio.
             if (raw.num_frames > 0) {
                 lastAccountedQpcNs = QpcNowNs();
                 silent_stalled = false;
@@ -903,7 +909,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         // fails inside MixedAudioSrc). Record it here too, so the post-flight
         // fact and live diagnostics are accurate even when the whole track
         // drains in a single outer iteration and the pre-drain block does not
-        // run again before the session ends (ADR 0046).
+        // run again before the session ends.
         {
             const uint32_t degraded_after = source_->DegradedSourceCount();
             if (degraded_after > 0) {
@@ -918,6 +924,37 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
 
         if (!anyWork)
             waitForCaptureWork();
+    }
+
+    if (mixed_src_ != nullptr && !failed) {
+        mixed_src_->BeginDrain();
+        while (source_->PendingFrameCount() > 0) {
+            RawAudioBuffer tail{};
+            std::string error;
+            if (!source_->AcquireBuffer(tail, error)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture, error);
+                failed = true;
+                break;
+            }
+            std::vector<EncodedAudioPacket> packets;
+            if (tail.num_frames > 0) {
+                enc.FeedFloat32(reinterpret_cast<const float*>(tail.bytes),
+                                static_cast<size_t>(tail.num_frames) * channels, 0, encoderAccumulatedFrames,
+                                sample_rate, channels, packets);
+            }
+            source_->ReleaseBuffer();
+            {
+                std::lock_guard slk(m_state.stats_mutex);
+                for (const auto& packet : packets) {
+                    ++m_state.stats.audio_packets;
+                    m_state.stats.audio_bytes += packet.bytes.size();
+                }
+            }
+            if (!routeAudioPackets(packets)) {
+                failed = true;
+                break;
+            }
+        }
     }
 
     // --- Drain the resampler before the source (and its SwrContext) goes away ---

@@ -22,6 +22,7 @@
 
 #include "ExoSnapBuildInfo.h"
 
+#include "diagnostics/AppLog.h"
 #include "diagnostics/NativeWindowFacts.h"
 #include "diagnostics/PresentMonProvider.h"
 #include "models/AboutInfo.h"
@@ -40,6 +41,8 @@
 #include <update_handoff/handoff.h>
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QMetaObject>
@@ -48,6 +51,7 @@
 #include <QScreen>
 #include <QSet>
 #include <QVariant>
+#include <QtGui/qscreen_platform.h>
 
 #include <optional>
 #include <utility>
@@ -104,7 +108,10 @@ QString PageName(ShellAdapter::Page page) {
     case ShellAdapter::DiagnosticsPage:
         return QString::fromLatin1(live_verify::page_name::kDiagnostics);
     case ShellAdapter::LogsPage:
-        return QString::fromLatin1(live_verify::page_name::kLogs);
+        // Never published: the shell normalizes the legacy request to
+        // DiagnosticsPage. Mapped to diagnostics here so a future caller that
+        // reads currentPage mid-normalization still gets the canonical name.
+        return QString::fromLatin1(live_verify::page_name::kDiagnostics);
     case ShellAdapter::AboutPage:
         return QString::fromLatin1(live_verify::page_name::kAbout);
     }
@@ -189,9 +196,23 @@ QJsonObject ScreenJson(const QScreen* screen) {
     return json;
 }
 
+// The screen's own HMONITOR, not one found by geometry: Qt geometry is in
+// device-independent pixels, which do not map back to a monitor across mixed DPI.
+QString DisplayDeviceName(const QScreen& screen) {
+    const auto* native = screen.nativeInterface<QNativeInterface::QWindowsScreen>();
+    if (native == nullptr || native->handle() == nullptr)
+        return {};
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (GetMonitorInfoW(native->handle(), &info) == FALSE)
+        return {};
+    return QString::fromWCharArray(info.szDevice);
+}
+
 QJsonObject NativeFactsJson(const diagnostics::NativeWindowFacts& facts) {
     QJsonObject json;
     json.insert(QStringLiteral("valid"), facts.valid);
+    json.insert(QStringLiteral("hwnd"), static_cast<qint64>(facts.hwnd));
     json.insert(QStringLiteral("style"), QStringLiteral("0x%1").arg(facts.style, 8, 16, QLatin1Char('0')));
     json.insert(QStringLiteral("exStyle"), QStringLiteral("0x%1").arg(facts.ex_style, 8, 16, QLatin1Char('0')));
     json.insert(QStringLiteral("layered"), facts.layered);
@@ -295,6 +316,9 @@ live_verify::AutomationState QuickLiveVerifySource::State() const {
 
     if (const auto* shell = application_.shellAdapter()) {
         state.page = PageName(static_cast<ShellAdapter::Page>(shell->currentPage()));
+        state.diagnostics_section = shell->diagnosticsSection() == ShellAdapter::DiagnosticsLogs
+                                        ? QString::fromLatin1(live_verify::diagnostics_section_name::kLogs)
+                                        : QString::fromLatin1(live_verify::diagnostics_section_name::kOverview);
         state.edit_visible = shell->editSurfaceVisible();
         state.source_picker_open = shell->sourcePickerOpen();
     }
@@ -680,10 +704,13 @@ QJsonObject QuickLiveVerifySource::DiagnosticsSnapshot() const {
     json.insert(QStringLiteral("blockerCount"), diagnostics->blockerCount());
     json.insert(QStringLiteral("noticeCount"), diagnostics->noticeCount());
     json.insert(QStringLiteral("elevated"), diagnostics->elevated());
-    // The session-scoped in-depth switch. Reported next to `elevated` because the
-    // two together are the whole gate, and a runner that turned the switch on in a
-    // standard process needs to see both halves to explain an absent trace.
+    // The session-scoped in-depth switch and what the optional trace actually
+    // answered. `elevated` is a fact about the process, NOT half of a gate: a
+    // standard token with trace rights measures, and an elevated one can still
+    // be refused.
     json.insert(QStringLiteral("inDepth"), diagnostics->inDepthEnabled());
+    json.insert(QStringLiteral("presentState"), diagnostics->presentProviderState());
+    json.insert(QStringLiteral("measurementSources"), QJsonValue::fromVariant(diagnostics->measurementSources()));
     return json;
 }
 
@@ -788,6 +815,7 @@ QJsonObject QuickLiveVerifySource::EnvironmentSnapshot() const {
         observability::ScreenFacts facts;
         const QRect geometry = screen->geometry();
         facts.name = screen->name();
+        facts.device = DisplayDeviceName(*screen);
         facts.x = geometry.x();
         facts.y = geometry.y();
         facts.width = geometry.width();
@@ -810,7 +838,7 @@ QJsonObject QuickLiveVerifySource::EnvironmentSnapshot() const {
     inputs.audio_outputs = map_endpoints(audio.outputs);
     inputs.audio_observed = !audio.inputs.isEmpty() || !audio.outputs.isEmpty();
 
-    // PresentMon (ADR 0033). The opt-in and the elevation state are reported
+    // PresentMon. The opt-in and the elevation state are reported
     // unconditionally, because they are what a client needs in order to know WHY
     // there is no present measurement rather than merely that there is none.
     //
@@ -820,10 +848,12 @@ QJsonObject QuickLiveVerifySource::EnvironmentSnapshot() const {
     inputs.present.opt_in = application_.inDepthDiagnosticsEnabled();
     inputs.present.elevated = inputs.elevated;
     if (diagnostics::PresentMonProvider* provider = application_.presentProvider(); provider != nullptr) {
+        inputs.present.state = provider->state();
         inputs.present.available = provider->IsAvailable();
         if (inputs.present.available)
             inputs.present.sample = provider->Sample();
     } else {
+        inputs.present.state = diagnostics::PresentProviderState::NotBuilt;
         inputs.present.available = false;
     }
 
@@ -931,6 +961,15 @@ bool QuickLiveVerifySource::SelectRecordTarget(const QString& kind, const QStrin
         return false;
     }
     return true;
+}
+
+bool QuickLiveVerifySource::SelectRecordRegion(const QString& display_device, int x, int y, int width, int height,
+                                               QString* error) {
+    return application_.applyRegionForAutomation(display_device, x, y, width, height, error);
+}
+
+bool QuickLiveVerifySource::OpenRegionSelector(const QString& display_device, QString* error) {
+    return application_.openRegionSelectorForAutomation(display_device, error);
 }
 
 namespace {
@@ -1419,6 +1458,17 @@ bool QuickLiveVerifySource::LogsOpen(QString* error) {
     return true;
 }
 
+bool QuickLiveVerifySource::AppQuit(QString* error) {
+    // Paired with the shell's close-decision line, like the tray Quit's request.
+    diagnostics::AppLog::info(QStringLiteral("shell"), QStringLiteral("control-channel Quit requested"));
+    QString guard;
+    if (!application_.requestQuit(&guard)) {
+        *error = QStringLiteral("A close guard kept the application open (%1)").arg(guard);
+        return false;
+    }
+    return true;
+}
+
 bool QuickLiveVerifySource::RecoveryContinue(int index, QString* error) {
     auto* recovery = application_.recoveryAdapter();
     if (recovery == nullptr) {
@@ -1512,12 +1562,55 @@ bool QuickLiveVerifySource::Navigate(const QString& page, QString* error) {
     // single navigation guard. Writing `currentPage` here would be exactly the
     // bug QCR-001 removed: a page swapped without the policy ever running.
     //
-    // Synchronous: the QML connection is direct, and the destination loaders use
-    // Loader.setSource(), which loads synchronously. The resulting page is
-    // readable on the next line, which is what lets ui.navigate answer
-    // settled:true with no wait at all.
+    // The QML connection is direct, so the accepted request is readable on the
+    // next line. The destination's content is not: the page loaders are
+    // asynchronous, and a first visit is still incubating when the request
+    // returns. ui.navigate answers settled:true, and the commands that follow it
+    // address the page's own object, so the wait for that content happens here.
     emit shell->navigateToPageRequested(*destination);
-    return true;
+    // A legacy "logs" request normalizes to Diagnostics + the logs section, so
+    // the page that actually became current is Diagnostics. Waiting on the
+    // LogsPage readiness predicate is what makes ui.navigate answer settled for
+    // the internal view too.
+    if (*destination == ShellAdapter::LogsPage) {
+        if (shell->currentPage() != ShellAdapter::DiagnosticsPage ||
+            shell->diagnosticsSection() != ShellAdapter::DiagnosticsLogs)
+            return true; // Refused by the navigation guard; the caller reports the page it stayed on.
+        return waitForDestinationReady(ShellAdapter::LogsPage, page, error);
+    }
+    if (shell->currentPage() != *destination)
+        return true; // Refused by the navigation guard; the caller reports the page it stayed on.
+    return waitForDestinationReady(*destination, page, error);
+}
+
+bool QuickLiveVerifySource::waitForDestinationReady(int page_index, const QString& page, QString* error) {
+    QObject* app_shell =
+        root_window_ != nullptr ? root_window_->findChild<QObject*>(QStringLiteral("quickAppShell")) : nullptr;
+    if (app_shell == nullptr)
+        return true;
+    // Below the control server's dispatch timeout, so a page that never loads is
+    // answered as this command's failure rather than as a wedged main thread.
+    constexpr int kTimeoutMs = 10000;
+    QElapsedTimer timer;
+    timer.start();
+    for (;;) {
+        bool ready = false;
+        if (!QMetaObject::invokeMethod(app_shell, "destinationReady", Q_RETURN_ARG(bool, ready),
+                                       Q_ARG(int, page_index))) {
+            *error = QStringLiteral("The shell cannot report whether the %1 page is loaded").arg(page);
+            return false;
+        }
+        if (ready)
+            return true;
+        if (timer.hasExpired(kTimeoutMs)) {
+            *error = QStringLiteral("The %1 page did not finish loading within %2 ms").arg(page).arg(kTimeoutMs);
+            return false;
+        }
+        // Incubation advances as ordinary event handling. User input stays
+        // queued so that nothing the developer does can act on a half-answered
+        // command.
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 20);
+    }
 }
 
 QObject* QuickLiveVerifySource::pageObjectFor(const QString& surface) const {

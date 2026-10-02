@@ -7,8 +7,7 @@
 namespace exosnap::capability {
 
 // Real per-adapter encoder capability. Deliberately independent of
-// capability::VideoCodec (that enum's members are named *Nvenc — meaningless
-// for an AMD or Intel adapter); plain bool flags mirror the existing
+// capability::VideoCodec; plain bool flags mirror the existing
 // NvidiaRuntimeFacts convention in runtime_snapshot.h.
 struct AdapterEncoderCapability {
     // True only when a real hardware probe executed and returned an

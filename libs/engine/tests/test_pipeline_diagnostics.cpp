@@ -122,7 +122,7 @@ TEST(RollingTimeWindow, PercentileHonoursHorizon) {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Audio device-loss health (ADR 0046)
+// Audio device-loss health
 // ---------------------------------------------------------------------------
 
 TEST(PipelineDiagnostics, AudioSourceHealthDefaultsHealthy) {
@@ -343,7 +343,7 @@ TEST(PipelineDiagnostics, ObservedIntervalMarkedAvailableOnVfr) {
 }
 
 // ---------------------------------------------------------------------------
-// Present cadence (VRR/CFR judder correlation, v0.8.0 / ADR 0033)
+// Present cadence (VRR/CFR judder correlation)
 // ---------------------------------------------------------------------------
 
 TEST(PipelineDiagnostics, PresentCadenceUnavailableWithoutSamples) {
@@ -849,6 +849,7 @@ TEST(PipelineDiagnosticsClassifier, SustainedEncoderBacklogReturnsVideoEncoder) 
         agg.OnEncodeSubmitted();
         agg.OnEncodeSubmitted();
         agg.OnEncodeSubmitted();
+        agg.OnSlotStall();
         s = agg.BuildSnapshot(At(200 * i), stats, DiagnosticsLifecycle::Recording, 0.2 * i + 2.0);
     }
     EXPECT_EQ(s.bottleneck, PipelineBottleneck::VideoEncoder);
@@ -866,6 +867,7 @@ TEST(PipelineDiagnosticsClassifier, SustainedCaptureBelowTargetReturnsCapture) {
     RecordingDiagnosticsSnapshot s;
     uint64_t emitted = 0;
     for (int i = 1; i <= 5; ++i) {
+        agg.OnFrameDroppedProcessingFailure();
         emitted += 8; // 8 frames / 200 ms = 40 fps (< 60 * 0.85)
         stats.video_frames_captured = emitted;
         stats.encoded_video_packets = emitted;
@@ -882,7 +884,9 @@ TEST(PipelineDiagnosticsClassifier, SustainedDiskLatencyReturnsDisk) {
     for (int i = 0; i < 6; ++i) {
         stats.video_frames_captured = static_cast<uint64_t>(12 * (i + 1));
         stats.encoded_video_packets = static_cast<uint64_t>(12 * (i + 1));
+        agg.OnVideoQueueDepth(12);
         agg.OnDiskWrite(At(200 * i), 20.0, 1024); // 20 ms write-call latency (> 8 ms warn)
+        agg.OnMuxProducerWait(At(200 * i), 30.0);
         s = agg.BuildSnapshot(At(200 * i), stats, DiagnosticsLifecycle::Recording, 0.2 * i + 2.0);
     }
     EXPECT_EQ(s.bottleneck, PipelineBottleneck::Disk);
@@ -897,6 +901,7 @@ TEST(PipelineDiagnosticsClassifier, SustainedMuxQueueReturnsMuxer) {
         stats.video_frames_captured = static_cast<uint64_t>(12 * (i + 1));
         stats.encoded_video_packets = static_cast<uint64_t>(12 * (i + 1));
         agg.OnVideoQueueDepth(16); // >= mux_queue_warn (8), writes healthy
+        agg.OnMuxProducerWait(At(200 * i), 30.0);
         s = agg.BuildSnapshot(At(200 * i), stats, DiagnosticsLifecycle::Recording, 0.2 * i + 2.0);
     }
     EXPECT_EQ(s.bottleneck, PipelineBottleneck::Muxer);
@@ -1272,7 +1277,7 @@ TEST(EncoderInit, InvalidUntilSetThenCarriedOnSnapshots) {
     EncoderInitInfo info;
     info.valid = true;
     info.codec = VideoCodec::Av1;
-    info.preset = NvencPreset::P5;
+    info.backend_preset = "P5";
     info.rc_mode = RateControlMode::VariableBitrate;
     info.target_bitrate_kbps = 20000;
     info.gop_length = 120;
@@ -1281,7 +1286,7 @@ TEST(EncoderInit, InvalidUntilSetThenCarriedOnSnapshots) {
 
     s = agg.BuildSnapshot(At(100), MakeStats(), DiagnosticsLifecycle::Recording, 0.5);
     EXPECT_TRUE(s.encoder_init.valid);
-    EXPECT_EQ(s.encoder_init.preset, NvencPreset::P5);
+    EXPECT_EQ(s.encoder_init.backend_preset, "P5");
     EXPECT_EQ(s.encoder_init.rc_mode, RateControlMode::VariableBitrate);
     EXPECT_EQ(s.encoder_init.target_bitrate_kbps, 20000u);
     EXPECT_EQ(s.encoder_init.gop_length, 120u);
@@ -1510,21 +1515,21 @@ TEST(PipelineDiagnosticsAggregator, RetainedFrameCountersRoundTrip) {
 // A captured frame overwritten in the phase-correct ring before it was ever
 // emitted is real picture loss; it must land in the bucket every drop surface
 // reads, not in the benign coalescing one.
-TEST(PipelineDiagnostics, RingEvictionCountsAsAProblemDrop) {
+TEST(PipelineDiagnostics, RingEvictionIsSelectionEvidence) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
     agg.OnFrameDroppedRingEviction();
     agg.OnFrameDroppedCoalesced();
     const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
     EXPECT_EQ(s.capture.frames_dropped_ring_eviction, 1u);
-    EXPECT_EQ(s.capture.frames_dropped_problem(), 1u);
+    EXPECT_EQ(s.capture.frames_dropped_problem(), 0u);
     EXPECT_EQ(s.capture.frames_dropped_total(), 2u);
 }
 
 // The emitted rate holds the target through a source stall (the CFR pacer
 // repeats the held frame), so the capture count is the only witness. Ten
 // seconds without it moving is a starved source and never a Good card.
-TEST(PipelineDiagnostics, StarvedSourceIsNeverReportedGood) {
+TEST(PipelineDiagnostics, SourceSilenceAloneDoesNotProveRecordingDamage) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
     agg.OnFrameCaptured();
@@ -1537,8 +1542,8 @@ TEST(PipelineDiagnostics, StarvedSourceIsNeverReportedGood) {
     s = agg.BuildSnapshot(At(11000), MakeStats(), DiagnosticsLifecycle::Recording, 11.0);
     EXPECT_TRUE(s.capture.capture_starved);
     EXPECT_GE(s.capture.seconds_without_capture, 10.0);
-    EXPECT_EQ(s.health, PipelineHealth::Warning);
-    EXPECT_NE(s.bottleneck_reason.find("No new frame"), std::string::npos) << s.bottleneck_reason;
+    EXPECT_EQ(s.health, PipelineHealth::Good);
+    EXPECT_TRUE(s.capture.capture_starved);
 
     // A frame resets the clock.
     agg.OnFrameCaptured();
@@ -1561,7 +1566,7 @@ TEST(PipelineDiagnostics, EndpointInUseIsCarriedOnTheAudioSnapshot) {
 // GPU execution past the budget while the recorder's own submissions stay cheap
 // is the captured application's load, not the compositor's: a bottleneck of its
 // own, so the card does not blame the recorder's composition.
-TEST(PipelineDiagnostics, LateGpuExecutionWithCheapSubmissionIsGpuContention) {
+TEST(PipelineDiagnostics, LateGpuExecutionWithoutOutputImpactStaysNeutral) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
     SessionStats stats = MakeStats();
@@ -1575,6 +1580,86 @@ TEST(PipelineDiagnostics, LateGpuExecutionWithCheapSubmissionIsGpuContention) {
         }
         s = agg.BuildSnapshot(At(i * 1000 + 999), stats, DiagnosticsLifecycle::Recording, 2.0 + i);
     }
-    EXPECT_EQ(s.bottleneck, PipelineBottleneck::Gpu) << s.bottleneck_reason;
+    EXPECT_EQ(s.bottleneck, PipelineBottleneck::None) << s.bottleneck_reason;
     EXPECT_GT(s.compositor.gpu_exec_p99_ms, 16.7);
+}
+
+TEST(PacingOutcomeContract, UnselectedRingFramesAreNotRecordingLoss) {
+    exosnap::engine::CaptureDiagnostics capture;
+    capture.frames_dropped_ring_eviction = 400;
+    capture.frames_dropped_coalesced = 1000;
+    capture.frames_duplicated = 60;
+    EXPECT_EQ(capture.frames_dropped_problem(), 0u);
+}
+
+TEST(PacingOutcomeContract, SelectionResidualAndExpectedDuplicatesStaySeparate) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(9, MakeConfig());
+    for (int i = 1; i <= 120; ++i) {
+        const uint64_t ideal = static_cast<uint64_t>(i) * 16666667;
+        const bool fresh = i % 2 == 0;
+        agg.OnCfrOutput(At(i * 17), ideal, fresh ? ideal - 2000000 : 0, fresh, 2, 16666667);
+    }
+    const auto s = agg.BuildSnapshot(At(2040), MakeStats(), DiagnosticsLifecycle::Recording, 2.04);
+    EXPECT_EQ(s.pacing.output_slots, 120u);
+    EXPECT_EQ(s.pacing.affected_slots, 0u);
+    EXPECT_EQ(s.pacing.longest_duplicate_run, 1u);
+    EXPECT_DOUBLE_EQ(s.pacing.selection_residual.p95_ms, -2.0);
+    EXPECT_DOUBLE_EQ(s.pacing.absolute_residual.p99_ms, 2.0);
+    EXPECT_EQ(s.capture.frames_dropped_problem(), 0u);
+}
+
+TEST(PacingOutcomeContract, PoorFreshSelectionAndSkippedSlotsAreMeasured) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnCfrOutput(At(0), 1000000, 1000000, true, 1, 16666667);
+    agg.OnCfrOutput(At(100), 100000000, 60000000, true, 1, 16666667);
+    agg.OnWorkerWake(At(100), 35.0);
+    agg.OnPacingSlotsSkipped(At(100), 3);
+    auto s = agg.BuildSnapshot(At(100), MakeStats(), DiagnosticsLifecycle::Recording, 1.0);
+    EXPECT_EQ(s.pacing.affected_slots, 4u);
+    EXPECT_EQ(s.pacing.recent_affected_slots, 4u);
+    EXPECT_EQ(s.pacing.skipped_output_slots, 3u);
+    EXPECT_DOUBLE_EQ(s.pacing.worker_lateness.p99_ms, 35.0);
+    EXPECT_DOUBLE_EQ(s.pacing.worst_absolute_residual_ms, 40.0);
+    s = agg.BuildSnapshot(At(2201), MakeStats(), DiagnosticsLifecycle::Recording, 3.1);
+    EXPECT_EQ(s.pacing.recent_affected_slots, 0u);
+    EXPECT_EQ(s.pacing.absolute_residual.samples, 0u);
+    EXPECT_EQ(s.pacing.affected_slots, 4u);
+    agg.Reset(2, MakeConfig());
+    s = agg.BuildSnapshot(At(2300), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.pacing.output_slots, 0u);
+    EXPECT_EQ(s.pacing.affected_slots, 0u);
+    EXPECT_EQ(s.pacing.worker_lateness.samples, 0u);
+}
+
+TEST(PacingOutcomeContract, StartupAndPauseDoNotInventImpactOrCadence) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnCfrOutput(At(1), 1000000000, 1, true, 1, 16666667);
+    auto snapshot = agg.BuildSnapshot(At(1), MakeStats(), DiagnosticsLifecycle::Recording, 0.001);
+    EXPECT_EQ(snapshot.pacing.affected_slots, 0u);
+    EXPECT_EQ(snapshot.pacing.selection_residual.samples, 0u);
+    agg.OnPacingResumed();
+    agg.OnCfrOutput(At(10000), 10000000000, 10000000000, true, 1, 16666667);
+    snapshot = agg.BuildSnapshot(At(10000), MakeStats(), DiagnosticsLifecycle::Recording, 10.0);
+    EXPECT_EQ(snapshot.pacing.output_cadence.samples, 0u);
+    agg.OnFrameDroppedProcessingFailure();
+    snapshot = agg.BuildSnapshot(At(10100), MakeStats(), DiagnosticsLifecycle::Completed, 10.1);
+    EXPECT_EQ(snapshot.pacing.recent_frame_loss, 1u);
+    snapshot = agg.BuildSnapshot(At(10200), MakeStats(), DiagnosticsLifecycle::Completed, 10.2);
+    EXPECT_EQ(snapshot.pacing.recent_frame_loss, 1u);
+}
+
+TEST(PipelineDiagnostics, MaterialWriteAndDurabilityTimingRemainSeparate) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnOutputIoFinalized(2.0, 3.0, 100.0, 1);
+    const auto s = agg.BuildSnapshot(At(200), MakeStats(), DiagnosticsLifecycle::Completed, 0.2);
+    EXPECT_EQ(s.disk.finalized_io_segments, 1u);
+    EXPECT_DOUBLE_EQ(s.disk.crt_write_total_ms, 2.0);
+    EXPECT_DOUBLE_EQ(s.disk.crt_flush_total_ms, 3.0);
+    EXPECT_DOUBLE_EQ(s.disk.durability_flush_total_ms, 100.0);
+    EXPECT_EQ(s.disk.durability_flush_failures, 1u);
+    EXPECT_EQ(s.disk.write_failures, 0u);
 }

@@ -1,63 +1,15 @@
-# VendorFFmpeg.cmake
+# Pinned LGPL shared FFmpeg component build for remux/trim, preview decode,
+# native AAC-LC encoding and audio resampling. The imported targets are
+# FFmpeg::avformat, ::avcodec, ::avutil and ::swresample; ::mux bundles them.
+# avfilter, swscale and avdevice are not deployed. Software H.264/HEVC encoders
+# are not bundled. D3D11VA hardware decode still uses the engine's documented
+# readback/plane-conversion boundary (docs/architecture/edit-and-export.md).
 #
-# Downloads the pinned Exoridus/exosnap-ffmpeg-build lgpl-shared prebuilt via
-# FetchContent and exposes four imported SHARED targets:
-#
-#   FFmpeg::avformat   FFmpeg::avcodec   FFmpeg::avutil   FFmpeg::swresample
-#
-# A convenience INTERFACE target bundles all four for simple consumers:
-#
-#   FFmpeg::mux        (links avformat + avcodec + avutil + swresample)
-#
-# Only the mux-only DLL set (avformat, avcodec, avutil, swresample) is shipped.
-# The remaining DLLs (avfilter, swscale, avdevice) are NOT deployed.
-#
-# FFmpeg build: Exoridus/exosnap-ffmpeg-build, package n9.0.2-exosnap.1
-# Upstream:     n9.0.2
-# License:      LGPL-2.1-or-later (compatible with ExoSnap GPL-3.0-or-later)
-#
-# The package tag names the upstream ref and our recipe revision, and the
-# archive states the same facts in BUILD-INFO.json. The block below compares the
-# two before it creates a target, so a wrong or stale package is a named
-# configure error instead of a link failure. Earlier releases were numbered r1
-# through r7 and carry no manifest; they cannot be pinned by this file.
-#
-# r1 -> r2: added --enable-muxer=mp4. mp4 and mov share the movenc backend
-# but FFmpeg registers them as separate muxers. r1 only enabled mov, so
-# avformat_alloc_output_context2("mp4",...) returned AVERROR(EINVAL):
-#   Requested output format 'mp4' is not known.
-# r2 -> r3: added --enable-demuxer=mov. avformat_open_input on an .mp4 file
-# (test verification, future trim/probe) requires the mov demuxer.
-# r3 -> r4: added --enable-decoder=h264,hevc,av1,opus,aac,flac,pcm_s16le,pcm_s24le,
-# pcm_s32le,pcm_f32le. Previous releases were mux/demux-only (zero decoders); the
-# Edit-page video player needs real decode.
-# r4 -> r5: added --enable-encoder=aac. Enables FfmpegAacEncoder (ADR 0052) to
-# actually produce output; r1-r4 had zero encoders (mux/demux/decode only).
-#
-# r6 briefly added --enable-gpl, libx264, libx265 (cross-compiled, static)
-# to prove the build pipeline could produce a software H.264/HEVC encoder.
-# Reverted back to r5 (LGPL-only, no libx264/libx265): shipping a compiled
-# software encoder in ExoSnap's own binary makes ExoSnap the patent-pool
-# "product manufacturer" of record for that encoder, with no upstream vendor
-# license to lean on (unlike NVENC/AMF/QSV, which call vendor-owned hardware).
-# See ADR 0007 -- ExoSnap's own build stays hardware-only; x264/x265 software
-# encoding, if ever offered, is a user-supplied FFmpeg install detected at
-# runtime, never bundled here.
-#
-# r7 -> n9.0.2-exosnap.1: the same component whitelist against FFmpeg 9.0.2. No
-# configure flag changed; the upstream majors did, from avformat/avcodec 62,
-# avutil 60 and swresample 6 to 63, 63, 61 and 7. Those four numbers are pinned
-# below and checked against the archive, because a major bump renames every DLL.
-#
-# r5 -> r7: added the h264/hevc/av1 x d3d11va/d3d11va2/dxva2 hwaccels for the
-# editor's hardware-accelerated decode path (docs/dev/edit-player-architecture.md).
-# Vendor-neutral (D3D11/DXVA are Windows APIs, not NVIDIA-specific): frames
-# come back as ID3D11Texture2D, no CUDA/vendor SDK linked in. Verified against
-# this codebase's TryAttachD3D11VA/DeinterleaveHwReadbackFrame on real
-# hardware (RTX 5070 Ti) before tagging: avcodec_get_hw_config() previously
-# returned nullptr for h264/hevc/av1 (no hwaccel compiled in at all, r5 and
-# earlier); r7 fixes that. r6 (GPL/libx264/libx265) was never on this line --
-# r7 branches from r5, same as this comment block's LGPL license note above.
+# Package/upstream/profile/library-major expectations are declared below and
+# checked against the archive's BUILD-INFO.json before imported targets exist.
+# Hash and manifest mismatches fail configuration instead of creating targets
+# for a different ABI. A dependency pin is current build input, not a history
+# of previous prebuilt packages.
 
 include(FetchContent)
 

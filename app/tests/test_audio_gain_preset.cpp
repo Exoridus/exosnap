@@ -1,6 +1,6 @@
 // test_audio_gain_preset.cpp
 // Tests for per-row gain_db + muted preset round-trip, dirty-tracking,
-// and sanitize (ADR 0018 — Audio v2, 0.6.0).
+// and sanitize.
 
 #include <gtest/gtest.h>
 

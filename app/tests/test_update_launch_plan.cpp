@@ -9,11 +9,19 @@
 
 #include <gtest/gtest.h>
 
+#include <QDir>
+#include <QDirIterator>
+#include <QFile>
+#include <QFileInfo>
+#include <QProcess>
 #include <QProcessEnvironment>
+#include <QString>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QtGlobal>
 
 #include "../apps/updater/UpdaterArgs.h"
+#include "UpdaterExePath.h"
 #include "services/UpdateFeedOverride.h"
 #include "services/UpdateService.h"
 #include "services/VerifyReinstallMode.h"
@@ -29,24 +37,38 @@ using exosnap::updater::ParseUpdaterCommandLine;
 
 // -- UpdaterStagingFileList -------------------------------------------------
 
-TEST(UpdaterStagingFileList, ContainsFourMandatoryEntries) {
+TEST(UpdaterStagingFileList, CarriesTheQuickRuntimeTheUpdaterLinks) {
     const QStringList list = exosnap::UpdaterStagingFileList();
     EXPECT_TRUE(list.contains(QStringLiteral("exosnap-updater.exe")))
         << "staging list must include the updater executable";
     EXPECT_TRUE(list.contains(QStringLiteral("Qt6Core.dll")));
     EXPECT_TRUE(list.contains(QStringLiteral("Qt6Gui.dll")));
-    EXPECT_TRUE(list.contains(QStringLiteral("Qt6Widgets.dll")));
+    EXPECT_TRUE(list.contains(QStringLiteral("Qt6Qml.dll")));
+    EXPECT_TRUE(list.contains(QStringLiteral("Qt6Quick.dll")));
+    EXPECT_TRUE(list.contains(QStringLiteral("Qt6QuickControls2.dll")));
+    // The Widgets runtime is gone: the updater renders with Qt Quick now, and a
+    // staged Qt6Widgets.dll nobody links is one more DLL to keep in step.
+    EXPECT_FALSE(list.contains(QStringLiteral("Qt6Widgets.dll")));
 }
 
-TEST(UpdaterStagingFileList, IncludesPlatformPlugin) {
+TEST(UpdaterStagingFileList, IncludesPlatformPluginAndQmlImportTrees) {
     const QStringList list = exosnap::UpdaterStagingFileList();
-    // The Qt Widgets updater needs the windows platform plugin to show a window.
-    bool has_platform = false;
-    for (const QString& e : list) {
-        if (e.contains(QStringLiteral("qwindows.dll")))
-            has_platform = true;
-    }
-    EXPECT_TRUE(has_platform) << "staging list must include plugins/platforms/qwindows.dll";
+    // The windows platform plugin is what lets the hidden/visible window exist
+    // at all; the QML import trees carry the Controls style, its impl module and
+    // the shape/layout modules the shared components import.
+    EXPECT_TRUE(list.contains(QStringLiteral("plugins/platforms/qwindows.dll")));
+    EXPECT_TRUE(list.contains(QStringLiteral("qml/QtQml/")));
+    EXPECT_TRUE(list.contains(QStringLiteral("qml/QtQuick/Controls/qmldir")));
+    EXPECT_TRUE(list.contains(QStringLiteral("qml/QtQuick/Controls/qtquickcontrols2plugin.dll")));
+    EXPECT_TRUE(list.contains(QStringLiteral("qml/QtQuick/Controls/Basic/")));
+    EXPECT_TRUE(list.contains(QStringLiteral("qml/QtQuick/Controls/impl/")));
+    EXPECT_TRUE(list.contains(QStringLiteral("qml/QtQuick/Shapes/")));
+    // Tooling metadata, not runtime payload: the official deploy tree carries no
+    // .qmltypes file, so requiring one would refuse a correctly staged handoff.
+    EXPECT_FALSE(list.contains(QStringLiteral("qml/QtQuick/Controls/plugins.qmltypes")));
+    // No test runtime ever belongs in a staged product updater.
+    for (const QString& entry : list)
+        EXPECT_FALSE(entry.contains(QStringLiteral("Test"))) << entry.toStdString();
 }
 
 // -- BuildUpdaterArgs: two options, not a second contract -------------------
@@ -149,7 +171,7 @@ TEST(BuildUpdateHandoff, PassesTheReleaseTagVerbatimNotAReSpelling) {
 }
 
 TEST(BuildUpdateHandoff, VerificationReinstallPinsTheIdenticalVersion) {
-    // Both gates then agree by construction: the target gate and the ADR 0055
+    // Both gates then agree by construction: the target gate and the verification-reinstall
     // gate compare the same string against the same manifest field.
     upd::UpdateState st;
     st.install_mode = upd::InstallMode::Portable;
@@ -449,7 +471,7 @@ TEST(ResolveUpdateCardState, RearmsToAvailableAfterManualCheckClearsStamp) {
               QStringLiteral("available"));
 }
 
-// -- ResolveUpdateCardState: verification reinstall (ADR 0055) --------------
+// -- ResolveUpdateCardState: verification reinstall --------------
 
 TEST(ResolveUpdateCardState, VerifyReinstallWhenModeIsOnAndTheOfferIsTheRunningVersion) {
     EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),
@@ -573,4 +595,176 @@ TEST(UpdaterChildEnvironment, DropsTheKeyThisProcessSetWithQputenv) {
     } else {
         qunsetenv("QT_QPA_DISABLE_REDIRECTION_SURFACE");
     }
+}
+
+// -- Staged updater runtime: self-contained launch ---------------------------
+//
+// The real proof of the deployment contract: copy exactly the files the product
+// stages into a clean directory, strip the environment down to Windows itself,
+// and launch the shipped updater from there. A missing QML import, a missing
+// runtime DLL or a dependency on the live install tree fails the launch rather
+// than hiding behind a developer PATH.
+//
+// This test runs in Debug as well as Release, and a Debug build tree carries
+// `Qt6Cored.dll` where the product list names `Qt6Core.dll`. The staging loop
+// below therefore resolves the debug spelling when the release one is absent;
+// the PRODUCT list stays release-only, because the updater never runs from a
+// build tree.
+
+namespace {
+
+QString RuntimeSourceName(const QString& app_dir, const QString& relative) {
+    if (QFile::exists(QDir(app_dir).filePath(relative)))
+        return relative;
+    if (relative.endsWith(QStringLiteral(".dll"), Qt::CaseInsensitive)) {
+        QString debug_relative = relative;
+        debug_relative.chop(4);
+        debug_relative += QStringLiteral("d.dll");
+        if (QFile::exists(QDir(app_dir).filePath(debug_relative)))
+            return debug_relative;
+    }
+    // The install tree spells the plugin root `plugins/platforms/...`; a
+    // windeployqt output directory next to the build-tree exe is flat
+    // (`platforms/...`). The PRODUCT layout is the install one; this only maps
+    // the build-tree source.
+    if (relative.startsWith(QStringLiteral("plugins/"))) {
+        const QString flat = relative.mid(QStringLiteral("plugins/").size());
+        if (QFile::exists(QDir(app_dir).filePath(flat)))
+            return flat;
+        if (flat.endsWith(QStringLiteral(".dll"), Qt::CaseInsensitive)) {
+            QString flat_debug = flat;
+            flat_debug.chop(4);
+            flat_debug += QStringLiteral("d.dll");
+            if (QFile::exists(QDir(app_dir).filePath(flat_debug)))
+                return flat_debug;
+        }
+    }
+    return relative;
+}
+
+bool StageForTest(const QString& app_dir, const QString& stage, QString* error) {
+    for (const QString& rel : exosnap::UpdaterStagingFileList()) {
+        const bool directory = rel.endsWith(QLatin1Char('/'));
+        const QString relative = directory ? rel.left(rel.size() - 1) : rel;
+        const QString source_path = QDir(app_dir).filePath(RuntimeSourceName(app_dir, relative));
+        if (directory) {
+            if (!QFileInfo(source_path).isDir()) {
+                *error = QStringLiteral("missing directory %1").arg(relative);
+                return false;
+            }
+            QDirIterator it(source_path, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QString file = it.next();
+                const QString within = QDir(source_path).relativeFilePath(file);
+                const QString destination = QDir(stage).filePath(relative + QLatin1Char('/') + within);
+                QDir().mkpath(QFileInfo(destination).absolutePath());
+                if (!QFile::copy(file, destination)) {
+                    *error = QStringLiteral("failed to copy %1").arg(within);
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (!QFileInfo::exists(source_path)) {
+            *error = QStringLiteral("missing %1").arg(relative);
+            return false;
+        }
+        // The destination keeps the SOURCE basename: in Debug that is the
+        // `...d.dll` spelling the debug Qt libraries import by name, so the
+        // staged tree stays internally coherent. The product's release names are
+        // pinned by the staging-list tests above.
+        const QString source_name = QFileInfo(source_path).fileName();
+        const QString parent = QFileInfo(relative).path();
+        const QString destination_relative =
+            parent.isEmpty() || parent == QLatin1String(".") ? source_name : parent + QLatin1Char('/') + source_name;
+        const QString destination = QDir(stage).filePath(destination_relative);
+        QDir().mkpath(QFileInfo(destination).absolutePath());
+        if (!QFile::copy(source_path, destination)) {
+            *error = QStringLiteral("failed to copy %1").arg(relative);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool HasPlatformPluginAt(const QString& root, const QString& debug_name, const QString& release_name) {
+    const QDir dir(QDir(root).filePath(QStringLiteral("plugins/platforms")));
+    return dir.exists(debug_name) || dir.exists(release_name);
+}
+
+} // namespace
+
+TEST(StageUpdaterRuntime, ReportsAMissingSourceDirectory) {
+    QTemporaryDir stage_dir;
+    ASSERT_TRUE(stage_dir.isValid());
+    QString error;
+    EXPECT_FALSE(exosnap::StageUpdaterRuntime(QDir(stage_dir.path()).filePath(QStringLiteral("nowhere")),
+                                              stage_dir.path(), &error));
+    EXPECT_FALSE(error.isEmpty());
+}
+
+TEST(StageUpdaterRuntime, ProducesASelfContainedQuickRuntimeThatLaunches) {
+    const QString app_dir = QFileInfo(QString::fromUtf8(EXOSNAP_UPDATER_EXE)).absolutePath();
+    ASSERT_TRUE(QFileInfo(app_dir).isDir()) << app_dir.toStdString();
+
+    QTemporaryDir stage_dir;
+    ASSERT_TRUE(stage_dir.isValid());
+    const QString stage = stage_dir.path();
+
+    QString error;
+    ASSERT_TRUE(StageForTest(app_dir, stage, &error)) << error.toStdString();
+
+    // The Quick runtime and the QML import trees arrived, and no test runtime
+    // did.
+    EXPECT_TRUE(QFile::exists(QDir(stage).filePath(QStringLiteral("exosnap-updater.exe"))));
+    EXPECT_TRUE(QFile::exists(
+        QDir(stage).filePath(QFileInfo(RuntimeSourceName(app_dir, QStringLiteral("Qt6Quick.dll"))).fileName())));
+    EXPECT_TRUE(QFile::exists(QDir(stage).filePath(QStringLiteral("qml/QtQuick/Controls/Basic/qmldir"))));
+    EXPECT_TRUE(QFile::exists(QDir(stage).filePath(QStringLiteral("qml/QtQuick/Controls/impl/qmldir"))));
+    EXPECT_TRUE(HasPlatformPluginAt(stage, QStringLiteral("qwindowsd.dll"), QStringLiteral("qwindows.dll")));
+    for (const QFileInfo& file : QDir(stage).entryInfoList(QStringList{QStringLiteral("*.dll")}, QDir::Files))
+        EXPECT_FALSE(file.fileName().contains(QStringLiteral("Test"))) << file.fileName().toStdString();
+
+    // Test-only: the offscreen platform plugin, so this check renders without a
+    // visible window. Deliberately NOT in UpdaterStagingFileList().
+    const QString test_platform = QDir(app_dir).filePath(QStringLiteral("platforms/qoffscreend.dll"));
+    const QString test_platform_release = QDir(app_dir).filePath(QStringLiteral("platforms/qoffscreen.dll"));
+    const QString platform_source = QFile::exists(test_platform) ? test_platform : test_platform_release;
+    ASSERT_TRUE(QFile::exists(platform_source));
+    QDir().mkpath(QDir(stage).filePath(QStringLiteral("plugins/platforms")));
+    ASSERT_TRUE(QFile::copy(platform_source, QDir(stage).filePath(QStringLiteral("plugins/platforms/") +
+                                                                  QFileInfo(platform_source).fileName())));
+
+    // Test-only: a Debug build needs the debug CRT, which a user machine never
+    // receives from the product (release CRTs come from the VC redistributable).
+    // The build tree carries it; a Release run simply copies nothing.
+    for (const QFileInfo& file :
+         QDir(app_dir).entryInfoList(QStringList{QStringLiteral("msvcp*d.dll"), QStringLiteral("vcruntime*d.dll"),
+                                                 QStringLiteral("concrt*d.dll"), QStringLiteral("ucrtbased.dll")},
+                                     QDir::Files)) {
+        QFile::copy(file.absoluteFilePath(), QDir(stage).filePath(file.fileName()));
+    }
+
+    QFile qt_conf(QDir(stage).filePath(QStringLiteral("qt.conf")));
+    ASSERT_TRUE(qt_conf.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    qt_conf.write("[Paths]\nPlugins = plugins\n");
+    qt_conf.close();
+
+    // Sanitized: Windows itself and nothing that could point back at the live
+    // install tree or a developer Qt.
+    QProcessEnvironment env;
+    const QString system_root = QString::fromLocal8Bit(qgetenv("SystemRoot"));
+    env.insert(QStringLiteral("PATH"), QStringLiteral("%1\\system32;%1").arg(system_root));
+    env.insert(QStringLiteral("SystemRoot"), system_root);
+    env.insert(QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("offscreen"));
+    env.insert(QStringLiteral("QT_QUICK_BACKEND"), QStringLiteral("software"));
+
+    QProcess process;
+    process.setProcessEnvironment(env);
+    process.setWorkingDirectory(stage);
+    process.start(QDir(stage).filePath(QStringLiteral("exosnap-updater.exe")),
+                  {QStringLiteral("--preview-state"), QStringLiteral("progress"), QStringLiteral("--preview-smoke")});
+    ASSERT_TRUE(process.waitForStarted(10000));
+    ASSERT_TRUE(process.waitForFinished(30000)) << process.readAllStandardError().toStdString();
+    EXPECT_EQ(process.exitCode(), 0) << process.readAllStandardError().toStdString();
 }

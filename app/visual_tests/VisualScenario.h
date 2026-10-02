@@ -271,7 +271,7 @@ struct VisualScenario {
     // Same vocabulary as ConfigPage::scrollToSection ("settings/updates" etc.).
     QString scroll_target;
 
-    // Drive the Settings Updates card state (ADR 0034): "uptodate" | "checking" |
+    // Drive the Settings Updates card state: "uptodate" | "checking" |
     // "available" | "error". With "available", settings_update_version fills the
     // "Update to vX.Y" action. Empty = leave the card at its default.
     QString settings_update_state;

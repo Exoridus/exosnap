@@ -1,34 +1,31 @@
 {
-    "policyVersion": 1,
+    "policyVersion": 2,
     "product": "ExoSnap",
-    "note": "What each package channel is meant to be serving right now. Publishing is always a deliberate act (docs/release-checklist.md section 8); nothing in this repository submits a package. scripts/check-feed-drift.ps1 reads this file, reports what the public feeds actually serve, and never publishes anything.",
+    "note": "What each package channel is serving or being prepared to serve. Publishing is always a deliberate act through the protected distribution workflow; cargo exo-dev release feed-drift reads the feeds and reports, and never publishes anything.",
     "channels": {
         "github": {
-            "intent": "publish",
-            "expectedVersion": "0.9.1",
+            "state": "PUBLISHED",
+            "version": "0.10.0",
             "feed": "https://api.github.com/repos/Exoridus/exosnap/releases/latest",
-            "note": "The GitHub Release is the source every other channel downloads from, so it is the one channel that is never held."
+            "note": "The GitHub Release is the source every other channel downloads from."
         },
         "chocolatey": {
-            "intent": "hold",
-            "expectedVersion": "0.6.0",
-            "resumeAt": "0.9.1",
+            "state": "PENDING",
+            "version": "0.10.0",
             "feed": "https://community.chocolatey.org/api/v2/package/exosnap",
-            "reason": "0.7.0 and 0.8.0 shipped an MSI without the FFmpeg runtime DLLs, and 0.9.0 was tagged before its release gates were met. The next submission is 0.9.1, qualified through the campaign."
+            "note": "The thin package installs the official 0.10.0 MSI. Preparation, validation and the rehearsal run before the protected submission."
         },
         "winget": {
-            "intent": "hold",
-            "expectedVersion": "0.8.1",
-            "resumeAt": "0.9.1",
+            "state": "PENDING",
+            "version": "0.10.0",
             "feed": "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/c/Codexo/ExoSnap",
-            "reason": "Same as Chocolatey: 0.9.0 is not a version to move users onto. The manifests in packaging/winget are kept current so the 0.9.1 submission is a validate-and-submit, not a rewrite."
+            "note": "The manifests install the official 0.10.0 MSI with the Microsoft.VCRedist.2015+.x64 dependency."
         },
         "scoop": {
-            "intent": "hold",
-            "expectedVersion": "0.8.1",
-            "resumeAt": "0.9.1",
+            "state": "PENDING",
+            "version": "0.10.0",
             "feed": "https://raw.githubusercontent.com/Exoridus/scoop-exosnap/master/bucket/exosnap.json",
-            "reason": "The published bucket entry autoupdates from the newest GitHub Release once someone runs scoop update against it, so this hold is a statement about what the bucket has been seen serving rather than something the repository enforces."
+            "note": "The official bucket Exoridus/scoop-exosnap installs the portable ZIP and is updated by the protected distribution workflow."
         }
     }
 }

@@ -24,7 +24,7 @@ class WasapiProcessLoopbackSrc : public IAudioCaptureSource {
     WasapiProcessLoopbackSrc& operator=(const WasapiProcessLoopbackSrc&) = delete;
 
     bool Init(std::string& out_error) override;
-    // ADR 0046: a PID-keyed loopback is only re-acquired while the SAME process
+    // a PID-keyed loopback is only re-acquired while the SAME process
     // instance is still alive (PID + creation-time match). If the target process
     // has exited (or its PID was recycled by a stranger) Reinit fails closed and
     // the source's contribution stays permanently silent — it never grabs a
@@ -76,7 +76,7 @@ class WasapiProcessLoopbackSrc : public IAudioCaptureSource {
     // of the interface default of 0. 0 (S_OK) when none has occurred.
     int32_t last_capture_hr_ = 0;
 
-    // Process-identity guard for reactivation (ADR 0046 / process_identity.h).
+    // Process-identity guard for reactivation (process_identity.h).
     // Captured on the first successful Init; a Reinit only proceeds when the PID
     // still names this same instance.
     uint64_t process_creation_time_ = 0;

@@ -217,3 +217,25 @@ TEST(SessionLedger, ExclusiveFullscreenDuringTheRunEnters) {
 
 } // namespace
 } // namespace exosnap::diagnostics
+
+TEST(CompensatedConditions, NeverEnterImpactLedgerAndResetWithGeneration) {
+    using namespace exosnap::diagnostics;
+    SessionLedger ledger;
+    ledger.Reset(1);
+    DiagnosticResult fact;
+    fact.id = "rec.pacing.compensated";
+    fact.tier = DiagnosticTier::Fact;
+    fact.compensation = "Output slots unaffected";
+    ledger.Observe({fact}, 1.0);
+    ledger.Observe({fact}, 1.5);
+    EXPECT_TRUE(ledger.entries().empty());
+    ASSERT_EQ(ledger.compensated().size(), 1u);
+    EXPECT_EQ(ledger.compensated()[0].count, 1u);
+    ledger.Observe({}, 2.0);
+    ledger.Observe({fact}, 2.5);
+    EXPECT_EQ(ledger.compensated()[0].count, 2u);
+    ledger.Freeze(3.0);
+    EXPECT_FALSE(ledger.compensated()[0].active);
+    ledger.Reset(2);
+    EXPECT_TRUE(ledger.compensated().empty());
+}

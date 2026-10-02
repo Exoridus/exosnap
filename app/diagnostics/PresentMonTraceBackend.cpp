@@ -27,13 +27,37 @@ constexpr wchar_t kSessionName[] = L"ExoSnapPresentMon";
 
 class PresentMonTraceBackend final : public IPresentTraceBackend {
   public:
-    bool Open() override {
-        // A stale session from a previously crashed instance would block Start; clear
-        // it first. Harmless when there is none.
-        TraceSession::StopNamedSession(kSessionName);
+    PresentTraceOpenResult Open() override {
+        // Ownership is checked BEFORE opening, and nothing is stopped by name. A
+        // session already carrying this name may belong to another ExoSnap
+        // instance, a test collector or a crashed run; tearing it down would
+        // break whichever of those owns it. A stale session therefore has to be
+        // cleaned up deliberately and is reported as a conflict until then.
+        {
+            std::vector<wchar_t> buffer(sizeof(EVENT_TRACE_PROPERTIES) + (sizeof(kSessionName) + 1) * sizeof(wchar_t));
+            auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(buffer.data());
+            properties->Wnode.BufferSize = static_cast<ULONG>(buffer.size() * sizeof(wchar_t));
+            properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
+            const ULONG query = ::ControlTraceW(0, kSessionName, properties, EVENT_TRACE_CONTROL_QUERY);
+            if (query == ERROR_SUCCESS)
+                return PresentTraceOpenResult::SessionConflict;
+        }
         // realtime: etlPath=nullptr; no WinMR: mrConsumer=nullptr.
         const ULONG status = session_.Start(&consumer_, nullptr, nullptr, kSessionName);
-        return status == ERROR_SUCCESS; // ERROR_ACCESS_DENIED when not elevated
+        switch (status) {
+        case ERROR_SUCCESS:
+            return PresentTraceOpenResult::Opened;
+        case ERROR_ACCESS_DENIED:
+            return PresentTraceOpenResult::AccessDenied;
+        case ERROR_ALREADY_EXISTS:
+            return PresentTraceOpenResult::SessionConflict;
+        case ERROR_NOT_SUPPORTED:
+        case ERROR_INVALID_PARAMETER:
+        case ERROR_INVALID_OPERATION:
+            return PresentTraceOpenResult::NotSupported;
+        default:
+            return PresentTraceOpenResult::Failed;
+        }
     }
 
     void Consume() override {

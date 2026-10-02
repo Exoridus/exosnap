@@ -2,7 +2,7 @@
 // install_mode_detector.h -- Detect whether ExoSnap is running as an
 // installed copy or a portable (ZIP-extracted) copy.
 //
-// Portable detection rule (ADR-0012):
+// Portable detection rule:
 //   An installed copy is stamped by the MSI under
 //     HKLM\Software\Codexo\ExoSnap  (or HKCU on per-user installs):
 //       "installed"   (REG_DWORD == 1)  -- presence marker

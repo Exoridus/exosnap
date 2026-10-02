@@ -110,7 +110,7 @@ class QuickApplication {
     // GUI-thread-only -- which every caller is, because the control channel
     // marshals its dispatch onto the GUI thread before touching this.
     [[nodiscard]] diagnostics::PresentMonProvider* presentProvider() noexcept;
-    // ADR 0033. The in-depth diagnostics opt-in, which lives for this process only:
+    // The in-depth diagnostics opt-in, which lives for this process only:
     // the traces behind it need an elevated process, and an elevated process lasts
     // one session, so there is nothing for a persisted answer to be true about at
     // the next start.
@@ -142,6 +142,18 @@ class QuickApplication {
     // what lets the frontend A/B benchmark put both frontends in the same state.
     [[nodiscard]] bool selectCaptureTargetForAutomation(exosnap::engine::CaptureTarget::Kind kind,
                                                         const QString& title_filter);
+    // Automation only (Live Verify). Applies an exact physical-pixel region on
+    // a monitor through the source picker's own mode switch and selectRegion()
+    // path. `display_device` empty keeps the current monitor target; the rect is
+    // relative to that monitor's origin. Returns false with a reason when the
+    // monitor or rect cannot be applied.
+    [[nodiscard]] bool applyRegionForAutomation(const QString& display_device, int x, int y, int width, int height,
+                                                QString* error);
+    // Automation only (Live Verify). Enters Region mode on a monitor and opens
+    // the real selector overlay with no committed region, exactly as choosing
+    // the Region tab and "Use source" does. The drag/commit/cancel gesture
+    // stays user input.
+    [[nodiscard]] bool openRegionSelectorForAutomation(const QString& display_device, QString* error);
     // Automation only (--auto-edit chained onto --auto-record). Opens the Editor
     // on the recording this process just finished, through the same
     // openEditorForCurrentRecording() the production completion path calls.
@@ -153,6 +165,11 @@ class QuickApplication {
     // channel's availableActions and its precondition read the same predicate
     // the intent does instead of a second guess at it.
     [[nodiscard]] bool canOpenEditor() const;
+    // The tray Quit without a window to route through: the shell's close guards
+    // decide, and an allowed quit flushes pending writes and ends the process
+    // through the normal shutdown. On refusal `guard` receives the guard's
+    // decision key and a guard prompt may be up, exactly as for the tray Quit.
+    [[nodiscard]] bool requestQuit(QString* guard);
     // Which blocking surface is up, straight from the arbiter that decides it.
     [[nodiscard]] const BlockingSurfaceArbiter& blockingSurfaces() const noexcept {
         return surface_arbiter_;
@@ -206,19 +223,19 @@ class QuickApplication {
     // never touches the manifest, the crash sidecar or persisted settings.
     [[nodiscard]] bool applyOverlayVisualScenario(const QString& scenario);
 
-    // ADR 0033: applies the handoff a prior elevated self-relaunch put in our own
+    // applies the handoff a prior elevated self-relaunch put in our own
     // argv. Called by the entry point straight after construction, before the
     // window loads, exactly as the Widgets frontend does — the page choice has to
     // be in place before the shell picks its landing page.
     void applyStartupRelaunchHandoff(const QString& page_name, bool arm_in_depth_diagnostics);
-    // ADR 0033, the other half: the seam through which the "Restart as
+    // The seam through which the "Restart as
     // administrator" toast action reaches the bootstrap. The frontend builds the
     // handoff (it is the only side that knows which page the user is on) and the
     // entry point arms it, because the relaunch itself may only run once the
     // event loop has ended and this object is gone. Without a handler installed
     // the action is refused rather than silently ignored.
     void setElevatedRelaunchHandler(std::function<void(const QStringList&)> handler);
-    // ADR 0055: armed from --verify-update-reinstall for this run only. Nothing is
+    // armed from --verify-update-reinstall for this run only. Nothing is
     // persisted, so a plain restart drops back to normal update behaviour.
     void applyVerifyUpdateReinstallMode(bool enabled);
     // Suppresses the tray icon for harness runs that would otherwise put a second
@@ -325,7 +342,7 @@ class QuickApplication {
     [[nodiscard]] QString updateBlockerReason() const;
 
   private:
-    // Crash session sidecar (ADR 0017). Reads the previous session's context
+    // Crash session sidecar. Reads the previous session's context
     // before overwriting it, so a crash in the last run stays detectable.
     void initializeCrashSession();
     [[nodiscard]] crash_capture::SessionContext currentCrashSessionContext() const;
@@ -442,7 +459,7 @@ class QuickApplication {
     // Notification event sources and the action router. Dispatch lives here
     // rather than in the adapter: navigating, opening Explorer and relaunching
     // elevated are application concerns, not QML-boundary ones.
-    // Startup recovery (ADR-0014/ADR-0015): scans the manifest the coordinator
+    // Startup recovery: scans the manifest the coordinator
     // writes, raises the standing notification and puts the surface up. Without
     // this the manifest was written and never read — an interrupted recording
     // stayed on disk with nothing offering to save it.
@@ -458,7 +475,7 @@ class QuickApplication {
     // surface's turn. The report has to live somewhere while it waits, and only
     // the composition root has it.
     void presentRecordingFailure(const models::RecordingFailureReport& report, bool can_send_report);
-    // Next-launch crash consent (ADR 0017). The crash surface is an in-window
+    // Next-launch crash consent. The crash surface is an in-window
     // overlay of this application, not a separate reporter executable, so it is
     // part of the main-app cutover. Raised only when the persisted policy says
     // to ask; deferred behind recovery so the two never stack.
@@ -466,7 +483,7 @@ class QuickApplication {
     void showCrashReportSurface();
     bool applyCrashConsentAction(CrashConsentAction action);
     void initializeNotifications();
-    // ADR 0012: the update check, the Settings card state machine and the updater
+    // the update check, the Settings card state machine and the updater
     // handoff. Until this existed the card rendered state nobody ever set and its
     // button reached nothing.
     void initializeUpdates();
@@ -497,7 +514,7 @@ class QuickApplication {
     // handoff, and the updater reports the honest appWontClose instead.
     void closeForUpdaterHandoff();
     void dispatchNotificationAction(notifications::NotificationAction action, const QString& payload);
-    // ADR 0033. Restarts ExoSnap elevated by asking the shell to close, so the
+    // Restarts ExoSnap elevated by asking the shell to close, so the
     // relaunch inherits every close guard: a running, preparing or finalizing
     // recording refuses it, and nothing is armed in the bootstrap until the
     // close has actually been allowed. The relaunch itself runs after the event
@@ -512,7 +529,7 @@ class QuickApplication {
     // Flushes anything a debounced timer still owes to disk. Runs on the way
     // out so a quit inside the debounce window never loses the last edit.
     void flushPendingPersists();
-    // Production Record -> Editor handoff (ADR 0022). Builds the EditContext
+    // Production Record -> Editor handoff. Builds the EditContext
     // from the completed session and hands it to the session adapter, which is
     // what makes the overlay appear.
     void openEditorForCurrentRecording();
@@ -590,6 +607,11 @@ class QuickApplication {
     void noteDefaultInputEndpoint(const AudioDeviceSnapshot& snapshot);
     static diagnostics::RecommendationEngine::CaptureTargetAdapterFacts
     captureTargetAdapterFacts(const std::optional<exosnap::engine::CaptureTarget>& target);
+    // Resolves the persisted encoder-device preference against the current
+    // adapter scan and the selected target's capture adapter. Pure; the result
+    // is verified again by the engine against the actual capture device.
+    exosnap::engine::ResolvedEncoderDevice
+    resolveEncoderDeviceFor(const std::optional<exosnap::engine::CaptureTarget>& target) const;
     // The deferred half of updateMeterServices(): opens the endpoints the current
     // state wants. Re-checks the stop condition, because it runs one debounce
     // interval after the decision that scheduled it.
@@ -648,7 +670,7 @@ class QuickApplication {
     // "the recording is still running", which stops being true then.
     void clearWindowCaptureStallWarning();
 
-    // ADR 0046. Feeds one live diagnostics snapshot to the audio-source
+    // Feeds one live diagnostics snapshot to the audio-source
     // degradation latch and acts on what it reports: raise or replace the
     // standing "audio source went silent" notice, or clear it once every source
     // is capturing again. Same shape and same driver as the capture-stall path
@@ -680,7 +702,7 @@ class QuickApplication {
     AboutViewModelAdapter about_view_model_;
     SettingsAdapter settings_adapter_;
     DeviceAdapter device_adapter_;
-    // ADR 0033 DPC/ISR latency. Declared BEFORE the adapter that borrows it: the
+    // DPC/ISR latency. Declared BEFORE the adapter that borrows it: the
     // adapter samples it on every evaluation, so this member has to outlive it —
     // members are destroyed in reverse declaration order. Owns a real kernel trace
     // only while the same gate the present provider uses (opt-in AND elevation) is
@@ -691,7 +713,7 @@ class QuickApplication {
     // reason as dpc_provider_: the adapter borrows whichever one is installed.
     std::unique_ptr<diagnostics::IDpcLatencyProvider> visual_dpc_provider_;
     DiagnosticsAdapter diagnostics_adapter_;
-    // ADR 0033 present diagnostics. Declared BEFORE the provider that borrows it:
+    // present diagnostics. Declared BEFORE the provider that borrows it:
     // PresentMonProvider holds a reference to the elevation provider for its whole
     // lifetime, so this member must outlive it.
     diagnostics::Win32ElevationProvider elevation_provider_;
@@ -699,7 +721,7 @@ class QuickApplication {
     // gate (opt-in AND elevation) is open and nothing at all otherwise -- an
     // unelevated launch never opens a session and never prompts for one.
     std::unique_ptr<diagnostics::PresentMonProvider> present_provider_;
-    // Session-scoped, never persisted, off at every start (ADR 0033).
+    // Session-scoped, never persisted, off at every start.
     bool in_depth_diagnostics_ = false;
     // The process id present statistics are currently attributed to (0 == dominant
     // presenter / no window target). Kept so the attribution boundary is only
@@ -754,7 +776,7 @@ class QuickApplication {
     // Empty whenever nothing is waiting; the payload behind it is already gone,
     // because the decision to show was made when it was read.
     QVector<WhatsNewNote> deferred_whats_new_notes_;
-    // ADR 0055, argv-armed for this run only; never persisted.
+    // Verification reinstall, argv-armed for this run only; never persisted.
     bool verify_update_reinstall_ = false;
     bool tray_suppressed_ = false;
     // Harness only. Empty unless the corresponding CLI option was given.
@@ -777,7 +799,7 @@ class QuickApplication {
     // sentinel in an int, which is exactly the bare-integer navigation QCR-716
     // removed.
     std::optional<ShellAdapter::Page> pending_landing_page_;
-    // ADR 0033. Empty in every build that has no bootstrap to arm -- the tests
+    // Empty in every build that has no bootstrap to arm -- the tests
     // and the harnesses -- which is why the toast action checks it instead of
     // assuming a relaunch is reachable.
     std::function<void(const QStringList&)> elevated_relaunch_handler_;
@@ -849,7 +871,7 @@ class QuickApplication {
     std::string last_default_input_id_;
     void* console_display_notify_ = nullptr; // HPOWERNOTIFY
     std::unique_ptr<QAbstractNativeEventFilter> console_display_filter_;
-    // ADR 0046. Same threading and same driver as capture_stall_monitor_.
+    // Same threading and same driver as capture_stall_monitor_.
     diagnostics::AudioSourceDegradationMonitor audio_degradation_monitor_;
     // Sequence of the standing audio-degradation toast while it is up, 0 when
     // none is. The hub keeps its own permanent record either way.

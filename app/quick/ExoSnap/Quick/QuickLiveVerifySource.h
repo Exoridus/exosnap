@@ -75,6 +75,9 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
 
     bool MoveWindowToScreen(const QString& screen_name, QString* error) override;
     bool SelectRecordTarget(const QString& kind, const QString& title_filter, QString* error) override;
+    bool SelectRecordRegion(const QString& display_device, int x, int y, int width, int height,
+                            QString* error) override;
+    bool OpenRegionSelector(const QString& display_device, QString* error) override;
     bool RecordStart(QString* error) override;
     bool RecordPause(QString* error) override;
     bool RecordResume(QString* error) override;
@@ -106,6 +109,7 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     bool DiagnosticsRun(QString* error) override;
     bool DiagnosticsSetInDepth(bool enabled, QString* error) override;
     bool LogsOpen(QString* error) override;
+    bool AppQuit(QString* error) override;
 
     bool RecoveryContinue(int index, QString* error) override;
     bool RecoveryDiscard(int index, QString* error) override;
@@ -155,6 +159,8 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     // that page is not loaded. Constant object names only -- a client-supplied
     // string never reaches findChild().
     [[nodiscard]] QObject* pageObjectFor(const QString& surface) const;
+    // Blocks, bounded, until the shell reports `page_index`'s content loaded.
+    [[nodiscard]] bool waitForDestinationReady(int page_index, const QString& page, QString* error);
     // The hub row holding `sequence`, or -1. The hub's model is index-addressed
     // and the wire is sequence-addressed on purpose: the list reorders on
     // dismissal, so an index a client read a moment ago can name a different

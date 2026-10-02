@@ -209,7 +209,7 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_mic_dsp_audio_src PRIVATE src include)
 
-    # ADR 0030 (0.6.0): OutputFormatAudioSrc resampling decorator (links swresample).
+    # OutputFormatAudioSrc resampling decorator (links swresample).
     exosnap_add_gtest(
         NAME test_output_format_audio_src
         TEST_PREFIX engine.
@@ -638,7 +638,7 @@ exosnap_add_gtest(
 )
 target_include_directories(test_worker_teardown_ownership PRIVATE src)
 
-# FfmpegAacEncoder (ADR 0052): native FFmpeg AAC-LC encoder, the sole AAC path
+# FfmpegAacEncoder: native FFmpeg AAC-LC encoder, the sole AAC path
 # now that the prior third-party AAC encoder has been removed. Links
 # exosnap_engine (which carries the encoder + FFmpeg::mux/swresample
 # transitively); the FFmpeg DLLs are staged next to the test binary by
@@ -990,7 +990,7 @@ exosnap_add_gtest(
 )
 target_include_directories(test_mic_dsp_audio_src PRIVATE src include)
 
-# ADR 0030 (0.6.0): OutputFormatAudioSrc resampling decorator (links swresample).
+# OutputFormatAudioSrc resampling decorator (links swresample).
 exosnap_add_gtest(
     NAME test_output_format_audio_src
     TEST_PREFIX engine.
@@ -1007,6 +1007,7 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 target_include_directories(mixed_audio_src_tests PRIVATE src)
+target_link_libraries(mixed_audio_src_tests PRIVATE FFmpeg::mux)
 
 exosnap_add_gtest(
     NAME test_session_stats_meter
@@ -1067,6 +1068,15 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 target_compile_definitions(test_display_color_recheck PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME test_display_color_watch_lifetime
+    TEST_PREFIX engine.
+    SOURCES tests/test_display_color_watch_lifetime.cpp
+    LIBRARIES exosnap_engine
+    PHASE desktop
+)
+target_compile_definitions(test_display_color_watch_lifetime PRIVATE NOMINMAX)
 
 # OD acquire-failure classifier: pure recording-loss policy (ACCESS_LOST recover
 # vs DEVICE_REMOVED / unexpected HRESULT fail-closed). No GPU.
@@ -1136,7 +1146,7 @@ exosnap_add_gtest(
 target_include_directories(test_first_frame_wait_step PRIVATE src)
 target_compile_definitions(test_first_frame_wait_step PRIVATE NOMINMAX)
 
-# Audio device-loss policy (ADR 0046): pure classifier (endpoint loss ->
+# Audio device-loss policy: pure classifier (endpoint loss ->
 # degrade the source, not kill the session), unbounded reactivation cadence, and
 # the PID-reuse identity guard for process-loopback flavors. No audio hardware.
 exosnap_add_gtest(
@@ -1148,7 +1158,7 @@ exosnap_add_gtest(
 target_include_directories(test_audio_device_loss_policy PRIVATE src)
 target_compile_definitions(test_audio_device_loss_policy PRIVATE NOMINMAX)
 
-# MixedAudioSrc per-source degradation (ADR 0046): a lost inner source degrades
+# MixedAudioSrc per-source degradation: a lost inner source degrades
 # to honest silence (visible via DegradedSourceCount) while the survivors keep
 # mixing, and Reinit reacquires it. No audio hardware.
 exosnap_add_gtest(
@@ -1160,7 +1170,7 @@ exosnap_add_gtest(
 target_include_directories(test_mixed_audio_device_loss PRIVATE src)
 target_compile_definitions(test_mixed_audio_device_loss PRIVATE NOMINMAX)
 
-# AudioThread device-loss integration (ADR 0046): a fake source that loses its
+# AudioThread device-loss integration: a fake source that loses its
 # endpoint mid-recording keeps the session alive (no RecordFailure), holds the
 # timeline with silence, reactivates via Reinit, and still emits EOS; a merged
 # track survives one dead inner. No audio hardware.
@@ -1392,11 +1402,11 @@ target_include_directories(test_playback_clock PRIVATE src)
 # EditPlayerEngine: file-open, stream discovery and error paths. Most of the
 # fixtures here are synthetic containers written with libavformat carrying no
 # real compressed bitstream -- this FFmpeg build ships no video encoder (LGPL,
-# ADR 0007) -- so those exercise Open()/track-discovery only. A handful of
+# the distribution policy) -- so those exercise Open()/track-discovery only. A handful of
 # tests actually decode (DecodeFrameAtRaw/StartPlaybackDecode), which needs
 # a real bitstream; those open a checked-in-locally (gitignored, .workspace/ is
 # scratch) fixture clip via EXOSNAP_SOURCE_DIR and GTEST_SKIP when it is not
-# present on the host, same convention as test_analyze_encode_perf.cpp.
+# present on the host.
 # FFmpeg::mux is listed explicitly because the test compiles
 # src/edit_player_engine.cpp itself and needs the libavformat/libavcodec
 # headers at compile time (exosnap_engine links FFmpeg PRIVATE, so its include
@@ -1415,7 +1425,7 @@ target_include_directories(test_edit_player_engine PRIVATE src include)
 target_compile_definitions(test_edit_player_engine PRIVATE EXOSNAP_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # Hardware-decode readback: semi-planar (NV12/P010) -> planar de-interleave,
-# including P010's <<6 left-justification rescale (docs/dev/edit-player-architecture.md).
+# including P010's <<6 left-justification rescale (docs/architecture/edit-and-export.md).
 # Pure logic on hand-built synthetic frames -- no D3D11 adapter, no decoder,
 # no fixture clip needed to run these.
 exosnap_add_gtest(
@@ -1585,7 +1595,7 @@ exosnap_add_gtest(
 target_include_directories(test_clock_slaving PRIVATE src)
 
 # test_mp4_remux_pipeline_flow: pure-logic tests for DeriveTransientMkvPath
-# and codec-container gating rules (ADR-0014).  No FFmpeg runtime needed.
+# and codec-container gating rules.  No FFmpeg runtime needed.
 exosnap_add_gtest(
     NAME test_mp4_remux_pipeline_flow
     TEST_PREFIX engine.
@@ -1655,7 +1665,7 @@ exosnap_add_gtest(
 )
 target_compile_definitions(recovery_truncation_tests PRIVATE NOMINMAX)
 
-# ADR 0035 (0.8.0): phase-correct CFR pacing ring-size helper (pure; no D3D/NVENC).
+# phase-correct CFR pacing ring-size helper (pure; no D3D/NVENC).
 exosnap_add_gtest(
     NAME frame_pacing_tests
     TEST_PREFIX frame_pacing.
@@ -1689,6 +1699,15 @@ exosnap_add_gtest(
     SOURCES tests/test_wgc_acquire_classify.cpp
 )
 target_include_directories(test_wgc_acquire_classify PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# WGC frame geometry: a minimized window holds the last frame, a resize ends the
+# recording. Pure size logic, no D3D/WinRT.
+exosnap_add_gtest(
+    NAME test_wgc_frame_geometry
+    TEST_PREFIX engine.
+    SOURCES tests/test_wgc_frame_geometry.cpp
+)
+target_include_directories(test_wgc_frame_geometry PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # Capture backend resolution: normal monitor/window selection plus the harness-only
 # monitor WGC override. Pure configuration logic, no D3D/WinRT.
@@ -1728,9 +1747,9 @@ exosnap_add_gtest(
 )
 target_include_directories(test_perf_histogram PRIVATE src)
 
-# analyze-encode-perf.py round-trip: write a synthetic engine.jsonl via the real
-# logging layer and assert the script recomputes the same percentiles from the
-# summary histogram. Skips itself when no Python interpreter is present.
+# exo-dev perf-analyze round-trip: write a synthetic engine.jsonl via the real
+# logging layer and assert it recomputes the same percentiles from the summary
+# histogram that the C++ LatencyHistogram would report.
 exosnap_add_gtest(
     NAME test_analyze_encode_perf
     TEST_PREFIX engine.

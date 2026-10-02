@@ -5,7 +5,7 @@
 // The before_send hook calls ScrubEvent() before any event is sent to Sentry
 // (or written to the local crash dir).
 //
-// Scrubbing rules (ADR 0017):
+// Scrubbing rules:
 //   REMOVE from event:
 //     - %USERPROFILE% / %USERNAME% / machine name anywhere in string fields
 //     - Any absolute Windows path (C:\..., UNC \\...)
@@ -34,14 +34,14 @@ namespace exosnap::crash_capture {
 // Allow-listed tag keys (structured context allowed through before_send).
 // Any tag whose key does NOT appear here is stripped before upload.
 //
-// This is the SINGLE source of truth (ADR 0045): it used to also live as a
+// This is the SINGLE source of truth: it used to also live as a
 // literal, hand-repeated brace-list inside BeforeSendHook (crash_capture.cpp),
 // which could drift from this array. BeforeSendHook now iterates
 // AllowedTagKeys() instead. The markers below are also parsed by
-// scripts/validate-privacy-allowlist.ps1, which checks that every key here is
-// documented in PRIVACY.md and docs/product-spec.md §14 (and vice versa) — do
-// not reformat the array declaration in a way the script's regex would miss
-// (see that script's header comment for the exact pattern it expects).
+// `cargo exo-dev privacy allowlist`, which checks that every key here is
+// documented in PRIVACY.md and docs/product-spec.md section 14, and vice
+// versa. Do not reformat the array declaration in a way that would break the
+// check's regex (tools/exo-dev/src/privacy/allowlist.rs).
 // PRIVACY-ALLOWLIST-BEGIN
 inline constexpr std::array<std::string_view, 10> kAllowedTagKeys = {
     "os.name",     "os.version",      "gpu.model", "gpu.vendor",  "gpu.driver",

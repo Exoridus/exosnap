@@ -261,7 +261,7 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         // MP4 video: H.264 (Recommended) or HEVC. HEVC is recorded to the transient
         // MKV as V_MPEGH/ISO/HEVC and remuxed to MP4 with the 'hvc1' sample-entry
         // FourCC (parameter sets out-of-band in hvcC) for Apple/QuickTime/NLE
-        // compatibility (0.7.0; container compat registry → Allowed, ADR 0010/0014).
+        // compatibility (0.7.0; container compat registry → Allowed).
         if (config.video_codec != VideoCodec::H264 && config.video_codec != VideoCodec::Hevc) {
             return fail(E_NOTIMPL, ErrorPhase::Prepare, "Container::Mp4 requires VideoCodec::H264 or VideoCodec::Hevc");
         }
@@ -284,8 +284,8 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
     // Audio codec
     if (config.container == Container::Mp4) {
         // MP4 audio is AAC only. PCM is deferred (libavformat emits ipcm which has
-        // limited player support); FLAC and Opus are also rejected for MP4 (ADR 0010,
-        // ADR 0028, ADR 0030). Use MKV for PCM or FLAC.
+        // limited player support); FLAC and Opus are also rejected for MP4.
+        // Use MKV for PCM or FLAC.
         if (config.audio_codec != AudioCodec::Aac) {
             return fail(E_INVALIDARG, ErrorPhase::Prepare,
                         "Container::Mp4 requires AudioCodec::Aac; "
@@ -320,7 +320,7 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
     }
 
     // ---------------------------------------------------------------------------
-    // Audio format model validation (ADR 0030)
+    // Audio format model validation
     // ---------------------------------------------------------------------------
 
     // audio_channels: only mono (1) and stereo (2) are supported.
@@ -383,8 +383,8 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         }
     }
 
-    // Bit depth: Bit8 is universal. Bit10 (P010 → HEVC Main10 / AV1 10-bit, SDR BT.709,
-    // ADR 0032) is valid only for Hevc and Av1 — H.264 stays 8-bit only. The
+    // Bit depth: Bit8 is universal. Bit10 (P010 for HEVC Main10 / AV1)
+    // is valid only for Hevc and Av1. H.264 stays 8-bit only. The
     // container constraints are identical to the 8-bit path for the same codec (already
     // enforced above): HEVC → MKV/MP4, AV1 → MKV/WebM.
     if (config.bit_depth != BitDepth::Bit8 && config.bit_depth != BitDepth::Bit10) {
@@ -624,7 +624,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         return validationResult;
     }
 
-    // ADR-0014: MP4 remux-on-stop. The engine always records to MKV (Matroska).
+    // MP4 remux-on-stop. The engine always records to MKV (Matroska).
     // When the user selected MP4, redirect the engine to a transient MKV path;
     // the app layer handles the remux and deletion after this call returns.
     RecorderConfig engine_config = config;

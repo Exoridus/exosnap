@@ -46,7 +46,7 @@ namespace exosnap::diagnostics {
 //     needed unless kPollInterval grows substantially or the bitrate ceiling
 //     is raised well past today's clamp.
 //
-// Remux reserve (ADR-0014):
+// Remux reserve:
 //   When MP4 output is selected, the MKV transient file and the MP4 output
 //   file coexist on disk during the remux-on-stop phase.  The low-disk guard
 //   must add the current transient-MKV size to the hard-stop threshold so

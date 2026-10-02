@@ -5,6 +5,8 @@ import QtQuick.Layouts
 ExoCard {
     id: root
 
+    function focusControl(target: int): var { return target === SettingsAdapter.OutputDestination ? destinationChip : resolutionControl; }
+
     required property SettingsAdapter settings
     required property bool stacked
 
@@ -134,6 +136,7 @@ ExoCard {
         Layout.fillWidth: true
 
         ExoSelect {
+            id: resolutionControl
             options: root.settings.resolutionOptions
             value: root.settings.resolutionMode
             enabled: !root.settings.controlsLocked

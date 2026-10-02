@@ -28,25 +28,27 @@ CaptureExclusion::AffinityFunction& affinityOverride() {
 }
 
 #if defined(Q_OS_WIN)
-// Drops WS_EX_LAYERED from an overlay window that is about to be composed by
-// DirectComposition.
+// Drops WS_EX_LAYERED from an interactive overlay window (quick controls,
+// toast) that is about to be composed by DirectComposition.
 //
-// The five overlays are translucent (`color: "transparent"` plus a clear colour
-// with alpha), so Qt requests an alpha channel for them and — as its own log
-// says — creates a Direct Composition device, "needed for semi-transparent
-// windows". The scene graph then renders into a composition swapchain whose
-// visual tree is bound to this HWND.
+// The overlays are translucent (`color: "transparent"` plus a clear colour
+// with alpha), so Qt requests an alpha channel for them and creates a Direct
+// Composition device, "needed for semi-transparent windows" as its own log
+// says. The scene graph then renders into a composition swapchain whose visual
+// tree is bound to this HWND.
 //
-// Windows' platform plugin ALSO marks a translucent window WS_EX_LAYERED, which
-// is the other, older way to get per-pixel alpha. The two are mutually
-// exclusive: DWM composes a layered window from its redirection surface, and a
-// DXGI flip-model swapchain never writes there. The result is that the overlay
-// appears as the window class's unwritten background — a white plate with the
-// pill or the countdown circle drawn on it, instead of a shape floating over
-// the desktop.
+// Windows' platform plugin ALSO marks a translucent window WS_EX_LAYERED, the
+// older way to get per-pixel alpha. When DWM composes such a window from its
+// layered redirection surface instead of the flip-model swapchain, the overlay
+// shows as a white plate with its content drawn on it.
 //
-// Removing the bit leaves DirectComposition as the single compositing path,
-// which is the one Qt already set up.
+// Click-through overlays must keep the bit. Real input passes through to a
+// window of another process only when WS_EX_TRANSPARENT is paired with
+// WS_EX_LAYERED; without it, WindowFromPoint still reports the window beneath
+// while an actual click stays with the overlay. Those overlays render correctly
+// with the bit in place, and `overlay.operable-hit-test` pins both styles. If a
+// white plate ever appears on a click-through overlay, the fix must preserve
+// real pass-through, which that scenario checks.
 //
 // Must be re-applied on every show. Qt does not set WS_EX_LAYERED when it
 // creates the HWND — measured at create() time, the bit is absent — it sets it
@@ -126,11 +128,19 @@ void CaptureExclusion::setTarget(QQuickWindow* window) {
                                   .arg(ok ? QStringLiteral("granted") : QStringLiteral("REFUSED"), overlay_name));
 
 #if defined(Q_OS_WIN)
-    // Qt applies WS_EX_LAYERED on the way to the screen, so the correction has
-    // to ride every show rather than happening once here. The overlays are shown
-    // and hidden repeatedly across a session (each recording, each countdown).
+    // Never for a click-through overlay (see dropLayeredAttribute). Qt applies
+    // WS_EX_LAYERED on the way to the screen, so for the interactive overlays
+    // the correction has to ride every show rather than happening once here.
+    // They are shown and hidden repeatedly across a session.
+    //
+    // window->flags() must be read inside the handler. At setTarget() time the
+    // enclosing QML Window's `flags:` assignment may not have reached the
+    // QWindow yet, because QML finalizes an object's own properties in the same
+    // pass as its children's and this CaptureExclusion is one of them. An early
+    // read reports no flags for every overlay.
     QObject::connect(window, &QWindow::visibleChanged, this, [this, window](bool visible) {
-        if (!visible || window->winId() == 0)
+        const bool is_click_through = (window->flags() & Qt::WindowTransparentForInput) != 0;
+        if (is_click_through || !visible || window->winId() == 0)
             return;
         if (!dropLayeredAttribute(reinterpret_cast<HWND>(window->winId())))
             return;

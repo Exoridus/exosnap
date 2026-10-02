@@ -12,6 +12,7 @@ add_library(exosnap_capability STATIC
   src/audio_ui_state.cpp
   src/adapter_enum.cpp
   src/adapter_capability.cpp
+  src/encoder_device_resolver.cpp
 )
 
 add_library(exosnap::capability ALIAS exosnap_capability)
@@ -128,5 +129,14 @@ exosnap_add_gtest(
   NAME capability_cache_key_tests
   TEST_PREFIX capability.
   SOURCES tests/test_capability_cache_key.cpp
+  LIBRARIES exosnap_capability
+)
+
+# Pure: encoder-device candidate building, Auto/Explicit resolution policy and
+# per-adapter capability scoping. No hardware or DXGI calls.
+exosnap_add_gtest(
+  NAME capability_encoder_device_resolver_tests
+  TEST_PREFIX capability.
+  SOURCES tests/test_encoder_device_resolver.cpp
   LIBRARIES exosnap_capability
 )

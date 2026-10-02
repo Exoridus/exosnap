@@ -9,7 +9,7 @@ This is an isolated capability probe, not production recording code.
 ## Build
 
 ```pwsh
-cmake --preset windows-x64-debug
+cmake --preset windows-x64-debug -DEXOSNAP_BUILD_PROBES=ON
 cmake --build --preset windows-x64-debug --target probe_wgc_preview
 ```
 
@@ -18,7 +18,7 @@ The executable is produced at: `build/windows-x64-debug/tools/probes/probe_wgc_p
 ## Run
 
 ```pwsh
-.\build\windows-x64-debug\apps\probes\probe_wgc_preview\Debug\probe_wgc_preview.exe
+.\build\windows-x64-debug\tools\probes\probe_wgc_preview\Debug\probe_wgc_preview.exe
 ```
 
 On startup the probe:

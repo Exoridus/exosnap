@@ -72,7 +72,7 @@ class UpdateService final : public QObject {
     exosnap::update::UpdateChannel Channel() const;
     void SetChannel(exosnap::update::UpdateChannel ch);
 
-    // Verification reinstall (ADR 0055). Set once at startup from the
+    // Verification reinstall. Set once at startup from the
     // --verify-update-reinstall CLI flag and never persisted: while on, the check
     // additionally offers the byte-identical version and LaunchUpdater hands the
     // updater its matching --verify-reinstall gate. Off is the shipping default.
@@ -91,7 +91,7 @@ class UpdateService final : public QObject {
 
     // The automation run id to hand the updater (--automation-control). Set only
     // when this process itself was launched with a control channel; empty
-    // otherwise, and then the updater gets no endpoint at all. See ADR 0067 --
+    // otherwise, and then the updater gets no endpoint at all. The updater has a separate pipe role:
     // the endpoint name carries a role, so parent and child share one run id
     // without sharing a pipe.
     void SetUpdaterAutomationRunId(const QString& run_id);
@@ -207,12 +207,18 @@ class UpdateService final : public QObject {
 // UpdateLaunchPlan.cpp; exposed here so they can be unit-tested headless).
 // ---------------------------------------------------------------------------
 
-// Files copied into the staged updater directory, as paths relative to the app
-// dir. Mandatory: the updater exe, Qt6Core/Gui/Widgets.dll, and the windows
-// platform plugin. All entries must exist at launch time (LaunchUpdater fails
-// with a clear updateError otherwise); the styles plugin is copied best-effort
-// on top of this list.
+// Files and directories copied into the staged updater directory, as paths
+// relative to the app dir. An entry ending in '/' is staged recursively (the QML
+// import trees). All entries must exist at launch time (LaunchUpdater fails with
+// a clear updateError otherwise); the styles plugin is copied best-effort on top
+// of this list.
 [[nodiscard]] QStringList UpdaterStagingFileList();
+
+// Copies UpdaterStagingFileList() from `app_dir` into `staging_dir`, creating
+// directories as needed. Returns false and fills `error` on the first missing or
+// uncopyable entry. Pure filesystem work, separated from LaunchUpdater() so the
+// exact staging contract the packaged runtime depends on is unit-testable.
+[[nodiscard]] bool StageUpdaterRuntime(const QString& app_dir, const QString& staging_dir, QString* error);
 
 // The argv (flags only, excluding argv[0]) the app passes to the staged updater.
 //
@@ -266,7 +272,7 @@ BuildUpdateHandoff(const exosnap::update::UpdateState& st, const UpdateService::
 // the loop-guard / recovery semantics can be unit-tested headless:
 //   * !update_available                        -> "uptodate"
 //   * is_scoop                                 -> "scoop"   (notify-only)
-//   * verify mode AND available == current     -> "verify-reinstall" (ADR 0055:
+//   * verify mode AND available == current     -> "verify-reinstall" (
 //                                                 the offered version IS the
 //                                                 running one, on purpose)
 //   * available_version == applied_version     -> "pending" (legacy/runtime loop

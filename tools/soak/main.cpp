@@ -239,7 +239,7 @@ int RunClapper(const exosnap::soak::ClapperSchedule& schedule, int flash_ms) {
         std::fflush(stdout);
         EmitFlash(flash_ms);
     }
-    std::fprintf(stdout, "[soak] clapper: all markers emitted. Analyze with scripts/dev/av-sync-check.py\n");
+    std::fprintf(stdout, "[soak] clapper: all markers emitted. Analyze with cargo exo-dev av-sync-check\n");
     return 0;
 }
 

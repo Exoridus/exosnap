@@ -1,0 +1,26 @@
+id = "media.av-sync.clapper-golden"
+class = "regression"
+contract = """
+A clip whose flash and tone markers were written on one timeline decodes \
+cleanly and is judged in sync, with the offset constant across markers. \
+Guards the A/V oracle the recording scenarios rely on.
+"""
+
+[input]
+path = "media/clapper-golden.mp4"
+
+[[oracle]]
+kind = "decode-integrity"
+min_frames = 200
+
+[[oracle]]
+kind = "av-sync"
+# Five markers were written; the one at t=0 has no observable leading edge.
+min_markers = 4
+# Flash onsets are estimated on the 60 fps frame grid, tone onsets on 5 ms
+# windows, so two frame intervals bound a correct clip with margin.
+max_offset_ms = 34.0
+max_spread_ms = 34.0
+
+[requirements]
+capabilities = ["ffmpeg", "ffprobe"]

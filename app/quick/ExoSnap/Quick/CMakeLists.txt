@@ -56,6 +56,7 @@ qt_add_qml_module(exosnap
         DeviceCapabilityRow.qml
         DeviceCodecChip.qml
         DiagnosticsPage.qml
+        DiagnosticsWorkspace.qml
         DiagnosticsSectionHeader.qml
         DiagnosticsSelfTestRow.qml
         EditDetailsRail.qml
@@ -73,6 +74,8 @@ qt_add_qml_module(exosnap
         ExoConfirmDialog.qml
         ExoDisclosure.qml
         ExoGlyph.qml
+        RecordPreviewChrome.qml
+        SourceConfidence.qml
         ExoIssueCard.qml
         ExoKeyValueTable.qml
         ExoLastSessionCard.qml
@@ -112,11 +115,11 @@ qt_add_qml_module(exosnap
         NotificationBell.qml
         NotificationHub.qml
         OverlayCountdown.qml
-        OverlayDiagnostics.qml
         OverlayNotificationToast.qml
         OverlayQuickControlPill.qml
         OverlayRecording.qml
         PreviewMetricsOverlay.qml
+        PreviewTestCard.qml
         RecordActionButton.qml
         RecordPage.qml
         RecordingErrorOverlay.qml
@@ -126,6 +129,7 @@ qt_add_qml_module(exosnap
         RecordTransportDock.qml
         RecoveryOverlay.qml
         RegionSelectionOverlay.qml
+        RegionSelectionWindow.qml
         SettingsAppearanceSection.qml
         SettingsAudioEncodingSection.qml
         SettingsAudioSourcesSection.qml
@@ -266,7 +270,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/StartupTrace.h
         ${PROJECT_SOURCE_DIR}/app/services/ElevatedRelaunch.cpp
         ${PROJECT_SOURCE_DIR}/app/services/ElevatedRelaunch.h
-        # ADR 0055: --verify-update-reinstall argv gate, shared with the Widgets
+        # --verify-update-reinstall argv gate, shared with the Widgets
         # entry point.
         ${PROJECT_SOURCE_DIR}/app/services/VerifyReinstallMode.cpp
         ${PROJECT_SOURCE_DIR}/app/services/VerifyReinstallMode.h
@@ -323,7 +327,7 @@ target_sources(exosnap
         # observation can never disagree.
         ${PROJECT_SOURCE_DIR}/app/diagnostics/NativeWindowFacts.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/NativeWindowFacts.h
-        # ADR 0066: the application binding for the Live Verify control channel.
+        # the application binding for the Live Verify control channel.
         # The channel itself lives in exosnap_live_verify; this is the only file
         # that knows what an ExoSnap adapter is.
         QuickLiveVerifySource.cpp
@@ -339,6 +343,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/GpuTelemetryProviders.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.h
@@ -347,7 +352,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/CrashSessionContext.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/CrashSessionContext.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/ElevationProvider.cpp
-        # ADR 0033 present diagnostics. These sources existed since the ETW slice
+        # Present diagnostics. The shipping target must link the real producer
         # landed but were compiled ONLY by present_provider_tests, so the shipping
         # binary contained the no-op session and could never report a present mode.
         # Wave D compiles them here and defines EXOSNAP_HAS_PRESENTMON below, which
@@ -364,7 +369,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentTraceBackend.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentModeMapping.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentModeMapping.h
-        # The DPC/ISR half of the same ADR 0033 opt-in, and the worse case of the same
+        # The DPC/ISR half of the same opt-in, and the worse case of the same
         # defect: this file was compiled by NO target at all, so the check that names
         # the kernel driver behind "smooth game, stuttery recording" evaluated an
         # absent reading in every build there has ever been.
@@ -417,7 +422,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/GlobalHotkeyService.cpp
         ${PROJECT_SOURCE_DIR}/app/services/GlobalHotkeyService.h
         ${PROJECT_SOURCE_DIR}/app/services/Win32HotkeyRegistrar.h
-        # ADR 0012: the Qt-side owner of the update engine. UpdateLaunchPlan alone
+        # the Qt-side owner of the update engine. UpdateLaunchPlan alone
         # only provided the pure helpers -- the service itself is what makes the
         # Settings updates card do anything.
         ${PROJECT_SOURCE_DIR}/app/services/UpdateService.cpp
@@ -509,7 +514,7 @@ if(WIN32)
     # loads IDI_EXOSNAP_APP_ICON out of the EXE's own resources, so a target
     # without them shows a blank taskbar entry), and the generated
     # exosnap_version.rc carries VERSIONINFO, which
-    # scripts/build-release-artifacts.ps1 asserts against the release identity.
+    # `exo-verify package` asserts against the release identity.
     target_sources(exosnap
         PRIVATE
             ${PROJECT_SOURCE_DIR}/app/exosnap.rc
@@ -518,12 +523,10 @@ if(WIN32)
 endif()
 
 # Output into ${PROJECT_BINARY_DIR}/app rather than this subdirectory's own
-# binary dir. Two things depend on that location: scripts/build-release-artifacts.ps1
-# resolves the built exe as app/<config>/exosnap.exe (multi-config) or
-# app/exosnap.exe (Ninja), and every gtest binary is emitted into the same
-# directory -- so the Qt/FFmpeg runtime this target stages POST_BUILD is also
-# what makes the test executables launchable. While the Widgets frontend still
-# existed it played both roles; the Quick target inherits them whole.
+# binary dir. Every gtest binary is emitted into the same directory, so the
+# Qt/FFmpeg runtime this target stages POST_BUILD is also what makes the test
+# executables launchable. While the Widgets frontend still existed it played
+# that role; the Quick target inherits it.
 set_target_properties(exosnap PROPERTIES
     AUTORCC ON
     OUTPUT_NAME "exosnap"
@@ -553,7 +556,7 @@ target_compile_options(exosnap
         $<$<CXX_COMPILER_ID:MSVC>:/wd4702>
 )
 
-# ADR 0033 / Wave D: the real in-process PresentMon ETW consumer. Without the
+# the real in-process PresentMon ETW consumer. Without the
 # define, PresentMonEtwSession compiles to the graceful no-op branch and
 # IsAvailable() is false forever -- which is exactly the state the shipping
 # binary was in, and why present mode, tearing, discarded count and mode flips
@@ -612,7 +615,7 @@ target_link_libraries(exosnap
         mfuuid
         ole32
         runtimeobject
-        # ADR 0033: ShellExecuteExW (Shell32) for the elevated relaunch plus the
+        # ShellExecuteExW (Shell32) for the elevated relaunch plus the
         # token APIs behind the elevation check (Advapi32); Version.lib backs the
         # file-version queries the update/diagnostics paths make.
         Shell32
@@ -891,7 +894,7 @@ qt_add_qml_module(record_controls_qml_tests
         # ExoScrollView.qml (below) and ExoTheme.qml both resolve through this
         # singleton, same reason QuickThemeTokens is here.
         QuickWheelMetrics.h
-        # OverlayDiagnostics gates its own visibility on CaptureExclusion.granted,
+        # OverlayRecording gates its own visibility on CaptureExclusion.granted,
         # so the type has to exist for the overlay to load at all. Nothing in the
         # token tests shows the window — `granted` stays false and the delegates
         # exist regardless, which is the cost QCR-606 is about.
@@ -956,6 +959,8 @@ qt_add_qml_module(record_controls_qml_tests
         # the test module has to carry it as well — without it qmllint resolves
         # nothing inside either component and reports the whole icon block.
         ExoGlyph.qml
+        RecordPreviewChrome.qml
+        SourceConfidence.qml
         # The log viewer, for its selection contract: a selection identifies
         # entries by sequence, so it has to survive an append, front eviction
         # and a filter change without ever sliding onto another entry. Driven
@@ -995,9 +1000,17 @@ qt_add_qml_module(record_controls_qml_tests
         # update reaches the SAME card object.
         ExoPipelineFlow.qml
         ExoPipelineStepCard.qml
-        # QCR-606: the HUD's token list is keyed on the content policy, not on
-        # the measured values.
-        OverlayDiagnostics.qml
+        # QCR-606: the HUD's diagnostics token list is keyed on the content
+        # policy, not on the measured values. OverlayDiagnostics.qml was
+        # absorbed into this component; the token-identity test now targets it.
+        # Brand.h: the recording dot's breathing animation resolves
+        # Brand.recordingBeatMs. Its BrandMarkSvg/ShellIconRenderer backing
+        # sources are added via target_sources() below, not here -- an
+        # absolute-path .cpp inside a qt_add_qml_module SOURCES list is
+        # mis-classified as a QML-module resource file instead of a plain
+        # compiled source.
+        OverlayRecording.qml
+        Brand.h
         # The three-line body clamp and the dismiss glyph's rest-state
         # visibility are state, not pixels, so they are asserted here;
         # --visual-test judges the card's geometry and colour.
@@ -1044,9 +1057,24 @@ target_link_libraries(record_controls_qml_tests
         Qt6::Quick
         Qt6::QuickControls2
         Qt6::QuickTest
+        # BrandMarkSvg.cpp renders the mark geometry through QtSvg.
+        Qt6::Svg
         # CaptureExclusion logs its verdict through AppLog.
         exosnap_app_log_test_support
         exosnap::warnings
+)
+
+# Brand.h (added to the qml module above) declares wordmarkBox/url/source in
+# terms of BrandMarkSvg/ShellIconRenderer; moc compiles the whole class
+# regardless of whether this suite's QML ever calls those members, so the
+# backing sources have to link even though OverlayRecording only reaches
+# Brand.recordingBeatMs. Added here rather than in the qml module's SOURCES
+# list above: an absolute-path .cpp there is mis-classified as a QML-module
+# resource file instead of a plain compiled source.
+target_sources(record_controls_qml_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/app/ui/brand/BrandMarkSvg.cpp
+        ${PROJECT_SOURCE_DIR}/app/ui/brand/ShellIconRenderer.cpp
 )
 
 add_test(NAME quick.qml.record_controls COMMAND record_controls_qml_tests)
@@ -1201,12 +1229,20 @@ qt_add_qml_module(record_source_picker_qml_tests
         QuickWheelMetrics.h
     QML_FILES
         ExoButton.qml
+        ExoChevron.qml
         ExoGlyph.qml
+        ExoMenu.qml
+        ExoMenuItem.qml
         ExoScrollBar.qml
         ExoSearchField.qml
         ExoSegmentedControl.qml
         ExoTheme.qml
+        RecordActionButton.qml
         RecordSourcePicker.qml
+        RecordSourceToggle.qml
+        RecordSplitButton.qml
+        RecordTransportDock.qml
+        RegionSelectionOverlay.qml
 )
 
 target_compile_definitions(record_source_picker_qml_tests
@@ -1547,6 +1583,7 @@ exosnap_add_gtest(
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/GpuTelemetryProviders.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
     LIBRARIES
         Qt6::Core
@@ -1692,6 +1729,7 @@ exosnap_add_gtest(
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/GpuTelemetryProviders.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/LogViewPolicy.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/ElevationProvider.cpp
@@ -2016,6 +2054,7 @@ exosnap_add_gtest(
         exosnap_record_viewmodel_test_support
         exosnap::capability
         exosnap_engine
+        dwmapi
 )
 
 target_include_directories(overlay_qml_adapter_tests

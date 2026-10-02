@@ -41,95 +41,11 @@ Item {
                                        : root.recordViewModel.sourceKindText === "REGION" ? ExoGlyph.Region
                                        : ExoGlyph.Display
 
-    // The stage takes the session's colour only when there is a session to
-    // report. Ready is `neutral` and the momentary transitions are `busy`, and
-    // both fall through ExoTheme.toneColor to success -- which is right for the
-    // title bar's pill, where a green dot beside "Ready" means the product is
-    // ready, and wrong for a 1000 px frame, where it claims a recording finished
-    // before one has run. Those two states take the structural line instead.
-    //
-    // `busy` is included deliberately: a countdown that tints the stage would
-    // change its colour three times in three seconds.
-    readonly property color stageBorder: {
-        const tone = root.recordViewModel.stateTone;
-        if (tone === "neutral" || tone === "busy")
-            return ExoTheme.line;
-        return ExoTheme.toneColor(tone, false);
-    }
-
-    // ONE gap on this page: the same step between the bands and from every band
-    // to the window edge. Record is a stage page, not a page of cards -- the
-    // 24 px card inset put a wider band under the transport than between the
-    // transport and the preview, which read as the stage hanging high, and it
-    // spent the page's largest dimension on air rather than on the picture.
     ColumnLayout {
         spacing: ExoTheme.spacingLg
         anchors {
             fill: parent
             margins: ExoTheme.spacingLg
-        }
-
-        RowLayout {
-            spacing: ExoTheme.spacingSm
-            Layout.fillWidth: true
-            Layout.preferredHeight: ExoTheme.controlHeightCompact
-
-            ExoGlyph {
-                kind: root.sourceGlyph
-                color: ExoTheme.textMuted
-                Layout.alignment: Qt.AlignVCenter
-                implicitWidth: 18
-                implicitHeight: 18
-            }
-
-            Label {
-                text: root.recordViewModel.sourceName
-                textFormat: Text.PlainText
-                elide: Text.ElideRight
-                color: ExoTheme.text
-                Layout.fillWidth: true
-                Layout.minimumWidth: 120
-                Accessible.name: qsTr("%1: %2").arg(root.recordViewModel.sourceKindText)
-                                                 .arg(root.recordViewModel.sourceName)
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontBody
-                    weight: Font.DemiBold
-                }
-            }
-
-            ExoBadge {
-                text: qsTr("LOCKED")
-                tone: "neutral"
-                visible: !root.recordViewModel.canSelectSource
-                Layout.alignment: Qt.AlignVCenter
-            }
-
-            Label {
-                text: root.recordViewModel.formatText
-                textFormat: Text.PlainText
-                elide: Text.ElideRight
-                horizontalAlignment: Text.AlignRight
-                color: ExoTheme.textMuted
-                Layout.preferredWidth: 240
-                Layout.minimumWidth: 0
-                Layout.maximumWidth: 320
-                Layout.alignment: Qt.AlignVCenter
-                font {
-                    family: ExoTheme.monoFamily
-                    pixelSize: ExoTheme.fontCaption
-                }
-            }
-
-            ExoButton {
-                text: qsTr("Change source")
-                leadingGlyph: ExoGlyph.Layers
-                compact: true
-                enabled: root.recordViewModel.canSelectSource
-                Accessible.description: enabled ? "" : qsTr("The capture setup is locked while a recording runs")
-                Layout.alignment: Qt.AlignVCenter
-                onClicked: root.openSourcePicker()
-            }
         }
 
         // ── Preview Surface ──────────────────────────────────────────────────
@@ -148,18 +64,12 @@ Item {
                                          * root.recordViewModel.normalizedSourceRect.height
                     return sourceHeight > 0 ? sourceWidth / sourceHeight : 16 / 9
                 }
-                readonly property real frameWidth: Math.min(parent.width, parent.height * previewSurface.sourceAspect)
+                readonly property real frameWidth: Math.max(0, Math.min(width - 2, (height - 2) * previewSurface.sourceAspect))
 
-                width: previewSurface.frameWidth
-                height: previewSurface.frameWidth / previewSurface.sourceAspect
+                anchors.fill: parent
                 color: "#08080A"
                 border.width: 1
-                // See root.stageBorder: the state's colour while a session has
-                // something to report, the structural line otherwise.
-                border.color: root.stageBorder
-                // The largest surface in the product sits on the largest radius
-                // in the scale, the same rung cards use. At radiusMd it read as
-                // a scaled-up control rather than as the page's stage.
+                border.color: ExoTheme.overlayLine
                 radius: ExoTheme.radiusLg
                 anchors.centerIn: parent
 
@@ -172,22 +82,31 @@ Item {
                 Item {
                     id: previewStage
 
-                    anchors {
-                        top: parent.top
-                        right: parent.right
-                        bottom: parent.bottom
-                        left: parent.left
-                        topMargin: 1
-                        rightMargin: 1
-                        bottomMargin: 1
-                        leftMargin: 1
-                    }
+                    width: previewSurface.frameWidth
+                    height: previewSurface.frameWidth / previewSurface.sourceAspect
+                    anchors.centerIn: parent
 
                     ExoPreviewItem {
                         objectName: "quickPreviewItem"
                         previewAdapter: root.previewAdapter
                         normalizedSourceRect: root.recordViewModel.normalizedSourceRect
-                        cornerRadius: ExoTheme.radiusLg
+                        cornerRadius: 0
+                        anchors.fill: parent
+                        visible: !root.previewAdapter.harnessTestCard && root.previewAdapter.previewFrameRate > 0
+                    }
+
+                    Label {
+                        visible: root.previewAdapter.previewFrameRate === 0 && root.recordViewModel.selectedTargetAvailable
+                        text: qsTr("Preview off")
+                        color: ExoTheme.overlayInkMuted
+                        anchors.centerIn: parent
+                    }
+
+                    PreviewTestCard {
+                        objectName: "quickPreviewTestCard"
+                        visible: root.previewAdapter.harnessTestCard && root.previewAdapter.frameReady && root.previewAdapter.previewFrameRate > 0
+                        radius: 0
+                        fontFamily: ExoTheme.sansFamily
                         anchors.fill: parent
                     }
 
@@ -226,7 +145,7 @@ Item {
 
                         Label {
                             text: qsTr("Choose what to record")
-                            color: ExoTheme.text
+                            color: ExoTheme.overlayInk
                             anchors.horizontalCenter: parent.horizontalCenter
                             font {
                                 family: ExoTheme.sansFamily
@@ -237,7 +156,7 @@ Item {
 
                         Label {
                             text: qsTr("Select a screen, window, or region to continue.")
-                            color: ExoTheme.textMuted
+                            color: ExoTheme.overlayInkMuted
                             anchors.horizontalCenter: parent.horizontalCenter
                             font {
                                 family: ExoTheme.sansFamily
@@ -268,7 +187,7 @@ Item {
                         y: parent.height * draftRect.y
                         width: parent.width * draftRect.width
                         height: parent.height * draftRect.height
-                        visible: root.active && root.recordViewModel.webcamEnabled
+                        visible: root.active && root.previewAdapter.previewFrameRate > 0 && root.recordViewModel.webcamEnabled
                                  && (!idlePreview || root.recordViewModel.webcamFrameSource.length > 0)
                         activeFocusOnTab: root.recordViewModel.webcamOverlayEditable
                         Accessible.name: qsTr("Webcam overlay")
@@ -504,93 +423,19 @@ Item {
                         }
                     }
 
-                    ExoStatusPill {
-                        text: root.recordViewModel.stateText
-                        tone: root.recordViewModel.stateTone
-                        onSurface: true
-                        width: Math.min(implicitWidth, Math.max(0, parent.width - 2 * ExoTheme.spacingLg))
-                        anchors {
-                            top: parent.top
-                            left: parent.left
-                            margins: ExoTheme.spacingLg
-                        }
-                    }
-
-                    // The source name used to be repeated here, over the preview. The
-                    // strip directly above states it already, and a second copy cost
-                    // preview area to say the same thing twice.
-
-                    // The live readout, on the SAME ground the status pill in the
-                    // opposite corner already uses. It used to be four bare outlined
-                    // strings sitting straight on the video: legible, but it read as
-                    // debug text burned into the frame rather than as a readout the
-                    // product puts there, and it was the one thing on the preview
-                    // that did not share the pill's language.
-                    Rectangle {
-                        id: liveMetrics
-
-                        readonly property real maxWidth: Math.max(0, parent.width - 2 * ExoTheme.spacingLg)
-
-                        width: Math.min(metricsFlow.childrenRect.width + 2 * ExoTheme.spacingMd, liveMetrics.maxWidth)
-                        height: metricsFlow.childrenRect.height + 2 * ExoTheme.spacingSm
-                        // Near-black in BOTH appearances, like the status pill
-                        // opposite: what is behind it is the captured frame. So
-                        // the labels below take the `overlay*` ink rungs —
-                        // `ExoTheme.text` measured 1.20:1 here in Light.
-                        color: Qt.rgba(0, 0, 0, 0.72)
-                        radius: ExoTheme.radiusSm
-                        visible: root.recordViewModel.recording || root.recordViewModel.paused
-                        anchors {
-                            left: parent.left
-                            bottom: parent.bottom
-                            margins: ExoTheme.spacingLg
-                        }
-
-                        Flow {
-                            id: metricsFlow
-
-                            // Measured off the preview rather than off the ground
-                            // above, which is what keeps the two from feeding into
-                            // each other.
-                            width: Math.max(0, liveMetrics.maxWidth - 2 * ExoTheme.spacingMd)
-                            spacing: ExoTheme.spacingMd
-                            anchors {
-                                top: parent.top
-                                left: parent.left
-                                topMargin: ExoTheme.spacingSm
-                                leftMargin: ExoTheme.spacingMd
-                            }
-
-                            Label {
-                                text: qsTr("BITRATE %1").arg(root.recordViewModel.bitrateText)
-                                textFormat: Text.PlainText
-                                color: ExoTheme.overlayInk
-                                font.family: ExoTheme.monoFamily
-                                font.pixelSize: ExoTheme.fontEyebrow
-                            }
-                            Label {
-                                text: qsTr("DROP %1").arg(root.recordViewModel.droppedFramesText)
-                                textFormat: Text.PlainText
-                                color: ExoTheme.overlayInk
-                                font.family: ExoTheme.monoFamily
-                                font.pixelSize: ExoTheme.fontEyebrow
-                            }
-                            Label {
-                                text: qsTr("DRIFT %1").arg(root.recordViewModel.driftText)
-                                textFormat: Text.PlainText
-                                color: ExoTheme.overlayInk
-                                font.family: ExoTheme.monoFamily
-                                font.pixelSize: ExoTheme.fontEyebrow
-                            }
-
-                            Label {
-                                text: qsTr("SIZE %1").arg(root.recordViewModel.outputSizeText)
-                                textFormat: Text.PlainText
-                                color: ExoTheme.overlayInk
-                                font.family: ExoTheme.monoFamily
-                                font.pixelSize: ExoTheme.fontEyebrow
-                            }
-                        }
+                    RecordPreviewChrome {
+                        parent: previewSurface
+                        anchors.fill: parent
+                        z: 10
+                        formatText: root.recordViewModel.formatText
+                        sourceText: root.recordViewModel.sourceButtonText
+                        sourceGlyph: root.sourceGlyph
+                        sourceEnabled: root.recordViewModel.canSelectSource
+                        metricsVisible: (root.recordViewModel.recording || root.recordViewModel.paused) && root.recordViewModel.liveStatsAvailable
+                        dropsText: root.recordViewModel.droppedFramesText
+                        driftText: root.recordViewModel.driftText
+                        sizeText: root.recordViewModel.outputSizeText
+                        onSourceRequested: root.openSourcePicker()
                     }
 
                     // Harness surface, so it is not built in an ordinary run.
@@ -627,16 +472,6 @@ Item {
                             monoFamily: ExoTheme.monoFamily
                             onToggled: expanded => root.showMetricsOverlay = expanded
                         }
-                    }
-
-                    RegionSelectionOverlay {
-                        recordViewModel: root.recordViewModel
-                        // The preview maps the capture 1:1, so its pixel size
-                        // is what turns the normalized selection into the
-                        // dimension label's real numbers.
-                        sourcePixelSize: root.previewAdapter.sourceSize
-                        visible: root.recordViewModel.regionSelectionNeeded
-                        anchors.fill: parent
                     }
 
                     Label {
@@ -692,7 +527,7 @@ Item {
             }
         }
 
-        // The entry into the Edit surface (ADR 0022) lives IN the transport dock,
+        // The entry into the Edit surface lives IN the transport dock,
         // as that state's one recommended action — see RecordTransportDock. It
         // used to be a detached button in a row of its own between the Preview
         // Surface and the dock, which broke the page's composition (one Preview

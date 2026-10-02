@@ -642,7 +642,7 @@ TEST(VisualScenarioTest, PolishR1ScenariosCarryFrozenContracts) {
 }
 
 // 57. Standing audio-degraded notification scenario (AUDIO-DEGRADED-NOTIFY-R1 /
-// ADR 0046 follow-up) carries deterministic state and is the only registered
+// audio-source loss) carries deterministic state and is the only registered
 // scenario that drives the notification.
 TEST(VisualScenarioTest, AudioDegradedNotificationScenarioCarriesDeterministicState) {
     const VisualScenario* s = FindVisualScenario(QStringLiteral("record-recording-audio-degraded"));

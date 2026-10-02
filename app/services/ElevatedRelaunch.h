@@ -11,7 +11,7 @@ namespace exosnap::services {
 // Outcome of an attempt to relaunch the current executable elevated.
 //   Launched      — UAC consent granted, a new elevated process was started.
 //   UserDeclined   — the user dismissed the UAC prompt (ERROR_CANCELLED). This
-//                    is a NORMAL, graceful outcome (ADR 0033): the app stays
+//                    is a NORMAL, graceful outcome: the app stays
 //                    non-elevated, the feature stays disabled, no retry loop.
 //   Failed         — ShellExecuteEx failed for another reason.
 enum class RelaunchResult { Launched, UserDeclined, Failed };

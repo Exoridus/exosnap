@@ -50,6 +50,7 @@ using exosnap::update::MakeSwapPlan;
 using exosnap::update::ParseManifest;
 using exosnap::update::ParseSemVer;
 using exosnap::update::ReadInstallPath;
+using exosnap::update::RenameOutcome;
 using exosnap::update::RepairOrphanedSwap;
 using exosnap::update::RestoreBackup;
 using exosnap::update::SelectPackage;
@@ -551,7 +552,7 @@ bool UpdaterWorker::fetchAndStage() {
     }
 
     // Verify the detached signature over the EXACT manifest bytes -- BEFORE any
-    // field is parsed or acted upon (ADR 0012). No re-serialisation is involved.
+    // field is parsed or acted upon. No re-serialisation is involved.
     if (VerifyManifestSignature(manifest_json, signature_hex) != VerifyResult::Ok) {
         emit failed(FailureCase::VerifyDownloadFailed, QStringLiteral("Manifest signature invalid.")); // A2
         return false;
@@ -593,7 +594,7 @@ bool UpdaterWorker::fetchAndStage() {
         return false;
     }
 
-    // Verification reinstall gate (ADR 0055), AFTER the signature check and ON TOP
+    // Verification reinstall gate, AFTER the signature check and ON TOP
     // of the downgrade guard: this run was started to reinstall one exact version,
     // so anything else -- including a legitimately newer release -- is refused
     // before a single package byte is fetched. Nothing is installed here.
@@ -831,7 +832,13 @@ bool UpdaterWorker::runInstallPortable() {
         }
     }
 
-    switch (StageRename(plan_)) {
+    RenameOutcome failed_rename;
+    const SwapError swap_error = StageRename(plan_, {}, &failed_rename);
+    if (swap_error != SwapError::None && failed_rename.attempts > 0) {
+        std::fprintf(stderr, "exosnap-updater: directory rename failed after %u attempt(s), Windows error %lu\n",
+                     failed_rename.attempts, failed_rename.error);
+    }
+    switch (swap_error) {
     case SwapError::None:
         break;
     case SwapError::StagingMissing: // nothing touched, old install intact

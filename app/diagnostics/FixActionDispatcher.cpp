@@ -69,24 +69,56 @@ FixResult ApplyAutoFix(std::string_view fix_id, const capability::CapabilitySet&
 }
 
 FixResult ResolveAssistedFix(std::string_view fix_id) {
+    if (fix_id == "fix.display.reselect")
+        return {FixOutcome::NavigateSourcePicker};
     if (fix_id.empty())
         return {FixOutcome::Unknown};
-    if (fix_id == "fix.output.change_folder" || fix_id == "fix.output.fat32_folder")
+    if (fix_id == "fix.output.change_folder" || fix_id == "fix.output.fat32_folder" || fix_id == "fix.disk.writestall")
         return {FixOutcome::NavigateSettingsOutput};
-    // fix.container.mkv / fix.fps.cap / fix.profile.select and any future assisted
-    // fix land in the format & quality area.
-    return {FixOutcome::NavigateSettingsFormat};
+    if (fix_id == "fix.fps.cap")
+        return {FixOutcome::NavigateFramePacing};
+    if (fix_id == "settings/video/frame-rate")
+        return {FixOutcome::NavigateFrameRate};
+    if (fix_id == "settings/video/frame-pacing")
+        return {FixOutcome::NavigateFramePacing};
+    if (fix_id == "settings/video/resolution")
+        return {FixOutcome::NavigateResolution};
+    if (fix_id == "settings/video/quality")
+        return {FixOutcome::NavigateQuality};
+    if (fix_id == "settings/audio/clock-slaving")
+        return {FixOutcome::NavigateClockSlaving};
+    if (fix_id == "fix.audio.check_devices" || fix_id == "settings/audio/microphone")
+        return {FixOutcome::NavigateMicrophone};
+    if (fix_id == "settings/output/folder")
+        return {FixOutcome::NavigateSettingsOutput};
+    if (fix_id == "fix.container.mkv" || fix_id == "fix.profile.select" || fix_id == "fix.audio.flac_to_mkv" ||
+        fix_id == "fix.video.hevc_webm" || fix_id == "fix.video.h264_webm")
+        return {FixOutcome::NavigateSettingsFormat};
+    return {FixOutcome::Unknown};
 }
 
 std::string_view SettingsSectionFor(FixOutcome outcome) noexcept {
     switch (outcome) {
     case FixOutcome::NavigateSettingsOutput:
-        return "settings/output";
+        return "settings/output/folder";
     case FixOutcome::NavigateSettingsFormat:
         return "settings/format";
+    case FixOutcome::NavigateFramePacing:
+        return "settings/video/frame-pacing";
+    case FixOutcome::NavigateFrameRate:
+        return "settings/video/frame-rate";
+    case FixOutcome::NavigateResolution:
+        return "settings/video/resolution";
+    case FixOutcome::NavigateQuality:
+        return "settings/video/quality";
+    case FixOutcome::NavigateMicrophone:
+        return "settings/audio/microphone";
+    case FixOutcome::NavigateClockSlaving:
+        return "settings/audio/clock-slaving";
     case FixOutcome::Unknown:
     case FixOutcome::SettingsChanged:
     case FixOutcome::RetargetToHostingMonitor:
+    case FixOutcome::NavigateSourcePicker:
         break;
     }
     return "";

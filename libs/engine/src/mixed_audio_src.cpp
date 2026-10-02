@@ -1,6 +1,11 @@
 #include "mixed_audio_src.h"
 
 #include "discontinuity_gap.h"
+#include "output_format_audio_src.h"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -10,6 +15,22 @@
 namespace exosnap::engine {
 
 namespace {
+int64_t SamplePosition(uint64_t ns) {
+    return static_cast<int64_t>((ns / 1'000'000'000) * MixedAudioSrc::kOutputSampleRate +
+                                ((ns % 1'000'000'000) * MixedAudioSrc::kOutputSampleRate + 500'000'000) /
+                                    1'000'000'000);
+}
+uint64_t CaptureClockNs() {
+    static const uint64_t frequency = [] {
+        LARGE_INTEGER f{};
+        QueryPerformanceFrequency(&f);
+        return uint64_t(f.QuadPart);
+    }();
+    LARGE_INTEGER counter{};
+    QueryPerformanceCounter(&counter);
+    const auto ticks = static_cast<uint64_t>(counter.QuadPart);
+    return (ticks / frequency) * 1'000'000'000 + ((ticks % frequency) * 1'000'000'000) / frequency;
+}
 
 // Converts src_bytes (up to src_frames) into float32 stereo in dst[0..requested_frames*2-1].
 // Remaining dst frames beyond src_frames are left untouched (caller zeroes dst first).
@@ -60,10 +81,12 @@ void ConvertToFloat32Stereo(const uint8_t* src_bytes, uint32_t src_frames, uint3
 
 MixedAudioSrc::MixedAudioSrc(std::vector<std::unique_ptr<IAudioCaptureSource>> sources,
                              std::vector<float> source_gain_multipliers, bool limiter_enabled,
-                             float limiter_ceiling_linear)
+                             float limiter_ceiling_linear, std::function<uint64_t()> clock_now_ns)
     : sources_(std::move(sources)), source_gain_multipliers_(std::move(source_gain_multipliers)),
-      limiter_enabled_(limiter_enabled),
+      clock_now_ns_(clock_now_ns ? std::move(clock_now_ns) : CaptureClockNs), limiter_enabled_(limiter_enabled),
       limiter_ceiling_linear_((limiter_ceiling_linear > 0.0f) ? limiter_ceiling_linear : 1.0f) {
+    for (auto& source : sources_)
+        source = std::make_unique<OutputFormatAudioSrc>(std::move(source), kOutputSampleRate, kOutputChannels);
 }
 
 void MixedAudioSrc::SetSourceMuted(std::size_t index, bool muted) noexcept {
@@ -94,6 +117,13 @@ bool MixedAudioSrc::Init(std::string& out_error) {
     const size_t num = sources_.size();
     source_fifo_.assign(num, std::vector<float>{});
     source_degraded_.assign(num, false);
+    timeline_sources_.assign(num > 1 ? num : 0, {});
+    timeline_started_ = timeline_emitted_ = draining_ = false;
+    output_frame_ = latest_frame_ = 0;
+    for (auto& source : timeline_sources_) {
+        source.samples.resize(static_cast<size_t>(kMaxFifoFrames) * kOutputChannels);
+        source.tags.assign(kMaxFifoFrames, std::numeric_limits<int64_t>::min());
+    }
 
     for (size_t i = 0; i < num; ++i) {
         std::string src_err;
@@ -111,6 +141,11 @@ bool MixedAudioSrc::Init(std::string& out_error) {
         }
     }
 
+    if (num > 1) {
+        output_frame_ = latest_frame_ = SamplePosition(clock_now_ns_());
+        timeline_started_ = true;
+    }
+    timeline_discontinuity_pending_ = false;
     mix_buffer_.clear();
     scratch_buffer_.assign(static_cast<size_t>(kMixFrameCount) * kOutputChannels, 0.0f);
 
@@ -128,6 +163,8 @@ bool MixedAudioSrc::Init(std::string& out_error) {
 }
 
 uint32_t MixedAudioSrc::EmittableFrames() const {
+    if (sources_.size() > 1)
+        return TimelineFramesReady();
     size_t emittable = 0;
     bool any_ready = false;
     for (const auto& fifo : source_fifo_) {
@@ -144,12 +181,14 @@ uint32_t MixedAudioSrc::EmittableFrames() const {
 }
 
 void MixedAudioSrc::PumpOnePacketPerSource(bool& any_discontinuity) {
+    if (draining_)
+        return;
     const size_t num = sources_.size();
     const float base_gain = 1.0f / static_cast<float>(num);
 
     for (size_t i = 0; i < num; ++i) {
         // A degraded inner (endpoint lost) is not polled — it would only fail
-        // again. The survivors keep mixing; Reinit reacquires it (ADR 0046).
+        // again. The survivors keep mixing; Reinit reacquires it.
         if (source_degraded_[i]) {
             continue;
         }
@@ -178,12 +217,16 @@ void MixedAudioSrc::PumpOnePacketPerSource(bool& any_discontinuity) {
         // Single-source pass-through of the measured discontinuity gap (H-3): a
         // gain-wrapped single track must not silently drop the inner packet's
         // gap. Hold it for the next emitted buffer. Multi-source merges leave it
-        // 0 (they mix several clocks; the per-source FIFO drift relief bounds
-        // inter-source skew instead).
+        // 0 because timestamped placement already represents each source gap.
         if (num == 1) {
             single_source_pending_gap_frames_ += src_buf.gap_frames;
         }
 
+        if (num > 1) {
+            StoreTimelinePacket(i, src_buf);
+            sources_[i]->ReleaseBuffer();
+            continue;
+        }
         const uint32_t frames = src_buf.num_frames;
         auto& fifo = source_fifo_[i];
 
@@ -233,11 +276,13 @@ uint32_t MixedAudioSrc::PendingFrameCount() {
     if (emittable > 0) {
         return emittable;
     }
+    if (draining_)
+        return 0;
     uint32_t inner_pending = 0;
     for (size_t i = 0; i < sources_.size(); ++i) {
         // A degraded inner keeps reporting a pending error; skip it so a
-        // fully-degraded merged track reports 0 pending (the audio thread then
-        // holds its timeline with silence) instead of spinning on failed pumps.
+        // degraded source is not retried by the packet pump. The shared timeline
+        // still becomes ready at its bounded silence deadline.
         if (i < source_degraded_.size() && source_degraded_[i]) {
             continue;
         }
@@ -252,11 +297,11 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
 
     bool any_discontinuity = false;
     PumpOnePacketPerSource(any_discontinuity);
+    timeline_discontinuity_pending_ |= any_discontinuity;
 
     const uint32_t n = EmittableFrames();
     if (n == 0) {
-        // No source currently holds samples — emit nothing this call rather than
-        // fabricating a silent block. data_discontinuity is still forwarded.
+        // No interval is ready yet. Keep discontinuity pending until emission.
         out_buf.num_frames = 0;
         out_buf.silent = true;
         out_buf.data_discontinuity = any_discontinuity;
@@ -266,17 +311,21 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
     const size_t samples = static_cast<size_t>(n) * kOutputChannels;
     mix_buffer_.assign(samples, 0.0f);
 
-    // Sum the first n frames of every source that holds samples; sources with an
-    // empty FIFO contribute silence for this block. Then consume n frames from
-    // each contributing FIFO, leaving any surplus buffered for the next call.
-    for (auto& fifo : source_fifo_) {
-        if (fifo.empty()) {
-            continue;
+    if (sources_.size() > 1) {
+        MixTimeline(n);
+    } else {
+        // Sum the first n frames of every source that holds samples; sources with an
+        // empty FIFO contribute silence for this block. Then consume n frames from
+        // each contributing FIFO, leaving any surplus buffered for the next call.
+        for (auto& fifo : source_fifo_) {
+            if (fifo.empty()) {
+                continue;
+            }
+            for (size_t s = 0; s < samples; ++s) {
+                mix_buffer_[s] += fifo[s];
+            }
+            fifo.erase(fifo.begin(), fifo.begin() + static_cast<std::ptrdiff_t>(samples));
         }
-        for (size_t s = 0; s < samples; ++s) {
-            mix_buffer_[s] += fifo[s];
-        }
-        fifo.erase(fifo.begin(), fifo.begin() + static_cast<std::ptrdiff_t>(samples));
     }
 
     bool all_zero = true;
@@ -304,7 +353,8 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
     out_buf.bytes = reinterpret_cast<const uint8_t*>(mix_buffer_.data());
     out_buf.num_frames = n;
     out_buf.silent = all_zero;
-    out_buf.data_discontinuity = any_discontinuity;
+    out_buf.data_discontinuity = timeline_discontinuity_pending_;
+    timeline_discontinuity_pending_ = false;
     // Single-source: attach the held inner gap (scaled to the 48 kHz output rate)
     // to this emitted buffer, then clear it. The gap precedes these samples, so
     // the audio thread fills it with silence before feeding them.
@@ -314,6 +364,102 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
         single_source_pending_gap_frames_ = 0;
     }
     return true;
+}
+
+void MixedAudioSrc::StoreTimelinePacket(size_t index, const RawAudioBuffer& packet, bool tail) {
+    if (packet.num_frames == 0)
+        return;
+    auto& source = timeline_sources_[index];
+    const auto* normalized = static_cast<OutputFormatAudioSrc*>(sources_[index].get());
+    const uint64_t qpc = normalized->LastBufferQpcNs();
+    int64_t start;
+    if (tail) {
+        start = source.end;
+    } else if (qpc != 0) {
+        start = SamplePosition(qpc);
+    } else if (source.seen) {
+        start = source.end + packet.gap_frames;
+        const auto wall = SamplePosition(clock_now_ns_()) - SamplePosition(kArrivalHorizonNs);
+        start = std::max(start, wall);
+    } else {
+        start = timeline_started_ ? output_frame_ : SamplePosition(clock_now_ns_()) - packet.num_frames;
+    }
+    if (!timeline_started_) {
+        output_frame_ = start;
+        latest_frame_ = start;
+        timeline_started_ = true;
+    } else if (!timeline_emitted_) {
+        output_frame_ = std::min(output_frame_, start);
+    }
+    source.seen = true;
+    source.end = start + packet.num_frames;
+    latest_frame_ = std::max(latest_frame_, source.end);
+    const bool muted = index < 32 && (source_mute_mask_.load(std::memory_order_relaxed) & (1u << index));
+    const float gain = source_gain_multipliers_[index] / static_cast<float>(sources_.size());
+    const auto* samples = reinterpret_cast<const float*>(packet.bytes);
+    for (uint32_t f = 0; f < packet.num_frames; ++f) {
+        const int64_t position = start + f;
+        if (position < output_frame_ || position >= output_frame_ + kMaxFifoFrames)
+            continue;
+        const auto slot = static_cast<size_t>(position % kMaxFifoFrames);
+        source.tags[slot] = position;
+        for (size_t channel = 0; channel < kOutputChannels; ++channel)
+            source.samples[slot * kOutputChannels + channel] =
+                muted || packet.silent || !samples ? 0.0f : samples[f * kOutputChannels + channel] * gain;
+    }
+}
+
+uint32_t MixedAudioSrc::TimelineFramesReady() const {
+    if (!timeline_started_)
+        return 0;
+    int64_t ready = latest_frame_;
+    if (!draining_) {
+        for (size_t i = 0; i < timeline_sources_.size(); ++i) {
+            if (source_degraded_[i])
+                continue;
+            const auto& source = timeline_sources_[i];
+            ready = std::min(ready, source.seen ? source.end : output_frame_);
+        }
+        const int64_t deadline = SamplePosition(clock_now_ns_()) - SamplePosition(kArrivalHorizonNs);
+        ready = std::max(ready, deadline);
+    }
+    return static_cast<uint32_t>(std::clamp<int64_t>(ready - output_frame_, 0, kMixFrameCount));
+}
+
+void MixedAudioSrc::MixTimeline(uint32_t frames) {
+    last_output_qpc_ns_ = DeviceFramesToNs(static_cast<uint64_t>(output_frame_), kOutputSampleRate);
+    for (const auto& source : timeline_sources_) {
+        for (uint32_t f = 0; f < frames; ++f) {
+            const int64_t position = output_frame_ + f;
+            const auto slot = static_cast<size_t>(position % kMaxFifoFrames);
+            if (source.tags[slot] != position)
+                continue;
+            for (size_t channel = 0; channel < kOutputChannels; ++channel)
+                mix_buffer_[f * kOutputChannels + channel] += source.samples[slot * kOutputChannels + channel];
+        }
+    }
+    output_frame_ += frames;
+    timeline_emitted_ = true;
+}
+
+void MixedAudioSrc::BeginDrain() {
+    if (draining_)
+        return;
+    draining_ = true;
+    // Already captured filter tails belong immediately after each source's last output.
+    for (size_t i = 0; i < sources_.size(); ++i) {
+        RawAudioBuffer tail{};
+        auto* normalized = static_cast<OutputFormatAudioSrc*>(sources_[i].get());
+        if (normalized->DrainResampler(tail) > 0) {
+            if (sources_.size() > 1)
+                StoreTimelinePacket(i, tail, true);
+            else {
+                const auto* samples = reinterpret_cast<const float*>(tail.bytes);
+                for (size_t s = 0; s < static_cast<size_t>(tail.num_frames) * kOutputChannels; ++s)
+                    source_fifo_[0].push_back(samples[s] * source_gain_multipliers_[0]);
+            }
+        }
+    }
 }
 
 bool MixedAudioSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const {
@@ -336,6 +482,8 @@ bool MixedAudioSrc::Reinit(std::string& out_error) {
         std::string err;
         if (sources_[i]->Reinit(err)) {
             source_degraded_[i] = false;
+            if (i < timeline_sources_.size())
+                timeline_sources_[i].seen = false;
         } else if (first_err.empty()) {
             first_err = err;
         }

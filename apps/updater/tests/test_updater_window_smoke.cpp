@@ -1,46 +1,33 @@
-// test_updater_window_smoke.cpp -- widget smoke tests for the updater window.
+// test_updater_window_smoke.cpp -- the updater frontend's visible contract.
 //
-// UpdaterWindow / ProgressRing / StepListWidget are QtWidgets, so this binary
-// owns a single QApplication (created once per test binary; CTest isolates each
-// binary in its own process). The tests drive the window purely through
-// render(const UpdaterUiState&) and assert the visible contract: the five fixed
-// step labels, the footer button captions per terminal variant, and the
-// close-X enabled/disabled flips while a swap is mid-flight.
+// The window is Qt Quick now, rendered from the same UpdaterController state as
+// before through UpdaterViewAdapter. The projection is asserted directly on the
+// adapter (step labels, footer captions, close policy, terminal copy) and the
+// shipped executable is launched once per canned preview state to prove the real
+// Quick window loads, renders and exits cleanly -- the guarantee the Widgets
+// smoke test gave.
+//
+// The process runs are offscreen and use Qt's software renderer on purpose: the
+// updater must stay readable in restricted graphics environments, so the smoke
+// must not depend on a shader-only path.
 
 #include <gtest/gtest.h>
 
-#include <QApplication>
-#include <QCloseEvent>
 #include <QCoreApplication>
-#include <QEventLoop>
-#include <QLabel>
-#include <QPushButton>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QString>
 #include <QStringList>
 
-#include <array>
-#include <memory>
-
-#include "ElidingLabel.h"
-#include "StepListWidget.h"
+#include "UpdaterArgs.h"
 #include "UpdaterController.h"
-#include "UpdaterWindow.h"
+#include "UpdaterExePath.h"
+#include "UpdaterViewAdapter.h"
 
 using namespace exosnap::updater;
 
 namespace {
 
-QApplication* EnsureApplication() {
-    if (auto* existing = qobject_cast<QApplication*>(QCoreApplication::instance()))
-        return existing;
-    static int argc = 1;
-    static char app_name[] = "updater_window_tests";
-    static char* argv[] = {app_name, nullptr};
-    static QApplication app(argc, argv);
-    return &app;
-}
-
-// Progress state with Install mid-flight: close must be blocked.
 UpdaterUiState InstallInFlight() {
     UpdaterController c(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
     c.onStepDone(UpStep::Download);
@@ -74,55 +61,29 @@ UpdaterUiState Terminal(FailureCase which) {
     return c.state();
 }
 
-void Settle(UpdaterWindow& window) {
-    window.move(-20000, -20000);
-    window.show();
-    for (int i = 0; i < 3; ++i) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents);
-        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-        window.ensurePolished();
+bool RunPreviewSmoke(const QString& state) {
+    QProcess process;
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("offscreen"));
+    env.insert(QStringLiteral("QT_QUICK_BACKEND"), QStringLiteral("software"));
+    process.setProcessEnvironment(env);
+    process.start(QString::fromUtf8(EXOSNAP_UPDATER_EXE),
+                  {QStringLiteral("--preview-state"), state, QStringLiteral("--preview-smoke")});
+    if (!process.waitForStarted(10000))
+        return false;
+    if (!process.waitForFinished(30000)) {
+        process.kill();
+        process.waitForFinished(5000);
+        return false;
     }
+    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
 }
 
-// The string a label STANDS FOR, which is not always the string it paints: the
-// window's text rows elide, and `text()` on an ElidingLabel is whatever fits the
-// width the layout last gave it. These assertions are about the copy, so they
-// have to ask for the copy.
-QStringList LabelStrings(const UpdaterWindow& window) {
-    QStringList out;
-    for (const auto* label : window.findChildren<QLabel*>()) {
-        if (const auto* eliding = qobject_cast<const ElidingLabel*>(label))
-            out << eliding->fullText();
-        else
-            out << label->text();
-    }
-    return out;
-}
+} // namespace
 
-void ExpectLabelFitsOneLine(const UpdaterWindow& window, const char* object_name) {
-    const auto* label = window.findChild<QLabel*>(QString::fromLatin1(object_name));
-    ASSERT_NE(label, nullptr) << object_name;
-    // For an eliding row the contract is not "the full string fits" — it cannot
-    // be, for content this window receives from outside — but "what is painted
-    // fits its box, on one line".
-    if (const auto* eliding = qobject_cast<const ElidingLabel*>(label)) {
-        EXPECT_LE(eliding->fontMetrics().horizontalAdvance(eliding->text()), eliding->textAreaWidth())
-            << object_name << " overflows its own box: " << eliding->text().toStdString();
-        return;
-    }
-    EXPECT_GE(label->width(), label->fontMetrics().horizontalAdvance(label->text()))
-        << object_name << " wrapped or clipped: " << label->text().toStdString();
-}
-
-class UpdaterWindowTest : public ::testing::Test {
-  protected:
-    static void SetUpTestSuite() {
-        EnsureApplication();
-    }
-};
-
-TEST_F(UpdaterWindowTest, StepLabelsAreTheFiveFixedCanonStrings) {
-    const std::array<QString, 5> labels = UpdaterWindow::stepLabels();
+TEST(UpdaterViewAdapterTest, StepLabelsAreTheFiveFixedCanonStrings) {
+    const QStringList labels = UpdaterViewAdapter::stepLabels();
+    ASSERT_EQ(labels.size(), 5);
     EXPECT_EQ(labels[0], QStringLiteral("Downloading update"));
     EXPECT_EQ(labels[1], QStringLiteral("Closing previous version"));
     EXPECT_EQ(labels[2], QStringLiteral("Installing new files"));
@@ -130,364 +91,149 @@ TEST_F(UpdaterWindowTest, StepLabelsAreTheFiveFixedCanonStrings) {
     EXPECT_EQ(labels[4], QStringLiteral("Launching ExoSnap"));
 }
 
-TEST_F(UpdaterWindowTest, RenderShowsEveryStepLabelInTheWidgetTree) {
-    UpdaterWindow window;
-    window.render(InstallInFlight());
+TEST(UpdaterViewAdapterTest, RenderShowsEveryStepLabelAndState) {
+    UpdaterViewAdapter adapter;
+    adapter.render(InstallInFlight());
 
-    const QStringList seen = LabelStrings(window);
-    for (const QString& expected : UpdaterWindow::stepLabels())
-        EXPECT_TRUE(seen.contains(expected)) << expected.toStdString();
+    ASSERT_EQ(adapter.stepRows().size(), 5);
+    const QStringList labels = UpdaterViewAdapter::stepLabels();
+    for (int i = 0; i < labels.size(); ++i)
+        EXPECT_EQ(adapter.stepRows().at(i).toMap().value(QStringLiteral("label")).toString(), labels.at(i));
+    EXPECT_EQ(adapter.stepRows().at(0).toMap().value(QStringLiteral("status")).toString(), QStringLiteral("done"));
+    EXPECT_EQ(adapter.stepRows().at(2).toMap().value(QStringLiteral("status")).toString(), QStringLiteral("working"));
+    EXPECT_EQ(adapter.stepRows().at(3).toMap().value(QStringLiteral("status")).toString(), QStringLiteral("queued"));
 }
 
-TEST_F(UpdaterWindowTest, CloseIsBlockedWhileInstallIsWorking) {
-    UpdaterWindow window;
-    window.render(InstallInFlight());
-    EXPECT_FALSE(window.closeEnabled());
+TEST(UpdaterViewAdapterTest, CloseIsBlockedWhileInstallVerifyOrLaunchIsWorking) {
+    UpdaterViewAdapter adapter;
+    adapter.render(InstallInFlight());
+    EXPECT_FALSE(adapter.closeEnabled());
+    EXPECT_FALSE(adapter.requestClose());
+
+    adapter.render(VerifyInFlight());
+    EXPECT_FALSE(adapter.closeEnabled());
+    EXPECT_FALSE(adapter.requestClose());
+
+    adapter.render(LaunchInFlight());
+    EXPECT_FALSE(adapter.closeEnabled());
+    EXPECT_FALSE(adapter.requestClose());
 }
 
-TEST_F(UpdaterWindowTest, CloseIsBlockedWhileVerifyIsWorking) {
-    UpdaterWindow window;
-    window.render(VerifyInFlight());
-    EXPECT_FALSE(window.closeEnabled());
+TEST(UpdaterViewAdapterTest, CloseIsAllowedOnTerminalStates) {
+    UpdaterViewAdapter adapter;
+    int closed = 0;
+    QObject::connect(&adapter, &UpdaterViewAdapter::closeRequested, &adapter, [&closed]() { ++closed; });
+
+    adapter.render(Terminal(FailureCase::InstallFailed));
+    EXPECT_TRUE(adapter.closeEnabled());
+    EXPECT_TRUE(adapter.requestClose());
+    EXPECT_EQ(closed, 1);
 }
 
-TEST_F(UpdaterWindowTest, CloseIsBlockedWhileLaunchIsWorking) {
-    UpdaterWindow window;
-    window.render(LaunchInFlight());
-    EXPECT_FALSE(window.closeEnabled());
+TEST(UpdaterViewAdapterTest, SafeWorkingCloseAsksInsteadOfClosing) {
+    UpdaterViewAdapter adapter;
+    int closed = 0;
+    int confirmations = 0;
+    QObject::connect(&adapter, &UpdaterViewAdapter::closeRequested, &adapter, [&closed]() { ++closed; });
+    QObject::connect(&adapter, &UpdaterViewAdapter::cancelConfirmationRequested, &adapter,
+                     [&confirmations]() { ++confirmations; });
+
+    UpdaterController c(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
+    c.onStepStarted(UpStep::Download);
+    adapter.render(c.state());
+
+    EXPECT_TRUE(adapter.closeEnabled());
+    EXPECT_FALSE(adapter.requestClose());
+    EXPECT_EQ(closed, 0);
+    EXPECT_EQ(confirmations, 1);
+    EXPECT_TRUE(adapter.cancelConfirmationVisible());
+
+    adapter.confirmCancelAndClose();
+    EXPECT_EQ(closed, 1);
+    EXPECT_FALSE(adapter.cancelConfirmationVisible());
 }
 
-TEST_F(UpdaterWindowTest, CloseIsAllowedOnTerminalStates) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::VerifyInstallFailed));
-    EXPECT_TRUE(window.closeEnabled());
+TEST(UpdaterViewAdapterTest, RedVariantFooterButtons) {
+    UpdaterViewAdapter adapter;
+    adapter.render(Terminal(FailureCase::VerifyInstallFailed));
+    EXPECT_EQ(adapter.footerButtonLabels(),
+              QStringList({QStringLiteral("Retry"), QStringLiteral("Close")}));
 }
 
-// The in-window close button is only half the guard -- Alt+F4, the taskbar
-// close, and a Windows logoff all raise WM_CLOSE / QCloseEvent directly,
-// bypassing the disabled button entirely. closeEvent() must refuse those too
-// while a swap is mid-flight, or a force-kill between StageRename's two
-// renames can strand the install directory.
-TEST_F(UpdaterWindowTest, CloseEventIsIgnoredWhileInstallIsWorking) {
-    UpdaterWindow window;
-    window.render(InstallInFlight());
-    QCloseEvent event;
-    QCoreApplication::sendEvent(&window, &event);
-    EXPECT_FALSE(event.isAccepted());
+TEST(UpdaterViewAdapterTest, GreenVariantFooterButtons) {
+    UpdaterUiState state = Terminal(FailureCase::LaunchFailed);
+    ASSERT_EQ(state.variant, TerminalVariant::Green);
+    UpdaterViewAdapter adapter;
+    adapter.render(state);
+    EXPECT_TRUE(adapter.footerButtonLabels().contains(QStringLiteral("Open ExoSnap")));
 }
 
-TEST_F(UpdaterWindowTest, CloseEventIsIgnoredWhileVerifyIsWorking) {
-    UpdaterWindow window;
-    window.render(VerifyInFlight());
-    QCloseEvent event;
-    QCoreApplication::sendEvent(&window, &event);
-    EXPECT_FALSE(event.isAccepted());
+TEST(UpdaterViewAdapterTest, MsiRebootRequiredHasSingleCloseButtonAndRestartHeadline) {
+    UpdaterViewAdapter adapter;
+    adapter.render(Terminal(FailureCase::MsiRebootRequired));
+    EXPECT_EQ(adapter.statusHeadline(), QStringLiteral("Update installed — restart Windows to finish"));
+    EXPECT_EQ(adapter.footerButtonLabels(), QStringList({QStringLiteral("Close")}));
 }
 
-TEST_F(UpdaterWindowTest, CloseEventIsIgnoredWhileLaunchIsWorking) {
-    UpdaterWindow window;
-    window.render(LaunchInFlight());
-    QCloseEvent event;
-    QCoreApplication::sendEvent(&window, &event);
-    EXPECT_FALSE(event.isAccepted());
+TEST(UpdaterViewAdapterTest, MsiVerifyFailureDoesNotClaimAConfirmedRollback) {
+    UpdaterViewAdapter adapter;
+    adapter.render(Terminal(FailureCase::VerifyInstallFailedMsi));
+    // The MSI path cannot confirm the post-install state; the copy must say so
+    // rather than claim the previous version was restored.
+    EXPECT_TRUE(adapter.panelSafety().contains(QStringLiteral("Windows Installer"))
+                || adapter.panelDetail().contains(QStringLiteral("Windows Installer"))
+                || adapter.panelSafety().contains(QStringLiteral("could not be confirmed"))
+                || adapter.panelDetail().contains(QStringLiteral("could not be confirmed")));
+    EXPECT_FALSE(adapter.panelTitle().contains(QStringLiteral("restored")));
 }
 
-TEST_F(UpdaterWindowTest, CloseEventIsAcceptedOnTerminalStates) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::VerifyInstallFailed));
-    QCloseEvent event;
-    QCoreApplication::sendEvent(&window, &event);
-    EXPECT_TRUE(event.isAccepted());
+TEST(UpdaterViewAdapterTest, CriticalInProgressKeepsDisabledCloseAction) {
+    UpdaterViewAdapter adapter;
+    adapter.render(InstallInFlight());
+    EXPECT_TRUE(adapter.closeActionVisible());
+    EXPECT_FALSE(adapter.closeActionEnabled());
+    EXPECT_EQ(adapter.closeActionLabel(), QStringLiteral("Close"));
+    EXPECT_EQ(adapter.hint(), QStringLiteral("This phase cannot be interrupted."));
 }
 
-TEST_F(UpdaterWindowTest, RedVariantFooterButtons) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::VerifyInstallFailed));
-    const QStringList buttons = window.footerButtonLabels();
-    ASSERT_EQ(buttons.size(), 2);
-    EXPECT_EQ(buttons[0], QStringLiteral("Retry"));
-    EXPECT_EQ(buttons[1], QStringLiteral("Close"));
+TEST(UpdaterViewAdapterTest, GreenVariantRendersLaunchRowTagAsManual) {
+    UpdaterViewAdapter adapter;
+    adapter.render(Terminal(FailureCase::LaunchFailed));
+    EXPECT_EQ(adapter.stepRows().at(4).toMap().value(QStringLiteral("tag")).toString(), QStringLiteral("manual"));
 }
 
-TEST_F(UpdaterWindowTest, TerminalCopyStaysInResultCardAndActionsUseFixedExternalRow) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::DownloadFailed));
+TEST(UpdaterViewAdapterTest, RedAndAmberVariantsRenderFailedRowTagAsFailed) {
+    UpdaterViewAdapter adapter;
+    adapter.render(Terminal(FailureCase::VerifyInstallFailed));
+    EXPECT_EQ(adapter.stepRows().at(3).toMap().value(QStringLiteral("tag")).toString(), QStringLiteral("failed"));
 
-    auto* card = window.findChild<QWidget*>(QStringLiteral("updaterResultCard"));
-    auto* headline = window.findChild<QLabel*>(QStringLiteral("updaterResultHeadline"));
-    auto* detail = window.findChild<QLabel*>(QStringLiteral("updaterResultDetail"));
-    auto* safety = window.findChild<QLabel*>(QStringLiteral("updaterSafetyText"));
-    auto* retry = window.findChild<QPushButton*>(QStringLiteral("updaterRetryButton"));
-    auto* action_row = window.findChild<QWidget*>(QStringLiteral("updaterActionRow"));
-    ASSERT_NE(card, nullptr);
-    ASSERT_NE(headline, nullptr);
-    ASSERT_NE(detail, nullptr);
-    ASSERT_NE(safety, nullptr);
-    ASSERT_NE(retry, nullptr);
-    ASSERT_NE(action_row, nullptr);
-    EXPECT_TRUE(card->isAncestorOf(headline));
-    EXPECT_TRUE(card->isAncestorOf(detail));
-    EXPECT_TRUE(card->isAncestorOf(safety));
-    EXPECT_FALSE(card->isAncestorOf(retry));
-    EXPECT_TRUE(action_row->isAncestorOf(retry));
-    EXPECT_FALSE(retry->icon().isNull());
-    EXPECT_EQ(retry->accessibleName(), QStringLiteral("Retry"));
+    adapter.render(Terminal(FailureCase::InstallFailed));
+    EXPECT_EQ(adapter.stepRows().at(2).toMap().value(QStringLiteral("tag")).toString(), QStringLiteral("failed"));
 }
 
-TEST_F(UpdaterWindowTest, TitleBarUsesSingleLineExoSnapUpdaterIdentityWithoutStatus) {
-    UpdaterWindow window;
-    UpdaterUiState state = InstallInFlight();
-    state.verification_reinstall = true;
-    window.render(state);
-
-    auto* wordmark = window.findChild<QLabel*>(QStringLiteral("updaterWordmark"));
-    auto* title = window.findChild<QLabel*>(QStringLiteral("updaterTitle"));
-    auto* title_bar = window.findChild<QWidget*>(QStringLiteral("updaterTitleBar"));
-    auto* minimize = window.findChild<QPushButton*>(QStringLiteral("updaterMinimizeButton"));
-    auto* close = window.findChild<QPushButton*>(QStringLiteral("updaterCloseButton"));
-    ASSERT_NE(wordmark, nullptr);
-    ASSERT_NE(title, nullptr);
-    ASSERT_NE(title_bar, nullptr);
-    ASSERT_NE(minimize, nullptr);
-    ASSERT_NE(close, nullptr);
-    EXPECT_TRUE(wordmark->text().contains(QStringLiteral("exo")));
-    EXPECT_TRUE(wordmark->text().contains(QStringLiteral("snap")));
-    EXPECT_EQ(title->text(), QStringLiteral("Updater"));
-    EXPECT_EQ(title_bar->height(), 56);
-    EXPECT_EQ(minimize->size(), QSize(46, 56));
-    EXPECT_EQ(close->size(), QSize(46, 56));
-    EXPECT_EQ(window.findChild<QPushButton*>(QStringLiteral("updaterMaximizeButton")), nullptr);
-    EXPECT_EQ(window.findChild<QLabel*>(QStringLiteral("updaterTitleStatus")), nullptr);
-    EXPECT_EQ(window.findChild<QLabel*>(QStringLiteral("updaterTitleDetail")), nullptr);
-    EXPECT_EQ(window.findChild<QLabel*>(QStringLiteral("updaterVerifyTag")), nullptr);
+TEST(UpdaterViewAdapterTest, TerminalAmberHasNoKeepOnNote) {
+    UpdaterViewAdapter adapter;
+    adapter.render(Terminal(FailureCase::InstallFailed));
+    EXPECT_FALSE(adapter.hint().contains(QStringLiteral("Cancelling discards")));
+    EXPECT_TRUE(adapter.hint().isEmpty());
 }
 
-TEST_F(UpdaterWindowTest, WindowDimensionsStayFixedAcrossWorkingAndTerminalStates) {
-    UpdaterWindow working;
-    working.render(InstallInFlight());
-    const QSize expected = working.size();
-
-    UpdaterWindow warning;
-    warning.render(Terminal(FailureCase::InstallFailed));
-    UpdaterWindow error;
-    error.render(Terminal(FailureCase::VerifyInstallFailed));
-    UpdaterWindow completed;
-    completed.render(Terminal(FailureCase::LaunchFailed));
-
-    EXPECT_EQ(expected, QSize(520, 680));
-    EXPECT_EQ(working.minimumSize(), expected);
-    EXPECT_EQ(working.maximumSize(), expected);
-    EXPECT_EQ(warning.size(), expected);
-    EXPECT_EQ(error.size(), expected);
-    EXPECT_EQ(completed.size(), expected);
+TEST(UpdaterViewAdapterTest, AppWontCloseNamesTheActionTheModeOffers) {
+    UpdaterController controller(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
+    controller.setMode(exosnap::update::UpdaterMode::Manual);
+    controller.onStepDone(UpStep::Download);
+    controller.onFailure(FailureCase::AppWontClose, QString());
+    UpdaterViewAdapter adapter;
+    adapter.render(controller.state());
+    EXPECT_FALSE(controller.state().secondary_action.isEmpty());
+    EXPECT_EQ(adapter.secondaryAction(), controller.state().secondary_action);
 }
 
-TEST_F(UpdaterWindowTest, StatePanelAndActionRowKeepTheSameGeometryAcrossStates) {
-    struct Geometry {
-        QRect panel;
-        QRect actions;
-    };
-    const auto geometryFor = [](const UpdaterUiState& state) {
-        auto window = std::make_unique<UpdaterWindow>();
-        window->render(state);
-        Settle(*window);
-        auto* panel = window->findChild<QWidget*>(QStringLiteral("updaterWorkingPanel"));
-        if (panel == nullptr)
-            panel = window->findChild<QWidget*>(QStringLiteral("updaterResultCard"));
-        auto* actions = window->findChild<QWidget*>(QStringLiteral("updaterActionRow"));
-        EXPECT_NE(panel, nullptr);
-        EXPECT_NE(actions, nullptr);
-        return Geometry{panel != nullptr ? panel->geometry() : QRect{},
-                        actions != nullptr ? actions->geometry() : QRect{}};
-    };
-
-    const Geometry working = geometryFor(InstallInFlight());
-    const Geometry warning = geometryFor(Terminal(FailureCase::InstallFailed));
-    const Geometry success = geometryFor(Terminal(FailureCase::LaunchFailed));
-    EXPECT_EQ(working.panel, warning.panel);
-    EXPECT_EQ(working.panel, success.panel);
-    EXPECT_EQ(working.actions, warning.actions);
-    EXPECT_EQ(working.actions, success.actions);
-    EXPECT_EQ(working.panel.height(), 110);
-    EXPECT_EQ(working.actions.height(), 36);
+// The real Quick window, one per canned state. This is the smoke that proves
+// the QML module, the shared theme and the bundled fonts all load and render in
+// the shipped executable.
+TEST(UpdaterQuickWindowSmoke, EveryPreviewStateStartsAndRendersOffscreen) {
+    ASSERT_FALSE(PreviewStateNames().isEmpty());
+    for (const QString& state : PreviewStateNames())
+        EXPECT_TRUE(RunPreviewSmoke(state)) << "preview state: " << state.toStdString();
 }
-
-TEST_F(UpdaterWindowTest, EveryTerminalResultKeepsItsThreeCopyRowsOnOneLine) {
-    constexpr std::array<FailureCase, 12> failures = {
-        FailureCase::DownloadFailed,
-        FailureCase::VerifyDownloadFailed,
-        FailureCase::VerifyReinstallMismatch,
-        FailureCase::AppWontClose,
-        FailureCase::InstallFailed,
-        FailureCase::VerifyInstallFailed,
-        FailureCase::RestoreFailed,
-        FailureCase::VerifyInstallFailedMsi,
-        FailureCase::LaunchFailed,
-        FailureCase::UacDeclined,
-        FailureCase::MsiFailed,
-        FailureCase::MsiRebootRequired,
-    };
-
-    for (const FailureCase failure : failures) {
-        UpdaterWindow window;
-        window.render(Terminal(failure));
-        Settle(window);
-        ExpectLabelFitsOneLine(window, "updaterResultHeadline");
-        ExpectLabelFitsOneLine(window, "updaterResultDetail");
-        ExpectLabelFitsOneLine(window, "updaterSafetyText");
-    }
-}
-
-TEST_F(UpdaterWindowTest, WorkingPanelKeepsAllThreeCopyRowsOnOneLine) {
-    UpdaterWindow window;
-    window.render(InstallInFlight());
-    Settle(window);
-    ExpectLabelFitsOneLine(window, "updaterWorkingTitle");
-    ExpectLabelFitsOneLine(window, "updaterWorkingDetail");
-    ExpectLabelFitsOneLine(window, "updaterWorkingSafety");
-}
-
-TEST_F(UpdaterWindowTest, SafeWorkingPhasesExposeCancelSemanticsThroughCloseControl) {
-    UpdaterController controller(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
-    controller.onStepStarted(UpStep::Download);
-    UpdaterWindow window;
-    window.render(controller.state());
-
-    EXPECT_TRUE(window.closeEnabled());
-    EXPECT_TRUE(window.footerButtonLabels().contains(QStringLiteral("Cancel update")));
-    auto* cancel = window.findChild<QPushButton*>(QStringLiteral("updaterCancelButton"));
-    ASSERT_NE(cancel, nullptr);
-    Settle(window);
-    cancel->click();
-    EXPECT_TRUE(window.cancelConfirmationVisible());
-    auto* dialog = window.findChild<QWidget*>(QStringLiteral("updaterCancelDialog"));
-    ASSERT_NE(dialog, nullptr);
-    EXPECT_TRUE(dialog->isVisibleTo(&window));
-}
-
-TEST_F(UpdaterWindowTest, SafeWorkingCloseEventShowsConfirmationInsteadOfClosing) {
-    UpdaterController controller(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
-    controller.onStepStarted(UpStep::Download);
-    UpdaterWindow window;
-    window.render(controller.state());
-    Settle(window);
-
-    QCloseEvent event;
-    QCoreApplication::sendEvent(&window, &event);
-    EXPECT_FALSE(event.isAccepted());
-    EXPECT_TRUE(window.cancelConfirmationVisible());
-}
-
-TEST_F(UpdaterWindowTest, GreenVariantFooterButtons) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::LaunchFailed));
-    const QStringList buttons = window.footerButtonLabels();
-    ASSERT_EQ(buttons.size(), 2);
-    EXPECT_EQ(buttons[0], QStringLiteral("Open ExoSnap"));
-    EXPECT_EQ(buttons[1], QStringLiteral("Close"));
-}
-
-TEST_F(UpdaterWindowTest, MsiRedVariantHasSinglePrimaryButton) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::MsiFailed));
-    const QStringList buttons = window.footerButtonLabels();
-    ASSERT_EQ(buttons.size(), 1);
-    EXPECT_EQ(buttons[0], QStringLiteral("Close"));
-}
-
-TEST_F(UpdaterWindowTest, MsiRebootRequiredHasSingleCloseButton) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::MsiRebootRequired));
-    const QStringList buttons = window.footerButtonLabels();
-    ASSERT_EQ(buttons.size(), 1);
-    EXPECT_EQ(buttons[0], QStringLiteral("Close"));
-    // Close must be allowed: the install already applied, nothing is mid-flight.
-    EXPECT_TRUE(window.closeEnabled());
-}
-
-TEST_F(UpdaterWindowTest, MsiRebootRequiredHeadlineMentionsRestart) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::MsiRebootRequired));
-
-    const QStringList seen = LabelStrings(window);
-    bool mentions_restart = false;
-    for (const QString& text : seen)
-        mentions_restart = mentions_restart || text.contains(QStringLiteral("restart Windows"));
-    EXPECT_TRUE(mentions_restart);
-}
-
-TEST_F(UpdaterWindowTest, MsiVerifyFailureDoesNotClaimAConfirmedRollback) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::VerifyInstallFailedMsi));
-
-    const QStringList seen = LabelStrings(window);
-    bool could_not_confirm = false;
-    bool restored = false;
-    for (const QString& text : seen) {
-        could_not_confirm = could_not_confirm || text.contains(QStringLiteral("Couldn't confirm"));
-        restored = restored || text.contains(QStringLiteral("was restored"));
-    }
-    EXPECT_TRUE(could_not_confirm);
-    EXPECT_FALSE(restored);
-    // Same actions as the portable B3 red card.
-    const QStringList buttons = window.footerButtonLabels();
-    ASSERT_EQ(buttons.size(), 2);
-    EXPECT_EQ(buttons[0], QStringLiteral("Retry"));
-    EXPECT_EQ(buttons[1], QStringLiteral("Close"));
-}
-
-TEST_F(UpdaterWindowTest, CriticalInProgressStateKeepsDisabledCloseInFixedActionRow) {
-    UpdaterWindow window;
-    window.render(InstallInFlight());
-    EXPECT_EQ(window.footerButtonLabels(), QStringList{QStringLiteral("Close")});
-    auto* action_row = window.findChild<QWidget*>(QStringLiteral("updaterActionRow"));
-    ASSERT_NE(action_row, nullptr);
-    const auto buttons = action_row->findChildren<QPushButton*>();
-    ASSERT_EQ(buttons.size(), 1);
-    EXPECT_FALSE(buttons.front()->isEnabled());
-}
-
-// Green is a soft success (the update installed fine; only the auto-relaunch
-// didn't happen), so the Launch row must read as an action to take ("manual"),
-// never as an error ("failed"). Red/Amber variants are real failures and must
-// keep the "failed" tag.
-TEST_F(UpdaterWindowTest, GreenVariantRendersLaunchRowTagAsManual) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::LaunchFailed));
-
-    const QStringList seen = LabelStrings(window);
-    EXPECT_TRUE(seen.contains(QStringLiteral("manual")));
-    EXPECT_FALSE(seen.contains(QStringLiteral("failed")));
-}
-
-TEST_F(UpdaterWindowTest, RedVariantRendersFailedRowTagAsFailed) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::VerifyInstallFailed));
-
-    const QStringList seen = LabelStrings(window);
-    EXPECT_TRUE(seen.contains(QStringLiteral("failed")));
-    EXPECT_FALSE(seen.contains(QStringLiteral("manual")));
-}
-
-TEST_F(UpdaterWindowTest, AmberVariantRendersFailedRowTagAsFailed) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::InstallFailed));
-
-    const QStringList seen = LabelStrings(window);
-    EXPECT_TRUE(seen.contains(QStringLiteral("failed")));
-    EXPECT_FALSE(seen.contains(QStringLiteral("manual")));
-}
-
-// Terminal Amber must not repeat the "keep your computer on" note -- that is
-// an in-progress-only affordance, and the terminal footer sentence already
-// says the current version is safe.
-TEST_F(UpdaterWindowTest, TerminalAmberHasNoKeepOnNote) {
-    UpdaterWindow window;
-    window.render(Terminal(FailureCase::InstallFailed));
-
-    const QStringList seen = LabelStrings(window);
-    for (const QString& text : seen)
-        EXPECT_FALSE(text.contains(QStringLiteral("Keep your computer on"))) << text.toStdString();
-}
-
-} // namespace

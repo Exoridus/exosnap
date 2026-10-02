@@ -67,7 +67,7 @@ class AudioThread : public std::enable_shared_from_this<AudioThread> {
     // which the encode loop mutes by feeding silence instead.
     MixedAudioSrc* mixed_src_ = nullptr;
     // Typed, non-owning view of the OutputFormatAudioSrc wrapper that source_
-    // points at after Run() wraps the raw capture source (ADR 0030). Lets the
+    // points at after Run() wraps the raw capture source. Lets the
     // clock-slaving controller drive its compensation without an interface
     // downcast. Valid for the lifetime of source_.
     OutputFormatAudioSrc* output_format_src_ = nullptr;

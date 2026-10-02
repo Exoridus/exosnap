@@ -297,7 +297,7 @@ ResolveResult SettingsResolver::ResolveChange(const UserRecorderConfig& current,
 OutputFormatReconciliation ReconcileOutputFormat(OutputFormatRequest request) noexcept {
     OutputFormatReconciliation outcome;
 
-    // 1. Container × codec compatibility (ADR 0010): the registry replaces an
+    // 1. Container × codec compatibility: the registry replaces an
     //    incompatible audio (and, if needed, video) codec with the container's
     //    preferred codec.
     const VideoCodec requested_video = request.video_codec;
@@ -305,7 +305,7 @@ OutputFormatReconciliation ReconcileOutputFormat(OutputFormatRequest request) no
     ContainerCompatRegistry::ReconcileCodecs(request.container, request.video_codec, request.audio_codec);
     outcome.codecs_adjusted = request.video_codec != requested_video || request.audio_codec != requested_audio;
 
-    // 2. 10-bit is HEVC/AV1 only (ADR 0032). Runs after the container rule so a
+    // 2. 10-bit is HEVC/AV1 only. Runs after the container rule so a
     //    stored 10-bit selection that just had H.264 forced onto it demotes too.
     if (request.bit_depth == BitDepth::Bit10 && !CodecSupports10Bit(request.video_codec)) {
         request.bit_depth = BitDepth::Bit8;

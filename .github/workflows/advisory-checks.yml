@@ -14,18 +14,18 @@ name: Advisory Checks
 #
 # WHY THIS IS ITS OWN WORKFLOW FILE
 #
-# This job used to live in ci.yml and ran on every push to main, where it cost
+# This job used to live in ci.yml and ran on every development-branch push, where it cost
 # up to 45 min of Windows runner time to re-derive a finding list that changes
 # on the scale of weeks, not commits. It is now nightly instead. It could not
 # simply gain a `schedule:` trigger inside ci.yml, for two reasons:
 #
 #   1. The README CI badge reads
-#      img.shields.io/github/actions/workflow/status/.../ci.yml?branch=main,
-#      which reports the conclusion of the most recent ci.yml run on main. A
+#      img.shields.io/github/actions/workflow/status/.../ci.yml?branch=next,
+#      which reports the conclusion of the most recent ci.yml run on next. A
 #      `schedule:` event always runs on the default branch, so every nightly
-#      would become the newest main run of ci.yml and would drive the badge.
+#      would become the newest next run of ci.yml and would drive the badge.
 #      A nightly that times out or trips over a toolchain hiccup would then
-#      paint the CI badge red even though main builds fine. Keeping the nightly
+#      paint the CI badge red even though next builds fine. Keeping the nightly
 #      in a separate workflow file keeps it out of ci.yml's history entirely.
 #   2. A `schedule:` trigger on ci.yml would also start the quick checks and,
 #      via their own conditions, potentially the heavy build legs — a scheduled
@@ -44,7 +44,7 @@ name: Advisory Checks
 on:
   # Nightly on the default branch. 03:00 UTC is off-peak for GitHub's hosted
   # Windows pool, and a run that starts then has finished long before the
-  # working day. schedule events always run on the default branch (main).
+  # working day. schedule events always run on the default branch (next).
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
@@ -118,25 +118,24 @@ jobs:
       # produce warnings (exit 0) not errors, and the finding count below is the whole point
       # of the step.
       #
-      # scripts/check-quality.ps1, not a clang-tidy invocation written out here. This step
-      # used to pass every tracked source on one command line: ~900 paths is roughly 36 KB
-      # against the 32767-character CreateProcess limit, so the process never started, and
-      # with continue-on-error the run went green without the notice line ever appearing.
-      # The script batches the file list to fit and runs the batches in parallel, and it is
-      # the same invocation local verification uses, so the two cannot drift apart.
+      # exo-dev lint quality, not a clang-tidy invocation written out here. This step used to
+      # pass every tracked source on one command line: ~900 paths is roughly 36 KB against the
+      # 32767-character CreateProcess limit, so the process never started, and with
+      # continue-on-error the run went green without the notice line ever appearing.
+      # exo-dev batches the file list to fit and runs the batches in parallel, and it is the
+      # same invocation local verification uses, so the two cannot drift apart.
       #
       # NO continue-on-error. It is the reason the launch failure went unnoticed for as long
-      # as it did. The script separates the two outcomes for us: findings are reported and
-      # exit 0, while "clang-tidy is not installed" and "this tree has no compile database"
-      # are non-zero -- which is exactly the half that must go red.
+      # as it did. exo-dev separates the two outcomes for us: findings are reported and exit
+      # 0, while "clang-tidy is not installed" and "this tree has no compile database" are
+      # non-zero -- which is exactly the half that must go red.
       - name: clang-tidy advisory checks
         shell: pwsh
         run: |
           $report = Join-Path $env:RUNNER_TEMP 'clang-tidy-advisory.txt'
-          pwsh -NoProfile -NonInteractive -File scripts/check-quality.ps1 `
-            -Only clang-tidy -BuildDir build/windows-x64-ninja-debug -ReportPath $report
+          cargo exo-dev lint quality --only clang-tidy --build-dir build/windows-x64-ninja-debug --report-path $report
           if ($LASTEXITCODE -ne 0) {
-            throw "check-quality.ps1 could not run clang-tidy (exit $LASTEXITCODE); the advisory pass produced no finding count."
+            throw "exo-dev lint quality could not run clang-tidy (exit $LASTEXITCODE); the advisory pass produced no finding count."
           }
           # Counted from the report file rather than the console: the script prints only a
           # tail, and a count taken from a truncated log is not the count it claims to be.

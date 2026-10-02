@@ -2,7 +2,7 @@
 
 #include "hdr_tonemap.h"
 
-#include <d3dcompiler.h>
+#include "measured_shader_compile.h"
 
 #include <cstdio>
 #include <cstring>
@@ -151,16 +151,16 @@ bool HdrToneMapper::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     winrt::com_ptr<ID3DBlob> ps_blob;
     winrt::com_ptr<ID3DBlob> error_blob;
 
-    HRESULT hr = D3DCompile(kVertexShaderSrc, std::strlen(kVertexShaderSrc), "hdr_tonemap_vs", nullptr, nullptr, "main",
-                            "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs_blob.put(), error_blob.put());
+    HRESULT hr = MeasuredD3DCompile(kVertexShaderSrc, std::strlen(kVertexShaderSrc), "hdr_tonemap_vs", nullptr, nullptr,
+                                    "main", "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs_blob.put(), error_blob.put());
     if (FAILED(hr)) {
         SetHResultError(err, "D3DCompile(tone-map vertex shader)", hr);
         return false;
     }
 
     error_blob = nullptr;
-    hr = D3DCompile(kPixelShaderSrc, std::strlen(kPixelShaderSrc), "hdr_tonemap_ps", nullptr, nullptr, "main", "ps_5_0",
-                    D3DCOMPILE_ENABLE_STRICTNESS, 0, ps_blob.put(), error_blob.put());
+    hr = MeasuredD3DCompile(kPixelShaderSrc, std::strlen(kPixelShaderSrc), "hdr_tonemap_ps", nullptr, nullptr, "main",
+                            "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, ps_blob.put(), error_blob.put());
     if (FAILED(hr)) {
         SetHResultError(err, "D3DCompile(tone-map pixel shader)", hr);
         return false;

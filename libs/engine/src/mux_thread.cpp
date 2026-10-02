@@ -168,7 +168,7 @@ void MuxThread::Run() {
     sw_config_template.encode_height = encH;
     sw_config_template.frame_rate_num = m_state.config.frame_rate_num;
     sw_config_template.frame_rate_den = m_state.config.frame_rate_den;
-    // Color description (ADR 0032) — carried from RecorderConfig into the track's
+    // Color description — carried from RecorderConfig into the track's
     // Colour element. Default SDR BT.709 limited-range.
     sw_config_template.color = m_state.config.color;
     // An HDR10 session measures its content light levels while it records, so the
@@ -208,7 +208,7 @@ void MuxThread::Run() {
             sw_config_template.audio_tracks[i].name = DeriveAudioTrackName(m_state.config.audio_track_plan.tracks[i]);
         }
     }
-    // Thread audio format from RecorderConfig into the stream writer config (ADR 0030).
+    // Thread audio format from RecorderConfig into the stream writer config.
     // Opus is locked to 48 kHz by Validate(); all other codecs use the configured rate.
     sw_config_template.audio_sample_rate = m_state.config.audio_sample_rate;
     sw_config_template.audio_channels = m_state.config.audio_channels;
@@ -269,6 +269,7 @@ void MuxThread::Run() {
 
         MatroskaStreamConfig cfg = sw_config_template;
         cfg.output_path = seg.path.string();
+        cfg.fail_io = m_state.output_io_failure;
         // Only segment 0 keeps the base path the caller reserved; DeriveSegmentPath
         // mints every later one, so those are the writer's to create exclusively.
         cfg.path_pre_reserved = index == 0 && m_state.config.output_path_pre_reserved;
@@ -304,6 +305,17 @@ void MuxThread::Run() {
         const double finalize_ms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - finalize_t0).count();
         const std::string err = seg.writer->error();
+        const auto& io = seg.writer->io_timings();
+        m_state.diagnostics.OnOutputIoFinalized(io.write_ms, io.crt_flush_ms, io.durability_flush_ms,
+                                                io.durability_failures);
+        const logging::LogField io_fields[] = {{"segment_index", std::to_string(seg.index)},
+                                               {"write_ms", std::to_string(io.write_ms)},
+                                               {"crt_flush_ms", std::to_string(io.crt_flush_ms)},
+                                               {"durability_flush_ms", std::to_string(io.durability_flush_ms)},
+                                               {"durability_failures", std::to_string(io.durability_failures)},
+                                               {"finalize_ms", std::to_string(finalize_ms)}};
+        logging::log(logging::LogLevel::Info, "mux_thread", "output I/O timing",
+                     std::span<const logging::LogField>(io_fields, std::size(io_fields)));
         seg.writer.reset();
         m_state.diagnostics.OnSegmentFinalized(finalize_ms, ok);
 
@@ -334,7 +346,7 @@ void MuxThread::Run() {
             // keeps this segment's recovery-manifest entry precisely because
             // the engine failed (see RecordingCoordinator::FinishRecording,
             // "Engine failed → leave the entry so recovery UI can offer
-            // repair" / ADR-0014's RemuxToMkv salvage path) — deleting the
+            // repair" / the RemuxToMkv salvage path) — deleting the
             // file here would silently destroy the footage that flow exists
             // to save. Every cluster flushed before the failure (typically
             // all of them; Finalize() only fails writing the trailer) is

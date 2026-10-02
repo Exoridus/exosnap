@@ -1,14 +1,14 @@
 name: Cache Warm
 
-# push -> main no longer builds anything (see ci.yml's "WHAT RUNS WHERE" header),
-# so without this workflow main's sccache scope -- the only scope every PR can
+# push -> next no longer builds anything (see ci.yml's "WHAT RUNS WHERE" header),
+# so without this workflow next's sccache scope -- the only scope every PR can
 # read from -- would go stale between nightly advisory-checks.yml runs, and the
 # next PR's first build would start cold. This workflow exists solely to keep
 # that scope warm for both Ninja presets: it builds, nothing else. It reports no
 # tests and no status the README badge or branch protection depends on.
 on:
   push:
-    branches: [main]
+    branches: [next]
   workflow_dispatch:
 
 env:
@@ -27,7 +27,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     concurrency:
-      group: cache-warm-debug-main
+      group: cache-warm-debug-next
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -58,7 +58,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     concurrency:
-      group: cache-warm-release-main
+      group: cache-warm-release-next
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

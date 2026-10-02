@@ -35,7 +35,7 @@ TEST(ManifestParse, ValidManifest) {
 }
 
 // The raw "version" string is kept alongside the parsed SemVer: the
-// verification reinstall gate (ADR 0055) compares it byte-for-byte against
+// verification reinstall gate compares it byte-for-byte against
 // --current-version, which SemVer equality cannot do for foreign labels.
 TEST(ManifestParse, KeepsTheRawVersionString) {
     const std::string json = R"({

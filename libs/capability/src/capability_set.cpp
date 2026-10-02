@@ -46,7 +46,7 @@ SupportAnnotation LookupAnnotation(const MapT& map, const KeyT& key, std::string
 // Maps a ContainerCompatLevel from the registry to a SupportLevel for the
 // CapabilitySet query layer.
 //
-// Mapping rationale (ADR 0010):
+// Mapping rationale:
 //   Recommended  → Available        (vetted; fully selectable)
 //   Allowed      → ValidUnvalidated (selectable with caveat; warning emitted)
 //   Experimental → NotImplemented   (not user-selectable until validated)
@@ -190,9 +190,9 @@ SupportAnnotation CapabilitySet::QueryTemporalAq(VideoCodec v) const {
 }
 
 SupportAnnotation CapabilitySet::QueryRateControlMode(exosnap::engine::RateControlMode mode) const {
-    // Static capability declaration for NVENC (ADR 0009).
+    // Static capability declaration for NVENC.
     // CQ / VBR / CBR are implemented and available.
-    // Lossless is not yet implemented for any encoder — hidden in UI per ADR 0009.
+    // Lossless is not yet implemented for any encoder — hidden in UI.
     switch (mode) {
     case exosnap::engine::RateControlMode::ConstantQuality:
         return {SupportLevel::Available, "NVENC CQP — quality-target, encoder chooses bitrate."};

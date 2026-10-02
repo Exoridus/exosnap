@@ -5,7 +5,7 @@ namespace exosnap::diagnostics {
 // Injectable interface for querying whether the current process runs with an
 // elevated (administrator) token.  Production code uses Win32ElevationProvider;
 // tests inject a stub returning a fixed value.  Mirrors the provider pattern of
-// IDiskSpaceProvider / IFilesystemProvider (ADR 0033).
+// IDiskSpaceProvider / IFilesystemProvider.
 class IElevationProvider {
   public:
     virtual ~IElevationProvider() = default;

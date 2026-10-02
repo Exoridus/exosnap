@@ -256,7 +256,7 @@ void ProductionBootstrap::InitializeCrashCapture() {
 #if defined(Q_OS_WIN)
     crash_capture_attempted_ = true;
 
-    // ADR 0017. In the default OFF/stub build this no-ops the Sentry path, but
+    // In the default OFF/stub build this no-ops the Sentry path, but
     // the session sidecar and the next-launch dialog still work -- that is
     // intended, "the previous session never marked a clean exit" is detectable
     // without any upload channel.
@@ -311,7 +311,7 @@ void ProductionBootstrap::RunPendingElevatedRelaunch() {
     elevated_relaunch_requested_ = false;
 
 #if defined(Q_OS_WIN)
-    // ADR 0033. The successor has to be able to take the single-instance guard,
+    // The successor has to be able to take the single-instance guard,
     // so hand it over first -- otherwise the elevated process comes up, finds
     // the mutex still held by the exiting one, and activates a window that is
     // already going away.
@@ -328,7 +328,7 @@ void ProductionBootstrap::RunPendingElevatedRelaunch() {
         qWarning().noquote() << "Elevated relaunch failed (ShellExecuteEx).";
     }
 
-    // ADR 0033: a decline or a ShellExecuteEx failure must not strand the user
+    // a decline or a ShellExecuteEx failure must not strand the user
     // with no ExoSnap running. Carry the page across, same as a successful
     // elevation would, but drop the reenable-present-diagnostics flag: it was
     // written for the elevated successor that never came up, and a process that

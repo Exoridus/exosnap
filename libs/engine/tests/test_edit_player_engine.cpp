@@ -37,7 +37,7 @@ using exosnap::engine::ShouldDemuxMorePackets;
 // video track carries a valid H.264 parameter set and packets of nothing --
 // Open() opens the decoders, it does not decode, and this FFmpeg build ships
 // no video encoder that could produce a real bitstream (LGPL, hardware-only
-// by ADR 0007). Audio is PCM for the same reason: no encoder needed.
+// by the distribution policy). Audio is PCM for the same reason: no encoder needed.
 
 constexpr int kTestWidth = 16;
 constexpr int kTestHeight = 16;
@@ -553,13 +553,9 @@ TEST(EditPlaybackPacing, UnknownDemuxPositionNeverPaces) {
 
 // ---- Raw-frame decode path: DecodeFrameAtRaw / StartPlaybackDecode -----
 //
-// Everything above opens a synthetic MKV whose video track carries no real
-// compressed bitstream (this FFmpeg build ships no video encoder -- ADR
-// 0007), so it exercises Open()/track-discovery only. Actually decoding a
-// frame needs a REAL bitstream, which these tests get from checked-in-locally
-// (gitignored, .workspace/ is scratch -- see .gitignore) fixture clips.
-// Skipped gracefully (GTEST_SKIP) when a fixture is not present on the host,
-// same convention as test_analyze_encode_perf.cpp's Python-interpreter check.
+// Track-discovery fixtures have no compressed video bitstream. Decode tests
+// require the optional local media fixtures; a missing fixture is reported as
+// GTEST_SKIP rather than as successful decode coverage.
 
 #ifndef EXOSNAP_SOURCE_DIR
 #define EXOSNAP_SOURCE_DIR "."

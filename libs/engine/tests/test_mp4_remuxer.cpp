@@ -1,4 +1,4 @@
-// test_mp4_remuxer.cpp — unit tests for the MP4 remux engine (ADR-0014)
+// test_mp4_remuxer.cpp — unit tests for the MP4 remux engine
 //
 // Fixture strategy: generate a minimal MKV at test time using MatroskaStreamWriter
 // with the existing synthetic packet helpers from test_matroska_stream_writer.cpp.
@@ -744,7 +744,7 @@ TEST_F(RemuxerTest, Mp4ColorTagsFallbackWhenMkvUntagged) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 8: HEVC-in-MP4 carries the 'hvc1' sample-entry FourCC (0.7.0, ADR 0014).
+// Test 8: HEVC-in-MP4 carries the 'hvc1' sample-entry FourCC.
 //         A source MKV with a V_MPEGH/ISO/HEVC track (hvcC codec-private) must
 //         remux to an MP4 whose video stream is tagged 'hvc1' — NOT the libav
 //         default 'hev1', which QuickTime/Apple devices refuse. The hvc1 tag
@@ -1083,6 +1083,24 @@ TEST_F(MkvRemuxerTest, MkvBadInputReturnsStructuredError) {
     EXPECT_FALSE(result.success);
     EXPECT_NE(result.av_error_code, 0);
     EXPECT_FALSE(result.message.empty());
+}
+
+TEST_F(MkvRemuxerTest, CloseFailureCannotPublishSuccessAndRetainsSource) {
+    ASSERT_FALSE(BuildTestMkv(src_mkv_path_).empty());
+    exosnap::engine::RemuxIoFaults faults;
+    faults.fail_output_close = true;
+    bool reported_complete = false;
+    const auto result = RemuxToMkv(
+        src_mkv_path_, out_mkv_path_,
+        [&](float progress) {
+            reported_complete |= progress >= 1.0f;
+            return true;
+        },
+        {}, &faults);
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.av_error_code, 0);
+    EXPECT_FALSE(reported_complete);
+    EXPECT_TRUE(std::filesystem::exists(src_mkv_path_));
 }
 
 } // namespace

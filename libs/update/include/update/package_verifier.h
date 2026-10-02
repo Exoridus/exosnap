@@ -1,7 +1,7 @@
 #pragma once
 // package_verifier.h -- SHA-256 package hash verification and handoff.
 //
-// Security contract (ADR-0012):
+// Security contract:
 //   - SHA-256 of the downloaded bytes is checked against manifest sha256_hex.
 //   - No partial binary is retained: if verification fails, the temp file is
 //     deleted before returning.

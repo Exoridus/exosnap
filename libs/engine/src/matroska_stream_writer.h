@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -127,7 +128,18 @@ struct StreamAudioTrack {
 };
 
 // Static configuration resolved once before Open().
+enum class OutputIoOperation { PayloadWrite, ClusterWrite, TrailerWrite, CrtFlush, Close, DurabilityFlush };
+
+struct OutputIoTimings {
+    double write_ms = 0;
+    double crt_flush_ms = 0;
+    double durability_flush_ms = 0;
+    uint64_t durability_failures = 0;
+};
+
 struct MatroskaStreamConfig {
+    // Optional deterministic fault injector. Called only by the owning mux worker.
+    std::function<bool(OutputIoOperation)> fail_io;
     std::string output_path;
 
     // True when the caller has already created output_path exclusively and is
@@ -144,7 +156,7 @@ struct MatroskaStreamConfig {
     uint32_t frame_rate_num = 0;
     uint32_t frame_rate_den = 0;
 
-    // Color description written into the video track's Colour element (ADR 0032).
+    // Color description written into the video track's Colour element.
     // Defaults to SDR BT.709 limited-range 8-bit.
     ColorMetadata color;
     // The session measures content light levels per frame and supplies them
@@ -172,7 +184,7 @@ struct MatroskaStreamConfig {
     uint32_t audio_track_count = 0;
     std::array<StreamAudioTrack, 3> audio_tracks{}; // CodecPrivateData::kMaxAudioTracks
 
-    // Audio format (ADR 0030). These values are written into KaxTrackAudio for
+    // Audio format. These values are written into KaxTrackAudio for
     // every audio track. bit_depth is only written for PCM and FLAC.
     uint32_t audio_sample_rate = 48000;
     uint32_t audio_channels = 2;
@@ -223,7 +235,8 @@ class MatroskaStreamWriter {
     }
 
     // Drain the window, write Cues, patch Duration/SeekHead/Segment size, close.
-    // Returns false on any I/O error; the file is closed regardless so a partial
+    // Returns false on material write, CRT flush or close failure. OS durability
+    // failure is reported separately. The file is closed regardless so a partial
     // file is never left with a dangling handle.
     bool Finalize();
 
@@ -293,6 +306,10 @@ class MatroskaStreamWriter {
     // window drain, or an unusually short GOP) must not stall the writer behind
     // physical I/O.
     static constexpr std::chrono::milliseconds kDurabilityFlushInterval{2000};
+
+    [[nodiscard]] const OutputIoTimings& io_timings() const noexcept {
+        return m_io_timings;
+    }
 
   private:
     // Sorted-by-PTS reorder window entry.
@@ -366,6 +383,7 @@ class MatroskaStreamWriter {
 
     // Periodic durability flush (fflush + FlushFileBuffers) cadence gate and
     // counter. See kDurabilityFlushInterval/durability_flush_count() above.
+    OutputIoTimings m_io_timings;
     DurabilityFlushScheduler m_durability_flush_scheduler{kDurabilityFlushInterval};
     uint64_t m_durability_flush_count = 0;
 

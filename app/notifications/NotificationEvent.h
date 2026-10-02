@@ -18,7 +18,7 @@ enum class NotificationType : uint8_t {
     Saved,                     // recording finalized / saved successfully
     UnexpectedStop,            // recording stopped due to engine error (non-disk failure)
     RecoveryAvailable,         // startup scan found recoverable sessions
-    UpdateAvailable,           // a newer release exists on the active channel (ADR 0012)
+    UpdateAvailable,           // a newer release exists on the active channel
     FramesDropped,             // real frames lost during recording: encoder backpressure or a
                                // frame-processing failure (DROP-NOTIFY) — never benign CFR pacing
     SettingsRepaired,          // the preset store needed a field-wise repair on load
@@ -28,7 +28,7 @@ enum class NotificationType : uint8_t {
     SettingsSaveFailed,        // a settings/preset write failed (disk full, file locked, ...) — the change may be lost
     AudioDefaultDeviceChanged, // Windows switched the default microphone mid-recording; the session keeps its device
     AudioSourceDegraded,       // an audio capture source lost its device mid-recording and is contributing
-                               // honest silence while the engine retries (ADR 0046); standing while any
+                               // honest silence while the engine retries; standing while any
                                // source stays degraded, replaced in place if the degraded set changes,
                                // cleared the moment every source reactivates (or the recording ends).
     CaptureActionFailed,       // a Record-page quick action (frame capture, split request) was rejected
@@ -52,7 +52,7 @@ enum class NotificationType : uint8_t {
                                    // never a failure. Cleared the moment frames resume, and when the
                                    // recording ends.
     ElevationRequired,             // a setting the user just turned on needs an elevated process to take
-                                   // effect (ADR 0033: the in-depth diagnostics opt-in). The setting is
+                                   // effect (the in-depth diagnostics opt-in). The setting is
                                    // written and stays written; only the measurement is missing, so this
                                    // offers the restart rather than reporting a failure.
 };
@@ -72,7 +72,7 @@ enum class NotificationAction : uint8_t {
     Discard,          // discard recovery session (secondary button on RecoveryAvailable)
     OpenUpdate,       // navigate to Settings → Software updates card (UpdateAvailable type)
     Edit,             // navigate to the Edit/Output page for the saved recording (primary on Saved type)
-    RelaunchElevated, // relaunch ExoSnap as administrator to unlock elevation-gated diagnostics (ADR 0033)
+    RelaunchElevated, // relaunch ExoSnap as administrator to unlock elevation-gated diagnostics
     OpenDiagnostics,  // navigate to the Diagnostics page for the frame-drop breakdown (FramesDropped type)
     UndoPresetSwitch, // restore the previous live config and selection (PresetSwitched type)
     OpenHotkeys,      // navigate to Settings → Hotkeys to rebind a shortcut (HotkeyConflict type)
@@ -183,7 +183,7 @@ struct NotificationEvent {
 // MakeAudioSourceDegradedEvent
 // ---------------------------------------------------------------------------
 // Pure resolver: degraded-source count -> the standing AudioSourceDegraded toast
-// body (ADR 0046). Kept separate from the MainWindow wiring that decides WHEN to
+// body. Kept separate from the MainWindow wiring that decides WHEN to
 // call it, so the text itself is unit-testable without constructing a window
 // (CLAUDE.md: prefer explicit models and pure resolver logic where possible).
 // degraded_count must be >= 1 — the caller (MainWindow) never raises this
@@ -308,7 +308,7 @@ struct NotificationEvent {
 // ---------------------------------------------------------------------------
 // ShouldOfferElevatedRelaunch / MakeElevatedRelaunchOfferEvent
 // ---------------------------------------------------------------------------
-// ADR 0033. The in-depth diagnostics opt-in cannot measure anything in a standard
+// The in-depth diagnostics opt-in cannot measure anything in a standard
 // process, so turning it on there offers the restart that would let it.
 //
 // Only the off -> on edge, and only when the process is not already elevated: an

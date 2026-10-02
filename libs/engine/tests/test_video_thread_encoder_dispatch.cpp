@@ -1,44 +1,3 @@
-// test_video_thread_encoder_dispatch.cpp — IVideoEncoder-refactor design spec,
-// section "4. Teststrategie".
-//
-// Coverage this file provides, and a note on what it deliberately does NOT
-// cover (see the design-decision comment block below the includes):
-//
-//   * FakeVideoEncoder's own contract: slot acquire/exhaustion/release,
-//     EncodeFrame producing one structurally-correct packet per call with a
-//     pass-through PTS and correct keyframe flagging, and every force-fail
-//     hook (Open/Configure/EncodeFrame/Flush) setting out_error and
-//     returning false.
-//   * VideoEncoderFactory's dispatch mechanism: a test subclass can return a
-//     FakeVideoEncoder for any AdapterVendor value, and the real production
-//     default (video_encoder_factory.cpp) returns nullptr for every
-//     non-Nvidia vendor today.
-//   * The SessionState::video_encoder_factory injection seam itself: the
-//     field defaults to a real VideoEncoderFactory, is replaceable, and a
-//     replaced factory is reachable and dispatches correctly through the
-//     SessionState.
-//
-// ---------------------------------------------------------------------------
-// Scope: the dispatch mechanism, not a driven VideoThread::Run()
-// ---------------------------------------------------------------------------
-// VideoThread::Run() reads m_state.video_encoder_factory and encodes through
-// the IVideoEncoder it returns, so the seam these tests cover is the one
-// production uses. What Run() cannot be given in a unit test is the rest of its
-// world: it opens a D3D11 device, constructs a capture backend against real
-// hardware, and runs a pacing loop. Substituting a factory would not make any
-// of that reachable.
-//
-// So the decisions that are worth testing are extracted from the loop instead
-// and tested as themselves -- NextCaptureDrainStep, NextDrainContinuation,
-// DecideOdReopen, the NVENC drain steps -- each pure, each with the clock as a
-// parameter. This file covers what remains: that the factory dispatches, that
-// the SessionState seam is replaceable and reachable, and that the fake honours
-// the IVideoEncoder contract the production encoder is held to.
-//
-// One deliberate scoping choice: this file does not assert what
-// VideoEncoderFactory::Create(Nvidia) returns. That branch constructs a real
-// NvencVideoEncoder, which needs hardware; the non-Nvidia -> nullptr behaviour
-// is what is stable and assertable here.
 #include <gtest/gtest.h>
 
 #include "fakes/fake_video_encoder.h"
@@ -68,7 +27,8 @@ class FakeVideoEncoderFactory : public VideoEncoderFactory {
     explicit FakeVideoEncoderFactory(int32_t slot_count = 4) : slot_count_(slot_count) {
     }
 
-    [[nodiscard]] std::unique_ptr<IVideoEncoder> Create(AdapterVendor vendor) const override {
+    [[nodiscard]] std::unique_ptr<IVideoEncoder> Create(AdapterVendor vendor,
+                                                        const exosnap::engine::RecorderConfig& = {}) const override {
         (void)vendor;
         return std::make_unique<FakeVideoEncoder>(slot_count_);
     }
@@ -82,7 +42,8 @@ class FakeVideoEncoderFactory : public VideoEncoderFactory {
 // without depending on the real factory's in-flight Nvidia branch.
 class NullVideoEncoderFactory : public VideoEncoderFactory {
   public:
-    [[nodiscard]] std::unique_ptr<IVideoEncoder> Create(AdapterVendor vendor) const override {
+    [[nodiscard]] std::unique_ptr<IVideoEncoder> Create(AdapterVendor vendor,
+                                                        const exosnap::engine::RecorderConfig& = {}) const override {
         (void)vendor;
         return nullptr;
     }
@@ -367,11 +328,50 @@ TEST(FakeVideoEncoderTest, EncodeFrame_ImplicitlyFreesItsSlotOnFailureToo) {
 // VideoEncoderFactory: dispatch mechanism
 // ---------------------------------------------------------------------------
 
+template <typename T>
+concept HasVendorPreset = requires(T& encoder) { encoder.SetPreset(exosnap::engine::NvencPreset::P4); };
+
+TEST(VideoEncoderFactoryDispatchTest, ActualAdapterDispatchNeverFallsBackToNvidia) {
+    const VideoEncoderFactory factory;
+    const exosnap::engine::RecorderConfig config;
+    for (uint32_t vendor : {0x1002u, 0x1022u, 0x8086u, 0x1414u, 0u}) {
+        std::string error;
+        EXPECT_EQ(factory.CreateForAdapter(vendor, config, error), nullptr);
+        EXPECT_FALSE(error.empty());
+    }
+    std::string error = "old failure";
+    EXPECT_NE(factory.CreateForAdapter(0x10DEu, config, error), nullptr);
+    EXPECT_TRUE(error.empty());
+}
+
+TEST(VideoEncoderFactoryDispatchTest, ActualAdapterDispatchUsesInjectedFactoryForEveryVendor) {
+    class TrackingFactory final : public VideoEncoderFactory {
+      public:
+        mutable AdapterVendor selected = AdapterVendor::Other;
+        std::unique_ptr<IVideoEncoder> Create(AdapterVendor vendor,
+                                              const exosnap::engine::RecorderConfig&) const override {
+            selected = vendor;
+            return std::make_unique<FakeVideoEncoder>(3);
+        }
+    } factory;
+    std::string error;
+    const auto encoder = factory.CreateForAdapter(0x8086u, {}, error);
+    ASSERT_NE(encoder, nullptr);
+    EXPECT_EQ(factory.selected, AdapterVendor::Intel);
+    EXPECT_EQ(encoder->SlotCount(), 3);
+    EXPECT_TRUE(error.empty());
+}
+
+TEST(VideoEncoderFactoryDispatchTest, GenericContractHasNoVendorPreset) {
+    EXPECT_FALSE(HasVendorPreset<IVideoEncoder>);
+}
+
+TEST(VideoEncoderFactoryDispatchTest, NvidiaConstructionDoesNotRequireOpeningHardware) {
+    const VideoEncoderFactory factory;
+    EXPECT_NE(factory.Create(AdapterVendor::Nvidia), nullptr);
+}
+
 TEST(VideoEncoderFactoryDispatchTest, DefaultProductionFactory_NonNvidiaVendorsReturnNull) {
-    // Stable across Agent A's in-flight change to the Nvidia branch: only the
-    // Nvidia case is being wired up, every other vendor stays nullptr both
-    // before and after that merge (see the design-decision comment above for
-    // why this file does not assert on the Nvidia case itself).
     const VideoEncoderFactory factory;
     EXPECT_EQ(factory.Create(AdapterVendor::Amd), nullptr);
     EXPECT_EQ(factory.Create(AdapterVendor::Intel), nullptr);
@@ -390,12 +390,6 @@ TEST(VideoEncoderFactoryDispatchTest, SubclassFactory_ReturnsFakeEncoderRegardle
 }
 
 TEST(VideoEncoderFactoryDispatchTest, NullFactory_CreateReturnsNullptr_FatalInitErrorPrecondition) {
-    // Per the design spec: video_thread.cpp is defined to treat a nullptr
-    // Create() result as the same fatal init error as a failed Open()/
-    // Configure() (existing out_error/blocker path, no new error class). This
-    // test pins the nullptr contract a caller must handle; the actual
-    // escalation into video_thread.cpp is Agent A's wiring and isn't present
-    // in this worktree (see the design-decision comment above).
     const NullVideoEncoderFactory factory;
     EXPECT_EQ(factory.Create(AdapterVendor::Nvidia), nullptr);
 }
@@ -424,3 +418,59 @@ TEST(SessionStateEncoderSeamTest, FactoryIsReplaceable_AndDispatchesThroughTheSe
 }
 
 } // namespace
+
+TEST(BackendTuning, NvencPresetIsAppliedOnlyByTheConcreteFactory) {
+    exosnap::engine::VideoEncoderFactory factory;
+    for (int i = 0; i < 7; ++i) {
+        exosnap::engine::RecorderConfig config;
+        config.backend_tuning = exosnap::engine::NvencTuning{static_cast<exosnap::engine::NvencPreset>(i)};
+        const auto encoder = factory.Create(exosnap::capability::AdapterVendor::Nvidia, config);
+        ASSERT_NE(encoder, nullptr);
+        EXPECT_EQ(encoder->GetInitInfo().backend_id, "nvenc");
+        EXPECT_EQ(encoder->GetInitInfo().backend_preset, "P" + std::to_string(i + 1));
+    }
+}
+
+TEST(BackendTuning, OnlyTheNvencAlternativeCarriesAPreset) {
+    exosnap::engine::BackendTuning none;
+    EXPECT_EQ(exosnap::engine::GetNvencTuning(none), nullptr);
+    exosnap::engine::BackendTuning nvenc{exosnap::engine::NvencTuning{exosnap::engine::NvencPreset::P6}};
+    ASSERT_NE(exosnap::engine::GetNvencTuning(nvenc), nullptr);
+    EXPECT_EQ(exosnap::engine::GetNvencTuning(nvenc)->preset, exosnap::engine::NvencPreset::P6);
+}
+
+TEST(EncoderDeviceValidation, AutoWithoutResolutionUsesTheCaptureAdapter) {
+    exosnap::engine::EncoderDevicePreference preference; // Auto
+    const auto validation = exosnap::engine::ValidateEncoderDeviceForCapture(preference, {}, 0x1234);
+    EXPECT_TRUE(validation.ok);
+}
+
+TEST(EncoderDeviceValidation, ExplicitUnresolvedFailsClosed) {
+    exosnap::engine::EncoderDevicePreference preference;
+    preference.mode = exosnap::engine::EncoderDevicePreference::Mode::Explicit;
+    exosnap::engine::ResolvedEncoderDevice resolved;
+    resolved.reason = "device not present";
+    const auto validation = exosnap::engine::ValidateEncoderDeviceForCapture(preference, resolved, 0x1234);
+    EXPECT_FALSE(validation.ok);
+    EXPECT_EQ(validation.reason, "device not present");
+}
+
+TEST(EncoderDeviceValidation, CrossAdapterExplicitIsRefused) {
+    exosnap::engine::EncoderDevicePreference preference;
+    preference.mode = exosnap::engine::EncoderDevicePreference::Mode::Explicit;
+    exosnap::engine::ResolvedEncoderDevice resolved;
+    resolved.valid = true;
+    resolved.adapter_luid = 2;
+    const auto validation = exosnap::engine::ValidateEncoderDeviceForCapture(preference, resolved, 1);
+    EXPECT_FALSE(validation.ok);
+    EXPECT_NE(validation.reason.find("cross-adapter"), std::string::npos);
+}
+
+TEST(EncoderDeviceValidation, ExplicitOnTheCaptureAdapterPasses) {
+    exosnap::engine::EncoderDevicePreference preference;
+    preference.mode = exosnap::engine::EncoderDevicePreference::Mode::Explicit;
+    exosnap::engine::ResolvedEncoderDevice resolved;
+    resolved.valid = true;
+    resolved.adapter_luid = 1;
+    EXPECT_TRUE(exosnap::engine::ValidateEncoderDeviceForCapture(preference, resolved, 1).ok);
+}

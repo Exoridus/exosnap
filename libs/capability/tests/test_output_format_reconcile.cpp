@@ -13,7 +13,7 @@ namespace exosnap::capability {
 namespace {
 
 // ---------------------------------------------------------------------------
-// Rule 1 — container × codec compatibility (ADR 0010 registry)
+// Rule 1 — container × codec compatibility (compatibility registry)
 // ---------------------------------------------------------------------------
 
 TEST(ReconcileOutputFormatTest, DefaultProfileIsUntouched) {
@@ -75,7 +75,7 @@ TEST(ReconcileOutputFormatTest, WebMForcesAv1OpusFromH264Aac) {
 }
 
 // ---------------------------------------------------------------------------
-// Rule 2 — 10-bit demotion (HEVC/AV1 only, ADR 0032)
+// Rule 2 — 10-bit demotion (HEVC/AV1 only)
 // ---------------------------------------------------------------------------
 
 TEST(ReconcileOutputFormatTest, TenBitH264DemotesToEightBit) {

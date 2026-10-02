@@ -257,6 +257,10 @@ class FakeSource final : public LiveVerifySource {
         calls.append(QStringLiteral("logs.open"));
         return Outcome(error);
     }
+    bool AppQuit(QString* error) override {
+        calls.append(QStringLiteral("app.quit"));
+        return Outcome(error);
+    }
 
     bool RecoveryContinue(int index, QString* error) override {
         calls.append(QStringLiteral("recovery.continue:%1").arg(index));
@@ -314,6 +318,16 @@ class FakeSource final : public LiveVerifySource {
         calls.append(QStringLiteral("selectTarget:%1/%2").arg(kind, title_filter));
         return Outcome(error);
     }
+    bool SelectRecordRegion(const QString& display_device, int x, int y, int width, int height,
+                            QString* error) override {
+        calls.append(
+            QStringLiteral("selectRegion:%1/%2,%3 %4x%5").arg(display_device).arg(x).arg(y).arg(width).arg(height));
+        return Outcome(error);
+    }
+    bool OpenRegionSelector(const QString& display_device, QString* error) override {
+        calls.append(QStringLiteral("openRegionSelector:%1").arg(display_device));
+        return Outcome(error);
+    }
     bool RecordStart(QString* error) override {
         calls.append(QStringLiteral("start"));
         return Outcome(error);
@@ -355,7 +369,14 @@ class FakeSource final : public LiveVerifySource {
             return false;
         // The real shell reaches the destination synchronously; the fake mirrors
         // that so the dispatcher's postcondition check has something to observe.
-        state.page = page;
+        // The legacy "logs" request is normalized to Diagnostics with the logs
+        // subview, and the fake mirrors that too.
+        if (page == QLatin1String(page_name::kLogs)) {
+            state.page = QString::fromLatin1(page_name::kDiagnostics);
+            state.diagnostics_section = QString::fromLatin1(diagnostics_section_name::kLogs);
+        } else {
+            state.page = page;
+        }
         ++revision;
         return true;
     }
@@ -1327,6 +1348,24 @@ TEST(LiveVerifyDispatcher, ExportAndDiagnosticsRunAreAcceptedWithoutClaimingComp
               QString::fromLatin1(error_code::kInvalidState));
 }
 
+// A quit is only asked for here; the answer comes from the close guards and the
+// completion is the process ending, so an accepted quit never claims to be settled
+// and a guard's refusal reaches the client as a refusal, not as success.
+TEST(LiveVerifyDispatcher, AppQuitRoutesThroughTheCloseGuardsWithoutClaimingCompletion) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject accepted = dispatcher.Dispatch(RequestV2(QStringLiteral("app.quit")));
+    ASSERT_TRUE(Ok(accepted));
+    EXPECT_FALSE(accepted.value(QStringLiteral("settled")).toBool());
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("app.quit")));
+
+    source.allow_intents = false;
+    const QJsonObject refused = dispatcher.Dispatch(RequestV2(QStringLiteral("app.quit")));
+    EXPECT_FALSE(Ok(refused));
+}
+
 // The in-depth diagnostics switch has no settings key any more, so this command
 // is the whole surface a check has for it. Synchronous: the switch either moved
 // or the intent was refused, and there is nothing to wait for either way.
@@ -1443,6 +1482,33 @@ TEST(LiveVerifyDispatcher, ParameterValidationRunsBeforeTheIntent) {
     EXPECT_TRUE(source.calls.isEmpty());
 }
 
+TEST(LiveVerifyDispatcher, RegionCommandsCarryTheRectAndDisplayToTheSource) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject selected =
+        dispatcher.Dispatch(RequestV2(QStringLiteral("record.selectRegion"),
+                                      QJsonObject{{QStringLiteral("display"), QStringLiteral("\\\\.\\DISPLAY2")},
+                                                  {QStringLiteral("x"), 100},
+                                                  {QStringLiteral("y"), 50},
+                                                  {QStringLiteral("width"), 640},
+                                                  {QStringLiteral("height"), 360}}));
+    ASSERT_TRUE(Ok(selected)) << selected.value(QStringLiteral("error")).toString().toStdString();
+    const QJsonObject opened = dispatcher.Dispatch(RequestV2(QStringLiteral("record.openRegionSelector")));
+    ASSERT_TRUE(Ok(opened)) << opened.value(QStringLiteral("error")).toString().toStdString();
+
+    ASSERT_EQ(source.calls.size(), 2);
+    EXPECT_EQ(source.calls[0], QStringLiteral("selectRegion:\\\\.\\DISPLAY2/100,50 640x360"));
+    EXPECT_EQ(source.calls[1], QStringLiteral("openRegionSelector:"));
+    // The rect parameters are required: a payload missing them is a client
+    // error answered before the intent runs.
+    EXPECT_EQ(ErrorCode(dispatcher.Dispatch(
+                  RequestV2(QStringLiteral("record.selectRegion"), QJsonObject{{QStringLiteral("x"), 0}}))),
+              QString::fromLatin1(error_code::kInvalidParams));
+    EXPECT_EQ(source.calls.size(), 2);
+}
+
 TEST(LiveVerifyDispatcher, CapabilitiesMatchTheCommandsThatWillBeAccepted) {
     FakeSource source;
     LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
@@ -1533,6 +1599,24 @@ TEST(LiveVerifyDispatcher, NavigationAnswersTheResultingPageAndSettlesInTheSameR
     EXPECT_TRUE(response.value(QStringLiteral("settled")).toBool());
     EXPECT_EQ(response.value(QStringLiteral("result")).toObject().value(QStringLiteral("page")).toString(),
               QStringLiteral("settings"));
+}
+
+TEST(LiveVerifyDispatcher, LegacyLogsNavigationNormalizesToDiagnosticsLogs) {
+    FakeSource source;
+    source.state.page = QString::fromLatin1(page_name::kRecord);
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("ui.navigate"), QJsonObject{{QStringLiteral("page"), QStringLiteral("logs")}}));
+    ASSERT_TRUE(Ok(response));
+    EXPECT_TRUE(response.value(QStringLiteral("settled")).toBool());
+    // The legacy spelling is an input alias only: the answer names the canonical
+    // destination and the state carries the logs subview, never a phantom fifth
+    // page.
+    EXPECT_EQ(response.value(QStringLiteral("result")).toObject().value(QStringLiteral("page")).toString(),
+              QStringLiteral("diagnostics"));
+    EXPECT_EQ(source.state.diagnostics_section, QString::fromLatin1(diagnostics_section_name::kLogs));
 }
 
 TEST(LiveVerifyDispatcher, NavigatingToTheCurrentPageIsASuccessfulNoOp) {

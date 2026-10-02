@@ -142,7 +142,7 @@ class UpdateService::Impl {
     // writing `state` at once, and a UI that said "not checking" the whole time.
     std::uint64_t next_operation_id = 1;
     std::uint64_t active_operation = 0;
-    // ADR 0055. Atomic because SetVerifyReinstallMode/IsVerifyReinstallMode run
+    // Atomic because SetVerifyReinstallMode/IsVerifyReinstallMode run
     // outside the mutex; its value is snapshotted into the operation context at
     // check start so a toggle cannot change what a running check means.
     std::atomic<bool> verify_reinstall{false};
@@ -545,19 +545,14 @@ void UpdateService::LaunchUpdater() {
         emit updateError(exosnap::update::VerifyResult::PackageNotFound, detail);
     };
 
-    // Copy the mandatory runtime subset; a missing entry is a hard failure.
-    for (const QString& rel : UpdaterStagingFileList()) {
-        const QString src = QDir(app_dir).filePath(rel);
-        const QString dst = QDir(staging_dir).filePath(rel);
-        if (!QFileInfo::exists(src)) {
-            fail_staging(QStringLiteral("Updater runtime file missing: %1").arg(rel));
-            return;
-        }
-        QDir().mkpath(QFileInfo(dst).absolutePath());
-        if (!QFile::copy(src, dst)) {
-            fail_staging(QStringLiteral("Failed to stage updater file: %1").arg(rel));
-            return;
-        }
+    // Copy the mandatory runtime subset through the shared staging helper; a
+    // missing entry is a hard failure. The helper is also what the packaging
+    // gate's unit test drives, so the product's copy and the tested copy cannot
+    // drift apart.
+    QString staging_error;
+    if (!StageUpdaterRuntime(app_dir, staging_dir, &staging_error)) {
+        fail_staging(staging_error);
+        return;
     }
 
     // Best-effort, and genuinely optional: without the styles plugin the updater
@@ -582,7 +577,7 @@ void UpdateService::LaunchUpdater() {
     // and Qt's default library paths cover the application directory and the
     // *build-time* Qt plugins path — neither of which exists on a user machine.
     // Without this file the staged updater cannot load qwindows.dll and dies at
-    // startup with "could not load the Qt platform plugin". ADR 0037 §E treats
+    // startup with "could not load the Qt platform plugin". The packaging gate treats
     // it as part of the staging contract for exactly that reason: the packaging
     // gate's updater smoke reproduces this write verbatim. So its failure is a
     // staging failure, not something to shrug at — the previous code checked

@@ -37,7 +37,7 @@ void LogWarn(const std::string& msg) {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Bitrate resolution (unchanged by the ADR 0052 encoder swap: default
+// Bitrate resolution (default
 // 192 kbps, clamped to [kAacBitrateKbpsMin, kAacBitrateKbpsMax]).
 // ---------------------------------------------------------------------------
 

@@ -30,9 +30,8 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
         AudioCodec::Opus,
         SupportAnnotation{SupportLevel::Available, "Opus encoder implemented via libopus (static); M4 Phase 3."});
     caps.audio_codecs.emplace(
-        AudioCodec::Aac,
-        SupportAnnotation{SupportLevel::Available,
-                          "AAC-LC via FFmpeg's bundled native encoder (LGPL); always available (ADR 0052)."});
+        AudioCodec::Aac, SupportAnnotation{SupportLevel::Available,
+                                           "AAC-LC via FFmpeg's bundled native encoder (LGPL); always available."});
     caps.audio_codecs.emplace(
         AudioCodec::Pcm, SupportAnnotation{SupportLevel::Available,
                                            "Uncompressed S16LE PCM (A_PCM/INT/LIT); Matroska-only (0.6.0 Audio v2)."});
@@ -152,7 +151,7 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
         caps.combo_overrides[mp4_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
     }
 
-    // AAC has no runtime-availability downgrade rule: since ADR 0052 it is encoded
+    // AAC has no runtime-availability downgrade rule: it is encoded
     // by FFmpeg's bundled native AAC-LC encoder, which ships with every build and
     // has no external/OS dependency to probe. The static baseline's Available
     // annotation (BuildStaticValidatedBaseline above) always stands.

@@ -1,8 +1,10 @@
 #pragma once
 
+#include "AdapterTelemetryTargets.h"
 #include "DiagnosticsController.h"
 
 #include <filesystem>
+#include <vector>
 
 // Every blocking probe the Diagnostics surface needs, gathered into one call that
 // is safe to run on a worker thread.
@@ -19,6 +21,10 @@ struct DiagnosticsProbeRequest {
     // The self-test is comparatively expensive (COM + DXGI + LoadLibraryW), so it
     // only runs when the surface actually needs a fresh checklist.
     bool run_self_test = true;
+    // Unique physical adapters with their pipeline roles, from
+    // BuildAdapterTelemetryTargets. Empty means nothing to poll, not adapter 0.
+    std::vector<AdapterTelemetryTarget> telemetry_targets;
+    uint64_t session_generation = 0;
 };
 
 // Blocking. Never call from the GUI thread.

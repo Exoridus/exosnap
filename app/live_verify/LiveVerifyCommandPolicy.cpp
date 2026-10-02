@@ -480,6 +480,13 @@ const QVector<CommandDescriptor>& AllCommands() {
          {Param("recordingSessionId", "string", true)},
          &NoPrecondition},
 
+        // --- Lifetime -----------------------------------------------------------
+        // The tray Quit, not a process kill: the close guards answer it exactly
+        // as they answer a user, and an allowed quit ends through the normal
+        // shutdown that records a clean exit. Asynchronous, because the process
+        // is still running when the answer is sent.
+        {QStringLiteral("app.quit"), 2, true, true, Settle::Asynchronous, {}, &NoPrecondition},
+
         // --- Window ----------------------------------------------------------
         {QStringLiteral("window.moveToScreen"),
          1,
@@ -497,6 +504,28 @@ const QVector<CommandDescriptor>& AllCommands() {
          Settle::Synchronous,
          {Param("kind", "enum", true, {QStringLiteral("monitor"), QStringLiteral("window")}),
           Param("titleFilter", "string", false)},
+         &CanSelectTarget},
+        // Region geometry without the selector gesture. `x`/`y`/`width`/`height`
+        // are physical pixels relative to the monitor origin, the same contract
+        // the product stores; the capture-contract scenario asserts output
+        // dimensions against them. `display` is an optional \\.\DISPLAYn.
+        {QStringLiteral("record.selectRegion"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("display", "string", false), Param("x", "int", true), Param("y", "int", true),
+          Param("width", "int", true), Param("height", "int", true)},
+         &CanSelectTarget},
+        // Opens the real selector overlay without committing anything, so the
+        // pointer-interaction scenario owns only the drag/commit gesture and
+        // reads the resulting product state back semantically.
+        {QStringLiteral("record.openRegionSelector"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("display", "string", false)},
          &CanSelectTarget},
         {QStringLiteral("record.start"), 1, true, false, Settle::Asynchronous, {}, &CanStartRecording},
         {QStringLiteral("record.pause"), 1, true, false, Settle::Asynchronous, {}, &CanPause},
@@ -733,6 +762,7 @@ QJsonObject StateToJson(const AutomationState& state, std::uint64_t state_revisi
     QJsonObject json;
     json.insert(QStringLiteral("stateRevision"), static_cast<double>(state_revision));
     json.insert(QStringLiteral("page"), state.page);
+    json.insert(QStringLiteral("diagnosticsSection"), state.diagnostics_section);
     json.insert(QStringLiteral("recordingState"), state.recording_state);
     json.insert(QStringLiteral("editSession"),
                 state.edit_session_open ? QStringLiteral("open") : QStringLiteral("closed"));

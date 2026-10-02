@@ -298,6 +298,7 @@ struct PerfWindowSample {
     // Composition / colour conversion
     StageWindowStats composition_cpu; // GpuCompositor submit (CPU)
     StageWindowStats composition_gpu; // composite pass execution (GPU)
+    StageWindowStats hdr_luminance_gpu;
     StageWindowStats hdr_tonemap_gpu; // scRGB->SDR tone-map pass execution (GPU)
     StageWindowStats rgb_to_yuv_cpu;  // VideoProcessorBlt submit (CPU)
     StageWindowStats rgb_to_yuv_gpu;  // VideoProcessorBlt execution (GPU)
@@ -332,6 +333,7 @@ struct PerfSessionSummary {
     StageHistogramSummary acquire;
     StageHistogramSummary composition_cpu;
     StageHistogramSummary composition_gpu;
+    StageHistogramSummary hdr_luminance_gpu;
     StageHistogramSummary hdr_tonemap_gpu;
     StageHistogramSummary rgb_to_yuv_cpu;
     StageHistogramSummary rgb_to_yuv_gpu;
@@ -404,6 +406,7 @@ class PipelineDiagnosticsAggregator {
     // only resolved, non-disjoint spans; a not-ready or disjoint frame is simply
     // dropped upstream and never reaches these.
     void OnCompositionGpuTime(time_point now, double ms) noexcept;
+    void OnHdrLuminanceGpuTime(time_point now, double ms) noexcept;
     void OnHdrTonemapGpuTime(time_point now, double ms) noexcept;
     void OnRgbToYuvGpuTime(time_point now, double ms) noexcept;
     void OnWebcamUploadGpuTime(time_point now, double ms) noexcept;
@@ -425,6 +428,17 @@ class PipelineDiagnosticsAggregator {
     // A CFR duplicate output frame was emitted (the last real frame re-submitted
     // to fill a scheduled output slot that produced no new source frame).
     void OnFrameDuplicated() noexcept;
+    // Adapter roles are recorded separately: capture-side, processing-side and
+    // encoder-side facts must stay attributable to the role they describe.
+    void SetCaptureAdapter(int64_t luid, uint32_t vendor_id) noexcept;
+    void SetProcessingAdapter(int64_t luid, uint32_t vendor_id) noexcept;
+    void SetEncoderAdapter(int64_t luid, uint32_t vendor_id) noexcept;
+    void OnMuxProducerWait(time_point now, double milliseconds) noexcept;
+    void OnPacingResumed() noexcept;
+    void OnWorkerWake(time_point now, double lateness_ms) noexcept;
+    void OnPacingSlotsSkipped(time_point now, uint64_t count) noexcept;
+    void OnCfrOutput(time_point now, uint64_t ideal_ns, uint64_t selected_ns, bool fresh, uint32_t ring_occupancy,
+                     uint64_t period_ns, uint64_t actual_ns = 0) noexcept;
     // Retained-frame reuse (CV-RETAIN-001..004, CV-CURSOR-001..003, CV-PACING-001).
     void OnScreenGenerationChanged() noexcept;
     void OnWebcamGenerationChanged() noexcept;
@@ -470,7 +484,7 @@ class PipelineDiagnosticsAggregator {
     void OnAudioQueueDepth(uint32_t depth) noexcept;
     // gap_frames is the measured length of the outage, in source frames.
     void OnAudioDiscontinuity(uint32_t gap_frames) noexcept;
-    // Device hot-swap health for one audio track (ADR 0046): how many of the
+    // Device hot-swap health for one audio track: how many of the
     // track's capture sources are currently degraded (endpoint lost, silent) out
     // of its total. Level-based (the current state, not an event), reported each
     // drain iteration; the snapshot sums across tracks. track_id is bounded by
@@ -482,6 +496,8 @@ class PipelineDiagnosticsAggregator {
     void OnAudioPremuxDepth(uint32_t depth) noexcept; // bounded premux
     // Mux / Disk (MuxThread)
     void OnMuxPacket(uint64_t bytes) noexcept;
+    void OnOutputIoFinalized(double write_ms, double crt_flush_ms, double durability_ms,
+                             uint64_t durability_failures) noexcept;
     void OnDiskWrite(time_point now, double ms, uint64_t bytes) noexcept; // filesystem boundary
     void OnSegmentOpened(uint32_t index) noexcept;
     void OnSegmentFinalized(double ms, bool succeeded) noexcept;
@@ -520,6 +536,27 @@ class PipelineDiagnosticsAggregator {
     DiagnosticsStaticConfig cfg_;
     uint64_t generation_ = 0;
 
+    PacingDiagnostics pacing_;
+    int64_t capture_adapter_luid_ = 0;
+    uint32_t capture_adapter_vendor_id_ = 0;
+    int64_t processing_adapter_luid_ = 0;
+    uint32_t processing_adapter_vendor_id_ = 0;
+    int64_t encoder_adapter_luid_ = 0;
+    uint32_t encoder_adapter_vendor_id_ = 0;
+    RollingTimeWindow residual_window_{256};
+    RollingTimeWindow absolute_residual_window_{256};
+    RollingTimeWindow selected_age_window_{256};
+    RollingTimeWindow worker_lateness_window_{256};
+    RollingTimeWindow output_cadence_window_{256};
+    RollingTimeWindow affected_slots_window_{256};
+    RollingTimeWindow frame_loss_window_{256};
+    RollingTimeWindow producer_wait_window_{256};
+    uint64_t last_slot_stalls_ = 0;
+    time_point last_output_time_{};
+    bool have_output_time_ = false;
+    uint64_t first_output_slot_ns_ = 0;
+    uint64_t last_published_frame_loss_ = 0;
+
     // Capture counters
     uint64_t frames_captured_ = 0;
     uint64_t dropped_coalesced_ = 0;
@@ -557,6 +594,8 @@ class PipelineDiagnosticsAggregator {
     // CPU-submission windows above). Fed from resolved D3D11 timestamp spans.
     RollingTimeWindow composition_gpu_window_{256, std::chrono::milliseconds(2000)};
     LatencyHistogram composition_gpu_hist_;
+    RollingTimeWindow hdr_luminance_gpu_window_{256, std::chrono::milliseconds(2000)};
+    LatencyHistogram hdr_luminance_gpu_hist_;
     RollingTimeWindow hdr_tonemap_gpu_window_{256, std::chrono::milliseconds(2000)};
     LatencyHistogram hdr_tonemap_gpu_hist_;
     RollingTimeWindow rgb_to_yuv_gpu_window_{256, std::chrono::milliseconds(2000)};
@@ -605,7 +644,7 @@ class PipelineDiagnosticsAggregator {
     uint64_t audio_discontinuities_ = 0;
     uint64_t audio_discontinuity_frames_total_ = 0;
     uint32_t audio_discontinuity_frames_longest_ = 0;
-    // Per-track degraded/total capture-source counts (ADR 0046). Array size
+    // Per-track degraded/total capture-source counts. Array size
     // mirrors CodecPrivateData::kMaxAudioTracks; summed in BuildSnapshot.
     std::array<uint32_t, 3> audio_degraded_sources_{};
     std::array<uint32_t, 3> audio_degraded_source_kinds_{};
@@ -628,6 +667,7 @@ class PipelineDiagnosticsAggregator {
     // Mux / Disk
     uint64_t mux_packets_ = 0;
     uint64_t disk_bytes_written_ = 0;
+    DiskDiagnostics finalized_io_{};
     RollingTimeWindow write_window_{256, std::chrono::milliseconds(2000)};
     bool mux_process_observed_ = false;
     RollingTimeWindow mux_window_{256, std::chrono::milliseconds(2000)};

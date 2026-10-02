@@ -74,7 +74,7 @@ TEST(UpdateHandoffSchema, RoundTripsInstalledModeAndVerifyReinstall) {
     UpdateHandoff original = Sample();
     original.install_mode = InstallMode::Installed;
     original.verify_reinstall = true;
-    original.target_version = original.current_version; // ADR 0055: the identical version
+    original.target_version = original.current_version; // the identical version
     const HandoffLoadResult parsed = ParseUpdateHandoff(SerializeUpdateHandoff(original));
     ASSERT_TRUE(parsed.ok());
     EXPECT_EQ(parsed.handoff->install_mode, InstallMode::Installed);

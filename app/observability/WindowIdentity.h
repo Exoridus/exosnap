@@ -15,9 +15,8 @@
 // and a machine decision can be reconciled, never so the machine can match on it.
 //
 // The role is derived from the QML objectName, which is internal and stable, and
-// the derivation lives HERE rather than at each call site -- `scripts/lib/
-// LiveVerifyChecks.ps1` currently hardcodes two objectNames, which is exactly the
-// coupling a role replaces.
+// the derivation lives HERE rather than at each call site, so no automation client
+// has to hardcode an objectName.
 
 #include <QJsonObject>
 #include <QString>
@@ -31,8 +30,9 @@ namespace exosnap::observability {
 // than silently omitted -- an unnamed top-level window is a finding, not a gap.
 namespace window_role {
 inline constexpr const char* kMain = "main";
+// Carries the diagnostics tokens too: OverlayDiagnostics was absorbed into
+// the recording pill, one window with two independently-gated sections.
 inline constexpr const char* kRecordingOverlay = "recordingOverlay";
-inline constexpr const char* kDiagnosticsOverlay = "diagnosticsOverlay";
 inline constexpr const char* kQuickControls = "quickControls";
 inline constexpr const char* kNotificationToast = "notificationToast";
 inline constexpr const char* kCountdown = "countdown";

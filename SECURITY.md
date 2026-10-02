@@ -2,12 +2,7 @@
 
 ## Supported versions
 
-| Version | Supported          |
-|---------|--------------------|
-| 0.9.0   | :white_check_mark: |
-| 0.8.1   | :x:                |
-
-ExoSnap is pre-v1 preview software. Only the latest release receives security attention.
+ExoSnap is pre-v1 preview software. Only the latest release receives security attention. The source tree's development version is not a claim that a release has already been published.
 
 ## Reporting a vulnerability
 

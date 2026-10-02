@@ -116,7 +116,7 @@ directory alongside the ExoSnap binary.
 ### PresentMon (ETW present-diagnostics consumer)
 
 - **Version:** v1.10.0 (pinned by commit SHA
-  `2ce1158783e570539119f577d894252b395cadca`; see ADR 0033)
+  `2ce1158783e570539119f577d894252b395cadca`)
 - **Project:** https://github.com/GameTechDev/PresentMon
 - **License:** MIT
 - **Linkage:** static
@@ -170,25 +170,18 @@ directory alongside the ExoSnap binary.
 
 ### FFmpeg
 
-- **Version:** exosnap-ffmpeg-build release `r7` (upstream FFmpeg `n8.1.1`)
+- **Version:** exosnap-ffmpeg-build package `n9.0.2-exosnap.1` (upstream FFmpeg `n9.0.2`)
 - **Project:** https://github.com/Exoridus/exosnap-ffmpeg-build (build/packaging
   repository) / https://ffmpeg.org (upstream FFmpeg source)
 - **License:** LGPL-2.1-or-later (no GPL-licensed components; `--enable-gpl` is not set)
 - **Linkage:** dynamic (shared DLLs deployed alongside the ExoSnap binary)
 - **Bundled license:** `licenses/ffmpeg.txt`
-- **DLLs deployed:** `avformat-62.dll`, `avcodec-62.dll`, `avutil-60.dll`,
-  `swresample-6.dll` (avfilter/swscale/avdevice are not built by this component set and are
+- **DLLs deployed:** `avformat-63.dll`, `avcodec-63.dll`, `avutil-61.dll`,
+  `swresample-7.dll` (avfilter/swscale/avdevice are not built by this component set and are
   excluded from the portable ZIP)
 - **Role:** Post-recording stream-copy remux of MKV → progressive MP4 (`+faststart`), plus the
-  native AAC-LC encoder (ADR 0052).
-- **Note:** ExoSnap's own build is deliberately hardware-encoder-only — no software H.264/HEVC
-  encoder (`libx264`/`libx265`) is compiled in or shipped (see ADR 0007). An earlier `r6` build
-  briefly added them for a build-capability proof; `r7` continues the LGPL line from `r5` and does
-  not carry them. The `r6` additions were reverted after a patent-licensing
-  review concluded that shipping a compiled software encoder in ExoSnap's own binary is a
-  materially different risk than calling a hardware vendor's own NVENC/AMF/QSV SDK, with no
-  clear budget to resolve it through formal licensing at this stage. Users may replace the
-  DLLs with compatible versions.
+  native AAC-LC encoder.
+- **Note:** ExoSnap's bundled FFmpeg is an LGPL shared build without software H.264/HEVC encoders (`libx264`/`libx265`). Video recording uses the native NVIDIA encoder path. Users may replace the DLLs with compatible versions. The current component roles include remux/trim, preview decode, native AAC-LC encoding and audio resampling. Distribution changes require a separate license and distribution review.
 
 ## Official-release-build-only dependencies (crash capture)
 
@@ -206,7 +199,7 @@ not download, link, or ship any of the three components below, and does not prod
 - **License:** MIT
 - **Linkage:** static
 - **Bundled license:** `licenses/sentry-native.txt`
-- **Role:** out-of-process crash-capture client library (ADR 0017); configured with
+- **Role:** out-of-process crash-capture client library; configured with
   the Crashpad backend and WinHTTP transport.
 
 ### Crashpad
@@ -262,10 +255,10 @@ provided by the Windows operating system and are not bundled.
 - **WASAPI** — Windows audio session API
 - **Microsoft Visual C++ Runtime** — `exosnap.exe` and the shipped Qt6 DLLs
   link the dynamic MSVC runtime (`/MD`). It is **not bundled** in any ExoSnap
-  artifact (MSI, portable ZIP, Chocolatey, or Scoop package). The WinGet
+  artifact (MSI or portable ZIP). The WinGet
   package declares `Microsoft.VCRedist.2015+.x64` as a dependency and installs
-  it automatically. Users installing via the MSI, the portable ZIP,
-  Chocolatey, or Scoop must install the Microsoft Visual C++ 2015-2022
+  it automatically. The Chocolatey package declares `vcredist140` as its runtime dependency.
+  Users installing via the MSI, the portable ZIP, or Scoop must install the Microsoft Visual C++ 2015-2022
   Redistributable (x64) themselves from
   <https://aka.ms/vs/17/release/vc_redist.x64.exe> if it is not already present.
 

@@ -164,7 +164,8 @@ QJsonObject EncoderInitJson(const exosnap::engine::EncoderInitInfo& init) {
     if (!init.valid)
         return json;
     json.insert(QStringLiteral("codec"), ui::videoCodecLabel(init.codec));
-    json.insert(QStringLiteral("preset"), EncoderPresetName(init.preset));
+    json.insert(QStringLiteral("preset"),
+                QString::fromUtf8(init.backend_preset.data(), static_cast<qsizetype>(init.backend_preset.size())));
     json.insert(QStringLiteral("rateControl"), RateControlName(init.rc_mode));
     json.insert(QStringLiteral("targetBitrateKbps"), static_cast<double>(init.target_bitrate_kbps));
     json.insert(QStringLiteral("maxBitrateKbps"), static_cast<double>(init.max_bitrate_kbps));
@@ -308,6 +309,13 @@ QJsonObject DiskJson(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
     QJsonObject json;
     json.insert(QStringLiteral("bytesWritten"), Count(d.bytes_written));
     json.insert(QStringLiteral("throughputMiBs"), d.throughput_mib_s);
+    const bool finalized_io = d.finalized_io_segments > 0;
+    json.insert(QStringLiteral("finalizedIoSegments"), Count(d.finalized_io_segments));
+    json.insert(QStringLiteral("crtWriteTotalMs"), Metric(d.crt_write_total_ms, finalized_io));
+    json.insert(QStringLiteral("crtFlushTotalMs"), Metric(d.crt_flush_total_ms, finalized_io));
+    json.insert(QStringLiteral("durabilityFlushTotalMs"), Metric(d.durability_flush_total_ms, finalized_io));
+    json.insert(QStringLiteral("durabilityFlushFailures"),
+                finalized_io ? Count(d.durability_flush_failures) : QJsonValue());
     json.insert(QStringLiteral("latestWriteMs"), Metric(d.latest_write_ms, latency_available));
     json.insert(QStringLiteral("averageWriteMs"), Metric(d.average_write_ms, latency_available));
     json.insert(QStringLiteral("peakWriteMs"), Metric(d.peak_write_ms, latency_available));
@@ -362,6 +370,33 @@ QJsonObject PipelineSnapshotToJson(const RecordingDiagnosticsSnapshot& snapshot)
         return json;
     }
 
+    json.insert(QStringLiteral("realFrameLoss"), Count(snapshot.real_frame_loss()));
+    QJsonObject pacing;
+    pacing.insert(QStringLiteral("outputSlots"), Count(snapshot.pacing.output_slots));
+    pacing.insert(QStringLiteral("affectedSlots"), Count(snapshot.pacing.affected_slots));
+    pacing.insert(QStringLiteral("skippedSlots"), Count(snapshot.pacing.skipped_output_slots));
+    pacing.insert(QStringLiteral("recentFrameLoss"), Count(snapshot.pacing.recent_frame_loss));
+    pacing.insert(QStringLiteral("longestDuplicateRun"), Count(snapshot.pacing.longest_duplicate_run));
+    pacing.insert(QStringLiteral("ringMisses"), Count(snapshot.pacing.ring_misses));
+    pacing.insert(QStringLiteral("ringOccupancy"), Count(snapshot.pacing.ring_occupancy));
+    const auto distribution = [&pacing](const char* name, const exosnap::engine::TimingDistribution& d) {
+        if (d.samples == 0) {
+            pacing.insert(QLatin1String(name), QStringLiteral("unavailable"));
+            return;
+        }
+        QJsonObject value;
+        value.insert(QStringLiteral("p50Ms"), d.p50_ms);
+        value.insert(QStringLiteral("p95Ms"), d.p95_ms);
+        value.insert(QStringLiteral("p99Ms"), d.p99_ms);
+        value.insert(QStringLiteral("samples"), Count(d.samples));
+        pacing.insert(QLatin1String(name), value);
+    };
+    distribution("selectionResidual", snapshot.pacing.selection_residual);
+    distribution("absoluteResidual", snapshot.pacing.absolute_residual);
+    distribution("selectedFrameAge", snapshot.pacing.selected_frame_age);
+    distribution("workerLateness", snapshot.pacing.worker_lateness);
+    distribution("submissionCadence", snapshot.pacing.output_cadence);
+    json.insert(QStringLiteral("pacingOutcome"), pacing);
     json.insert(QStringLiteral("capture"), CaptureJson(snapshot.capture));
     json.insert(QStringLiteral("sourcePresentation"), SourcePresentationJson(snapshot.capture));
     json.insert(QStringLiteral("captureTiming"), CaptureTimingJson(snapshot.capture));
@@ -376,6 +411,8 @@ QJsonObject PipelineSnapshotToJson(const RecordingDiagnosticsSnapshot& snapshot)
     json.insert(QStringLiteral("mux"), MuxJson(snapshot.mux));
     json.insert(QStringLiteral("disk"), DiskJson(snapshot));
     json.insert(QStringLiteral("split"), SplitJson(snapshot.split));
+    const auto& producer = snapshot.video_queue.producer_wait;
+    json.insert(QStringLiteral("muxProducerWaitP99Ms"), Metric(producer.p99_ms, producer.samples > 0));
     json.insert(QStringLiteral("retainedFrames"), RetainedFramesJson(snapshot));
     return json;
 }

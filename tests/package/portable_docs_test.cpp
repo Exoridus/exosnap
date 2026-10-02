@@ -80,10 +80,10 @@ TEST(PortableDocs, NoDocClaimsItIsOnePointZeroRelease) {
 }
 
 // ---------------------------------------------------------------------------
-// Pre-v1 status
+// Pre-1.0 status
 // ---------------------------------------------------------------------------
 TEST(PortableDocs, KnownLimitationsStatesPreV1Preview) {
-    EXPECT_TRUE(contains(known_limitations(), "pre-v1"));
+    EXPECT_TRUE(contains(known_limitations(), "pre-1.0"));
     EXPECT_TRUE(contains(known_limitations(), "preview"));
 }
 
@@ -105,15 +105,15 @@ TEST(PortableDocs, RootReadmeDocumentsNvidiaRequirement) {
 }
 
 // ---------------------------------------------------------------------------
-// MP4 split support (0.2.0 — MP4-SPLIT-REMUX-R1)
+// MP4 delivery and split support
 // ---------------------------------------------------------------------------
 TEST(PortableDocs, KnownLimitationsDocumentsMp4SplitSupport) {
-    // MP4 split is now supported via per-segment remux.
-    EXPECT_TRUE(contains(known_limitations(), "split is supported for MKV, WebM, and MP4"));
+    EXPECT_TRUE(contains(known_limitations(), "MP4 is delivered by stream-copy remux") &&
+                contains(known_limitations(), "split jobs"));
 }
 
 TEST(PortableDocs, PortableReadmeDocumentsMp4SplitSupport) {
-    EXPECT_TRUE(contains(portable_readme(), "Split is supported for"));
+    EXPECT_TRUE(contains(portable_readme(), "manual split"));
     EXPECT_TRUE(contains(portable_readme(), "MP4"));
 }
 
@@ -125,11 +125,11 @@ TEST(PortableDocs, RootReadmeDocumentsMp4SplitSupport) {
 // Crash-recovery limitation
 // ---------------------------------------------------------------------------
 TEST(PortableDocs, KnownLimitationsDocumentsCrashRecoveryLimitation) {
-    // 0.2.0: crash recovery is now implemented. The doc must describe the
-    // recovery workflow rather than saying it does not exist.
+    // The doc must describe the recovery workflow and its limits rather than
+    // saying recovery does not exist.
     const auto doc = known_limitations();
-    EXPECT_TRUE(contains(doc, "Crash recovery is available"));
-    EXPECT_TRUE(contains(doc, "recovery manifest"));
+    EXPECT_TRUE(contains(doc, "Continue creates separate slices"));
+    EXPECT_TRUE(contains(doc, "recovery-manifest"));
 }
 
 // ---------------------------------------------------------------------------
@@ -168,5 +168,5 @@ TEST(PortableDocs, PortableReadmeHasChecksumInstructions) {
 }
 
 TEST(PortableDocs, PortableReadmeDocumentsDefaultHotkey) {
-    EXPECT_TRUE(contains(portable_readme(), "Alt+F9"));
+    EXPECT_TRUE(contains(portable_readme(), "Alt+Shift+R"));
 }

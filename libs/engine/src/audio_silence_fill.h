@@ -4,7 +4,7 @@
 //
 // Two different situations leave an audio worker with no packets to encode:
 //
-//   1. The endpoint was lost (ADR 0046). The source reports the failure and the
+//   1. The endpoint was lost. The source reports the failure and the
 //      worker holds the timeline with silence until it is reacquired.
 //   2. The source is perfectly healthy but has nothing to hand over. WASAPI
 //      loopback on a render endpoint is the everyday case: while nothing is

@@ -22,7 +22,7 @@ namespace exosnap::engine {
 //   * HDR10 R10G10B10A2 (already PQ/BT.2020 R'G'B'): only the Y'CbCr conversion
 //     + packing is applied (no re-transfer).
 //
-// Threading: all methods are VideoThread-exclusive (ADR-0009). The class does
+// Threading: all methods are VideoThread-exclusive. The class does
 // not own the device/context.
 class HdrPqConverter {
   public:

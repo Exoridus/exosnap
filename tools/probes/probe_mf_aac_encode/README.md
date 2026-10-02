@@ -38,14 +38,14 @@ probe_mf_aac_encode_output\wasapi_loopback_aac.aac
 ## Build
 
 ```
-cmake --preset windows-x64-debug
+cmake --preset windows-x64-debug -DEXOSNAP_BUILD_PROBES=ON
 cmake --build out/build/windows-x64-debug --target probe_mf_aac_encode
 ```
 
 ## Run
 
 ```
-.\out\build\windows-x64-debug\apps\probes\probe_mf_aac_encode\probe_mf_aac_encode.exe
+.\out\build\windows-x64-debug\tools\probes\probe_mf_aac_encode\probe_mf_aac_encode.exe
 ```
 
 Run from the repository root so that the output directory is created at `<repo root>\probe_mf_aac_encode_output\`.

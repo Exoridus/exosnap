@@ -1,4 +1,4 @@
-// Tests for audio encoding parameters (ADR 0019):
+// Tests for audio encoding parameters:
 //   - OpusFrameDuration → sample count mapping
 //   - PTS correctness at 10 ms frame size
 //   - Opus bitrate clamping

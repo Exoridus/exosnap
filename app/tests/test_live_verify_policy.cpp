@@ -179,6 +179,7 @@ TEST(LiveVerifyPolicy, ReadyOnRecordOffersExactlyTheActionsTheSurfaceOffers) {
     const QStringList actions = AvailableActions(Ready());
     for (const QString& expected :
          {QStringLiteral("ui.navigate"), QStringLiteral("record.start"), QStringLiteral("record.selectTarget"),
+          QStringLiteral("record.selectRegion"), QStringLiteral("record.openRegionSelector"),
           QStringLiteral("sourcePicker.open"), QStringLiteral("notificationHub.open")}) {
         EXPECT_TRUE(actions.contains(expected)) << expected.toStdString();
     }
@@ -482,7 +483,7 @@ TEST(LiveVerifyUpdatePolicy, ApplyNeedsAnOfferedUpdate) {
 }
 
 TEST(LiveVerifyUpdatePolicy, AVerificationReinstallIsAlsoAnOffer) {
-    // ADR 0055: the offered version IS the running one, on purpose, and its
+    // the offered version IS the running one, on purpose, and its
     // button launches the updater exactly like a normal update's.
     AutomationState state = UpdateOffered();
     state.update_state = QStringLiteral("verify-reinstall");

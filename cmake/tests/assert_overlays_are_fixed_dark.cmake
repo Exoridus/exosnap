@@ -13,7 +13,6 @@ set(OVERLAYS
     OverlayRecording
     OverlayCountdown
     OverlayQuickControlPill
-    OverlayDiagnostics
 )
 
 # Appearance-resolved colour tokens. `accentInk`, `successInk`, `warningInk` and

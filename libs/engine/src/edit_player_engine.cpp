@@ -1,4 +1,7 @@
 #include "exosnap/engine/edit_player_engine.h"
+#include <cstdlib>
+#include <exosnap/engine/performance_measurements.h>
+#include <string_view>
 
 #include "edit_audio_mix.h"
 #include "edit_playback_pacing.h"
@@ -267,6 +270,7 @@ class PacketQueue {
                 return false;
             if (ShouldAdmitDemuxedPacket(AdmissionStateLocked(), kPacketQueueLimits))
                 break;
+            ScopedPerformanceMeasurement measurement(PerformanceStage::QueueWait);
             not_full_.wait_for(lock, kPacketQueuePushRecheckInterval);
         }
         AVPacket* owned = av_packet_alloc();
@@ -423,7 +427,7 @@ struct AudioTrack {
 };
 
 // get_format callback for a codec context with hw_device_ctx set to a
-// D3D11VA device (docs/dev/edit-player-architecture.md).
+// D3D11VA device (docs/architecture/edit-and-export.md).
 // Prefers AV_PIX_FMT_D3D11 when the decoder offers it -- meaning D3D11VA
 // negotiation accepted this stream's exact profile/chroma/bit-depth -- and
 // otherwise falls back to the LAST format libavcodec itself offered (never
@@ -486,7 +490,7 @@ struct EditPlayerEngine::Impl {
     AVRational frame_rate{0, 1}; // the opened clip's own rate; {0,1} when unknown
 
     // Playback runs on three threads with strictly separate ownership (see
-    // docs/dev/edit-player-architecture.md):
+    // docs/architecture/edit-and-export.md):
     // demux owns `fmt`, video owns `video_codec`, audio owns every entry of
     // `audio_tracks`. No context is touched by two threads, which keeps the
     // engine's single-writer contract intact instead of covering it with locks.
@@ -632,7 +636,9 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
         // itself, so a hardware-incompatible stream simply fails to open
         // here and falls back once, cleanly, to the exact call this codebase
         // already made before hardware decode existed.
-        TryAttachD3D11VA(vctx);
+        const char* software_decode = std::getenv("EXOSNAP_EDIT_SOFTWARE_DECODE");
+        if (!software_decode || std::string_view(software_decode) != "1")
+            TryAttachD3D11VA(vctx);
         vctx_ready = avcodec_open2(vctx, vcodec, nullptr) >= 0;
         if (!vctx_ready && vctx->hw_device_ctx != nullptr) {
             av_buffer_unref(&vctx->hw_device_ctx);
@@ -659,7 +665,7 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
     // leave the tone-mapper standing.
     //
     // Same reference tone-map curve as the capture preview and snapshot path
-    // (ADR 0040: one colour truth, no second invented tone-map). Display peak:
+    // (the shared reference curve, not an independent tone-map). Display peak:
     // the engine is UI-agnostic and has no screen to ask, so this is the
     // reference-peak fallback (kHdrFallbackPeakNits) -- that shifts only where
     // the highlight roll-off begins, not whether the image is readable at all.
@@ -774,7 +780,7 @@ bool IsConvertibleFrame(const AVFrame* frame) noexcept {
 // Normalizes a D3D11 hardware-decode readback frame in place, so every call
 // site below can call IsConvertibleFrame/WrapRawDecodedFrame/
 // ConvertToDecodedFrame exactly as before regardless of which decode path
-// produced `frame` (docs/dev/edit-player-architecture.md).
+// produced `frame` (docs/architecture/edit-and-export.md).
 // A no-op unless frame->format == AV_PIX_FMT_D3D11. Transfers the hardware
 // surface to system memory (av_hwframe_transfer_data) and de-interleaves it
 // via edit_player_hw_decode.h. On any failure -- including a 4:4:4 hardware
@@ -785,8 +791,12 @@ bool IsConvertibleFrame(const AVFrame* frame) noexcept {
 void NormalizeHwFrame(AVFrame* frame) {
     if (frame->format != AV_PIX_FMT_D3D11)
         return;
+    const auto transfer = [](AVFrame* destination, AVFrame* source) {
+        ScopedPerformanceMeasurement measurement(PerformanceStage::DecodeReadback);
+        return av_hwframe_transfer_data(destination, source, 0);
+    };
     FrameGuard sw(av_frame_alloc());
-    if (sw.frame == nullptr || av_hwframe_transfer_data(sw.frame, frame, 0) < 0) {
+    if (sw.frame == nullptr || transfer(sw.frame, frame) < 0 || av_frame_copy_props(sw.frame, frame) < 0) {
         av_frame_unref(frame);
         return;
     }
@@ -807,6 +817,7 @@ void NormalizeHwFrame(AVFrame* frame) {
 // conversion, which would render PQ material flat and washed out.
 DecodedVideoFrame ConvertToDecodedFrame(const AVFrame* frame, int64_t pts_us, MatrixCoefficients matrix,
                                         ColorRange range, const P010PqMonitorConverter* pq) {
+    ScopedPerformanceMeasurement measurement(PerformanceStage::CpuConversion);
     YuvToBgraParams params;
     params.matrix = matrix;
     params.range = range;
@@ -868,7 +879,7 @@ DecodedVideoFrame ConvertToDecodedFrame(const AVFrame* frame, int64_t pts_us, Ma
 // AVFrame*, av_frame_ref it to `frame` -- bumps the buffer refcount, no pixel
 // copy) rather than color-converting into a new BGRA allocation. This is the
 // entire reason RawDecodedVideoFrame exists for the GPU conversion path
-// (docs/dev/edit-player-architecture.md):
+// (docs/architecture/edit-and-export.md):
 // ConvertToDecodedFrame's `new uint8_t[bgra_bytes]` per frame above is gone
 // on this path, replaced by an AVFrame struct allocation (a few hundred
 // bytes), not a multi-megabyte pixel buffer.
@@ -1224,7 +1235,7 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                                            std::function<int64_t()> current_media_time_us) {
     // Same demux/video/audio thread topology, same clock-gated skip decision,
     // same PacketQueue backpressure as DecodeFrameAtRaw's single-frame
-    // sibling above -- docs/dev/edit-player-architecture.md.
+    // sibling above -- docs/architecture/edit-and-export.md.
     // The video thread calls WrapRawDecodedFrame (ref-counts the decoder's
     // own buffer) rather than ConvertToDecodedFrame (a fresh BGRA allocation
     // + CPU colour conversion): this is the editor player's own continuous
@@ -1425,11 +1436,6 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                         if (recv_ret < 0)
                             break; // EAGAIN (need more input) or EOF (fully drained)
 
-                        // Hardware readback normalizes back to a plain
-                        // software pixel format before anything below
-                        // inspects frame.frame->format.
-                        NormalizeHwFrame(frame.frame);
-
                         const int64_t pts_us = FramePtsUs(frame.frame, vtb);
                         // A negative clock reading means "nobody is presenting
                         // this" -- then nothing is known to be late and nothing is
@@ -1444,9 +1450,13 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                         const bool preroll = pts_us < start_us;
                         if (worth_converting)
                             late_streak = 0;
-                        else if (!preroll)
+                        else if (!preroll) {
                             ++late_streak;
+                            RecordPerformanceEvent(PerformanceStage::DecodeDropped);
+                        }
 
+                        if (worth_converting)
+                            NormalizeHwFrame(frame.frame);
                         if (worth_converting && IsConvertibleFrame(frame.frame)) {
                             // Wrap and release the decoder's frame BEFORE
                             // handing the result on: on_video is allowed to

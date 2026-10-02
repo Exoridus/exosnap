@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 
-// Edit/Output/Save surface (ADR 0022): still a LAYER over the Record page
+// Edit/Output/Save surface: still a LAYER over the Record page
 // rather than a navigation destination — ownership of the clip, the decoder
 // session and the export is unchanged — but presented as a WORKSPACE that
 // occupies the normal content region rather than as a dialog floating above a

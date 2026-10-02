@@ -1,73 +1,38 @@
-# ExoSnap Developer Probes
+# Developer probes
 
-Standalone C++ programs that exercise individual hardware subsystems independently of the full ExoSnap GUI. These are **not** product applications.
+Small executables isolate a hardware/API question without running the complete application. Some call production engine code; others deliberately implement a standalone API experiment. Identify which one a result proves before treating it as product evidence.
 
-## Build
+## Build and run
 
-Probes are OFF by default. Enable them with:
+Most probes are opt-in:
 
 ```powershell
 cmake --preset windows-x64-debug -DEXOSNAP_BUILD_PROBES=ON
-cmake --build --preset windows-x64-debug
+cmake --build build/windows-x64-debug --config Debug --target <probe target>
 ```
 
-Individual probe targets are placed under `build/<preset>/tools/probes/`.
+Multi-config outputs normally sit under `build/windows-x64-debug/tools/probes/<target>/Debug/`. The actual target directory/build result is authoritative. Release-gate instruments such as the stall/fullscreen test windows can be built unconditionally; do not assume every probe uses the same gate. Probes are not installed in the user package.
 
-## Probes
+Run visible/audio-producing probes only with desktop coordination, and run them from a scratch directory when they create files. Hardware requirements are established by their capability checks, not by an assumed GPU model alone.
 
-| Probe | Purpose | Hardware Required | Invocation |
-|---|---|---|---|
-| probe_wgc_preview | Visual WGC frame capture preview | GPU + display | `probe_wgc_preview.exe` |
-| probe_process_loopback | WASAPI process-loopback audio capture | Audio device | `probe_process_loopback.exe <PID>` |
-| probe_nvenc | NVENC encoder initialization test | NVIDIA GPU | `probe_nvenc.exe` |
-| probe_wgc_nvenc | WGC capture + NVENC encode pipeline (system memory path) | NVIDIA GPU | `probe_wgc_nvenc.exe` |
-| probe_wgc_nvenc_gpu | WGC + NVENC GPU texture sharing path (D3D11 interop) | NVIDIA GPU | `probe_wgc_nvenc_gpu.exe` |
-| probe_mf_aac_encode | Media Foundation AAC encoding (legacy/transitional) | None | `probe_mf_aac_encode.exe` |
-| probe_gpup_nvenc | NVENC session, codec caps and 60 encoded frames on adapter 0, as JSON | NVIDIA GPU, or a Hyper-V GPU partition of one | `probe_gpup_nvenc.exe` |
-| probe_idd_duplication | Output Duplication on every output: mode, colour space, frame timing and diagnostics as JSON | A desktop session | `probe_idd_duplication.exe` |
-| probe_luminance_cost | GPU execution time of the per-frame luminance analysis next to the tone-map pass, per resolution, as JSON | GPU | `probe_luminance_cost.exe` |
+| Probe | Question |
+|---|---|
+| [probe_wgc_preview](probe_wgc_preview/README.md) | Can WGC capture the selected monitor/window and display BGRA frames? |
+| [probe_process_loopback](probe_process_loopback/README.md) | Can process-loopback WASAPI capture the selected process? |
+| [probe_nvenc](probe_nvenc/README.md) | Can a standalone NVENC session encode its synthetic input? |
+| [probe_wgc_nvenc](probe_wgc_nvenc/README.md) | Does standalone WGC + CPU conversion + NVENC produce an AV1 bitstream? |
+| [probe_wgc_nvenc_gpu](probe_wgc_nvenc_gpu/README.md) | Does WGC + GPU conversion/resource registration + NVENC work? |
+| [probe_mf_aac_encode](probe_mf_aac_encode/README.md) | Does the independent Media Foundation AAC API experiment work? Not the product AAC encoder. |
+| `probe_gpup_nvenc`, `probe_idd_duplication` | Is NVENC/duplication usable in the declared guest and output configuration? |
+| `probe_encode_file`, `probe_edit_playback` | Exercise real encoder or editor code with controlled media |
+| `probe_luminance_cost` | GPU query cost of luminance analysis and tone-mapping |
 
-## The two verification-guest probes
+## Interpreting evidence
 
-`probe_gpup_nvenc` and `probe_idd_duplication` exist to answer the two questions the Hyper-V verification guest is built on, before any gate depends on the answers: does NVENC work through a GPU partition, and can the virtual monitor be duplicated. Both are built on the host and run in the guest. The host result is the reference the guest result is compared against, which is why both print JSON rather than prose.
+An init-only PASS is not a decoded-file round trip. A standalone CPU/BT.601 experiment does not validate the product's GPU BT.709/HDR compositor. A probe reporting frames says nothing about all output containers, audio routing, recovery or frontend lifecycle unless it actually executes those paths.
 
-Either one failing in the guest moves the gates that need it back to the host. See `docs/dev/release-verify-vm.md`.
+Media Foundation AAC is not a production recording dependency; current AAC uses FFmpeg's native encoder. Keep its probe only as an explicitly scoped API diagnostic, not as a transitional product path or a blocker for normal AAC recording.
 
-## probe_mf_aac_encode: Legacy/Transitional Note
+For duplication experiments, `probe_idd_duplication` offers `--frames`, `--duration-ms`, `--acquire-timeout-ms`, `--nonblocking-acquire`, `--resource-reset-before-release` and `--hold-ms` forms described by its source. Record the exact invocation; changing acquire/release timing changes the measured behavior. The [guest guide](../../docs/dev/release-verify-vm.md) explains its verification role.
 
-Media Foundation AAC encoding is a transitional path. It is not the preferred future encoder architecture for ExoSnap (which uses FFmpeg's native AAC-LC encoder for cross-platform portability, as described in ADR 0052). This probe remains only for current compatibility validation and debugging. Remove it when the Media Foundation AAC path is retired from the production pipeline.
-
-## Maintenance Value
-
-- **probe_wgc_preview:** Validates WGC frame capture works. Useful when debugging capture failures or checking frame format compatibility.
-- **probe_process_loopback:** Validates WASAPI process loopback audio capture against a specific PID. Critical for debugging app-audio isolation issues.
-- **probe_nvenc:** Tests NVENC encoder init standalone (no capture dependency). First-stop diagnostic for NVENC API or driver problems.
-- **probe_wgc_nvenc:** End-to-end system-memory capture+encode pipeline. Validates the most common recording path used in production.
-- **probe_wgc_nvenc_gpu:** Tests the GPU-texture-sharing NVENC path. This is a distinct code path from probe_wgc_nvenc (D3D11 texture interop vs system memory copy). Validate this if GPU compositor or texture-sharing issues arise.
-- **probe_mf_aac_encode:** Validates Media Foundation AAC encoder initialization and basic encoding. See retirement note above.
-
-## Relationship to Production Architecture
-
-Probes exercise the same low-level Windows APIs (WGC, WASAPI, NVENC, MF) that the production recording engine uses, but in isolation. They share no code with the production pipeline. Each probe has its own self-contained implementation. When a production integration test fails, the corresponding probe helps isolate whether the issue is in the API layer or the integration.
-
-## Retirement Conditions
-
-A probe should be removed when:
-- The subsystem it tests has a production-level self-test or diagnostic
-- The underlying API is no longer used by ExoSnap
-- The probe duplicates capabilities available in `engine` tests
-
-## Usage
-
-Each probe has its own `README.md` with detailed build and run instructions. Probes are excluded from normal Release builds, install rules, and CI.
-
-### probe_idd_duplication diagnostics
-
-For the DXGI deep-research path, the duplication probe supports the following options:
-
-- `--frames=<n>`: number of frame samples required before exit.
-- `--duration-ms=<ms>`: per-output runtime budget.
-- `--acquire-timeout-ms=<ms>`: timeout in milliseconds for `AcquireNextFrame`.
-- `--nonblocking-acquire`: force `AcquireNextFrame(0)`.
-- `--resource-reset-before-release`: release the `IDXGIResource` before `ReleaseFrame`.
-- `--hold-ms=<ms>`: wait for N ms after successful acquire before release.
+Prefer an existing probe for a specific hardware question. Remove redundant instruments deliberately when their subject is covered elsewhere. Do not copy run histories or experiment plans into these READMEs. Current production invariants belong in [architecture](../../docs/architecture/overview.md).

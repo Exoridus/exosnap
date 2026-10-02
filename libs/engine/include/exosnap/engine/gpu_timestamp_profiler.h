@@ -17,7 +17,7 @@
 //     the oldest in-flight result is not ready yet. A not-ready or disjoint frame
 //     is dropped, never awaited.
 //   - Threading: an instance is single-thread, owned by the thread that owns the
-//     context (VideoThread per ADR-0009). It does not own the device/context.
+//     context (VideoThread). It does not own the device/context.
 
 #include <exosnap/engine/gpu_timestamp_math.h>
 

@@ -39,6 +39,16 @@ class LogsAdapter : public QObject {
     Q_PROPERTY(bool canCopy READ canCopy NOTIFY countsChanged FINAL)
     Q_PROPERTY(bool canExport READ canExport NOTIFY countsChanged FINAL)
 
+    // A "Show in log" reveal temporarily forces the severity filter to All and
+    // the search to the requested identifier, remembering both so the previous
+    // view can be restored. The view names this state and offers the way back;
+    // nothing is overwritten silently. `revealMissing` turns true when the
+    // buffer holds no entry matching the identifier any more (evicted, or the
+    // message no longer in the bounded history).
+    Q_PROPERTY(bool revealActive READ revealActive NOTIFY revealChanged FINAL)
+    Q_PROPERTY(bool revealMissing READ revealMissing NOTIFY revealChanged FINAL)
+    Q_PROPERTY(QString revealEntryId READ revealEntryId NOTIFY revealChanged FINAL)
+
     // CONSTANT, and truthfully so: AppLog::init() resolves the session log file
     // once per process and every later write reopens the SAME path — rotation
     // renames the backups (exosnap.log.1/.2) around it and leaves exosnap.log
@@ -69,6 +79,9 @@ class LogsAdapter : public QObject {
     [[nodiscard]] const QString& statusText() const noexcept;
     [[nodiscard]] bool canCopy() const;
     [[nodiscard]] bool canExport() const;
+    [[nodiscard]] bool revealActive() const noexcept;
+    [[nodiscard]] bool revealMissing() const noexcept;
+    [[nodiscard]] const QString& revealEntryId() const noexcept;
     [[nodiscard]] QString logFolderPath() const;
     [[nodiscard]] QString logFilePath() const;
     [[nodiscard]] const QVariantList& startupTrace() const noexcept;
@@ -88,6 +101,14 @@ class LogsAdapter : public QObject {
     Q_INVOKABLE void openLogFolder();
     Q_INVOKABLE void clear();
     Q_INVOKABLE void refreshStartupTrace();
+    // Shows the entry with this identifier. For 0.10 the identifier is the
+    // diagnostic category the log line carries, which is what "Show in log"
+    // has always searched for; the reveal makes that visible even when the
+    // severity filter would hide it. Unlike setSearchQuery this is not just a
+    // text expression: it remembers the previous filter and search so
+    // clearReveal() can put them back.
+    Q_INVOKABLE void revealEntry(const QString& entry_id);
+    Q_INVOKABLE void clearReveal();
     // Routed to the one support-bundle action the Diagnostics side owns, so both
     // entry points share a single code path.
     Q_INVOKABLE void createSupportBundle(const QUrl& destination);
@@ -103,10 +124,12 @@ class LogsAdapter : public QObject {
     void countsChanged();
     void statusChanged();
     void startupTraceChanged();
+    void revealChanged();
     void createSupportBundleRequested(const QUrl& destination);
 
   private:
     void applyPendingSearch();
+    void refreshRevealPresence();
     void updateStatus(const QString& feedback = {});
 
     LogEntryModel source_model_;
@@ -117,6 +140,11 @@ class LogsAdapter : public QObject {
     QVariantList startup_trace_;
     bool auto_scroll_ = true;
     bool synthetic_ = false;
+    bool reveal_active_ = false;
+    bool reveal_missing_ = false;
+    QString reveal_entry_id_;
+    int reveal_previous_severity_ = 0;
+    QString reveal_previous_query_;
 };
 
 } // namespace exosnap::quick

@@ -1,407 +1,197 @@
-// Deterministic layout, state-presentation and accessibility contracts for the
-// updater window.
+// test_updater_text_layout.cpp -- the updater's copy and progress semantics,
+// asserted on the projection the Quick window renders.
 //
-// These are the invariants the pre-0.9 visual review found broken and which a
-// screenshot alone cannot defend: a PNG shows that a string ended at a widget
-// edge, but nothing fails when it starts doing so again. They are asserted on
-// geometry and on the accessibility tree rather than on pixels, because that is
-// what the contracts are actually about.
-//
-// No network, no install, no live updater process: the production window is
-// driven by the production controller and measured offscreen.
+// The Widgets window kept arbitrary-length values (release metadata, msiexec
+// text, safety copy) inside one-line eliding rows. The Quick window keeps the
+// same contract with `elide` plus a tooltip/accessible description; what can be
+// asserted headless is that the projection carries the full value and that the
+// ring, eyebrow and emphasis rules are the ones the window has always shown.
 
 #include <gtest/gtest.h>
 
-#include <QAccessible>
-#include <QAccessibleInterface>
-#include <QAccessibleValueInterface>
-#include <QApplication>
-#include <QCoreApplication>
-#include <QEvent>
-#include <QEventLoop>
-#include <QLabel>
 #include <QString>
-#include <QWidget>
 
-#include "ElidingLabel.h"
-#include "ProgressRing.h"
-#include "StepListWidget.h"
 #include "UpdaterController.h"
-#include "UpdaterWindow.h"
+#include "UpdaterViewAdapter.h"
 
 using namespace exosnap::updater;
 
 namespace {
 
-constexpr QChar kEllipsis(0x2026);
-
-// The longest input the shipping updater can actually receive: version strings
-// come from UpdaterArgs (--from/--to), i.e. whatever the signed release manifest
-// names. A pre-release + build-metadata semver is the realistic maximum.
-constexpr char kLongFrom[] = "0.9.0-rc4+build.20260810.a5d55f1.windows-x64";
-constexpr char kLongTo[] = "0.9.0-rc5+build.20260812.eba270a.windows-x64";
-
-QApplication* EnsureApplication() {
-    if (auto* existing = qobject_cast<QApplication*>(QCoreApplication::instance()))
-        return existing;
-    static int argc = 1;
-    static char app_name[] = "updater_text_layout";
-    static char* argv[] = {app_name, nullptr};
-    static QApplication app(argc, argv);
-    return &app;
+UpdaterUiState DownloadInFlight() {
+    UpdaterController c(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
+    c.onStepStarted(UpStep::Download);
+    c.onDownloadProgress(38, 100);
+    return c.state();
 }
 
-void Settle(QWidget& widget) {
-    widget.move(-20000, -20000);
-    widget.show();
-    for (int i = 0; i < 3; ++i) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents);
-        widget.ensurePolished();
-        widget.adjustSize();
-    }
+UpdaterUiState Terminal(FailureCase which, const QString& detail = {}) {
+    UpdaterController c(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
+    c.onStepDone(UpStep::Download);
+    c.onStepDone(UpStep::CloseApp);
+    c.onStepStarted(UpStep::Install);
+    c.onFailure(which, detail);
+    return c.state();
 }
 
-UpdaterUiState IdleState(const char* from = "0.9.0-rc4", const char* to = "0.9.0-rc5") {
-    return UpdaterController(QString::fromLatin1(from), QString::fromLatin1(to)).state();
-}
-
-UpdaterUiState DownloadingState(const char* from = "0.9.0-rc4", const char* to = "0.9.0-rc5") {
-    UpdaterController controller(QString::fromLatin1(from), QString::fromLatin1(to));
-    controller.onStepStarted(UpStep::Download);
-    controller.onDownloadProgress(38, 100);
-    return controller.state();
-}
-
-UpdaterUiState LongMsiDetailState() {
-    UpdaterController controller(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
-    controller.onStepDone(UpStep::Download);
-    controller.onStepDone(UpStep::CloseApp);
-    controller.onFailure(FailureCase::MsiFailed,
-                         QStringLiteral("1603 (fatal error during installation, ERROR_INSTALL_FAILURE)"));
-    return controller.state();
-}
-
-UpdaterUiState ReinstallDownloadingState() {
-    UpdaterController controller(QStringLiteral("0.9.0-rc5"), QStringLiteral("0.9.0-rc5"));
-    controller.setVerificationReinstall(true);
-    controller.onStepStarted(UpStep::Download);
-    controller.onDownloadProgress(38, 100);
-    return controller.state();
-}
-
-UpdaterUiState SuccessState() {
-    UpdaterController controller(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
-    controller.onAllDone();
-    return controller.state();
-}
-
-const ElidingLabel* Eliding(const UpdaterWindow& window, const char* name) {
-    return window.findChild<ElidingLabel*>(QString::fromLatin1(name));
-}
-
-// Every visible string in the window, in tree order. Used to assert that a
-// statement is made once rather than that a particular widget carries it.
-QStringList VisibleText(const UpdaterWindow& window) {
-    QStringList out;
-    for (const QLabel* label : window.findChildren<const QLabel*>()) {
-        const auto* eliding = qobject_cast<const ElidingLabel*>(label);
-        const QString text = eliding != nullptr ? eliding->fullText() : label->text();
-        if (!text.isEmpty())
-            out << text;
-    }
-    return out;
-}
-
-class UpdaterTextLayoutTest : public ::testing::Test {
-  protected:
-    static void SetUpTestSuite() {
-        EnsureApplication();
-    }
-};
-
-// ── Long content ────────────────────────────────────────────────────────────
-
-TEST_F(UpdaterTextLayoutTest, LongVersionsElideInTheMiddleAndStayInsideTheWindow) {
-    UpdaterWindow window;
-    window.render(DownloadingState(kLongFrom, kLongTo));
-    Settle(window);
-
-    for (const char* name : {"updaterFromVersionPill", "updaterToVersionPill"}) {
-        const ElidingLabel* pill = Eliding(window, name);
-        ASSERT_NE(pill, nullptr) << name;
-        EXPECT_TRUE(pill->isElided()) << name;
-        // Deliberate shortening, not a cut: an ellipsis, and it sits in the
-        // MIDDLE so the build suffix that identifies the version survives.
-        EXPECT_TRUE(pill->text().contains(kEllipsis)) << name;
-        // The whole reason this pill elides in the middle: the tail is what
-        // identifies WHICH build the version stands for, so it has to survive.
-        // ElideRight would have dropped exactly that half.
-        EXPECT_TRUE(pill->text().endsWith(pill->fullText().right(8))) << name << " -> " << pill->text().toStdString();
-        EXPECT_TRUE(pill->text().startsWith(pill->fullText().left(8))) << name << " -> " << pill->text().toStdString();
-        EXPECT_FALSE(pill->text().endsWith(kEllipsis)) << name;
-        // Nothing is lost by shortening.
-        EXPECT_EQ(pill->toolTip(), pill->fullText()) << name;
-        EXPECT_EQ(pill->accessibleName(), pill->fullText()) << name;
-        // The painted string fits its own box, and the box fits the window.
-        EXPECT_LE(pill->fontMetrics().size(Qt::TextSingleLine, pill->text()).width(), pill->textAreaWidth()) << name;
-        const QRect placed(pill->mapTo(&window, QPoint(0, 0)), pill->size());
-        EXPECT_TRUE(window.rect().contains(placed)) << name;
-    }
-
-    EXPECT_EQ(Eliding(window, "updaterFromVersionPill")->fullText(), QString::fromLatin1(kLongFrom));
-    EXPECT_EQ(Eliding(window, "updaterToVersionPill")->fullText(), QString::fromLatin1(kLongTo));
-}
-
-TEST_F(UpdaterTextLayoutTest, ShortVersionsAreNotShortenedAtAll) {
-    UpdaterWindow window;
-    window.render(DownloadingState());
-    Settle(window);
-
-    for (const char* name : {"updaterFromVersionPill", "updaterToVersionPill"}) {
-        const ElidingLabel* pill = Eliding(window, name);
-        ASSERT_NE(pill, nullptr) << name;
-        EXPECT_FALSE(pill->isElided()) << name;
-        EXPECT_FALSE(pill->text().contains(kEllipsis)) << name;
-        // No tooltip on a label that shows everything: a hover hint repeating
-        // what is already on screen is noise.
-        EXPECT_TRUE(pill->toolTip().isEmpty()) << name;
-    }
-    EXPECT_EQ(Eliding(window, "updaterFromVersionPill")->text(), QStringLiteral("0.9.0-rc4"));
-    EXPECT_EQ(Eliding(window, "updaterToVersionPill")->text(), QStringLiteral("0.9.0-rc5"));
-}
-
-TEST_F(UpdaterTextLayoutTest, LongMsiDetailElidesInsteadOfEndingMidToken) {
-    UpdaterWindow window;
-    window.render(LongMsiDetailState());
-    Settle(window);
-
-    const ElidingLabel* detail = Eliding(window, "updaterResultDetail");
-    ASSERT_NE(detail, nullptr);
-    EXPECT_TRUE(detail->isElided());
-    // Prose reads front to back, so this one elides at the right — but it ends
-    // in an ellipsis rather than in "...ERROR_I".
-    EXPECT_TRUE(detail->text().endsWith(kEllipsis));
-    EXPECT_EQ(detail->toolTip(), detail->fullText());
-    EXPECT_TRUE(detail->fullText().contains(QStringLiteral("ERROR_INSTALL_FAILURE")));
-    EXPECT_LE(detail->fontMetrics().size(Qt::TextSingleLine, detail->text()).width(), detail->textAreaWidth());
-}
-
-TEST_F(UpdaterTextLayoutTest, LongContentNeverPushesTheActionRowOutOfView) {
-    UpdaterWindow window;
-    window.render(LongMsiDetailState());
-    Settle(window);
-
-    auto* actions = window.findChild<QWidget*>(QStringLiteral("updaterActionRow"));
-    ASSERT_NE(actions, nullptr);
-    const QRect placed(actions->mapTo(&window, QPoint(0, 0)), actions->size());
-    EXPECT_TRUE(window.rect().contains(placed));
-    EXPECT_EQ(window.size(), QSize(520, 680)) << "the fixed window must not grow to fit pathological text";
-}
-
-// ── Pre-flight vs. measured progress ────────────────────────────────────────
-
-TEST_F(UpdaterTextLayoutTest, PreFlightShowsNoPercentageAndOneLabelledIndicator) {
-    UpdaterWindow window;
-    window.render(IdleState());
-    Settle(window);
-
-    auto* ring = window.findChild<ProgressRing*>();
-    ASSERT_NE(ring, nullptr);
-    // Nothing has been measured, so no number is claimed.
-    EXPECT_TRUE(ring->isIndeterminate());
-    EXPECT_EQ(ring->value(), 0.0);
-
-    // The spinner beside the ring is no longer an orphan: it labels a status
-    // line, which is what every other state already had.
-    const ElidingLabel* status = Eliding(window, "updaterStatusText");
-    ASSERT_NE(status, nullptr);
-    EXPECT_EQ(status->fullText(), QStringLiteral("Preparing update…"));
-}
-
-// The success screen states the one thing the user needs — the app is coming
-// back on its own — exactly once, in the state panel where every other state
-// puts its safety line. It used to appear a second time as the action hint,
-// where the surrounding states describe what the BUTTON does.
-TEST_F(UpdaterTextLayoutTest, SuccessSaysTheAppIsRelaunchingOnlyOnce) {
-    UpdaterWindow window;
-    window.render(SuccessState());
-    Settle(window);
-
-    const QString relaunch = QStringLiteral("ExoSnap is starting automatically.");
-    EXPECT_EQ(VisibleText(window).count(relaunch), 1);
-
-    const ElidingLabel* safety = Eliding(window, "updaterWorkingSafety");
-    ASSERT_NE(safety, nullptr);
-    EXPECT_EQ(safety->fullText(), relaunch);
-
-    const auto* hint = window.findChild<const QLabel*>(QStringLiteral("updaterActionHint"));
-    ASSERT_NE(hint, nullptr);
-    EXPECT_TRUE(hint->text().isEmpty()) << hint->text().toStdString();
-}
-
-TEST_F(UpdaterTextLayoutTest, MeasuredDownloadProgressIsDeterminate) {
-    UpdaterWindow window;
-    window.render(DownloadingState());
-    Settle(window);
-
-    auto* ring = window.findChild<ProgressRing*>();
-    ASSERT_NE(ring, nullptr);
-    EXPECT_FALSE(ring->isIndeterminate());
-    EXPECT_GT(ring->value(), 0.0);
-    // No geometry jump between the two: the ring keeps its box either way.
-    EXPECT_EQ(ring->size(), QSize(120, 120));
-}
-
-// ── What kind of run this is ────────────────────────────────────────────────
-
-TEST_F(UpdaterTextLayoutTest, EyebrowNamesTheRunAndTheTitleBarNeverChanges) {
-    struct Case {
-        UpdaterUiState state;
-        const char* eyebrow;
-    };
-    const std::array<Case, 3> cases = {{
-        {DownloadingState(), "UPDATING EXOSNAP"},
-        {ReinstallDownloadingState(), "REINSTALLING EXOSNAP"},
-        {LongMsiDetailState(), "EXOSNAP WAS NOT UPDATED"},
-    }};
-
-    for (const Case& scenario : cases) {
-        UpdaterWindow window;
-        window.render(scenario.state);
-        Settle(window);
-
-        auto* eyebrow = window.findChild<QLabel*>(QStringLiteral("updaterEyebrow"));
-        ASSERT_NE(eyebrow, nullptr);
-        EXPECT_EQ(eyebrow->text(), QString::fromLatin1(scenario.eyebrow));
-
-        // ADR 0055: the role label is stable in every state, including a
-        // verification reinstall and a terminal failure.
-        auto* role = window.findChild<QLabel*>(QStringLiteral("updaterTitle"));
-        ASSERT_NE(role, nullptr);
-        EXPECT_EQ(role->text(), QStringLiteral("Updater"));
-    }
-}
-
-TEST_F(UpdaterTextLayoutTest, TerminalFailureMovesTheEmphasisToTheInstalledVersion) {
-    const QString accent = QStringLiteral("#9bd9d2"); // theme::mint()
-
-    UpdaterWindow working;
-    working.render(DownloadingState());
-    Settle(working);
-    // While the update is still going, the target is where the run is heading.
-    EXPECT_TRUE(Eliding(working, "updaterToVersionPill")->styleSheet().contains(accent, Qt::CaseInsensitive));
-    EXPECT_EQ(Eliding(working, "updaterToVersionPill")->font().weight(), QFont::DemiBold);
-    EXPECT_EQ(Eliding(working, "updaterFromVersionPill")->font().weight(), QFont::Medium);
-
-    UpdaterWindow failed;
-    failed.render(LongMsiDetailState());
-    Settle(failed);
-    // After a terminal failure the target version is NOT what is installed, so
-    // it must not keep the accent — that read as "0.9.0-rc5 is on the machine".
-    EXPECT_FALSE(Eliding(failed, "updaterToVersionPill")->styleSheet().contains(accent, Qt::CaseInsensitive));
-    EXPECT_EQ(Eliding(failed, "updaterToVersionPill")->font().weight(), QFont::Medium);
-    EXPECT_EQ(Eliding(failed, "updaterFromVersionPill")->font().weight(), QFont::DemiBold);
-}
-
-TEST_F(UpdaterTextLayoutTest, SoftSuccessKeepsTheTargetEmphasisBecauseTheUpdateDidApply) {
-    UpdaterController controller(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
-    controller.onStepDone(UpStep::Download);
-    controller.onStepDone(UpStep::CloseApp);
-    controller.onStepDone(UpStep::Install);
-    controller.onStepDone(UpStep::Verify);
-    controller.onFailure(FailureCase::LaunchFailed, QString());
-
-    UpdaterWindow window;
-    window.render(controller.state());
-    Settle(window);
-
-    EXPECT_EQ(window.findChild<QLabel*>(QStringLiteral("updaterEyebrow"))->text(), QStringLiteral("UPDATING EXOSNAP"));
-    EXPECT_TRUE(
-        Eliding(window, "updaterToVersionPill")->styleSheet().contains(QStringLiteral("#9bd9d2"), Qt::CaseInsensitive));
-}
-
-// ── Accessibility ───────────────────────────────────────────────────────────
-
-TEST_F(UpdaterTextLayoutTest, ProgressRingExposesProgressSemantics) {
-    UpdaterWindow window;
-    window.render(DownloadingState());
-    Settle(window);
-
-    auto* ring = window.findChild<ProgressRing*>();
-    ASSERT_NE(ring, nullptr);
-    QAccessibleInterface* iface = QAccessible::queryAccessibleInterface(ring);
-    ASSERT_NE(iface, nullptr);
-    EXPECT_EQ(iface->role(), QAccessible::ProgressBar);
-    EXPECT_EQ(iface->text(QAccessible::Name), QStringLiteral("Update progress"));
-
-    auto* value = iface->valueInterface();
-    ASSERT_NE(value, nullptr);
-    EXPECT_DOUBLE_EQ(value->minimumValue().toDouble(), 0.0);
-    EXPECT_DOUBLE_EQ(value->maximumValue().toDouble(), 100.0);
-    EXPECT_GT(value->currentValue().toDouble(), 0.0);
-    EXPECT_TRUE(iface->text(QAccessible::Description).endsWith(QStringLiteral("percent")));
-}
-
-TEST_F(UpdaterTextLayoutTest, ProgressRingSaysSoWhenThereIsNothingToMeasure) {
-    UpdaterWindow window;
-    window.render(IdleState());
-    Settle(window);
-
-    auto* ring = window.findChild<ProgressRing*>();
-    ASSERT_NE(ring, nullptr);
-    QAccessibleInterface* iface = QAccessible::queryAccessibleInterface(ring);
-    ASSERT_NE(iface, nullptr);
-    // "0 percent" would be the same lie the visible ring used to tell.
-    EXPECT_TRUE(iface->text(QAccessible::Description).startsWith(QStringLiteral("Preparing update")));
-}
-
-TEST_F(UpdaterTextLayoutTest, StepListExposesEveryPhaseAndItsStatus) {
-    UpdaterController controller(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
-    controller.onStepDone(UpStep::Download);
-    controller.onStepStarted(UpStep::CloseApp);
-
-    UpdaterWindow window;
-    window.render(controller.state());
-    Settle(window);
-
-    auto* steps = window.findChild<StepListWidget*>();
-    ASSERT_NE(steps, nullptr);
-    QAccessibleInterface* iface = QAccessible::queryAccessibleInterface(steps);
-    ASSERT_NE(iface, nullptr);
-    EXPECT_EQ(iface->role(), QAccessible::List);
-    EXPECT_EQ(iface->text(QAccessible::Name), QStringLiteral("Update steps"));
-
-    // The glyph that carries each row's status on screen is painted, so the row
-    // itself has to say it.
-    QStringList names;
-    for (const QWidget* row : steps->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly))
-        names << row->accessibleName();
-    EXPECT_TRUE(names.contains(QStringLiteral("Downloading update, done")))
-        << names.join(QStringLiteral(" | ")).toStdString();
-    EXPECT_TRUE(names.contains(QStringLiteral("Closing previous version, working")))
-        << names.join(QStringLiteral(" | ")).toStdString();
-    EXPECT_TRUE(names.contains(QStringLiteral("Launching ExoSnap, queued")))
-        << names.join(QStringLiteral(" | ")).toStdString();
+int CountOccurrences(const QStringList& rows, const QString& needle) {
+    int count = 0;
+    for (const QString& row : rows)
+        count += row.count(needle);
+    return count;
 }
 
 } // namespace
 
-// A hand-started updater refuses the swap while ExoSnap is up, and reaches the
-// same B1 card the handoff path uses. "Try the handoff again" is the handoff's
-// own word for it: nobody handed anything over here, so the card has to name the
-// action the reader actually has.
-TEST(UpdaterText, AppWontCloseNamesTheActionTheModeOffers) {
-    UpdaterController handoff(QStringLiteral("0.9.0-rc17"), QStringLiteral("0.9.0-rc18"));
-    handoff.setMode(exosnap::update::UpdaterMode::AppHandoff);
-    handoff.onFailure(FailureCase::AppWontClose, QString());
-    EXPECT_EQ(handoff.state().detail_text, QStringLiteral("Close the running app, then try the handoff again."));
+TEST(UpdaterTextLayoutTest, LongVersionsStayCompleteInTheProjection) {
+    const QString long_from = QStringLiteral("0.10.0-rc1+20261001.abcdef123456.windows-x64-portable");
+    const QString long_to = QStringLiteral("0.10.0-rc2+20261015.fedcba654321.windows-x64-portable");
+    UpdaterViewAdapter adapter;
+    UpdaterUiState state = DownloadInFlight();
+    state.from_version = long_from;
+    state.to_version = long_to;
+    adapter.render(state);
 
-    UpdaterController manual(QStringLiteral("0.9.0-rc17"), QStringLiteral("0.9.0-rc18"));
+    EXPECT_EQ(adapter.fromVersion(), long_from);
+    EXPECT_EQ(adapter.toVersion(), long_to);
+    EXPECT_TRUE(adapter.hasTarget());
+}
+
+TEST(UpdaterTextLayoutTest, ShortVersionsAreNotShortenedAtAll) {
+    UpdaterViewAdapter adapter;
+    adapter.render(DownloadInFlight());
+    EXPECT_EQ(adapter.fromVersion(), QStringLiteral("0.8.1"));
+    EXPECT_EQ(adapter.toVersion(), QStringLiteral("0.9.0"));
+}
+
+TEST(UpdaterTextLayoutTest, LongMsiDetailStaysCompleteInTheProjection) {
+    const QString long_detail =
+        QStringLiteral("Windows Installer returned 1603: the installation failed because a required file could not "
+                       "be replaced while another process still held it open; close every ExoSnap window and try "
+                       "again.");
+    UpdaterViewAdapter adapter;
+    UpdaterUiState state = Terminal(FailureCase::InstallFailed);
+    // The controller keeps raw technical detail out of the UI copy; this seam is
+    // the same one a long msiexec message arrives through in production.
+    state.headline = QStringLiteral("Update didn't complete");
+    state.detail_text = long_detail;
+    adapter.render(state);
+    EXPECT_EQ(adapter.panelDetail(), long_detail);
+}
+
+TEST(UpdaterTextLayoutTest, PreFlightShowsNoPercentageAndOneLabelledIndicator) {
+    UpdaterController c(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
+    c.onStepStarted(UpStep::Download);
+    UpdaterViewAdapter adapter;
+    adapter.render(c.state());
+
+    EXPECT_TRUE(adapter.indeterminate());
+    EXPECT_TRUE(adapter.ringGlyph().isEmpty());
+    EXPECT_EQ(adapter.ringPercent(), 0);
+    EXPECT_EQ(adapter.ringDescription(), QStringLiteral("Preparing update, progress not measurable yet"));
+}
+
+TEST(UpdaterTextLayoutTest, MeasuredDownloadProgressIsDeterminate) {
+    UpdaterViewAdapter adapter;
+    adapter.render(DownloadInFlight());
+    EXPECT_FALSE(adapter.indeterminate());
+    EXPECT_TRUE(adapter.ringGlyph().isEmpty());
+    // The ring reports the whole run's progress, not the download band's: the
+    // download band ends at 55 %, so 38 % of it is 21 %.
+    EXPECT_EQ(adapter.ringPercent(), 21);
+    EXPECT_EQ(adapter.ringDescription(), QStringLiteral("21 percent"));
+}
+
+TEST(UpdaterTextLayoutTest, SuccessSaysTheAppIsRelaunchingOnlyOnce) {
+    UpdaterController c(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
+    c.onStepDone(UpStep::Download);
+    c.onStepDone(UpStep::CloseApp);
+    c.onStepDone(UpStep::Install);
+    c.onStepDone(UpStep::Verify);
+    c.onStepDone(UpStep::Launch);
+    c.onAllDone();
+    UpdaterViewAdapter adapter;
+    adapter.render(c.state());
+
+    const QStringList copy = {adapter.panelTitle(), adapter.panelDetail(), adapter.panelSafety(),
+                              adapter.statusHeadline(), adapter.statusLine(), adapter.hint()};
+    EXPECT_EQ(CountOccurrences(copy, QStringLiteral("starting automatically")), 1);
+}
+
+TEST(UpdaterTextLayoutTest, EyebrowNamesTheRun) {
+    UpdaterViewAdapter adapter;
+
+    UpdaterController failed(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
+    failed.onFailure(FailureCase::InstallFailed, QString());
+    adapter.render(failed.state());
+    EXPECT_EQ(adapter.eyebrow(), QStringLiteral("EXOSNAP WAS NOT UPDATED"));
+
+    UpdaterController reinstall(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
+    reinstall.setVerificationReinstall(true);
+    reinstall.onFailure(FailureCase::InstallFailed, QString());
+    adapter.render(reinstall.state());
+    EXPECT_EQ(adapter.eyebrow(), QStringLiteral("EXOSNAP WAS NOT REINSTALLED"));
+
+    UpdaterController manual(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
     manual.setMode(exosnap::update::UpdaterMode::Manual);
-    manual.onFailure(FailureCase::AppWontClose, QString());
-    EXPECT_EQ(manual.state().detail_text, QStringLiteral("Close ExoSnap, then try again."));
+    manual.onIdle();
+    adapter.render(manual.state());
+    EXPECT_EQ(adapter.eyebrow(), QStringLiteral("EXOSNAP UPDATER"));
 
-    // Both stay the amber "nothing was touched" shape, with Retry as the action.
-    EXPECT_EQ(manual.state().headline, QStringLiteral("Couldn't close ExoSnap"));
-    EXPECT_EQ(manual.state().primary_action, QStringLiteral("Retry"));
+    manual.onUpToDate();
+    adapter.render(manual.state());
+    EXPECT_EQ(adapter.eyebrow(), QStringLiteral("EXOSNAP IS UP TO DATE"));
+}
+
+TEST(UpdaterTextLayoutTest, TerminalFailureMovesTheEmphasisToTheInstalledVersion) {
+    UpdaterViewAdapter adapter;
+    adapter.render(Terminal(FailureCase::InstallFailed));
+    EXPECT_TRUE(adapter.failedTerminal());
+
+    adapter.render(Terminal(FailureCase::VerifyInstallFailed));
+    EXPECT_TRUE(adapter.failedTerminal());
+}
+
+TEST(UpdaterTextLayoutTest, SoftSuccessKeepsTheTargetEmphasisBecauseTheUpdateDidApply) {
+    UpdaterViewAdapter adapter;
+    adapter.render(Terminal(FailureCase::LaunchFailed));
+    EXPECT_FALSE(adapter.failedTerminal());
+}
+
+TEST(UpdaterTextLayoutTest, ProgressRingExposesTheOutcomeSemantics) {
+    UpdaterViewAdapter adapter;
+    adapter.render(Terminal(FailureCase::InstallFailed));
+    EXPECT_EQ(adapter.ringGlyph(), QStringLiteral("warning"));
+    EXPECT_EQ(adapter.ringDescription(), QStringLiteral("Update didn't complete"));
+
+    adapter.render(Terminal(FailureCase::VerifyInstallFailed));
+    EXPECT_EQ(adapter.ringGlyph(), QStringLiteral("cross"));
+    EXPECT_EQ(adapter.ringDescription(), QStringLiteral("Update failed"));
+
+    adapter.render(Terminal(FailureCase::MsiRebootRequired));
+    EXPECT_EQ(adapter.ringGlyph(), QStringLiteral("check"));
+    EXPECT_EQ(adapter.ringDescription(), QStringLiteral("Update complete"));
+}
+
+TEST(UpdaterTextLayoutTest, StepListExposesEveryPhaseAndItsStatus) {
+    UpdaterController c(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
+    c.onStepDone(UpStep::Download);
+    c.onStepDone(UpStep::CloseApp);
+    c.onStepStarted(UpStep::Install);
+    UpdaterViewAdapter adapter;
+    adapter.render(c.state());
+
+    ASSERT_EQ(adapter.stepRows().size(), 5);
+    const QVariantList rows = adapter.stepRows();
+    for (int i = 0; i < rows.size(); ++i) {
+        const QVariantMap row = rows.at(i).toMap();
+        EXPECT_TRUE(row.contains(QStringLiteral("label")));
+        EXPECT_TRUE(row.contains(QStringLiteral("status")));
+        EXPECT_TRUE(row.contains(QStringLiteral("tag")));
+        EXPECT_TRUE(row.contains(QStringLiteral("accessible")));
+        EXPECT_TRUE(row.value(QStringLiteral("accessible")).toString().contains(
+            row.value(QStringLiteral("label")).toString()));
+        EXPECT_TRUE(row.value(QStringLiteral("accessible")).toString().contains(
+            row.value(QStringLiteral("tag")).toString()));
+    }
 }

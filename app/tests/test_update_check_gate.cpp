@@ -220,7 +220,7 @@ TEST(UpdateCheckGateTest, ReselectingTheSameChannelChangesNothing) {
 }
 
 // ---------------------------------------------------------------------------
-// The verification-reinstall mode travels with the operation (ADR 0055)
+// The verification-reinstall mode travels with the operation
 // ---------------------------------------------------------------------------
 
 TEST(UpdateCheckGateTest, TheOperationCarriesItsOwnVerifyReinstallFlag) {

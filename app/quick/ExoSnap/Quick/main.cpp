@@ -1,3 +1,4 @@
+#include <exosnap/engine/performance_measurements.h>
 // Not inside the EXOSNAP_ENABLE_AUTO_RECORD_HARNESS block below, and that is
 // the whole contract: --pseudo-localize is armed by argv and by nothing else
 // (see PseudoLocalization.h), so its translator has to exist in every
@@ -13,6 +14,7 @@
 #include "QuickAutoEditHarness.h"
 #include "QuickAutoRecordHarness.h"
 #include "auto_record/AutoRecordHarness.h"
+#include <QtQml/qqmldebug.h>
 #endif
 #include "bootstrap/ProductionBootstrap.h"
 #include "cli/CommandLineFlags.h"
@@ -43,10 +45,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaMethod>
+#include <QMetaProperty>
+#include <QPainter>
 #include <QQuickItem>
+#include <QQuickItemGrabResult>
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
+#include <QScopeGuard>
 #include <QScreen>
 #include <QSet>
 #include <QSize>
@@ -54,6 +60,7 @@
 #include <QTextStream>
 #include <QTimer>
 #include <QVariantMap>
+#include <exosnap/engine/gpu_surface_inventory.h>
 
 #include <capability/audio_ui_state.h>
 
@@ -343,6 +350,105 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
     }
 }
 
+// A --visual-test capture that acts on the loaded page first lets the page's
+// own layout passes settle, then waits out the transition of what it opened.
+constexpr int kHarnessPageSettleMs = 300;
+constexpr int kHarnessTransitionMs = 400;
+
+// Harness-only (--visual-expand-all): opens every collapsed element on the
+// visible part of the window, so a capture shows the content a reader would
+// otherwise have to click to reach. An element opts in through a writable
+// `expanded` property (ExoDisclosure and the cards built on it) or, where the
+// open state is not a property, through a `harnessExpand()` function.
+// Invisible subtrees are skipped: another destination's page and a collapsed
+// body are not part of what the capture shows. A nested element only becomes
+// visible once its parent opened, so the caller runs this more than once.
+int expandAllVisible(QQuickItem* item) {
+    if (item == nullptr || !item->isVisible())
+        return 0;
+    int opened = 0;
+    const QMetaObject* meta = item->metaObject();
+    const int expanded_index = meta->indexOfProperty("expanded");
+    if (expanded_index >= 0) {
+        const QMetaProperty expanded = meta->property(expanded_index);
+        if (expanded.isWritable() && expanded.typeId() == QMetaType::Bool && !expanded.read(item).toBool()) {
+            expanded.write(item, true);
+            ++opened;
+        }
+    }
+    if (meta->indexOfMethod("harnessExpand()") >= 0 && QMetaObject::invokeMethod(item, "harnessExpand"))
+        ++opened;
+    for (QQuickItem* child : item->childItems())
+        opened += expandAllVisible(child);
+    return opened;
+}
+
+// The page's own scroller: the widest visible Flickable with the most content.
+// Nested lists and combo popups are narrower than the page and lose.
+QQuickItem* pageFlickable(QQuickWindow* window) {
+    if (window == nullptr || window->contentItem() == nullptr)
+        return nullptr;
+    QQuickItem* best = nullptr;
+    const qreal min_width = window->width() / 2.0;
+    const std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+        if (item == nullptr || !item->isVisible())
+            return;
+        if (item->inherits("QQuickFlickable") && item->width() >= min_width &&
+            (best == nullptr ||
+             item->property("contentHeight").toDouble() > best->property("contentHeight").toDouble())) {
+            best = item;
+        }
+        for (QQuickItem* child : item->childItems())
+            visit(child);
+    };
+    visit(window->contentItem());
+    return best;
+}
+
+// Harness-only (--visual-full-page): the window as if it were tall enough to
+// show the active page's whole scrollable content. The part above the page's
+// scroller (title bar, navigation, fixed page header) and the part below it
+// come from the window grab; between them goes the scroller's complete
+// content, rendered on its own. Scroll bars are not part of the result.
+void saveFullPage(QQuickWindow* window, const QString& path, std::function<void(bool)> done) {
+    QQuickItem* flickable = pageFlickable(window);
+    auto* content = flickable != nullptr ? flickable->property("contentItem").value<QQuickItem*>() : nullptr;
+    const QImage window_image = window->grabWindow();
+    if (content == nullptr) {
+        qWarning("--visual-full-page: nothing on this page scrolls; saving the window instead");
+        done(window_image.save(path));
+        return;
+    }
+    const qreal ratio = window->effectiveDevicePixelRatio();
+    const QRectF viewport = flickable->mapRectToScene(QRectF(0, 0, flickable->width(), flickable->height()));
+    const qreal content_height = std::max(flickable->property("contentHeight").toDouble(), viewport.height());
+    const QSharedPointer<QQuickItemGrabResult> result =
+        content->grabToImage((QSizeF(viewport.width(), content_height) * ratio).toSize());
+    if (result == nullptr) {
+        qWarning("--visual-full-page: the page content could not be rendered");
+        done(false);
+        return;
+    }
+    const QColor background = window->color();
+    QObject::connect(
+        result.data(), &QQuickItemGrabResult::ready, window,
+        [result, path, background, window_image, viewport, content_height, ratio, done = std::move(done)]() {
+            const int top = qRound(viewport.top() * ratio);
+            const int bottom = qRound(viewport.bottom() * ratio);
+            const int content_pixels = qRound(content_height * ratio);
+            const int below = std::max(0, window_image.height() - bottom);
+            QImage page(window_image.width(), top + content_pixels + below, QImage::Format_ARGB32_Premultiplied);
+            page.fill(background);
+            QPainter painter(&page);
+            painter.drawImage(QPoint(0, 0), window_image, QRect(0, 0, window_image.width(), top));
+            painter.drawImage(QPoint(qRound(viewport.left() * ratio), top), result->image());
+            painter.drawImage(QPoint(0, top + content_pixels), window_image,
+                              QRect(0, bottom, window_image.width(), below));
+            painter.end();
+            done(page.save(path));
+        });
+}
+
 // ── --navigation-lifecycle-test (QCR-615) ───────────────────────────────────
 //
 // Settings, Diagnostics, Logs and About are loaded by URL rather than from an
@@ -364,6 +470,10 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
 // until the shell itself reports the page ready rather than sleeping a guess.
 struct NavigationDestination {
     int page = 0;
+    // The StackLayout index the page occupies. The enum keeps its historical
+    // values (LogsPage stays 3 for the legacy spelling), so the stack position
+    // is no longer the page value.
+    int stack_index = 0;
     const char* object_name = nullptr;
     const char* adapter_property = nullptr;
     QObject* adapter = nullptr;
@@ -414,6 +524,22 @@ bool waitForCurrentPage(QObject* shell, int page, int timeout_ms) {
     return true;
 }
 
+// A logs request normalizes to the Diagnostics destination plus the logs
+// section, so "the logs view is showing" is two properties, not one page value.
+bool waitForLogsView(QObject* shell, int timeout_ms) {
+    QElapsedTimer timer;
+    timer.start();
+    for (;;) {
+        if (shell->property("currentPage").toInt() == static_cast<int>(exosnap::quick::ShellAdapter::DiagnosticsPage) &&
+            shell->property("diagnosticsSection").toInt() ==
+                static_cast<int>(exosnap::quick::ShellAdapter::DiagnosticsLogs))
+            return true;
+        if (timer.hasExpired(timeout_ms))
+            return false;
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+}
+
 // Calls the shell's one navigation edge the way a tab, a shortcut or a
 // notification action does. Resolved through the metaobject rather than by name
 // alone, because a typed QML function (`navigateTo(page: int)`) publishes an
@@ -460,11 +586,10 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     if (shell == nullptr)
         return failNavigationLifecycle("no quickAppShell");
 
-    const std::array<NavigationDestination, 4> destinations{{
-        {1, "quickSettingsPage", "settings", application.settingsAdapter()},
-        {2, "quickDiagnosticsPage", "diagnostics", application.diagnosticsAdapter()},
-        {3, "quickLogsPage", "logs", application.logsAdapter()},
-        {4, "quickAboutPage", "aboutViewModel", application.aboutViewModel()},
+    const std::array<NavigationDestination, 3> destinations{{
+        {1, 1, "quickSettingsPage", "settings", application.settingsAdapter()},
+        {2, 2, "quickDiagnosticsPage", "diagnostics", application.diagnosticsAdapter()},
+        {4, 3, "quickAboutPage", "aboutViewModel", application.aboutViewModel()},
     }};
 
     // Startup built the page the user is looking at, and nothing else.
@@ -475,10 +600,38 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
             return failNavigationLifecycle(destination.object_name);
     }
 
+    // ui.navigate answers settled:true, and a runner's next command addresses the
+    // page's own object. A first visit is still incubating when the navigation
+    // request returns, so the automation edge has to have waited for it.
+    //
+    // "logs" is the legacy request spelling: the shell normalizes it to
+    // Diagnostics plus the logs section, so the visible page is 2 and the
+    // subview flag names the internal view. The old fifth destination no longer
+    // exists, and this is where that contract is pinned.
+    {
+        exosnap::quick::QuickLiveVerifySource automation(application, window);
+        QString error;
+        if (!automation.Navigate(QStringLiteral("logs"), &error))
+            return failNavigationLifecycle(qPrintable(error));
+        bool logs_ready = false;
+        QMetaObject::invokeMethod(shell, "destinationReady", Q_RETURN_ARG(bool, logs_ready), Q_ARG(int, 3));
+        if (!logs_ready || findShellPage(window, "quickLogsPage") == nullptr)
+            return failNavigationLifecycle("ui.navigate returned before its first-visit page was loaded");
+        if (shell->property("currentPage").toInt() != 2 ||
+            shell->property("diagnosticsSection").toInt() != exosnap::quick::ShellAdapter::DiagnosticsLogs)
+            return failNavigationLifecycle("a logs navigation did not normalize to Diagnostics + logs");
+        if (automation.Reveal(QStringLiteral("logs"), QStringLiteral("no-such-target"), &error) !=
+            exosnap::live_verify::LiveVerifySource::RevealOutcome::UnknownTarget)
+            return failNavigationLifecycle("an unknown reveal target right after navigation was not reported as such");
+        shell->setProperty("currentPage", 0);
+    }
+
     // First visit: the page exists and holds the adapter it was handed.
-    std::array<QObject*, 4> first_visit{};
+    std::array<QObject*, 3> first_visit{};
     for (std::size_t index = 0; index < destinations.size(); ++index) {
         const NavigationDestination& destination = destinations.at(index);
+        QElapsedTimer navigation_timer;
+        navigation_timer.start();
         shell->setProperty("currentPage", destination.page);
         // The asynchronous Loader contract: incubation never completes within
         // the same call that starts it, so the very first destination (still
@@ -497,7 +650,7 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
             // is displayed, so a stack that jumped ahead blanked the preview
             // while the Record page was still visibly there. The stack index is
             // the one observable that says which of the two the shell did.
-            if (shell->property("stackIndex").toInt() == destination.page)
+            if (shell->property("stackIndex").toInt() == destination.stack_index)
                 return failNavigationLifecycle("the stack switched to a page that does not exist yet");
             if (shell->property("currentPage").toInt() != destination.page)
                 return failNavigationLifecycle("the request itself was not recorded immediately");
@@ -511,7 +664,7 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
         // And once it exists, the stack follows -- through the same event
         // processing that delivered readiness, not a separate wait.
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-        if (shell->property("stackIndex").toInt() != destination.page)
+        if (shell->property("stackIndex").toInt() != destination.stack_index)
             return failNavigationLifecycle("the stack did not advance to a page that is ready");
         QObject* page = findShellPage(window, destination.object_name);
         if (page == nullptr)
@@ -519,6 +672,8 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
         if (page->property(destination.adapter_property).value<QObject*>() != destination.adapter)
             return failNavigationLifecycle(destination.adapter_property);
         first_visit.at(index) = page;
+        qInfo("navigation-timing: page=%s visit=first ready_ms=%.3f", destination.object_name,
+              navigation_timer.nsecsElapsed() / 1e6);
     }
 
     // Diagnostics is the one page with a second required property, and the one
@@ -531,18 +686,31 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     // was in it (the resident contract from QCR-602).
     for (std::size_t index = 0; index < destinations.size(); ++index) {
         shell->setProperty("currentPage", 0);
+        QElapsedTimer navigation_timer;
+        navigation_timer.start();
         shell->setProperty("currentPage", destinations.at(index).page);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        qInfo("navigation-timing: page=%s visit=warm ready_ms=%.3f", destinations.at(index).object_name,
+              navigation_timer.nsecsElapsed() / 1e6);
         if (findShellPage(window, destinations.at(index).object_name) != first_visit.at(index))
             return failNavigationLifecycle("page rebuilt on second visit");
     }
 
-    // The two signals the shell used to handle inline on its sourceComponent.
-    shell->setProperty("currentPage", 2);
+    // The two signals the shell used to handle inline on its sourceComponent and
+    // that the Diagnostics workspace forwards from the overview page.
+    if (!invokeNavigateTo(shell, 2))
+        return failNavigationLifecycle("navigateTo is not invokable");
+    if (shell->property("currentPage").toInt() != 2 ||
+        shell->property("diagnosticsSection").toInt() != exosnap::quick::ShellAdapter::DiagnosticsOverview)
+        return failNavigationLifecycle("the Diagnostics destination did not open on its overview");
     if (!QMetaObject::invokeMethod(diagnostics, "navigateToLogsRequested"))
         return failNavigationLifecycle("navigateToLogsRequested not invokable");
-    if (!waitForCurrentPage(shell, 3, 20000))
+    if (!waitForLogsView(shell, 20000))
         return failNavigationLifecycle("navigateToLogsRequested did not navigate");
-    shell->setProperty("currentPage", 2);
+    if (!invokeNavigateTo(shell, 2))
+        return failNavigationLifecycle("navigateTo is not invokable");
+    if (shell->property("diagnosticsSection").toInt() != exosnap::quick::ShellAdapter::DiagnosticsOverview)
+        return failNavigationLifecycle("re-entering Diagnostics did not restore the overview");
     if (!QMetaObject::invokeMethod(diagnostics, "navigateToSettingsRequested"))
         return failNavigationLifecycle("navigateToSettingsRequested not invokable");
     if (!waitForCurrentPage(shell, 1, 20000))
@@ -573,7 +741,7 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     QObject* nav_tabs = findShellPage(window, "quickNavTabs");
     if (nav_tabs == nullptr)
         return failNavigationLifecycle("no quickNavTabs repeater");
-    for (int tab = 0; tab <= 4; ++tab) {
+    for (int tab = 0; tab <= 3; ++tab) {
         QObject* delegate = navTabAt(nav_tabs, tab);
         if (delegate == nullptr)
             return failNavigationLifecycle("a navigation tab is missing");
@@ -593,12 +761,19 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
 
     // Every destination stays reachable. The Edit workspace is ephemeral:
     // leaving Record closes it without a discard prompt and returning does not
-    // resurrect the clip.
+    // resurrect the clip. Page 3 is the legacy logs request: it must land on
+    // Diagnostics with the logs section, not on a fifth destination.
     for (int page = 1; page <= 4; ++page) {
         if (!invokeNavigateTo(shell, page))
             return failNavigationLifecycle("navigateTo is not invokable");
-        if (shell->property("currentPage").toInt() != page)
+        const int expected_page = page == static_cast<int>(exosnap::quick::ShellAdapter::LogsPage)
+                                      ? static_cast<int>(exosnap::quick::ShellAdapter::DiagnosticsPage)
+                                      : page;
+        if (shell->property("currentPage").toInt() != expected_page)
             return failNavigationLifecycle("a destination was refused during an edit session");
+        if (page == static_cast<int>(exosnap::quick::ShellAdapter::LogsPage) &&
+            shell->property("diagnosticsSection").toInt() != exosnap::quick::ShellAdapter::DiagnosticsLogs)
+            return failNavigationLifecycle("the legacy logs destination did not open the logs view");
         if (shell->property("editOverlayOpen").toBool())
             return failNavigationLifecycle("navigation kept the edit session open");
         if (shell->property("editOverlayVisible").toBool() || workspace->property("visible").toBool())
@@ -634,7 +809,9 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     if (shell_adapter == nullptr)
         return failNavigationLifecycle("no shell adapter");
     emit shell_adapter->navigateToPageRequested(exosnap::quick::ShellAdapter::LogsPage);
-    if (shell->property("currentPage").toInt() != 3)
+    if (shell->property("currentPage").toInt() != static_cast<int>(exosnap::quick::ShellAdapter::DiagnosticsPage) ||
+        shell->property("diagnosticsSection").toInt() !=
+            static_cast<int>(exosnap::quick::ShellAdapter::DiagnosticsLogs))
         return failNavigationLifecycle("the adapter navigation path did not reach the shell");
     if (shell->property("editOverlayOpen").toBool() || shell->property("editOverlayVisible").toBool() ||
         workspace->property("visible").toBool())
@@ -652,23 +829,38 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     if (shell->property("navigationAllowed").toBool())
         return failNavigationLifecycle("a blocking surface left navigation allowed");
     const int blocked_page = shell->property("currentPage").toInt();
-    for (int tab = 0; tab <= 4; ++tab) {
+    // The same page -> visible-tab mapping the shell uses. The legacy LogsPage
+    // value has no tab of its own; its normalized destination does.
+    const auto tab_for_page = [](int page) {
+        switch (page) {
+        case 1:
+            return 1;
+        case 2:
+        case 3:
+            return 2;
+        case 4:
+            return 3;
+        default:
+            return 0;
+        }
+    };
+    for (int tab = 0; tab <= 3; ++tab) {
         QObject* delegate = navTabAt(nav_tabs, tab);
         if (delegate == nullptr)
             return failNavigationLifecycle("a navigation tab is missing");
         // The destination the user is already on is the one exception. A
         // blocking surface refuses every navigation, so greying the whole band
-        // is right for the four the user would be leaving for -- but the fifth
-        // is the page underneath the surface, and disabling it leaves the band
-        // with no current destination at all. A recovery surface raised at
-        // launch is the case that made it visible.
-        const bool expected = tab == blocked_page;
+        // is right for the destinations the user would be leaving for -- but
+        // the page underneath the surface stays enabled, and disabling it would
+        // leave the band with no current destination at all. A recovery surface
+        // raised at launch is the case that made it visible.
+        const bool expected = tab == tab_for_page(blocked_page);
         if (delegate->property("enabled").toBool() != expected)
             return failNavigationLifecycle(expected ? "a blocking surface disabled the destination the user is on"
                                                     : "a blocking surface left an unselected navigation tab enabled");
     }
     (void)invokeNavigateTo(shell, 4);
-    if (shell->property("currentPage").toInt() != 3)
+    if (shell->property("currentPage").toInt() != blocked_page)
         return failNavigationLifecycle("navigation went through behind a blocking surface");
     recording_error->dismiss();
     if (!shell->property("navigationAllowed").toBool())
@@ -766,6 +958,13 @@ int main(int argc, char* argv[]) {
         qputenv("QT_QPA_DISABLE_REDIRECTION_SURFACE", "1");
 
     QApplication app(argc, argv);
+#if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+    if (qEnvironmentVariableIntValue("EXOSNAP_QML_PROFILE") == 1) {
+        QQmlDebuggingEnabler::setServices(QQmlDebuggingEnabler::profilerServices());
+        QQmlDebuggingEnabler::enableDebugging(true);
+    }
+#endif
+    exosnap::engine::EnablePerformanceMeasurements(qEnvironmentVariableIntValue("EXOSNAP_PERFORMANCE_TRACE") == 1);
     // quitOnLastWindowClosed is deliberately left at Qt's default. Close-to-tray
     // REFUSES the close (requestClose() returns false) and only then hides the
     // window, which is structurally the same thing the Widgets shell does with
@@ -949,13 +1148,13 @@ int main(int argc, char* argv[]) {
         installPseudoLocalization(app);
 
     exosnap::quick::QuickApplication quick_application;
-    // ADR 0033: the handoff a prior elevated self-relaunch put in our own argv.
+    // the handoff a prior elevated self-relaunch put in our own argv.
     // Applied before load() so the shell's landing page is decided once, rather
-    // than navigating away from Record after the first frame. ADR 0055: the
+    // than navigating away from Record after the first frame. Verification reinstall: the
     // verification-reinstall arming is argv-only and never persisted.
     const exosnap::services::RelaunchHandoff startup_handoff = exosnap::services::ParseRelaunchArgs(arguments);
     quick_application.applyStartupRelaunchHandoff(startup_handoff.page_name, startup_handoff.reenable_present_diag);
-    // ADR 0033, the outbound half. The frontend decides WHETHER to restart (it
+    // Elevation handoff. The frontend decides WHETHER to restart (it
     // owns the close guards) and WHAT to carry across; the bootstrap owns WHEN,
     // which is after exec() returns -- the successor cannot take the
     // single-instance mutex or the log file while this process still holds them.
@@ -967,7 +1166,7 @@ int main(int argc, char* argv[]) {
     quick_application.applyVerifyUpdateReinstallMode(exosnap::services::HasVerifyUpdateReinstallRequest(arguments));
     quick_application.applyUpdateFeedOverride(update_feed_override.base_url);
     // The child updater gets an automation endpoint ONLY when this process has
-    // one. Same run id, different role in the pipe name (ADR 0067), so a runner
+    // one. Same run id, different role in the pipe name, so a runner
     // that is already driving this process can reach the updater it starts
     // without discovering anything.
     quick_application.applyUpdaterAutomationRunId(live_verify_options.requested ? live_verify_options.run_id
@@ -1188,6 +1387,17 @@ int main(int argc, char* argv[]) {
     if (requested_size.isValid())
         quick_application.applyHarnessWindowSize(requested_size);
 
+    // Harness-only: a --visual-test capture shows a test card where the live
+    // preview would be. A live preview photographs whatever is on the
+    // developer's screen and changes from run to run. --desktop-pattern is a
+    // request for the real capture path, so it keeps it, as does the explicit
+    // --visual-live-preview.
+    if (!visualOutputPath(arguments).isEmpty() && !arguments.contains(QStringLiteral("--visual-live-preview")) &&
+        !arguments.contains(QStringLiteral("--desktop-pattern"))) {
+        if (auto* preview = quick_application.recordPreviewAdapter())
+            preview->setHarnessTestCard(true);
+    }
+
     // Harness-only: selects which navigation destination a --visual-test capture
     // renders. Nav indices follow the canonical product order (Record, Settings,
     // Diagnostics, Logs, About).
@@ -1212,11 +1422,20 @@ int main(int argc, char* argv[]) {
     const QString visual_popup = optionValue(arguments, QStringLiteral("--visual-popup"));
     if (!visual_popup.isEmpty()) {
         QTimer::singleShot(0, &app, [root_window, &quick_application, visual_popup]() {
-            if (visual_popup == QLatin1String("source-picker")) {
+            const bool picker_popup = visual_popup == QLatin1String("source-picker") ||
+                                      visual_popup == QLatin1String("source-picker-windows") ||
+                                      visual_popup == QLatin1String("source-picker-search");
+            if (picker_popup) {
                 if (auto* page = root_window != nullptr
                                      ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage"))
                                      : nullptr) {
                     QMetaObject::invokeMethod(page, "openSourcePicker");
+                    if (auto* picker = root_window->findChild<QObject*>(QStringLiteral("recordSourcePicker"))) {
+                        if (visual_popup != QLatin1String("source-picker"))
+                            picker->setProperty("currentTab", 1);
+                        if (visual_popup == QLatin1String("source-picker-search"))
+                            picker->setProperty("windowQuery", QStringLiteral("Task"));
+                    }
                 }
             } else if (visual_popup == QLatin1String("notification-hub")) {
                 if (auto* notifications = quick_application.notificationsAdapter())
@@ -1231,34 +1450,32 @@ int main(int argc, char* argv[]) {
     // system buttons, no ExoSnap control anywhere on it -- went unnoticed inside
     // a product that styles everything else.
     //
-    // On a timer for the same reason --visual-scroll is: the Settings page is
-    // built by the shell's loader, so its preset bar does not exist yet at this
-    // point in startup. The capture delay is raised to match.
+    // Opened from the capture sequence below, after the active page's loader is
+    // Ready, never from a timer of its own: the Settings page that hosts the
+    // preset dialogs is loader-built, and a fixed delay loses to a slow load, so
+    // the capture photographed the page with no dialog on it.
     const QString visual_dialog = optionValue(arguments, QStringLiteral("--visual-dialog"));
-    if (!visual_dialog.isEmpty()) {
-        QTimer::singleShot(900, &app, [root_window, visual_dialog]() {
-            if (root_window == nullptr)
-                return;
-            // Settings owns its own dialogs; everything else on this list belongs
-            // to the shell, which is the root object itself.
-            QObject* host = visual_dialog.startsWith(QLatin1String("preset-"))
-                                ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))
-                                : static_cast<QObject*>(root_window);
-            if (host == nullptr) {
-                qWarning("--visual-dialog: no Settings page; is --visual-page set to Settings?");
-                return;
-            }
-            // Typed args, not QVariant: a QML function declared with a typed
-            // signature registers a typed meta-method, and a QVariant call
-            // against it fails to match and returns false without invoking
-            // anything.
-            bool opened = false;
-            QMetaObject::invokeMethod(host, "openHarnessDialog", Q_RETURN_ARG(bool, opened),
-                                      Q_ARG(QString, visual_dialog));
-            if (!opened)
-                qWarning("--visual-dialog: no dialog named %s", qPrintable(visual_dialog));
-        });
-    }
+    const auto open_visual_dialog = [root_window, visual_dialog]() {
+        if (visual_dialog.isEmpty() || root_window == nullptr)
+            return;
+        // Settings owns its own dialogs; everything else on this list belongs
+        // to the shell, which is the root object itself.
+        QObject* host = visual_dialog.startsWith(QLatin1String("preset-"))
+                            ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))
+                            : static_cast<QObject*>(root_window);
+        if (host == nullptr) {
+            qWarning("--visual-dialog: no Settings page; is --visual-page set to Settings?");
+            return;
+        }
+        // Typed args, not QVariant: a QML function declared with a typed
+        // signature registers a typed meta-method, and a QVariant call
+        // against it fails to match and returns false without invoking
+        // anything.
+        bool opened = false;
+        QMetaObject::invokeMethod(host, "openHarnessDialog", Q_RETURN_ARG(bool, opened), Q_ARG(QString, visual_dialog));
+        if (!opened)
+            qWarning("--visual-dialog: no dialog named %s", qPrintable(visual_dialog));
+    };
 
     // Harness-only: renders a --visual-test capture in the named appearance and
     // accent.
@@ -1309,12 +1526,6 @@ int main(int argc, char* argv[]) {
     // the cards below the fold. Appearance is the last of them, and no window
     // height on a real display reaches it — the window is clamped to the screen
     // work area long before the content ends.
-    // Queued, not immediate: the Settings page is built by the shell's loader in
-    // response to --visual-page above, so at this point in startup it does not
-    // exist yet. findChild() then returned nullptr and this did nothing at all,
-    // silently -- every capture taken with the flag showed the top of the page
-    // while claiming to show its end, and the cards below the fold (Appearance
-    // among them) had never actually been photographed.
     // Harness-only: Expert mode, for a capture of the surfaces that have two
     // arrangements. Settings and Diagnostics both key off the SAME product
     // setting, so this is one switch rather than one per page -- and it goes
@@ -1337,56 +1548,53 @@ int main(int argc, char* argv[]) {
     // scrollable height. A page that needs three screens to show its sections
     // cannot be reviewed from one capture of its top, and a reviewer given only
     // the top reports the rest as missing.
+    //
+    // Applied from the capture sequence below, like --visual-dialog: the page is
+    // loader-built and its contentHeight is only final once its sections are
+    // laid out, and a fixed delay loses to a slow load and photographs the top.
     const QString visual_scroll = optionValue(arguments, QStringLiteral("--visual-scroll"));
-    if (!visual_scroll.isEmpty()) {
+    const auto apply_visual_scroll = [root_window, visual_scroll]() {
         bool fraction_ok = false;
         const double fraction = visual_scroll.toDouble(&fraction_ok);
-        if (fraction_ok) {
-            // On a TIMER, not on a queued call. The page is loader-built, its two
-            // breakpoint compositions settle afterwards, and contentHeight is not
-            // final until the sections have been laid out -- exactly the reason
-            // --settings-visual-bottom raises the capture delay to 2 s. Scrolling
-            // before that silently photographs the top.
-            QTimer::singleShot(1200, &app, [root_window, fraction]() {
-                if (root_window == nullptr || root_window->contentItem() == nullptr)
-                    return;
-                // The VISUAL tree, not findChildren(): a page built by a Loader is
-                // not a QObject child of the shell, and a QObject walk from the
-                // content item never reaches the flickable that holds it. Same
-                // reason --cursor-audit walks childItems().
-                int scrolled = 0;
-                const std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
-                    if (item == nullptr)
-                        return;
-                    if (item->inherits("QQuickFlickable")) {
-                        const double content = item->property("contentHeight").toDouble();
-                        const double range = content - item->height();
-                        if (range > 0.0) {
-                            item->setProperty("contentY", std::clamp(fraction, 0.0, 1.0) * range);
-                            ++scrolled;
-                        }
-                    }
-                    for (QQuickItem* child : item->childItems())
-                        visit(child);
-                };
-                visit(root_window->contentItem());
-                if (scrolled == 0)
-                    qWarning("--visual-scroll: nothing on this page scrolls");
-            });
-        }
-    }
-
-    if (arguments.contains(QStringLiteral("--settings-visual-bottom"))) {
-        QTimer::singleShot(0, &app, [root_window]() {
-            auto* page = root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))
-                                                : nullptr;
-            if (page == nullptr) {
-                qWarning("--settings-visual-bottom: no quickSettingsPage; is --visual-page set to Settings?");
+        if (!fraction_ok || root_window == nullptr || root_window->contentItem() == nullptr)
+            return;
+        // The VISUAL tree, not findChildren(): a page built by a Loader is
+        // not a QObject child of the shell, and a QObject walk from the
+        // content item never reaches the flickable that holds it. Same
+        // reason --cursor-audit walks childItems().
+        int scrolled = 0;
+        const std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+            if (item == nullptr)
                 return;
+            if (item->inherits("QQuickFlickable")) {
+                const double content = item->property("contentHeight").toDouble();
+                const double range = content - item->height();
+                if (range > 0.0) {
+                    item->setProperty("contentY", std::clamp(fraction, 0.0, 1.0) * range);
+                    ++scrolled;
+                }
             }
-            QMetaObject::invokeMethod(page, "scrollToBottom");
-        });
-    }
+            for (QQuickItem* child : item->childItems())
+                visit(child);
+        };
+        visit(root_window->contentItem());
+        if (scrolled == 0)
+            qWarning("--visual-scroll: nothing on this page scrolls");
+    };
+
+    // Harness-only: scrolls Settings to its last card, which no window height on
+    // a real display reaches. Applied from the capture sequence for the same
+    // reason as --visual-scroll.
+    const bool settings_visual_bottom = arguments.contains(QStringLiteral("--settings-visual-bottom"));
+    const auto apply_settings_bottom = [root_window]() {
+        auto* page =
+            root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage")) : nullptr;
+        if (page == nullptr) {
+            qWarning("--settings-visual-bottom: no quickSettingsPage; is --visual-page set to Settings?");
+            return;
+        }
+        QMetaObject::invokeMethod(page, "scrollToBottom");
+    };
 
     const QString record_visual_state = optionValue(arguments, QStringLiteral("--record-visual-state"));
     if (!record_visual_state.isEmpty()) {
@@ -1395,7 +1603,8 @@ int main(int argc, char* argv[]) {
             shell->setProperty("currentPage", 0);
         }
         QTimer::singleShot(0, &app, [&quick_application, record_visual_state]() {
-            (void)quick_application.applyRecordVisualScenario(record_visual_state);
+            if (!quick_application.applyRecordVisualScenario(record_visual_state))
+                qWarning("--record-visual-state: no state named %s", qPrintable(record_visual_state));
         });
 
         // The scenario forces the Record page, because that is what it is a
@@ -1425,7 +1634,8 @@ int main(int argc, char* argv[]) {
     const QString overlay_visual_state = optionValue(arguments, QStringLiteral("--overlay-visual-state"));
     if (!overlay_visual_state.isEmpty()) {
         QTimer::singleShot(0, &app, [&quick_application, overlay_visual_state]() {
-            (void)quick_application.applyOverlayVisualScenario(overlay_visual_state);
+            if (!quick_application.applyOverlayVisualScenario(overlay_visual_state))
+                qWarning("--overlay-visual-state: no state named %s", qPrintable(overlay_visual_state));
         });
     }
 
@@ -2055,20 +2265,50 @@ int main(int argc, char* argv[]) {
         cycle->start();
     }
 
+    const auto performance_report = qScopeGuard([] {
+        if (qEnvironmentVariableIntValue("EXOSNAP_PERFORMANCE_TRACE") == 1) {
+            for (size_t i = 0; i < static_cast<size_t>(exosnap::engine::PerformanceStage::Count); ++i) {
+                const auto m =
+                    exosnap::engine::ReadPerformanceMeasurement(static_cast<exosnap::engine::PerformanceStage>(i));
+                qInfo("performance-stage: name=%s calls=%llu total_ms=%.3f max_ms=%.3f",
+                      exosnap::engine::kPerformanceStageNames[i], static_cast<unsigned long long>(m.calls),
+                      m.total_ns / 1e6, m.max_ns / 1e6);
+            }
+        }
+    });
+
     const QString benchmark_path = optionValue(arguments, QStringLiteral("--preview-benchmark"));
     if (!benchmark_path.isEmpty()) {
         bool duration_ok = false;
         const int requested_duration =
             optionValue(arguments, QStringLiteral("--benchmark-seconds")).toInt(&duration_ok);
         const int duration_seconds = duration_ok ? std::clamp(requested_duration, 2, 120) : 10;
+        const QString benchmark_state = qEnvironmentVariable("EXOSNAP_PREVIEW_BENCHMARK_STATE", "record");
+        if (benchmark_state != QStringLiteral("record") && benchmark_state != QStringLiteral("settings") &&
+            benchmark_state != QStringLiteral("minimized"))
+            return 2;
+        const bool animate = !qEnvironmentVariableIsSet("EXOSNAP_PREVIEW_BENCHMARK_ANIMATION") ||
+                             qEnvironmentVariableIntValue("EXOSNAP_PREVIEW_BENCHMARK_ANIMATION") != 0;
+        if (qEnvironmentVariableIsSet("EXOSNAP_PREVIEW_BENCHMARK_RATE"))
+            quick_application.recordPreviewAdapter()->setPreviewFrameRate(
+                qEnvironmentVariableIntValue("EXOSNAP_PREVIEW_BENCHMARK_RATE"));
+        if (benchmark_state == QStringLiteral("settings"))
+            emit quick_application.shellAdapter()->navigateToPageRequested(exosnap::quick::ShellAdapter::SettingsPage);
+        if (benchmark_state == QStringLiteral("minimized") && root_window)
+            root_window->showMinimized();
         auto* wait_for_frame = new QTimer(&app);
         wait_for_frame->setInterval(50);
         int* attempts = new int(0);
         QObject::connect(
             wait_for_frame, &QTimer::timeout, &app,
-            [&app, &quick_application, root_window, benchmark_path, duration_seconds, wait_for_frame, attempts]() {
+            [&app, &quick_application, root_window, benchmark_path, duration_seconds, wait_for_frame, attempts,
+             benchmark_state, animate]() {
                 ++*attempts;
-                if (!quick_application.recordPreviewAdapter()->frameReady()) {
+                if (*attempts < 40)
+                    return;
+                if (benchmark_state == QStringLiteral("record") &&
+                    quick_application.recordPreviewAdapter()->previewFrameRate() > 0 &&
+                    !quick_application.recordPreviewAdapter()->frameReady()) {
                     if (*attempts < 200)
                         return;
                     wait_for_frame->stop();
@@ -2081,11 +2321,12 @@ int main(int argc, char* argv[]) {
                 delete attempts;
                 quick_application.recordPreviewAdapter()->resetMetrics();
                 if (root_window != nullptr)
-                    root_window->setProperty("benchmarkInteractionActive", true);
+                    root_window->setProperty("benchmarkInteractionActive", animate);
                 const quint64 cpu_start = processCpuTime100ns();
                 QTimer::singleShot(
                     duration_seconds * 1000, &app,
-                    [&app, &quick_application, root_window, benchmark_path, duration_seconds, cpu_start]() {
+                    [&app, &quick_application, root_window, benchmark_path, duration_seconds, cpu_start,
+                     benchmark_state, animate]() {
                         QVariantMap values = quick_application.recordPreviewAdapter()->benchmarkSnapshot();
                         QJsonObject report = QJsonObject::fromVariantMap(values);
                         report.insert(QStringLiteral("duration_seconds"), duration_seconds);
@@ -2108,7 +2349,18 @@ int main(int argc, char* argv[]) {
                         report.insert(QStringLiteral("process_cpu_percent"), cpu_percent);
                         report.insert(QStringLiteral("gpu_usage_percent"),
                                       QStringLiteral("unavailable: no in-process GPU counter"));
-                        report.insert(QStringLiteral("qml_overlay_animation"), true);
+                        report.insert(QStringLiteral("qml_overlay_animation"), animate);
+                        report.insert(QStringLiteral("preview_state"), benchmark_state);
+                        report.insert(QStringLiteral("preview_rate"),
+                                      quick_application.recordPreviewAdapter()->previewFrameRate());
+                        QJsonObject surfaces;
+                        for (size_t i = 0; i < exosnap::engine::kGpuSurfaceOwnerNames.size(); ++i) {
+                            const auto usage =
+                                exosnap::engine::ReadGpuSurfaceUsage(static_cast<exosnap::engine::GpuSurfaceOwner>(i));
+                            surfaces.insert(QLatin1String(exosnap::engine::kGpuSurfaceOwnerNames[i]),
+                                            static_cast<double>(usage.bytes));
+                        }
+                        report.insert(QStringLiteral("logical_surface_bytes"), surfaces);
                         report.insert(QStringLiteral("scene_graph_api"), QStringLiteral("Direct3D 11"));
                         report.insert(QStringLiteral("qt_version"), QString::fromLatin1(qVersion()));
                         report.insert(QStringLiteral("child_hwnd_count"),
@@ -2398,7 +2650,13 @@ int main(int argc, char* argv[]) {
         // The active page's asynchronous Loader has to have reached Ready before
         // any of this grabs -- see waitForActiveDestinationReady above.
         constexpr int kActiveDestinationReadyTimeoutMs = 8000;
-        const auto grab = [&app, root_window, screenshot_path]() {
+        const bool full_page = arguments.contains(QStringLiteral("--visual-full-page"));
+        const bool expand_all = arguments.contains(QStringLiteral("--visual-expand-all"));
+        const auto grab = [&app, root_window, screenshot_path, full_page]() {
+            if (full_page && root_window != nullptr) {
+                saveFullPage(root_window, screenshot_path, [&app](bool saved) { app.exit(saved ? 0 : 2); });
+                return;
+            }
             const bool saved = root_window != nullptr && root_window->grabWindow().save(screenshot_path);
             // The capture-excluded overlays are separate top-level windows, so
             // the root grab above cannot contain them -- and a desktop capture
@@ -2408,8 +2666,42 @@ int main(int argc, char* argv[]) {
             saveOverlayWindowGrabs(screenshot_path);
             app.exit(saved ? 0 : 2);
         };
-        const auto capture = [&app, root_window, grab]() {
-            waitForActiveDestinationReady(app, root_window, kActiveDestinationReadyTimeoutMs, grab);
+        // Requests that act on the loaded page run once its loader is Ready:
+        // first a settle interval for the page's own layout passes, then the
+        // expansion, scroll or dialog, then the grab after their transitions.
+        const bool scrolls = !visual_scroll.isEmpty() || settings_visual_bottom;
+        const bool has_dialog = !visual_dialog.isEmpty();
+        const auto act_on_page = [&app, root_window, grab, scrolls, has_dialog, full_page, expand_all,
+                                  apply_visual_scroll, settings_visual_bottom, apply_settings_bottom,
+                                  open_visual_dialog]() {
+            if (!scrolls && !has_dialog && !full_page && !expand_all) {
+                grab();
+                return;
+            }
+            const auto act = [&app, grab, apply_visual_scroll, settings_visual_bottom, apply_settings_bottom,
+                              open_visual_dialog]() {
+                apply_visual_scroll();
+                if (settings_visual_bottom)
+                    apply_settings_bottom();
+                open_visual_dialog();
+                QTimer::singleShot(kHarnessTransitionMs, &app, grab);
+            };
+            if (!expand_all || root_window == nullptr) {
+                QTimer::singleShot(kHarnessPageSettleMs, &app, act);
+                return;
+            }
+            // Two passes: a nested element only becomes visible, and therefore
+            // reachable, once the element around it has opened and laid out.
+            QTimer::singleShot(kHarnessPageSettleMs, &app, [&app, root_window, act]() {
+                expandAllVisible(root_window->contentItem());
+                QTimer::singleShot(kHarnessTransitionMs, &app, [&app, root_window, act]() {
+                    expandAllVisible(root_window->contentItem());
+                    QTimer::singleShot(kHarnessTransitionMs, &app, act);
+                });
+            });
+        };
+        const auto capture = [&app, root_window, act_on_page]() {
+            waitForActiveDestinationReady(app, root_window, kActiveDestinationReadyTimeoutMs, act_on_page);
         };
         QTimer::singleShot(visualCaptureDelayMs(arguments), &app, [&app, root_window, open_countdown_menu, capture]() {
             if (!open_countdown_menu) {
@@ -2426,5 +2718,6 @@ int main(int argc, char* argv[]) {
         });
     }
 
-    return app.exec();
+    const int exit_code = app.exec();
+    return exit_code;
 }

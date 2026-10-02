@@ -59,11 +59,11 @@ End-to-end integration probe that captures real desktop content via Windows Grap
 
 Chroma is downsampled by averaging each 2×2 block. The UV plane byte order is `[U/Cb, V/Cr]` per sample, matching the NV12 specification.
 
-For production use, BT.709 coefficients would be appropriate for 1080p and higher. The README will be updated when that path is implemented.
+The product uses its own BT.709/HDR color pipeline. This standalone conversion is not that pipeline and cannot validate its color accuracy.
 
 ## IVF output format
 
-Identical to `probe_nvenc`. See that probe's README for the byte-level layout. The key correctness point: each frame record uses a **12-byte** header (4-byte LE size + 8-byte LE timestamp), avoiding the old 4-byte-only malformed-IVF defect.
+Identical to `probe_nvenc`. See that probe's README for the byte-level layout. The key correctness point: each frame record uses a **12-byte** header (4-byte LE size + 8-byte LE timestamp), because the size and timestamp require separate fields.
 
 Timestamps come from `NV_ENC_LOCK_BITSTREAM::outputTimeStamp` (presentation order, handles B-frame reordering). IVF timebase is 60/1 (1/60 s per tick).
 
@@ -87,7 +87,7 @@ If the WGC source is closed mid-capture, the loop stops gracefully. EOS flush ru
 ## Build
 
 ```pwsh
-cmake --preset windows-x64-debug
+cmake --preset windows-x64-debug -DEXOSNAP_BUILD_PROBES=ON
 cmake --build --preset windows-x64-debug --target probe_wgc_nvenc
 ```
 
@@ -96,7 +96,7 @@ Executable: `build/windows-x64-debug/tools/probes/probe_wgc_nvenc/Debug/probe_wg
 ## Run
 
 ```pwsh
-.\build\windows-x64-debug\apps\probes\probe_wgc_nvenc\Debug\probe_wgc_nvenc.exe
+.\build\windows-x64-debug\tools\probes\probe_wgc_nvenc\Debug\probe_wgc_nvenc.exe
 ```
 
 The probe lists available capture targets and prompts for a selection. Enter the index number, then wait for up to 5 seconds or 300 frames. Exit code `0` means all phases passed. Exit code `1` means the first failing phase stopped the run.
@@ -115,10 +115,3 @@ Written relative to the working directory at launch time. The directory is `.git
 - Source dimensions are used as-is (minus even-rounding). If WGC delivers a different resolution mid-run the probe will fail the per-frame dimension gate.
 - IVF timestamps represent frame submission order, not wall-clock time.
 - Dropped/skipped frames are counted but not further diagnosed.
-
-## Next likely steps
-
-1. `NvEncRegisterResource` / `NvEncMapInputResource` GPU path (eliminates CPU copy and conversion).
-2. BT.709 color conversion.
-3. `ffprobe` / dav1d decode verification.
-4. Variable source resolution handling.

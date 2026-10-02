@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.27)
 # only accepts numeric X.Y.Z, so prerelease identity cannot live here. Every
 # other version form is derived from PROJECT_VERSION plus EXOSNAP_RELEASE_VERSION
 # below — do not duplicate either elsewhere.
-project(exosnap VERSION 0.9.1 LANGUAGES C CXX)
+project(exosnap VERSION 0.10.0 LANGUAGES C CXX)
 
 # Full release identity. Official release builds pass the complete release
 # version (e.g. -DEXOSNAP_RELEASE_VERSION=0.9.0-rc4), derived from the validated
@@ -57,8 +57,7 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 # .obj, which keeps the cache working and the build parallel.
 #
 # The Release link still passes /DEBUG, so the LINKER produces exosnap.pdb from
-# those embedded records. That is what symbolicates a crash minidump (ADR 0017
-# § Symbol pipeline) — and a minidump without symbols is a list of addresses, not a
+# those embedded records. That is what symbolicates a crash minidump — and a minidump without symbols is a list of addresses, not a
 # diagnosis. The install tree never ships a .pdb (install(TARGETS) deploys RUNTIME
 # only), so nothing leaks to end users.
 if(MSVC)
@@ -127,8 +126,8 @@ install(CODE "
   endforeach()
 ")
 
-# ADR 0033: present & tearing diagnostics (PresentMon ETW). This slice ships only the
-# verifiable shell — the stub provider degrades to Unavailable and compiles regardless.
+# Present/tearing diagnostics use the real PresentMon ETW consumer when built.
+# Without it the provider reports Unavailable rather than fabricating readings.
 # The flag gates the in-process ETW consumer vendored in third_party/CMakeLists.txt;
 # it must be declared BEFORE add_subdirectory(third_party) so the guarded FetchContent
 # block there can see the value on a clean configure (before the option lands in cache).

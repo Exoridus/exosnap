@@ -1,0 +1,33 @@
+id = "media.timestamps.cfr-60"
+class = "regression"
+contract = """
+A constant 60 fps stream with a two-second GOP passes the timestamp, keyframe \
+and decode oracles with the bounds the recording scenarios use, so an oracle \
+change that rejects a known-good stream is caught before it judges the product.
+"""
+
+[input]
+generate = [
+    "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=60:duration=4",
+    "-c:v", "libx264", "-preset", "ultrafast", "-g", "120", "-pix_fmt", "yuv420p",
+]
+extension = "mkv"
+
+[[oracle]]
+kind = "decode-integrity"
+min_frames = 240
+
+[[oracle]]
+kind = "timestamps"
+max_gap_ms = 20.0
+
+[[oracle]]
+kind = "keyframes"
+max_interval_s = 2.1
+
+[[oracle]]
+kind = "metadata"
+fields = ["codec_type", "codec_name", "pix_fmt", "width", "height", "format.format_name"]
+
+[requirements]
+capabilities = ["ffmpeg", "ffprobe"]

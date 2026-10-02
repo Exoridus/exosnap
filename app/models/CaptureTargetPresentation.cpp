@@ -76,7 +76,7 @@ WindowParts ParseWindow(const std::string& description) {
     if (IsInternalWindowToken(value))
         return {"Window", {}};
 
-    const std::string separators[] = {" \xE2\x80\x94 ", " - "};
+    const std::string separators[] = {" \xE2\x80\x94 ", " \xE2\x80\x93 ", " - "};
     std::size_t position = std::string::npos;
     std::size_t separator_size = 0;
     for (const std::string& separator : separators) {

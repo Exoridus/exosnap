@@ -106,7 +106,7 @@ struct UpdateHandoff {
     // swap against it.
     quint32 app_pid = 0;
 
-    // ADR 0055: this operation reinstalls the IDENTICAL version on purpose. Adds
+    // this operation reinstalls the IDENTICAL version on purpose. Adds
     // the updater's same-version gate; relaxes nothing.
     bool verify_reinstall = false;
 

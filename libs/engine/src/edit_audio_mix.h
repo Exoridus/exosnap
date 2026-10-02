@@ -1,7 +1,7 @@
 #pragma once
 
 // Timestamp-aligned mix of the Edit-page player's audio tracks
-// (docs/dev/edit-player-architecture.md).
+// (docs/architecture/edit-and-export.md).
 //
 // Kept here, separate from the FFmpeg-facing engine, so the alignment and the
 // overload behaviour are unit-testable without a real file or a real audio

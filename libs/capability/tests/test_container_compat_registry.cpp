@@ -48,7 +48,7 @@ TEST(ContainerCompatRegistry, Mkv_H264_Aac_IsRecommended) {
 TEST(ContainerCompatRegistry, Mkv_H264_Opus_IsAllowed) {
     // Matroska carries Opus natively; Opus-in-MKV write path is production-validated
     // (AV1+Opus). Only a dedicated player-matrix pass for H.264+Opus is missing —
-    // that is the Allowed caveat per ADR 0010.
+    // that is why the combination is only Allowed.
     EXPECT_EQ(Level(Container::Matroska, VideoCodec::H264, AudioCodec::Opus), ContainerCompatLevel::Allowed);
 }
 
@@ -101,12 +101,12 @@ TEST(ContainerCompatRegistry, Mp4_H264_Aac_IsRecommended) {
 }
 
 TEST(ContainerCompatRegistry, Mp4_H264_Opus_IsProhibited) {
-    // ADR 0010: Opus-in-MP4 is Prohibited for all video codecs.
+    // Opus-in-MP4 is Prohibited for all video codecs.
     EXPECT_EQ(Level(Container::Mp4, VideoCodec::H264, AudioCodec::Opus), ContainerCompatLevel::Prohibited);
 }
 
 TEST(ContainerCompatRegistry, Mp4_H264_Pcm_IsExperimental) {
-    // ADR 0030 (narrowed): MP4 + H.264 + PCM is back to Experimental. libavformat
+    // MP4 + H.264 + PCM is Experimental. libavformat
     // emits the ipcm (ISO/IEC 23003-5) sample entry for pcm_s16le/s24le/s32le in
     // MP4 (confirmed via ffprobe codec_tag_string=ipcm); ipcm has limited player
     // support. Deferred until a broadly-compatible sample-entry mapping is validated.
@@ -140,7 +140,7 @@ TEST(ContainerCompatRegistry, Mp4_Av1_Pcm_IsExperimental) {
     EXPECT_EQ(Level(Container::Mp4, VideoCodec::Av1, AudioCodec::Pcm), ContainerCompatLevel::Experimental);
 }
 
-// ADR 0030: MP4 + Opus is still Prohibited; MP4 + FLAC is still Experimental.
+// MP4 + Opus is still Prohibited; MP4 + FLAC is still Experimental.
 TEST(ContainerCompatRegistry, Mp4_H264_Opus_IsStillProhibited) {
     EXPECT_EQ(Level(Container::Mp4, VideoCodec::H264, AudioCodec::Opus), ContainerCompatLevel::Prohibited);
 }
@@ -166,7 +166,7 @@ TEST(ContainerCompatRegistry, WebM_Av1_Pcm_IsProhibited) {
 }
 
 TEST(ContainerCompatRegistry, WebM_H264_Opus_IsProhibited) {
-    // ADR 0010: H.264 is prohibited in WebM.
+    // H.264 is prohibited in WebM.
     EXPECT_EQ(Level(Container::WebM, VideoCodec::H264, AudioCodec::Opus), ContainerCompatLevel::Prohibited);
 }
 
@@ -179,7 +179,7 @@ TEST(ContainerCompatRegistry, WebM_H264_Pcm_IsProhibited) {
 }
 
 TEST(ContainerCompatRegistry, WebM_Hevc_Opus_IsProhibited) {
-    // ADR 0010: HEVC is prohibited in WebM.
+    // HEVC is prohibited in WebM.
     EXPECT_EQ(Level(Container::WebM, VideoCodec::Hevc, AudioCodec::Opus), ContainerCompatLevel::Prohibited);
 }
 
@@ -360,28 +360,10 @@ TEST(ContainerCompatRegistry, Reconcile_WebM_Av1_Pcm_FixesAudioToOpus) {
 }
 
 TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Pcm_FixesAudioToAac) {
-    // ADR 0030 (narrowed): MP4 + H.264 + PCM is back to Experimental (not selectable).
+    // MP4 + H.264 + PCM is Experimental (not selectable).
     // The reconciler must fix audio to AAC — PCM is no longer a working combo for MP4.
     VideoCodec v = VideoCodec::H264;
     AudioCodec a = AudioCodec::Pcm;
-    ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
-    EXPECT_EQ(v, VideoCodec::H264);
-    EXPECT_EQ(a, AudioCodec::Aac);
-}
-
-TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Opus_FixesAudioToAac_AfterAdr0030) {
-    // MP4 + Opus remains Prohibited; the reconciler must still fix it to AAC.
-    VideoCodec v = VideoCodec::H264;
-    AudioCodec a = AudioCodec::Opus;
-    ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
-    EXPECT_EQ(v, VideoCodec::H264);
-    EXPECT_EQ(a, AudioCodec::Aac);
-}
-
-TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Flac_FixesAudioToAac_AfterAdr0030) {
-    // MP4 + FLAC remains Experimental (not selectable); the reconciler fixes it to AAC.
-    VideoCodec v = VideoCodec::H264;
-    AudioCodec a = AudioCodec::Flac;
     ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
     EXPECT_EQ(v, VideoCodec::H264);
     EXPECT_EQ(a, AudioCodec::Aac);

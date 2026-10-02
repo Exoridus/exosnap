@@ -70,6 +70,7 @@
 #include <capability/adapter_enum.h>
 #include <capability/capability_builder.h>
 #include <capability/codec_selection.h>
+#include <capability/encoder_device_resolver.h>
 #include <capability/support_level.h>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 
@@ -146,15 +147,20 @@ models::AboutInfo buildAboutInfo(const PersistedAppSettings& settings) {
 // replaces had already drifted: their audio fallback was "Opus" where the canon
 // says "AAC", and the video labels were hardcoded strings rather than the shared
 // capability::VisibleVideoCodecLabel spelling.
-QString formatLabel(const RecordingPresetConfig& config) {
-    const QString timing =
-        config.video.frame_rate_den == 1
-            ? QStringLiteral("%1 fps").arg(config.video.frame_rate_num)
-            : QStringLiteral("%1/%2 fps").arg(config.video.frame_rate_num).arg(config.video.frame_rate_den);
-    return QStringLiteral("%1 %2 · %3 · %4 · %5")
-        .arg(timing, config.video.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"),
-             ui::videoCodecLabel(config.output.video_codec), ui::audioCodecLabel(config.output.audio_codec),
-             ui::containerLabel(config.output.container));
+QString formatLabel(const RecordingPresetConfig& config, engine::FrameSize source) {
+    const auto output = ResolveRequestedOutputSize(config.output.resolution, source);
+    const QString dimensions = output && output->width > 0 && output->height > 0
+                                   ? QStringLiteral("%1×%2 · ").arg(output->width).arg(output->height)
+                                   : QString();
+    QString codec = ui::videoCodecLabel(config.output.video_codec);
+    codec.remove(QStringLiteral(" (NVENC)"));
+    const QString timing = config.video.cfr
+                               ? QStringLiteral("%1 CFR").arg(static_cast<double>(config.video.frame_rate_num) /
+                                                                  std::max(1u, config.video.frame_rate_den),
+                                                              0, 'g', 6)
+                               : QStringLiteral("VFR");
+    return dimensions + codec + QStringLiteral(" · ") + timing +
+           (config.output.hdr_mode == engine::HdrMode::Hdr10 ? QStringLiteral(" · HDR10") : QString());
 }
 
 // Harness-only, env-configured (never input synthesis): three readings in dBFS,
@@ -300,7 +306,7 @@ std::optional<std::vector<exosnap::engine::CaptureTarget>> HarnessCaptureTargets
     static const std::optional<std::vector<exosnap::engine::CaptureTarget>> targets =
         []() -> std::optional<std::vector<exosnap::engine::CaptureTarget>> {
         const QByteArray scenario = qgetenv("EXOSNAP_VISUAL_SOURCE_SCENARIO");
-        if (scenario != "many-windows")
+        if (scenario.isEmpty())
             return std::nullopt;
 
         using exosnap::engine::CaptureTarget;
@@ -311,6 +317,26 @@ std::optional<std::vector<exosnap::engine::CaptureTarget>> HarnessCaptureTargets
         const auto window = [&seeded](const char* description) {
             seeded.push_back(CaptureTarget{CaptureTarget::Kind::Window, seeded.size() + 1, description});
         };
+
+        if (scenario == "displays-only") {
+            monitor(R"(\\.\DISPLAY1)");
+            monitor(R"(\\.\DISPLAY2)");
+            return seeded;
+        }
+        if (scenario == "single-display") {
+            monitor(R"(\\.\DISPLAY1)");
+            return seeded;
+        }
+        if (scenario == "few-windows") {
+            monitor(R"(\\.\DISPLAY1)");
+            window("Claude Design - Brave");
+            window("Task Manager");
+            return seeded;
+        }
+        if (scenario == "no-targets")
+            return seeded; // an empty target list: the picker's empty states
+        if (scenario != "many-windows")
+            return std::nullopt;
 
         monitor(R"(\\.\DISPLAY1)");
         monitor(R"(\\.\DISPLAY2)");
@@ -378,6 +404,11 @@ QuickApplication::QuickApplication()
     // Device only needs the static, system-wide capability declarations up
     // front; its per-adapter scan stays lazy and starts on first navigation.
     device_adapter_.setCapabilitySet(capabilities_);
+    // The encoder-device selector reads the per-adapter scan; publishing it to
+    // Settings here keeps the composition root the only owner of the scan.
+    QObject::connect(&device_adapter_, &DeviceAdapter::scanCompleted, [this] {
+        settings_adapter_.setEncoderDevices(device_adapter_.adapterInfos(), device_adapter_.adapterCapabilities());
+    });
     initializeDiagnosticsArea();
     initializeEditArea();
     initializeShell();
@@ -509,9 +540,11 @@ void QuickApplication::applyShowNotifications() {
 }
 
 void QuickApplication::applyDpcLatencyGate() {
-    // The kernel DPC/ISR session shares the present opt-in but has no internal
-    // elevation check, so the gate (opt-in AND elevation) is applied here -- mirroring
-    // PresentMonProvider::GateOpen().
+    // The kernel DPC/ISR session is its own privilege boundary: opening it means
+    // a system trace, which needs elevation and is NOT implied by the present
+    // opt-in (or by a token that happens to hold the present trace right). It is
+    // applied here so the gate is one place, and a refused or absent DPC reading
+    // leaves every other diagnostic source untouched.
     const bool elevated = elevation_provider_.IsElevated();
     const bool gate_open = in_depth_diagnostics_ && elevated;
     // Start() is itself idempotent (it returns true for an already-open session), and
@@ -557,7 +590,7 @@ void QuickApplication::initializeCrashSession() {
     // Reconcile the SDK-wide persisted consent with the explicit app policy
     // before any report path is reachable in this process.
     applyCrashReportPolicy();
-    // ADR 0017. crash_capture::Initialize() already ran in the bootstrap; this
+    // crash_capture::Initialize() already ran in the bootstrap; this
     // owns the session sidecar.
     //
     // ORDER IS CRITICAL: read the previous session's crash context BEFORE
@@ -657,6 +690,7 @@ void QuickApplication::initializeRecordWorkflow() {
     recording_coordinator_->SetSplitSettings(
         {SplitDurationMs(live_config_.output.split), SplitSizeBytes(live_config_.output.split)});
 
+    record_preview_adapter_.setPreviewFrameRate(settings_.preview_frame_rate);
     record_preview_adapter_.bindRecordingCoordinator(recording_coordinator_.get());
     recording_coordinator_->SetReadyFrameRequester([this](RecordingCoordinator::ReadyFrameCallback callback) {
         ReadyFrameComposition composition;
@@ -730,11 +764,11 @@ void QuickApplication::initializeRecordWorkflow() {
             // neither the latch nor a leftover toast may cross into this one.
             capture_stall_monitor_.Reset();
             clearWindowCaptureStallWarning();
-            // ADR 0046: same reason. A previous recording's audio outage may not
+            // same reason. A previous recording's audio outage may not
             // arrive standing over this one.
             audio_degradation_monitor_.Reset();
             clearAudioSourceDegradedWarning();
-            // ADR 0033: same reason, one class further. Present / discarded / mode-flip
+            // same reason, one class further. Present / discarded / mode-flip
             // totals are per-recording, and a Display or Region recording shares pid 0
             // with the idle desktop -- so this boundary is announced unconditionally,
             // or every present counted while the user was still picking a target would
@@ -749,7 +783,7 @@ void QuickApplication::initializeRecordWorkflow() {
         if (state != UiRecordingState::Recording && state != UiRecordingState::Paused) {
             clearWindowCaptureStallWarning();
             clearAudioSourceDegradedWarning();
-            // ADR 0033: the OTHER half of the attribution boundary, on the edge OUT of
+            // the OTHER half of the attribution boundary, on the edge OUT of
             // a session. Both PresentMonEtwSession and PresentAccumulator document the
             // reset as happening at "recording start/stop"; only start was ever wired,
             // so a finished recording's present, discard and mode-flip totals stayed on
@@ -786,7 +820,7 @@ void QuickApplication::initializeRecordWorkflow() {
     });
     recording_coordinator_->SetDiagnosticsCallback(
         [this](const exosnap::engine::RecordingDiagnosticsSnapshot& measured) {
-            // ADR 0033 / Wave D. The engine measures no presentation, so the present
+            // The engine measures no presentation, so the present
             // fields arrive Unavailable on every snapshot; the elevation- and opt-in-gated
             // ETW consumer is the only producer and it lives here. Overlaying ONCE at the
             // single fan-out point is what makes the Diagnostics surface, the
@@ -801,11 +835,12 @@ void QuickApplication::initializeRecordWorkflow() {
                 diagnostics::ApplyPresentSample(snapshot.capture, sample);
                 diagnostics_adapter_.setPresentSample(
                     sample.available ? std::optional<diagnostics::PresentSample>(sample) : std::nullopt);
+                diagnostics_adapter_.setPresentProviderState(present_provider_->state());
             }
             record_view_model_.av_drift_available =
                 snapshot.av_drift_availability == exosnap::engine::MetricAvailability::Available;
             record_view_model_.av_drift_ms = record_view_model_.av_drift_available ? snapshot.av_drift_ms : 0.0;
-            record_view_model_.dropped_frames = snapshot.capture.frames_dropped_problem();
+            record_view_model_.dropped_frames = snapshot.real_frame_loss();
             // Peak A/V drift is accumulated in the engine aggregator (one source of
             // truth shared with the session report); latch the availability so a
             // metric that stopped being reported before the last frame still counts.
@@ -821,6 +856,7 @@ void QuickApplication::initializeRecordWorkflow() {
             // Diagnostics area used to install its own, which silently replaced this
             // one and left dropped_frames, av_drift and the Edit report badge at zero
             // for the whole session.
+            record_view_model_adapter_.setAudioSourceHealth(snapshot.audio.degraded_source_kinds);
             diagnostics_adapter_.applyLiveDiagnostics(snapshot);
             observeWindowCaptureStall(snapshot);
             observeAudioSourceDegradation(snapshot);
@@ -836,7 +872,7 @@ void QuickApplication::initializeRecordWorkflow() {
     // dereference a destroyed unique_ptr.
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::sessionLedgerFrozen, &diagnostics_adapter_,
                      [this, sink = recording_coordinator_->FrozenLedgerSink()]() {
-                         sink->Set(diagnostics_adapter_.frozenLedger());
+                         sink->Set(diagnostics_adapter_.frozenLedger(), diagnostics_adapter_.compensatedConditions());
                      });
     recording_coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
         record_view_model_.SetResult(result);
@@ -1084,6 +1120,8 @@ void QuickApplication::initializeRecordWorkflow() {
     countdown_timer_.setTimerType(Qt::PreciseTimer);
     QObject::connect(&countdown_timer_, &QTimer::timeout, &record_view_model_adapter_, [this]() { updateCountdown(); });
 
+    QObject::connect(&record_preview_adapter_, &RecordPreviewAdapter::sourceSizeChanged, &record_view_model_adapter_,
+                     [this]() { synchronizeRecordState(); });
     QObject::connect(&record_preview_adapter_, &RecordPreviewAdapter::frameReadyChanged, &record_view_model_adapter_,
                      [this]() { synchronizeRecordState(); });
     QObject::connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, &record_view_model_adapter_,
@@ -1191,6 +1229,13 @@ void QuickApplication::onCapabilitiesReady(const capability::CapabilitySet& capa
     // Settings codec lists and the Diagnostics recommendations were all built
     // against the empty set while the probe ran, so they are rebuilt here.
     device_adapter_.setCapabilitySet(capabilities_);
+    // The encoder-device selector needs the per-adapter scan; kick it off now
+    // so it is normally complete before the first recording starts. The scan
+    // is lazy-safe: ensureScanned() never starts a second pass. A visual
+    // harness owns a fixture machine, so a real hardware scan would replace it.
+    if (!canonical_machine_.has_value()) {
+        device_adapter_.ensureScanned();
+    }
     seedVideoCodecFromCapabilities();
     settings_adapter_.setCapabilities(capabilities_);
     publishDisplayDerivedState();
@@ -1407,7 +1452,14 @@ void QuickApplication::wireRecordCommands() {
 void QuickApplication::synchronizeRecordState() {
     const bool mkv = live_config_.output.container == capability::Container::Matroska ||
                      live_config_.output.container == capability::Container::WebM;
-    record_view_model_adapter_.setFormatText(formatLabel(live_config_));
+    const QSize previewSize = record_preview_adapter_.sourceSize();
+    engine::FrameSize sourceSize{static_cast<uint32_t>(std::max(0, previewSize.width())),
+                                 static_cast<uint32_t>(std::max(0, previewSize.height()))};
+    if (record_view_model_.capture_mode == CaptureMode::Region && record_view_model_.has_region &&
+        record_view_model_.region.IsValid())
+        sourceSize = {static_cast<uint32_t>(record_view_model_.region.width),
+                      static_cast<uint32_t>(record_view_model_.region.height)};
+    record_view_model_adapter_.setFormatText(formatLabel(live_config_, sourceSize));
     // The Settings audio card scopes its sources to the capture target by name:
     // "Everything except Chrome" is a different recording from "Everything the
     // computer plays", and the two are the same row.
@@ -1750,6 +1802,7 @@ bool QuickApplication::startRecordingNow() {
     recording_coordinator_->SetOutputTargetContext(context);
     recording_coordinator_->SetOutputSettings(live_config_.output);
     recording_coordinator_->SetVideoSettings(live_config_.video);
+    recording_coordinator_->SetEncoderDeviceResolution(resolveEncoderDeviceFor(target));
     recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
     record_view_model_.ResetStats();
     recording_coordinator_->StartRecording(target, record_view_model_.audio_ui_state, crop);
@@ -2093,21 +2146,21 @@ void QuickApplication::initializeDiagnosticsArea() {
     const bool elevated = elevation_provider_.IsElevated();
     diagnostics_adapter_.setElevated(elevated);
 
-    // ADR 0033 / Wave D: the present-diagnostics provider. Constructing it is free --
-    // the constructor opens nothing. SetOptIn() is what evaluates the gate
-    // (opt-in AND elevation) and starts the ETW session, so an unelevated process or
-    // one with the opt-in off holds a provider that reports `available: false` and
-    // owns no session, which is exactly what `environment.snapshot` must be able to
-    // explain the difference between.
-    present_provider_ = std::make_unique<diagnostics::PresentMonProvider>(elevation_provider_, in_depth_diagnostics_);
-    present_provider_->SetOptIn(in_depth_diagnostics_);
-    diagnostics::AppLog::info(QStringLiteral("present"),
-                              QStringLiteral("provider constructed optIn=%1 elevated=%2 available=%3")
-                                  .arg(in_depth_diagnostics_ ? 1 : 0)
-                                  .arg(elevated ? 1 : 0)
-                                  .arg(present_provider_->IsAvailable() ? 1 : 0));
+    // The present-diagnostics provider. Constructing it is free -- the
+    // constructor opens nothing beyond the controlled start attempt the opt-in
+    // asks for. The opt-in is the request; the actual ETW open decides
+    // availability, so a standard token with trace rights can measure and an
+    // elevated process can still report a session conflict.
+    present_provider_ = std::make_unique<diagnostics::PresentMonProvider>(in_depth_diagnostics_);
+    diagnostics_adapter_.setPresentProviderState(present_provider_->state());
+    diagnostics::AppLog::info(
+        QStringLiteral("present"),
+        QStringLiteral("provider optIn=%1 state=%2 available=%3")
+            .arg(in_depth_diagnostics_ ? 1 : 0)
+            .arg(QString::fromLatin1(diagnostics::PresentProviderStateKey(present_provider_->state())))
+            .arg(present_provider_->IsAvailable() ? 1 : 0));
 
-    // ADR 0033 DPC/ISR latency. The producer existed in this tree since the ETW slice
+    // DPC/ISR latency. The producer existed in this tree since the ETW slice
     // landed but was compiled by no target at all and driven by nobody, so
     // RecommendationEngine::checkDpcLatency evaluated an absent reading forever while
     // the spec promised the check. The adapter samples this on every evaluation; the
@@ -2120,11 +2173,13 @@ void QuickApplication::initializeDiagnosticsArea() {
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::inDepthToggled, &diagnostics_adapter_,
                      [this](bool enabled) { setInDepthDiagnostics(enabled); });
 
-    // "Show in log" is the Logs page with the diagnostic id already in the
-    // search box; the navigation itself is the one openLogs() performs.
+    // "Show in log" opens the internal log view with the diagnostic id already
+    // revealed. The reveal temporarily widens the severity filter and names
+    // itself in the view, so the entry cannot be hidden by whatever filter the
+    // user had set; the navigation itself is the one openLogs() performs.
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::showInLogRequested, &diagnostics_adapter_,
                      [this](const QString& entry_id) {
-                         logs_adapter_.setSearchQuery(entry_id);
+                         logs_adapter_.revealEntry(entry_id);
                          diagnostics_adapter_.openLogs();
                      });
     // An occurrence link opens the finished recording at the moment it names.
@@ -2146,15 +2201,50 @@ void QuickApplication::initializeDiagnosticsArea() {
 
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::applyFixAccepted, &diagnostics_adapter_,
                      [this](const QString& fix_id) { applyDiagnosticsFix(fix_id); });
-    // Assisted fixes resolve to a Settings section; the Quick Settings page has no
-    // section anchor yet, so the navigation lands on Settings and the resolved
-    // section is recorded rather than silently dropped.
     QObject::connect(
         &diagnostics_adapter_, &DiagnosticsAdapter::assistedFixRequested, &diagnostics_adapter_,
         [this](const QString& fix_id) {
             const diagnostics::FixResult result = diagnostics::ResolveAssistedFix(fix_id.toStdString());
             const std::string_view section = diagnostics::SettingsSectionFor(result.outcome);
+            if (!result.handled())
+                return;
+            SettingsAdapter::FocusTarget target = SettingsAdapter::FocusTarget::Format;
+            using diagnostics::FixOutcome;
+            switch (result.outcome) {
+            case FixOutcome::NavigateSourcePicker:
+                emit shell_adapter_.navigateToPageRequested(ShellAdapter::RecordPage);
+                QTimer::singleShot(0, &shell_adapter_, [this] {
+                    if (shell_adapter_.currentPage() == ShellAdapter::RecordPage)
+                        emit shell_adapter_.sourcePickerRequested(true);
+                });
+                return;
+            case FixOutcome::NavigateSettingsOutput:
+                target = SettingsAdapter::FocusTarget::OutputDestination;
+                break;
+            case FixOutcome::NavigateFramePacing:
+                target = SettingsAdapter::FocusTarget::FramePacing;
+                break;
+            case FixOutcome::NavigateFrameRate:
+                target = SettingsAdapter::FocusTarget::FrameRate;
+                break;
+            case FixOutcome::NavigateResolution:
+                target = SettingsAdapter::FocusTarget::Resolution;
+                break;
+            case FixOutcome::NavigateQuality:
+                target = SettingsAdapter::FocusTarget::Quality;
+                break;
+            case FixOutcome::NavigateMicrophone:
+                target = SettingsAdapter::FocusTarget::Microphone;
+                break;
+            case FixOutcome::NavigateClockSlaving:
+                target = SettingsAdapter::FocusTarget::ClockSlaving;
+                break;
+            default:
+                break;
+            }
             diagnostics_adapter_.requestSettingsNavigation();
+            QTimer::singleShot(0, &settings_adapter_,
+                               [this, target] { settings_adapter_.requestSettingsFocus(target); });
             diagnostics::AppLog::info(
                 QStringLiteral("diagnostics"),
                 QStringLiteral("Opened assisted fix %1 -> %2")
@@ -2249,8 +2339,11 @@ void QuickApplication::updateCaptureEvidenceTarget() {
     if (!same_target(pushed_selected_target_, target)) {
         pushed_selected_target_ = target;
         diagnostics_adapter_.setSelectedCaptureTarget(target);
-        diagnostics_adapter_.setCaptureTargetAdapter(captureTargetAdapterFacts(target));
-        // Idle attribution boundary (ADR 0033): present statistics follow the
+        const auto adapter_facts = captureTargetAdapterFacts(target);
+        diagnostics_adapter_.setCaptureTargetAdapter(adapter_facts);
+        settings_adapter_.setCaptureAdapter(static_cast<int64_t>(adapter_facts.capture_adapter_luid),
+                                            adapter_facts.known);
+        // Idle attribution boundary: present statistics follow the
         // selection, so the Diagnostics page describes the source the user is
         // looking at rather than whatever presented last.
         updatePresentAttribution(presentTargetPidForSelection(), /*force=*/false);
@@ -2472,7 +2565,7 @@ void QuickApplication::clearWindowCaptureStallWarning() {
     capture_stall_toast_sequence_ = 0;
 }
 
-// ADR 0046. The mid-recording audio-degradation notice, driven entirely by the
+// The mid-recording audio-degradation notice, driven entirely by the
 // AudioDiagnostics health facts the pipeline already publishes at ~5 Hz.
 //
 // This is a restored producer, not a new feature. The Widgets frontend raised
@@ -2609,6 +2702,7 @@ void QuickApplication::wireSettingsCommands() {
     QObject::connect(&settings_adapter_, &SettingsAdapter::appSettingsEdited, &settings_adapter_, [this]() {
         const QString previous_update_channel = settings_.update_channel;
         settings_ = settings_adapter_.appSettings();
+        record_preview_adapter_.setPreviewFrameRate(settings_.preview_frame_rate);
         persistAppSettings(SettingsWriteIntent::UserEdit);
         if (settings_.update_channel != previous_update_channel)
             applyUpdateChannel();
@@ -2620,6 +2714,13 @@ void QuickApplication::wireSettingsCommands() {
         applyCrashReportPolicy();
         applyShowNotifications();
         applyWindowCaptureExclusion();
+        // Without this, a show_recording_overlay/show_diagnostics_overlay/
+        // show_quick_controls edit made here never reaches the overlay windows:
+        // OverlayAdapter reads its own cached copy of the settings struct, and
+        // synchronize() only re-evaluates on a recording-state change, not on a
+        // settings edit alone. A toggle made this way could silently stay inert
+        // for the rest of the recording it was meant to affect.
+        overlay_adapter_.setAppSettings(settings_);
     });
 
     QObject::connect(&settings_adapter_, &SettingsAdapter::presetSelected, &settings_adapter_,
@@ -3238,10 +3339,12 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
     const QByteArray diag_live = qgetenv("EXOSNAP_VISUAL_DIAG_LIVE");
     if (!diag_live.isEmpty()) {
         const QString kind = QString::fromUtf8(diag_live);
+
         const visual::DiagnosticsLiveExtras extras = visual::MakeDiagnosticsLiveExtras(kind);
         if (extras.elevated)
             diagnostics_adapter_.setElevated(true);
         diagnostics_adapter_.setInDepthEnabled(extras.in_depth);
+        diagnostics_adapter_.setPresentProviderState(extras.present_state);
         if (extras.present.has_value())
             diagnostics_adapter_.setPresentSample(extras.present);
         if (extras.dpc.has_value()) {
@@ -3262,6 +3365,13 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
         }
         if (kind == QLatin1String("after-stop"))
             diagnostics_adapter_.setLastSession(MakeVisualRecordingResult());
+        const auto final_snapshot = visual::MakeDiagnosticsLiveSample(kind, steps - 1, steps);
+        if (final_snapshot.valid) {
+            if (final_snapshot.lifecycle == exosnap::engine::DiagnosticsLifecycle::Paused)
+                (void)applyRecordVisualScenario(QStringLiteral("paused"));
+            else if (final_snapshot.lifecycle == exosnap::engine::DiagnosticsLifecycle::Recording)
+                (void)applyRecordVisualScenario(QStringLiteral("recording"));
+        }
         diagnostics_visual_scenario_active_ = true;
     }
 }
@@ -3368,7 +3478,7 @@ void QuickApplication::initializeEditArea() {
 }
 
 // ---------------------------------------------------------------------------
-// Updates (ADR 0012)
+// Updates
 // ---------------------------------------------------------------------------
 //
 // Before this existed the Settings updates card was the worst kind of unfinished
@@ -3445,7 +3555,7 @@ void QuickApplication::initializeUpdates() {
 // card, because "Update available — <ver>" was an answer about the feed the user
 // just left. The card returns to the same "unchecked" state a fresh launch
 // shows; no automatic network check is started, since a check is the user's
-// explicit action (ADR 0045) and the card's own button is right there.
+// explicit action and the card's own button is right there.
 void QuickApplication::applyUpdateChannel() {
     if (!update_service_)
         return;
@@ -3500,7 +3610,7 @@ void QuickApplication::closeForUpdaterHandoff() {
 QuickApplication::EffectiveRecordingConfig QuickApplication::resolveEffectiveConfig() const {
     EffectiveRecordingConfig effective;
     // Step one is the product's own sanitizer: container x codec reconciliation
-    // (ADR 0010), the 10-bit demotion (ADR 0032), the 4:4:4 snap, the MP4 CFR
+    // the 10-bit demotion, the 4:4:4 snap, the MP4 CFR
     // constraint, and the split clamps. It is the same call persistLiveConfig()
     // makes on the way to disk.
     effective.config = SanitizePresetConfig(live_config_);
@@ -3735,7 +3845,7 @@ void QuickApplication::presentPostUpdateWhatsNew(const QVector<WhatsNewNote>& no
 
 namespace {
 
-// ADR 0033. The nav labels the elevated relaunch hands across, in both
+// The nav labels the elevated relaunch hands across, in both
 // directions. One table, so the page a relaunch is asked for and the page it
 // lands on cannot drift apart.
 constexpr std::array<std::pair<const char*, ShellAdapter::Page>, 5> kRelaunchNavLabels{{
@@ -3761,7 +3871,7 @@ void QuickApplication::setElevatedRelaunchHandler(std::function<void(const QStri
 }
 
 void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, bool arm_in_depth_diagnostics) {
-    // ADR 0033. Land on the page the pre-elevation instance was showing.
+    // Land on the page the pre-elevation instance was showing.
     for (const auto& [label, page] : kRelaunchNavLabels) {
         if (page_name.compare(QLatin1StringView(label), Qt::CaseInsensitive) == 0) {
             pending_landing_page_ = page;
@@ -3796,15 +3906,20 @@ void QuickApplication::setInDepthDiagnostics(bool enabled) {
 
     // Both traces follow the one flag. Turning it off stops them and the readings
     // go back to unavailable in the same step -- a peak measured a moment ago is
-    // not a measurement of this machine now.
+    // not a measurement of this machine now. The present provider opens on the
+    // request and reports what the OS actually answered; the kernel DPC trace has
+    // its own privilege boundary (see applyDpcLatencyGate()).
     if (present_provider_)
         present_provider_->SetOptIn(in_depth_diagnostics_);
+    diagnostics_adapter_.setPresentProviderState(present_provider_ ? present_provider_->state()
+                                                                   : diagnostics::PresentProviderState::NotBuilt);
     applyDpcLatencyGate();
 
     // Not a prompt: the toast has to be pressed, and declining the UAC prompt
     // behind it leaves the switch on and this process running, which is the
     // "not measuring, needs an admin relaunch" state the sub-text then reports.
-    if (notifications::ShouldOfferElevatedRelaunch(in_depth_diagnostics_, was_enabled,
+    if (!record_view_model_adapter_.recording() && !record_view_model_adapter_.paused() &&
+        notifications::ShouldOfferElevatedRelaunch(in_depth_diagnostics_, was_enabled,
                                                    elevation_provider_.IsElevated())) {
         notifications::NotificationEvent event = notifications::MakeElevatedRelaunchOfferEvent();
         notifications_adapter_.manager().Enqueue(std::move(event));
@@ -4147,6 +4262,39 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         return true;
     }
 
+    // One desktop toast of one advisory status, alone, so each status's glyph
+    // and tint is photographed in the toast window rather than only in the hub.
+    // Real Enqueue, as above, so the status comes from AdvisoryStatusForType.
+    if (scenario.startsWith(QLatin1String("toast-"))) {
+        const QStringView status = QStringView(scenario).mid(6);
+        notifications::NotificationEvent event;
+        if (status == u"success") {
+            event.type = notifications::NotificationType::Saved;
+            event.title = QStringLiteral("Recording saved");
+            event.body = QStringLiteral("2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB");
+            event.action = notifications::NotificationAction::Edit;
+            event.secondary_action = notifications::NotificationAction::OpenFolder;
+        } else if (status == u"caution") {
+            event.type = notifications::NotificationType::FramesDropped;
+            event.title = QStringLiteral("Frames were dropped");
+            event.body = QStringLiteral("122 frames did not reach the encoder during the last recording.");
+        } else if (status == u"error") {
+            event.type = notifications::NotificationType::UnexpectedStop;
+            event.title = QStringLiteral("Recording stopped unexpectedly");
+            event.body = QStringLiteral("The encoder reported an error. The partial file was kept.");
+            event.action = notifications::NotificationAction::ShowFile;
+        } else if (status == u"info") {
+            event.type = notifications::NotificationType::UpdateAvailable;
+            event.title = QStringLiteral("Update available");
+            event.body = QStringLiteral("ExoSnap 0.9.1 is ready to install.");
+            event.action = notifications::NotificationAction::OpenUpdate;
+        } else {
+            return false;
+        }
+        notifications_adapter_.manager().Enqueue(std::move(event));
+        return true;
+    }
+
     // The capture-excluded HUDs. Seeds the real INPUTS -- view-model state,
     // live stats, persisted settings -- and lets the ordinary resolution path
     // run, rather than forcing the adapter's outputs. A harness that wrote the
@@ -4183,7 +4331,7 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
 
         // The quick-control pill is opt-in and off by default, so the variant
         // that photographs it has to turn it on. It is the one capture-excluded
-        // overlay that takes mouse input (ADR 0016), which is exactly why its
+        // overlay that takes mouse input, which is exactly why its
         // appearance has to be checkable like the others'.
         const bool all_overlays = variant == QLatin1String("all");
         settings_.show_quick_controls = variant == QLatin1String("controls") || all_overlays;
@@ -4701,6 +4849,24 @@ void QuickApplication::initializeShell() {
     });
 }
 
+bool QuickApplication::requestQuit(QString* guard) {
+    QString decision;
+    const QMetaObject::Connection capture =
+        QObject::connect(&shell_adapter_, &ShellAdapter::closeDecided, &shell_adapter_,
+                         [&decision](const QString& kind, bool, bool, bool, bool) { decision = kind; });
+    const bool allowed = shell_adapter_.requestClose();
+    QObject::disconnect(capture);
+    if (!allowed) {
+        if (guard != nullptr)
+            *guard = decision;
+        return false;
+    }
+    // An allowed requestClose() quits through closeDecided, never closeApproved,
+    // so the debounced writes are flushed here.
+    flushPendingPersists();
+    return true;
+}
+
 void QuickApplication::initializeTray() {
     // One-time process setup, ahead of the availability check below rather than
     // gated by it: the opt-in is a process-wide setting, not a property of the
@@ -4759,8 +4925,7 @@ void QuickApplication::initializeTray() {
         // came to do nothing at all, so ask the shell directly: same guard chain,
         // same decision, and the approved case quits through closeDecided like
         // every other close.
-        if (shell_adapter_.requestClose())
-            flushPendingPersists();
+        static_cast<void>(requestQuit(nullptr));
     });
 
     // The unread badge mirrors the in-window bell: a toast raised while the
@@ -5197,7 +5362,7 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("shellPresence"), QVariant::fromValue(&shell_presence_)},
         {QStringLiteral("trayAdapter"), QVariant::fromValue(&tray_adapter_)},
         {QStringLiteral("noActivate"), no_activate},
-        // ADR 0033, and deliberately an initial property rather than a
+        // Deliberately an initial property rather than a
         // navigation emitted once the engine has loaded. By that point a
         // recovery surface or a crash prompt raised during startup is already
         // up, and the single navigation edge (QCR-001) refuses a navigation
@@ -5499,6 +5664,45 @@ QuickApplication::captureTargetAdapterFacts(const std::optional<exosnap::engine:
     return facts;
 }
 
+exosnap::engine::ResolvedEncoderDevice
+QuickApplication::resolveEncoderDeviceFor(const std::optional<exosnap::engine::CaptureTarget>& target) const {
+    exosnap::engine::ResolvedEncoderDevice device;
+    const auto& adapters = device_adapter_.adapterInfos();
+    if (adapters.empty()) {
+        device.reason = "The encoder-device scan has not completed yet.";
+        return device;
+    }
+    std::vector<capability::AdapterEncoderCapability> capabilities = device_adapter_.adapterCapabilities();
+    if (capabilities.size() != adapters.size()) {
+        capabilities.assign(adapters.size(), capability::AdapterEncoderCapability{});
+    }
+    capability::EncoderDeviceRequest request;
+    request.video_codec = live_config_.output.video_codec;
+    request.chroma = live_config_.output.chroma_subsampling;
+    request.bit_depth = live_config_.output.bit_depth;
+    const auto candidates = capability::BuildEncoderDeviceCandidates(adapters, capabilities, request);
+
+    int64_t capture_luid = 0;
+    bool capture_known = false;
+    if (target.has_value()) {
+        const auto facts = captureTargetAdapterFacts(target);
+        capture_luid = static_cast<int64_t>(facts.capture_adapter_luid);
+        capture_known = facts.known;
+    }
+    const auto resolution =
+        capability::ResolveEncoderDevice(candidates, live_config_.video.encoder_device, capture_luid, capture_known);
+    if (resolution.candidate_index >= 0 && static_cast<size_t>(resolution.candidate_index) < candidates.size()) {
+        const auto& candidate = candidates[static_cast<size_t>(resolution.candidate_index)];
+        device.valid = resolution.resolved;
+        device.adapter_luid = candidate.adapter.luid;
+        device.vendor_id = candidate.adapter.vendor_id;
+        device.backend = candidate.backend;
+        device.device = capability::FingerprintFromAdapter(candidate.adapter);
+    }
+    device.reason = resolution.reason;
+    return device;
+}
+
 unsigned long QuickApplication::presentTargetPidForSelection() const {
     // Window capture attributes presents to the captured window's process. Display
     // and Region capture have no owning process -- their presenter is whichever
@@ -5595,6 +5799,67 @@ bool QuickApplication::selectCaptureTargetForAutomation(exosnap::engine::Capture
         return record_view_model_.selected_target_index == static_cast<int>(index);
     }
     return false;
+}
+
+bool QuickApplication::openRegionSelectorForAutomation(const QString& display_device, QString* error) {
+    if (!display_device.isEmpty() &&
+        !selectCaptureTargetForAutomation(exosnap::engine::CaptureTarget::Kind::Monitor, display_device)) {
+        *error = QStringLiteral("No monitor target matched \"%1\"").arg(display_device);
+        return false;
+    }
+    const int index = record_view_model_.selected_target_index;
+    if (index < 0 || index >= static_cast<int>(record_view_model_.targets.size()) ||
+        record_view_model_.targets[static_cast<std::size_t>(index)].kind !=
+            exosnap::engine::CaptureTarget::Kind::Monitor) {
+        *error = QStringLiteral("Region selection needs a selected monitor");
+        return false;
+    }
+    // The picker's own Region transition: selectTarget(Region) leaves
+    // has_region false and raises regionSelectionNeeded, which is what opens
+    // the overlay the user sees.
+    selectTarget(index, CaptureMode::Region);
+    if (record_view_model_.capture_mode != CaptureMode::Region) {
+        *error = QStringLiteral("The product did not enter Region mode");
+        return false;
+    }
+    return true;
+}
+
+bool QuickApplication::applyRegionForAutomation(const QString& display_device, int x, int y, int width, int height,
+                                                QString* error) {
+    if (!openRegionSelectorForAutomation(display_device, error))
+        return false;
+    const auto& target = record_view_model_.targets[static_cast<std::size_t>(record_view_model_.selected_target_index)];
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof(monitor);
+    if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &monitor) == FALSE) {
+        *error = QStringLiteral("The selected display is no longer available");
+        return false;
+    }
+    const int monitor_width = monitor.rcMonitor.right - monitor.rcMonitor.left;
+    const int monitor_height = monitor.rcMonitor.bottom - monitor.rcMonitor.top;
+    if (monitor_width <= 0 || monitor_height <= 0) {
+        *error = QStringLiteral("The selected display reports an empty size");
+        return false;
+    }
+    if (x < 0 || y < 0 || width < 64 || height < 64 || x + width > monitor_width || y + height > monitor_height) {
+        *error = QStringLiteral("The region %1,%2 %3x%4 is outside the %5x%6 monitor")
+                     .arg(x)
+                     .arg(y)
+                     .arg(width)
+                     .arg(height)
+                     .arg(monitor_width)
+                     .arg(monitor_height);
+        return false;
+    }
+    const QRectF normalized(static_cast<qreal>(x) / monitor_width, static_cast<qreal>(y) / monitor_height,
+                            static_cast<qreal>(width) / monitor_width, static_cast<qreal>(height) / monitor_height);
+    selectRegion(normalized);
+    if (!record_view_model_.has_region) {
+        *error = QStringLiteral("The product did not accept the region");
+        return false;
+    }
+    return true;
 }
 
 void QuickApplication::applyHarnessWindowSize(const QSize& size) {

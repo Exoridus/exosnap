@@ -72,7 +72,7 @@ struct UpdaterUiState {
     QString primary_action;   // "" = hidden
     QString secondary_action; // "" = hidden
     QString from_version, to_version;
-    // ADR 0055: this run reinstalls the IDENTICAL version on purpose. The title
+    // this run reinstalls the IDENTICAL version on purpose. The title
     // bar deliberately does NOT change -- it stays the stable "Updater" role
     // label -- so the marking is content-level: the window's eyebrow reads
     // "REINSTALLING EXOSNAP" and the working status lines say "reinstall", so
@@ -88,7 +88,7 @@ class UpdaterController {
   public:
     UpdaterController(QString from_version, QString to_version);
 
-    // Mark this run as a verification reinstall (ADR 0055). Affects wording only.
+    // Mark this run as a verification reinstall. Affects wording only.
     void setVerificationReinstall(bool on);
     // Manual vs. handoff. Set once, at construction time of the run; it decides
     // which commands exist at all and cannot be derived afterwards.
