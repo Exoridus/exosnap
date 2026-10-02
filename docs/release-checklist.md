@@ -63,7 +63,7 @@ If source or package bytes change, build another candidate and rerun the affecte
 
 ## 4. Publication boundary
 
-The `Publish qualified release` workflow (`.github/workflows/publish-release.yml`) separates preparation from publication. Dispatch it on `next` at the candidate source commit with the successful official candidate run ID, candidate ID and frozen qualification encoded by `exo-verify publication encode`. The read-only preparation job downloads the official bundle, frozen plan and every hosted lane attempt, validates readiness in Rust, and retains the frozen evidence in its private `publication-inputs` artifact. It neither tags nor publishes.
+The `Publish qualified release` workflow (`.github/workflows/publish-release.yml`) separates preparation from publication. Dispatch it on `next` at the candidate source commit with the successful official candidate run ID, candidate ID, the secret gist and revision holding the full retained evidence, and the compact binding written by `exo-verify publication bundle`. The read-only preparation job downloads the official bundle, frozen plan and every hosted lane attempt, fetches and digest-verifies the retained evidence, validates readiness in Rust, and retains the frozen evidence in its private `publication-inputs` artifact. It neither tags nor publishes.
 
 After that run succeeds, use `exo-verify publication tag-message` with the bound evidence and both run metadata documents. Push the final annotated `vX.Y.Z` tag at the qualified source using the repository administrator/user identity, only after explicit approval. The existing Admin-role bypass authorizes that protected tag creation. The annotation contains only the candidate/preparation run IDs, candidate ID and bundle hash; private qualification details remain in Actions artifacts.
 
@@ -127,9 +127,11 @@ Inspect packet-span durations for each stream, listen at the beginning/middle/en
 
 ## 8. Package-manager publication
 
-Publish downstream only after the approved release is available. Follow [WinGet](../packaging/winget/README.md), [Chocolatey](../packaging/chocolatey/README.md) and [Scoop](../packaging/scoop/README.md). The [publication policy](../packaging/publication-policy.json) records each channel's intended hold/publish state; `cargo exo-dev release feed-drift` is an advisory comparison, not an upload command.
+Publish downstream only after the approved release is available. The protected `Distribute release` workflow owns distribution: dispatch it on `next` with the released version and its qualified source commit. Its PREPARE phase resolves the immutable public GitHub Release, verifies every asset digest against the release API and the published sidecars, reads the MSI's ProductCode and UpgradeCode, renders and validates each channel, packs the thin Chocolatey `.nupkg`, runs `winget validate` and the disposable Chocolatey rehearsal, and freezes a `distribution-readiness.json` with its digest. Its PUBLISH phase consumes that exact frozen preparation and, behind the `distribution` environment, submits the frozen artifacts: `choco push`, `wingetcreate submit`, and the `Exoridus/scoop-exosnap` bucket commit.
 
-Fill release hashes from the published bytes/sidecars. Read each new MSI ProductCode from that MSI; never reuse the previous build's generated code. Preserve the permanent UpgradeCode. Run each full package validator, including manifest/hash checks where required. Version-placeholder checks alone do not authorize submission.
+`cargo exo-dev distribution status|prepare|validate|submit` exposes the same steps locally; follow [WinGet](../packaging/winget/README.md), [Chocolatey](../packaging/chocolatey/README.md) and [Scoop](../packaging/scoop/README.md) for channel details. `cargo exo-dev release feed-drift` remains an advisory feed comparison, never an upload command. The [publication policy](../packaging/publication-policy.json) records each channel's actual state (PENDING, PREPARED, SUBMITTED, IN_REVIEW, PUBLISHED); update it as an external service changes state. A successful submission is not publication: Chocolatey and WinGet stay SUBMITTED or IN_REVIEW until the service publishes them.
+
+Every release-dependent hash and identifier comes from the published bytes: the MSI SHA-256 and ProductCode, the permanent UpgradeCode, and the portable ZIP SHA-256. Version-placeholder checks alone do not authorize submission.
 
 ## 9. Closeout
 

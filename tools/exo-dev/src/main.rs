@@ -76,6 +76,13 @@ enum Command {
         #[command(subcommand)]
         release: ReleaseCommand,
     },
+    /// Package-manager distribution: resolve the immutable public release,
+    /// prepare and validate every channel, freeze a readiness digest, and
+    /// submit the frozen artifacts through the official programs.
+    Distribution {
+        #[command(subcommand)]
+        distribution: DistributionCommand,
+    },
     /// Regenerates the detached-signature fixture pasted into
     /// libs/update/tests/test_update_signature.cpp and prints it.
     #[cfg(feature = "dev-tools")]
@@ -651,6 +658,68 @@ enum PackagingCommand {
     MsiHarvest,
 }
 
+#[derive(Subcommand)]
+enum DistributionCommand {
+    /// Resolve the public release and report the declared channel states.
+    Status {
+        /// Product version to resolve.
+        #[arg(long)]
+        version: String,
+        /// Qualified source commit the release was built from.
+        #[arg(long)]
+        source_commit: String,
+        /// GitHub release metadata document for that tag.
+        #[arg(long)]
+        release_json: PathBuf,
+        /// Directory holding the downloaded release assets and sidecars.
+        #[arg(long)]
+        assets: PathBuf,
+        /// A prepared distribution to report the readiness of.
+        #[arg(long)]
+        prepared: Option<PathBuf>,
+    },
+    /// Resolve the release, render each channel, validate and pack it.
+    Prepare {
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        source_commit: String,
+        #[arg(long)]
+        release_json: PathBuf,
+        #[arg(long)]
+        assets: PathBuf,
+        /// Fresh directory receiving the frozen prepared artifacts.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Revalidate a frozen preparation and freeze its readiness digest.
+    Validate {
+        #[arg(long)]
+        prepared: PathBuf,
+        #[arg(long)]
+        assets: PathBuf,
+        /// Rehearsal result proving the prepared Chocolatey package.
+        #[arg(long)]
+        chocolatey_rehearsal: Option<PathBuf>,
+        /// Fail unless the revalidated digest equals this frozen value.
+        #[arg(long)]
+        expect_readiness_digest: Option<String>,
+    },
+    /// Submit one channel's exact frozen artifacts through its official program.
+    Submit {
+        #[arg(long)]
+        prepared: PathBuf,
+        #[arg(long, value_parser = ["chocolatey", "winget", "scoop"])]
+        channel: String,
+        /// Fresh file receiving the submission record.
+        #[arg(long)]
+        out: PathBuf,
+        /// Fail unless the frozen readiness digest equals this approved value.
+        #[arg(long)]
+        expect_readiness_digest: Option<String>,
+    },
+}
+
 #[derive(Args, Default)]
 struct VerifyArgs {
     /// The scoped pre-commit contract. It may check more than strictly needed and
@@ -711,6 +780,30 @@ struct VerifyArgs {
     /// CI profiles: the clang-tidy result cache directory.
     #[arg(long)]
     tidy_cache_dir: Option<PathBuf>,
+}
+
+fn printable_readiness(
+    readiness: &exo_dev::distribution::ReadinessReport,
+) -> anyhow::Result<ExitCode> {
+    for (name, channel) in &readiness.channels {
+        println!("  {name:<12} {}", channel.state);
+        for line in &channel.detail {
+            println!("               {line}");
+        }
+    }
+    if readiness.ready_for_distribution {
+        println!(
+            "READY FOR DISTRIBUTION: {} is prepared on every selected channel and frozen at {}",
+            readiness.version, readiness.source_commit
+        );
+        Ok(ExitCode::SUCCESS)
+    } else {
+        eprintln!(
+            "NOT READY: distribution preparation for {} is incomplete",
+            readiness.version
+        );
+        Ok(ExitCode::FAILURE)
+    }
 }
 
 fn main() -> ExitCode {
@@ -869,6 +962,104 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 policy_path,
                 timeout_seconds,
             } => release_feed_drift(&repo_root, offline, policy_path, timeout_seconds),
+        },
+        Command::Distribution { distribution } => match distribution {
+            DistributionCommand::Status {
+                version,
+                source_commit,
+                release_json,
+                assets,
+                prepared,
+            } => {
+                let request = exo_dev::distribution::StatusRequest {
+                    repo_root: repo_root.clone(),
+                    version,
+                    source_commit,
+                    release_json,
+                    assets,
+                    prepared,
+                };
+                println!("{}", exo_dev::distribution::status(&request)?);
+                Ok(ExitCode::SUCCESS)
+            }
+            DistributionCommand::Prepare {
+                version,
+                source_commit,
+                release_json,
+                assets,
+                out,
+            } => {
+                let request = exo_dev::distribution::PrepareRequest {
+                    repo_root: repo_root.clone(),
+                    version,
+                    source_commit,
+                    release_json,
+                    assets,
+                    out,
+                };
+                let outcome = exo_dev::distribution::prepare(
+                    &request,
+                    &exo_dev::distribution::RealCommands,
+                    &exo_dev::distribution::SystemMsi,
+                )?;
+                println!(
+                    "prepared {} from release {}; readiness {} ({} channels)",
+                    outcome.release.version,
+                    outcome.release.tag,
+                    if outcome.readiness.ready_for_distribution {
+                        "READY"
+                    } else {
+                        "NOT READY until validated"
+                    },
+                    outcome.readiness.channels.len()
+                );
+                println!("readiness digest: {}", outcome.readiness_digest);
+                Ok(ExitCode::SUCCESS)
+            }
+            DistributionCommand::Validate {
+                prepared,
+                assets,
+                chocolatey_rehearsal,
+                expect_readiness_digest,
+            } => {
+                let request = exo_dev::distribution::ValidateRequest {
+                    prepared,
+                    assets,
+                    chocolatey_rehearsal,
+                    expect_readiness_digest,
+                };
+                let readiness = exo_dev::distribution::validate(&request)?;
+                printable_readiness(&readiness)
+            }
+            DistributionCommand::Submit {
+                prepared,
+                channel,
+                out,
+                expect_readiness_digest,
+            } => {
+                let channel = match channel.as_str() {
+                    "chocolatey" => exo_dev::distribution::Channel::Chocolatey,
+                    "winget" => exo_dev::distribution::Channel::Winget,
+                    "scoop" => exo_dev::distribution::Channel::Scoop,
+                    other => anyhow::bail!("unknown distribution channel '{other}'"),
+                };
+                let request = exo_dev::distribution::SubmitRequest {
+                    prepared,
+                    channel,
+                    out,
+                    expect_readiness_digest,
+                };
+                let result = exo_dev::distribution::submit(
+                    &request,
+                    &exo_dev::distribution::RealCommands,
+                    &exo_dev::distribution::ProcessSecrets,
+                )?;
+                println!(
+                    "{} {}: {} {}",
+                    result.channel, result.version, result.status, result.url
+                );
+                Ok(ExitCode::SUCCESS)
+            }
         },
         Command::PerfAnalyze(args) => perf_analyze(args),
         Command::EncoderQualityMatrix(args) => exo_dev::encoder_quality_matrix::run(&args),

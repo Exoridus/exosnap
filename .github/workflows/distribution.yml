@@ -1,0 +1,179 @@
+name: Distribute release
+
+# Prepares, validates and rehearses one already-published immutable GitHub
+# Release, freezes the prepared artifacts and their readiness digest, then,
+# behind the protected `distribution` environment, submits exactly those
+# frozen artifacts through each package manager's official program. The
+# GitHub Release is never rebuilt and never modified.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Released product version to distribute (x.y.z)
+        required: true
+        type: string
+      source_commit:
+        description: Qualified source commit that version was released from
+        required: true
+        type: string
+      publish:
+        description: Request the protected distribution approval and submit after a READY preparation
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: distribute-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/next' && github.repository == 'Exoridus/exosnap'
+    runs-on: windows-2022
+    timeout-minutes: 45
+    outputs:
+      ready: ${{ steps.validate.outputs.ready }}
+      digest: ${{ steps.validate.outputs.digest }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build the distribution tools from the trusted workflow revision
+        run: cargo build --locked --manifest-path tools/Cargo.toml -p exo-dev -p exo-verify
+      - name: Download the immutable public release metadata and assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { throw 'version must be x.y.z' }
+          $tag = "v$env:VERSION"
+          gh api "repos/Exoridus/exosnap/releases/tags/$tag" > release.json
+          New-Item -ItemType Directory -Path assets -Force | Out-Null
+          gh release download $tag --repo Exoridus/exosnap --dir assets `
+            --pattern "ExoSnap-$env:VERSION-windows-x64.msi" `
+            --pattern "ExoSnap-$env:VERSION-windows-x64.msi.sha256" `
+            --pattern "ExoSnap-$env:VERSION-windows-x64-portable.zip" `
+            --pattern "ExoSnap-$env:VERSION-windows-x64-portable.sha256"
+          if ($LASTEXITCODE -ne 0) { throw 'could not download the release assets' }
+      - name: Resolve the release and prepare every channel
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: >-
+          ./tools/target/debug/exo-dev.exe distribution prepare
+          --version "$env:VERSION" --source-commit "$env:SOURCE_COMMIT"
+          --release-json release.json --assets assets --out prepared
+      - name: Rehearse the prepared Chocolatey package against the frozen MSI
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: >-
+          ./tools/target/debug/exo-verify.exe rehearse
+          --channel chocolatey --package-source prepared/packaging/chocolatey
+          --installer "assets/ExoSnap-$env:VERSION-windows-x64.msi" --out rehearsal
+      - name: Freeze and validate the distribution readiness report
+        id: validate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item rehearsal/chocolatey-rehearsal.json prepared/chocolatey-rehearsal.json
+          ./tools/target/debug/exo-dev.exe distribution validate --prepared prepared --assets assets --chocolatey-rehearsal prepared/chocolatey-rehearsal.json
+          if ($LASTEXITCODE -ne 0) { throw 'distribution preparation is not READY' }
+          $digest = (Get-Content -LiteralPath prepared/distribution-readiness.json.sha256 -Raw).Split(' ')[0]
+          if ($digest -notmatch '^[0-9a-f]{64}$') { throw 'the readiness digest is malformed' }
+          "ready=true" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+          "digest=$digest" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+      - name: Retain the frozen preparation
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: distribution-prepared
+          path: prepared/
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    needs: prepare
+    if: inputs.publish && needs.prepare.outputs.ready == 'true' && github.ref == 'refs/heads/next' && github.repository == 'Exoridus/exosnap'
+    environment: distribution
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build the distribution tool from the trusted workflow revision
+        run: cargo build --locked --manifest-path tools/Cargo.toml -p exo-dev
+      - name: Consume the exact frozen preparation
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: distribution-prepared
+          path: prepared
+      - name: Re-download the immutable public assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "v$env:VERSION"
+          New-Item -ItemType Directory -Path assets -Force | Out-Null
+          gh release download $tag --repo Exoridus/exosnap --dir assets `
+            --pattern "ExoSnap-$env:VERSION-windows-x64.msi" `
+            --pattern "ExoSnap-$env:VERSION-windows-x64.msi.sha256" `
+            --pattern "ExoSnap-$env:VERSION-windows-x64-portable.zip" `
+            --pattern "ExoSnap-$env:VERSION-windows-x64-portable.sha256"
+          if ($LASTEXITCODE -ne 0) { throw 'could not download the release assets' }
+      - name: Revalidate the frozen preparation against its digest
+        shell: pwsh
+        env:
+          READINESS_DIGEST: ${{ needs.prepare.outputs.digest }}
+        run: >-
+          ./tools/target/debug/exo-dev.exe distribution validate
+          --prepared prepared --assets assets
+          --chocolatey-rehearsal prepared/chocolatey-rehearsal.json
+          --expect-readiness-digest "$env:READINESS_DIGEST"
+      - name: Submit to Chocolatey Community
+        shell: pwsh
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+          READINESS_DIGEST: ${{ needs.prepare.outputs.digest }}
+        run: >-
+          ./tools/target/debug/exo-dev.exe distribution submit
+          --prepared prepared --channel chocolatey --out submissions/chocolatey.json
+          --expect-readiness-digest "$env:READINESS_DIGEST"
+      - name: Submit to microsoft/winget-pkgs
+        shell: pwsh
+        env:
+          WINGET_SUBMIT_TOKEN: ${{ secrets.WINGET_SUBMIT_TOKEN }}
+          READINESS_DIGEST: ${{ needs.prepare.outputs.digest }}
+        run: >-
+          ./tools/target/debug/exo-dev.exe distribution submit
+          --prepared prepared --channel winget --out submissions/winget.json
+          --expect-readiness-digest "$env:READINESS_DIGEST"
+      - name: Update the Exoridus/scoop-exosnap bucket
+        shell: pwsh
+        env:
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          READINESS_DIGEST: ${{ needs.prepare.outputs.digest }}
+        run: >-
+          ./tools/target/debug/exo-dev.exe distribution submit
+          --prepared prepared --channel scoop --out submissions/scoop.json
+          --expect-readiness-digest "$env:READINESS_DIGEST"
+      - name: Retain the submission records
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: distribution-submissions
+          path: submissions/
+          if-no-files-found: warn
+          retention-days: 90

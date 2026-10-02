@@ -8,14 +8,16 @@ Each version directory holds the standard multi-file manifest set (schema 1.10.0
 - `Codexo.ExoSnap.installer.yaml`: `wix` MSI installer (machine scope), with the release `InstallerSha256`, `ProductCode`, and the permanent `UpgradeCode`
 - `Codexo.ExoSnap.locale.en-US.yaml`: default-locale metadata
 
-## Submission
+## Preparation and submission
 
-Validate, then submit to `microsoft/winget-pkgs` with the standalone tooling:
+The protected `Distribute release` workflow owns submission. It resolves the immutable public GitHub Release, renders this manifest set with the published MSI SHA-256, the MSI's real ProductCode, the permanent UpgradeCode and the release date, runs `winget validate`, and freezes the exact manifests into the distribution readiness report. After the `distribution` environment approval it submits those frozen manifests to `microsoft/winget-pkgs` with the official WingetCreate program, which owns the upstream pull request.
+
+The same steps are available locally:
 
 ```powershell
-winget validate --manifest packaging/winget/manifests/c/Codexo/ExoSnap/<version>
-wingetcreate submit --prtitle "New package: Codexo.ExoSnap version <version>" `
-  --token <github-token> packaging/winget/manifests/c/Codexo/ExoSnap/<version>
+cargo exo-dev distribution prepare --version <x.y.z> --source-commit <sha> `
+    --release-json release.json --assets assets --out prepared
+winget validate --manifest prepared/packaging/winget/manifests/c/Codexo/ExoSnap/<x.y.z>
 ```
 
 The installer always points at the immutable public GitHub Release MSI asset and its verified SHA-256, never a mutable or pre-release URL.

@@ -55,11 +55,30 @@ struct Cli {
     command: Command,
 }
 
+#[derive(Args)]
+struct RehearseArgs {
+    /// Package channel to rehearse.
+    #[arg(long, value_parser = ["chocolatey"])]
+    channel: String,
+    /// Prepared package tree the rehearsal packs and installs.
+    #[arg(long)]
+    package_source: PathBuf,
+    /// Local installer the package must install, with the same bytes the
+    /// package declares.
+    #[arg(long)]
+    installer: PathBuf,
+    /// Fresh directory receiving the rehearsal result and its evidence.
+    #[arg(long)]
+    out: PathBuf,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Prepare qualification and promote exact official candidate bytes.
     #[command(subcommand)]
     Publication(publication::PublicationCommand),
+    /// Rehearse a prepared package-manager package against a local installer.
+    Rehearse(RehearseArgs),
     /// Build, inspect or transport the immutable candidate bundle.
     #[command(subcommand)]
     Bundle(BundleCommand),
@@ -893,6 +912,21 @@ fn real_main() -> Result<ExitCode> {
         #[cfg(not(windows))]
         Command::Disposable(_) => bail!("disposable backends need a Windows host"),
         Command::Publication(command) => publication::run(command)?,
+        Command::Rehearse(args) => match args.channel.as_str() {
+            "chocolatey" => {
+                let document = scenarios::rehearse_chocolatey(
+                    &args.package_source,
+                    &args.installer,
+                    &args.out,
+                )?;
+                println!(
+                    "Chocolatey rehearsal: ok={} ({} step(s))",
+                    document["ok"],
+                    document["steps"].as_array().map_or(0, Vec::len)
+                );
+            }
+            other => bail!("no rehearsal is implemented for channel '{other}'"),
+        },
         Command::Package(args) => {
             let result = package::run(&args)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
