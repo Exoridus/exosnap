@@ -64,6 +64,18 @@ jobs:
       - name: Install WiX
         shell: pwsh
         run: dotnet tool install --global wix --version 4.0.5
+      - name: Install the WiX bootstrapper extensions
+        shell: pwsh
+        run: |
+          wix extension add -g WixToolset.Util.wixext/4.0.5
+          wix extension add -g WixToolset.Bal.wixext/4.0.5
+          if ($LASTEXITCODE -ne 0) { throw 'could not install the WiX extensions' }
+      - name: Fetch the pinned Visual C++ x64 redistributable
+        shell: pwsh
+        run: |
+          curl.exe -sSfL -o vc_redist.x64.exe https://aka.ms/vs/17/release/vc_redist.x64.exe
+          if ($LASTEXITCODE -ne 0) { throw 'could not download the Visual C++ redistributable' }
+          (Get-Item vc_redist.x64.exe).Length | Out-String
       - name: Enable long Git paths
         shell: pwsh
         run: git config --global core.longpaths true
@@ -96,13 +108,16 @@ jobs:
           CANDIDATE_ID: ${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
         run: |
           $verify = 'tools/target/release/exo-verify.exe'
-          & $verify package --build-dir build/windows-x64-ninja-release --out candidate-package --version $env:RELEASE_VERSION
+          & $verify package --build-dir build/windows-x64-ninja-release --out candidate-package --version $env:RELEASE_VERSION `
+            --vc-redist vc_redist.x64.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $portable = "candidate-package/ExoSnap-$env:RELEASE_VERSION-windows-x64-portable.zip"
           $installer = "candidate-package/ExoSnap-$env:RELEASE_VERSION-windows-x64.msi"
+          $setup = "candidate-package/ExoSnap-$env:RELEASE_VERSION-Setup.exe"
+          if (-not (Test-Path -LiteralPath $setup)) { throw 'the candidate package has no Setup bootstrapper' }
           & $verify bundle create --out candidate-bundle --version $env:RELEASE_VERSION `
             --commit $env:SOURCE_COMMIT --candidate-id $env:CANDIDATE_ID `
-            --installer $installer --portable $portable --runtime $verify `
+            --installer $installer --setup $setup --portable $portable --runtime $verify `
             --metadata candidate-package/package.json `
             --toolchain 'generator=Ninja' --toolchain 'runner=windows-2022'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

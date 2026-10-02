@@ -67,6 +67,43 @@ pub fn packaging_fixture(version: &str) -> tempfile::TempDir {
             &dir.path().join("packaging").join(name),
         );
     }
+    // The tracked tree always carries the current release version; a test
+    // that asks for another one gets a copy rewritten to it, so version-axis
+    // tests never depend on which release the working tree is preparing.
+    let tracked_source =
+        std::fs::read_to_string(repo_root.join("CMakeLists.txt")).expect("read root CMakeLists");
+    let tracked = regex::Regex::new(r"project\(\s*exosnap\s+VERSION\s+(\d+\.\d+\.\d+)")
+        .expect("version regex")
+        .captures(&tracked_source)
+        .expect("root CMakeLists declares project(exosnap VERSION x.y.z)")[1]
+        .to_string();
+    if tracked != version {
+        let packaging = dir.path().join("packaging");
+        for entry in [
+            "chocolatey/exosnap.nuspec",
+            "chocolatey/tools/chocolateyinstall.ps1",
+            "chocolatey/tools/chocolateyuninstall.ps1",
+            "scoop/exosnap.json",
+        ] {
+            let path = packaging.join(entry);
+            if path.is_file() {
+                let text = std::fs::read_to_string(&path).expect("read fixture packaging file");
+                std::fs::write(&path, text.replace(&tracked, version))
+                    .expect("rewrite fixture packaging file");
+            }
+        }
+        let manifests = packaging.join("winget/manifests/c/Codexo/ExoSnap");
+        let old_dir = manifests.join(&tracked);
+        if old_dir.is_dir() {
+            for entry in std::fs::read_dir(&old_dir).expect("read winget manifests") {
+                let path = entry.expect("winget manifest entry").path();
+                let text = std::fs::read_to_string(&path).expect("read winget manifest");
+                std::fs::write(&path, text.replace(&tracked, version))
+                    .expect("rewrite winget manifest");
+            }
+            std::fs::rename(&old_dir, manifests.join(version)).expect("rename winget version dir");
+        }
+    }
     std::fs::write(
         dir.path().join("CMakeLists.txt"),
         format!("project(exosnap VERSION {version} LANGUAGES C CXX)\n"),

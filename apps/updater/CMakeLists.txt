@@ -234,6 +234,7 @@ if(WIN32)
         add_custom_command(TARGET exosnap_updater POST_BUILD
             COMMAND "${EXOSNAP_UPDATER_WINDEPLOYQT}" --force --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/quick"
                 --no-translations --no-system-d3d-compiler --no-opengl-sw
+                --no-compiler-runtime --skip-plugin-types qmltooling
                 "$<IF:$<CONFIG:Debug>,--debug,--release>" "$<TARGET_FILE:exosnap_updater>"
             COMMENT "Staging Qt runtime next to exosnap-updater.exe (build tree)"
             VERBATIM

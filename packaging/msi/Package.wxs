@@ -38,6 +38,27 @@
 
     <Media Id="1" Cabinet="exosnap.cab" EmbedCab="yes" />
 
+    <!-- Add/Remove Programs uses the product icon, not the executable's. -->
+    <Icon Id="ExoSnapAppIcon" SourceFile="$(var.AppIconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="ExoSnapAppIcon" />
+
+    <!-- A direct `msiexec /i` on a machine without the shared Visual C++
+         runtime would succeed and then leave an application that cannot start.
+         Refuse before anything is installed. `Installed` keeps uninstall and
+         maintenance working on machines where the runtime is already gone.
+         The Setup bootstrapper and the package-manager dependencies satisfy
+         this requirement before this package runs. -->
+    <Property Id="VCREDISTX64_INSTALLED">
+      <RegistrySearch Id="VCRedistX64Installed"
+                      Type="raw"
+                      Root="HKLM"
+                      Key="SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+                      Name="Installed"
+                      Bitness="always64" />
+    </Property>
+    <Launch Condition='Installed OR VCREDISTX64_INSTALLED = "#1"'
+            Message="ExoSnap requires the Microsoft Visual C++ 2015-2022 x64 Redistributable. Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe, or use ExoSnap Setup, and run this installer again." />
+
     <!-- Install-root directory skeleton.
          Subdirectories (plugins/, licenses/, …) are defined by _harvest.wxs. -->
     <StandardDirectory Id="ProgramFiles64Folder">
@@ -53,7 +74,8 @@
                   Name="ExoSnap"
                   Description="Windows-native screen, window and region recorder"
                   Target="[INSTALLFOLDER]exosnap.exe"
-                  WorkingDirectory="INSTALLFOLDER" />
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="ExoSnapAppIcon" />
         <RegistryValue Root="HKLM"
                        Key="Software\Codexo\ExoSnap"
                        Name="installed"

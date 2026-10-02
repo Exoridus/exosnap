@@ -230,6 +230,45 @@ TEST_F(InstallTreeTest, NoStaleKnownLimitationsTxt) {
     EXPECT_FALSE(file_exists(_root, "KNOWN_LIMITATIONS.txt")) << "Stale KNOWN_LIMITATIONS.txt must not ship";
 }
 
+// The compiler runtime belongs to Setup and the package-manager dependencies,
+// never to the application tree.
+TEST_F(InstallTreeTest, NoCompilerRuntimePayload) {
+    SKIP_IF_NO_TREE();
+    for (const auto& p : relative_paths(_root)) {
+        auto name = lower(fs::path(p).filename().string());
+        bool is_redist = name.rfind("vc_redist", 0) == 0 && name.size() > 4 && name.substr(name.size() - 4) == ".exe";
+        EXPECT_FALSE(is_redist) << "Visual C++ redistributable payload must not ship in the runtime tree: " << p;
+    }
+}
+
+// QML debugger/profiler/preview plugins are development tooling.
+TEST_F(InstallTreeTest, NoQmlToolingPlugins) {
+    SKIP_IF_NO_TREE();
+    EXPECT_FALSE(dir_exists(_root, "plugins/qmltooling")) << "plugins/qmltooling must not ship";
+    for (const auto& p : relative_paths(_root)) {
+        auto name = lower(fs::path(p).filename().string());
+        EXPECT_NE(name.rfind("qmldbg_", 0), 0u) << "QML tooling plugin leaked into install tree: " << p;
+    }
+}
+
+// ExoSnap selects the Basic Quick Controls style; no other style ships.
+TEST_F(InstallTreeTest, NoUnusedQuickControlsStyles) {
+    SKIP_IF_NO_TREE();
+    for (const auto& style : {"Fusion", "Imagine", "Material", "Universal", "FluentWinUI3", "Windows"}) {
+        EXPECT_FALSE(dir_exists(_root, std::string("qml/QtQuick/Controls/") + style))
+            << style << " style must not ship";
+    }
+    EXPECT_FALSE(dir_exists(_root, "qml/QtQuick/NativeStyle")) << "the native style module must not ship";
+    EXPECT_TRUE(dir_exists(_root, "qml/QtQuick/Controls/Basic")) << "the selected Basic style must ship";
+}
+
+// Upstream Crashpad's duplicate handler and WER shim are pruned; the root
+// handler the application resolves stays next to exosnap.exe.
+TEST_F(InstallTreeTest, NoCrashpadBinPayload) {
+    SKIP_IF_NO_TREE();
+    EXPECT_FALSE(dir_exists(_root, "bin")) << "bin/ must not ship";
+}
+
 TEST_F(InstallTreeTest, NoWorkspaceLeak) {
     SKIP_IF_NO_TREE();
     auto paths = join(relative_paths(_root));

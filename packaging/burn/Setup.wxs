@@ -1,0 +1,78 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <!--
+    ExoSnap offline Setup bootstrapper
+    ==================================
+    One self-contained ExoSnap-<version>-Setup.exe for normal direct
+    installation. The chain installs the exact pinned Microsoft Visual C++
+    2015-2022 x64 runtime first and the MSI only after it succeeds; both
+    payloads are embedded, so nothing is downloaded at install time.
+
+    `exo-verify package` supplies BundleVersion, VCRedistPath,
+    VCRedistMinVersion, MsiPath, IconPath and LicenseUrl with `-d`; the
+    redistributable digest and the minimum version live in Rust so the policy
+    has one owner.
+
+    The redistributable is Permanent: removing ExoSnap must never remove a
+    shared system runtime. Cache="remove" keeps the embedded prerequisite out
+    of the permanent package cache, while the MSI keeps Burn's default cache
+    so repair, modify and uninstall work without the original Setup.exe.
+  -->
+
+  <Bundle Name="ExoSnap"
+          Version="$(var.BundleVersion)"
+          Manufacturer="Codexo"
+          UpgradeCode="{15DD5AFF-4C08-4549-BB4E-ECBF10913E77}"
+          IconSourceFile="$(var.IconPath)"
+          AboutUrl="https://github.com/Exoridus/exosnap"
+          HelpUrl="https://github.com/Exoridus/exosnap/issues"
+          UpdateUrl="https://github.com/Exoridus/exosnap/releases"
+          Copyright="Copyright 2026 Codexo">
+
+    <!-- The installed x64 runtime publishes this key. A version-typed
+         variable keeps the comparison numeric; a missing or older value
+         fails the condition below and the embedded redistributable runs. -->
+    <Variable Name="VCRedistVersion" Type="version" Value="0.0.0.0" />
+    <util:RegistrySearch Id="VCRedistVersionSearch"
+                         Variable="VCRedistVersion"
+                         Root="HKLM"
+                         Key="SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+                         Value="Version"
+                         Result="value"
+                         Bitness="always64" />
+
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+          Theme="hyperlinkLicense"
+          LicenseUrl="$(var.LicenseUrl)"
+          ShowVersion="yes"
+          LaunchTarget="[ProgramFiles64Folder]Codexo\ExoSnap\exosnap.exe"
+          LaunchWorkingFolder="[ProgramFiles64Folder]Codexo\ExoSnap" />
+    </BootstrapperApplication>
+
+    <Chain>
+      <ExePackage Id="VCRedistX64"
+                  SourceFile="$(var.VCRedistPath)"
+                  Compressed="yes"
+                  Vital="yes"
+                  Permanent="yes"
+                  Cache="remove"
+                  InstallArguments="/install /quiet /norestart"
+                  DetectCondition="VCRedistVersion &gt;= $(var.VCRedistMinVersion)">
+        <!-- A newer runtime already present is success, not failure. -->
+        <ExitCode Value="1638" Behavior="success" />
+        <!-- Success with a pending restart is reported as such; Burn offers
+             the restart instead of silently rebooting. -->
+        <ExitCode Value="3010" Behavior="scheduleReboot" />
+      </ExePackage>
+
+      <MsiPackage Id="ExoSnapMsi"
+                  SourceFile="$(var.MsiPath)"
+                  Compressed="yes"
+                  Vital="yes"
+                  Visible="no" />
+    </Chain>
+  </Bundle>
+</Wix>

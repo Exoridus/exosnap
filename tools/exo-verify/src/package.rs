@@ -37,6 +37,11 @@ pub struct PackageArgs {
     /// Skip the MSI (requires the WiX CLI otherwise).
     #[arg(long)]
     pub skip_msi: bool,
+    /// The pinned Microsoft Visual C++ x64 redistributable to embed in the
+    /// offline Setup bootstrapper. Its SHA-256 is verified against the pin in
+    /// this module before anything is built.
+    #[arg(long)]
+    pub vc_redist: Option<PathBuf>,
     /// Start the staged exosnap.exe with --smoke-test in an environment that
     /// hides every developer Qt, so a package that only runs with the
     /// build machine's Qt on PATH fails here.
@@ -51,12 +56,25 @@ pub struct PackageResult {
     pub base_version: String,
     pub portable: PathBuf,
     pub installer: Option<PathBuf>,
+    pub setup: Option<PathBuf>,
     pub staging: PathBuf,
     pub file_count: usize,
     pub dependency_audit: BTreeMap<String, usize>,
     /// Upstream identity of every third-party component in the package.
     pub dependencies: Vec<dependency_identity::DependencyEntry>,
 }
+
+/// The exact Microsoft Visual C++ 2015-2022 x64 redistributable embedded in
+/// the offline Setup bootstrapper. The link is Microsoft's supported stable
+/// alias; the digest pins the bytes so a silently updated alias fails the
+/// build instead of changing what users install. Refreshing the pin is a
+/// deliberate release change.
+pub const VC_REDIST_URL: &str = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
+pub const VC_REDIST_SHA256: &str =
+    "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b";
+/// The runtime floor the product's toolset requires; Burn skips the embedded
+/// redistributable only when the installed runtime meets or exceeds it.
+pub const VC_REDIST_MIN_VERSION: &str = "v14.44.35211.0";
 
 pub fn portable_dir_name(version: &str) -> String {
     format!("ExoSnap-{version}-{PLATFORM}-portable")
@@ -121,6 +139,8 @@ const REQUIRED_DIRS: &[&str] = &[
     "licenses",
     "qml/QtQuick",
     "qml/QtQuick/Controls",
+    "qml/QtQuick/Controls/Basic",
+    "qml/QtQuick/Controls/impl",
     "qml/QtQuick/Dialogs",
     "qml/QtQuick/Shapes",
     "qml/QtQml",
@@ -172,13 +192,44 @@ const FORBIDDEN_DIRS: &[&str] = &[
     ".github",
     ".workspace",
     ".claude",
+    // Upstream Crashpad's own install rules drop a second handler and the WER
+    // shim here; the application resolves only the root handler. The
+    // redistributable belongs to Burn and the package managers, never to the
+    // application tree.
+    "bin",
     "include",
     "lib",
     "src",
     "tests",
     "CMakeFiles",
     "Testing",
+    "plugins/qmltooling",
     "qml/QtTest",
+    // ExoSnap selects the Basic style explicitly; every other Controls style
+    // and the native-style module are dead weight plus attack surface.
+    "qml/QtQuick/Controls/Fusion",
+    "qml/QtQuick/Controls/Imagine",
+    "qml/QtQuick/Controls/Material",
+    "qml/QtQuick/Controls/Universal",
+    "qml/QtQuick/Controls/FluentWinUI3",
+    "qml/QtQuick/Controls/Windows",
+    "qml/QtQuick/NativeStyle",
+];
+
+/// File-name fragments no shipping runtime tree may contain, wherever a Qt
+/// deployment decides to place them. This is the wildcard half of
+/// [`FORBIDDEN_DIRS`]: a future Qt layout that flattens a style plugin next to
+/// the executables is caught here instead of shipping silently.
+const FORBIDDEN_NAME_FRAGMENTS: &[&str] = &[
+    "vc_redist",
+    "qmldbg_",
+    "qtquickcontrols2fusion",
+    "qtquickcontrols2imagine",
+    "qtquickcontrols2material",
+    "qtquickcontrols2universal",
+    "qtquickcontrols2fluentwinui3",
+    "qtquickcontrols2windowsstyle",
+    "qtquickcontrols2nativestyle",
 ];
 
 pub fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
@@ -260,6 +311,14 @@ pub fn validate_tree(root: &Path, version: &str, leak_patterns: &[String]) -> Re
         }
         if FORBIDDEN_EXECUTABLES.contains(&name.as_str()) {
             errors.push(format!("superseded executable in package: {rel}"));
+        }
+        if let Some(fragment) = FORBIDDEN_NAME_FRAGMENTS
+            .iter()
+            .find(|fragment| name.contains(**fragment))
+        {
+            errors.push(format!(
+                "forbidden runtime payload in package ({fragment}): {rel}"
+            ));
         }
         if name == "qt6quicktest.dll" || name == "qt6test.dll" {
             errors.push(format!("Qt test framework in package: {rel}"));
@@ -534,6 +593,63 @@ pub fn msi_missing_binaries(staging: &Path, extracted: &Path) -> Result<Vec<Stri
         .collect())
 }
 
+/// Builds the offline Setup bootstrapper: the pinned VC++ x64 redistributable
+/// followed by the MSI, as one WiX Burn bundle. The redistributable is
+/// embedded, never downloaded at install time, and is `Permanent` so
+/// uninstalling ExoSnap can never remove a shared system runtime.
+fn build_setup(
+    wix: &Path,
+    repo_root: &Path,
+    out: &Path,
+    base: &str,
+    msi: &Path,
+    vc_redist: &Path,
+) -> Result<PathBuf> {
+    let (hash, size) = crate::bundle::sha256_file(vc_redist)?;
+    ensure!(
+        hash.eq_ignore_ascii_case(VC_REDIST_SHA256),
+        "the Visual C++ redistributable at {} hashes to {hash}, not the pinned {VC_REDIST_SHA256} from {VC_REDIST_URL}",
+        vc_redist.display()
+    );
+    let icon = repo_root.join("app/assets/brand/exosnap-app.ico");
+    ensure!(icon.is_file(), "product icon missing: {}", icon.display());
+    let bundle = out.join(format!("ExoSnap-{base}-Setup.exe"));
+    println!("==> {}", bundle.display());
+    println!(
+        "  embedding {VC_REDIST_URL} ({size} bytes, {hash}); minimum runtime {VC_REDIST_MIN_VERSION}"
+    );
+    run_checked(
+        Command::new(wix)
+            .args([
+                "build",
+                "-arch",
+                "x64",
+                "-ext",
+                "WixToolset.Util.wixext/4.0.5",
+                "-ext",
+                "WixToolset.Bal.wixext/4.0.5",
+                "-o",
+            ])
+            .arg(&bundle)
+            .arg("-d")
+            .arg(format!("BundleVersion={base}.0"))
+            .arg("-d")
+            .arg(format!("VCRedistPath={}", vc_redist.display()))
+            .arg("-d")
+            .arg(format!("VCRedistMinVersion={VC_REDIST_MIN_VERSION}"))
+            .arg("-d")
+            .arg(format!("MsiPath={}", msi.display()))
+            .arg("-d")
+            .arg(format!("IconPath={}", icon.display()))
+            .arg("-d")
+            .arg("LicenseUrl=https://github.com/Exoridus/exosnap/blob/main/LICENSE")
+            .arg(repo_root.join("packaging/burn/Setup.wxs")),
+        "wix build (Setup)",
+        Duration::from_secs(900),
+    )?;
+    Ok(bundle)
+}
+
 pub fn run(args: &PackageArgs) -> Result<PackageResult> {
     let repo_root = external_path(&fs::canonicalize(&args.repo_root)?);
     let base = project_version(&repo_root)?;
@@ -577,14 +693,35 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
     for dev in ["lib", "include"] {
         remove_if_exists(&staging.join(dev))?;
     }
-    // Software OpenGL, translations and network bearer/TLS plugins are not used.
+    // Software OpenGL, translations, network plugins, development-only QML
+    // tooling and the unattached Controls styles are not used. The compiler
+    // runtime belongs to Burn and the package-manager dependencies, never to
+    // the application tree. `bin/` holds nothing but upstream Crashpad's
+    // duplicate handler and WER shim; the root handler is the one the
+    // application resolves.
     for unused in [
         "opengl32sw.dll",
         "translations",
         "plugins/bearer",
         "plugins/tls",
+        "plugins/qmltooling",
+        "qml/QtQuick/Controls/Fusion",
+        "qml/QtQuick/Controls/Imagine",
+        "qml/QtQuick/Controls/Material",
+        "qml/QtQuick/Controls/Universal",
+        "qml/QtQuick/Controls/FluentWinUI3",
+        "qml/QtQuick/Controls/Windows",
+        "qml/QtQuick/NativeStyle",
+        "bin",
     ] {
         remove_if_exists(&staging.join(unused))?;
+    }
+    for entry in fs::read_dir(&staging)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if name.starts_with("vc_redist") && name.ends_with(".exe") {
+            remove_if_exists(&entry.path())?;
+        }
     }
 
     let mut leaks = vec![
@@ -648,6 +785,11 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
                 .arg(&msi)
                 .arg("-d")
                 .arg(format!("ProductVersion={base}"))
+                .arg("-d")
+                .arg(format!(
+                    "AppIconPath={}",
+                    repo_root.join("app/assets/brand/exosnap-app.ico").display()
+                ))
                 .arg(repo_root.join("packaging/msi/Package.wxs"))
                 .arg(&fragment),
             "wix build",
@@ -665,12 +807,25 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
         Some(msi)
     };
 
+    let setup = match (&installer, &args.vc_redist) {
+        (Some(msi), Some(vc_redist)) => Some(build_setup(
+            &crate::tools::require("wix")?,
+            &repo_root,
+            &out,
+            &base,
+            msi,
+            vc_redist,
+        )?),
+        _ => None,
+    };
+
     let file_count = walk_files(&staging)?.len();
     let result = PackageResult {
         version,
         base_version: base,
         portable,
         installer,
+        setup,
         staging,
         file_count,
         dependency_audit: BTreeMap::from([
@@ -778,6 +933,11 @@ mod tests {
         let errors = validate_tree(dir.path(), "0.10.0", &[]).unwrap();
         assert!(errors.iter().any(|e| e.contains("exosnap.exe")));
         assert!(errors.iter().any(|e| e.contains("qml/QtQuick/Effects")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("qml/QtQuick/Controls/Basic"))
+        );
         assert!(errors.iter().any(|e| e.contains("licenses/ffmpeg.txt")));
     }
 
@@ -792,7 +952,14 @@ mod tests {
         fs::write(dir.path().join("exosnap.pdb"), "x").unwrap();
         fs::write(dir.path().join("Qt6Cored.dll"), "x").unwrap();
         fs::write(dir.path().join("exosnap_widgets_legacy.exe"), "x").unwrap();
+        fs::write(dir.path().join("vc_redist.x64.exe"), "x").unwrap();
         fs::create_dir_all(dir.path().join("qml/QtTest")).unwrap();
+        fs::create_dir_all(dir.path().join("plugins/qmltooling")).unwrap();
+        fs::write(dir.path().join("plugins/qmltooling/qmldbg_tcp.dll"), "x").unwrap();
+        fs::create_dir_all(dir.path().join("qml/QtQuick/Controls/Fusion")).unwrap();
+        fs::create_dir_all(dir.path().join("qml/QtQuick/NativeStyle")).unwrap();
+        fs::create_dir_all(dir.path().join("bin")).unwrap();
+        fs::write(dir.path().join("bin/crashpad_handler.exe"), "x").unwrap();
         let errors = validate_tree(dir.path(), "0.10.0", &[r"C:\Users\".into()]).unwrap();
         for needle in [
             "leak",
@@ -800,6 +967,12 @@ mod tests {
             "debug Qt",
             "superseded",
             "qml/QtTest",
+            "plugins/qmltooling",
+            "qml/QtQuick/Controls/Fusion",
+            "qml/QtQuick/NativeStyle",
+            "forbidden directory in package: bin/",
+            "vc_redist",
+            "qmldbg_",
         ] {
             assert!(
                 errors.iter().any(|e| e.contains(needle)),

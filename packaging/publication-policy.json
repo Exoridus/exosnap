@@ -7,25 +7,25 @@
             "state": "PUBLISHED",
             "version": "0.10.0",
             "feed": "https://api.github.com/repos/Exoridus/exosnap/releases/latest",
-            "note": "The GitHub Release is the source every other channel downloads from."
+            "note": "The GitHub Release is the source every other channel downloads from. 0.10.1 becomes the published version at its own release cut."
         },
         "chocolatey": {
             "state": "PENDING",
-            "version": "0.10.0",
+            "version": "0.10.1",
             "feed": "https://community.chocolatey.org/api/v2/package/exosnap",
-            "note": "The thin package installs the official 0.10.0 MSI. Preparation, validation and the rehearsal run before the protected submission."
+            "note": "The thin package installs the official 0.10.1 MSI. Preparation, validation and the rehearsal run before the protected submission."
         },
         "winget": {
             "state": "PENDING",
-            "version": "0.10.0",
+            "version": "0.10.1",
             "feed": "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/c/Codexo/ExoSnap",
-            "note": "The manifests install the official 0.10.0 MSI with the Microsoft.VCRedist.2015+.x64 dependency."
+            "note": "The manifests install the official 0.10.1 MSI with the Microsoft.VCRedist.2015+.x64 dependency."
         },
         "scoop": {
             "state": "PENDING",
-            "version": "0.10.0",
+            "version": "0.10.1",
             "feed": "https://raw.githubusercontent.com/Exoridus/scoop-exosnap/master/bucket/exosnap.json",
-            "note": "The official bucket Exoridus/scoop-exosnap installs the portable ZIP and is updated by the protected distribution workflow."
+            "note": "The official bucket Exoridus/scoop-exosnap installs the pruned portable ZIP and is updated by the protected distribution workflow."
         }
     }
 }
