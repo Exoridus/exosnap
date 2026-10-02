@@ -63,6 +63,9 @@ TEST(UpdaterStagingFileList, IncludesPlatformPluginAndQmlImportTrees) {
     EXPECT_TRUE(list.contains(QStringLiteral("qml/QtQuick/Controls/Basic/")));
     EXPECT_TRUE(list.contains(QStringLiteral("qml/QtQuick/Controls/impl/")));
     EXPECT_TRUE(list.contains(QStringLiteral("qml/QtQuick/Shapes/")));
+    // Tooling metadata, not runtime payload: the official deploy tree carries no
+    // .qmltypes file, so requiring one would refuse a correctly staged handoff.
+    EXPECT_FALSE(list.contains(QStringLiteral("qml/QtQuick/Controls/plugins.qmltypes")));
     // No test runtime ever belongs in a staged product updater.
     for (const QString& entry : list)
         EXPECT_FALSE(entry.contains(QStringLiteral("Test"))) << entry.toStdString();
