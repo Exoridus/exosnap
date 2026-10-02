@@ -67,10 +67,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "diagnostics.present-unelevated",
-            revision: 1,
-            title: "Unelevated present diagnostics explain themselves and open nothing",
+            revision: 2,
+            title: "Unelevated present diagnostics report the trace's own truth",
             class: ScenarioClass::Contract,
-            contract: "with in-depth diagnostics opted in but no elevation, present diagnostics report requiresElevation and claim no data",
+            contract: "with in-depth diagnostics opted in but no elevation, present diagnostics report an unelevated process and either a named refusal (accessDenied or conflict) with no measurement fields or a real sample when this token holds the trace right",
             lane: Lane::CiCore,
             also: &[Lane::Quick],
             tier: Tier::Required,
@@ -413,14 +413,33 @@ fn present_unelevated(ctx: &mut Context) -> Step {
         "the opt-in did not take: {present}"
     );
     product_ensure!(
-        present["available"] == false,
-        "present data is claimed without elevation: {present}"
+        present["elevated"] == false,
+        "a standard token is reported as elevated: {present}"
     );
-    product_ensure!(
-        present["availability"] == "requiresElevation",
-        "availability is {} instead of requiresElevation",
-        present["availability"]
-    );
+    if present["available"] == true {
+        // This token held the trace right, so the sample is a measurement and
+        // must carry the fields one has. Nothing is refused here.
+        product_ensure!(
+            present["mode"].is_string(),
+            "an available present trace carries no measured mode: {present}"
+        );
+    } else {
+        // The trace was attempted and refused. The failure is named, and the
+        // sample fields stay absent rather than reading zero.
+        let availability = present["availability"].as_str().unwrap_or("");
+        product_ensure!(
+            matches!(availability, "accessDenied" | "conflict"),
+            "a refused present trace reports availability {availability}, expected accessDenied or conflict: {present}"
+        );
+        product_ensure!(
+            present["reason"].is_string(),
+            "a refused present trace names no reason: {present}"
+        );
+        product_ensure!(
+            present["mode"].is_null() && present["tearing"].is_null(),
+            "a refused present trace still carries measurement fields: {present}"
+        );
+    }
     Ok(())
 }
 
