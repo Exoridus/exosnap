@@ -71,6 +71,10 @@ struct PresentObservation {
     bool opt_in = false;
     bool elevated = false;
     bool available = false;
+    // The provider's own answer: the opt-in is the request, the OS decides the
+    // open, and fresh data decides "measuring". `opt_in` and `elevated` remain
+    // here as facts; neither alone implies this state.
+    diagnostics::PresentProviderState state = diagnostics::PresentProviderState::NotRequested;
     // A real sample, only when `available`.
     std::optional<diagnostics::PresentSample> sample;
 };

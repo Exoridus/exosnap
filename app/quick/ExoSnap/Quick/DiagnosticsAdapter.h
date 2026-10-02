@@ -6,6 +6,7 @@
 
 #include "diagnostics/DiagnosticsController.h"
 #include "diagnostics/DpcLatencyProvider.h"
+#include "diagnostics/PresentProvider.h"
 #include "services/SupportBundleService.h"
 
 #include <capability/capability_set.h>
@@ -102,6 +103,11 @@ class DiagnosticsAdapter : public QObject {
     Q_PROPERTY(bool inDepthEnabled READ inDepthEnabled WRITE setInDepthEnabledFromUi NOTIFY inDepthChanged FINAL)
     Q_PROPERTY(QString inDepthStateText READ inDepthStateText NOTIFY inDepthChanged FINAL)
     Q_PROPERTY(bool inDepthAvailable READ inDepthAvailable NOTIFY inDepthChanged FINAL)
+    // The honest four-source projection under the switch. Each row is
+    // {title, state, tone}; sources measure independently, so a refused optional
+    // trace never turns another source's availability into a failure.
+    Q_PROPERTY(QVariantList measurementSources READ measurementSources NOTIFY changed FINAL)
+    Q_PROPERTY(QString presentProviderState READ presentProviderState NOTIFY changed FINAL)
 
     Q_PROPERTY(bool bundleBusy READ bundleBusy NOTIFY bundleBusyChanged FINAL)
     Q_PROPERTY(QString defaultBundleFileName READ defaultBundleFileName NOTIFY lastCheckChanged FINAL)
@@ -143,6 +149,8 @@ class DiagnosticsAdapter : public QObject {
     void setInDepthEnabledFromUi(bool enabled);
     [[nodiscard]] QString inDepthStateText() const;
     [[nodiscard]] bool inDepthAvailable() const noexcept;
+    [[nodiscard]] QVariantList measurementSources() const;
+    [[nodiscard]] QString presentProviderState() const;
     [[nodiscard]] bool bundleBusy() const noexcept;
     [[nodiscard]] QString defaultBundleFileName() const;
 
@@ -179,6 +187,9 @@ class DiagnosticsAdapter : public QObject {
     // rate the display now supports.
     void refreshDisplayFacts();
     void setElevated(bool elevated);
+    // Pushed by the composition root from the real provider, so the page reports
+    // what the OS answered rather than inferring it from the process token.
+    void setPresentProviderState(diagnostics::PresentProviderState state);
     void setHasLastRecording(bool has_last_recording);
     // DPC/ISR latency. Borrowed, never owned, and PULLED on every evaluation
     // rather than pushed: the reading is only ever as current as the last read, so
@@ -218,6 +229,9 @@ class DiagnosticsAdapter : public QObject {
     void refreshForTest();
 
   signals:
+    // The broad "some projected value moved" signal behind the measurement
+    // sources and the provider state, which do not warrant a notify signal each.
+    void changed();
     void verdictChanged();
     void lastCheckChanged();
     void checkingChanged();
@@ -337,6 +351,7 @@ class DiagnosticsAdapter : public QObject {
     bool probe_in_flight_ = false;
     bool probed_ = false;
     bool in_depth_enabled_ = false;
+    diagnostics::PresentProviderState present_provider_state_ = diagnostics::PresentProviderState::NotRequested;
     bool recording_ = false;
     bool pipeline_live_ = false;
     bool bundle_busy_ = false;

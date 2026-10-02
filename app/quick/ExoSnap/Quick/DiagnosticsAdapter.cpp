@@ -337,13 +337,91 @@ void DiagnosticsAdapter::setInDepthEnabledFromUi(bool enabled) {
 
 QString DiagnosticsAdapter::inDepthStateText() const {
     if (in_depth_enabled_)
-        return controller_.elevated() ? tr("On · including optional presentation and kernel traces")
-                                      : tr("On · enhanced presentation telemetry unavailable");
+        return tr("On · core measurements active");
     return tr("Off · core recording health remains active");
 }
 
 bool DiagnosticsAdapter::inDepthAvailable() const noexcept {
     return true;
+}
+
+QString DiagnosticsAdapter::presentProviderState() const {
+    return QString::fromLatin1(diagnostics::PresentProviderStateKey(present_provider_state_));
+}
+
+QVariantList DiagnosticsAdapter::measurementSources() const {
+    const auto now = std::chrono::steady_clock::now();
+    const auto& probe = controller_.probeResult();
+    QVariantList rows;
+    const auto add = [&rows](const QString& title, const QString& state, const QString& tone) {
+        rows.push_back(QVariantMap{
+            {QStringLiteral("title"), title}, {QStringLiteral("state"), state}, {QStringLiteral("tone"), tone}});
+    };
+
+    // The recording pipeline's own measurements. They are engine-owned and never
+    // depend on any optional trace.
+    if (recording_)
+        add(tr("Recording pipeline"), tr("Measuring"), QStringLiteral("measuring"));
+    else
+        add(tr("Recording pipeline"), tr("Waiting for a recording"), QStringLiteral("idle"));
+
+    // GPU telemetry and video memory, field-wise: one usable source keeps the row
+    // partially available rather than collapsing to unavailable.
+    const bool gpu_fresh = probe.gpu.metadata.Fresh(now);
+    const bool memory_fresh = (probe.video_memory.local.has_value() || probe.video_memory.nonlocal.has_value()) &&
+                              probe.video_memory.metadata.Fresh(now);
+    if (gpu_fresh && memory_fresh)
+        add(tr("GPU / memory"), tr("Measuring"), QStringLiteral("measuring"));
+    else if (gpu_fresh || memory_fresh)
+        add(tr("GPU / memory"), tr("Partially available"), QStringLiteral("partial"));
+    else
+        add(tr("GPU / memory"), tr("Unavailable"), QStringLiteral("unavailable"));
+
+    // Presentation: the actual provider state, never an elevation prediction.
+    using diagnostics::PresentProviderState;
+    switch (present_provider_state_) {
+    case PresentProviderState::NotRequested:
+        add(tr("Presentation"), tr("Not requested"), QStringLiteral("idle"));
+        break;
+    case PresentProviderState::Starting:
+        add(tr("Presentation"), tr("Starting"), QStringLiteral("partial"));
+        break;
+    case PresentProviderState::OpenNoData:
+        add(tr("Presentation"), tr("Connected, waiting for data"), QStringLiteral("partial"));
+        break;
+    case PresentProviderState::Measuring:
+        add(tr("Presentation"), tr("Measuring"), QStringLiteral("measuring"));
+        break;
+    case PresentProviderState::AccessDenied:
+        add(tr("Presentation"), tr("Unavailable - access denied"), QStringLiteral("unavailable"));
+        break;
+    case PresentProviderState::SessionConflict:
+        add(tr("Presentation"), tr("Unavailable - session conflict"), QStringLiteral("unavailable"));
+        break;
+    case PresentProviderState::NotBuilt:
+    case PresentProviderState::NotSupported:
+        add(tr("Presentation"), tr("Unavailable - not supported"), QStringLiteral("unavailable"));
+        break;
+    case PresentProviderState::Stopped:
+        add(tr("Presentation"), tr("Stopped"), QStringLiteral("unavailable"));
+        break;
+    case PresentProviderState::Failed:
+        add(tr("Presentation"), tr("Unavailable - trace error"), QStringLiteral("unavailable"));
+        break;
+    }
+
+    // DPC/ISR is a separate kernel-trace boundary. A missing provider is not a
+    // failure of the recording and never turns into a zero reading.
+    if (!in_depth_enabled_)
+        add(tr("DPC / ISR"), tr("Not requested"), QStringLiteral("idle"));
+    else if (!elevated())
+        add(tr("DPC / ISR"), tr("Not running - elevated kernel trace required"), QStringLiteral("unavailable"));
+    else if (dpc_reading_.has_value() && dpc_reading_->available)
+        add(tr("DPC / ISR"), tr("Measuring"), QStringLiteral("measuring"));
+    else
+        add(tr("DPC / ISR"), tr("Unavailable - kernel trace not running"), QStringLiteral("unavailable"));
+
+    return rows;
 }
 
 const QVariantList& DiagnosticsAdapter::tiles() const noexcept {
@@ -677,6 +755,14 @@ void DiagnosticsAdapter::setElevated(bool elevated) {
     controller_.SetElevated(elevated);
     emit environmentChanged();
     emit inDepthChanged();
+    emit changed();
+}
+
+void DiagnosticsAdapter::setPresentProviderState(diagnostics::PresentProviderState state) {
+    if (present_provider_state_ == state)
+        return;
+    present_provider_state_ = state;
+    emit changed();
 }
 
 void DiagnosticsAdapter::setInDepthEnabled(bool enabled) {
@@ -685,6 +771,7 @@ void DiagnosticsAdapter::setInDepthEnabled(bool enabled) {
     in_depth_enabled_ = enabled;
     emit inDepthChanged();
     refreshLiveTiles();
+    emit changed();
 }
 
 void DiagnosticsAdapter::setHasLastRecording(bool has_last_recording) {

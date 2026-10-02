@@ -24,11 +24,13 @@ A preview trace line carries `owed`, `reissued`, publishes/wakeups/updates/rende
 
 `--visual-test <path>` seeds a scenario, captures it and exits using isolated configuration. It can also save individual overlay scene-graph images. Those images prove scene content, not actual desktop alpha/composition or capture exclusion.
 
+The standalone updater has its own deterministic render path, used by its tests and evidence: `exosnap-updater.exe --preview-state <idle|checking|available|ready|uptodate|cancelled|download|progress|verifying|success|amber|red|green|reboot|reinstall|long>` renders a canned state from the real controller, `--appearance dark|light` sets the shared theme singleton for that render, `--preview-smoke` exits after the first paint, and `--screenshot <path>` grabs the real Quick window and exits. These are argument-configured harness modes; they do not drive update transactions.
+
 | Option | Purpose |
 |---|---|
 | `--visual-test-size WxH` | Explicit logical window size |
 | `--visual-delay-ms N` | Bounded capture delay for construction |
-| `--visual-page N` | Destination in Record, Settings, Diagnostics, Logs, About order |
+| `--visual-page N` | Index 0-2 Record/Settings/Diagnostics, 3 the internal logs view (legacy alias normalized to Diagnostics + logs), 4 About |
 | `--visual-appearance dark\|light`, `--visual-accent <id>` | Explicit appearance/accent |
 | `--visual-shell-appearance dark\|light` | Shell-owned toast appearance, separate from app preference |
 | `--visual-expert` | Settings Expert rows |

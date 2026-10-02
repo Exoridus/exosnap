@@ -90,6 +90,7 @@ pub const SET_NAMES: &[&str] = &[
     "pages",
     "settings",
     "record",
+    "picker",
     "edit",
     "diagnostics",
     "logs",
@@ -115,7 +116,15 @@ const EDIT_SCENARIOS: &[&str] = &[
     "edit-long-filename",
 ];
 
-const DIAGNOSTICS_LIVE: &[&str] = &["healthy", "degraded", "paused", "after-stop"];
+const DIAGNOSTICS_LIVE: &[&str] = &[
+    "healthy",
+    "degraded",
+    "paused",
+    "after-stop",
+    "in-depth",
+    "opt-in-unelevated",
+    "present-no-data",
+];
 
 /// In-window surfaces raised over the page.
 const OVERLAY_STATES: &[&str] = &[
@@ -209,6 +218,26 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
             }));
             shots
         }
+        "picker" => [
+            ("single-display", Popup::SourcePicker),
+            ("displays-only", Popup::SourcePicker),
+            ("few-windows", Popup::SourcePicker),
+            ("few-windows", Popup::SourcePickerWindows),
+            ("many-windows", Popup::SourcePicker),
+            ("many-windows", Popup::SourcePickerWindows),
+            ("many-windows", Popup::SourcePickerSearch),
+            ("no-targets", Popup::SourcePicker),
+            ("no-targets", Popup::SourcePickerWindows),
+        ]
+        .into_iter()
+        .map(|(scenario, popup)| {
+            named(ShotSpec {
+                popup: Some(popup),
+                sources: Some(scenario.to_string()),
+                ..page(Page::Record)
+            })
+        })
+        .collect(),
         "edit" => EDIT_SCENARIOS
             .iter()
             .map(|scenario| {

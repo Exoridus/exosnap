@@ -884,12 +884,13 @@ void RecommendationEngine::checkAudioSourceDegraded(DiagnosticChecklist& checkli
 // ---------------------------------------------------------------------------
 std::vector<DiagnosticResult> RecommendationEngine::GenerateEnvironmentFacts() const {
     std::vector<DiagnosticResult> facts;
-    // Truthful, measured elevation baseline (queried by the caller via IElevationProvider —
-    // the same gate PresentMonProvider uses). Elevated unlocks the PresentMon ETW present
-    // diagnostics; Standard keeps the DXGI / NVAPI baseline (judder is still measured live).
+    // The process's own measured elevation, stated as a fact and nothing more. It
+    // is NOT a prediction about which optional traces can start: a standard token
+    // may hold the trace right and an elevated one can still be refused, which is
+    // why the provider's own state is reported separately.
     const std::string elevation_summary =
-        elevated_ ? "Elevated — PresentMon ETW present diagnostics available"
-                  : "Standard — core recording health available; presentation details are optional";
+        elevated_ ? "Elevated"
+                  : "Standard - core recording health available; optional traces depend on the token's rights";
     facts.push_back(MakeResult("fact.elevation", DiagnosticGroup::ConfigSnapshot, DiagnosticSeverity::Pass,
                                DiagnosticTier::Fact, "Elevation", elevation_summary));
     if (live_audio_format_available_) {

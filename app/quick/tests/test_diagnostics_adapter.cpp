@@ -546,12 +546,42 @@ TEST(DiagnosticsAdapterTest, TheInDepthSwitchAsksAndDoesNotDecide) {
 
     adapter.setInDepthEnabled(true);
     EXPECT_TRUE(adapter.inDepthEnabled());
-    // On in a standard process there is no ETW session, and the sub-text is the
-    // one place the spec says the gate is stated.
-    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On · enhanced presentation telemetry unavailable"));
+    // The sub-text states what the request means, never a privilege prediction:
+    // the provider's own state is what says whether an optional source measures.
+    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On · core measurements active"));
 
     adapter.setElevated(true);
-    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On · including optional presentation and kernel traces"));
+    EXPECT_EQ(adapter.inDepthStateText(), QStringLiteral("On · core measurements active"));
+}
+
+TEST(DiagnosticsAdapterTest, MeasurementSourcesSeparateTheOptionalProviders) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setInDepthEnabled(true);
+    adapter.setElevated(false);
+    adapter.setPresentProviderState(diagnostics::PresentProviderState::AccessDenied);
+
+    const QVariantList sources = adapter.measurementSources();
+    ASSERT_EQ(sources.size(), 4);
+    const auto stateOf = [&sources](const QString& title) {
+        for (const QVariant& row : sources) {
+            if (row.toMap().value(QStringLiteral("title")).toString() == title)
+                return row.toMap().value(QStringLiteral("state")).toString();
+        }
+        return QString();
+    };
+
+    EXPECT_EQ(adapter.presentProviderState(), QStringLiteral("accessDenied"));
+    EXPECT_TRUE(stateOf(QStringLiteral("Presentation")).contains(QStringLiteral("access denied")));
+    EXPECT_TRUE(stateOf(QStringLiteral("DPC / ISR")).contains(QStringLiteral("elevated kernel trace required")));
+    // The core sources remain their own states; a refused optional trace does
+    // not turn them into failures.
+    EXPECT_FALSE(stateOf(QStringLiteral("Recording pipeline")).isEmpty());
+    EXPECT_FALSE(stateOf(QStringLiteral("GPU / memory")).isEmpty());
+
+    // Present measuring is its own state and does not move the DPC boundary.
+    adapter.setPresentProviderState(diagnostics::PresentProviderState::Measuring);
+    EXPECT_EQ(adapter.presentProviderState(), QStringLiteral("measuring"));
 }
 
 // The switch is session state: off at every start, and the offer to restart
@@ -919,6 +949,42 @@ TEST(LogsAdapterTest, CopyAndExportGatesFollowTheCounts) {
     adapter.setSyntheticEntries({MakeLogEntry(1, diagnostics::LogSeverity::Info, "started")});
     EXPECT_TRUE(adapter.canCopy());
     EXPECT_TRUE(adapter.canExport());
+}
+
+// A "Show in log" reveal temporarily widens the severity filter so the
+// requested entry cannot be hidden, and the same state is what backs the
+// visible restore affordance.
+TEST(LogsAdapterTest, RevealWidensTheFilterAndRestoresIt) {
+    EnsureApplication();
+    LogsAdapter adapter;
+    adapter.setSyntheticEntries({MakeLogEntry(1, diagnostics::LogSeverity::Info, "started"),
+                                 MakeLogEntry(2, diagnostics::LogSeverity::Error, "failed")});
+    adapter.setSeverityFilter(2); // Issues
+    EXPECT_EQ(adapter.visibleCount(), 1);
+
+    adapter.revealEntry(QStringLiteral("Record"));
+    EXPECT_TRUE(adapter.revealActive());
+    EXPECT_FALSE(adapter.revealMissing());
+    EXPECT_EQ(adapter.severityFilter(), 0);
+    EXPECT_EQ(adapter.searchQuery(), QStringLiteral("Record"));
+    EXPECT_EQ(adapter.visibleCount(), 2);
+
+    adapter.clearReveal();
+    EXPECT_FALSE(adapter.revealActive());
+    EXPECT_EQ(adapter.severityFilter(), 2);
+    EXPECT_EQ(adapter.searchQuery(), QString());
+    EXPECT_EQ(adapter.visibleCount(), 1);
+}
+
+TEST(LogsAdapterTest, RevealReportsAnEntryThatIsNoLongerInTheBuffer) {
+    EnsureApplication();
+    LogsAdapter adapter;
+    adapter.setSyntheticEntries({MakeLogEntry(1, diagnostics::LogSeverity::Info, "started")});
+
+    adapter.revealEntry(QStringLiteral("no-such-entry"));
+    EXPECT_TRUE(adapter.revealActive());
+    EXPECT_TRUE(adapter.revealMissing());
+    EXPECT_EQ(adapter.visibleCount(), 0);
 }
 
 TEST(LogsAdapterTest, AutoScrollIsAPlainToggle) {

@@ -360,15 +360,36 @@ TEST(ShellNavigation, PageIndicesAreTheShippedNavigationOrder) {
     EXPECT_EQ(static_cast<int>(ShellAdapter::RecordPage), 0);
     EXPECT_EQ(static_cast<int>(ShellAdapter::SettingsPage), 1);
     EXPECT_EQ(static_cast<int>(ShellAdapter::DiagnosticsPage), 2);
+    // Kept as the legacy request spelling for the Logs view; the shell
+    // normalizes it to DiagnosticsPage + DiagnosticsLogs.
     EXPECT_EQ(static_cast<int>(ShellAdapter::LogsPage), 3);
     EXPECT_EQ(static_cast<int>(ShellAdapter::AboutPage), 4);
 }
 
+TEST(ShellNavigation, DiagnosticsSectionNamesTheInternalView) {
+    ShellAdapter adapter;
+    EXPECT_EQ(adapter.diagnosticsSection(), static_cast<int>(ShellAdapter::DiagnosticsOverview));
+
+    int changes = 0;
+    QObject::connect(&adapter, &ShellAdapter::diagnosticsSectionChanged, &adapter, [&changes]() { ++changes; });
+    adapter.setDiagnosticsSection(ShellAdapter::DiagnosticsLogs);
+    EXPECT_EQ(adapter.diagnosticsSection(), static_cast<int>(ShellAdapter::DiagnosticsLogs));
+    EXPECT_EQ(changes, 1);
+
+    // Idempotent write publishes nothing.
+    adapter.setDiagnosticsSection(ShellAdapter::DiagnosticsLogs);
+    EXPECT_EQ(changes, 1);
+
+    adapter.setDiagnosticsSection(ShellAdapter::DiagnosticsOverview);
+    EXPECT_EQ(adapter.diagnosticsSection(), static_cast<int>(ShellAdapter::DiagnosticsOverview));
+    EXPECT_EQ(changes, 2);
+}
+
 TEST(ShellNavigation, EveryDestinationIsDirectlyAddressable) {
-    // All five are peers in the band — there is no secondary tier and no page
-    // that has to be reached through a menu. A sixth destination added here
-    // must therefore be a deliberate decision about the band's width budget at
-    // the 860 px minimum window, not an accident of appending an enumerator.
+    // The visible band is four peers -- Record, Settings, Diagnostics, About.
+    // Logs is an internal Diagnostics view, and a sixth destination added here
+    // must be a deliberate decision about the band's width budget at the 860 px
+    // minimum window, not an accident of appending an enumerator.
     EXPECT_EQ(static_cast<int>(ShellAdapter::AboutPage) + 1, 5);
 }
 

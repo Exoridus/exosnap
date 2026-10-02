@@ -18,6 +18,8 @@
 #include <QQmlEngine>
 #include <QQuickStyle>
 #include <QStringList>
+#include <QVariantList>
+#include <QVariantMap>
 #include <QtQuickTest>
 
 #include <cstdint>
@@ -52,6 +54,23 @@ class RecordPickerTestDriver final : public QObject {
         }
         source_.selected_target_index = 0;
         source_.capture_mode = exosnap::CaptureMode::Monitor;
+        ++source_.targets_revision;
+        adapter_.setSource(&source_);
+    }
+
+    // A rescan that keeps the native handles of the windows the caller names,
+    // so a test can prove the pending selection follows its identity through an
+    // insert or a reorder instead of the index it happened to have.
+    Q_INVOKABLE void seedWindowTargets(const QVariantList& windows) {
+        source_.targets.clear();
+        for (const QVariant& value : windows) {
+            const QVariantMap row = value.toMap();
+            source_.targets.push_back({exosnap::engine::CaptureTarget::Kind::Window,
+                                       row.value(QStringLiteral("id")).toULongLong(),
+                                       row.value(QStringLiteral("label")).toString().toStdString()});
+        }
+        if (source_.selected_target_index >= static_cast<int>(source_.targets.size()))
+            source_.selected_target_index = source_.targets.empty() ? -1 : 0;
         ++source_.targets_revision;
         adapter_.setSource(&source_);
     }

@@ -5,13 +5,13 @@ import QtTest
 
 import ExoSnap.Quick.RecordPickerTestControls
 
-// The source picker's behavioural contract: three tabs, a Windows tab that
-// reports its count and scrolls visibly when it overflows,
-// full-card selection confirmed by Enter or a double click, a fixed footer with
-// Cancel and the named confirm action, and cards that reflow from two columns
-// to one at the narrow layout. The Region
-// tab lists Draw custom first, then the aspect presets, and confirms into
-// region mode through the adapter's preset boundary.
+// The source picker's behavioural contract: three tabs, a Windows tab with
+// search, count and scroll, full-card selection confirmed by Enter or a double
+// click, a fixed footer with Cancel and the named confirm action, cards that
+// reflow across the 1-4 column breakpoints, and a pending selection carried by
+// source identity rather than the list index. The Region tab lists Draw custom
+// first, then the aspect presets, and confirms into region mode through the
+// adapter's preset boundary.
 TestCase {
     id: testCase
 
@@ -151,15 +151,15 @@ TestCase {
         compare(page.picker.currentTab, 2);
     }
 
-    function test_windows_tab_reports_count_without_search() {
+    function test_windows_tab_reports_count_and_search() {
         let page = makePage();
         recordDriver.seedTargets(1, ["Claude Design - Brave", "Task Manager", "Steam Library", "Notepad", "Terminal"]);
         showTab(page, 1);
         const count = pick(page, "windowsCount");
         compare(count.text, "5 windows");
         const card = pick(page, "targetCard-window:100");
-        compare(card.primaryLabel, "Brave");
-        compare(card.secondaryLabel, "Claude Design");
+        compare(card.primaryLabel, "Claude Design");
+        compare(card.secondaryLabel, "Brave");
         const thumbnail = findVisual(card, "targetThumbnail");
         verify(thumbnail.width <= card.width);
         compare(Math.round(thumbnail.width * 9 / 16), Math.round(thumbnail.height));
@@ -168,8 +168,32 @@ TestCase {
         compare(grid.count, 5);
         compare(grid.height % grid.cellHeight, 0);
 
-        verify(!findVisual(page.picker.contentItem, "windowSearch"));
+        verify(findVisual(page.picker.contentItem, "windowSearch"));
         compare(page.picker.windowRows.length, 5);
+    }
+
+    // The search narrows the grid and the count, but the dialog's own height is
+    // reserved from the unfiltered list: typing must not make the picker jump.
+    function test_window_search_filters_by_title_and_app() {
+        let page = makePage();
+        recordDriver.seedTargets(1, ["Claude Design - Brave", "Task Manager", "Steam Library"]);
+        showTab(page, 1);
+        const grid = pick(page, "windowsGrid");
+        const heightBefore = page.picker.height;
+
+        page.picker.windowQuery = "task";
+        tryCompare(grid, "count", 1);
+        compare(pick(page, "targetCard-window:101").primaryLabel, "Task Manager");
+        compare(pick(page, "windowsCount").text, "1 window");
+        compare(page.picker.height, heightBefore);
+
+        page.picker.windowQuery = "brave";
+        tryCompare(grid, "count", 1);
+        compare(pick(page, "targetCard-window:100").secondaryLabel, "Brave");
+
+        page.picker.windowQuery = "no such window";
+        tryCompare(grid, "count", 0);
+        compare(pick(page, "windowsEmptyState").text, "No windows match your search.");
     }
 
     function test_window_list_shows_a_scrollbar_only_when_it_overflows() {
@@ -245,6 +269,73 @@ TestCase {
         compare(presetSpy.count, 0);
     }
 
+    // The pending choice follows the source's identity, not the list index.
+    // A rescan that inserts a window before it must leave the same card
+    // selected and commit to the source that was clicked.
+    function test_pending_selection_survives_a_list_insert() {
+        let page = makePage();
+        recordDriver.seedTargets(1, ["Claude Design - Brave", "Task Manager"]);
+        showTab(page, 1);
+        mouseClick(pick(page, "targetCard-window:101"));
+        waitForRendering(page);
+        verify(pick(page, "targetCard-window:101").pending);
+
+        recordDriver.seedWindowTargets([
+            { id: 99, label: "New Window - Fresh" },
+            { id: 100, label: "Claude Design - Brave" },
+            { id: 101, label: "Task Manager" }
+        ]);
+        waitForRendering(page);
+        tryVerify(() => pick(page, "targetCard-window:101") !== null);
+        verify(pick(page, "targetCard-window:101").pending, "the identical source stays selected");
+        verify(pick(page, "confirmButton").enabled);
+
+        mouseClick(pick(page, "confirmButton"));
+        tryCompare(selectSpy, "count", 1);
+        compare(selectSpy.signalArguments[0][0], 2, "commits the re-resolved index");
+        compare(selectSpy.signalArguments[0][1], 1);
+    }
+
+    // A source that disappears leaves no replacement selection: the confirm
+    // action locks and the footer says why.
+    function test_pending_selection_that_disappears_blocks_commit() {
+        let page = makePage();
+        recordDriver.seedTargets(1, ["Claude Design - Brave", "Task Manager"]);
+        showTab(page, 1);
+        mouseClick(pick(page, "targetCard-window:100"));
+        waitForRendering(page);
+        verify(pick(page, "confirmButton").enabled);
+
+        recordDriver.seedWindowTargets([{ id: 101, label: "Task Manager" }]);
+        waitForRendering(page);
+        verify(!pick(page, "confirmButton").enabled, "a vanished source cannot be confirmed");
+        compare(pick(page, "windowsCount").text, "Selected source is no longer available.");
+
+        mouseClick(pick(page, "confirmButton"));
+        waitForRendering(page);
+        compare(selectSpy.count, 0);
+    }
+
+    // The confirm action belongs to the tab in front of the user: a display
+    // picked earlier is not committed from the Windows tab.
+    function test_tab_switch_does_not_commit_the_other_tabs_pending_selection() {
+        let page = makePage();
+        // init() seeded two displays and selected display 1.
+        showTab(page, 1);
+        verify(!pick(page, "confirmButton").enabled);
+        mouseClick(pick(page, "confirmButton"));
+        waitForRendering(page);
+        compare(selectSpy.count, 0);
+
+        mouseClick(pick(page, "targetCard-window:100"));
+        waitForRendering(page);
+        verify(pick(page, "confirmButton").enabled);
+        mouseClick(pick(page, "confirmButton"));
+        tryCompare(selectSpy, "count", 1);
+        compare(selectSpy.signalArguments[0][0], 2);
+        compare(selectSpy.signalArguments[0][1], 1);
+    }
+
     function test_open_publishes_the_visible_targets_in_layout_order() {
         let page = makePage();
         // The Displays tab is the one on screen, so only its two cards are
@@ -281,16 +372,40 @@ TestCase {
         compare(pick(page, "displaysGrid").cellHeight, box);
     }
 
-    function test_cards_reflow_from_two_columns_to_one() {
+    function test_columns_follow_the_one_to_four_column_breakpoints() {
         let page = makePage();
         recordDriver.seedTargets(2, ["Claude Design - Brave"]);
         const grid = pick(page, "displaysGrid");
+        // 860x700 host: the dialog is 720 wide, 672 of content, so two columns.
         compare(page.picker.pickerColumns, 2);
-        verify(grid.cellWidth < grid.width / 2 + 1, "two columns split the grid width");
+        compare(page.picker.displayColumns, 2, "two displays use two columns");
+        compare(grid.cellWidth, page.picker.displaysCardWidth + 16);
+        compare(grid.width, 2 * page.picker.displaysCardWidth + 32);
+        verify(page.picker.displaysCardWidth <= 420);
 
-        compare(page.picker.columnsForWidth(520), 2);
-        compare(page.picker.columnsForWidth(519), 1);
-        compare(page.picker.columnsForWidth(400), 1);
+        compare(page.picker.columnsForWidth(300), 1);
+        compare(page.picker.columnsForWidth(655), 1);
+        compare(page.picker.columnsForWidth(656), 2);
+        compare(page.picker.columnsForWidth(991), 2);
+        compare(page.picker.columnsForWidth(992), 3);
+        compare(page.picker.columnsForWidth(1327), 3);
+        compare(page.picker.columnsForWidth(1328), 4);
+        compare(page.picker.columnsForWidth(4000), 4);
+    }
+
+    // A single display must not stretch to the whole dialog: the card caps at
+    // 420 and the grid centres inside the content area.
+    function test_few_displays_keep_cards_compact_and_centred() {
+        let page = makePage();
+        recordDriver.seedTargets(1, []);
+        waitForRendering(page);
+        const grid = pick(page, "displaysGrid");
+        compare(page.picker.displayColumns, 1);
+        compare(page.picker.displaysCardWidth, 420);
+        verify(grid.width < page.picker.gridContentWidth);
+        compare(grid.x + page.picker.displaysCardWidth / 2, Math.round(grid.parent.width / 2));
+        const card = pick(page, "targetCard-display:1");
+        compare(card.primaryLabel, "Display 1");
     }
 
     function test_region_tab_lists_draw_custom_first_then_the_aspect_presets() {

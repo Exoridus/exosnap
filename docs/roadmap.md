@@ -23,6 +23,26 @@ Maintain repeatable privacy review and symbol delivery for official crash report
 | Capture-format rollover | Consider ending one segment and rebuilding capture/color/encoder state when HDR or source dimensions change. Existing mux-only split does not rebuild those resources. Current behavior remains an explicit stop. |
 | Replay and richer editing | Replay buffering and richer edit operations are capability gaps, not controls that should be advertised as working. Lossless keyframe trim remains the current editing boundary. |
 
+## Deferred to v0.11 and later
+
+These are explicitly postponed, not silently implied by any current surface. v0.10 keeps the existing behavior.
+
+### Update lifecycle and distribution (v0.11+)
+
+Evaluate whether updater distribution, temporary runtime staging and installation ownership can be simplified without changing the verified release trust chain. Preserve distinct portable, Windows Installer and package-manager responsibilities. Validate renamed/removed runtime files, locked files, interrupted updates and restoration. A separately downloadable bootstrapper is an option to evaluate, not a shipped feature. The current staged updater and install-mode-specific apply logic remain unchanged in v0.10.
+
+### Region workflow (v0.11+)
+
+Evaluate draw-on-start, explicit reuse of the previous region and optional saved areas against the current reusable-region workflow. Define hotkey, countdown, cancel/restore and source-preview behavior before changing the default. Preserve physical-coordinate, display-identity, DPI and capture-exclusion correctness. v0.10 keeps the existing region selection and recording-start semantics.
+
+### Optional presentation tracing integration (post-v0.10)
+
+Evaluate a PresentMon Service client or another narrowly scoped collector only if it provides sufficient attribution value. Keep the main UI unelevated. Define installation consent, privilege boundaries, service/API compatibility, update ownership, unavailable behavior and bounded resource use before shipping a dependency. Core recording diagnostics must remain useful without that component. A service moves privileged work to another process; it does not make system rights unnecessary.
+
+### Overlay presentation policy (post-v0.10)
+
+Measure the effects of overlay visibility and repaint cadence separately across relevant Windows, driver, display and game configurations. Evaluate low-distraction/default policies from recording and gameplay impact, not from overlay frame rate alone. Do not promise VRR, Independent Flip or DWM neutrality solely because an overlay is capture-excluded or redraws infrequently. The overlays already render with Qt Quick; their migration is not pending work.
+
 ## Hardware reach and media capability
 
 AMD AMF and Intel oneVPL/QSV are future hardware backends. Each requires native surface integration, capability and diagnostic mappings, failure behavior, and a real hardware matrix. Generalize backend/codec boundaries where needed rather than copying per-codec assumptions into each vendor implementation.

@@ -43,6 +43,10 @@ Item {
     // opt-in during the migration, when About was the only migrated page; leaving
     // it that way shipped an application that opens on its own version numbers.
     property int currentPage: ShellAdapter.RecordPage
+    // Which Diagnostics view is on screen. Additive state, not a page of its
+    // own: Logs moved inside Diagnostics, and a request for the old LogsPage
+    // value normalizes to DiagnosticsPage plus this section.
+    property int diagnosticsSection: ShellAdapter.DiagnosticsOverview
     // Edit/Output/Save is an overlay over the Record page, never a
     // nav destination — so its visibility is shell state, not a stack index.
     property bool editOverlayOpen: false
@@ -53,11 +57,25 @@ Item {
     // visible is where that session is shown.
     readonly property bool editOverlayVisible: root.editOverlayOpen && root.currentPage === ShellAdapter.RecordPage
 
-    // Page index -> stack index. One index space, and it IS ShellAdapter::Page:
-    // the StackLayout's child order below is the enum's order, so no separate
-    // mapping exists to drift. QCR-716 replaced the bare 0..4 literals that used
-    // to spell it out here with the enumerators themselves.
-    //
+    // Page -> stack index. The StackLayout holds the four VISIBLE destinations
+    // in their band order; the enum keeps its historical values so the legacy
+    // LogsPage request still normalizes, which is why this mapping cannot be
+    // the identity function any more. One function, so the tab selection, the
+    // stack cursor and the loader readiness checks cannot drift apart.
+    function stackIndexForPage(page: int): int {
+        switch (page) {
+        case ShellAdapter.SettingsPage:
+            return 1;
+        case ShellAdapter.DiagnosticsPage:
+        case ShellAdapter.LogsPage:
+            return 2;
+        case ShellAdapter.AboutPage:
+            return 3;
+        default:
+            return 0;
+        }
+    }
+
     // Deliberately NOT root.currentPage. The four loaders below are
     // asynchronous, so a page just requested may still be incubating; showing
     // its empty Loader immediately would blank the window for however long
@@ -69,7 +87,7 @@ Item {
     // updates the instant the request is made; only the visible stack content
     // is deferred.
     property int displayedPage: ShellAdapter.RecordPage
-    readonly property int stackIndex: root.displayedPage
+    readonly property int stackIndex: root.stackIndexForPage(root.displayedPage)
 
     // Advances `displayedPage` to `currentPage` once its content exists.
     // Called after every navigation and again whenever a loader's status
@@ -81,7 +99,7 @@ Item {
     }
 
     // Loads the destination being navigated to. Written as a switch over the same
-    // index space rather than as a generated list: the five destinations are a
+    // index space rather than as a generated list: the destinations are a
     // product decision, not a collection.
     //
     // Called from onCurrentPageChanged AND from Component.onCompleted, because a
@@ -92,16 +110,16 @@ Item {
     // setSource(url, properties) rather than an inline sourceComponent: an inline
     // component is part of THIS document, so the engine resolves and compiles the
     // page's type before the first frame even though nothing instantiates it. A
-    // URL is a string until it is loaded, so the four page documents leave the
-    // startup compile entirely — DiagnosticsPage 34,7 ms, LogsPage 17,9 ms,
-    // SettingsPage 8,8 ms, AboutPage 0,5 ms of it (QCR-615). The trade is
-    // deliberate: the first deliberate visit to a page pays that page's compile.
+    // URL is a string until it is loaded, so the page documents leave the
+    // startup compile entirely (QCR-615). The trade is deliberate: the first
+    // deliberate visit to a page pays that page's compile.
     //
     // The properties below are the pages' required adapters. Every one of them is
     // a required property of this shell, handed in once by Main and never
     // reassigned, so an initial value is the whole contract — there is no binding
     // to lose. Signals are the exception: setSource carries values, not handlers,
-    // so DiagnosticsPage's two navigation signals are connected separately below.
+    // so DiagnosticsWorkspace's two navigation signals are connected separately
+    // below.
     //
     // Idempotent by status: a second navigation to the same page finds it loaded
     // and does nothing, which is the resident-page contract QCR-602 established.
@@ -115,15 +133,11 @@ Item {
             break;
         case ShellAdapter.DiagnosticsPage:
             if (diagnosticsLoader.status === Loader.Null)
-                diagnosticsLoader.setSource(Qt.resolvedUrl("DiagnosticsPage.qml"), {
+                diagnosticsLoader.setSource(Qt.resolvedUrl("DiagnosticsWorkspace.qml"), {
                     diagnostics: root.diagnosticsAdapter,
-                    device: root.deviceAdapter
-                });
-            break;
-        case ShellAdapter.LogsPage:
-            if (logsLoader.status === Loader.Null)
-                logsLoader.setSource(Qt.resolvedUrl("LogsPage.qml"), {
-                    logs: root.logsAdapter
+                    device: root.deviceAdapter,
+                    logs: root.logsAdapter,
+                    shell: root.shell
                 });
             break;
         case ShellAdapter.AboutPage:
@@ -138,14 +152,24 @@ Item {
     }
 
     onCurrentPageChanged: {
+        // Direct assignments (the --visual-page harness, the relaunch landing
+        // page, tests) may still carry the legacy LogsPage value. Normalizing it
+        // HERE means every route that moves the visible destination agrees on
+        // the four-destination model, not just the ones that go through
+        // navigateTo().
+        if (root.currentPage === ShellAdapter.LogsPage) {
+            root.diagnosticsSection = ShellAdapter.DiagnosticsLogs;
+            root.currentPage = ShellAdapter.DiagnosticsPage;
+            return;
+        }
         root.loadDestination(root.currentPage);
         root.refreshDisplayedPage();
     }
 
     // Whether `page`'s content exists and has finished loading. Record is
-    // never loader-built, so it is always ready; the other four ask their own
-    // Loader, which loadDestination() above may not have reached yet, or may
-    // still be incubating asynchronously.
+    // never loader-built, so it is always ready. LogsPage keeps its own
+    // readiness answer: it means "the internal logs view exists", which is what
+    // the automation edge has to wait for after a legacy logs navigation.
     //
     // Two independent callers read this through the SAME predicate rather than
     // each re-deriving it: the --visual-test capture (main.cpp) waits for
@@ -156,9 +180,9 @@ Item {
         case ShellAdapter.SettingsPage:
             return settingsLoader.status === Loader.Ready;
         case ShellAdapter.DiagnosticsPage:
-            return diagnosticsLoader.status === Loader.Ready;
+            return diagnosticsLoader.status === Loader.Ready && diagnosticsLoader.item.overviewReady;
         case ShellAdapter.LogsPage:
-            return logsLoader.status === Loader.Ready;
+            return diagnosticsLoader.status === Loader.Ready && diagnosticsLoader.item.logsViewReady;
         case ShellAdapter.AboutPage:
             return aboutLoader.status === Loader.Ready;
         default:
@@ -169,8 +193,14 @@ Item {
     // The CURRENT destination's readiness, bound rather than computed once: a
     // switch's dependencies are only the branch actually taken, so this
     // re-resolves correctly both when currentPage changes and when the loader
-    // it now reads reaches Ready.
-    readonly property bool activeDestinationReady: root.destinationReady(root.currentPage)
+    // it now reads reaches Ready. The logs view is a subview of Diagnostics, so
+    // its own readiness is what a capture of that surface has to wait for.
+    readonly property bool activeDestinationReady: {
+        if (root.currentPage === ShellAdapter.DiagnosticsPage
+                && root.diagnosticsSection === ShellAdapter.DiagnosticsLogs)
+            return root.destinationReady(ShellAdapter.LogsPage);
+        return root.destinationReady(root.currentPage);
+    }
 
     // Where the shell arrived, published back to C++. Two consumers need it and
     // neither can ask QML: the control channel answers `ui.getState.page` from
@@ -185,6 +215,12 @@ Item {
         target: root.shell
         property: "currentPage"
         value: root.currentPage
+    }
+
+    Binding {
+        target: root.shell
+        property: "diagnosticsSection"
+        value: root.diagnosticsSection
     }
 
     Binding {
@@ -212,6 +248,20 @@ Item {
             return;
         if (root.editOverlayVisible && page !== ShellAdapter.RecordPage)
             root.editSession.close();
+        // The legacy LogsPage request is the Logs view inside Diagnostics, not a
+        // destination of its own. Ctrl+4, DiagnosticsAdapter::openLogs(), the
+        // recording-error "View log" action and the control channel's
+        // `ui.navigate logs` all land here and all take the same route.
+        if (page === ShellAdapter.LogsPage) {
+            root.diagnosticsSection = ShellAdapter.DiagnosticsLogs;
+            root.currentPage = ShellAdapter.DiagnosticsPage;
+            return;
+        }
+        // Ctrl+3 and the Diagnostics tab mean the overview, the everyday
+        // first content. The logs view is reached from the Reference row, from
+        // Ctrl+4 or from a "Show in log" action.
+        if (page === ShellAdapter.DiagnosticsPage)
+            root.diagnosticsSection = ShellAdapter.DiagnosticsOverview;
         root.currentPage = page;
     }
 
@@ -238,11 +288,22 @@ Item {
                                               && !root.crashReport.active && !root.whatsNew.active
                                               && !root.shell.closeGuardActive
 
-    // Every destination, directly. Five words fit the band at the 860 px minimum
-    // window, so hiding three of them behind a glyph bought nothing and cost a
-    // click plus a menu on the way to Diagnostics — the page a user goes to
-    // precisely when something is already wrong.
-    readonly property var navPages: [qsTr("Record"), qsTr("Settings"), qsTr("Diagnostics"), qsTr("Logs"), qsTr("About")]
+    // Every visible destination, directly. Four words fit the band at the 860 px
+    // minimum window, so hiding any of them behind a glyph bought nothing and
+    // cost a click plus a menu on the way to Diagnostics — the page a user goes
+    // to precisely when something is already wrong. Logs lives inside
+    // Diagnostics; About keeps its own top-level destination.
+    readonly property var navPages: [qsTr("Record"), qsTr("Settings"), qsTr("Diagnostics"), qsTr("About")]
+
+    // Tab index -> ShellAdapter::Page. Separate from the labels because the
+    // enum keeps its historical values for the legacy logs spelling, so tab 3
+    // is AboutPage (4), not the legacy LogsPage (3).
+    readonly property var navPageValues: [ShellAdapter.RecordPage, ShellAdapter.SettingsPage,
+                                          ShellAdapter.DiagnosticsPage, ShellAdapter.AboutPage]
+
+    function pageForTab(index: int): int {
+        return root.navPageValues[index] !== undefined ? root.navPageValues[index] : ShellAdapter.RecordPage;
+    }
 
     // Below the regular width class the band gives up tab padding rather than
     // label text or font size: a truncated destination is unreadable and a
@@ -470,7 +531,7 @@ Item {
                         required property string modelData
 
                         text: modelData
-                        selected: root.currentPage === index
+                        selected: root.currentPage === root.pageForTab(index)
                         compact: root.compactNav
                         // An open Edit workspace is deliberately absent from this
                         // (QCR-001): it is state of the Record destination, so
@@ -513,7 +574,7 @@ Item {
                         Layout.fillWidth: true
                         Layout.maximumWidth: implicitWidth
                         Layout.minimumWidth: 0
-                        onClicked: root.navigateTo(index)
+                        onClicked: root.navigateTo(root.pageForTab(index))
                         onWidthChanged: Qt.callLater(titleBar.refreshChromeGeometry)
                     }
                 }
@@ -625,13 +686,15 @@ Item {
             }
         }
 
-        // ── The five destinations ────────────────────────────────────────────
+        // ── The four visible destinations ────────────────────────────────────
         //
-        // Record is eager; the other four are compiled and built on their first
-        // visit and then stay resident.
+        // Record is eager; the other three are compiled and built on their first
+        // visit and then stay resident. The Diagnostics slot hosts the
+        // overview/logs workspace, whose logs half is itself loaded on first
+        // request.
         //
-        // Before this, all five were direct children of the StackLayout, so a
-        // launch that never left Record still compiled and instantiated
+        // Before this, all destinations were direct children of the StackLayout,
+        // so a launch that never left Record still compiled and instantiated
         // Settings, Diagnostics, Logs and About: 8 700 `Creating` events and all
         // 134 `Compiling` events happened before the first frame, among them 154
         // ExoSettingRow and the 64 ComboBox popups of a page the user had not
@@ -640,12 +703,7 @@ Item {
         // Resident after the first visit rather than unloaded on leave: page
         // state that is not in an adapter (scroll position, an open disclosure,
         // a Settings draft) is the user's place in the page, and a stack whose
-        // pages forget where you were is worse than a slower first visit. Memory
-        // is not the constraint here — the eager version held all five for the
-        // whole session and nobody measured a problem.
-        //
-        // The five direct tabs are untouched: this changes WHEN a destination's
-        // content is built, never how many destinations there are.
+        // pages forget where you were is worse than a slower first visit.
         StackLayout {
             currentIndex: root.stackIndex
             Layout.fillWidth: true
@@ -669,7 +727,7 @@ Item {
                 Layout.fillHeight: true
             }
 
-            // The four loaders carry no source of their own: loadDestination()
+            // The three loaders carry no source of their own: loadDestination()
             // sets it, with the page's required adapters as initial properties.
             // They stay active so that the assignment loads immediately — an
             // inactive Loader would defer the load to whenever it is activated,
@@ -700,15 +758,6 @@ Item {
             }
 
             Loader {
-                id: logsLoader
-
-                asynchronous: true
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                onStatusChanged: root.refreshDisplayedPage()
-            }
-
-            Loader {
                 id: aboutLoader
 
                 asynchronous: true
@@ -719,11 +768,11 @@ Item {
         }
     }
 
-    // Diagnostics' two navigation signals. They used to be inline handlers on the
-    // loader's sourceComponent; setSource() carries property values and not signal
-    // handlers, so they are connected here instead. The target is null until the
-    // page is loaded, which is exactly when there is nothing to connect to — the
-    // binding re-targets on load.
+    // The Diagnostics workspace's two navigation signals, forwarded from the
+    // overview page through the workspace. setSource() carries property values
+    // and not signal handlers, so they are connected here instead. The target is
+    // null until the workspace is loaded, which is exactly when there is nothing
+    // to connect to — the binding re-targets on load.
     //
     // ignoreUnknownSignals because the loaded item's type is deliberately not
     // known to this document any more: knowing it is what pulled DiagnosticsPage
@@ -738,6 +787,25 @@ Item {
 
         function onNavigateToSettingsRequested(): void {
             root.navigateTo(ShellAdapter.SettingsPage);
+        }
+
+        // The log view's own way back. Written straight to the section rather
+        // than through navigateTo(): the destination does not change, so there
+        // is no navigation for the guard to refuse.
+        function onBackToOverviewRequested(): void {
+            root.diagnosticsSection = ShellAdapter.DiagnosticsOverview;
+        }
+
+        // The workspace's OUTER loader is ready before its inner view is, and the
+        // stack must not stop at the workspace and show the previous destination
+        // until some unrelated loader happens to move. The inner readiness is part
+        // of the destination's readiness, so it advances the displayed page too.
+        function onOverviewReadyChanged(): void {
+            root.refreshDisplayedPage();
+        }
+
+        function onLogsViewReadyChanged(): void {
+            root.refreshDisplayedPage();
         }
     }
 

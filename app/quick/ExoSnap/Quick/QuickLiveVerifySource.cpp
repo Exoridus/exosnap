@@ -108,7 +108,10 @@ QString PageName(ShellAdapter::Page page) {
     case ShellAdapter::DiagnosticsPage:
         return QString::fromLatin1(live_verify::page_name::kDiagnostics);
     case ShellAdapter::LogsPage:
-        return QString::fromLatin1(live_verify::page_name::kLogs);
+        // Never published: the shell normalizes the legacy request to
+        // DiagnosticsPage. Mapped to diagnostics here so a future caller that
+        // reads currentPage mid-normalization still gets the canonical name.
+        return QString::fromLatin1(live_verify::page_name::kDiagnostics);
     case ShellAdapter::AboutPage:
         return QString::fromLatin1(live_verify::page_name::kAbout);
     }
@@ -313,6 +316,9 @@ live_verify::AutomationState QuickLiveVerifySource::State() const {
 
     if (const auto* shell = application_.shellAdapter()) {
         state.page = PageName(static_cast<ShellAdapter::Page>(shell->currentPage()));
+        state.diagnostics_section = shell->diagnosticsSection() == ShellAdapter::DiagnosticsLogs
+                                        ? QString::fromLatin1(live_verify::diagnostics_section_name::kLogs)
+                                        : QString::fromLatin1(live_verify::diagnostics_section_name::kOverview);
         state.edit_visible = shell->editSurfaceVisible();
         state.source_picker_open = shell->sourcePickerOpen();
     }
@@ -698,10 +704,13 @@ QJsonObject QuickLiveVerifySource::DiagnosticsSnapshot() const {
     json.insert(QStringLiteral("blockerCount"), diagnostics->blockerCount());
     json.insert(QStringLiteral("noticeCount"), diagnostics->noticeCount());
     json.insert(QStringLiteral("elevated"), diagnostics->elevated());
-    // The session-scoped in-depth switch. Reported next to `elevated` because the
-    // two together are the whole gate, and a runner that turned the switch on in a
-    // standard process needs to see both halves to explain an absent trace.
+    // The session-scoped in-depth switch and what the optional trace actually
+    // answered. `elevated` is a fact about the process, NOT half of a gate: a
+    // standard token with trace rights measures, and an elevated one can still
+    // be refused.
     json.insert(QStringLiteral("inDepth"), diagnostics->inDepthEnabled());
+    json.insert(QStringLiteral("presentState"), diagnostics->presentProviderState());
+    json.insert(QStringLiteral("measurementSources"), QJsonValue::fromVariant(diagnostics->measurementSources()));
     return json;
 }
 
@@ -839,10 +848,12 @@ QJsonObject QuickLiveVerifySource::EnvironmentSnapshot() const {
     inputs.present.opt_in = application_.inDepthDiagnosticsEnabled();
     inputs.present.elevated = inputs.elevated;
     if (diagnostics::PresentMonProvider* provider = application_.presentProvider(); provider != nullptr) {
+        inputs.present.state = provider->state();
         inputs.present.available = provider->IsAvailable();
         if (inputs.present.available)
             inputs.present.sample = provider->Sample();
     } else {
+        inputs.present.state = diagnostics::PresentProviderState::NotBuilt;
         inputs.present.available = false;
     }
 
@@ -1557,6 +1568,16 @@ bool QuickLiveVerifySource::Navigate(const QString& page, QString* error) {
     // returns. ui.navigate answers settled:true, and the commands that follow it
     // address the page's own object, so the wait for that content happens here.
     emit shell->navigateToPageRequested(*destination);
+    // A legacy "logs" request normalizes to Diagnostics + the logs section, so
+    // the page that actually became current is Diagnostics. Waiting on the
+    // LogsPage readiness predicate is what makes ui.navigate answer settled for
+    // the internal view too.
+    if (*destination == ShellAdapter::LogsPage) {
+        if (shell->currentPage() != ShellAdapter::DiagnosticsPage ||
+            shell->diagnosticsSection() != ShellAdapter::DiagnosticsLogs)
+            return true; // Refused by the navigation guard; the caller reports the page it stayed on.
+        return waitForDestinationReady(ShellAdapter::LogsPage, page, error);
+    }
     if (shell->currentPage() != *destination)
         return true; // Refused by the navigation guard; the caller reports the page it stayed on.
     return waitForDestinationReady(*destination, page, error);

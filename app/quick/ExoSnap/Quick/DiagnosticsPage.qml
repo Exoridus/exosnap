@@ -223,6 +223,63 @@ Item {
             }
         }
 
+        // The four measurement sources, each with its own availability. Shown
+        // while the in-depth request is on, because that is exactly when a
+        // refused optional trace must not be mistaken for a failed recording or
+        // for a missing value. Successful sources stay quiet; unavailable ones
+        // state their real reason.
+        ColumnLayout {
+            objectName: "diagnosticsMeasurementSources"
+            visible: root.diagnostics.inDepthEnabled
+            Layout.fillWidth: true
+            Layout.leftMargin: root.sideInset
+            Layout.rightMargin: root.sideInset + ExoTheme.spacingLg
+            spacing: ExoTheme.spacingXs
+
+            DiagnosticsSectionHeader {
+                title: qsTr("MEASUREMENT SOURCES")
+                Layout.fillWidth: true
+            }
+
+            Repeater {
+                model: root.diagnostics.measurementSources
+
+                delegate: RowLayout {
+                    id: sourceRow
+
+                    required property var modelData
+
+                    Layout.fillWidth: true
+                    spacing: ExoTheme.spacingSm
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: sourceRow.modelData.title
+                        textFormat: Text.PlainText
+                        elide: Text.ElideRight
+                        color: ExoTheme.textSecondary
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontCaption
+                        }
+                    }
+
+                    Label {
+                        objectName: "measurementSourceState"
+                        text: sourceRow.modelData.state
+                        textFormat: Text.PlainText
+                        elide: Text.ElideRight
+                        color: sourceRow.modelData.tone === "measuring" ? ExoTheme.text : ExoTheme.textMuted
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontCaption
+                        }
+                        Layout.maximumWidth: root.contentWidth * 0.6
+                    }
+                }
+            }
+        }
+
         ExoScrollView {
             id: scroll
 
@@ -765,6 +822,33 @@ Item {
                                     family: ExoTheme.sansFamily
                                     pixelSize: ExoTheme.fontCaption
                                 }
+                            }
+                        }
+                    }
+
+                    // The full log surface, at the end of the reference section
+                    // where the inspectable facts live. Opening it keeps this
+                    // destination selected and swaps the workspace to the log
+                    // view; nothing here renders a second history.
+                    ExoReferenceRow {
+                        objectName: "logsReferenceRow"
+
+                        title: qsTr("Logs")
+                        summary: qsTr("Inspect recording events and startup timings")
+                        Layout.fillWidth: true
+
+                        trailing: Component {
+                            ExoButton {
+                                objectName: "openLogsButton"
+
+                                text: qsTr("Open logs")
+                                quiet: true
+                                compact: true
+                                Accessible.description: qsTr("Open the full log view inside Diagnostics")
+                                // The same request Ctrl+4 and every "Show in
+                                // log" action make; the adapter routes it
+                                // through the shell's one navigation edge.
+                                onClicked: root.diagnostics.openLogs()
                             }
                         }
                     }

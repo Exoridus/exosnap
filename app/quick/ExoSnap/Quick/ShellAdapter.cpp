@@ -43,6 +43,17 @@ void ShellAdapter::setCurrentPage(int page) {
     emit currentPageChanged();
 }
 
+int ShellAdapter::diagnosticsSection() const noexcept {
+    return diagnostics_section_;
+}
+
+void ShellAdapter::setDiagnosticsSection(int section) {
+    if (diagnostics_section_ == section)
+        return;
+    diagnostics_section_ = section;
+    emit diagnosticsSectionChanged();
+}
+
 bool ShellAdapter::editSurfaceVisible() const noexcept {
     return edit_surface_visible_;
 }

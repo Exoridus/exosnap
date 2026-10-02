@@ -306,7 +306,7 @@ std::optional<std::vector<exosnap::engine::CaptureTarget>> HarnessCaptureTargets
     static const std::optional<std::vector<exosnap::engine::CaptureTarget>> targets =
         []() -> std::optional<std::vector<exosnap::engine::CaptureTarget>> {
         const QByteArray scenario = qgetenv("EXOSNAP_VISUAL_SOURCE_SCENARIO");
-        if (scenario != "many-windows")
+        if (scenario.isEmpty())
             return std::nullopt;
 
         using exosnap::engine::CaptureTarget;
@@ -317,6 +317,26 @@ std::optional<std::vector<exosnap::engine::CaptureTarget>> HarnessCaptureTargets
         const auto window = [&seeded](const char* description) {
             seeded.push_back(CaptureTarget{CaptureTarget::Kind::Window, seeded.size() + 1, description});
         };
+
+        if (scenario == "displays-only") {
+            monitor(R"(\\.\DISPLAY1)");
+            monitor(R"(\\.\DISPLAY2)");
+            return seeded;
+        }
+        if (scenario == "single-display") {
+            monitor(R"(\\.\DISPLAY1)");
+            return seeded;
+        }
+        if (scenario == "few-windows") {
+            monitor(R"(\\.\DISPLAY1)");
+            window("Claude Design - Brave");
+            window("Task Manager");
+            return seeded;
+        }
+        if (scenario == "no-targets")
+            return seeded; // an empty target list: the picker's empty states
+        if (scenario != "many-windows")
+            return std::nullopt;
 
         monitor(R"(\\.\DISPLAY1)");
         monitor(R"(\\.\DISPLAY2)");
@@ -520,9 +540,11 @@ void QuickApplication::applyShowNotifications() {
 }
 
 void QuickApplication::applyDpcLatencyGate() {
-    // The kernel DPC/ISR session shares the present opt-in but has no internal
-    // elevation check, so the gate (opt-in AND elevation) is applied here -- mirroring
-    // PresentMonProvider::GateOpen().
+    // The kernel DPC/ISR session is its own privilege boundary: opening it means
+    // a system trace, which needs elevation and is NOT implied by the present
+    // opt-in (or by a token that happens to hold the present trace right). It is
+    // applied here so the gate is one place, and a refused or absent DPC reading
+    // leaves every other diagnostic source untouched.
     const bool elevated = elevation_provider_.IsElevated();
     const bool gate_open = in_depth_diagnostics_ && elevated;
     // Start() is itself idempotent (it returns true for an already-open session), and
@@ -813,6 +835,7 @@ void QuickApplication::initializeRecordWorkflow() {
                 diagnostics::ApplyPresentSample(snapshot.capture, sample);
                 diagnostics_adapter_.setPresentSample(
                     sample.available ? std::optional<diagnostics::PresentSample>(sample) : std::nullopt);
+                diagnostics_adapter_.setPresentProviderState(present_provider_->state());
             }
             record_view_model_.av_drift_available =
                 snapshot.av_drift_availability == exosnap::engine::MetricAvailability::Available;
@@ -2123,19 +2146,19 @@ void QuickApplication::initializeDiagnosticsArea() {
     const bool elevated = elevation_provider_.IsElevated();
     diagnostics_adapter_.setElevated(elevated);
 
-    // the present-diagnostics provider. Constructing it is free --
-    // the constructor opens nothing. SetOptIn() is what evaluates the gate
-    // (opt-in AND elevation) and starts the ETW session, so an unelevated process or
-    // one with the opt-in off holds a provider that reports `available: false` and
-    // owns no session, which is exactly what `environment.snapshot` must be able to
-    // explain the difference between.
-    present_provider_ = std::make_unique<diagnostics::PresentMonProvider>(elevation_provider_, in_depth_diagnostics_);
-    present_provider_->SetOptIn(in_depth_diagnostics_);
-    diagnostics::AppLog::info(QStringLiteral("present"),
-                              QStringLiteral("provider constructed optIn=%1 elevated=%2 available=%3")
-                                  .arg(in_depth_diagnostics_ ? 1 : 0)
-                                  .arg(elevated ? 1 : 0)
-                                  .arg(present_provider_->IsAvailable() ? 1 : 0));
+    // The present-diagnostics provider. Constructing it is free -- the
+    // constructor opens nothing beyond the controlled start attempt the opt-in
+    // asks for. The opt-in is the request; the actual ETW open decides
+    // availability, so a standard token with trace rights can measure and an
+    // elevated process can still report a session conflict.
+    present_provider_ = std::make_unique<diagnostics::PresentMonProvider>(in_depth_diagnostics_);
+    diagnostics_adapter_.setPresentProviderState(present_provider_->state());
+    diagnostics::AppLog::info(
+        QStringLiteral("present"),
+        QStringLiteral("provider optIn=%1 state=%2 available=%3")
+            .arg(in_depth_diagnostics_ ? 1 : 0)
+            .arg(QString::fromLatin1(diagnostics::PresentProviderStateKey(present_provider_->state())))
+            .arg(present_provider_->IsAvailable() ? 1 : 0));
 
     // DPC/ISR latency. The producer existed in this tree since the ETW slice
     // landed but was compiled by no target at all and driven by nobody, so
@@ -2150,11 +2173,13 @@ void QuickApplication::initializeDiagnosticsArea() {
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::inDepthToggled, &diagnostics_adapter_,
                      [this](bool enabled) { setInDepthDiagnostics(enabled); });
 
-    // "Show in log" is the Logs page with the diagnostic id already in the
-    // search box; the navigation itself is the one openLogs() performs.
+    // "Show in log" opens the internal log view with the diagnostic id already
+    // revealed. The reveal temporarily widens the severity filter and names
+    // itself in the view, so the entry cannot be hidden by whatever filter the
+    // user had set; the navigation itself is the one openLogs() performs.
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::showInLogRequested, &diagnostics_adapter_,
                      [this](const QString& entry_id) {
-                         logs_adapter_.setSearchQuery(entry_id);
+                         logs_adapter_.revealEntry(entry_id);
                          diagnostics_adapter_.openLogs();
                      });
     // An occurrence link opens the finished recording at the moment it names.
@@ -3319,6 +3344,7 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
         if (extras.elevated)
             diagnostics_adapter_.setElevated(true);
         diagnostics_adapter_.setInDepthEnabled(extras.in_depth);
+        diagnostics_adapter_.setPresentProviderState(extras.present_state);
         if (extras.present.has_value())
             diagnostics_adapter_.setPresentSample(extras.present);
         if (extras.dpc.has_value()) {
@@ -3880,9 +3906,13 @@ void QuickApplication::setInDepthDiagnostics(bool enabled) {
 
     // Both traces follow the one flag. Turning it off stops them and the readings
     // go back to unavailable in the same step -- a peak measured a moment ago is
-    // not a measurement of this machine now.
+    // not a measurement of this machine now. The present provider opens on the
+    // request and reports what the OS actually answered; the kernel DPC trace has
+    // its own privilege boundary (see applyDpcLatencyGate()).
     if (present_provider_)
         present_provider_->SetOptIn(in_depth_diagnostics_);
+    diagnostics_adapter_.setPresentProviderState(present_provider_ ? present_provider_->state()
+                                                                   : diagnostics::PresentProviderState::NotBuilt);
     applyDpcLatencyGate();
 
     // Not a prompt: the toast has to be pressed, and declining the UAC prompt

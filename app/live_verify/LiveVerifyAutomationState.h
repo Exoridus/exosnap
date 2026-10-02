@@ -29,9 +29,20 @@ namespace page_name {
 inline constexpr const char* kRecord = "record";
 inline constexpr const char* kSettings = "settings";
 inline constexpr const char* kDiagnostics = "diagnostics";
+// Legacy spelling. Accepted as an input alias for "diagnostics + logs"
+// (`ui.navigate logs`), and never reported as the visible page: the log
+// surface now lives inside Diagnostics.
 inline constexpr const char* kLogs = "logs";
 inline constexpr const char* kAbout = "about";
 } // namespace page_name
+
+// The Diagnostics destination's internal view. `page` stays "diagnostics"
+// while either one is showing, so a client can tell the canonical destination
+// from its subview instead of seeing a phantom fifth page.
+namespace diagnostics_section_name {
+inline constexpr const char* kOverview = "overview";
+inline constexpr const char* kLogs = "logs";
+} // namespace diagnostics_section_name
 
 // The three full-window modal surfaces, by product name. Empty means none is
 // up, which serializes as JSON null.
@@ -44,6 +55,8 @@ inline constexpr const char* kRecordingError = "recordingError";
 struct AutomationState {
     // --- Where the user is ---------------------------------------------------
     QString page = QString::fromLatin1(page_name::kRecord);
+    // Which Diagnostics view is on screen when `page` is diagnostics.
+    QString diagnostics_section = QString::fromLatin1(diagnostics_section_name::kOverview);
     // Which of the three blocking surfaces is on screen, or empty for none.
     // Sourced from BlockingSurfaceArbiter itself -- the same object that decides
     // which one may be up -- so this can never disagree with what is composited.

@@ -1,28 +1,118 @@
 // UpdateLaunchPlan.cpp -- pure, UI-agnostic helpers behind
-// UpdateService::LaunchUpdater(). No Win32, no I/O: just the staging file list,
-// the updater argv, and Scoop-path detection so they can be unit-tested headless
-// (see app/tests/test_update_launch_plan.cpp).
+// UpdateService::LaunchUpdater(). No Win32: the staging file list, the recursive
+// staging copy, the updater argv, and Scoop-path detection so they can be
+// unit-tested headless (see app/tests/test_update_launch_plan.cpp).
 
 #include "UpdateService.h"
 
 #include <control/options.h>
 
+#include <QDir>
+#include <QDirIterator>
+#include <QFile>
+#include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QString>
 #include <QStringList>
 
 namespace exosnap {
 
+namespace {
+
+// Copies one directory tree, preserving relative layout. Returns false on the
+// first entry that cannot be created or copied.
+bool CopyRuntimeTree(const QString& source_dir, const QString& destination_dir, const QString& relative_label,
+                     QString* error) {
+    QDirIterator it(source_dir, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString source = it.next();
+        const QString relative = QDir(source_dir).relativeFilePath(source);
+        const QString destination = QDir(destination_dir).filePath(relative);
+        if (!QDir().mkpath(QFileInfo(destination).absolutePath())) {
+            *error = QStringLiteral("Failed to create staging directory for: %1/%2").arg(relative_label, relative);
+            return false;
+        }
+        if (!QFile::copy(source, destination)) {
+            *error = QStringLiteral("Failed to stage updater file: %1/%2").arg(relative_label, relative);
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool StageUpdaterRuntime(const QString& app_dir, const QString& staging_dir, QString* error) {
+    for (const QString& rel : UpdaterStagingFileList()) {
+        if (rel.endsWith(QLatin1Char('/'))) {
+            const QString trimmed = rel.left(rel.size() - 1);
+            const QString source_dir = QDir(app_dir).filePath(trimmed);
+            if (!QFileInfo(source_dir).isDir()) {
+                *error = QStringLiteral("Updater runtime directory missing: %1").arg(rel);
+                return false;
+            }
+            if (!CopyRuntimeTree(source_dir, QDir(staging_dir).filePath(trimmed), trimmed, error))
+                return false;
+            continue;
+        }
+        const QString source = QDir(app_dir).filePath(rel);
+        const QString destination = QDir(staging_dir).filePath(rel);
+        if (!QFileInfo::exists(source)) {
+            *error = QStringLiteral("Updater runtime file missing: %1").arg(rel);
+            return false;
+        }
+        if (!QDir().mkpath(QFileInfo(destination).absolutePath()) || !QFile::copy(source, destination)) {
+            *error = QStringLiteral("Failed to stage updater file: %1").arg(rel);
+            return false;
+        }
+    }
+    return true;
+}
+
 QStringList UpdaterStagingFileList() {
     // Relative to QCoreApplication::applicationDirPath(). Forward slashes; the
-    // copy step resolves them against the native app dir. Keep this minimal: the
-    // updater is a small Qt Widgets app that only needs Core/Gui/Widgets plus the
-    // windows platform plugin. The styles plugin is optional and copied on top.
+    // copy step resolves them against the native app dir. An entry ending in '/'
+    // is a directory staged recursively, which keeps the QML import trees whole
+    // (qmldir + plugins.qmltypes + plugin DLL + the style's own .qml files)
+    // instead of listing each file of a Qt module by hand.
+    //
+    // The updater is a Qt Quick application: it needs the Quick/Qml runtime,
+    // the Basic Controls style it imports, QML's layout and shape modules, and
+    // the windows platform plugin. QtTest/QuickTest are deliberately absent.
     return {
         QStringLiteral("exosnap-updater.exe"),
         QStringLiteral("Qt6Core.dll"),
         QStringLiteral("Qt6Gui.dll"),
-        QStringLiteral("Qt6Widgets.dll"),
+        QStringLiteral("Qt6Qml.dll"),
+        QStringLiteral("Qt6QmlMeta.dll"),
+        QStringLiteral("Qt6QmlModels.dll"),
+        QStringLiteral("Qt6QmlWorkerScript.dll"),
+        // Hard import dependencies of Qt6Qml/Qt6Quick on Windows.
+        QStringLiteral("Qt6Network.dll"),
+        QStringLiteral("Qt6OpenGL.dll"),
+        QStringLiteral("Qt6Quick.dll"),
+        QStringLiteral("Qt6QuickControls2.dll"),
+        QStringLiteral("Qt6QuickControls2Basic.dll"),
+        // The Basic style's implementation library, imported by its QML plugin.
+        QStringLiteral("Qt6QuickControls2BasicStyleImpl.dll"),
+        QStringLiteral("Qt6QuickControls2Impl.dll"),
+        QStringLiteral("Qt6QuickTemplates2.dll"),
+        QStringLiteral("Qt6QuickLayouts.dll"),
+        QStringLiteral("Qt6QuickShapes.dll"),
+        QStringLiteral("Qt6Svg.dll"),
+        QStringLiteral("qml/QtQml/"),
+        // The Controls module root: qmldir + its plugin. Basic/ and impl/ are
+        // the only style submodules staged; the others are optional imports the
+        // qmldir tolerates and the updater never uses.
+        QStringLiteral("qml/QtQuick/Controls/qmldir"),
+        QStringLiteral("qml/QtQuick/Controls/plugins.qmltypes"),
+        QStringLiteral("qml/QtQuick/Controls/qtquickcontrols2plugin.dll"),
+        QStringLiteral("qml/QtQuick/Controls/Basic/"),
+        QStringLiteral("qml/QtQuick/Controls/impl/"),
+        QStringLiteral("qml/QtQuick/Layouts/"),
+        QStringLiteral("qml/QtQuick/Shapes/"),
+        QStringLiteral("qml/QtQuick/Templates/"),
+        QStringLiteral("qml/QtQuick/Window/"),
         QStringLiteral("plugins/platforms/qwindows.dll"),
     };
 }

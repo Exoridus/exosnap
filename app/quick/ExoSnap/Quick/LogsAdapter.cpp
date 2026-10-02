@@ -52,6 +52,7 @@ LogsAdapter::LogsAdapter(QObject* parent) : QObject(parent) {
     const auto counts_changed = [this]() {
         emit countsChanged();
         updateStatus();
+        refreshRevealPresence();
     };
     connect(&source_model_, &QAbstractItemModel::rowsInserted, this, counts_changed);
     connect(&source_model_, &QAbstractItemModel::rowsRemoved, this, counts_changed);
@@ -124,6 +125,18 @@ bool LogsAdapter::canCopy() const {
 
 bool LogsAdapter::canExport() const {
     return source_model_.rowCount() > 0;
+}
+
+bool LogsAdapter::revealActive() const noexcept {
+    return reveal_active_;
+}
+
+bool LogsAdapter::revealMissing() const noexcept {
+    return reveal_missing_;
+}
+
+const QString& LogsAdapter::revealEntryId() const noexcept {
+    return reveal_entry_id_;
 }
 
 QString LogsAdapter::logFolderPath() const {
@@ -242,6 +255,68 @@ void LogsAdapter::setSyntheticEntries(QVector<LogEntry> entries) {
 
 LogEntryModel& LogsAdapter::sourceModelForTest() noexcept {
     return source_model_;
+}
+
+void LogsAdapter::revealEntry(const QString& entry_id) {
+    if (entry_id.isEmpty())
+        return;
+    const bool first_reveal = !reveal_active_;
+    if (first_reveal) {
+        reveal_previous_severity_ = severityFilter();
+        reveal_previous_query_ = proxy_model_.searchQuery();
+    }
+    reveal_active_ = true;
+    reveal_entry_id_ = entry_id;
+    reveal_missing_ = proxy_model_.rowCount() == 0;
+
+    // Applied synchronously, not through the debounce: the reveal is one
+    // deliberate action, not a keystroke, and the caller navigates immediately.
+    search_debounce_.stop();
+    if (proxy_model_.severityFilter() != LogSeverityFilter::All) {
+        proxy_model_.setSeverityFilter(LogSeverityFilter::All);
+        emit filtersChanged();
+    }
+    pending_search_query_ = entry_id;
+    if (proxy_model_.searchQuery() != entry_id) {
+        proxy_model_.setSearchQuery(entry_id);
+        emit searchQueryChanged();
+    }
+    emit countsChanged();
+    updateStatus();
+    refreshRevealPresence();
+    emit revealChanged();
+}
+
+void LogsAdapter::clearReveal() {
+    if (!reveal_active_)
+        return;
+    reveal_active_ = false;
+    reveal_missing_ = false;
+
+    const LogSeverityFilter previous = FilterFromInt(reveal_previous_severity_);
+    if (proxy_model_.severityFilter() != previous) {
+        proxy_model_.setSeverityFilter(previous);
+        emit filtersChanged();
+    }
+    pending_search_query_ = reveal_previous_query_;
+    if (proxy_model_.searchQuery() != reveal_previous_query_) {
+        proxy_model_.setSearchQuery(reveal_previous_query_);
+        emit searchQueryChanged();
+    }
+    reveal_entry_id_.clear();
+    emit countsChanged();
+    updateStatus();
+    emit revealChanged();
+}
+
+void LogsAdapter::refreshRevealPresence() {
+    if (!reveal_active_)
+        return;
+    const bool missing = proxy_model_.rowCount() == 0;
+    if (missing == reveal_missing_)
+        return;
+    reveal_missing_ = missing;
+    emit revealChanged();
 }
 
 void LogsAdapter::applyPendingSearch() {

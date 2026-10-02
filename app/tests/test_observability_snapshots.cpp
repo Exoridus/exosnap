@@ -687,17 +687,31 @@ TEST(EnvironmentSnapshotJson, AnUnnamedDxgiDisplayMatchesNothingRatherThanItsNei
     EXPECT_EQ(entry.value(QStringLiteral("colorAvailability")).toString(), QStringLiteral("unsupported"));
 }
 
-TEST(EnvironmentSnapshotJson, PresentUnavailabilityNamesItsCauseInGateOrder) {
+TEST(EnvironmentSnapshotJson, PresentUnavailabilityNamesTheProvidersOwnState) {
     EnvironmentSnapshotInputs inputs;
 
     const QJsonObject no_opt_in = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
     EXPECT_EQ(no_opt_in.value(QStringLiteral("availability")).toString(), QStringLiteral("requiresOptIn"));
+    EXPECT_EQ(no_opt_in.value(QStringLiteral("state")).toString(), QStringLiteral("notRequested"));
 
+    // Opted in, and the OS refused the trace in this token. This is NOT
+    // "requiresElevation": a standard token may hold the trace right, and an
+    // elevated one can still be refused.
     inputs.present.opt_in = true;
-    const QJsonObject no_elevation = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
-    EXPECT_EQ(no_elevation.value(QStringLiteral("availability")).toString(), QStringLiteral("requiresElevation"));
+    inputs.present.state = diagnostics::PresentProviderState::AccessDenied;
+    const QJsonObject denied = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
+    EXPECT_EQ(denied.value(QStringLiteral("availability")).toString(), QStringLiteral("accessDenied"));
+    EXPECT_EQ(denied.value(QStringLiteral("state")).toString(), QStringLiteral("accessDenied"));
+    EXPECT_EQ(denied.value(QStringLiteral("reason")).toString(), QStringLiteral("traceAccessDenied"));
 
-    inputs.present.elevated = true;
+    // A session with our name already exists and was left alone.
+    inputs.present.state = diagnostics::PresentProviderState::SessionConflict;
+    const QJsonObject conflict = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
+    EXPECT_EQ(conflict.value(QStringLiteral("availability")).toString(), QStringLiteral("conflict"));
+    EXPECT_EQ(conflict.value(QStringLiteral("reason")).toString(), QStringLiteral("traceSessionConflict"));
+
+    // An open trace with no present yet: unavailable, not a zero measurement.
+    inputs.present.state = diagnostics::PresentProviderState::OpenNoData;
     const QJsonObject nothing_seen = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
     EXPECT_EQ(nothing_seen.value(QStringLiteral("availability")).toString(), QStringLiteral("unavailable"));
     EXPECT_EQ(nothing_seen.value(QStringLiteral("reason")).toString(), QStringLiteral("noPresentObserved"));
@@ -711,10 +725,12 @@ TEST(EnvironmentSnapshotJson, PresentUnavailabilityNamesItsCauseInGateOrder) {
     sample.present_count = 900;
     sample.discarded_count = 0;
     inputs.present.available = true;
+    inputs.present.state = diagnostics::PresentProviderState::Measuring;
     inputs.present.sample = sample;
 
     const QJsonObject measured = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
     EXPECT_EQ(measured.value(QStringLiteral("availability")).toString(), QStringLiteral("available"));
+    EXPECT_EQ(measured.value(QStringLiteral("state")).toString(), QStringLiteral("measuring"));
     EXPECT_EQ(measured.value(QStringLiteral("mode")).toString(), QStringLiteral("independentFlip"));
     EXPECT_TRUE(measured.value(QStringLiteral("tearing")).toBool());
     EXPECT_EQ(measured.value(QStringLiteral("presentCount")).toDouble(), 900.0);

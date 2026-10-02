@@ -4,6 +4,18 @@ This document owns release acceptance and publication procedure. [Release verifi
 
 Creating/pushing a version tag, publishing a release or submitting a package requires explicit maintainer authorization for that operation. Preparing or verifying a candidate does not authorize publication. Published versions and their bytes are immutable.
 
+## Verification scope
+
+| Level | When required | Evidence |
+|---|---|---|
+| Repository and CI gates | For the changed source under contributor and CI policy | Unit, integration, QML, Debug/Release, Rust, documentation and source/package checks |
+| Candidate artifact verification | For every final candidate set | Exact MSI/ZIP identity and contents, sanitized launch, short real recording smoke, installation, update, restoration where supported, uninstall and required runtime/privacy/crash/signing checks |
+| Hardware qualification | For relevant implementation, dependency or environment changes, a missing relevant baseline, or a concrete new finding | Physical sample-rate variants, long-duration drift, device loss, HDR/VRR, pressure, webcam endurance and desktop interaction |
+
+Apply the [delta and evidence reuse policy](architecture/verification-boundaries.md#regression-qualification-and-evidence-reuse) before selecting specialist hardware scenarios. Record the compared baseline, affected contracts, selected checks and reasons for exclusions. Findings can expand the scope. A version change, another RC or repackaging alone does not require repeating unchanged hardware qualification. Artifact checks still apply to every changed final package set.
+
+A reused observation retains its original binary and environment identity. A short current recording can complement it but does not retroactively prove an unmeasured longer duration. Do not assert a previous long-duration baseline unless its evidence exists. Selection and measured verdict are separate: an unselected scenario is not a new PASS. The [release runbook](dev/release-verify.md#select-regression-qualification-from-the-delta) explains the current registry and explicit decisions for any required hardware scenario not rerun.
+
 ## 1. Prepare the source
 
 - Start from a reviewed, integrated commit. Confirm repository protection against the intended [rulesets](../.github/rulesets/README.md); local hooks are not server-side protection.
@@ -32,7 +44,7 @@ Qt deployment must include discovered QML imports as well as linked DLLs. The pa
 
 ## 3. Verify the frozen candidate
 
-Download the candidate bundle and plan from the same Actions run. Use the candidate's own `exo-verify.exe` against its official package bytes. The bundle hash binds each release lane's result to the exact MSI, ZIP and runtime. The plan fixes every required scenario, revision and lane from that source commit. Run the CI core, disposable install and update, GPU and hardware lanes where their declared capabilities exist. [Release verification](dev/release-verify.md) gives the commands and guest preparation.
+Download the candidate bundle and plan from the same Actions run. Use the candidate's own `exo-verify.exe` against its official package bytes. The bundle hash binds each release lane's result to the exact MSI, ZIP and runtime. The plan fixes every required scenario, revision and lane from that source commit. Run the CI core, disposable install and update, and required GPU artifact checks where their declared capabilities exist. Select specialist hardware checks from the reviewed delta instead of running the entire hardware lane by default. [Release verification](dev/release-verify.md) gives the commands and guest preparation.
 
 For a local result set, rederive the report and check it against the original bundle and source registry:
 
@@ -101,7 +113,9 @@ A scene-graph screenshot does not prove desktop composition of a capture-exclude
 
 ### Long-duration audio/capture gate
 
-Run a 2–3 hour default-profile monitor recording with SYS and MIC as separate tracks, slaving on, sustained audio, no sleep and stable display settings. Run a shorter 30–60 minute 44.1 kHz endpoint session as well. The [soak runbook](dev/soak-and-recovery-drills.md) explains stimulus and analysis.
+This is change-triggered qualification, not a requirement for every candidate. Select the long-duration test when changes affect A/V clock slaving or attribution, resampling/compensation, CFR scheduling, audio FIFO/threading, the mix timeline, capture clocks, mux timestamps or broader pipeline scheduling, or when a concrete finding warrants it. UI, text, Source Picker presentation, updater UI and documentation changes alone do not trigger it.
+
+When selected, run a 2-3 hour default-profile monitor recording with SYS and MIC as separate tracks, slaving on, sustained audio, no sleep and stable display settings. Select the 30-60 minute physical 44.1 kHz variant only when WASAPI capture, format/rate negotiation, resampling, mixing, output conversion, clock slaving, rate-sensitive encoding or device recovery is affected, or a relevant failure requires investigation. Neither test is repeated solely because a new candidate was built. The [soak runbook](dev/soak-and-recovery-drills.md) explains stimulus and analysis. The following acceptance budgets apply when that qualification is selected.
 
 Use a scheduled clapper signal with enough markers for the analyzer's reference-quality test. The acceptance budget is **20 ms fitted drift**, not merely a small start/end difference. Reference uncertainty must meet the analyzer's budget fraction and residual/nonlinearity checks. An unqualified reference is unmeasurable, not PASS; `--unqualified-reference` must not be used for acceptance. Absolute offset includes setup-dependent emission skew and is reported separately.
 

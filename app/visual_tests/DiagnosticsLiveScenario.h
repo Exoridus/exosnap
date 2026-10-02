@@ -43,9 +43,11 @@ namespace exosnap::visual {
 //   "ledger"               a long recording that measured judder three times and
 //                          is contending for the GPU right now
 //   "after-stop"           the same recording, stopped and saved
-//   "in-depth"             a healthy recording with the elevated traces running
+//   "in-depth"             a healthy recording with the optional traces measuring
 //   "opt-in-unelevated"    no recording, the in-depth opt-in on in a standard
-//                          process: the switch is on and nothing is measuring
+//                          process: presentation states access denied and DPC
+//                          states its separate elevated boundary
+//   "present-no-data"      opted in with the trace open but no present decoded yet
 //
 // An unrecognised kind returns an invalid snapshot, which renders as no live
 // tiles at all -- the honest result for "no scenario".
@@ -62,11 +64,14 @@ namespace exosnap::visual {
 // tile; a trend and a ledger need a sequence.
 [[nodiscard]] int DiagnosticsLiveSampleCount(const QString& kind);
 
-// The elevation-gated readings a kind runs with. Both empty unless the scenario is
-// one of the in-depth ones, which is what "the switch is off" looks like.
+// The optional-trace readings a kind runs with, and the provider state the same
+// scenario would have reached: elevation is a process fact, not the predictor of
+// these. Both empty unless the scenario is one of the in-depth ones, which is
+// what "the switch is off" looks like.
 struct DiagnosticsLiveExtras {
     bool elevated = false;
     bool in_depth = false;
+    diagnostics::PresentProviderState present_state = diagnostics::PresentProviderState::NotRequested;
     std::optional<diagnostics::PresentSample> present;
     std::optional<diagnostics::DpcLatencyReading> dpc;
 };

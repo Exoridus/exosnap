@@ -1046,10 +1046,9 @@ std::vector<KeyValueRow> BuildEnvironmentRows(const std::vector<DiagnosticResult
     // today, so this is a defensive fallback that still mirrors the measured state
     // rather than a fixed string.
     if (rows.empty()) {
-        rows.push_back(
-            {"Elevation", elevated ? std::string("Elevated ") + kDash + " PresentMon ETW present diagnostics available"
-                                   : std::string("Standard ") + kDash + " DXGI / NVAPI baseline " + kMiddot +
-                                         " present diagnostics need elevation"});
+        rows.push_back({"Elevation", elevated ? std::string("Elevated ") + kDash + " optional kernel traces may start"
+                                              : std::string("Standard ") + kDash + " core recording health available " +
+                                                    kMiddot + " optional traces depend on the token's rights"});
     }
     return rows;
 }

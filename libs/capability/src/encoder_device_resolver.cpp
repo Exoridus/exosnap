@@ -52,6 +52,8 @@ const EncoderDeviceCandidate* FindCandidateByLuid(std::span<const EncoderDeviceC
     }
     for (const auto& candidate : candidates) {
         if (candidate.adapter.luid == luid) {
+            // candidate refers to an element in caller-owned storage; the span does not own it.
+            // cppcheck-suppress returnDanglingLifetime
             return &candidate;
         }
     }

@@ -364,9 +364,12 @@ QVariantList RecordViewModelAdapter::filteredTargetOptions(const QString& kind, 
         const QVariantMap row = value.toMap();
         if (!normalized_kind.isEmpty() && row.value(QStringLiteral("kind")).toString() != normalized_kind)
             continue;
-        if (!normalized_query.isEmpty() &&
-            !row.value(QStringLiteral("label")).toString().contains(normalized_query, Qt::CaseInsensitive)) {
-            continue;
+        if (!normalized_query.isEmpty()) {
+            const auto matches = [&normalized_query, &row](const char* key) {
+                return row.value(QLatin1String(key)).toString().contains(normalized_query, Qt::CaseInsensitive);
+            };
+            if (!matches("label") && !matches("title") && !matches("appName") && !matches("windowTitle"))
+                continue;
         }
         result.push_back(row);
     }
@@ -865,6 +868,11 @@ void RecordViewModelAdapter::rebuildPresentation() {
                 // against what an automated caller was told to record.
                 {QStringLiteral("device"), QString::fromStdString(target.description)},
                 {QStringLiteral("label"), QString::fromStdString(presentation.label)},
+                // The user-facing short name without the kind prefix: "Display 1"
+                // for a monitor, the window title for a window. The picker card
+                // leads with it so the grid does not repeat "Desktop - " on
+                // every display.
+                {QStringLiteral("title"), QString::fromStdString(presentation.title)},
                 {QStringLiteral("appName"), QString::fromStdString(presentation.app_name)},
                 {QStringLiteral("windowTitle"), QString::fromStdString(presentation.title)},
                 {QStringLiteral("kind"), window ? QStringLiteral("window") : QStringLiteral("display")},

@@ -762,6 +762,7 @@ QJsonObject StateToJson(const AutomationState& state, std::uint64_t state_revisi
     QJsonObject json;
     json.insert(QStringLiteral("stateRevision"), static_cast<double>(state_revision));
     json.insert(QStringLiteral("page"), state.page);
+    json.insert(QStringLiteral("diagnosticsSection"), state.diagnostics_section);
     json.insert(QStringLiteral("recordingState"), state.recording_state);
     json.insert(QStringLiteral("editSession"),
                 state.edit_session_open ? QStringLiteral("open") : QStringLiteral("closed"));

@@ -57,6 +57,8 @@ impl Appearance {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Popup {
     SourcePicker,
+    SourcePickerWindows,
+    SourcePickerSearch,
     NotificationHub,
 }
 
@@ -64,6 +66,8 @@ impl Popup {
     fn id(self) -> &'static str {
         match self {
             Popup::SourcePicker => "source-picker",
+            Popup::SourcePickerWindows => "source-picker-windows",
+            Popup::SourcePickerSearch => "source-picker-search",
             Popup::NotificationHub => "notification-hub",
         }
     }
@@ -101,7 +105,8 @@ pub struct ShotSpec {
     /// Notification fixture (`EXOSNAP_VISUAL_NOTIFICATION_SCENARIO`): `many`, `many-info`.
     #[arg(long)]
     pub notifications: Option<String>,
-    /// Source list fixture (`EXOSNAP_VISUAL_SOURCE_SCENARIO`): `many-windows`.
+    /// Source list fixture (`EXOSNAP_VISUAL_SOURCE_SCENARIO`): `many-windows`,
+    /// `few-windows`, `displays-only`, `single-display`, `no-targets`.
     #[arg(long)]
     pub sources: Option<String>,
     /// Fixed audio meter level in dBFS (`EXOSNAP_VISUAL_METER_DBFS`), or `-inf`.

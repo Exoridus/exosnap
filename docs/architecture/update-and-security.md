@@ -28,7 +28,7 @@ The transaction ID correlates the application's child-launch snapshot, updater i
 
 ## Process and installation lifetime
 
-The updater is staged outside the live installation with the runtime files it needs, so it does not prevent replacing itself. The app's card enters Updater running on launch and Pending only after the marked close/handoff is accepted. A child that exits before handoff re-arms an actionable state instead of leaving a persisted pending fiction.
+The updater is staged outside the live installation with the runtime files it needs, so it does not prevent replacing itself. The staged set is the Quick runtime the updater process links, its QML import trees (the Controls module and the Basic style it uses) and the windows platform plugin; a missing entry fails staging before any update action instead of launching a half-deployed UI. The app's card enters Updater running on launch and Pending only after the marked close/handoff is accepted. A child that exits before handoff re-arms an actionable state instead of leaving a persisted pending fiction.
 
 Portable update uses staged replacement: old installation to backup, verified new tree to live, installed-version/health checks, then approved relaunch and cleanup. Failure can restore the backup; if restoration itself fails, report the stranded/unknown state. Interrupted swaps are inspected and self-healed before another normal update proceeds.
 Each directory rename retries access, sharing and lock violations with a short bounded backoff, because the exited application, its crash handler or a file scanner can hold a handle inside the tree for a moment after the process is gone.

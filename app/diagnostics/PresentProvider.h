@@ -64,4 +64,47 @@ class IPresentProvider {
     [[nodiscard]] virtual bool IsAvailable() const = 0;
 };
 
+// The provider's honest state, separating the user's request, the OS's answer to
+// the start attempt, and whether fresh data is actually arriving. `elevated`
+// appears nowhere: a standard token with trace rights may measure, and an
+// elevated process may still meet a session conflict.
+enum class PresentProviderState {
+    NotRequested,    // the in-depth opt-in is off
+    Starting,        // reserved for a future asynchronous open; not observed today
+    OpenNoData,      // the trace is open and no fresh present has arrived yet
+    Measuring,       // the trace is open and a fresh present is attributed
+    NotBuilt,        // no consumer in this build
+    AccessDenied,    // the OS refused the trace in this token
+    SessionConflict, // a session with this name exists and was left alone
+    NotSupported,    // this system has no usable trace facility
+    Failed,          // any other open failure
+    Stopped,         // it opened before; the trace then ended
+};
+
+[[nodiscard]] inline constexpr const char* PresentProviderStateKey(PresentProviderState state) noexcept {
+    switch (state) {
+    case PresentProviderState::NotRequested:
+        return "notRequested";
+    case PresentProviderState::Starting:
+        return "starting";
+    case PresentProviderState::OpenNoData:
+        return "openNoData";
+    case PresentProviderState::Measuring:
+        return "measuring";
+    case PresentProviderState::NotBuilt:
+        return "notBuilt";
+    case PresentProviderState::AccessDenied:
+        return "accessDenied";
+    case PresentProviderState::SessionConflict:
+        return "sessionConflict";
+    case PresentProviderState::NotSupported:
+        return "notSupported";
+    case PresentProviderState::Failed:
+        return "failed";
+    case PresentProviderState::Stopped:
+        return "stopped";
+    }
+    return "failed";
+}
+
 } // namespace exosnap::diagnostics

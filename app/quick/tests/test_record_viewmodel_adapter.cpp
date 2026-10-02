@@ -336,8 +336,10 @@ TEST(RecordViewModelAdapterTest, PickerRowsExposeStableIdentityPresentationAndSe
     EXPECT_EQ(display.value(QStringLiteral("kind")).toString(), QStringLiteral("display"));
     EXPECT_FALSE(adapter.targetStillOptions().contains(QStringLiteral("display:41")));
     EXPECT_FALSE(display.value(QStringLiteral("selected")).toBool());
+    EXPECT_EQ(display.value(QStringLiteral("title")).toString(), QStringLiteral("Display 1"));
     EXPECT_EQ(window.value(QStringLiteral("identity")).toString(), QStringLiteral("window:73"));
     EXPECT_EQ(window.value(QStringLiteral("label")).toString(), QStringLiteral("Brave - Claude Design"));
+    EXPECT_EQ(window.value(QStringLiteral("title")).toString(), QStringLiteral("Claude Design"));
     EXPECT_EQ(window.value(QStringLiteral("appName")).toString(), QStringLiteral("Brave"));
     EXPECT_EQ(window.value(QStringLiteral("windowTitle")).toString(), QStringLiteral("Claude Design"));
     EXPECT_TRUE(window.value(QStringLiteral("selected")).toBool());

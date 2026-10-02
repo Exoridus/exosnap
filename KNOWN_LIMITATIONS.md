@@ -30,7 +30,7 @@ Display capture uses DXGI Output Duplication; window capture uses Windows Graphi
 
 An idle duplication preview can affect desktop compositor/overlay/fullscreen-optimization behavior on some machines. Leaving the visible Record preview releases its preview-only ownership. The current product has no separate preview-off/frame-cap setting.
 
-The recording preview uses the engine's composited pre-encode image where sharing is available. It is not a decoder verifying the finished file. Cross-adapter sharing and the rare already-PQ desktop are exceptions: independent preview can remain, so do not assume exact producer parity on an unsupported shared path. The source picker is a named list without live thumbnails, which cannot visually disambiguate identically titled windows.
+The recording preview uses the engine's composited pre-encode image where sharing is available. It is not a decoder verifying the finished file. Cross-adapter sharing and the rare already-PQ desktop are exceptions: independent preview can remain, so do not assume exact producer parity on an unsupported shared path. The source picker shows identifying target stills on a bounded refresh, not a live motion feed; identically titled windows are distinguished by their app identity and stable native identity rather than by the still alone.
 
 Legacy exclusive-fullscreen **window** capture is not supported. Use display capture or a borderless window. ExoSnap does not inject or hook capture into the game. Detection is evidence-based, and a generic fullscreen shape alone cannot prove exclusive fullscreen. The full hardware/game matrix needs live verification.
 

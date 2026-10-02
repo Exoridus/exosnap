@@ -97,6 +97,10 @@ capture the operator's other display locally.
 
 Reveal/scroll commands require the target page to be the current page, even if another page's object remains resident. A syntactically valid target name is not proof that it reached the viewport. Navigation goes through the same guard as tabs and Ctrl+1…5. Pages other than Record load asynchronously on their first visit, so an accepted `ui.navigate` waits, bounded, for the destination's content before it answers `settled:true`. A page that does not finish loading in time is `operation_failed`.
 
+`ui.navigate logs` remains a documented legacy alias: the shell normalizes it to the Diagnostics destination with the logs subview. `ui.getState` answers page `diagnostics` plus `diagnosticsSection` (`overview` or `logs`) -- never a fifth top-level page -- and `ui.scrollHome`/`ui.scrollEnd`/`ui.reveal` with surface `logs` address the internal log view, which is one instance loaded on first request and kept resident. `app.snapshot.currentPage` keeps its integer shape and reports Diagnostics (2) while the logs subview is showing; About keeps its own value (4).
+
+`diagnostics.snapshot` reports `presentState` (the provider's real state: `notRequested`, `openNoData`, `measuring`, `accessDenied`, `sessionConflict`, `notBuilt`, `notSupported`, `failed`, `stopped`) and the four `measurementSources` rows. `environment.snapshot`'s present group carries the same `state` and an `availability` of `accessDenied` or `conflict` where those are the truth; `elevated` stays a process fact and is not a prediction of trace access.
+
 The endpoint does not expose arbitrary shell execution, registry writes, Windows display/audio setters, arbitrary URL opening or destructive recovery/crash actions. Their UI state can be observable without granting mutation authority.
 
 Events include application ready, recording state/result, screen change and protocol-2 UI state changes. Prefer a synchronous settled response, then an event/revision wait, then bounded polling of a field that has no event. Fixed measurement intervals and recording duration are legitimate; an arbitrary sleep in place of a postcondition is not.

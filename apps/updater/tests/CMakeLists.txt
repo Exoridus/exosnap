@@ -87,33 +87,43 @@ exosnap_add_gtest(
     LIBRARIES exosnap_updater_logic
 )
 
-# Widget smoke test: UpdaterWindow / ProgressRing / StepListWidget are QtWidgets,
-# so this binary owns its own QApplication (CTest isolates each binary in its own
-# process). It links the UI library, which already carries the AUTOMOC output.
+# The Quick frontend's visible contract. The projection is asserted on
+# UpdaterViewAdapter (compiled into this test for the same reason it is compiled
+# into the executable: one source, no library indirection), and the shipped
+# executable is launched once per canned preview state so the real QML module,
+# the shared theme and the bundled fonts are covered, not just the projection.
 exosnap_add_gtest(
     NAME    test_updater_window_smoke
     TEST_PREFIX updater.
-    SOURCES test_updater_window_smoke.cpp
-    LIBRARIES exosnap_updater_ui
+    SOURCES test_updater_window_smoke.cpp ../UpdaterViewAdapter.cpp
+    LIBRARIES exosnap_updater_logic
 )
+set_target_properties(test_updater_window_smoke PROPERTIES AUTOMOC ON)
+target_include_directories(test_updater_window_smoke
+    PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>")
+add_dependencies(test_updater_window_smoke exosnap_updater)
 
-# Layout, state-presentation and accessibility contracts measured on the real
-# widget tree rather than on pixels: long-version elision, the long msiexec
-# detail, the indeterminate pre-flight ring, the eyebrow that names the run, the
-# version emphasis after a terminal failure, and the accessible progress/step
-# semantics. Writes no evidence files.
+# Copy and progress semantics on the same projection: long values stay complete,
+# the pre-flight ring measures nothing, and the terminal/eyebrow emphasis rules
+# are the ones the window always showed. Writes no evidence files.
 exosnap_add_gtest(
     NAME    test_updater_text_layout
     TEST_PREFIX updater.
-    SOURCES test_updater_text_layout.cpp
-    LIBRARIES exosnap_updater_ui
+    SOURCES test_updater_text_layout.cpp ../UpdaterViewAdapter.cpp
+    LIBRARIES exosnap_updater_logic
 )
+set_target_properties(test_updater_text_layout PROPERTIES AUTOMOC ON)
 
-# Deterministic QWidget renders of the terminal failure matrix at representative
-# Windows DPR values. Evidence is written under .workspace/live-verify/.
+# Deterministic offscreen renders of the real Quick window for the text-state
+# matrix in Dark and Light. Evidence is written under the workspace's updater
+# visual-evidence directory; the runs are the shipped executable through its own
+# --screenshot path.
 exosnap_add_gtest(
     NAME    test_updater_visual_proof
     TEST_PREFIX updater.
     SOURCES test_updater_visual_proof.cpp
-    LIBRARIES exosnap_updater_ui
+    LIBRARIES exosnap_updater_logic Qt6::Gui
 )
+target_include_directories(test_updater_visual_proof
+    PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>")
+add_dependencies(test_updater_visual_proof exosnap_updater)

@@ -470,6 +470,10 @@ void saveFullPage(QQuickWindow* window, const QString& path, std::function<void(
 // until the shell itself reports the page ready rather than sleeping a guess.
 struct NavigationDestination {
     int page = 0;
+    // The StackLayout index the page occupies. The enum keeps its historical
+    // values (LogsPage stays 3 for the legacy spelling), so the stack position
+    // is no longer the page value.
+    int stack_index = 0;
     const char* object_name = nullptr;
     const char* adapter_property = nullptr;
     QObject* adapter = nullptr;
@@ -520,6 +524,22 @@ bool waitForCurrentPage(QObject* shell, int page, int timeout_ms) {
     return true;
 }
 
+// A logs request normalizes to the Diagnostics destination plus the logs
+// section, so "the logs view is showing" is two properties, not one page value.
+bool waitForLogsView(QObject* shell, int timeout_ms) {
+    QElapsedTimer timer;
+    timer.start();
+    for (;;) {
+        if (shell->property("currentPage").toInt() == static_cast<int>(exosnap::quick::ShellAdapter::DiagnosticsPage) &&
+            shell->property("diagnosticsSection").toInt() ==
+                static_cast<int>(exosnap::quick::ShellAdapter::DiagnosticsLogs))
+            return true;
+        if (timer.hasExpired(timeout_ms))
+            return false;
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+}
+
 // Calls the shell's one navigation edge the way a tab, a shortcut or a
 // notification action does. Resolved through the metaobject rather than by name
 // alone, because a typed QML function (`navigateTo(page: int)`) publishes an
@@ -566,11 +586,10 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     if (shell == nullptr)
         return failNavigationLifecycle("no quickAppShell");
 
-    const std::array<NavigationDestination, 4> destinations{{
-        {1, "quickSettingsPage", "settings", application.settingsAdapter()},
-        {2, "quickDiagnosticsPage", "diagnostics", application.diagnosticsAdapter()},
-        {3, "quickLogsPage", "logs", application.logsAdapter()},
-        {4, "quickAboutPage", "aboutViewModel", application.aboutViewModel()},
+    const std::array<NavigationDestination, 3> destinations{{
+        {1, 1, "quickSettingsPage", "settings", application.settingsAdapter()},
+        {2, 2, "quickDiagnosticsPage", "diagnostics", application.diagnosticsAdapter()},
+        {4, 3, "quickAboutPage", "aboutViewModel", application.aboutViewModel()},
     }};
 
     // Startup built the page the user is looking at, and nothing else.
@@ -584,6 +603,11 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     // ui.navigate answers settled:true, and a runner's next command addresses the
     // page's own object. A first visit is still incubating when the navigation
     // request returns, so the automation edge has to have waited for it.
+    //
+    // "logs" is the legacy request spelling: the shell normalizes it to
+    // Diagnostics plus the logs section, so the visible page is 2 and the
+    // subview flag names the internal view. The old fifth destination no longer
+    // exists, and this is where that contract is pinned.
     {
         exosnap::quick::QuickLiveVerifySource automation(application, window);
         QString error;
@@ -593,6 +617,9 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
         QMetaObject::invokeMethod(shell, "destinationReady", Q_RETURN_ARG(bool, logs_ready), Q_ARG(int, 3));
         if (!logs_ready || findShellPage(window, "quickLogsPage") == nullptr)
             return failNavigationLifecycle("ui.navigate returned before its first-visit page was loaded");
+        if (shell->property("currentPage").toInt() != 2 ||
+            shell->property("diagnosticsSection").toInt() != exosnap::quick::ShellAdapter::DiagnosticsLogs)
+            return failNavigationLifecycle("a logs navigation did not normalize to Diagnostics + logs");
         if (automation.Reveal(QStringLiteral("logs"), QStringLiteral("no-such-target"), &error) !=
             exosnap::live_verify::LiveVerifySource::RevealOutcome::UnknownTarget)
             return failNavigationLifecycle("an unknown reveal target right after navigation was not reported as such");
@@ -600,7 +627,7 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     }
 
     // First visit: the page exists and holds the adapter it was handed.
-    std::array<QObject*, 4> first_visit{};
+    std::array<QObject*, 3> first_visit{};
     for (std::size_t index = 0; index < destinations.size(); ++index) {
         const NavigationDestination& destination = destinations.at(index);
         QElapsedTimer navigation_timer;
@@ -623,7 +650,7 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
             // is displayed, so a stack that jumped ahead blanked the preview
             // while the Record page was still visibly there. The stack index is
             // the one observable that says which of the two the shell did.
-            if (shell->property("stackIndex").toInt() == destination.page)
+            if (shell->property("stackIndex").toInt() == destination.stack_index)
                 return failNavigationLifecycle("the stack switched to a page that does not exist yet");
             if (shell->property("currentPage").toInt() != destination.page)
                 return failNavigationLifecycle("the request itself was not recorded immediately");
@@ -637,7 +664,7 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
         // And once it exists, the stack follows -- through the same event
         // processing that delivered readiness, not a separate wait.
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-        if (shell->property("stackIndex").toInt() != destination.page)
+        if (shell->property("stackIndex").toInt() != destination.stack_index)
             return failNavigationLifecycle("the stack did not advance to a page that is ready");
         QObject* page = findShellPage(window, destination.object_name);
         if (page == nullptr)
@@ -669,13 +696,21 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
             return failNavigationLifecycle("page rebuilt on second visit");
     }
 
-    // The two signals the shell used to handle inline on its sourceComponent.
-    shell->setProperty("currentPage", 2);
+    // The two signals the shell used to handle inline on its sourceComponent and
+    // that the Diagnostics workspace forwards from the overview page.
+    if (!invokeNavigateTo(shell, 2))
+        return failNavigationLifecycle("navigateTo is not invokable");
+    if (shell->property("currentPage").toInt() != 2 ||
+        shell->property("diagnosticsSection").toInt() != exosnap::quick::ShellAdapter::DiagnosticsOverview)
+        return failNavigationLifecycle("the Diagnostics destination did not open on its overview");
     if (!QMetaObject::invokeMethod(diagnostics, "navigateToLogsRequested"))
         return failNavigationLifecycle("navigateToLogsRequested not invokable");
-    if (!waitForCurrentPage(shell, 3, 20000))
+    if (!waitForLogsView(shell, 20000))
         return failNavigationLifecycle("navigateToLogsRequested did not navigate");
-    shell->setProperty("currentPage", 2);
+    if (!invokeNavigateTo(shell, 2))
+        return failNavigationLifecycle("navigateTo is not invokable");
+    if (shell->property("diagnosticsSection").toInt() != exosnap::quick::ShellAdapter::DiagnosticsOverview)
+        return failNavigationLifecycle("re-entering Diagnostics did not restore the overview");
     if (!QMetaObject::invokeMethod(diagnostics, "navigateToSettingsRequested"))
         return failNavigationLifecycle("navigateToSettingsRequested not invokable");
     if (!waitForCurrentPage(shell, 1, 20000))
@@ -706,7 +741,7 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     QObject* nav_tabs = findShellPage(window, "quickNavTabs");
     if (nav_tabs == nullptr)
         return failNavigationLifecycle("no quickNavTabs repeater");
-    for (int tab = 0; tab <= 4; ++tab) {
+    for (int tab = 0; tab <= 3; ++tab) {
         QObject* delegate = navTabAt(nav_tabs, tab);
         if (delegate == nullptr)
             return failNavigationLifecycle("a navigation tab is missing");
@@ -726,12 +761,19 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
 
     // Every destination stays reachable. The Edit workspace is ephemeral:
     // leaving Record closes it without a discard prompt and returning does not
-    // resurrect the clip.
+    // resurrect the clip. Page 3 is the legacy logs request: it must land on
+    // Diagnostics with the logs section, not on a fifth destination.
     for (int page = 1; page <= 4; ++page) {
         if (!invokeNavigateTo(shell, page))
             return failNavigationLifecycle("navigateTo is not invokable");
-        if (shell->property("currentPage").toInt() != page)
+        const int expected_page = page == static_cast<int>(exosnap::quick::ShellAdapter::LogsPage)
+                                      ? static_cast<int>(exosnap::quick::ShellAdapter::DiagnosticsPage)
+                                      : page;
+        if (shell->property("currentPage").toInt() != expected_page)
             return failNavigationLifecycle("a destination was refused during an edit session");
+        if (page == static_cast<int>(exosnap::quick::ShellAdapter::LogsPage) &&
+            shell->property("diagnosticsSection").toInt() != exosnap::quick::ShellAdapter::DiagnosticsLogs)
+            return failNavigationLifecycle("the legacy logs destination did not open the logs view");
         if (shell->property("editOverlayOpen").toBool())
             return failNavigationLifecycle("navigation kept the edit session open");
         if (shell->property("editOverlayVisible").toBool() || workspace->property("visible").toBool())
@@ -767,7 +809,9 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     if (shell_adapter == nullptr)
         return failNavigationLifecycle("no shell adapter");
     emit shell_adapter->navigateToPageRequested(exosnap::quick::ShellAdapter::LogsPage);
-    if (shell->property("currentPage").toInt() != 3)
+    if (shell->property("currentPage").toInt() != static_cast<int>(exosnap::quick::ShellAdapter::DiagnosticsPage) ||
+        shell->property("diagnosticsSection").toInt() !=
+            static_cast<int>(exosnap::quick::ShellAdapter::DiagnosticsLogs))
         return failNavigationLifecycle("the adapter navigation path did not reach the shell");
     if (shell->property("editOverlayOpen").toBool() || shell->property("editOverlayVisible").toBool() ||
         workspace->property("visible").toBool())
@@ -785,23 +829,38 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     if (shell->property("navigationAllowed").toBool())
         return failNavigationLifecycle("a blocking surface left navigation allowed");
     const int blocked_page = shell->property("currentPage").toInt();
-    for (int tab = 0; tab <= 4; ++tab) {
+    // The same page -> visible-tab mapping the shell uses. The legacy LogsPage
+    // value has no tab of its own; its normalized destination does.
+    const auto tab_for_page = [](int page) {
+        switch (page) {
+        case 1:
+            return 1;
+        case 2:
+        case 3:
+            return 2;
+        case 4:
+            return 3;
+        default:
+            return 0;
+        }
+    };
+    for (int tab = 0; tab <= 3; ++tab) {
         QObject* delegate = navTabAt(nav_tabs, tab);
         if (delegate == nullptr)
             return failNavigationLifecycle("a navigation tab is missing");
         // The destination the user is already on is the one exception. A
         // blocking surface refuses every navigation, so greying the whole band
-        // is right for the four the user would be leaving for -- but the fifth
-        // is the page underneath the surface, and disabling it leaves the band
-        // with no current destination at all. A recovery surface raised at
-        // launch is the case that made it visible.
-        const bool expected = tab == blocked_page;
+        // is right for the destinations the user would be leaving for -- but
+        // the page underneath the surface stays enabled, and disabling it would
+        // leave the band with no current destination at all. A recovery surface
+        // raised at launch is the case that made it visible.
+        const bool expected = tab == tab_for_page(blocked_page);
         if (delegate->property("enabled").toBool() != expected)
             return failNavigationLifecycle(expected ? "a blocking surface disabled the destination the user is on"
                                                     : "a blocking surface left an unselected navigation tab enabled");
     }
     (void)invokeNavigateTo(shell, 4);
-    if (shell->property("currentPage").toInt() != 3)
+    if (shell->property("currentPage").toInt() != blocked_page)
         return failNavigationLifecycle("navigation went through behind a blocking surface");
     recording_error->dismiss();
     if (!shell->property("navigationAllowed").toBool())
@@ -1363,11 +1422,20 @@ int main(int argc, char* argv[]) {
     const QString visual_popup = optionValue(arguments, QStringLiteral("--visual-popup"));
     if (!visual_popup.isEmpty()) {
         QTimer::singleShot(0, &app, [root_window, &quick_application, visual_popup]() {
-            if (visual_popup == QLatin1String("source-picker")) {
+            const bool picker_popup = visual_popup == QLatin1String("source-picker") ||
+                                      visual_popup == QLatin1String("source-picker-windows") ||
+                                      visual_popup == QLatin1String("source-picker-search");
+            if (picker_popup) {
                 if (auto* page = root_window != nullptr
                                      ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage"))
                                      : nullptr) {
                     QMetaObject::invokeMethod(page, "openSourcePicker");
+                    if (auto* picker = root_window->findChild<QObject*>(QStringLiteral("recordSourcePicker"))) {
+                        if (visual_popup != QLatin1String("source-picker"))
+                            picker->setProperty("currentTab", 1);
+                        if (visual_popup == QLatin1String("source-picker-search"))
+                            picker->setProperty("windowQuery", QStringLiteral("Task"));
+                    }
                 }
             } else if (visual_popup == QLatin1String("notification-hub")) {
                 if (auto* notifications = quick_application.notificationsAdapter())
