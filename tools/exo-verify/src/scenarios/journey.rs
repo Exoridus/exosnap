@@ -16,7 +16,7 @@ use crate::{infra_ensure, product_ensure};
 pub fn scenarios() -> Vec<Scenario> {
     vec![Scenario {
         id: "journey.record-edit-export-restart",
-        revision: 4,
+        revision: 5,
         title: "A recording can be edited, exported and reopened after restart",
         class: ScenarioClass::Contract,
         contract: "the candidate records a changing window, accepts a marker and pause/resume, closes the open edit session without confirmation on navigation to any other page, exports an ordered trim to a decodable file after reopening the editor clean, quits through its own shutdown with a recorded clean exit, and starts again with the same candidate identity, the settings it was given and no blocking surface",
@@ -266,8 +266,11 @@ fn persisted_settings() -> Vec<(&'static str, Value)> {
 /// draft. Returning to Record shows the normal Completed state." Edit is a
 /// workspace over Record, not a session that survives leaving it.
 fn judge_edit_closes_on_navigation(page: &str, state: &Value) -> Step {
+    // The legacy "logs" request is an input alias for Diagnostics with the logs
+    // subview; the canonical page is what the state reports.
+    let expected = if page == "logs" { "diagnostics" } else { page };
     product_ensure!(
-        state["page"] == page,
+        state["page"] == expected,
         "ui.navigate {page} landed on {}",
         state["page"]
     );

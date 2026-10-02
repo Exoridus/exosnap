@@ -369,7 +369,14 @@ class FakeSource final : public LiveVerifySource {
             return false;
         // The real shell reaches the destination synchronously; the fake mirrors
         // that so the dispatcher's postcondition check has something to observe.
-        state.page = page;
+        // The legacy "logs" request is normalized to Diagnostics with the logs
+        // subview, and the fake mirrors that too.
+        if (page == QLatin1String(page_name::kLogs)) {
+            state.page = QString::fromLatin1(page_name::kDiagnostics);
+            state.diagnostics_section = QString::fromLatin1(diagnostics_section_name::kLogs);
+        } else {
+            state.page = page;
+        }
         ++revision;
         return true;
     }
@@ -1592,6 +1599,24 @@ TEST(LiveVerifyDispatcher, NavigationAnswersTheResultingPageAndSettlesInTheSameR
     EXPECT_TRUE(response.value(QStringLiteral("settled")).toBool());
     EXPECT_EQ(response.value(QStringLiteral("result")).toObject().value(QStringLiteral("page")).toString(),
               QStringLiteral("settings"));
+}
+
+TEST(LiveVerifyDispatcher, LegacyLogsNavigationNormalizesToDiagnosticsLogs) {
+    FakeSource source;
+    source.state.page = QString::fromLatin1(page_name::kRecord);
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("ui.navigate"), QJsonObject{{QStringLiteral("page"), QStringLiteral("logs")}}));
+    ASSERT_TRUE(Ok(response));
+    EXPECT_TRUE(response.value(QStringLiteral("settled")).toBool());
+    // The legacy spelling is an input alias only: the answer names the canonical
+    // destination and the state carries the logs subview, never a phantom fifth
+    // page.
+    EXPECT_EQ(response.value(QStringLiteral("result")).toObject().value(QStringLiteral("page")).toString(),
+              QStringLiteral("diagnostics"));
+    EXPECT_EQ(source.state.diagnostics_section, QString::fromLatin1(diagnostics_section_name::kLogs));
 }
 
 TEST(LiveVerifyDispatcher, NavigatingToTheCurrentPageIsASuccessfulNoOp) {

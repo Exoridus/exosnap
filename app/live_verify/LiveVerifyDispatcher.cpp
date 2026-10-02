@@ -265,9 +265,15 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         if (!source.Navigate(page, &error))
             return IntentRefused(command, source, error);
         // The RESULTING page, not the requested one. Navigating to the page you
-        // are already on is a successful no-op, which is the same answer.
+        // are already on is a successful no-op, which is the same answer. The
+        // legacy "logs" request is the one alias: the shell normalizes it to
+        // Diagnostics with the logs subview, so the canonical page is what the
+        // state reports and what satisfies the postcondition.
         const AutomationState after = source.State();
-        if (after.page != page)
+        const bool normalized_logs = page == QLatin1String(page_name::kLogs) &&
+                                     after.page == QLatin1String(page_name::kDiagnostics) &&
+                                     after.diagnostics_section == QLatin1String(diagnostics_section_name::kLogs);
+        if (after.page != page && !normalized_logs)
             return PostconditionMissed(command.name, QStringLiteral("the shell reaching \"%1\"").arg(page));
         QJsonObject result;
         result.insert(QStringLiteral("page"), after.page);

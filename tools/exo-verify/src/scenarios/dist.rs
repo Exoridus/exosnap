@@ -72,7 +72,7 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "dist.updater-staged-launch",
-            revision: 1,
+            revision: 2,
             title: "The updater runs from the file subset the application stages",
             class: ScenarioClass::Contract,
             contract: "exosnap-updater.exe loads and renders from exactly the runtime subset the application copies before a handoff",
@@ -394,7 +394,9 @@ fn portable_first_launch(ctx: &mut Context) -> Step {
 /// Must match the application's staging list: the updater never runs in place.
 /// The updater is a Qt Quick application, so this mirrors both halves of
 /// `UpdaterStagingFileList()` -- the Quick runtime DLLs and the QML import trees
-/// (staged recursively, because a module is qmldir + plugin + its own files).
+/// (staged recursively, because a module is qmldir + plugin + its own runtime
+/// files). No .qmltypes file is expected: that is tooling metadata which the
+/// official deploy tree does not carry and the engine does not read.
 const UPDATER_STAGING_FILES: &[&str] = &[
     "exosnap-updater.exe",
     "Qt6Core.dll",
@@ -416,7 +418,6 @@ const UPDATER_STAGING_FILES: &[&str] = &[
     "Qt6Svg.dll",
     "plugins/platforms/qwindows.dll",
     "qml/QtQuick/Controls/qmldir",
-    "qml/QtQuick/Controls/plugins.qmltypes",
     "qml/QtQuick/Controls/qtquickcontrols2plugin.dll",
 ];
 

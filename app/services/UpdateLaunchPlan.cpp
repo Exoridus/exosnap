@@ -73,8 +73,13 @@ QStringList UpdaterStagingFileList() {
     // Relative to QCoreApplication::applicationDirPath(). Forward slashes; the
     // copy step resolves them against the native app dir. An entry ending in '/'
     // is a directory staged recursively, which keeps the QML import trees whole
-    // (qmldir + plugins.qmltypes + plugin DLL + the style's own .qml files)
-    // instead of listing each file of a Qt module by hand.
+    // (qmldir + plugin DLL + the style's own .qml files) instead of listing each
+    // file of a Qt module by hand.
+    //
+    // No .qmltypes file appears here. Those are tooling metadata, the official
+    // deploy tree does not carry them, and the engine does not read them at
+    // runtime, so requiring one would refuse a handoff from a correctly
+    // packaged installation.
     //
     // The updater is a Qt Quick application: it needs the Quick/Qml runtime,
     // the Basic Controls style it imports, QML's layout and shape modules, and
@@ -105,7 +110,6 @@ QStringList UpdaterStagingFileList() {
         // the only style submodules staged; the others are optional imports the
         // qmldir tolerates and the updater never uses.
         QStringLiteral("qml/QtQuick/Controls/qmldir"),
-        QStringLiteral("qml/QtQuick/Controls/plugins.qmltypes"),
         QStringLiteral("qml/QtQuick/Controls/qtquickcontrols2plugin.dll"),
         QStringLiteral("qml/QtQuick/Controls/Basic/"),
         QStringLiteral("qml/QtQuick/Controls/impl/"),

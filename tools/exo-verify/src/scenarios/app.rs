@@ -41,7 +41,7 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "app.navigation-surfaces",
-            revision: 1,
+            revision: 2,
             title: "Every page and popup is reachable and settles",
             class: ScenarioClass::Contract,
             contract: "each page navigates and settles idempotently, Edit is not a navigation target, and the source picker, notification hub and settings reveal behave as specified",
@@ -161,6 +161,17 @@ fn control_endpoint_lifecycle(ctx: &mut Context) -> Step {
 
 const PAGES: [&str; 5] = ["record", "settings", "diagnostics", "logs", "about"];
 
+/// The canonical page a navigation request must land on. The legacy "logs"
+/// spelling is an input alias for Diagnostics with the logs subview; the
+/// product answers the canonical destination, never a phantom page of its own.
+fn canonical_page(requested: &str) -> &str {
+    if requested == "logs" {
+        "diagnostics"
+    } else {
+        requested
+    }
+}
+
 fn navigation_surfaces(ctx: &mut Context) -> Step {
     let mut app = ctx.launch(&[])?;
     for page in PAGES {
@@ -169,8 +180,9 @@ fn navigation_surfaces(ctx: &mut Context) -> Step {
                 .client
                 .request("ui.navigate", json!({ "page": page }), secs(15.0))?
                 .map_err(|r| Stop::fail(format!("ui.navigate {page} refused: {r}")))?;
+            let expected = canonical_page(page);
             product_ensure!(
-                result["page"] == page,
+                result["page"] == expected,
                 "navigating to {page} (attempt {}) landed on {}",
                 attempt + 1,
                 result["page"]
@@ -178,6 +190,15 @@ fn navigation_surfaces(ctx: &mut Context) -> Step {
             product_ensure!(
                 app.client.last_response["settled"] == true,
                 "ui.navigate {page} did not settle in its response"
+            );
+        }
+        if page == "logs" {
+            let state = app.call("ui.getState", json!({}))?;
+            product_ensure!(
+                state["page"] == "diagnostics" && state["diagnosticsSection"] == "logs",
+                "the logs alias left page {} with diagnosticsSection {}",
+                state["page"],
+                state["diagnosticsSection"]
             );
         }
     }
