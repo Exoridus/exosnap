@@ -1,4 +1,4 @@
-# ExoSnap 0.10.0: Portable Windows guide
+# ExoSnap 0.10.1: Portable Windows guide
 
 ExoSnap records a screen, window or region with NVIDIA NVENC, independently routed audio, optional webcam composition and recording diagnostics. This is a pre-1.0 preview; see [Known limitations](KNOWN_LIMITATIONS.md) before relying on a particular hardware/format combination.
 
