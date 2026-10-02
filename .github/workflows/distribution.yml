@@ -129,6 +129,14 @@ jobs:
           ./tools/target/debug/exo-verify.exe rehearse
           --channel chocolatey --package-source prepared/packaging/chocolatey
           --installer "assets/ExoSnap-$env:VERSION-windows-x64.msi" --out rehearsal
+      - name: Retain the rehearsal evidence even when it fails
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: distribution-rehearsal
+          path: rehearsal/
+          if-no-files-found: warn
+          retention-days: 90
       - name: Freeze and validate the distribution readiness report
         id: validate
         shell: pwsh
