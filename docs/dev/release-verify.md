@@ -176,6 +176,16 @@ Extracted package trees and copied executables are working data, not evidence.
 Passing recordings are discarded unless explicitly requested.
 Failures retain available logs, analyzer output, short media, dumps and screenshots.
 
-`READY FOR APPROVAL` is a calculation, not release permission. Publication remains blocked until an approved path checks the frozen report and reuses the exact candidate MSI and ZIP bytes behind the `release` environment. Follow the [release checklist](../release-checklist.md#4-publication-boundary).
+`READY FOR APPROVAL` is a calculation, not release permission. The `Publish qualified release` workflow checks the frozen report and reuses the exact candidate MSI and ZIP bytes behind the `release` environment. Follow the [release checklist](../release-checklist.md#4-publication-boundary).
+
+Prepare its qualification input after the final report is ready:
+
+```powershell
+exo-verify publication encode --bundle candidate-bundle --plan candidate-plan.json `
+    --report report/release-report.json --decisions decisions.json `
+    --results results --out publication-inputs.json
+```
+
+Omit `--decisions` when none were recorded. The output contains `qualification_sha256` and `qualification_base64` for workflow dispatch. Supply them together with `candidate_run` and `candidate_id`, using `next` at the same source revision as the candidate. The encoded document carries the frozen report, explicit decisions and external GPU/hardware result documents. Hosted results are downloaded independently from Actions, including all retained attempts; external input cannot replace those lanes. The input is bounded to the workflow dispatch size limit and never includes executables or signing keys. Preserve the underlying private evidence with the campaign; the workflow retains qualification records as private Actions artifacts.
 
 Runner tests use fake environment/tools and hostile inputs to execute real gate logic. They test refusal, restoration, interrupted state, schema and evidence handling without changing the developer's machine. Their success does not claim the hardware or installer under test has been exercised.

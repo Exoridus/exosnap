@@ -22,6 +22,7 @@ mod pattern;
 mod pe;
 mod plan;
 mod pointer;
+mod publication;
 mod report;
 mod runner;
 mod samples;
@@ -56,6 +57,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Prepare qualification and promote exact official candidate bytes.
+    #[command(subcommand)]
+    Publication(publication::PublicationCommand),
     /// Build, inspect or transport the immutable candidate bundle.
     #[command(subcommand)]
     Bundle(BundleCommand),
@@ -888,6 +892,7 @@ fn real_main() -> Result<ExitCode> {
         }
         #[cfg(not(windows))]
         Command::Disposable(_) => bail!("disposable backends need a Windows host"),
+        Command::Publication(command) => publication::run(command)?,
         Command::Package(args) => {
             let result = package::run(&args)?;
             println!("{}", serde_json::to_string_pretty(&result)?);

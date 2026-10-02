@@ -63,7 +63,9 @@ If source or package bytes change, build another candidate and rerun the affecte
 
 ## 4. Publication boundary
 
-There is currently no enabled publish workflow. The candidate workflow creates no version tag and publishes no GitHub Release. Until the publish path verifies the frozen report and reuses the candidate's exact MSI and ZIP bytes behind the `release` environment, do not push a release tag or submit a package-manager version.
+The `Publish qualified release` workflow (`.github/workflows/publish-release.yml`) runs from `next` at the candidate source commit. It accepts the official successful candidate run ID and candidate ID, plus the frozen qualification encoded by `exo-verify publication encode`. The candidate workflow itself creates no version tag and publishes no GitHub Release.
+
+The read-only job downloads the official bundle, frozen plan and every hosted lane attempt. The Rust verifier checks source/run provenance, exact package hashes, plan and report consistency, decisions and readiness. The `release` environment protects the publication job, which repeats that check, signs the production manifest using the existing update key, tags the qualified source and uploads the same MSI/ZIP bytes to a draft release. It verifies independently downloaded assets before publishing, fast-forwards `main` without rewriting history, and verifies the public downloads again. Only release tools are compiled; publication never rebuilds the product packages.
 
 At publication, independently re-download and hash every public asset, verify the signed production update manifest against the embedded public key, and confirm that the tag names the exact source commit and final version already compiled into the candidate. State the actual Authenticode status; an Ed25519 update signature does not remove SmartScreen warnings.
 
