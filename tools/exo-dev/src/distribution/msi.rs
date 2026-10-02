@@ -46,21 +46,30 @@ pub fn read_msi_identity(msi: &Path) -> anyhow::Result<MsiIdentity> {
                 ensure!(code == 0, "MsiViewExecute failed with {code}");
                 let code = MsiViewFetch(view, &mut record);
                 ensure!(code == 0, "the MSI declares no {property}");
-                let mut length = 0u32;
-                let code = MsiRecordGetStringW(record, 1, None, Some(&mut length));
+                // The size queried with a null buffer includes the null
+                // terminator, and the second call takes the buffer capacity
+                // as its input length. Both conventions have to be honored or
+                // the call reports ERROR_MORE_DATA for a buffer that fits.
+                let mut required = 0u32;
+                let code = MsiRecordGetStringW(record, 1, None, Some(&mut required));
                 ensure!(
                     code == 0 || code == 234,
                     "MsiRecordGetStringW failed with {code}"
                 );
-                let mut buffer = vec![0u16; length as usize + 1];
+                if required == 0 {
+                    return Ok(String::new());
+                }
+                let mut buffer = vec![0u16; required as usize + 1];
+                let mut capacity = required + 1;
                 let code = MsiRecordGetStringW(
                     record,
                     1,
                     Some(windows::core::PWSTR(buffer.as_mut_ptr())),
-                    Some(&mut length),
+                    Some(&mut capacity),
                 );
                 ensure!(code == 0, "MsiRecordGetStringW failed with {code}");
-                Ok(String::from_utf16_lossy(&buffer[..length as usize]))
+                buffer.truncate(capacity.min(required) as usize);
+                Ok(String::from_utf16_lossy(&buffer))
             })();
             if record.0 != 0 {
                 MsiCloseHandle(record);
