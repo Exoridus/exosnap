@@ -72,13 +72,25 @@ jobs:
           Add-AppxProvisionedPackage -Online -PackagePath $bundle -LicensePath $license -DependencyPackagePath $dependencyPackages | Out-Null
           $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
           $winget = Join-Path $alias 'winget.exe'
-          if (Test-Path -LiteralPath $winget) {
-            Add-Content -LiteralPath $env:GITHUB_PATH -Value $alias
+          if (-not (Test-Path -LiteralPath $winget)) {
+            # Provisioning stages the package machine-wide but does not create
+            # the current user's app execution alias in this session; register
+            # the staged package for this user before falling back to its
+            # install directory on PATH.
+            Import-Module -Name Appx -UseWindowsPowerShell -ErrorAction Stop
+            $packageRoot = Get-ChildItem -LiteralPath 'C:\Program Files\WindowsApps' -Directory `
+              -Filter 'Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe' -ErrorAction Stop |
+              Sort-Object Name -Descending | Select-Object -First 1
+            if (-not $packageRoot) { throw 'the provisioned WinGet package has no install directory' }
+            Add-AppxPackage -Register -DisableDevelopmentMode -Path (Join-Path $packageRoot.FullName 'AppxManifest.xml')
+            if (Test-Path -LiteralPath $winget) {
+              Add-Content -LiteralPath $env:GITHUB_PATH -Value $alias
+            } else {
+              $winget = Join-Path $packageRoot.FullName 'winget.exe'
+              Add-Content -LiteralPath $env:GITHUB_PATH -Value $packageRoot.FullName
+            }
           } else {
-            $package = Get-AppxPackage -Name Microsoft.DesktopAppInstaller | Select-Object -First 1
-            if (-not $package) { throw 'the WinGet client was not provisioned' }
-            $winget = Join-Path $package.InstallLocation 'winget.exe'
-            Add-Content -LiteralPath $env:GITHUB_PATH -Value $package.InstallLocation
+            Add-Content -LiteralPath $env:GITHUB_PATH -Value $alias
           }
           & $winget --version
       - name: Build the distribution tools from the trusted workflow revision
