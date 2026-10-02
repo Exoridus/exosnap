@@ -168,8 +168,8 @@ fn vcvars_environment(_installation: &Path) -> anyhow::Result<Vec<(String, Strin
     bail!("the MSVC environment exists only on Windows")
 }
 
-/// Parses `set` output. Entries whose name is empty (cmd's per-drive `=C:=C:\`) are
-/// skipped.
+/// Parses `set` output. Entries whose name is empty, such as cmd's per-drive
+/// pseudo-variables, are skipped.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn parse_set_output(text: &str) -> Vec<(String, String)> {
     text.lines()
