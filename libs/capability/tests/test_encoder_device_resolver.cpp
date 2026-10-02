@@ -48,9 +48,9 @@ AdapterEncoderCapability NvencCapability(bool av1 = true, bool hevc = true, bool
     return capability;
 }
 
-std::vector<exosnap::capability::EncoderDeviceCandidate> Candidates(std::vector<AdapterInfo> adapters,
-                                                                    std::vector<AdapterEncoderCapability> capabilities,
-                                                                    EncoderDeviceRequest request = {}) {
+std::vector<exosnap::capability::EncoderDeviceCandidate>
+Candidates(const std::vector<AdapterInfo>& adapters, const std::vector<AdapterEncoderCapability>& capabilities,
+           EncoderDeviceRequest request = {}) {
     return BuildEncoderDeviceCandidates(adapters, capabilities, request);
 }
 

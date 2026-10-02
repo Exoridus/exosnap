@@ -13,7 +13,8 @@ using exosnap::engine::PipelineAdapterIdentity;
 using exosnap::engine::PipelineRole;
 
 TEST(GpuTelemetry, MissingReadApiAndUnsupportedFieldsRemainUnavailable) {
-    const auto absent = ReadNvmlMeasurements({}, reinterpret_cast<void*>(1), 42);
+    int device = 0;
+    const auto absent = ReadNvmlMeasurements({}, &device, 42);
     EXPECT_FALSE(absent.utilization_percent);
     EXPECT_FALSE(absent.encoder_utilization_percent);
     EXPECT_FALSE(absent.temperature_celsius);
@@ -26,13 +27,13 @@ TEST(GpuTelemetry, MissingReadApiAndUnsupportedFieldsRemainUnavailable) {
         *value = 99;
         return 3;
     };
-    const auto partial = ReadNvmlMeasurements(api, reinterpret_cast<void*>(1), 43);
+    const auto partial = ReadNvmlMeasurements(api, &device, 43);
     EXPECT_EQ(partial.utilization_percent, 99);
     EXPECT_FALSE(partial.temperature_celsius);
     EXPECT_EQ(partial.metadata.adapter_luid, 43);
     EXPECT_FALSE(partial.metadata.process_id);
     EXPECT_FALSE(ReadNvmlMeasurements(api, nullptr, 43).utilization_percent);
-    EXPECT_FALSE(ReadNvmlMeasurements({}, reinterpret_cast<void*>(1), 44).utilization_percent);
+    EXPECT_FALSE(ReadNvmlMeasurements({}, &device, 44).utilization_percent);
 }
 
 TEST(GpuTelemetry, AmbiguousAndMissingAdaptersAreNeverGuessed) {
