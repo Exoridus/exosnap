@@ -48,8 +48,8 @@
           Theme="hyperlinkLicense"
           LicenseUrl="$(var.LicenseUrl)"
           ShowVersion="yes"
-          LaunchTarget="[ProgramFiles64Folder]Codexo\ExoSnap\exosnap.exe"
-          LaunchWorkingFolder="[ProgramFiles64Folder]Codexo\ExoSnap" />
+          LaunchTarget="[ProgramFiles64Folder]ExoSnap\exosnap.exe"
+          LaunchWorkingFolder="[ProgramFiles64Folder]ExoSnap" />
     </BootstrapperApplication>
 
     <Chain>

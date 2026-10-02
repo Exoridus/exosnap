@@ -401,11 +401,11 @@ impl<'a> Rehearsal<'a> {
     }
 
     fn installed_exe_path() -> PathBuf {
-        PathBuf::from(r"C:\Program Files\Codexo\ExoSnap\exosnap.exe")
+        PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe")
     }
 
     fn install_directory() -> PathBuf {
-        PathBuf::from(r"C:\Program Files\Codexo\ExoSnap")
+        PathBuf::from(r"C:\Program Files\ExoSnap")
     }
 
     fn shortcut_path() -> Result<PathBuf> {
@@ -862,7 +862,7 @@ mod tests {
             display_name: display_name.to_string(),
             publisher: "Codexo".to_string(),
             display_version: "1.2.3".to_string(),
-            install_location: r"C:\Program Files\Codexo\ExoSnap".to_string(),
+            install_location: r"C:\Program Files\ExoSnap".to_string(),
         }
     }
 

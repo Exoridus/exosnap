@@ -143,8 +143,8 @@ function Get-ExoSnapResidue {
     $update = Join-Path $userConfig 'update'
     if (Test-Path -LiteralPath $update) { $found += "update state from an earlier install ($update)" }
 
-    if (Test-Path -LiteralPath 'HKCU:\SOFTWARE\Codexo\ExoSnap') {
-        $found += 'a per-user registry key (HKCU:\SOFTWARE\Codexo\ExoSnap)'
+    if ((Test-Path -LiteralPath 'HKCU:\SOFTWARE\ExoSnap') -or (Test-Path -LiteralPath 'HKCU:\SOFTWARE\Codexo\ExoSnap')) {
+        $found += 'a per-user registry key (HKCU:\SOFTWARE\ExoSnap or the legacy HKCU:\SOFTWARE\Codexo\ExoSnap)'
     }
 
     # Named without a cause attached. No ExoSnap install creates this directory --
@@ -174,6 +174,8 @@ function Invoke-Msi {
 
 function Get-InstalledExoSnap {
     $candidates = @(
+        (Join-Path $env:ProgramFiles 'ExoSnap\exosnap.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'ExoSnap\exosnap.exe'),
         (Join-Path $env:ProgramFiles 'Codexo\ExoSnap\exosnap.exe'),
         (Join-Path ${env:ProgramFiles(x86)} 'Codexo\ExoSnap\exosnap.exe'))
     foreach ($candidate in $candidates) {

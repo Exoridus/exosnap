@@ -194,12 +194,7 @@ fn portable(ctx: &mut Context) -> Step {
 
 fn installed_exe() -> Step<Option<PathBuf>> {
     let out = crate::tools::run(
-        Command::new("reg.exe").args([
-            "query",
-            r"HKLM\SOFTWARE\Codexo\ExoSnap",
-            "/v",
-            "InstallPath",
-        ]),
+        Command::new("reg.exe").args(["query", r"HKLM\SOFTWARE\ExoSnap", "/v", "InstallPath"]),
         Duration::from_secs(10),
     )?;
     if !out.success() {
@@ -977,21 +972,17 @@ mod tests {
 
     #[test]
     fn the_relaunch_is_a_new_process_running_the_updated_executable() {
-        let target = Path::new(r"C:\Program Files\Codexo\ExoSnap\exosnap.exe");
+        let target = Path::new(r"C:\Program Files\ExoSnap\exosnap.exe");
         let processes = vec![
             (
                 10,
-                Some(PathBuf::from(
-                    r"C:\Program Files\Codexo\ExoSnap\exosnap.exe",
-                )),
+                Some(PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe")),
             ),
             (11, Some(PathBuf::from(r"C:\Other\exosnap.exe"))),
             (12, None),
             (
                 13,
-                Some(PathBuf::from(
-                    r"c:\program files\codexo\exosnap\EXOSNAP.EXE",
-                )),
+                Some(PathBuf::from(r"c:\program files\exosnap\EXOSNAP.EXE")),
             ),
         ];
         assert_eq!(relaunched_pid(&processes, 10, target), Some(13));
@@ -1000,7 +991,7 @@ mod tests {
             relaunched_pid(
                 &processes,
                 99,
-                Path::new(r"\\?\C:\Program Files\Codexo\ExoSnap\exosnap.exe")
+                Path::new(r"\\?\C:\Program Files\ExoSnap\exosnap.exe")
             ),
             Some(10)
         );

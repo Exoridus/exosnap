@@ -19,8 +19,8 @@ use crate::{infra_ensure, product_ensure};
 /// The registry key an installed ExoSnap publishes its product state under.
 /// Shared with the Chocolatey rehearsal, which installs and removes the same
 /// product through a different channel and must recognize the same state.
-pub(crate) const INSTALL_KEY: &str = r"HKLM\SOFTWARE\Codexo\ExoSnap";
-pub(crate) const USER_KEY: &str = r"HKCU\SOFTWARE\Codexo\ExoSnap";
+pub(crate) const INSTALL_KEY: &str = r"HKLM\SOFTWARE\ExoSnap";
+pub(crate) const USER_KEY: &str = r"HKCU\SOFTWARE\ExoSnap";
 
 pub fn scenarios() -> Vec<Scenario> {
     vec![Scenario {
@@ -268,10 +268,10 @@ mod tests {
 
     #[test]
     fn registry_value_parser_handles_paths_and_dword_markers() {
-        let output = "\n    InstallPath    REG_SZ    C:\\Program Files\\Codexo\\ExoSnap\\\n    installed    REG_DWORD    0x1\n";
+        let output = "\n    InstallPath    REG_SZ    C:\\Program Files\\ExoSnap\\\n    installed    REG_DWORD    0x1\n";
         assert_eq!(
             parse_reg_value(output, "InstallPath"),
-            Some(r"C:\Program Files\Codexo\ExoSnap\".into())
+            Some(r"C:\Program Files\ExoSnap\".into())
         );
         assert_eq!(parse_reg_value(output, "installed"), Some("0x1".into()));
     }
