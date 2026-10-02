@@ -12,15 +12,23 @@ This is a thin download-at-install package. It embeds no binaries, which is why 
 
 Between a version bump and the published release the MSI does not exist, so no real hash can be written. `checksum64` carries 64 zeros in that window, and `cargo exo-dev packaging chocolatey` fails on it unconditionally so it cannot be packed or pushed by accident. Fill it from the `ExoSnap-<x.y.z>-windows-x64.msi.sha256` sidecar once the release workflow has published it. The full release order is in `docs/release-checklist.md` §8.
 
-## Submission
+## Preparation and submission
+
+The protected `Distribute release` workflow owns submission. It resolves the immutable public GitHub Release, renders this package with the published MSI hash, runs the full validator, packs `exosnap.<x.y.z>.nupkg`, rehearses install/uninstall/restore on a disposable runner, and freezes a distribution readiness report. After the `distribution` environment approval it pushes exactly that frozen `.nupkg`.
+
+The same steps are available locally:
 
 ```powershell
-cargo exo-dev packaging chocolatey --version <x.y.z> --require-manifest --manifest-path <manifest>
-choco pack packaging/chocolatey/exosnap.nuspec --output-directory $env:TEMP/exosnap-choco
-choco push $env:TEMP/exosnap-choco/exosnap.<x.y.z>.nupkg --source https://push.chocolatey.org/
+cargo exo-dev distribution prepare --version <x.y.z> --source-commit <sha> `
+    --release-json release.json --assets assets --out prepared
+cargo exo-verify rehearse --channel chocolatey `
+    --package-source prepared/packaging/chocolatey `
+    --installer assets/ExoSnap-<x.y.z>-windows-x64.msi --out rehearsal
+cargo exo-dev distribution validate --prepared prepared --assets assets `
+    --chocolatey-rehearsal rehearsal/chocolatey-rehearsal.json
 ```
 
-`<manifest>` is the candidate `bundle.json` written by `exo-verify bundle create`; its installer entry carries the MSI hash. `--require-manifest` is mandatory for a real submission. Without it, a missing manifest skips the checksum cross-check instead of failing it.
+The version-only validator (`cargo exo-dev packaging chocolatey --version-only`) remains the pull-request gate before a release exists.
 
 A submission is reviewed by a human moderator after two automated services have run: the *validator*, which checks the metadata and the automation scripts against the published rules, and the *verifier*, which installs and uninstalls the package on a clean machine. The validator's mechanically checkable rules are mirrored in `cargo exo-dev packaging chocolatey` so a failure costs a local second rather than a review round trip. When a moderator asks for a change, the corrected package is pushed under the **same** version, not a new one.
 

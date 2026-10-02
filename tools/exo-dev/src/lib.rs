@@ -8,6 +8,7 @@ pub mod build_artifacts;
 pub mod cli_flags;
 pub mod commit_policy;
 pub mod crash_dump;
+pub mod distribution;
 pub mod drift;
 pub mod encoder_quality_matrix;
 pub mod evidence;

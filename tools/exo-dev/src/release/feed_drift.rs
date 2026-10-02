@@ -1,22 +1,21 @@
-//! What each package channel is serving, against what the publication policy
-//! says it should be. Advisory: it reports, it never publishes.
+//! What each package channel is serving or being prepared to serve, against
+//! what the publication policy states. Advisory: it reports, it never
+//! publishes.
 //!
 //! Four channels carry ExoSnap to users: the GitHub Release every other one
-//! downloads from, Chocolatey, WinGet and Scoop, and three of them are
-//! currently held behind the repository version on purpose. "On purpose" is
-//! the part that goes stale: without a written policy, a channel serving an
-//! old version is indistinguishable from a submission somebody forgot, and
-//! the only way to tell was to remember why.
+//! downloads from, Chocolatey, WinGet and Scoop. The policy states one of
+//! PENDING, PREPARED, SUBMITTED, IN_REVIEW or PUBLISHED per channel, so a
+//! channel that is behind the release is distinguishable from a submission
+//! that was forgotten.
 //!
-//! `packaging/publication-policy.json` states the intent per channel, and
-//! this module is the other half. It runs in two parts:
+//! `packaging/publication-policy.json` states that per channel, and this
+//! module is the other half. It runs in two parts:
 //!
 //!   - The policy itself, offline and deterministic: every packaging
-//!     surface in the tree is covered, every version parses, a channel
-//!     meant to publish names the version the tree declares, and a hold
-//!     resumes at a version ahead of where it is held. A defect here fails
-//!     the run, because it is a defect in the statement itself and needs no
-//!     network to see.
+//!     surface in the tree is covered, every version parses, every state is
+//!     one this checker implements, and no channel claims to serve a version
+//!     the tree has not reached. A defect here fails the run, because it is
+//!     a defect in the statement itself and needs no network to see.
 //!
 //!   - The feeds, over the network: what each one actually serves.
 //!     Everything here is advisory. A feed that moved without the policy
@@ -24,9 +23,8 @@
 //!     reason to fail a build: the feeds are outside this repository, and
 //!     the answer to drift is a decision, never an automatic submission.
 //!
-//! Nothing in here submits, pushes or publishes anything, and nothing in
-//! this repository does: every submission is a step in
-//! docs/release-checklist.md section 8 that a person runs.
+//! Nothing in here submits, pushes or publishes anything: submission is the
+//! protected distribution workflow's job, after a readiness report freezes.
 
 use std::path::Path;
 
@@ -58,12 +56,10 @@ pub struct FeedComparison {
 #[derive(Default)]
 pub struct FeedDriftReport {
     pub repository_version: String,
-    /// Statements the policy itself must not make: version disagreements,
-    /// undeclared channels, a hold with no reason. Any of these fails.
+    /// Statements the policy itself must not make: undeclared channels, an
+    /// unknown state, a version no channel could serve yet. Any of these
+    /// fails.
     pub problems: Vec<String>,
-    /// A hold that has reached its `resumeAt` version. Reported, never a
-    /// failure: publishing is a decision, not something this check takes.
-    pub due: Vec<String>,
     pub channel_names: Vec<String>,
     /// Empty unless the live half ran.
     pub feeds: Vec<FeedComparison>,
@@ -131,8 +127,9 @@ pub fn check_with_fetcher(
     let mut channel_names: Vec<String> = channels.keys().cloned().collect();
     channel_names.sort();
 
+    const STATES: &[&str] = &["PENDING", "PREPARED", "SUBMITTED", "IN_REVIEW", "PUBLISHED"];
+
     let mut problems = Vec::new();
-    let mut due = Vec::new();
 
     for (required, marker) in PACKAGED_CHANNELS {
         if !channels.contains_key(*required) {
@@ -150,68 +147,31 @@ pub fn check_with_fetcher(
 
     for name in &channel_names {
         let channel = &channels[name];
-        let intent = channel
-            .get("intent")
+        let state = channel
+            .get("state")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let expected = channel
-            .get("expectedVersion")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let Some(expected_comparable) = parse_version(expected) else {
+        if !STATES.contains(&state) {
             problems.push(format!(
-                "{name} declares expectedVersion '{expected}', which is not x.y.z"
+                "{name} declares state '{state}'; it must be one of {}",
+                STATES.join(", ")
+            ));
+            continue;
+        }
+        let version = channel
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let Some(comparable) = parse_version(version) else {
+            problems.push(format!(
+                "{name} declares version '{version}', which is not x.y.z"
             ));
             continue;
         };
-
-        match intent {
-            "publish" => {
-                if expected != repository_version {
-                    problems.push(format!(
-                        "{name} is meant to publish, so its expectedVersion must be the version the tree declares ({repository_version}); it says {expected}"
-                    ));
-                }
-            }
-            "hold" => {
-                let resume_at = channel
-                    .get("resumeAt")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let Some(resume_comparable) = parse_version(resume_at) else {
-                    problems.push(format!(
-                        "{name} is held and declares resumeAt '{resume_at}', which is not x.y.z"
-                    ));
-                    continue;
-                };
-                if resume_comparable <= expected_comparable {
-                    problems.push(format!(
-                        "{name} is held at {expected} and resumes at {resume_at}, which is not ahead of it"
-                    ));
-                }
-                if resume_comparable < repository_comparable {
-                    problems.push(format!(
-                        "{name} is held until {resume_at}, and the tree already declares {repository_version}: the hold was overtaken rather than lifted"
-                    ));
-                }
-                let reason = channel
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                if reason.trim().is_empty() {
-                    problems.push(format!(
-                        "{name} is held and states no reason; a hold nobody wrote down is indistinguishable from a forgotten submission"
-                    ));
-                }
-                if resume_comparable == repository_comparable {
-                    due.push(format!(
-                        "{name} resumes at {resume_at}, which is the version the tree declares"
-                    ));
-                }
-            }
-            other => problems.push(format!(
-                "{name} declares intent '{other}'; it must be 'publish' or 'hold'"
-            )),
+        if comparable > repository_comparable {
+            problems.push(format!(
+                "{name} claims {state} at {version}, ahead of the version the tree declares ({repository_version})"
+            ));
         }
     }
 
@@ -221,7 +181,7 @@ pub fn check_with_fetcher(
         for name in &channel_names {
             let channel = &channels[name];
             let expected = channel
-                .get("expectedVersion")
+                .get("version")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
@@ -251,7 +211,6 @@ pub fn check_with_fetcher(
     Ok(FeedDriftReport {
         repository_version,
         problems,
-        due,
         channel_names,
         feeds,
         advisories,
@@ -259,8 +218,7 @@ pub fn check_with_fetcher(
 }
 
 /// Renders a report the way the offline and (when run) live halves printed
-/// it: the policy verdict first, then due holds, then per-feed lines and
-/// advisories.
+/// it: the policy verdict first, then per-feed lines and advisories.
 pub fn render(report: &FeedDriftReport) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -275,9 +233,6 @@ pub fn render(report: &FeedDriftReport) -> String {
             "  policy: OK ({} channel(s) declared)\n",
             report.channel_names.len()
         ));
-    }
-    for entry in &report.due {
-        out.push_str(&format!("  due:    {entry}\n"));
     }
     if !report.feeds.is_empty() {
         out.push('\n');
@@ -532,10 +487,10 @@ mod tests {
 
     fn passing_channels(version: &str) -> Value {
         serde_json::json!({
-            "github": { "intent": "publish", "expectedVersion": version, "feed": "https://example.invalid/github" },
-            "chocolatey": { "intent": "hold", "expectedVersion": "0.6.0", "resumeAt": "99.0.0", "feed": "https://example.invalid/choco", "reason": "held on purpose" },
-            "winget": { "intent": "hold", "expectedVersion": "0.8.1", "resumeAt": "99.0.0", "feed": "https://example.invalid/winget", "reason": "held on purpose" },
-            "scoop": { "intent": "hold", "expectedVersion": "0.8.1", "resumeAt": "99.0.0", "feed": "https://example.invalid/scoop", "reason": "held on purpose" },
+            "github": { "state": "PUBLISHED", "version": version, "feed": "https://example.invalid/github" },
+            "chocolatey": { "state": "SUBMITTED", "version": version, "feed": "https://example.invalid/choco" },
+            "winget": { "state": "IN_REVIEW", "version": version, "feed": "https://example.invalid/winget" },
+            "scoop": { "state": "PUBLISHED", "version": version, "feed": "https://example.invalid/scoop" },
         })
     }
 
@@ -565,11 +520,8 @@ mod tests {
 
     #[test]
     fn a_packaging_surface_the_policy_says_nothing_about_fails() {
-        let channels = serde_json::json!({
-            "github": { "intent": "publish", "expectedVersion": "0.10.0", "feed": "https://example.invalid/github" },
-            "winget": { "intent": "hold", "expectedVersion": "0.8.1", "resumeAt": "99.0.0", "feed": "https://example.invalid/winget", "reason": "held" },
-            "scoop": { "intent": "hold", "expectedVersion": "0.8.1", "resumeAt": "99.0.0", "feed": "https://example.invalid/scoop", "reason": "held" },
-        });
+        let mut channels = passing_channels("0.10.0");
+        channels.as_object_mut().unwrap().remove("chocolatey");
         let dir = fixture("0.10.0", &channels);
         let report = check_offline(&dir).unwrap();
         assert!(!report.ok());
@@ -582,9 +534,9 @@ mod tests {
     }
 
     #[test]
-    fn a_publishing_channel_pinned_to_another_version_fails() {
+    fn an_unknown_state_fails() {
         let mut channels = passing_channels("0.10.0");
-        channels["github"]["expectedVersion"] = serde_json::json!("0.0.1");
+        channels["chocolatey"]["state"] = serde_json::json!("maybe");
         let dir = fixture("0.10.0", &channels);
         let report = check_offline(&dir).unwrap();
         assert!(!report.ok());
@@ -592,14 +544,14 @@ mod tests {
             report
                 .problems
                 .iter()
-                .any(|p| p.contains("github is meant to publish"))
+                .any(|p| p.contains("declares state 'maybe'"))
         );
     }
 
     #[test]
-    fn a_hold_that_resumes_where_it_already_is_fails() {
+    fn a_channel_ahead_of_the_tree_version_fails() {
         let mut channels = passing_channels("0.10.0");
-        channels["chocolatey"]["resumeAt"] = serde_json::json!("0.6.0");
+        channels["github"]["version"] = serde_json::json!("9.9.9");
         let dir = fixture("0.10.0", &channels);
         let report = check_offline(&dir).unwrap();
         assert!(!report.ok());
@@ -607,82 +559,27 @@ mod tests {
             report
                 .problems
                 .iter()
-                .any(|p| p.contains("which is not ahead of it"))
+                .any(|p| p.contains("ahead of the version the tree declares"))
         );
     }
 
     #[test]
-    fn a_hold_the_tree_has_already_overtaken_fails() {
-        let mut channels = passing_channels("9.9.9");
-        channels["chocolatey"]["resumeAt"] = serde_json::json!("0.7.0");
-        let dir = fixture("9.9.9", &channels);
-        let report = check_offline(&dir).unwrap();
-        assert!(!report.ok());
-        assert!(
-            report
-                .problems
-                .iter()
-                .any(|p| p.contains("overtaken rather than lifted"))
-        );
-    }
-
-    #[test]
-    fn a_hold_with_no_reason_fails() {
+    fn a_published_channel_behind_the_tree_is_reported_not_failed() {
         let mut channels = passing_channels("0.10.0");
-        channels["chocolatey"]["reason"] = serde_json::json!("");
+        channels["scoop"]["state"] = serde_json::json!("PENDING");
+        channels["scoop"]["version"] = serde_json::json!("0.9.0");
         let dir = fixture("0.10.0", &channels);
-        let report = check_offline(&dir).unwrap();
-        assert!(!report.ok());
-        assert!(
-            report
-                .problems
-                .iter()
-                .any(|p| p.contains("states no reason"))
-        );
-    }
-
-    #[test]
-    fn a_hold_that_comes_due_is_reported_and_does_not_fail() {
-        let mut channels = passing_channels("9.9.9");
-        channels["chocolatey"]["resumeAt"] = serde_json::json!("9.9.9");
-        let dir = fixture("9.9.9", &channels);
         let report = check_offline(&dir).unwrap();
         assert!(report.ok(), "{:?}", report.problems);
-        assert!(
-            report
-                .due
-                .iter()
-                .any(|d| d.contains("chocolatey resumes at 9.9.9"))
-        );
-    }
-
-    #[test]
-    fn an_intent_the_checker_does_not_implement_fails() {
-        let mut channels = passing_channels("0.10.0");
-        channels["chocolatey"]["intent"] = serde_json::json!("maybe");
-        let dir = fixture("0.10.0", &channels);
-        let report = check_offline(&dir).unwrap();
-        assert!(!report.ok());
-        assert!(
-            report
-                .problems
-                .iter()
-                .any(|p| p.contains("declares intent 'maybe'"))
-        );
     }
 
     #[test]
     fn a_version_that_is_not_x_y_z_fails() {
         let mut channels = passing_channels("0.10.0");
-        channels["chocolatey"]["expectedVersion"] = serde_json::json!("latest");
+        channels["chocolatey"]["version"] = serde_json::json!("latest");
         let dir = fixture("0.10.0", &channels);
         let report = check_offline(&dir).unwrap();
         assert!(!report.ok());
-        assert!(
-            report
-                .problems
-                .iter()
-                .any(|p| p.contains("expectedVersion 'latest'"))
-        );
+        assert!(report.problems.iter().any(|p| p.contains("'latest'")));
     }
 }

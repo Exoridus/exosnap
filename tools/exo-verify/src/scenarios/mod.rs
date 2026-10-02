@@ -26,6 +26,47 @@ pub mod webcam;
 
 use crate::scenario::Scenario;
 
+/// Runs the Chocolatey rehearsal for one prepared package tree against one
+/// local MSI. This is the distribution-side entry point: it does not need the
+/// lane runner or a checkout, only the frozen package and its installer, and
+/// it writes the same result document the release lane produces.
+pub fn rehearse_chocolatey(
+    package_source: &std::path::Path,
+    installer: &std::path::Path,
+    out: &std::path::Path,
+) -> anyhow::Result<serde_json::Value> {
+    use anyhow::Context as _;
+    std::fs::create_dir_all(out)?;
+    let (hash, _) = crate::bundle::sha256_file(installer)?;
+    let staging = out.join("staging");
+    let evidence = out.join("evidence");
+    let document = match chocolatey_worker::run_rehearsal(
+        &staging,
+        package_source,
+        installer,
+        &hash,
+        &evidence,
+    ) {
+        Ok(result) => serde_json::to_value(&result)?,
+        Err(error) => {
+            let fatal = serde_json::json!({
+                "ok": false,
+                "msiPath": installer.display().to_string(),
+                "msiSha256": hash,
+                "restoreRan": false,
+                "steps": [],
+                "fatal": error.to_string(),
+            });
+            crate::write_json(&out.join("chocolatey-rehearsal.json"), &fatal)?;
+            return Err(error).context("the Chocolatey rehearsal could not run");
+        }
+    };
+    update::chocolatey_verdict(&document)
+        .map_err(|stop| anyhow::anyhow!("Chocolatey rehearsal verdict failed: {stop:?}"))?;
+    crate::write_json(&out.join("chocolatey-rehearsal.json"), &document)?;
+    Ok(document)
+}
+
 pub fn registry() -> Vec<Scenario> {
     let mut all = Vec::new();
     all.extend(dist::scenarios());

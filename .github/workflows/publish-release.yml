@@ -16,12 +16,16 @@ on:
         description: Candidate ID from that run
         required: true
         type: string
-      qualification_sha256:
-        description: SHA-256 from exo-verify publication encode
+      evidence_gist:
+        description: Gist holding the full retained qualification evidence
         required: true
         type: string
-      qualification_base64:
-        description: Encoded qualification from exo-verify publication encode
+      evidence_revision:
+        description: Gist revision the evidence was frozen at
+        required: true
+        type: string
+      binding_base64:
+        description: Compact publication binding from exo-verify publication bundle
         required: true
         type: string
 
@@ -36,7 +40,8 @@ concurrency:
 env:
   CANDIDATE_RUN: ${{ inputs.candidate_run }}
   CANDIDATE_ID: ${{ inputs.candidate_id }}
-  QUALIFICATION_SHA256: ${{ inputs.qualification_sha256 }}
+  EVIDENCE_GIST: ${{ inputs.evidence_gist }}
+  EVIDENCE_REVISION: ${{ inputs.evidence_revision }}
 
 jobs:
   verify:
@@ -69,19 +74,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api "repos/Exoridus/exosnap/actions/runs/$env:CANDIDATE_RUN" > candidate-run.json
-      - name: Decode frozen external qualification
+      - name: Write the compact publication binding
         shell: pwsh
         env:
-          EXOSNAP_QUALIFICATION: ${{ inputs.qualification_base64 }}
+          EXOSNAP_BINDING: ${{ inputs.binding_base64 }}
+        run: >-
+          ./tools/target/debug/exo-verify.exe publication binding
+          --base64-env EXOSNAP_BINDING --out binding.json
+      - name: Fetch the retained qualification evidence
+        shell: pwsh
+        run: >-
+          ./tools/target/debug/exo-verify.exe publication fetch
+          --binding binding.json --gist "$env:EVIDENCE_GIST"
+          --revision "$env:EVIDENCE_REVISION" --out evidence
+      - name: Verify the frozen evidence and write the qualification set
+        shell: pwsh
         run: >-
           ./tools/target/debug/exo-verify.exe publication unpack
-          --sha256 "$env:QUALIFICATION_SHA256" --out qualification
+          --binding binding.json --evidence evidence --gist "$env:EVIDENCE_GIST"
+          --revision "$env:EVIDENCE_REVISION" --out qualification
       - name: Check exact candidate publication preconditions
         id: qualification
         shell: pwsh
         run: >-
           ./tools/target/debug/exo-verify.exe publication check
           --bundle candidate/candidate-bundle --plan candidate/candidate-plan.json
+          --binding binding.json
           --report qualification/release-report.json --decisions qualification/decisions.json
           --results hosted-results --results qualification/results
           --run-metadata candidate-run.json --candidate-id "$env:CANDIDATE_ID"
@@ -106,6 +124,8 @@ jobs:
         with:
           name: publication-inputs
           path: |
+            binding.json
+            evidence/
             candidate-run.json
             hosted-results/**/*.result.json
             qualification/
@@ -181,6 +201,7 @@ jobs:
         run: >-
           ./tools/target/debug/exo-verify.exe publication check
           --bundle candidate/candidate-bundle --plan candidate/candidate-plan.json
+          --binding binding.json
           --report qualification/release-report.json --decisions qualification/decisions.json
           --results current-hosted-results --results qualification/results
           --run-metadata candidate-run.json --candidate-id "$env:CANDIDATE_ID"
@@ -220,7 +241,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.qualification.outputs.tag }}
-        run: gh api "repos/Exoridus/exosnap/releases/tags/$env:RELEASE_TAG" > release.json
+        run: |
+          # A draft release is not returned by the per-tag endpoint; the
+          # authenticated list endpoint includes it. Selecting from the list
+          # keeps the draft invisible to everyone else while its assets are
+          # still verified before publication.
+          $release = gh api "repos/Exoridus/exosnap/releases?per_page=100" --jq ".[] | select(.tag_name == `"$env:RELEASE_TAG`")"
+          if (-not $release) { throw "no release named $env:RELEASE_TAG is visible to this token" }
+          $release | Set-Content -NoNewline release.json
       - name: Verify uploaded assets before making the release public
         shell: pwsh
         env:
