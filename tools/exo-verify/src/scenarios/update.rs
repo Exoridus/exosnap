@@ -193,19 +193,27 @@ fn portable(ctx: &mut Context) -> Step {
 }
 
 fn installed_exe() -> Step<Option<PathBuf>> {
-    let out = crate::tools::run(
-        Command::new("reg.exe").args(["query", r"HKLM\SOFTWARE\ExoSnap", "/v", "InstallPath"]),
-        Duration::from_secs(10),
-    )?;
-    if !out.success() {
-        return Ok(None);
+    // The product marker moved to Software\ExoSnap in 0.10.1; a baseline older
+    // than that (the previous official MSI this lane installs) still publishes
+    // Software\Codexo\ExoSnap. Both are the same product, so both are read.
+    for key in [r"HKLM\SOFTWARE\ExoSnap", r"HKLM\SOFTWARE\Codexo\ExoSnap"] {
+        let out = crate::tools::run(
+            Command::new("reg.exe").args(["query", key, "/v", "InstallPath"]),
+            Duration::from_secs(10),
+        )?;
+        if !out.success() {
+            continue;
+        }
+        let path = out.stdout.lines().find_map(|line| {
+            let (_, value) = line.split_once("REG_SZ")?;
+            line.contains("InstallPath")
+                .then_some(PathBuf::from(value.trim()).join("exosnap.exe"))
+        });
+        if let Some(path) = path.filter(|p| p.is_file()) {
+            return Ok(Some(path));
+        }
     }
-    let path = out.stdout.lines().find_map(|line| {
-        let (_, value) = line.split_once("REG_SZ")?;
-        line.contains("InstallPath")
-            .then_some(PathBuf::from(value.trim()).join("exosnap.exe"))
-    });
-    Ok(path.filter(|p| p.is_file()))
+    Ok(None)
 }
 
 fn install_base(ctx: &mut Context) -> Step<PathBuf> {
