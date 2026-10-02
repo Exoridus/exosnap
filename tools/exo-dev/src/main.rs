@@ -682,7 +682,8 @@ struct VerifyArgs {
     /// EXOSNAP_VERIFY_JOBS, then all cores but two.
     #[arg(long)]
     jobs: Option<usize>,
-    /// Where to write the receipt. Defaults to .workspace/verify/latest.json.
+    /// Where to write the receipt. Defaults to the latest receipt in the local
+    /// verification workspace.
     #[arg(long)]
     result_path: Option<PathBuf>,
     /// Lines of a failed step's log printed at the end.
