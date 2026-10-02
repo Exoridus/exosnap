@@ -37,6 +37,13 @@ pub fn rehearse_chocolatey(
 ) -> anyhow::Result<serde_json::Value> {
     use anyhow::Context as _;
     std::fs::create_dir_all(out)?;
+    // The Chocolatey install script and the rehearsal both hand this path to
+    // msiexec, whose engine fails to open a database at a relative path or one
+    // with forward slashes. Resolve it absolute with native separators once.
+    let installer = std::path::absolute(installer)
+        .with_context(|| format!("resolve {}", installer.display()))?;
+    let installer = std::path::PathBuf::from(installer.to_string_lossy().replace('/', "\\"));
+    let installer = installer.as_path();
     let (hash, _) = crate::bundle::sha256_file(installer)?;
     let staging = out.join("staging");
     let evidence = out.join("evidence");
@@ -61,9 +68,11 @@ pub fn rehearse_chocolatey(
             return Err(error).context("the Chocolatey rehearsal could not run");
         }
     };
+    // The document is written before the verdict so a failed verdict still
+    // leaves the step that failed in the run's retained evidence.
+    crate::write_json(&out.join("chocolatey-rehearsal.json"), &document)?;
     update::chocolatey_verdict(&document)
         .map_err(|stop| anyhow::anyhow!("Chocolatey rehearsal verdict failed: {stop:?}"))?;
-    crate::write_json(&out.join("chocolatey-rehearsal.json"), &document)?;
     Ok(document)
 }
 
