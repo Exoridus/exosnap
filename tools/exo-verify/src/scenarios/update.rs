@@ -409,10 +409,27 @@ pub(super) fn chocolatey_verdict(document: &Value) -> Step {
             .ok_or_else(|| Stop::infra(format!("Chocolatey step {name} has no ok flag")))?;
         if !ok {
             let detail = step["detail"].as_str().unwrap_or_default();
+            let failed = step["failedAssertions"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|value| value.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })
+                .unwrap_or_default();
+            let message = if failed.is_empty() {
+                detail.to_string()
+            } else if detail.is_empty() {
+                failed
+            } else {
+                format!("{detail}; {failed}")
+            };
             return match kind {
-                "product" => Err(Stop::fail(format!("Chocolatey {name} failed: {detail}"))),
+                "product" => Err(Stop::fail(format!("Chocolatey {name} failed: {message}"))),
                 "bootstrap" => Err(Stop::infra(format!(
-                    "Chocolatey {name} setup failed: {detail}"
+                    "Chocolatey {name} setup failed: {message}"
                 ))),
                 _ => Err(Stop::infra(format!(
                     "Chocolatey {name} has unknown kind {kind}"
