@@ -8,7 +8,7 @@ Windows 10/11 x64 only, with Windows 11 primary and Windows 10 best effort. No A
 
 The capture adapter determines the D3D11 device used for NVENC. Cross-GPU capture-to-encode sharing is not a supported selectable workflow. Hardware inspection does not select the encoder device. Unsupported configurations are reconciled or blocked rather than silently sent to another backend.
 
-The Microsoft Visual C++ x64 runtime is required. Portable/MSI/Scoop do not bundle it. WinGet declares the redistributable dependency; the Chocolatey package declares `vcredist140`. A package manager satisfying that dependency is distinct from embedding runtime DLLs in ExoSnap.
+The Microsoft Visual C++ x64 runtime is required. Portable/Scoop do not bundle it. ExoSnap Setup installs the pinned redistributable when the machine lacks a sufficient version; the raw MSI refuses to install without it and names the prerequisite; WinGet declares the redistributable dependency and the Chocolatey package declares `vcredist140`. No application artifact embeds runtime DLLs.
 
 ## Formats
 

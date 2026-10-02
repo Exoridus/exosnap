@@ -446,7 +446,7 @@ Settings, presets, history, recovery metadata, reports and logs are local applic
 
 Windows 10/11 x64 is supported, with Windows 11 primary and Windows 10 best-effort. No Windows ARM64, Linux or macOS release is provided. Recording requires a supported NVIDIA NVENC device/driver; AMD, Intel and software video fallback are absent. A working GPU generation does not establish every codec/depth/chroma combination.
 
-The dynamic Visual C++ x64 runtime is required. Portable ZIP/MSI do not bundle it; package-manager dependency declarations are channel-specific. Install the runtime when absent. Keep the portable runtime files together.
+The dynamic Visual C++ x64 runtime is required. No application artifact bundles it. ExoSnap Setup embeds the pinned Microsoft redistributable and installs it only when the machine's runtime is missing or older; the raw MSI refuses a direct install without it and names the prerequisite; WinGet and Chocolatey declare it as a dependency; the portable ZIP and Scoop entry expect it on the machine. Keep the portable runtime files together.
 
 Replay buffer, arbitrary frame-accurate re-encode cuts, project/multitrack editing, embedded chapters, surround output, HLG, 4:2:2, 10-bit 4:4:4 and cross-vendor encoding are not current features. See [known limitations](../KNOWN_LIMITATIONS.md) for narrower behavioral and verification boundaries, and [roadmap](roadmap.md) for explicitly future work.
 

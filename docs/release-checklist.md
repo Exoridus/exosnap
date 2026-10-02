@@ -26,7 +26,7 @@ A reused observation retains its original binary and environment identity. A sho
 
 ## 2. Build and audit a candidate
 
-Run `Build release candidate` from `next` with the full source commit and a unique candidate ID. The workflow verifies that `main` is an ancestor and the commit is on `next`, compiles the final `X.Y.Z` identity once with the official update key, and uses `exo-verify package` to build MSI and portable ZIP from one CMake install tree. It uploads `candidate-bundle/` and `candidate-plan.json` as a private Actions artifact. A separate job signs disposable update-feed metadata without exposing the signing key to the candidate build job.
+Run `Build release candidate` from `next` with the full source commit and a unique candidate ID. The workflow verifies that `main` is an ancestor and the commit is on `next`, compiles the final `X.Y.Z` identity once with the official update key, and uses `exo-verify package` to build the portable ZIP, the MSI and the offline Setup bootstrapper from one pruned CMake install tree. The bootstrapper embeds the pinned Microsoft Visual C++ x64 redistributable and the same MSI, and installs the runtime only when the machine lacks a sufficient version. It uploads `candidate-bundle/` and `candidate-plan.json` as a private Actions artifact. A separate job signs disposable update-feed metadata without exposing the signing key to the candidate build job.
 
 Review the package report and bundle, not just whether archives were produced. The gate covers:
 
