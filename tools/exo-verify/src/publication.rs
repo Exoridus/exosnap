@@ -5,8 +5,9 @@ use base64::Engine as _;
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Cursor, Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::bundle::{self, Bundle, FileRole};
@@ -15,7 +16,6 @@ use crate::plan::{Decisions, ReleasePlan};
 use crate::report::{self, Report};
 
 const REPOSITORY: &str = "Exoridus/exosnap";
-const MAXIMUM_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Args)]
 pub struct EvidenceArgs {
@@ -55,20 +55,49 @@ pub enum PublicationCommand {
         #[arg(long)]
         github_output: PathBuf,
     },
-    /// Encode reviewed external qualification for workflow dispatch.
-    Encode {
+    /// Write the full evidence documents and the compact publication binding.
+    Bundle {
         #[command(flatten)]
         evidence: EvidenceArgs,
+        /// Successful official candidate run the evidence belongs to.
+        #[arg(long)]
+        candidate_run: u64,
+        /// Directory receiving the evidence documents and the binding.
         #[arg(long)]
         out: PathBuf,
     },
-    /// Decode external results without allowing replacement of hosted lanes.
-    Unpack {
-        /// Environment variable containing the encoded qualification.
-        #[arg(long, default_value = "EXOSNAP_QUALIFICATION")]
-        encoded_env: String,
+    /// Decode the compact binding a workflow dispatch carried.
+    Binding {
+        /// Environment variable containing the base64 binding document.
+        #[arg(long, default_value = "EXOSNAP_BINDING")]
+        base64_env: String,
         #[arg(long)]
-        sha256: String,
+        out: PathBuf,
+    },
+    /// Fetch the retained evidence set named by a binding.
+    Fetch {
+        #[arg(long)]
+        binding: PathBuf,
+        /// Gist holding the retained evidence documents.
+        #[arg(long)]
+        gist: String,
+        /// Gist revision the binding was frozen against.
+        #[arg(long)]
+        revision: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Verify the retained evidence set and write the qualification documents.
+    Unpack {
+        #[arg(long)]
+        binding: PathBuf,
+        /// Directory holding the fetched evidence documents.
+        #[arg(long)]
+        evidence: PathBuf,
+        #[arg(long)]
+        gist: Option<String>,
+        #[arg(long)]
+        revision: Option<String>,
         #[arg(long)]
         out: PathBuf,
     },
@@ -76,6 +105,9 @@ pub enum PublicationCommand {
     Check {
         #[command(flatten)]
         evidence: EvidenceArgs,
+        /// Compact publication binding the dispatched evidence belongs to.
+        #[arg(long)]
+        binding: PathBuf,
         /// GitHub Actions run metadata fetched by the workflow.
         #[arg(long)]
         run_metadata: PathBuf,
@@ -114,8 +146,42 @@ pub enum PublicationCommand {
     },
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// One retained evidence document. `name` is the flat gist file name; the
+/// digest is over the exact bytes that were frozen, so a gist revision or a
+/// re-download cannot silently replace the qualification.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EvidenceFile {
+    name: String,
+    sha256: String,
+    size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lane: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    attempt: Option<String>,
+}
+
+/// The compact binding a preparation dispatch carries. It names the candidate,
+/// the bundle and the qualification documents by digest; the documents
+/// themselves stay in the retained evidence set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PublicationBinding {
+    schema: String,
+    product_version: String,
+    source_commit: String,
+    candidate_run: u64,
+    candidate_id: String,
+    bundle_sha256: String,
+    report_sha256: String,
+    decisions_sha256: String,
+    files: Vec<EvidenceFile>,
+}
+
+const BINDING_SCHEMA: &str = "exosnap.publication-binding/1";
+
+/// The frozen qualification as loaded from local files: one report, the
+/// decisions for the same bundle, and the evidence results the report covers.
 struct Qualification {
     report: Report,
     decisions: Decisions,
@@ -187,50 +253,203 @@ fn external_lane(lane: &str) -> bool {
     matches!(lane, "release-gpu" | "release-hardware")
 }
 
-fn encode(bytes: &[u8]) -> Result<String> {
-    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    writer.start_file(
-        "qualification.json",
-        zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated),
-    )?;
-    writer.write_all(bytes)?;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(writer.finish()?.into_inner());
+fn load_binding(path: &Path) -> Result<PublicationBinding> {
+    let binding: PublicationBinding = serde_json::from_slice(&fs::read(path)?)
+        .with_context(|| format!("{} is not a publication binding", path.display()))?;
     ensure!(
-        encoded.len() <= 60_000,
-        "qualification exceeds workflow dispatch limit"
+        binding.schema == BINDING_SCHEMA,
+        "unsupported publication binding schema '{}'",
+        binding.schema
     );
-    Ok(encoded)
+    ensure!(
+        !binding.product_version.is_empty() && !binding.candidate_id.is_empty(),
+        "publication binding lacks a product version or candidate ID"
+    );
+    ensure!(
+        binding.source_commit.len() == 40
+            && binding.source_commit.bytes().all(|b| b.is_ascii_hexdigit()),
+        "publication binding names no full source commit"
+    );
+    ensure!(
+        binding.candidate_run > 0,
+        "publication binding names no candidate run"
+    );
+    ensure!(
+        bundle::is_sha256(&binding.bundle_sha256)
+            && bundle::is_sha256(&binding.report_sha256)
+            && bundle::is_sha256(&binding.decisions_sha256),
+        "publication binding carries an invalid digest"
+    );
+    ensure!(
+        !binding.files.is_empty(),
+        "publication binding names no evidence documents"
+    );
+    let mut names = std::collections::BTreeSet::new();
+    for file in &binding.files {
+        ensure!(
+            bundle::is_sha256(&file.sha256) && file.size > 0,
+            "evidence document '{}' has no valid digest",
+            file.name
+        );
+        ensure!(
+            !file.name.is_empty()
+                && !file.name.contains(['/', '\\'])
+                && !file.name.contains("..")
+                && file.name.bytes().all(|b| b.is_ascii_graphic()),
+            "evidence document name '{}' is not a flat file name",
+            file.name
+        );
+        ensure!(
+            names.insert(&file.name),
+            "evidence document '{}' is listed twice",
+            file.name
+        );
+    }
+    Ok(binding)
 }
 
-fn decode(encoded: &str, sha256: &str, maximum: u64) -> Result<Vec<u8>> {
+/// The flat gist name for one external lane result. Gists are flat, and the
+/// name has to survive a round trip through a URL path segment.
+fn evidence_result_name(index: usize, result: &LaneResult) -> String {
+    let sanitize = |value: &str| {
+        value
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '-') {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+    };
+    format!(
+        "result-{index:02}-{}-{}.result.json",
+        sanitize(&result.lane),
+        sanitize(&result.attempt)
+    )
+}
+
+fn evidence_file(name: &str, bytes: &[u8]) -> EvidenceFile {
+    EvidenceFile {
+        name: name.to_string(),
+        sha256: bundle::sha256_bytes(bytes),
+        size: bytes.len() as u64,
+        lane: None,
+        attempt: None,
+    }
+}
+
+fn validate_binding(
+    binding: &PublicationBinding,
+    bundle: &Bundle,
+    source_commit: &str,
+    candidate_id: &str,
+) -> Result<()> {
     ensure!(
-        encoded.len() <= 60_000,
-        "qualification exceeds dispatch limit"
+        binding.product_version == bundle.inventory.product_version
+            && binding.source_commit == source_commit
+            && binding.source_commit == bundle.inventory.source_commit
+            && binding.candidate_id == candidate_id
+            && binding.bundle_sha256 == bundle.sha256,
+        "publication binding names a different candidate, source, version or bundle"
     );
-    ensure!(bundle::is_sha256(sha256), "invalid qualification SHA-256");
-    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
+    Ok(())
+}
+
+/// What one retained evidence download proved.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvidenceLocator {
+    gist: String,
+    revision: String,
+    files: Vec<EvidenceFile>,
+}
+
+/// Reads a URL and returns its bytes. Injected so the fetch path can be
+/// exercised against scripted documents instead of the network.
+pub trait EvidenceFetcher {
+    fn get(&self, url: &str) -> Result<Vec<u8>>;
+}
+
+/// The production fetcher: `curl` follows the redirect a gist raw URL answers
+/// with. Nothing is written anywhere until the bytes match the binding.
+pub struct CurlEvidence;
+
+impl EvidenceFetcher for CurlEvidence {
+    fn get(&self, url: &str) -> Result<Vec<u8>> {
+        let output = std::process::Command::new("curl")
+            .args(["-sSfL", "--max-time", "60", url])
+            .output()
+            .context("could not run curl")?;
+        ensure!(output.status.success(), "curl {url} failed");
+        Ok(output.stdout)
+    }
+}
+
+fn gist_raw_urls(index: &[u8], gist: &str, revision: &str) -> Result<BTreeMap<String, String>> {
+    let document: Value = serde_json::from_slice(index)
+        .context("the gist revision endpoint did not answer with JSON")?;
     ensure!(
-        archive.len() == 1,
-        "qualification must contain exactly one document"
+        document["id"] == gist,
+        "the gist revision belongs to a different gist"
     );
-    let entry = archive.by_index(0)?;
+    let pinned = document["history"]
+        .as_array()
+        .and_then(|history| history.first())
+        .and_then(|entry| entry["version"].as_str());
     ensure!(
-        entry.name() == "qualification.json",
-        "unexpected qualification entry"
+        pinned == Some(revision),
+        "the gist did not answer at the requested revision"
     );
-    let mut bytes = Vec::new();
-    entry.take(maximum + 1).read_to_end(&mut bytes)?;
+    let files = document["files"]
+        .as_object()
+        .context("the gist revision lists no files")?;
+    let mut urls = BTreeMap::new();
+    for (name, entry) in files {
+        let raw = entry["raw_url"]
+            .as_str()
+            .context("gist file has no raw URL")?;
+        urls.insert(name.clone(), raw.to_string());
+    }
+    Ok(urls)
+}
+
+fn fetch_with_fetcher(
+    binding: &PublicationBinding,
+    gist: &str,
+    revision: &str,
+    out: &Path,
+    fetcher: &dyn EvidenceFetcher,
+) -> Result<()> {
     ensure!(
-        bytes.len() as u64 <= maximum,
-        "qualification exceeds expansion limit"
+        !gist.is_empty() && !revision.is_empty(),
+        "the retained evidence gist and revision are required"
     );
     ensure!(
-        bundle::sha256_bytes(&bytes) == sha256,
-        "qualification SHA-256 mismatch"
+        revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()),
+        "the retained evidence revision is not a full gist revision"
     );
-    Ok(bytes)
+    ensure!(!out.exists(), "evidence output directory must be fresh");
+    let index = fetcher.get(&format!("https://api.github.com/gists/{gist}/{revision}"))?;
+    let urls = gist_raw_urls(&index, gist, revision)?;
+    fs::create_dir_all(out)?;
+    for file in &binding.files {
+        let url = urls.get(&file.name).with_context(|| {
+            format!(
+                "the retained evidence set is missing the frozen document '{}'",
+                file.name
+            )
+        })?;
+        let bytes = fetcher.get(url)?;
+        ensure!(
+            bytes.len() as u64 == file.size && bundle::sha256_bytes(&bytes) == file.sha256,
+            "retained evidence document '{}' differs from the frozen reference",
+            file.name
+        );
+        fs::write(out.join(&file.name), &bytes)?;
+    }
+    Ok(())
 }
 
 fn validate_run(run: &Value, source: &str) -> Result<()> {
@@ -389,44 +608,186 @@ pub fn run(command: PublicationCommand) -> Result<()> {
                 binding.candidate_run, binding.preparation_run, binding.candidate_id, source_commit
             )?;
         }
-        PublicationCommand::Encode { evidence, out } => {
-            let (_, mut qualification) = load_evidence(&evidence)?;
+        PublicationCommand::Bundle {
+            evidence,
+            candidate_run,
+            out,
+        } => {
+            ensure!(candidate_run > 0, "candidate run must be a positive run ID");
+            ensure!(!out.exists(), "bundle output directory must be fresh");
+            let (bundle, mut qualification) = load_evidence(&evidence)?;
             qualification.results.retain(|r| external_lane(&r.lane));
-            let bytes = serde_json::to_vec(&qualification)?;
-            crate::write_json(
-                &out,
-                &serde_json::json!({"qualification_sha256": bundle::sha256_bytes(&bytes), "qualification_base64": encode(&bytes)?}),
-            )?;
+            ensure!(
+                !qualification.results.is_empty(),
+                "no external lane evidence to retain: the qualification is incomplete"
+            );
+            let report_bytes = serde_json::to_vec_pretty(&qualification.report)?;
+            let decisions_bytes = serde_json::to_vec_pretty(&qualification.decisions)?;
+            fs::create_dir_all(&out)?;
+            fs::write(out.join("release-report.json"), &report_bytes)?;
+            fs::write(out.join("decisions.json"), &decisions_bytes)?;
+            let mut files = vec![
+                evidence_file("release-report.json", &report_bytes),
+                evidence_file("decisions.json", &decisions_bytes),
+            ];
+            for (index, result) in qualification.results.iter().enumerate() {
+                let name = evidence_result_name(index, result);
+                let bytes = serde_json::to_vec_pretty(result)?;
+                fs::write(out.join(&name), &bytes)?;
+                files.push(EvidenceFile {
+                    name,
+                    sha256: bundle::sha256_bytes(&bytes),
+                    size: bytes.len() as u64,
+                    lane: Some(result.lane.clone()),
+                    attempt: Some(result.attempt.clone()),
+                });
+            }
+            let binding = PublicationBinding {
+                schema: BINDING_SCHEMA.into(),
+                product_version: bundle.inventory.product_version.clone(),
+                source_commit: bundle.inventory.source_commit.clone(),
+                candidate_run,
+                candidate_id: bundle.inventory.candidate_id.clone(),
+                bundle_sha256: bundle.sha256.clone(),
+                report_sha256: bundle::sha256_bytes(&report_bytes),
+                decisions_sha256: bundle::sha256_bytes(&decisions_bytes),
+                files,
+            };
+            crate::write_json(&out.join("publication-binding.json"), &binding)?;
+            let binding_bytes = serde_json::to_vec(&binding)?;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&binding_bytes);
+            ensure!(
+                encoded.len() <= 60_000,
+                "the compact publication binding does not fit a workflow dispatch input"
+            );
+            fs::write(out.join("publication-binding.base64"), &encoded)?;
+            println!(
+                "retained evidence set: {} document(s) for candidate {} ({}), binding {} bytes base64",
+                binding.files.len(),
+                binding.candidate_id,
+                binding.product_version,
+                encoded.len()
+            );
+            println!(
+                "upload {} and every file next to it to a secret gist, then dispatch with that binding",
+                out.join("publication-binding.json").display()
+            );
+        }
+        PublicationCommand::Binding { base64_env, out } => {
+            ensure!(!out.exists(), "binding output file must not exist");
+            let encoded = std::env::var(&base64_env)
+                .with_context(|| format!("{base64_env} is not set in the environment"))?;
+            ensure!(
+                encoded.len() <= 60_000,
+                "the compact publication binding is larger than a dispatch input should carry"
+            );
+            let bytes = base64::engine::general_purpose::STANDARD.decode(encoded.trim())?;
+            let binding: PublicationBinding = serde_json::from_slice(&bytes)
+                .context("the dispatched binding is not a publication binding")?;
+            fs::write(&out, &bytes)?;
+            load_binding(&out)?;
+            println!(
+                "publication binding: {} {} ({} evidence documents)",
+                binding.product_version,
+                binding.candidate_id,
+                binding.files.len()
+            );
+        }
+        PublicationCommand::Fetch {
+            binding,
+            gist,
+            revision,
+            out,
+        } => {
+            let binding = load_binding(&binding)?;
+            fetch_with_fetcher(&binding, &gist, &revision, &out, &CurlEvidence)?;
+            println!(
+                "retained evidence set at gist revision {} verified ({} documents)",
+                revision,
+                binding.files.len()
+            );
         }
         PublicationCommand::Unpack {
-            encoded_env,
-            sha256,
+            binding,
+            evidence,
+            gist,
+            revision,
             out,
         } => {
             ensure!(!out.exists(), "qualification directory must be fresh");
-            let bytes = decode(&std::env::var(encoded_env)?, &sha256, MAXIMUM_BYTES)?;
-            let qualification: Qualification = serde_json::from_slice(&bytes)?;
             ensure!(
-                qualification.results.iter().all(|r| external_lane(&r.lane)),
-                "external qualification cannot replace hosted lanes"
+                gist.is_some() == revision.is_some(),
+                "the evidence gist and revision are recorded together or not at all"
             );
+            let binding = load_binding(&binding)?;
+            let mut report_bytes = None;
+            let mut decisions_bytes = None;
+            let mut results = Vec::new();
+            for file in &binding.files {
+                let path = evidence.join(&file.name);
+                let bytes = fs::read(&path).with_context(|| {
+                    format!(
+                        "the retained evidence set is missing the frozen document '{}'",
+                        file.name
+                    )
+                })?;
+                ensure!(
+                    bytes.len() as u64 == file.size && bundle::sha256_bytes(&bytes) == file.sha256,
+                    "retained evidence document '{}' differs from its frozen reference",
+                    file.name
+                );
+                match file.name.as_str() {
+                    "release-report.json" => report_bytes = Some(bytes),
+                    "decisions.json" => decisions_bytes = Some(bytes),
+                    _ => {
+                        let result: LaneResult = serde_json::from_slice(&bytes)
+                            .with_context(|| format!("'{}' is not a lane result", file.name))?;
+                        ensure!(
+                            external_lane(&result.lane),
+                            "external qualification cannot replace hosted lanes"
+                        );
+                        results.push(result);
+                    }
+                }
+            }
+            let report_bytes =
+                report_bytes.context("the evidence set carries no release report")?;
+            ensure!(
+                bundle::sha256_bytes(&report_bytes) == binding.report_sha256,
+                "retained qualification report differs from the frozen qualification identity"
+            );
+            let decisions_bytes =
+                decisions_bytes.context("the evidence set carries no decisions document")?;
+            ensure!(
+                bundle::sha256_bytes(&decisions_bytes) == binding.decisions_sha256,
+                "retained decisions differ from the frozen qualification identity"
+            );
+            let stored: Report = serde_json::from_slice(&report_bytes)?;
             fs::create_dir_all(out.join("results"))?;
-            crate::write_json(&out.join("release-report.json"), &qualification.report)?;
-            fs::write(
-                out.join("release-report.md"),
-                report::markdown(&qualification.report),
-            )?;
-            qualification.decisions.save(&out.join("decisions.json"))?;
+            fs::write(out.join("release-report.json"), &report_bytes)?;
+            fs::write(out.join("release-report.md"), report::markdown(&stored))?;
+            fs::write(out.join("decisions.json"), &decisions_bytes)?;
             Decisions::load(&out.join("decisions.json"))?;
-            for (index, result) in qualification.results.iter().enumerate() {
+            for (index, result) in results.iter().enumerate() {
                 crate::write_json(
                     &out.join("results").join(format!("{index}.result.json")),
                     result,
                 )?;
             }
+            if let (Some(gist), Some(revision)) = (gist, revision) {
+                crate::write_json(
+                    &out.join("evidence-locator.json"),
+                    &EvidenceLocator {
+                        gist,
+                        revision,
+                        files: binding.files.clone(),
+                    },
+                )?;
+            }
         }
         PublicationCommand::Check {
             evidence,
+            binding,
             run_metadata,
             candidate_id,
             source_commit,
@@ -442,8 +803,26 @@ pub fn run(command: PublicationCommand) -> Result<()> {
                     && bundle.inventory.candidate_id == candidate_id,
                 "bundle differs from selected source/candidate"
             );
+            let binding = load_binding(&binding)?;
+            validate_binding(&binding, &bundle, &source_commit, &candidate_id)?;
+            let report_bytes = fs::read(&evidence.report)?;
+            ensure!(
+                bundle::sha256_bytes(&report_bytes) == binding.report_sha256,
+                "the release report differs from the frozen qualification identity"
+            );
+            if let Some(decisions_path) = &evidence.decisions {
+                let decisions_bytes = fs::read(decisions_path)?;
+                ensure!(
+                    bundle::sha256_bytes(&decisions_bytes) == binding.decisions_sha256,
+                    "the decisions differ from the frozen qualification identity"
+                );
+            }
             let metadata: Value = serde_json::from_slice(&fs::read(run_metadata)?)?;
             validate_run(&metadata, &source_commit)?;
+            ensure!(
+                metadata["id"].as_u64() == Some(binding.candidate_run),
+                "candidate run metadata differs from the publication binding"
+            );
             if let Some(tag) = tag {
                 ensure!(
                     tag == format!("v{}", bundle.inventory.product_version),
@@ -612,14 +991,258 @@ mod tests {
     }
 
     #[test]
-    fn qualification_transport_checks_hash_and_expansion_bound() {
-        let bytes = br#"{"results":[]}"#;
-        let encoded = encode(bytes).unwrap();
-        let hash = bundle::sha256_bytes(bytes);
-        assert_eq!(decode(&encoded, &hash, 1024).unwrap(), bytes);
-        assert!(decode(&encoded, &"0".repeat(64), 1024).is_err());
-        assert!(decode(&encoded, &hash, 2).is_err());
-        assert!(decode("invalid", &hash, 1024).is_err());
+    fn binding_stays_a_dispatch_input_and_binds_every_document_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = evidence_fixture(dir.path());
+        let binding = load_binding(&fixture.binding).unwrap();
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&binding).unwrap());
+        assert!(
+            encoded.len() <= 20_000,
+            "the compact binding must stay small even with every evidence document listed"
+        );
+        assert!(
+            binding.files.len() >= 3,
+            "the report, decisions and external results are all retained"
+        );
+        assert!(
+            binding
+                .files
+                .iter()
+                .any(|f| f.lane.as_deref() == Some("release-gpu")),
+            "the retained set carries the external lane documents"
+        );
+        let report = fs::read(&fixture.args.report).unwrap();
+        assert_eq!(bundle::sha256_bytes(&report), binding.report_sha256);
+    }
+
+    #[test]
+    fn a_binding_that_does_not_name_the_candidate_or_qualification_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = evidence_fixture(dir.path());
+        let (bundle, _) = load_evidence(&fixture.args).unwrap();
+        let run_path = dir.path().join("run.json");
+        crate::write_json(&run_path, &json!({"id": 10, "path": ".github/workflows/release-candidate-next.yml", "head_branch": "next", "head_sha": bundle.inventory.source_commit, "status": "completed", "conclusion": "success", "repository": {"full_name": REPOSITORY}})).unwrap();
+        let check = |binding: &Path, out: &str| {
+            run(PublicationCommand::Check {
+                evidence: EvidenceArgs {
+                    bundle: fixture.args.bundle.clone(),
+                    plan: fixture.args.plan.clone(),
+                    report: fixture.args.report.clone(),
+                    decisions: None,
+                    results: fixture.args.results.clone(),
+                },
+                binding: binding.to_path_buf(),
+                run_metadata: run_path.clone(),
+                candidate_id: bundle.inventory.candidate_id.clone(),
+                source_commit: bundle.inventory.source_commit.clone(),
+                tag: None,
+                tag_metadata: None,
+                preparation_run_metadata: None,
+                out: dir.path().join(out),
+                github_output: None,
+            })
+        };
+        check(&fixture.binding, "matching").unwrap();
+
+        let original: Value = serde_json::from_slice(&fs::read(&fixture.binding).unwrap()).unwrap();
+        let mutations = [
+            ("candidateRun", json!(999), "candidate run metadata differs"),
+            ("candidateId", json!("other"), "different candidate"),
+            ("sourceCommit", json!("0".repeat(40)), "different candidate"),
+            ("bundleSha256", json!("0".repeat(64)), "different candidate"),
+            (
+                "reportSha256",
+                json!("0".repeat(64)),
+                "frozen qualification identity",
+            ),
+        ];
+        for (index, (field, value, expected)) in mutations.into_iter().enumerate() {
+            let mut forged = original.clone();
+            forged[field] = value;
+            let path = dir.path().join(format!("forged-{index}.json"));
+            crate::write_json(&path, &forged).unwrap();
+            let error = check(&path, &format!("forged-out-{index}"))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{field}: {error}");
+        }
+    }
+
+    #[test]
+    fn unpack_refuses_missing_altered_and_misreferenced_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = evidence_fixture(dir.path());
+        let bundle_dir = fixture.binding.parent().unwrap().to_path_buf();
+        let report_name = load_binding(&fixture.binding)
+            .unwrap()
+            .files
+            .iter()
+            .find(|f| f.name == "release-report.json")
+            .unwrap()
+            .name
+            .clone();
+
+        let mut altered = fs::read(bundle_dir.join(&report_name)).unwrap();
+        altered.push(b'\n');
+        fs::write(bundle_dir.join(&report_name), altered).unwrap();
+        let error = run(PublicationCommand::Unpack {
+            binding: fixture.binding.clone(),
+            evidence: bundle_dir.clone(),
+            gist: None,
+            revision: None,
+            out: dir.path().join("out-altered"),
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("differs from its frozen reference"),
+            "{error}"
+        );
+
+        fs::remove_file(bundle_dir.join(&report_name)).unwrap();
+        let error = run(PublicationCommand::Unpack {
+            binding: fixture.binding.clone(),
+            evidence: bundle_dir.clone(),
+            gist: None,
+            revision: None,
+            out: dir.path().join("out-missing"),
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("missing the frozen document"), "{error}");
+    }
+
+    #[test]
+    fn fetch_refuses_a_missing_asset_or_a_different_gist_revision() {
+        struct FakeGist {
+            revision: String,
+            files: BTreeMap<String, Vec<u8>>,
+        }
+        impl EvidenceFetcher for FakeGist {
+            fn get(&self, url: &str) -> Result<Vec<u8>> {
+                if url.starts_with("https://api.github.com/gists/") {
+                    let files = self
+                        .files
+                        .keys()
+                        .map(|name| {
+                            (
+                                name.clone(),
+                                json!({"raw_url": format!("https://gist.example/{name}")}),
+                            )
+                        })
+                        .collect::<serde_json::Map<_, _>>();
+                    return Ok(serde_json::to_vec(&json!({
+                        "id": "abcdef",
+                        "history": [{"version": self.revision}],
+                        "files": files,
+                    }))?);
+                }
+                let name = url.rsplit('/').next().unwrap_or_default();
+                self.files
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("no such evidence file"))
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = evidence_fixture(dir.path());
+        let binding = load_binding(&fixture.binding).unwrap();
+        let bundle_dir = fixture.binding.parent().unwrap();
+        let mut files = BTreeMap::new();
+        for file in &binding.files {
+            files.insert(
+                file.name.clone(),
+                fs::read(bundle_dir.join(&file.name)).unwrap(),
+            );
+        }
+        let revision = "c".repeat(40);
+        let fetcher = FakeGist {
+            revision: revision.clone(),
+            files: files.clone(),
+        };
+        fetch_with_fetcher(
+            &binding,
+            "abcdef",
+            &revision,
+            &dir.path().join("fetched"),
+            &fetcher,
+        )
+        .unwrap();
+
+        let mut missing = files.clone();
+        let dropped = binding.files[0].name.clone();
+        missing.remove(&dropped);
+        let error = fetch_with_fetcher(
+            &binding,
+            "abcdef",
+            &revision,
+            &dir.path().join("fetched-missing"),
+            &FakeGist {
+                revision: revision.clone(),
+                files: missing,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains(&format!("missing the frozen document '{dropped}'")),
+            "{error}"
+        );
+
+        let mut altered = files;
+        let first = binding.files[0].name.clone();
+        altered.get_mut(&first).unwrap().push(b'\n');
+        let error = fetch_with_fetcher(
+            &binding,
+            "abcdef",
+            &revision,
+            &dir.path().join("fetched-altered"),
+            &FakeGist {
+                revision: revision.clone(),
+                files: altered,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("differs from the frozen reference"),
+            "{error}"
+        );
+
+        let error = fetch_with_fetcher(
+            &binding,
+            "abcdef",
+            &"d".repeat(40),
+            &dir.path().join("fetched-revision"),
+            &FakeGist {
+                revision,
+                files: BTreeMap::new(),
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("revision"), "{error}");
+    }
+
+    #[test]
+    fn the_preparation_workflow_reads_a_draft_release_through_a_draft_visible_query() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.github/workflows/publish-release.yml");
+        let text = fs::read_to_string(&path).unwrap();
+        let start = text
+            .find("Obtain draft release identity")
+            .expect("the publication workflow has no draft identity step");
+        let step = &text[start..(start + 900).min(text.len())];
+        assert!(
+            step.contains("releases?per_page=") && step.contains("select(.tag_name"),
+            "draft release metadata must come from a query that can see drafts: {step}"
+        );
+        assert!(
+            !step.contains("releases/tags/"),
+            "the per-tag endpoint hides drafts: {step}"
+        );
     }
 
     #[test]
@@ -714,7 +1337,12 @@ mod tests {
         assert!(bundle::open(&bundle.root).is_err());
     }
 
-    fn evidence_fixture(dir: &Path) -> EvidenceArgs {
+    struct Fixture {
+        args: EvidenceArgs,
+        binding: PathBuf,
+    }
+
+    fn evidence_fixture(dir: &Path) -> Fixture {
         use crate::model::{Identity, RESULT_SCHEMA_VERSION, ScenarioResult, Verdict};
         use std::collections::BTreeMap;
         let bundle = bundle::tests::fixture(dir, "0.10.0");
@@ -792,19 +1420,41 @@ mod tests {
             )
             .unwrap();
         }
-        args
+        let bundle_dir = dir.join("publication");
+        run(PublicationCommand::Bundle {
+            evidence: EvidenceArgs {
+                bundle: args.bundle.clone(),
+                plan: args.plan.clone(),
+                report: args.report.clone(),
+                decisions: None,
+                results: args.results.clone(),
+            },
+            candidate_run: 10,
+            out: bundle_dir.clone(),
+        })
+        .unwrap();
+        // The publication check reads the frozen evidence documents, exactly
+        // as the workflow reads the unpacked copies, not the local originals.
+        let mut args = args;
+        args.report = bundle_dir.join("release-report.json");
+        args.decisions = Some(bundle_dir.join("decisions.json"));
+        Fixture {
+            args,
+            binding: bundle_dir.join("publication-binding.json"),
+        }
     }
 
     #[test]
     fn complete_frozen_candidate_passes_and_mutations_are_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let args = evidence_fixture(dir.path());
+        let Fixture { args, binding } = evidence_fixture(dir.path());
         let (bundle, _) = load_evidence(&args).unwrap();
         let run_path = dir.path().join("run.json");
-        crate::write_json(&run_path, &json!({"path": ".github/workflows/release-candidate-next.yml", "head_branch": "next", "head_sha": bundle.inventory.source_commit, "status": "completed", "conclusion": "success", "repository": {"full_name": REPOSITORY}})).unwrap();
+        crate::write_json(&run_path, &json!({"id": 10, "path": ".github/workflows/release-candidate-next.yml", "head_branch": "next", "head_sha": bundle.inventory.source_commit, "status": "completed", "conclusion": "success", "repository": {"full_name": REPOSITORY}})).unwrap();
         let out = dir.path().join("assets");
         run(PublicationCommand::Check {
             evidence: args,
+            binding,
             run_metadata: run_path,
             candidate_id: bundle.inventory.candidate_id.clone(),
             source_commit: bundle.inventory.source_commit.clone(),
@@ -877,7 +1527,7 @@ mod tests {
     #[test]
     fn tagged_publication_requires_the_exact_candidate_and_preparation() {
         let dir = tempfile::tempdir().unwrap();
-        let args = evidence_fixture(dir.path());
+        let Fixture { args, binding } = evidence_fixture(dir.path());
         let (bundle, _) = load_evidence(&args).unwrap();
         let candidate_path = dir.path().join("candidate-run.json");
         crate::write_json(&candidate_path, &json!({"id": 10, "path": ".github/workflows/release-candidate-next.yml", "head_branch": "next", "head_sha": bundle.inventory.source_commit, "status": "completed", "conclusion": "success", "repository": {"full_name": REPOSITORY}})).unwrap();
@@ -898,13 +1548,14 @@ mod tests {
             out: message_path.clone(),
         })
         .unwrap();
-        let mut binding: TagBinding =
+        let mut tagged: TagBinding =
             serde_json::from_slice(&fs::read(message_path).unwrap()).unwrap();
         let tag_path = dir.path().join("tag.json");
-        let check = |binding: &TagBinding, out: &str| {
-            crate::write_json(&tag_path, &json!({"tag": "v0.10.0", "object": {"type": "commit", "sha": bundle.inventory.source_commit}, "message": serde_json::to_string(binding).unwrap()})).unwrap();
+        let check = |tagged: &TagBinding, out: &str| {
+            crate::write_json(&tag_path, &json!({"tag": "v0.10.0", "object": {"type": "commit", "sha": bundle.inventory.source_commit}, "message": serde_json::to_string(tagged).unwrap()})).unwrap();
             run(PublicationCommand::Check {
                 evidence: evidence(),
+                binding: binding.clone(),
                 run_metadata: candidate_path.clone(),
                 candidate_id: bundle.inventory.candidate_id.clone(),
                 source_commit: bundle.inventory.source_commit.clone(),
@@ -915,18 +1566,18 @@ mod tests {
                 github_output: None,
             })
         };
-        check(&binding, "matching").unwrap();
-        binding.preparation_run += 1;
+        check(&tagged, "matching").unwrap();
+        tagged.preparation_run += 1;
         assert!(
-            check(&binding, "wrong-run")
+            check(&tagged, "wrong-run")
                 .unwrap_err()
                 .to_string()
                 .contains("tag names different")
         );
-        binding.preparation_run -= 1;
-        binding.bundle_sha256 = "0".repeat(64);
+        tagged.preparation_run -= 1;
+        tagged.bundle_sha256 = "0".repeat(64);
         assert!(
-            check(&binding, "wrong-bundle")
+            check(&tagged, "wrong-bundle")
                 .unwrap_err()
                 .to_string()
                 .contains("tag names different")

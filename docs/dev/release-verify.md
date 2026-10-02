@@ -178,15 +178,15 @@ Failures retain available logs, analyzer output, short media, dumps and screensh
 
 `READY FOR APPROVAL` is a calculation, not release permission. The `Publish qualified release` workflow checks the frozen report and reuses the exact candidate MSI and ZIP bytes behind the `release` environment. Follow the [release checklist](../release-checklist.md#4-publication-boundary).
 
-Prepare its qualification input after the final report is ready:
+Prepare its qualification input after the final report is ready. `publication bundle` writes the full retained evidence set and a compact binding that names it by digest; the dispatch carries only the binding, so evidence size no longer limits what can be retained:
 
 ```powershell
-exo-verify publication encode --bundle candidate-bundle --plan candidate-plan.json `
+exo-verify publication bundle --bundle candidate-bundle --plan candidate-plan.json `
     --report report/release-report.json --decisions decisions.json `
-    --results results --out publication-inputs.json
+    --results results --candidate-run <candidate-run-id> --out publication
 ```
 
-Omit `--decisions` when none were recorded. The output contains `qualification_sha256` and `qualification_base64` for workflow dispatch. Supply them together with `candidate_run` and `candidate_id` to the preparation dispatch, using `next` at the same source revision as the candidate. This dispatch only freezes evidence; an administrator-pushed version tag triggers publication. The encoded document carries the frozen report, explicit decisions and external GPU/hardware result documents. Hosted results are downloaded independently from Actions, including all retained attempts; external input cannot replace those lanes. The input is bounded to the workflow dispatch size limit and never includes executables or signing keys. Preserve the underlying private evidence with the campaign; the workflow retains qualification records as private Actions artifacts.
+Omit `--decisions` when none were recorded. The output directory holds `release-report.json`, `decisions.json`, one result document per external GPU/hardware lane, `publication-binding.json` and its base64 form. Upload every document and the binding to a secret gist and take its revision from `gh api gists/<gist-id> --jq .history[0].version`; the retained set is then immutable-addressed by that revision. Supply `candidate_run`, `candidate_id`, the gist ID, its revision and the base64 binding to the preparation dispatch, using `next` at the same source revision as the candidate. The binding is a few kilobytes regardless of evidence size and never includes executables or signing keys. This dispatch only freezes evidence; an administrator-pushed version tag triggers publication. Hosted results are downloaded independently from Actions, including all retained attempts; external input cannot replace those lanes. Preserve the underlying private evidence with the campaign; the workflow retains qualification records as private Actions artifacts.
 
 After the preparation run succeeds, fetch its metadata and the official candidate run metadata with `gh api repos/Exoridus/exosnap/actions/runs/<run-id>`. Generate the public annotation from the same local evidence:
 
