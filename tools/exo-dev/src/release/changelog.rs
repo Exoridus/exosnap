@@ -49,6 +49,11 @@ pub struct ChangelogAssembly {
     pub entry_count: usize,
     /// Subjects of a type that intentionally produces no changelog entry.
     pub skipped: usize,
+    /// Explicit merge commits on the first-parent line. They carry no entry:
+    /// either their changes already shipped (a back-merge of a released
+    /// branch) or they belong to commits the first-parent walk deliberately
+    /// does not read.
+    pub merges: usize,
     /// Subjects grandfathered because they predate the commit-policy epoch.
     pub older: usize,
     /// Subjects the parser could not read at all, as `hash  subject  -- problem`.
@@ -108,6 +113,7 @@ pub fn assemble(
         .collect();
     let mut unreadable = Vec::new();
     let mut skipped = 0usize;
+    let mut merges = 0usize;
     let mut older = 0usize;
 
     for line in subjects.lines() {
@@ -122,6 +128,10 @@ pub fn assemble(
         if !parsed.valid {
             if grandfathered.contains(hash) {
                 older += 1;
+                continue;
+            }
+            if is_merge_subject(subject) {
+                merges += 1;
                 continue;
             }
             let short = &hash[..hash.len().min(8)];
@@ -148,9 +158,21 @@ pub fn assemble(
         sections,
         entry_count,
         skipped,
+        merges,
         older,
         unreadable,
     })
+}
+
+/// True for the subjects git itself writes for an explicit merge. On a
+/// squash-merging repository the only such commit is a deliberate merge such
+/// as a back-merge of a released branch, and its content is either already in
+/// an earlier release or lives on a second-parent line the changelog does not
+/// walk, so it must not be reported as an unreadable subject.
+fn is_merge_subject(subject: &str) -> bool {
+    subject.starts_with("Merge pull request #")
+        || subject.starts_with("Merge branch ")
+        || subject.starts_with("Merge remote-tracking branch ")
 }
 
 fn resolve_since(git: &Git) -> Option<String> {
@@ -229,6 +251,12 @@ pub fn render_report(assembly: &ChangelogAssembly) -> String {
         "no entry  {} (ci/build/test/chore/style)\n",
         assembly.skipped
     ));
+    if assembly.merges > 0 {
+        out.push_str(&format!(
+            "merges    {} explicit merge commit(s)\n",
+            assembly.merges
+        ));
+    }
     if assembly.older > 0 {
         out.push_str(&format!(
             "older     {} merged before the policy took effect\n",
@@ -639,6 +667,37 @@ mod tests {
         let assembly = assemble_all(&fx);
         assert_eq!(assembly.unreadable.len(), 1);
         assert!(assembly.unreadable[0].contains("made the drains better"));
+    }
+
+    #[test]
+    fn an_explicit_merge_commit_is_counted_but_carries_no_entry() {
+        let fx = new_fixture();
+        add_commit(fx.path(), "feat(ui): a real entry (#10)");
+        run_git(fx.path(), &["checkout", "-q", "-b", "back-merge"]);
+        add_commit(
+            fx.path(),
+            "fix(engine): arrives through the merged branch (#11)",
+        );
+        run_git(fx.path(), &["checkout", "-q", "main"]);
+        add_commit(fx.path(), "fix(ui): after the merge (#12)");
+        run_git(
+            fx.path(),
+            &[
+                "merge",
+                "--no-ff",
+                "-q",
+                "-m",
+                "Merge pull request #449 from Exoridus/back-merge",
+                "back-merge",
+            ],
+        );
+
+        let assembly = assemble_all(&fx);
+        assert!(assembly.unreadable.is_empty(), "{:?}", assembly.unreadable);
+        assert_eq!(assembly.merges, 1);
+        let text = rendered_text(&assembly, None, None);
+        assert!(!text.contains("back-merge"), "{text}");
+        assert!(text.contains("after the merge"), "{text}");
     }
 
     #[test]
