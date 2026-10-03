@@ -446,9 +446,12 @@ struct UiaRun<'a> {
 }
 
 /// The interactive Setup is driven by UI Automation inside the machine under
-/// test; this runs the helper and keeps its transcript beside the Burn log.
+/// test; this runs the helper and keeps its transcript and page screenshots
+/// beside the Burn log.
 fn run_uia(ctx: &mut Context, script: &Path, run: &UiaRun<'_>) -> Result<crate::tools::Output> {
     let log = ctx.scenario_dir.join(run.log_name);
+    let screenshots = ctx.scenario_dir.join("screenshots");
+    fs::create_dir_all(&screenshots)?;
     let mut command = Command::new("powershell.exe");
     command
         .args([
@@ -466,7 +469,9 @@ fn run_uia(ctx: &mut Context, script: &Path, run: &UiaRun<'_>) -> Result<crate::
         .arg("-Log")
         .arg(&log)
         .arg("-ExpectedExe")
-        .arg(r"C:\Program Files\ExoSnap\exosnap.exe");
+        .arg(r"C:\Program Files\ExoSnap\exosnap.exe")
+        .arg("-ScreenshotDir")
+        .arg(&screenshots);
     if run.desktop_shortcut {
         command.arg("-DesktopShortcut");
     }
@@ -478,6 +483,12 @@ fn run_uia(ctx: &mut Context, script: &Path, run: &UiaRun<'_>) -> Result<crate::
     }
     let out = crate::tools::run(&mut command, secs(1800.0))?;
     ctx.keep(&log);
+    for entry in fs::read_dir(&screenshots)? {
+        let path = entry?.path();
+        if path.is_file() {
+            ctx.keep(&path);
+        }
+    }
     Ok(out)
 }
 
@@ -538,6 +549,17 @@ fn setup_interactive(ctx: &mut Context) -> Step {
         visible == 1,
         "expected one Installed Apps entry, found {visible}"
     );
+    for name in [
+        "install-1-install-page.png",
+        "install-2-license.png",
+        "install-3-progress.png",
+        "install-4-success.png",
+    ] {
+        product_ensure!(
+            ctx.scenario_dir.join("screenshots").join(name).is_file(),
+            "the interactive install captured no {name}"
+        );
+    }
 
     fs::create_dir_all(&config)?;
     fs::write(config.join("settings.ini"), b"interactive probe")?;
@@ -585,6 +607,16 @@ fn setup_interactive(ctx: &mut Context) -> Step {
         sha256_file(&recording)?.0 == recording_hash,
         "the local-data removal touched a recording"
     );
+    for name in [
+        "uninstall-1-modify.png",
+        "uninstall-2-progress.png",
+        "uninstall-3-success.png",
+    ] {
+        product_ensure!(
+            ctx.scenario_dir.join("screenshots").join(name).is_file(),
+            "the interactive uninstall captured no {name}"
+        );
+    }
     Ok(())
 }
 
