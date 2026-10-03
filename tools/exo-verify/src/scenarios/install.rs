@@ -324,6 +324,11 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         "repair did not leave the product installed"
     );
 
+    // The quiet uninstall below removes Burn's cached bundle, so keep a copy
+    // for the passive phase, which exercises the UI level, not the cache path.
+    let passive_bundle = work.join("setup-passive-copy.exe");
+    fs::copy(&cached, &passive_bundle)?;
+
     let uninstall = run_setup(ctx, &cached, "/uninstall", "/quiet", "setup-uninstall.log")?;
     product_ensure!(
         matches!(uninstall.code(), Some(0 | 3010)),
@@ -359,7 +364,7 @@ fn setup_cycle(ctx: &mut Context) -> Step {
     // must not create the desktop shortcut either.
     let passive_install = run_setup(
         ctx,
-        &cached,
+        &passive_bundle,
         "/install",
         "/passive",
         "setup-passive-install.log",
@@ -375,7 +380,7 @@ fn setup_cycle(ctx: &mut Context) -> Step {
     );
     let passive_uninstall = run_setup(
         ctx,
-        &cached,
+        &passive_bundle,
         "/uninstall",
         "/passive",
         "setup-passive-uninstall.log",
@@ -389,6 +394,12 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         !exe.exists() && reg_value("installed")?.is_none(),
         "a passive uninstall left the product installed"
     );
+
+    // Both uninstalls above deliberately preserved this user's data, and this
+    // scenario runs before the MSI scenarios that assert a clean machine.
+    // Remove the probes it created so the next scenario starts clean.
+    fs::remove_dir_all(&config).ok();
+    fs::remove_file(&recording).ok();
 
     // Nothing is installed now, so the next scenario starts from the asserted
     // clean state.
