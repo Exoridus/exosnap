@@ -22,6 +22,11 @@ on:
         required: false
         default: false
         type: boolean
+      channels:
+        description: Comma-separated channels to submit (chocolatey,winget,scoop); a recovery run selects only the channels still owed a submission
+        required: false
+        default: chocolatey,winget,scoop
+        type: string
 
 permissions:
   contents: read
@@ -213,6 +218,7 @@ jobs:
           --chocolatey-rehearsal prepared/chocolatey-rehearsal.json
           --expect-readiness-digest "$env:READINESS_DIGEST"
       - name: Submit to Chocolatey Community
+        if: contains(format(',{0},', inputs.channels), ',chocolatey,')
         shell: pwsh
         env:
           CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
@@ -224,6 +230,7 @@ jobs:
           --prepared prepared --channel chocolatey --out submissions/chocolatey.json
           --expect-readiness-digest "$env:READINESS_DIGEST"
       - name: Submit to microsoft/winget-pkgs
+        if: contains(format(',{0},', inputs.channels), ',winget,')
         shell: pwsh
         env:
           CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
@@ -235,6 +242,7 @@ jobs:
           --prepared prepared --channel winget --out submissions/winget.json
           --expect-readiness-digest "$env:READINESS_DIGEST"
       - name: Update the Exoridus/scoop-exosnap bucket
+        if: contains(format(',{0},', inputs.channels), ',scoop,')
         shell: pwsh
         env:
           CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
