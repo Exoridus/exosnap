@@ -22,6 +22,8 @@ The documentation gate checks structure/references; editorial review checks trut
 
 Primary development uses Windows 11 x64 and PowerShell 7. Run commands through `pwsh` with Windows paths/quoting. Use `rg` / `rg --files`, then native PowerShell operations. Pass explicit roots and `--glob` rather than relying on shell wildcard expansion by native commands. The presence of an individual Coreutils command does not imply a GNU shell; do not invoke the Windows WSL launcher for repository work.
 
+Repository automation lives in Rust: `exo-dev` for repository checks, generators and release tooling, `exo-verify` for product verification including UI Automation drivers. PowerShell and Bash remain command shells and minimal GitHub Actions glue. Do not add standalone PowerShell, Python, Bash/shell, batch/CMD or C# helper scripts or tools; a reusable parser, validator, generator, test driver or policy belongs in the Rust tools. CMake configures the build, it is not general automation. A legacy script must not accumulate new business logic and is ported when materially touched.
+
 Media tools include ffprobe, ffmpeg, ffplay, MPV (`mpv`) and VLC where installed. Check `Get-Command` and resolve an installed tool before declaring it absent from a long-lived process's PATH. Prefer noninteractive ffprobe for inspection. Opening a GUI player follows the same desktop-coordination rules as driving the app.
 
 ## Driving applications and Windows

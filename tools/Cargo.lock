@@ -447,6 +447,7 @@ dependencies = [
  "ed25519-dalek",
  "exo-guest",
  "hex",
+ "png",
  "rcgen",
  "regex",
  "rustls",

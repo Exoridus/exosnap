@@ -20,6 +20,7 @@ pub mod present;
 pub mod preview;
 pub mod record;
 pub mod schema;
+mod setup_ui;
 pub mod update;
 pub mod visual;
 pub mod webcam;
