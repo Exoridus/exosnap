@@ -408,11 +408,20 @@ fn vc_runtime_version() -> Option<(u64, u64, u64, u64)> {
     if !out.success() {
         return None;
     }
+    parse_vc_runtime_version(&out.stdout)
+}
+
+/// Reads the `Major`/`Minor`/`Bld`/`Rbld` DWORDs out of a `reg query` listing.
+/// `reg.exe` renders DWORDs as hex (`0xe`), not decimal.
+fn parse_vc_runtime_version(output: &str) -> Option<(u64, u64, u64, u64)> {
     let number = |name: &str| -> Option<u64> {
-        parse_reg_value(&out.stdout, name)?
-            .trim_start_matches("0x")
-            .parse::<u64>()
-            .ok()
+        let raw = parse_reg_value(output, name)?;
+        let raw = raw.trim();
+        let (digits, radix) = match raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+            Some(digits) => (digits, 16),
+            None => (raw, 10),
+        };
+        u64::from_str_radix(digits, radix).ok()
     };
     Some((
         number("Major")?,
@@ -885,5 +894,12 @@ mod tests {
             Some(r"C:\Program Files\ExoSnap\".into())
         );
         assert_eq!(parse_reg_value(output, "installed"), Some("0x1".into()));
+    }
+
+    #[test]
+    fn vc_runtime_dwords_are_read_as_the_hex_reg_renders() {
+        let output = "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64\n    Version    REG_SZ    v14.51.36247.00\n    Installed    REG_DWORD    0x1\n    Major    REG_DWORD    0xe\n    Minor    REG_DWORD    0x33\n    Bld    REG_DWORD    0x8d97\n    Rbld    REG_DWORD    0x0\n";
+        assert_eq!(parse_vc_runtime_version(output), Some((14, 51, 36247, 0)));
+        assert_eq!(parse_vc_runtime_version("no values here\n"), None);
     }
 }
