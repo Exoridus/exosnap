@@ -216,6 +216,8 @@ jobs:
         shell: pwsh
         env:
           CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+          WINGET_SUBMIT_TOKEN: ${{ secrets.WINGET_SUBMIT_TOKEN }}
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
           READINESS_DIGEST: ${{ needs.prepare.outputs.digest }}
         run: >-
           ./tools/target/debug/exo-dev.exe distribution submit
@@ -224,7 +226,9 @@ jobs:
       - name: Submit to microsoft/winget-pkgs
         shell: pwsh
         env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
           WINGET_SUBMIT_TOKEN: ${{ secrets.WINGET_SUBMIT_TOKEN }}
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
           READINESS_DIGEST: ${{ needs.prepare.outputs.digest }}
         run: >-
           ./tools/target/debug/exo-dev.exe distribution submit
@@ -233,6 +237,8 @@ jobs:
       - name: Update the Exoridus/scoop-exosnap bucket
         shell: pwsh
         env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+          WINGET_SUBMIT_TOKEN: ${{ secrets.WINGET_SUBMIT_TOKEN }}
           SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
           READINESS_DIGEST: ${{ needs.prepare.outputs.digest }}
         run: >-
