@@ -324,10 +324,11 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         "repair did not leave the product installed"
     );
 
-    // The quiet uninstall below removes Burn's cached bundle, so keep a copy
-    // for the passive phase, which exercises the UI level, not the cache path.
-    let passive_bundle = work.join("setup-passive-copy.exe");
-    fs::copy(&cached, &passive_bundle)?;
+    // The quiet uninstall below removes Burn's cached bundle, and the passive
+    // phase needs a full self-contained bundle to install from, so copy the
+    // artifact again rather than relying on the cache.
+    let passive_bundle = work.join("setup-passive.exe");
+    fs::copy(&setup_source, &passive_bundle)?;
 
     let uninstall = run_setup(ctx, &cached, "/uninstall", "/quiet", "setup-uninstall.log")?;
     product_ensure!(

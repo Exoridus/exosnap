@@ -221,7 +221,7 @@ if ($Mode -eq 'install') {
         }
         if ($null -eq $started) { throw 'Launch did not start the installed executable' }
         Stop-Process -Id $started.Id -Force
-        Invoke-Control (Wait-Control 'Close' 'Button' 30)
+        # WixStdBA closes the Success window itself after launching the target.
     } else {
         Invoke-Control (Wait-Control 'Close' 'Button' 30)
     }
