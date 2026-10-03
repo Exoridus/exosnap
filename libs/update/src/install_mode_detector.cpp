@@ -10,10 +10,13 @@
 namespace exosnap::update {
 namespace {
 
-// The installer (MSI) writes both values under HKLM\Software\Codexo\ExoSnap:
+// The installer (MSI) writes both values under HKLM\Software\ExoSnap:
 //   "installed"   (REG_DWORD == 1)   -- presence marker
 //   "InstallPath" (REG_SZ)           -- [INSTALLFOLDER]
-constexpr const wchar_t* kKeyPath = L"Software\\Codexo\\ExoSnap";
+// v0.10.0 wrote the same values under HKLM\Software\Codexo\ExoSnap; that key
+// stays readable as a fallback while an old installation is still present,
+// and is removed during the v0.10.1 upgrade.
+constexpr const wchar_t* kKeyPaths[] = {L"Software\\ExoSnap", L"Software\\Codexo\\ExoSnap"};
 
 // Directory of the running executable, empty when it cannot be resolved.
 std::wstring RunningExecutableDir() {
@@ -68,25 +71,28 @@ std::optional<std::wstring> ReadStringValue(HKEY key, const wchar_t* value_name)
 // found in HKLM to be compared against a path found in HKCU, i.e. against a
 // different installation's directory, and nothing downstream could tell.
 std::optional<InstallStamp> ReadStamp(HKEY root) {
-    HKEY key = nullptr;
-    if (RegOpenKeyExW(root, kKeyPath, 0, KEY_READ, &key) != ERROR_SUCCESS)
-        return std::nullopt;
+    for (const wchar_t* key_path : kKeyPaths) {
+        HKEY key = nullptr;
+        if (RegOpenKeyExW(root, key_path, 0, KEY_READ, &key) != ERROR_SUCCESS)
+            continue;
 
-    DWORD type = 0;
-    DWORD data = 0;
-    DWORD size = sizeof(data);
-    const bool marker_present =
-        RegQueryValueExW(key, L"installed", nullptr, &type, reinterpret_cast<LPBYTE>(&data), &size) == ERROR_SUCCESS &&
-        type == REG_DWORD && data == 1;
-    if (!marker_present) {
+        DWORD type = 0;
+        DWORD data = 0;
+        DWORD size = sizeof(data);
+        const bool marker_present = RegQueryValueExW(key, L"installed", nullptr, &type, reinterpret_cast<LPBYTE>(&data),
+                                                     &size) == ERROR_SUCCESS &&
+                                    type == REG_DWORD && data == 1;
+        if (!marker_present) {
+            RegCloseKey(key);
+            continue;
+        }
+
+        InstallStamp stamp;
+        stamp.install_dir = ReadStringValue(key, L"InstallPath").value_or(std::wstring{});
         RegCloseKey(key);
-        return std::nullopt;
+        return stamp;
     }
-
-    InstallStamp stamp;
-    stamp.install_dir = ReadStringValue(key, L"InstallPath").value_or(std::wstring{});
-    RegCloseKey(key);
-    return stamp;
+    return std::nullopt;
 }
 
 } // namespace
@@ -105,12 +111,16 @@ InstallMode DetectInstallMode() noexcept {
 
 std::optional<std::wstring> ReadInstallPath() {
     auto try_key = [](HKEY root) -> std::optional<std::wstring> {
-        HKEY key = nullptr;
-        if (RegOpenKeyExW(root, kKeyPath, 0, KEY_READ, &key) != ERROR_SUCCESS)
-            return std::nullopt;
-        std::optional<std::wstring> value = ReadStringValue(key, L"InstallPath");
-        RegCloseKey(key);
-        return value;
+        for (const wchar_t* key_path : kKeyPaths) {
+            HKEY key = nullptr;
+            if (RegOpenKeyExW(root, key_path, 0, KEY_READ, &key) != ERROR_SUCCESS)
+                continue;
+            std::optional<std::wstring> value = ReadStringValue(key, L"InstallPath");
+            RegCloseKey(key);
+            if (value.has_value())
+                return value;
+        }
+        return std::nullopt;
     };
 
     if (auto v = try_key(HKEY_LOCAL_MACHINE))

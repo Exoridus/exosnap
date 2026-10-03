@@ -44,6 +44,55 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Install the pinned WinGet client used for manifest validation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releases = 'https://github.com/microsoft/winget-cli/releases/download/v1.29.380'
+          $expectedBundle = '65DEA9C01CE08EE7B763366B27C0E651F97DB857C11CA9B9C301826C10092F2E'
+          $expectedDependencies = 'BA875AFE9D190F61218985AC0292A99D1DB710BF93E13C68944CA9D89F0D82D1'
+          $expectedLicense = 'BCB15118EC47DF24E3E6013A7006147C3A15B3A8104ED660FE87C8B4ED01F485'
+          $dir = Join-Path $env:RUNNER_TEMP 'winget-client'
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          $bundle = Join-Path $dir 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle'
+          $dependencies = Join-Path $dir 'DesktopAppInstaller_Dependencies.zip'
+          $license = Join-Path $dir 'winget-license.xml'
+          Invoke-WebRequest -Uri "$releases/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle" -OutFile $bundle
+          Invoke-WebRequest -Uri "$releases/DesktopAppInstaller_Dependencies.zip" -OutFile $dependencies
+          Invoke-WebRequest -Uri "$releases/e53e159d00e04f729cc2180cffd1c02e_License1.xml" -OutFile $license
+          if ((Get-FileHash -LiteralPath $bundle -Algorithm SHA256).Hash -ne $expectedBundle) { throw 'the WinGet bundle does not match its pinned digest' }
+          if ((Get-FileHash -LiteralPath $dependencies -Algorithm SHA256).Hash -ne $expectedDependencies) { throw 'the WinGet dependencies do not match their pinned digest' }
+          if ((Get-FileHash -LiteralPath $license -Algorithm SHA256).Hash -ne $expectedLicense) { throw 'the WinGet license does not match its pinned digest' }
+          Expand-Archive -LiteralPath $dependencies -DestinationPath $dir
+          # The runner has no Microsoft Store, so a plain Add-AppxPackage leaves
+          # a package that cannot launch ("No applicable app licenses found").
+          # Provisioning applies the package's own license and makes the client
+          # runnable without the Store.
+          $dependencyPackages = @(Get-ChildItem -LiteralPath (Join-Path $dir 'x64') -Filter *.appx | ForEach-Object { $_.FullName })
+          Add-AppxProvisionedPackage -Online -PackagePath $bundle -LicensePath $license -DependencyPackagePath $dependencyPackages | Out-Null
+          $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+          $winget = Join-Path $alias 'winget.exe'
+          if (-not (Test-Path -LiteralPath $winget)) {
+            # Provisioning stages the package machine-wide but does not create
+            # the current user's app execution alias in this session; register
+            # the staged package for this user before falling back to its
+            # install directory on PATH.
+            Import-Module -Name Appx -UseWindowsPowerShell -ErrorAction Stop
+            $packageRoot = Get-ChildItem -LiteralPath 'C:\Program Files\WindowsApps' -Directory `
+              -Filter 'Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe' -ErrorAction Stop |
+              Sort-Object Name -Descending | Select-Object -First 1
+            if (-not $packageRoot) { throw 'the provisioned WinGet package has no install directory' }
+            Add-AppxPackage -Register -DisableDevelopmentMode -Path (Join-Path $packageRoot.FullName 'AppxManifest.xml')
+            if (Test-Path -LiteralPath $winget) {
+              Add-Content -LiteralPath $env:GITHUB_PATH -Value $alias
+            } else {
+              $winget = Join-Path $packageRoot.FullName 'winget.exe'
+              Add-Content -LiteralPath $env:GITHUB_PATH -Value $packageRoot.FullName
+            }
+          } else {
+            Add-Content -LiteralPath $env:GITHUB_PATH -Value $alias
+          }
+          & $winget --version
       - name: Build the distribution tools from the trusted workflow revision
         run: cargo build --locked --manifest-path tools/Cargo.toml -p exo-dev -p exo-verify
       - name: Download the immutable public release metadata and assets
@@ -76,10 +125,20 @@ jobs:
         shell: pwsh
         env:
           VERSION: ${{ inputs.version }}
-        run: >-
-          ./tools/target/debug/exo-verify.exe rehearse
-          --channel chocolatey --package-source prepared/packaging/chocolatey
-          --installer "assets/ExoSnap-$env:VERSION-windows-x64.msi" --out rehearsal
+        run: |
+          $installer = (Resolve-Path -LiteralPath "assets/ExoSnap-$env:VERSION-windows-x64.msi").Path
+          ./tools/target/debug/exo-verify.exe rehearse `
+            --channel chocolatey --package-source prepared/packaging/chocolatey `
+            --installer $installer --out rehearsal
+          exit $LASTEXITCODE
+      - name: Retain the rehearsal evidence even when it fails
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: distribution-rehearsal
+          path: rehearsal/
+          if-no-files-found: warn
+          retention-days: 90
       - name: Freeze and validate the distribution readiness report
         id: validate
         shell: pwsh
@@ -111,6 +170,17 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Install the pinned WingetCreate client used for submission
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = '24042BD37915805615E6CF969AC57C6439124C3FE85823327F5F3FB24BD9FFEA'
+          $dir = Join-Path $env:RUNNER_TEMP 'wingetcreate'
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          $exe = Join-Path $dir 'wingetcreate.exe'
+          Invoke-WebRequest -Uri 'https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe' -OutFile $exe
+          if ((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -ne $expected) { throw 'WingetCreate does not match its pinned digest' }
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $dir
       - name: Build the distribution tool from the trusted workflow revision
         run: cargo build --locked --manifest-path tools/Cargo.toml -p exo-dev
       - name: Consume the exact frozen preparation

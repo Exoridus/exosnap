@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  ExoSnap Setup theme for WixStandardBootstrapperApplication.
+
+  ExoSnap's own theme, not a copy of a WiX theme. Every control name WixStdBA
+  wires by name is preserved so the standard flows keep working; the two
+  ExoSnap options are checkboxes whose names do not collide with any wired
+  control, which is what lets thmutil bind them to Burn variables
+  (ExoSnapDesktopShortcut and ExoSnapRemoveUserData) automatically.
+
+  Colours are the Dark appearance of app/ui/theme/ExoSnapThemes.h, written as
+  COLORREF (BBGGRR) hex because thmutil parses the value with wcstoul base 16:
+
+    role        app value     here
+    background  #0E0E10       100E0E
+    surface     #151517       171515
+    raised      #242428       282424
+    ink         #F1F1EF       EFF1F1
+    text1       #C5C5C3       C3C5C5
+    muted       #9C9C9A       9A9C9C
+    dim         #67676C       6C6767
+    accent      #9BD9D2       D2D99B (the shipped default accent, dark value)
+    accent hover               E6ECC9
+    error       #E0786C       6C78E0
+
+  There are three visible text weights on purpose. Primary (ink) is the page
+  heading, the option labels and the buttons. Secondary (muted 9C9C9A) is
+  supporting prose. The dim rung exists for de-emphasised metadata; it is
+  never used for text the user must read, because on this background it reads
+  as disabled.
+
+  Display strings reuse the shipped RtfTheme localization keys, so the theme
+  can be swapped without shipping a second localization file.
+
+  Buttons stay native. Windows draws a themable push button itself, and the
+  only way thmutil recolours one is to switch it to owner draw with bitmap
+  images, which would trade real accessibility for decoration. The hierarchy
+  is therefore expressed with native roles: Install and Uninstall are default
+  push buttons (BS_DEFPUSHBUTTON via HexStyle), Cancel, Repair and View
+  license are plain push buttons. View license cannot be a Hyperlink: thmutil
+  executes a ChangePageAction only for Button and Commandlink controls, never
+  for Hyperlink, so the link would render but do nothing. A font without
+  colours leaves a button fully native; that is deliberate.
+
+  Graphic buttons were evaluated against that accessibility bar and rejected.
+  thmutil ORs BS_OWNERDRAW onto every button that carries an image, and
+  BS_OWNERDRAW replaces the BS_DEFPUSHBUTTON type bit; WixStdBA routes input
+  through IsDialogMessage and nothing sets DM_SETDEFID, so a graphic button
+  would stop responding to a bare Enter. DrawButton also ignores ODS_DISABLED,
+  so a visible disabled graphic button is drawn as enabled. A native button
+  keeps both behaviours, which outranks the accent fill. Revisit only if
+  thmutil grows a default-button and disabled state for owner draw.
+
+  Every action row is right aligned against the client edge. thmutil gives a
+  negative X the meaning "right edge this far from the right window edge", so
+  the rightmost button uses X="-12" (12 px margin), each button to its left
+  uses X = previous X minus previous width minus the 8 px inter button gap,
+  and the row sits 20 px above the bottom (Y="-20", Height="30"). A smaller
+  negative value moves a button LEFT, not right. Keep those numbers explicit
+  here and in comments rather than eyeballing positions.
+
+  The option checkboxes are a native BS_AUTOCHECKBOX with their caption
+  clipped to the glyph and a themed Label beside them. A themed checkbox draws
+  its glyph through the OS theme and takes the label colour from the OS, not
+  from a thmutil font: with a dark window the caption came out black on
+  #0E0E10. The checkbox keeps its real caption for UI Automation and screen
+  readers (it is only clipped), stays tab focusable, and the visible text is
+  the themed Label, which does take the font colour. Do not collapse this back
+  into one wide checkbox: the caption would be unreadable again.
+
+  There is deliberately NO EulaAcceptCheckbox and no EulaHyperlink. ExoSnap is
+  GPL-3.0-or-later and installing/running it does not require accepting the
+  license. The canonical LICENSE ships inside the bundle and is shown on the
+  License page by WixStdBA's own EulaRichedit control, offline.
+-->
+<Theme xmlns="http://wixtoolset.org/schemas/v4/thmutil">
+  <Font Id="0" Height="-14" Weight="400" Foreground="EFF1F1" Background="100E0E">Segoe UI</Font>
+  <Font Id="1" Height="-22" Weight="600" Foreground="EFF1F1" Background="100E0E">Segoe UI</Font>
+  <Font Id="2" Height="-16" Weight="600" Foreground="C3C5C5" Background="100E0E">Segoe UI</Font>
+  <Font Id="3" Height="-13" Weight="400" Foreground="9A9C9C" Background="100E0E">Segoe UI</Font>
+  <Font Id="4" Height="-12" Weight="400" Foreground="6C6767" Background="100E0E">Segoe UI</Font>
+  <Font Id="5" Height="-14" Weight="400">Segoe UI</Font>
+  <Font Id="8" Height="-13" Weight="400" Foreground="C3C5C5" Background="100E0E">Segoe UI</Font>
+
+  <Window Width="520" Height="340" HexStyle="100a0000" FontId="0" Caption="#(loc.Caption)">
+    <!-- The in-window brand lockup: the real mark and the real outlined
+         wordmark, generated from app/assets/brand/marks by
+         `cargo exo-dev generate-app-icons` at the application Top Bar's own
+         mark/gap/type relationship. -->
+    <ImageControl X="24" Y="20" Width="167" Height="36" ImageFile="logo.png" Visible="yes"/>
+
+    <Page Name="Help">
+      <Label X="24" Y="76" Width="-24" Height="30" FontId="2" DisablePrefix="yes">#(loc.HelpHeader)</Label>
+      <Label X="24" Y="112" Width="-24" Height="-55" FontId="3" DisablePrefix="yes">#(loc.HelpText)</Label>
+      <Button Name="HelpCloseButton" X="-12" Y="-20" Width="75" Height="28" TabStop="yes" FontId="5">
+        <Text>#(loc.HelpCloseButton)</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="Loading">
+      <Label X="24" Y="80" Width="-24" Height="30" FontId="3" DisablePrefix="yes" Visible="no" Name="CheckingForUpdatesLabel" />
+    </Page>
+
+    <Page Name="Install">
+      <Label X="24" Y="76" Width="-24" Height="30" FontId="1" DisablePrefix="yes">Install ExoSnap</Label>
+      <Label X="24" Y="110" Width="-24" Height="18" FontId="3" DisablePrefix="yes">Screen recording, without the noise.</Label>
+      <Label X="24" Y="136" Width="-24" Height="36" FontId="3" DisablePrefix="yes">Setup installs ExoSnap and, if required, the Microsoft Visual C++ Runtime.&#xA;Everything needed is included and installed offline.</Label>
+      <Button Name="ViewLicenseButton" X="24" Y="190" Width="110" Height="28" TabStop="yes" FontId="5">
+        <Text>View license</Text>
+        <ChangePageAction Page="License" />
+      </Button>
+      <Checkbox Name="ExoSnapDesktopShortcut" X="24" Y="232" Width="17" Height="17" TabStop="yes" FontId="0">Create a desktop shortcut</Checkbox>
+      <Label X="45" Y="233" Width="-45" Height="17" FontId="0" DisablePrefix="yes">Create a desktop shortcut</Label>
+      <Button Name="InstallButton" X="-12" Y="-20" Width="120" Height="30" TabStop="yes" FontId="5" HexStyle="1">Install ExoSnap</Button>
+      <Button Name="InstallCancelButton" X="-140" Y="-20" Width="84" Height="30" TabStop="yes" FontId="5">
+        <Text>#(loc.InstallCancelButton)</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="License">
+      <Label X="24" Y="76" Width="-24" Height="30" FontId="1" DisablePrefix="yes">License</Label>
+      <Richedit Name="EulaRichedit" X="24" Y="114" Width="-24" Height="-58" TabStop="yes" FontId="3" />
+      <Button Name="LicenseBackButton" X="-12" Y="-20" Width="75" Height="28" TabStop="yes" FontId="5">
+        <Text>Back</Text>
+        <ChangePageAction Page="Install" />
+      </Button>
+    </Page>
+
+    <Page Name="Modify">
+      <Label X="24" Y="76" Width="-24" Height="32" FontId="1" DisablePrefix="yes">Repair or uninstall ExoSnap</Label>
+      <Label X="24" Y="112" Width="-24" Height="20" FontId="3" DisablePrefix="yes">Repair the installation or remove ExoSnap from this computer.</Label>
+      <Checkbox Name="ExoSnapRemoveUserData" X="24" Y="146" Width="17" Height="17" TabStop="yes" FontId="0">Also remove local ExoSnap data</Checkbox>
+      <Label X="45" Y="147" Width="-45" Height="17" FontId="0" DisablePrefix="yes">Also remove local ExoSnap data</Label>
+      <Label X="45" Y="169" Width="-45" Height="34" FontId="3" DisablePrefix="yes">Settings, presets, history, caches, recovery data, logs and crash reports will&#xA;be removed.</Label>
+      <Label X="45" Y="205" Width="-45" Height="17" FontId="8" DisablePrefix="yes">Recordings and exported files are never deleted.</Label>
+      <Button Name="RepairButton" X="-211" Y="-20" Width="84" Height="30" TabStop="yes" FontId="5" HideWhenDisabled="yes">#(loc.ModifyRepairButton)</Button>
+      <Button Name="UninstallButton" X="-104" Y="-20" Width="99" Height="30" TabStop="yes" FontId="5" HexStyle="1">#(loc.ModifyUninstallButton)</Button>
+      <Button Name="ModifyCancelButton" X="-12" Y="-20" Width="84" Height="30" TabStop="yes" FontId="5">
+        <Text>#(loc.ModifyCancelButton)</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="Progress">
+      <Label X="24" Y="76" Width="-24" Height="32" FontId="1" DisablePrefix="yes">Installing ExoSnap</Label>
+      <Label Name="OverallProgressPackageText" X="24" Y="118" Width="-24" Height="17" FontId="3" DisablePrefix="yes">#(loc.OverallProgressPackageText)</Label>
+      <Progressbar Name="OverallCalculatedProgressbar" X="24" Y="146" Width="-24" Height="8" />
+      <Button Name="ProgressCancelButton" X="-12" Y="-20" Width="99" Height="30" TabStop="yes" FontId="5">#(loc.ProgressCancelButton)</Button>
+    </Page>
+
+    <Page Name="Success">
+      <Label X="24" Y="76" Width="-24" Height="32" FontId="1" DisablePrefix="yes">
+        <Text>ExoSnap is ready.</Text>
+        <Text Condition="WixBundleAction = 2">#(loc.SuccessLayoutHeader)</Text>
+        <Text Condition="WixBundleAction = 3">#(loc.SuccessUnsafeUninstallHeader)</Text>
+        <Text Condition="WixBundleAction = 4">ExoSnap was removed.</Text>
+        <Text Condition="WixBundleAction = 5">#(loc.SuccessCacheHeader)</Text>
+        <Text Condition="WixBundleAction = 6">#(loc.SuccessInstallHeader)</Text>
+        <Text Condition="WixBundleAction = 7">#(loc.SuccessModifyHeader)</Text>
+        <Text Condition="WixBundleAction = 8">#(loc.SuccessRepairHeader)</Text>
+      </Label>
+      <Label X="24" Y="116" Width="-24" Height="34" FontId="3" DisablePrefix="yes" VisibleCondition="WixStdBARestartRequired">
+        <Text>#(loc.SuccessRestartText)</Text>
+        <Text Condition="WixBundleAction = 3">#(loc.SuccessUninstallRestartText)</Text>
+      </Label>
+      <Button Name="LaunchButton" X="-104" Y="-20" Width="99" Height="30" TabStop="yes" FontId="5" HideWhenDisabled="yes">#(loc.SuccessLaunchButton)</Button>
+      <Button Name="SuccessRestartButton" X="-104" Y="-20" Width="99" Height="30" TabStop="yes" FontId="5" HexStyle="1" HideWhenDisabled="yes">#(loc.SuccessRestartButton)</Button>
+      <Button Name="SuccessCloseButton" X="-12" Y="-20" Width="84" Height="30" TabStop="yes" FontId="5">
+        <Text>#(loc.SuccessCloseButton)</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="Failure">
+      <Label X="24" Y="76" Width="-24" Height="32" FontId="1" DisablePrefix="yes">
+        <Text>Setup failed.</Text>
+        <Text Condition="WixBundleAction = 2">#(loc.FailureLayoutHeader)</Text>
+        <Text Condition="WixBundleAction = 3">#(loc.FailureUnsafeUninstallHeader)</Text>
+        <Text Condition="WixBundleAction = 4">#(loc.FailureUninstallHeader)</Text>
+        <Text Condition="WixBundleAction = 5">#(loc.FailureCacheHeader)</Text>
+        <Text Condition="WixBundleAction = 6">#(loc.FailureInstallHeader)</Text>
+        <Text Condition="WixBundleAction = 7">#(loc.FailureModifyHeader)</Text>
+        <Text Condition="WixBundleAction = 8">#(loc.FailureRepairHeader)</Text>
+      </Label>
+      <Hypertext Name="FailureLogFileLink" X="24" Y="120" Width="-24" Height="42" FontId="3" TabStop="yes" HideWhenDisabled="yes">#(loc.FailureHyperlinkLogText)</Hypertext>
+      <Hypertext Name="FailureMessageText" X="34" Y="158" Width="-24" Height="51" FontId="3" TabStop="yes" HideWhenDisabled="yes" />
+      <Label X="24" Y="-56" Width="420" Height="34" FontId="3" DisablePrefix="yes" VisibleCondition="WixStdBARestartRequired">#(loc.FailureRestartText)</Label>
+      <Button Name="FailureRestartButton" X="-104" Y="-20" Width="99" Height="30" TabStop="yes" FontId="5" HexStyle="1" HideWhenDisabled="yes">#(loc.FailureRestartButton)</Button>
+      <Button Name="FailureCloseButton" X="-12" Y="-20" Width="84" Height="30" TabStop="yes" FontId="5">
+        <Text>#(loc.FailureCloseButton)</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+  </Window>
+</Theme>

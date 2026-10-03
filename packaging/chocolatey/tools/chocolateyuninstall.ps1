@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 # The MSI owns every artifact it created and removes all of it on uninstall: the
-# ARP entry, HKLM\SOFTWARE\Codexo, the install tree under Program Files, and the
+# ARP entry, HKLM\SOFTWARE\ExoSnap, the install tree under Program Files, and the
 # Start Menu shortcut. User configuration under %LOCALAPPDATA%\ExoSnap is
 # deliberately not installed by the MSI and deliberately survives an uninstall,
 # so this script must never delete files or registry keys itself.

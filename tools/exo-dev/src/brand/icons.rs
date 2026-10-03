@@ -45,6 +45,19 @@ const PNG_FRAME_MIN_PX: u32 = 64;
 /// the three semantic ones.
 const CAUTION_INDEX: usize = 11;
 const ERROR_INDEX: usize = 12;
+const INK_INDEX: usize = 6;
+
+/// The installer's in-window brand lockup, reproducing the application Top
+/// Bar's own relationship -- an 18 px mark, an 8 px gap and the wordmark at a
+/// 16 px type size, all vertically centred -- at 2x so the header reads at
+/// window scale. The displayed pixels are rasterized at 4x so a DPI-scaled
+/// control downsamples cleanly. Never a second drawing: the mark comes from
+/// `marks/brand.svg` plus `BrandMark.h`'s optical profile, the wordmark from
+/// `marks/wordmark.svg`, and neither is restated here.
+const INSTALLER_MARK_PX: f64 = 36.0;
+const INSTALLER_GAP_PX: f64 = 16.0;
+const INSTALLER_WORDMARK_TYPE_PX: f64 = 32.0;
+const INSTALLER_RASTER_SCALE: u32 = 4;
 
 struct Rgb(u8, u8, u8);
 
@@ -85,6 +98,119 @@ fn render_frame(svg_body: &str, size: u32) -> anyhow::Result<Frame> {
     let transform = tiny_skia::Transform::from_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     Ok(Frame { size, pixmap })
+}
+
+/// Renders a non-square SVG document to a transparent RGBA PNG at the exact
+/// pixel size asked for. Used for the installer lockup, which is wider than
+/// it is tall.
+fn render_png(svg: &str, width: u32, height: u32) -> anyhow::Result<Vec<u8>> {
+    let tree = resvg::usvg::Tree::from_str(svg, &resvg::usvg::Options::default())
+        .context("parsing generated brand SVG")?;
+    let mut pixmap =
+        tiny_skia::Pixmap::new(width, height).context("allocating brand lockup pixmap")?;
+    let size = tree.size();
+    let transform = tiny_skia::Transform::from_scale(
+        width as f32 / size.width(),
+        height as f32 / size.height(),
+    );
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    pixmap.encode_png().context("encoding brand lockup PNG")
+}
+
+/// The installer's mark+wordmark lockup as one transparent PNG, composed from
+/// the same two canonical SVGs the running application uses.
+fn installer_brand_png(
+    repo_root: &Path,
+    mark: &BrandMark,
+    circles: &[Circle],
+    accent_hex: &str,
+    ink_hex: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let wordmark_path = repo_root.join("app/assets/brand/marks/wordmark.svg");
+    let wordmark_svg = std::fs::read_to_string(&wordmark_path)
+        .with_context(|| format!("could not read {}", wordmark_path.display()))?;
+    anyhow::ensure!(
+        wordmark_svg.contains("#9BD9D2") && wordmark_svg.contains("#F1F1EF"),
+        "{}: the wordmark no longer carries the reference accent and ink",
+        wordmark_path.display()
+    );
+    let view_box = regex::Regex::new(r#"viewBox="([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+)""#)
+        .expect("valid regex");
+    let caps = view_box
+        .captures(&wordmark_svg)
+        .with_context(|| format!("{} has no viewBox", wordmark_path.display()))?;
+    let vb_x: f64 = caps[1].parse()?;
+    let vb_y: f64 = caps[2].parse()?;
+    let vb_w: f64 = caps[3].parse()?;
+    let vb_h: f64 = caps[4].parse()?;
+
+    let grid = mark.value("kGrid");
+    let center = mark.value("kCenter");
+    let em_units = mark.value("kWordmarkEmUnits");
+
+    let scale = f64::from(INSTALLER_RASTER_SCALE);
+    let mark_px = INSTALLER_MARK_PX * scale;
+    let gap_px = INSTALLER_GAP_PX * scale;
+    let type_px = INSTALLER_WORDMARK_TYPE_PX * scale;
+    let wordmark_scale = type_px / em_units;
+    let wordmark_w = vb_w * wordmark_scale;
+    let wordmark_h = vb_h * wordmark_scale;
+    let canvas_w = mark_px + gap_px + wordmark_w;
+    let canvas_h = mark_px;
+
+    // Inline next to the wordmark, so no standalone margin; the optical
+    // profile is the one the DISPLAYED size resolves to, not the raster's own
+    // larger size, because the correction answers how large the mark reads.
+    let profile = mark.profile_for(INSTALLER_MARK_PX as i32);
+    let mark_scale = mark_px / grid;
+    let mut mark_body = String::new();
+    for circle in circles {
+        let alpha = if circle.opacity < 1.0 {
+            (circle.opacity * profile.outer_opacity_scale).min(1.0)
+        } else {
+            1.0
+        };
+        if let Some(stroke) = &circle.stroke {
+            let width = circle.stroke_width * profile.ring_stroke_scale;
+            mark_body.push_str(&format!(
+                r#"<circle cx="{center}" cy="{center}" r="{}" fill="none" stroke="{stroke}" stroke-width="{}" opacity="{}"/>"#,
+                super::num(circle.r, 4),
+                super::num(width, 4),
+                super::num(alpha, 4),
+            ));
+        } else {
+            mark_body.push_str(&format!(
+                r#"<circle cx="{center}" cy="{center}" r="{}" fill="{}" opacity="{}"/>"#,
+                super::num(circle.r, 4),
+                circle.fill,
+                super::num(alpha, 4),
+            ));
+        }
+    }
+
+    let wordmark_content = wordmark_svg
+        .split_once('>')
+        .and_then(|(_, rest)| rest.rsplit_once("</svg>").map(|(inner, _)| inner))
+        .with_context(|| format!("{} has no SVG body", wordmark_path.display()))?
+        .replace("#9BD9D2", accent_hex)
+        .replace("#F1F1EF", ink_hex);
+
+    // The wordmark's box is centred against the taller mark on the same
+    // vertical centre line the Top Bar's RowLayout uses.
+    let tx = mark_px + gap_px - vb_x * wordmark_scale;
+    let ty = (canvas_h - wordmark_h) / 2.0 - vb_y * wordmark_scale;
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}"><g transform="translate(0,0) scale({})">{mark_body}</g><g transform="translate({},{}) scale({})">{wordmark_content}</g></svg>"#,
+        super::num(canvas_w, 3),
+        super::num(canvas_h, 3),
+        super::num(canvas_w, 3),
+        super::num(canvas_h, 3),
+        super::num(mark_scale, 6),
+        super::num(tx, 4),
+        super::num(ty, 4),
+        super::num(wordmark_scale, 6),
+    );
+    render_png(&svg, canvas_w.ceil() as u32, canvas_h.ceil() as u32)
 }
 
 fn svg_document(grid: f64, body: &str) -> String {
@@ -263,10 +389,10 @@ fn png_frame(frame: &Frame) -> anyhow::Result<Vec<u8>> {
         .context("encoding icon frame as PNG")
 }
 
-/// Writes `<repo_root>/app/assets/brand/<stem>.ico`: the container is
-/// written here rather than by an image library, so the frame encoding is
-/// a decision this function makes, not one a dependency makes for it.
-fn write_ico(frames: &[Frame], out_path: &Path) -> anyhow::Result<()> {
+/// The ICO container bytes: the container is written here rather than by an
+/// image library, so the frame encoding is a decision this function makes,
+/// not one a dependency makes for it.
+fn ico_bytes(frames: &[Frame]) -> anyhow::Result<Vec<u8>> {
     let mut payloads = Vec::with_capacity(frames.len());
     for frame in frames {
         if frame.size > PNG_FRAME_MIN_PX {
@@ -297,15 +423,14 @@ fn write_ico(frames: &[Frame], out_path: &Path) -> anyhow::Result<()> {
         out.extend_from_slice(payload);
     }
 
-    std::fs::write(out_path, &out)
-        .with_context(|| format!("could not write {}", out_path.display()))?;
-    Ok(())
+    Ok(out)
 }
 
 /// Generates `exosnap-app.ico`, the five thumbnail-toolbar glyph `.ico`
-/// files (in the dark and light appearance's own state colours) and
-/// `exosnap-logo.svg`, into `<repo_root>/app/assets/brand/`.
-pub fn generate(repo_root: &Path) -> anyhow::Result<()> {
+/// files (in the dark and light appearance's own state colours),
+/// `exosnap-logo.svg` and the installer's brand lockup. With `check`, writes
+/// nothing and reports drift instead.
+pub fn generate(repo_root: &Path, check: bool) -> anyhow::Result<()> {
     let brand_mark_h_path = repo_root.join("app/ui/brand/BrandMark.h");
     let themes_h_path = repo_root.join("app/ui/theme/ExoSnapThemes.h");
     let brand_svg_path = repo_root.join("app/assets/brand/marks/brand.svg");
@@ -342,6 +467,8 @@ pub fn generate(repo_root: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("could not create {}", out_dir.display()))?;
 
+    let mut artifacts: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
+
     let mut app_frames = Vec::with_capacity(APP_ICO_SIZES.len());
     for &px in &APP_ICO_SIZES {
         app_frames.push(render_frame(
@@ -349,11 +476,12 @@ pub fn generate(repo_root: &Path) -> anyhow::Result<()> {
             px,
         )?);
     }
-    write_ico(&app_frames, &out_dir.join("exosnap-app.ico"))?;
+    artifacts.push((out_dir.join("exosnap-app.ico"), ico_bytes(&app_frames)?));
 
-    let logo_path = out_dir.join("exosnap-logo.svg");
-    std::fs::write(&logo_path, &brand_svg)
-        .with_context(|| format!("could not write {}", logo_path.display()))?;
+    artifacts.push((
+        out_dir.join("exosnap-logo.svg"),
+        brand_svg.clone().into_bytes(),
+    ));
 
     // Two sets, one per appearance: the taskbar's thumbnail strip is
     // Windows chrome, so its ground follows the system appearance and we
@@ -398,10 +526,45 @@ pub fn generate(repo_root: &Path) -> anyhow::Result<()> {
                     px,
                 )?);
             }
-            write_ico(&frames, &out_dir.join(format!("{stem}{suffix}.ico")))?;
+            artifacts.push((
+                out_dir.join(format!("{stem}{suffix}.ico")),
+                ico_bytes(&frames)?,
+            ));
         }
     }
 
+    // The installer's fixed-dark lockup: the dark appearance's own ink and
+    // the shipped default accent's dark value, so the raster is derived from
+    // the same theme table the running application resolves.
+    let dark_ink = parse_theme_colour(&themes_h, "dark", INK_INDEX);
+    artifacts.push((
+        repo_root.join("packaging/burn/exosnap-brand.png"),
+        installer_brand_png(repo_root, &mark, &circles, &accent_hex, &dark_ink)?,
+    ));
+
+    if check {
+        let drifted: Vec<_> = artifacts
+            .iter()
+            .filter(|(path, bytes)| std::fs::read(path).ok().as_deref() != Some(bytes.as_slice()))
+            .map(|(path, _)| path.clone())
+            .collect();
+        if !drifted.is_empty() {
+            for path in &drifted {
+                eprintln!("drifted: {}", path.display());
+            }
+            anyhow::bail!(
+                "{} generated brand artefact(s) differ from the generator; run `cargo exo-dev generate-app-icons`",
+                drifted.len()
+            );
+        }
+        println!("{} brand artefact(s) match the generator", artifacts.len());
+        return Ok(());
+    }
+
+    for (path, bytes) in &artifacts {
+        std::fs::write(path, bytes)
+            .with_context(|| format!("could not write {}", path.display()))?;
+    }
     Ok(())
 }
 
@@ -440,13 +603,10 @@ mod tests {
     }
 
     #[test]
-    fn write_ico_roundtrips_a_readable_directory() {
+    fn ico_bytes_roundtrips_a_readable_directory() {
         let pixmap = tiny_skia::Pixmap::new(16, 16).unwrap();
         let frame = Frame { size: 16, pixmap };
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.ico");
-        write_ico(std::slice::from_ref(&frame), &path).unwrap();
-        let bytes = std::fs::read(&path).unwrap();
+        let bytes = ico_bytes(std::slice::from_ref(&frame)).unwrap();
         assert_eq!(&bytes[0..2], &0u16.to_le_bytes());
         assert_eq!(&bytes[2..4], &1u16.to_le_bytes(), "type must be 1 (icon)");
         assert_eq!(&bytes[4..6], &1u16.to_le_bytes(), "one frame");

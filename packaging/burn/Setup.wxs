@@ -1,0 +1,92 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <!--
+    ExoSnap offline Setup bootstrapper
+    ==================================
+    One self-contained ExoSnap-<version>-Setup.exe for normal direct
+    installation. The chain installs the exact pinned Microsoft Visual C++
+    2015-2022 x64 runtime first and the MSI only after it succeeds; both
+    payloads are embedded, so nothing is downloaded at install time.
+
+    `exo-verify package` supplies BundleVersion, VCRedistPath,
+    VCRedistMinVersion, MsiPath, IconPath, ThemePath, LogoPath and
+    LicenseRtfPath with `-d`; the redistributable digest, the minimum version
+    and the license RTF live in Rust so the policy has one owner.
+
+    The redistributable is Permanent: removing ExoSnap must never remove a
+    shared system runtime. Its package is cached like the MSI's, because a
+    Burn repair after the original Setup.exe is gone must be able to restore a
+    runtime that was removed later; the two payloads together are the price of
+    an offline repair.
+  -->
+
+  <Bundle Name="ExoSnap"
+          Version="$(var.BundleVersion)"
+          Manufacturer="Codexo"
+          UpgradeCode="{15DD5AFF-4C08-4549-BB4E-ECBF10913E77}"
+          IconSourceFile="$(var.IconPath)"
+          AboutUrl="https://github.com/Exoridus/exosnap"
+          HelpUrl="https://github.com/Exoridus/exosnap/issues"
+          Copyright="Copyright 2026 Codexo">
+
+    <!-- The installed x64 runtime publishes this key. A version-typed
+         variable keeps the comparison numeric; a missing or older value
+         fails the condition below and the embedded redistributable runs. -->
+    <Variable Name="VCRedistVersion" Type="version" Value="0.0.0.0" />
+    <util:RegistrySearch Id="VCRedistVersionSearch"
+                         Variable="VCRedistVersion"
+                         Root="HKLM"
+                         Key="SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+                         Value="Version"
+                         Result="value"
+                         Bitness="always64" />
+
+    <!-- Direct Setup options. Both default off and are passed to the MSI as
+         properties; the MSI owns the shortcut component and the local-data
+         removal, so nothing here is a second implementation. -->
+    <Variable Name="ExoSnapDesktopShortcut" Type="numeric" Value="0" />
+    <Variable Name="ExoSnapRemoveUserData" Type="numeric" Value="0" />
+
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+          Theme="rtfLicense"
+          ThemeFile="$(var.ThemePath)"
+          LogoFile="$(var.LogoPath)"
+          LicenseFile="$(var.LicenseRtfPath)"
+          ShowVersion="yes"
+          LaunchTarget="[ProgramFiles64Folder]ExoSnap\exosnap.exe"
+          LaunchWorkingFolder="[ProgramFiles64Folder]ExoSnap" />
+    </BootstrapperApplication>
+
+    <Chain>
+      <ExePackage Id="VCRedistX64"
+                  SourceFile="$(var.VCRedistPath)"
+                  Compressed="yes"
+                  Vital="yes"
+                  Permanent="yes"
+                  InstallArguments="/install /quiet /norestart"
+                  DetectCondition="VCRedistVersion &gt;= $(var.VCRedistMinVersion)">
+        <!-- A newer runtime already present is success, not failure. -->
+        <ExitCode Value="1638" Behavior="success" />
+        <!-- Success with a pending restart is reported as such; Burn offers
+             the restart instead of silently rebooting. -->
+        <ExitCode Value="3010" Behavior="scheduleReboot" />
+      </ExePackage>
+
+      <MsiPackage Id="ExoSnapMsi"
+                  SourceFile="$(var.MsiPath)"
+                  Compressed="yes"
+                  Vital="yes"
+                  Visible="no">
+        <!-- The bundle owns the single Installed Apps entry; the chained MSI
+             is still fully registered with Windows Installer for repair and
+             upgrade. A raw MSI install keeps its normal ARP entry. -->
+        <MsiProperty Name="ARPSYSTEMCOMPONENT" Value="1" />
+        <MsiProperty Name="EXOSNAP_DESKTOP_SHORTCUT" Value="[ExoSnapDesktopShortcut]" />
+        <MsiProperty Name="EXOSNAP_REMOVE_USER_DATA" Value="[ExoSnapRemoveUserData]" />
+      </MsiPackage>
+    </Chain>
+  </Bundle>
+</Wix>

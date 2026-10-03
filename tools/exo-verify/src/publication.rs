@@ -515,8 +515,17 @@ fn load_evidence(args: &EvidenceArgs) -> Result<(Bundle, Qualification)> {
     Ok((bundle, qualification))
 }
 
+/// The release package roles present in the bundle, in the order the release
+/// page lists them. Setup is optional until the Burn toolchain produces one.
+fn package_roles(bundle: &Bundle) -> Vec<FileRole> {
+    [FileRole::Installer, FileRole::Setup, FileRole::Portable]
+        .into_iter()
+        .filter(|role| bundle.inventory.file(*role).is_some())
+        .collect()
+}
+
 fn verify_packages(bundle: &Bundle, assets: &Path) -> Result<()> {
-    for role in [FileRole::Installer, FileRole::Portable] {
+    for role in package_roles(bundle) {
         let file = bundle
             .inventory
             .file(role)
@@ -542,7 +551,7 @@ fn sidecar_name(filename: &str, role: FileRole) -> String {
 }
 
 fn verify_sidecars(bundle: &Bundle, assets: &Path) -> Result<()> {
-    for role in [FileRole::Installer, FileRole::Portable] {
+    for role in package_roles(bundle) {
         let file = bundle
             .inventory
             .file(role)
@@ -846,7 +855,7 @@ pub fn run(command: PublicationCommand) -> Result<()> {
             }
             ensure!(!out.exists(), "publication output directory must be fresh");
             fs::create_dir_all(&out)?;
-            for role in [FileRole::Installer, FileRole::Portable] {
+            for role in package_roles(&bundle) {
                 let original = bundle.require(role)?;
                 let name = original.file_name().context("package has no filename")?;
                 fs::copy(&original, out.join(name))?;

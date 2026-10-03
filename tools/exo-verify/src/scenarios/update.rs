@@ -193,24 +193,27 @@ fn portable(ctx: &mut Context) -> Step {
 }
 
 fn installed_exe() -> Step<Option<PathBuf>> {
-    let out = crate::tools::run(
-        Command::new("reg.exe").args([
-            "query",
-            r"HKLM\SOFTWARE\Codexo\ExoSnap",
-            "/v",
-            "InstallPath",
-        ]),
-        Duration::from_secs(10),
-    )?;
-    if !out.success() {
-        return Ok(None);
+    // The product marker moved to Software\ExoSnap in 0.10.1; a baseline older
+    // than that (the previous official MSI this lane installs) still publishes
+    // Software\Codexo\ExoSnap. Both are the same product, so both are read.
+    for key in [r"HKLM\SOFTWARE\ExoSnap", r"HKLM\SOFTWARE\Codexo\ExoSnap"] {
+        let out = crate::tools::run(
+            Command::new("reg.exe").args(["query", key, "/v", "InstallPath"]),
+            Duration::from_secs(10),
+        )?;
+        if !out.success() {
+            continue;
+        }
+        let path = out.stdout.lines().find_map(|line| {
+            let (_, value) = line.split_once("REG_SZ")?;
+            line.contains("InstallPath")
+                .then_some(PathBuf::from(value.trim()).join("exosnap.exe"))
+        });
+        if let Some(path) = path.filter(|p| p.is_file()) {
+            return Ok(Some(path));
+        }
     }
-    let path = out.stdout.lines().find_map(|line| {
-        let (_, value) = line.split_once("REG_SZ")?;
-        line.contains("InstallPath")
-            .then_some(PathBuf::from(value.trim()).join("exosnap.exe"))
-    });
-    Ok(path.filter(|p| p.is_file()))
+    Ok(None)
 }
 
 fn install_base(ctx: &mut Context) -> Step<PathBuf> {
@@ -409,10 +412,27 @@ pub(super) fn chocolatey_verdict(document: &Value) -> Step {
             .ok_or_else(|| Stop::infra(format!("Chocolatey step {name} has no ok flag")))?;
         if !ok {
             let detail = step["detail"].as_str().unwrap_or_default();
+            let failed = step["failedAssertions"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|value| value.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })
+                .unwrap_or_default();
+            let message = if failed.is_empty() {
+                detail.to_string()
+            } else if detail.is_empty() {
+                failed
+            } else {
+                format!("{detail}; {failed}")
+            };
             return match kind {
-                "product" => Err(Stop::fail(format!("Chocolatey {name} failed: {detail}"))),
+                "product" => Err(Stop::fail(format!("Chocolatey {name} failed: {message}"))),
                 "bootstrap" => Err(Stop::infra(format!(
-                    "Chocolatey {name} setup failed: {detail}"
+                    "Chocolatey {name} setup failed: {message}"
                 ))),
                 _ => Err(Stop::infra(format!(
                     "Chocolatey {name} has unknown kind {kind}"
@@ -977,21 +997,17 @@ mod tests {
 
     #[test]
     fn the_relaunch_is_a_new_process_running_the_updated_executable() {
-        let target = Path::new(r"C:\Program Files\Codexo\ExoSnap\exosnap.exe");
+        let target = Path::new(r"C:\Program Files\ExoSnap\exosnap.exe");
         let processes = vec![
             (
                 10,
-                Some(PathBuf::from(
-                    r"C:\Program Files\Codexo\ExoSnap\exosnap.exe",
-                )),
+                Some(PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe")),
             ),
             (11, Some(PathBuf::from(r"C:\Other\exosnap.exe"))),
             (12, None),
             (
                 13,
-                Some(PathBuf::from(
-                    r"c:\program files\codexo\exosnap\EXOSNAP.EXE",
-                )),
+                Some(PathBuf::from(r"c:\program files\exosnap\EXOSNAP.EXE")),
             ),
         ];
         assert_eq!(relaunched_pid(&processes, 10, target), Some(13));
@@ -1000,7 +1016,7 @@ mod tests {
             relaunched_pid(
                 &processes,
                 99,
-                Path::new(r"\\?\C:\Program Files\Codexo\ExoSnap\exosnap.exe")
+                Path::new(r"\\?\C:\Program Files\ExoSnap\exosnap.exe")
             ),
             Some(10)
         );
