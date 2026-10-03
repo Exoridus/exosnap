@@ -5,27 +5,29 @@
     "channels": {
         "github": {
             "state": "PUBLISHED",
-            "version": "0.10.0",
+            "version": "0.10.1",
             "feed": "https://api.github.com/repos/Exoridus/exosnap/releases/latest",
-            "note": "The GitHub Release is the source every other channel downloads from. 0.10.1 becomes the published version at its own release cut."
+            "note": "The GitHub Release is the source every other channel downloads from."
         },
         "chocolatey": {
-            "state": "PENDING",
+            "state": "IN_REVIEW",
             "version": "0.10.1",
             "feed": "https://community.chocolatey.org/api/v2/package/exosnap",
-            "note": "The thin package installs the official 0.10.1 MSI. Preparation, validation and the rehearsal run before the protected submission."
+            "note": "The thin package installs the official MSI. The protected distribution workflow submitted 0.10.1; the community repository moderates each version before it appears in the feed."
         },
         "winget": {
-            "state": "PENDING",
+            "state": "IN_REVIEW",
             "version": "0.10.1",
+            "reference": "https://github.com/microsoft/winget-pkgs/pull/446261",
             "feed": "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/c/Codexo/ExoSnap",
-            "note": "The manifests install the official 0.10.1 MSI with the Microsoft.VCRedist.2015+.x64 dependency."
+            "note": "The manifests install the official MSI with the Microsoft.VCRedist.2015+.x64 dependency. The submission pull request is open in microsoft/winget-pkgs."
         },
         "scoop": {
-            "state": "PENDING",
+            "state": "PUBLISHED",
             "version": "0.10.1",
+            "reference": "https://github.com/Exoridus/scoop-exosnap/commit/3dd6b2df27fcc949bfdf2eab20fbca0f485ca368",
             "feed": "https://raw.githubusercontent.com/Exoridus/scoop-exosnap/master/bucket/exosnap.json",
-            "note": "The official bucket Exoridus/scoop-exosnap installs the pruned portable ZIP and is updated by the protected distribution workflow."
+            "note": "The official bucket Exoridus/scoop-exosnap installs the pruned portable ZIP; the manifest read back carries the released 0.10.1 URL and its exact hash."
         }
     }
 }
