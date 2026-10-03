@@ -623,8 +623,23 @@ fn build_setup(
     ensure!(icon.is_file(), "product icon missing: {}", icon.display());
     let theme = repo_root.join("packaging/burn/ExoSnapTheme.xml");
     ensure!(theme.is_file(), "Setup theme missing: {}", theme.display());
-    let logo = repo_root.join("packaging/burn/exosnap-logo.png");
-    ensure!(logo.is_file(), "Setup logo missing: {}", logo.display());
+    let logo = repo_root.join("packaging/burn/exosnap-brand.png");
+    ensure!(
+        logo.is_file(),
+        "Setup brand lockup missing: {}",
+        logo.display()
+    );
+    let license = repo_root.join("LICENSE");
+    ensure!(license.is_file(), "license missing: {}", license.display());
+    // The license shown by Setup is generated from the canonical LICENSE at
+    // build time: one source of truth, nothing hand-maintained, and the file
+    // ships inside the bundle so the page works offline.
+    let license_rtf = out.join("ExoSnap-GPL-3.0.rtf");
+    fs::write(
+        &license_rtf,
+        license_text_to_rtf(&fs::read_to_string(&license)?),
+    )
+    .with_context(|| format!("write {}", license_rtf.display()))?;
     let bundle = out.join(format!("ExoSnap-{base}-Setup.exe"));
     println!("==> {}", bundle.display());
     println!(
@@ -658,12 +673,32 @@ fn build_setup(
             .arg("-d")
             .arg(format!("LogoPath={}", logo.display()))
             .arg("-d")
-            .arg("LicenseUrl=https://github.com/Exoridus/exosnap/blob/main/LICENSE")
+            .arg(format!("LicenseRtfPath={}", license_rtf.display()))
             .arg(repo_root.join("packaging/burn/Setup.wxs")),
         "wix build (Setup)",
         Duration::from_secs(900),
     )?;
     Ok(bundle)
+}
+
+/// The canonical LICENSE as RTF for WixStdBA's offline license page. Plain
+/// text with the two RTF metacharacters escaped and one paragraph per source
+/// line; the page background and ink are the installer's own dark tokens, so
+/// the page reads as part of Setup rather than as a white legal insert.
+fn license_text_to_rtf(text: &str) -> String {
+    let mut body = String::new();
+    for line in text.replace("\r\n", "\n").lines() {
+        body.push_str(
+            &line
+                .replace('\\', "\\\\")
+                .replace('{', "\\{")
+                .replace('}', "\\}"),
+        );
+        body.push_str("\\par\r\n");
+    }
+    format!(
+        "{{\\rtf1\\ansi\\ansicpg1252\\deff0\\nouicompat{{\\fonttbl{{\\f0\\fswiss Segoe UI;}}}}{{\\colortbl ;\\red14\\green14\\blue16;\\red241\\green241\\blue239;}}\\viewkind4\\uc1\\f0\\fs20\\cf2\\cbpat1 {body}}}"
+    )
 }
 
 pub fn run(args: &PackageArgs) -> Result<PackageResult> {
@@ -1072,6 +1107,10 @@ mod tests {
             package.contains(r#"MinVersion="$(var.VCRedistMinVersion)""#),
             "the raw MSI must enforce the shared runtime floor"
         );
+        assert!(
+            package.contains(r#"Languages="1033""#),
+            "the floor search must declare the runtime's 0409 version-resource language; a NULL Languages column does not match vcruntime140.dll"
+        );
         assert!(package.contains(r#"Property Id="EXOSNAP_DESKTOP_SHORTCUT" Value="0""#));
         assert!(package.contains(r#"Property Id="EXOSNAP_REMOVE_USER_DATA" Value="0""#));
         assert!(package.contains(r#"Value="%LOCALAPPDATA%\ExoSnap""#));
@@ -1102,12 +1141,58 @@ mod tests {
     }
 
     #[test]
-    fn the_setup_theme_binds_the_two_exosnap_options() {
+    fn the_setup_theme_binds_the_two_exosnap_options_without_gating_the_install() {
         let theme = packaging_source("packaging/burn/ExoSnapTheme.xml");
         assert!(theme.contains(r#"Name="ExoSnapDesktopShortcut""#));
         assert!(theme.contains(r#"Name="ExoSnapRemoveUserData""#));
         assert!(theme.contains(r#"Name="InstallButton""#));
         assert!(theme.contains(r#"Name="UninstallButton""#));
         assert!(theme.contains(r#"Name="LaunchButton""#));
+        assert!(
+            !theme.contains(r#"Name="EulaAcceptCheckbox""#)
+                && !theme.contains(r#"Name="EulaHyperlink""#),
+            "GPL installation must not require a licence acceptance control"
+        );
+        assert!(
+            theme.contains(r#"Name="EulaRichedit""#),
+            "the canonical license must be viewable inside Setup"
+        );
+        assert!(
+            packaging_source("packaging/burn/Setup.wxs")
+                .contains(r#"LicenseFile="$(var.LicenseRtfPath)""#),
+            "the license page must use the embedded offline license, not a URL"
+        );
+    }
+
+    #[test]
+    fn the_setup_theme_comments_are_well_formed() {
+        // An XML comment cannot contain a double hyphen; MSXML rejects the
+        // whole document, WixStdBA then has no theme and the Setup dies before
+        // it can show a window. Comments are prose, so nothing catches this at
+        // build time and only a live run would.
+        let theme = packaging_source("packaging/burn/ExoSnapTheme.xml");
+        let mut rest = theme.as_str();
+        while let Some(start) = rest.find("<!--") {
+            let after = start + "<!--".len();
+            let end = rest[after..]
+                .find("-->")
+                .expect("the Setup theme has an unterminated comment")
+                + after;
+            assert!(
+                !rest[after..end].contains("--"),
+                "an XML comment in the Setup theme contains a double hyphen"
+            );
+            rest = &rest[end + "-->".len()..];
+        }
+    }
+
+    #[test]
+    fn the_license_rtf_escapes_rtf_control_characters() {
+        let rtf = license_text_to_rtf("GPL \\ text {with} braces\r\nsecond line\r\n");
+        assert!(rtf.starts_with("{\\rtf1"));
+        assert!(rtf.ends_with('}'));
+        assert!(rtf.contains(r"GPL \\ text \{with\} braces\par"));
+        assert!(rtf.contains("second line\\par"));
+        assert!(!rtf.contains("text {with} braces"));
     }
 }

@@ -69,9 +69,16 @@
          package runs. -->
     <Property Id="VCREDISTX64_RUNTIME">
       <DirectorySearch Id="VCRedistX64System64Search" Path="[System64Folder]">
+        <!-- vcruntime140.dll carries a 0409 (1033, en-US) version-resource
+             translation. A Signature row with a NULL Languages column does not
+             match a file that carries a language, so without this the floor
+             rejects the very redistributable the Setup installs: the file is
+             present at exactly the minimum version and AppSearch still leaves
+             the property unset. -->
         <FileSearch Id="VCRuntime140X64Search"
                     Name="vcruntime140.dll"
-                    MinVersion="$(var.VCRedistMinVersion)" />
+                    MinVersion="$(var.VCRedistMinVersion)"
+                    Languages="1033" />
       </DirectorySearch>
     </Property>
     <Launch Condition="Installed OR VCREDISTX64_RUNTIME"

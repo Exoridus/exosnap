@@ -11,9 +11,9 @@
     payloads are embedded, so nothing is downloaded at install time.
 
     `exo-verify package` supplies BundleVersion, VCRedistPath,
-    VCRedistMinVersion, MsiPath, IconPath and LicenseUrl with `-d`; the
-    redistributable digest and the minimum version live in Rust so the policy
-    has one owner.
+    VCRedistMinVersion, MsiPath, IconPath, ThemePath, LogoPath and
+    LicenseRtfPath with `-d`; the redistributable digest, the minimum version
+    and the license RTF live in Rust so the policy has one owner.
 
     The redistributable is Permanent: removing ExoSnap must never remove a
     shared system runtime. Its package is cached like the MSI's, because a
@@ -29,7 +29,6 @@
           IconSourceFile="$(var.IconPath)"
           AboutUrl="https://github.com/Exoridus/exosnap"
           HelpUrl="https://github.com/Exoridus/exosnap/issues"
-          UpdateUrl="https://github.com/Exoridus/exosnap/releases"
           Copyright="Copyright 2026 Codexo">
 
     <!-- The installed x64 runtime publishes this key. A version-typed
@@ -52,10 +51,10 @@
 
     <BootstrapperApplication>
       <bal:WixStandardBootstrapperApplication
-          Theme="hyperlinkLicense"
+          Theme="rtfLicense"
           ThemeFile="$(var.ThemePath)"
           LogoFile="$(var.LogoPath)"
-          LicenseUrl="$(var.LicenseUrl)"
+          LicenseFile="$(var.LicenseRtfPath)"
           ShowVersion="yes"
           LaunchTarget="[ProgramFiles64Folder]ExoSnap\exosnap.exe"
           LaunchWorkingFolder="[ProgramFiles64Folder]ExoSnap" />

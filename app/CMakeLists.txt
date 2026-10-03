@@ -1387,6 +1387,20 @@ add_test(
 set_tests_properties(brand.geometry.marks_match_the_generator PROPERTIES TIMEOUT 60)
 exosnap_set_test_phase(brand.geometry.marks_match_the_generator hermetic)
 
+# The application icon, the logo SVG and the installer's brand lockup are all
+# written by generate-app-icons from the same two canonical sources. --check
+# proves the checked-in bytes still reproduce from them, including the
+# installer raster a WixStdBA theme consumes.
+add_test(
+    NAME brand.geometry.icons_match_the_generator
+    COMMAND "${CMAKE_COMMAND}"
+        "-DEXOSNAP_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DEXOSNAP_TOOL_ARGS=generate-app-icons;--check"
+        -P "${CMAKE_SOURCE_DIR}/cmake/run-exo-dev-tool.cmake"
+)
+set_tests_properties(brand.geometry.icons_match_the_generator PROPERTIES TIMEOUT 300)
+exosnap_set_test_phase(brand.geometry.icons_match_the_generator hermetic)
+
 # Pure unit tests for HumanizeEngineDetail (RecordingErrorPanel's raw-enum → canon
 # label mapping). Dependency-light: QString only.
 exosnap_add_gtest(

@@ -114,10 +114,16 @@ enum Command {
     /// Deterministic screenshots of the Qt Quick frontend through the app's
     /// own --visual-test harness, with a manifest and a contact sheet.
     Screenshot(Box<exo_dev::screenshot::ScreenshotArgs>),
-    /// Regenerates exosnap-app.ico, the thumbnail-toolbar glyph .ico files
-    /// and exosnap-logo.svg from the canonical mark geometry.
+    /// Regenerates exosnap-app.ico, the thumbnail-toolbar glyph .ico files,
+    /// exosnap-logo.svg and the installer's brand lockup from the canonical
+    /// mark geometry.
     #[cfg(feature = "dev-tools")]
-    GenerateAppIcons,
+    GenerateAppIcons {
+        /// Report drift instead of writing; exits non-zero if any artefact is
+        /// stale.
+        #[arg(long)]
+        check: bool,
+    },
     /// Regenerates the ExoSnap mark suite from parameters.json.
     #[cfg(feature = "dev-tools")]
     GenerateBrandMarks {
@@ -1155,8 +1161,8 @@ fn run_cli() -> anyhow::Result<ExitCode> {
         },
         Command::Screenshot(args) => exo_dev::screenshot::run(&repo_root, *args),
         #[cfg(feature = "dev-tools")]
-        Command::GenerateAppIcons => {
-            exo_dev::brand::icons::generate(&repo_root)?;
+        Command::GenerateAppIcons { check } => {
+            exo_dev::brand::icons::generate(&repo_root, check)?;
             Ok(ExitCode::SUCCESS)
         }
         #[cfg(feature = "dev-tools")]
