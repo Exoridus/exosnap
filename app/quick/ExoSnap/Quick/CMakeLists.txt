@@ -719,6 +719,7 @@ exosnap_stage_asan_runtime(exosnap)
 if(WIN32 AND EXOSNAP_WINDEPLOYQT)
     add_custom_command(TARGET exosnap POST_BUILD
         COMMAND "${EXOSNAP_WINDEPLOYQT}" --no-translations --no-system-d3d-compiler --no-opengl-sw
+            --no-compiler-runtime --skip-plugin-types qmltooling
             --qmldir "${CMAKE_CURRENT_SOURCE_DIR}"
             "$<IF:$<CONFIG:Debug>,--debug,--release>" "$<TARGET_FILE:exosnap>"
         COMMENT "Staging Qt runtime + QML imports next to exosnap.exe"
@@ -754,13 +755,25 @@ endif()
 # OWN QML is compiled into the executable's resources by qt_add_qml_module and
 # is not part of the deployed tree.
 #
-# No NO_TRANSLATIONS and no DEPLOY_TOOL_OPTIONS: package content stays exactly
-# what the previous shipping target produced, plus the QML runtime.
+# NO_COMPILER_RUNTIME: the Visual C++ runtime is a shared system
+# prerequisite owned by the Setup bootstrapper and the package-manager
+# dependencies, never a file this application tree carries.
+#
+# EXCLUDE_PLUGIN_TYPES qmltooling: the QML debugger/profiler/preview plugins
+# are development tools and are never loaded in production.
+#
+# Non-Basic Quick Controls styles cannot be excluded here: qmlimportscanner
+# records them as optional imports of the Controls module, so
+# qt6_deploy_qml_imports still installs each style's qmldir and plugin even
+# when windeployqt is told to skip it. `exo-verify package` prunes them after
+# the install and validation refuses their return.
 if(WIN32)
     qt_generate_deploy_qml_app_script(
         TARGET exosnap
         OUTPUT_SCRIPT _exosnap_deploy_script
         NO_UNSUPPORTED_PLATFORM_ERROR
+        NO_COMPILER_RUNTIME
+        EXCLUDE_PLUGIN_TYPES qmltooling
     )
 
     install(TARGETS exosnap RUNTIME DESTINATION .)

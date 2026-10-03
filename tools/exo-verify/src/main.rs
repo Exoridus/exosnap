@@ -141,6 +141,9 @@ enum Command {
     Control(control_cli::ControlArgs),
 }
 
+// One parsed command tree per process; the create variant carrying every
+// package path is not worth an indirection layer.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum BundleCommand {
     Create {
@@ -154,6 +157,9 @@ enum BundleCommand {
         candidate_id: String,
         #[arg(long)]
         installer: PathBuf,
+        /// The offline Setup bootstrapper, when the Burn toolchain built one.
+        #[arg(long)]
+        setup: Option<PathBuf>,
         #[arg(long)]
         portable: PathBuf,
         #[arg(long = "runtime")]
@@ -564,6 +570,7 @@ fn real_main() -> Result<ExitCode> {
             commit,
             candidate_id,
             installer,
+            setup,
             portable,
             runtimes,
             metadata,
@@ -576,6 +583,7 @@ fn real_main() -> Result<ExitCode> {
                 source_commit: commit,
                 candidate_id,
                 installer,
+                setup,
                 portable,
                 runtimes,
                 metadata,

@@ -31,7 +31,7 @@ A Windows screen recorder for gameplay, software demos and everyday capture. NVI
 
 ## Your first recording
 
-1. Download the **MSI installer** or **portable ZIP** from [Releases](https://github.com/Exoridus/exosnap/releases). For the portable build, extract the whole folder and run `exosnap.exe`; keep its bundled files together.
+1. Download **ExoSnap Setup** (`ExoSnap-<version>-Setup.exe`) from [Releases](https://github.com/Exoridus/exosnap/releases) and run it. The offline setup installs the required Microsoft Visual C++ runtime when it is missing, then ExoSnap. Administrators and package managers use the **MSI** (`ExoSnap-<version>-windows-x64.msi`); for a no-install build use the **portable ZIP** and keep its files together.
 2. Choose a screen, window or region. Select the application/system audio and microphone sources you want.
 3. Review the readiness status. ExoSnap explains blockers before you start and offers a fix where possible.
 4. Press **Record**, or use the default **Alt+Shift+R** start/stop hotkey. Hotkeys are configurable.
@@ -39,7 +39,7 @@ A Windows screen recorder for gameplay, software demos and everyday capture. NVI
 
 The built-in profile starts with **MKV, AV1, Opus and 60 fps CFR**. On first start, the video codec is reconciled to the best available encoder on your GPU: AV1, then HEVC, then H.264. Recordings default to the Windows Videos known folder plus `ExoSnap`, respecting folder redirection. The destination is configurable.
 
-The **Microsoft Visual C++ 2022 x64 Redistributable** is required. If startup reports a missing runtime DLL, install it from [Microsoft](https://aka.ms/vs/17/release/vc_redist.x64.exe). Current portable and MSI builds are unsigned, so Windows SmartScreen may warn on first launch. See the [portable guide](README-PORTABLE.md) for setup and storage details.
+The **Microsoft Visual C++ 2022 x64 Redistributable** is required. Setup installs it when missing; the MSI refuses to install without it and says what to install; the portable ZIP expects it on the machine. If startup reports a missing runtime DLL, install it from [Microsoft](https://aka.ms/vs/17/release/vc_redist.x64.exe). Current Setup, MSI and portable builds are unsigned, so Windows SmartScreen may warn on first launch. See the [portable guide](README-PORTABLE.md) for setup and storage details.
 
 ## Formats and hardware
 

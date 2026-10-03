@@ -171,16 +171,16 @@ TEST(ArgsForManualStartTest, CarriesNoOperation) {
 
 TEST(ResolveManualContextTest, InstalledCopyTrustsTheRegistryPath) {
     const ManualContext context =
-        ResolveManualContext(InstallMode::Installed, QStringLiteral("C:/Program Files/Codexo/ExoSnap"),
+        ResolveManualContext(InstallMode::Installed, QStringLiteral("C:/Program Files/ExoSnap"),
                              QStringLiteral("C:/Users/u/AppData/Local/x/updater"));
     EXPECT_EQ(context.install_mode, InstallMode::Installed);
-    EXPECT_EQ(context.install_dir, QStringLiteral("C:/Program Files/Codexo/ExoSnap"));
+    EXPECT_EQ(context.install_dir, QStringLiteral("C:/Program Files/ExoSnap"));
 }
 
 TEST(ResolveManualContextTest, InstalledCopyWithoutARegistryPathFallsBackToItsOwnDirectory) {
     const ManualContext context =
-        ResolveManualContext(InstallMode::Installed, QString(), QStringLiteral("C:/Program Files/Codexo/ExoSnap/"));
-    EXPECT_EQ(context.install_dir, QStringLiteral("C:/Program Files/Codexo/ExoSnap"))
+        ResolveManualContext(InstallMode::Installed, QString(), QStringLiteral("C:/Program Files/ExoSnap/"));
+    EXPECT_EQ(context.install_dir, QStringLiteral("C:/Program Files/ExoSnap"))
         << "the path is cleaned, so a trailing separator does not become part of it";
 }
 

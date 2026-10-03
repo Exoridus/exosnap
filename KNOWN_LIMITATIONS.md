@@ -1,6 +1,6 @@
-# ExoSnap 0.10.0: Known limitations
+# ExoSnap 0.10.1: Known limitations
 
-ExoSnap 0.10.0 is pre-1.0 Windows preview software. This page qualifies the [product contract](docs/product-spec.md), not a list of every theoretical capability of its dependencies. Settings, presets and recording-history schemas are not frozen; keep backups before switching preview versions.
+ExoSnap 0.10.1 is pre-1.0 Windows preview software. This page qualifies the [product contract](docs/product-spec.md), not a list of every theoretical capability of its dependencies. Settings, presets and recording-history schemas are not frozen; keep backups before switching preview versions.
 
 ## Platform and encoding
 
@@ -8,7 +8,7 @@ Windows 10/11 x64 only, with Windows 11 primary and Windows 10 best effort. No A
 
 The capture adapter determines the D3D11 device used for NVENC. Cross-GPU capture-to-encode sharing is not a supported selectable workflow. Hardware inspection does not select the encoder device. Unsupported configurations are reconciled or blocked rather than silently sent to another backend.
 
-The Microsoft Visual C++ x64 runtime is required. Portable/MSI/Scoop do not bundle it. WinGet declares the redistributable dependency; the Chocolatey package declares `vcredist140`. A package manager satisfying that dependency is distinct from embedding runtime DLLs in ExoSnap.
+The Microsoft Visual C++ x64 runtime is required. Portable/Scoop do not bundle it. ExoSnap Setup installs the pinned redistributable when the machine lacks a sufficient version; the raw MSI refuses to install without it and names the prerequisite; WinGet declares the redistributable dependency and the Chocolatey package declares `vcredist140`. No application artifact embeds runtime DLLs.
 
 ## Formats
 
@@ -96,4 +96,4 @@ Portable restore is attempted when appropriate, but can fail and must be reporte
 
 Crash reports are next-launch, consent-controlled and official-build upload only. Local minidumps can exist without upload. Structured events are scrubbed; native minidump module paths can include a portable install's username segment. See [Privacy](PRIVACY.md). Symbols are separate release artifacts; symbol delivery must be checked for the release rather than assumed from a captured dump.
 
-Portable/MSI builds are not yet Authenticode-signed in this source's documented distribution state. SmartScreen may warn. Signed update metadata is a different security mechanism. No replay buffer, immediate in-session crash-report UI or unsupported encoder backend is implied by this preview.
+Setup, MSI and portable builds are not yet Authenticode-signed in this source's documented distribution state. SmartScreen may warn. Signed update metadata is a different security mechanism. No replay buffer, immediate in-session crash-report UI or unsupported encoder backend is implied by this preview.

@@ -3,6 +3,7 @@
 use anyhow::Result;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -19,29 +20,563 @@ use crate::{infra_ensure, product_ensure};
 /// The registry key an installed ExoSnap publishes its product state under.
 /// Shared with the Chocolatey rehearsal, which installs and removes the same
 /// product through a different channel and must recognize the same state.
-pub(crate) const INSTALL_KEY: &str = r"HKLM\SOFTWARE\Codexo\ExoSnap";
-pub(crate) const USER_KEY: &str = r"HKCU\SOFTWARE\Codexo\ExoSnap";
+pub(crate) const INSTALL_KEY: &str = r"HKLM\SOFTWARE\ExoSnap";
+pub(crate) const USER_KEY: &str = r"HKCU\SOFTWARE\ExoSnap";
 
 pub fn scenarios() -> Vec<Scenario> {
-    vec![Scenario {
-        id: "install.msi-cycle",
-        revision: 1,
-        title: "The MSI installs, starts, uninstalls and reinstalls cleanly",
-        class: ScenarioClass::Installer,
-        contract: "on a clean disposable Windows machine, the MSI installs the portable bytes, first and second starts are healthy, uninstall preserves user settings, and reinstall restores the product",
-        lane: Lane::CiInstall,
-        also: &[],
-        tier: Tier::Required,
-        requires: &[
-            Capability::Windows,
-            Capability::Admin,
-            Capability::InteractiveDesktop,
-            Capability::DisposableOs,
-            Capability::MsvcRuntime,
-        ],
-        timeout: secs(900.0),
-        run: msi_cycle,
-    }]
+    vec![
+        // The Setup scenario starts and ends with no product so the raw-MSI
+        // scenario, which asserts a clean machine, can follow it.
+        Scenario {
+            id: "install.setup-cycle",
+            revision: 1,
+            title: "The offline Setup installs, repairs and uninstalls without its original file",
+            class: ScenarioClass::Installer,
+            contract: "on a clean disposable Windows machine, ExoSnap Setup installs silently with the default options (no desktop shortcut, one Installed Apps entry, Start Menu entry), repairs from Burn's cache after the original Setup.exe is deleted, and uninstalls while preserving the shared runtime and user data",
+            lane: Lane::CiInstall,
+            also: &[],
+            tier: Tier::Required,
+            requires: &[
+                Capability::Windows,
+                Capability::Admin,
+                Capability::InteractiveDesktop,
+                Capability::DisposableOs,
+            ],
+            timeout: secs(1800.0),
+            run: setup_cycle,
+        },
+        Scenario {
+            id: "install.setup-interactive",
+            revision: 1,
+            title: "The interactive Setup honors its checkboxes and Launch action",
+            class: ScenarioClass::Installer,
+            contract: "on a clean disposable Windows machine, the interactive ExoSnap Setup shows an unchecked desktop-shortcut option, creates the shortcut only when it is selected, launches the installed application from the success page, and its uninstall page shows an unchecked remove-local-data option that removes only local user data when selected",
+            lane: Lane::CiInstall,
+            also: &[],
+            tier: Tier::Required,
+            requires: &[
+                Capability::Windows,
+                Capability::Admin,
+                Capability::InteractiveDesktop,
+                Capability::DisposableOs,
+            ],
+            timeout: secs(1800.0),
+            run: setup_interactive,
+        },
+        Scenario {
+            id: "install.msi-cycle",
+            revision: 1,
+            title: "The MSI installs, starts, uninstalls and reinstalls cleanly",
+            class: ScenarioClass::Installer,
+            contract: "on a clean disposable Windows machine, the MSI installs the portable bytes, first and second starts are healthy, uninstall preserves user settings, and reinstall restores the product",
+            lane: Lane::CiInstall,
+            also: &[],
+            tier: Tier::Required,
+            requires: &[
+                Capability::Windows,
+                Capability::Admin,
+                Capability::InteractiveDesktop,
+                Capability::DisposableOs,
+                Capability::MsvcRuntime,
+            ],
+            timeout: secs(900.0),
+            run: msi_cycle,
+        },
+        Scenario {
+            id: "install.msi-user-data-removal",
+            revision: 1,
+            title: "An explicit uninstall removes only the current user's local data",
+            class: ScenarioClass::Installer,
+            contract: "on a disposable Windows machine, an MSI uninstall with EXOSNAP_REMOVE_USER_DATA=1 removes the current user's %LOCALAPPDATA%\\ExoSnap and leaves recordings outside it byte-identical, then restores an installed product",
+            lane: Lane::CiInstall,
+            also: &[],
+            tier: Tier::Required,
+            requires: &[
+                Capability::Windows,
+                Capability::Admin,
+                Capability::InteractiveDesktop,
+                Capability::DisposableOs,
+                Capability::MsvcRuntime,
+            ],
+            timeout: secs(900.0),
+            run: msi_user_data_removal,
+        },
+    ]
+}
+
+/// One Add/Remove Programs row, from either registry view.
+struct ArpRow {
+    display_name: String,
+    publisher: String,
+    system_component: bool,
+    uninstall_string: String,
+}
+
+fn is_product_code(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.len() == 38
+        && bytes[0] == b'{'
+        && bytes[37] == b'}'
+        && bytes[1..37]
+            .iter()
+            .all(|b| b.is_ascii_hexdigit() || *b == b'-')
+}
+
+/// Every Uninstall-registry row on the machine, both views.
+fn arp_rows() -> Result<Vec<ArpRow>> {
+    let roots = [
+        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+    ];
+    let mut rows = Vec::new();
+    for root in roots {
+        let listing = crate::tools::run(Command::new("reg.exe").args(["query", root]), secs(20.0))?;
+        if !listing.success() {
+            continue;
+        }
+        for line in listing.stdout.lines() {
+            let name = line.trim().rsplit('\\').next().unwrap_or_default();
+            if !is_product_code(name) {
+                continue;
+            }
+            let subkey = format!("{root}\\{name}");
+            let props =
+                crate::tools::run(Command::new("reg.exe").args(["query", &subkey]), secs(20.0))?;
+            if !props.success() {
+                continue;
+            }
+            let value = |key: &str| parse_reg_value(&props.stdout, key).unwrap_or_default();
+            rows.push(ArpRow {
+                display_name: value("DisplayName"),
+                publisher: value("Publisher"),
+                system_component: value("SystemComponent").trim() == "0x1",
+                uninstall_string: value("UninstallString"),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+fn exosnap_arp_rows() -> Result<Vec<ArpRow>> {
+    Ok(arp_rows()?
+        .into_iter()
+        .filter(|row| row.display_name.starts_with("ExoSnap") && row.publisher == "Codexo")
+        .collect())
+}
+
+/// The executable quoted at the start of an UninstallString.
+fn quoted_exe(command: &str) -> Option<PathBuf> {
+    let rest = command.trim();
+    let start = rest.find('"')? + 1;
+    let end = rest[start..].find('"')? + start;
+    Some(PathBuf::from(&rest[start..end]))
+}
+
+fn run_setup(
+    ctx: &mut Context,
+    setup: &Path,
+    verb: &str,
+    display: &str,
+    log_name: &str,
+) -> Result<crate::tools::Output> {
+    let log = ctx.scenario_dir.join(log_name);
+    let mut command = Command::new(setup);
+    command
+        .arg(verb)
+        .args([display, "/norestart", "/log"])
+        .arg(&log);
+    let out = crate::tools::run(&mut command, secs(1200.0))?;
+    ctx.keep(&log);
+    Ok(out)
+}
+
+fn burn_log(log: &Path) -> String {
+    std::fs::read_to_string(log).unwrap_or_default()
+}
+
+fn setup_cycle(ctx: &mut Context) -> Step {
+    let bundle = ctx.bundle()?;
+    let version = bundle.inventory.product_version.clone();
+    let commit = bundle.inventory.source_commit.clone();
+    let setup_source = ctx.package(FileRole::Setup)?;
+
+    // This scenario runs before the raw-MSI scenarios and must leave the
+    // machine clean for them, so it both starts and ends with no product.
+    let residue = super::clean::residue()?;
+    ctx.evidence.put("residueBeforeSetup", json!(residue));
+    infra_ensure!(
+        residue.is_empty(),
+        "the disposable machine is not clean: {}",
+        residue.join("; ")
+    );
+
+    let work = ctx.scenario_dir.join("setup-copy");
+    fs::create_dir_all(&work)?;
+    let setup = work.join(
+        setup_source
+            .file_name()
+            .ok_or_else(|| Stop::infra("Setup has no file name"))?,
+    );
+    fs::copy(&setup_source, &setup)?;
+
+    let runtime_before = vc_runtime_version();
+    ctx.evidence.put("vcRuntimeBefore", json!(runtime_before));
+
+    let install = run_setup(ctx, &setup, "/install", "/quiet", "setup-install.log")?;
+    product_ensure!(
+        matches!(install.code(), Some(0 | 3010)),
+        "Setup /install exited {:?}",
+        install.code()
+    );
+    let install_log = burn_log(&ctx.scenario_dir.join("setup-install.log"));
+    ctx.evidence.put(
+        "setupInstallExited",
+        json!(install.code().map(|code| code.to_string())),
+    );
+
+    let exe = PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe");
+    let shortcut = PathBuf::from(std::env::var("ProgramData")?)
+        .join(r"Microsoft\Windows\Start Menu\Programs\ExoSnap.lnk");
+    product_ensure!(exe.is_file(), "Setup did not install exosnap.exe");
+    product_ensure!(
+        reg_value("installed")?.is_some(),
+        "Setup did not write the product registry marker"
+    );
+    product_ensure!(
+        shortcut.is_file(),
+        "Setup did not create the Start Menu shortcut"
+    );
+    product_ensure!(
+        !desktop_shortcut()?.exists(),
+        "a silent Setup created a desktop shortcut without the option"
+    );
+    let rows = exosnap_arp_rows()?;
+    let visible: Vec<&ArpRow> = rows.iter().filter(|row| !row.system_component).collect();
+    let hidden = rows.iter().filter(|row| row.system_component).count();
+    product_ensure!(
+        visible.len() == 1,
+        "expected one Installed Apps entry, found {}: {:?}",
+        visible.len(),
+        visible.iter().map(|r| &r.display_name).collect::<Vec<_>>()
+    );
+    product_ensure!(
+        hidden >= 1,
+        "the chained MSI is not hidden behind the bundle's Installed Apps entry"
+    );
+    product_ensure!(
+        install_log.contains("VCRedistX64"),
+        "the Setup log does not report the runtime detection"
+    );
+    let runtime_after_install = vc_runtime_version();
+    product_ensure!(
+        runtime_sufficient(&runtime_after_install) && runtime_after_install >= runtime_before,
+        "the runtime was downgraded or left below the floor: {runtime_before:?} -> {runtime_after_install:?}"
+    );
+    ctx.evidence.put(
+        "vcRuntimeAfterInstall",
+        json!(runtime_after_install.clone()),
+    );
+
+    run_start(ctx, &exe, &version, &commit)?;
+    run_start(ctx, &exe, &version, &commit)?;
+
+    let config = PathBuf::from(std::env::var("LOCALAPPDATA")?).join("ExoSnap");
+    let recordings = PathBuf::from(std::env::var("USERPROFILE")?)
+        .join("Videos")
+        .join("ExoSnap");
+    fs::create_dir_all(&config)?;
+    fs::write(config.join("settings.ini"), b"setup cycle probe")?;
+    fs::create_dir_all(&recordings)?;
+    let recording = recordings.join("setup-cycle.mkv");
+    fs::write(&recording, b"recording bytes must survive an uninstall")?;
+    let (recording_hash, _) = sha256_file(&recording)?;
+
+    // Deleting the original file is the point: repair and uninstall must come
+    // from Burn's cache, not from the user's copy.
+    fs::remove_file(&setup)?;
+    let cached = quoted_exe(
+        &exosnap_arp_rows()?
+            .into_iter()
+            .find(|row| !row.system_component)
+            .map(|row| row.uninstall_string)
+            .ok_or_else(|| Stop::fail("the bundle has no Installed Apps entry"))?,
+    )
+    .ok_or_else(|| Stop::fail("the bundle UninstallString carries no executable"))?;
+    product_ensure!(
+        cached.is_file(),
+        "Burn did not cache the bundle for maintenance: {}",
+        cached.display()
+    );
+    product_ensure!(
+        !cached.starts_with(&work),
+        "the cached bundle is the deleted original"
+    );
+
+    let repair = run_setup(ctx, &cached, "/repair", "/quiet", "setup-repair.log")?;
+    product_ensure!(
+        matches!(repair.code(), Some(0 | 3010)),
+        "Setup /repair exited {:?}; log: {}",
+        repair.code(),
+        ctx.scenario_dir.join("setup-repair.log").display()
+    );
+    product_ensure!(
+        exe.is_file() && reg_value("installed")?.is_some(),
+        "repair did not leave the product installed"
+    );
+
+    let uninstall = run_setup(ctx, &cached, "/uninstall", "/quiet", "setup-uninstall.log")?;
+    product_ensure!(
+        matches!(uninstall.code(), Some(0 | 3010)),
+        "Setup /uninstall exited {:?}; log: {}",
+        uninstall.code(),
+        ctx.scenario_dir.join("setup-uninstall.log").display()
+    );
+    product_ensure!(
+        !exe.exists()
+            && reg_value("installed")?.is_none()
+            && !shortcut.exists()
+            && !desktop_shortcut()?.exists(),
+        "uninstall left application files, registry or shortcuts"
+    );
+    product_ensure!(
+        exosnap_arp_rows()?.is_empty(),
+        "uninstall left an ExoSnap Installed Apps entry"
+    );
+    product_ensure!(
+        config.join("settings.ini").is_file(),
+        "uninstall removed local user data without the explicit option"
+    );
+    product_ensure!(
+        sha256_file(&recording)?.0 == recording_hash,
+        "uninstall modified a recording"
+    );
+    product_ensure!(
+        runtime_sufficient(&vc_runtime_version()),
+        "uninstall removed the shared Visual C++ runtime"
+    );
+
+    // Passive mode runs the same chain with a progress UI but no prompts, and
+    // must not create the desktop shortcut either.
+    let passive_install = run_setup(
+        ctx,
+        &cached,
+        "/install",
+        "/passive",
+        "setup-passive-install.log",
+    )?;
+    product_ensure!(
+        matches!(passive_install.code(), Some(0 | 3010)),
+        "Setup /passive /install exited {:?}",
+        passive_install.code()
+    );
+    product_ensure!(
+        exe.is_file() && reg_value("installed")?.is_some() && !desktop_shortcut()?.exists(),
+        "a passive install did not leave the expected product state"
+    );
+    let passive_uninstall = run_setup(
+        ctx,
+        &cached,
+        "/uninstall",
+        "/passive",
+        "setup-passive-uninstall.log",
+    )?;
+    product_ensure!(
+        matches!(passive_uninstall.code(), Some(0 | 3010)),
+        "Setup /passive /uninstall exited {:?}",
+        passive_uninstall.code()
+    );
+    product_ensure!(
+        !exe.exists() && reg_value("installed")?.is_none(),
+        "a passive uninstall left the product installed"
+    );
+
+    // Nothing is installed now, so the next scenario starts from the asserted
+    // clean state.
+    Ok(())
+}
+
+/// The installed VC++ x64 runtime version tuple, when the redist key exists.
+fn vc_runtime_version() -> Option<(u64, u64, u64, u64)> {
+    let out = crate::tools::run(
+        Command::new("reg.exe").args([
+            "query",
+            r"HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64",
+        ]),
+        secs(10.0),
+    )
+    .ok()?;
+    if !out.success() {
+        return None;
+    }
+    let number = |name: &str| -> Option<u64> {
+        parse_reg_value(&out.stdout, name)?
+            .trim_start_matches("0x")
+            .parse::<u64>()
+            .ok()
+    };
+    Some((
+        number("Major")?,
+        number("Minor")?,
+        number("Bld")?,
+        number("Rbld")?,
+    ))
+}
+
+fn runtime_sufficient(version: &Option<(u64, u64, u64, u64)>) -> bool {
+    version.is_some_and(|(major, minor, build, _)| (major, minor, build) >= (14, 44, 35211))
+}
+
+/// One interactive Setup run for the UI Automation helper.
+struct UiaRun<'a> {
+    setup: &'a Path,
+    mode: &'a str,
+    log_name: &'a str,
+    desktop_shortcut: bool,
+    remove_user_data: bool,
+    click_launch: bool,
+}
+
+/// The interactive Setup is driven by UI Automation inside the machine under
+/// test; this runs the helper and keeps its transcript beside the Burn log.
+fn run_uia(ctx: &mut Context, script: &Path, run: &UiaRun<'_>) -> Result<crate::tools::Output> {
+    let log = ctx.scenario_dir.join(run.log_name);
+    let mut command = Command::new("powershell.exe");
+    command
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(script)
+        .arg("-Setup")
+        .arg(run.setup)
+        .arg("-Mode")
+        .arg(run.mode)
+        .arg("-Log")
+        .arg(&log)
+        .arg("-ExpectedExe")
+        .arg(r"C:\Program Files\ExoSnap\exosnap.exe");
+    if run.desktop_shortcut {
+        command.arg("-DesktopShortcut");
+    }
+    if run.remove_user_data {
+        command.arg("-RemoveUserData");
+    }
+    if run.click_launch {
+        command.arg("-ClickLaunch");
+    }
+    let out = crate::tools::run(&mut command, secs(1800.0))?;
+    ctx.keep(&log);
+    Ok(out)
+}
+
+fn setup_interactive(ctx: &mut Context) -> Step {
+    let residue = super::clean::residue()?;
+    infra_ensure!(
+        residue.is_empty(),
+        "the disposable machine is not clean: {}",
+        residue.join("; ")
+    );
+    let setup = ctx.package(FileRole::Setup)?;
+    let script = ctx.scenario_dir.join("setup_ui.ps1");
+    fs::write(&script, include_str!("setup_ui.ps1"))?;
+
+    let exe = PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe");
+    let shortcut = PathBuf::from(std::env::var("ProgramData")?)
+        .join(r"Microsoft\Windows\Start Menu\Programs\ExoSnap.lnk");
+    let config = PathBuf::from(std::env::var("LOCALAPPDATA")?).join("ExoSnap");
+    let recordings = PathBuf::from(std::env::var("USERPROFILE")?)
+        .join("Videos")
+        .join("ExoSnap");
+    let desktop = desktop_shortcut()?;
+
+    // Interactive install with the desktop shortcut chosen and the success
+    // page's Launch action exercised.
+    let install = run_uia(
+        ctx,
+        &script,
+        &UiaRun {
+            setup: &setup,
+            mode: "install",
+            log_name: "setup-ui-install.log",
+            desktop_shortcut: true,
+            remove_user_data: false,
+            click_launch: true,
+        },
+    )?;
+    product_ensure!(
+        install.code() == Some(0),
+        "the interactive install failed: {}",
+        install.stderr.trim()
+    );
+    product_ensure!(exe.is_file(), "the interactive install left no exosnap.exe");
+    product_ensure!(
+        reg_value("installed")?.is_some(),
+        "the interactive install wrote no product marker"
+    );
+    product_ensure!(shortcut.is_file(), "no Start Menu shortcut after install");
+    product_ensure!(
+        desktop.is_file(),
+        "the selected desktop shortcut was not created"
+    );
+    let visible = exosnap_arp_rows()?
+        .into_iter()
+        .filter(|row| !row.system_component)
+        .count();
+    product_ensure!(
+        visible == 1,
+        "expected one Installed Apps entry, found {visible}"
+    );
+
+    fs::create_dir_all(&config)?;
+    fs::write(config.join("settings.ini"), b"interactive probe")?;
+    fs::create_dir_all(&recordings)?;
+    let recording = recordings.join("setup-interactive.mkv");
+    fs::write(&recording, b"recording bytes must survive an uninstall")?;
+    let (recording_hash, _) = sha256_file(&recording)?;
+
+    // Interactive uninstall with the explicit local-data removal selected.
+    let uninstall = run_uia(
+        ctx,
+        &script,
+        &UiaRun {
+            setup: &setup,
+            mode: "uninstall",
+            log_name: "setup-ui-uninstall.log",
+            desktop_shortcut: false,
+            remove_user_data: true,
+            click_launch: false,
+        },
+    )?;
+    product_ensure!(
+        uninstall.code() == Some(0),
+        "the interactive uninstall failed: {}",
+        uninstall.stderr.trim()
+    );
+    product_ensure!(
+        !exe.exists() && reg_value("installed")?.is_none(),
+        "the interactive uninstall left the product installed"
+    );
+    product_ensure!(
+        !shortcut.exists() && !desktop.exists(),
+        "the interactive uninstall left shortcuts behind"
+    );
+    product_ensure!(
+        exosnap_arp_rows()?.is_empty(),
+        "the interactive uninstall left an Installed Apps entry"
+    );
+    product_ensure!(
+        !config.exists(),
+        "the selected local-data removal did not remove {}",
+        config.display()
+    );
+    product_ensure!(
+        sha256_file(&recording)?.0 == recording_hash,
+        "the local-data removal touched a recording"
+    );
+    Ok(())
 }
 
 /// Reads one value from [`INSTALL_KEY`], the product's own registry state.
@@ -112,6 +647,11 @@ fn msi(ctx: &mut Context, verb: &str, path: &Path, log_name: &str) -> Step {
         log.display()
     );
     Ok(())
+}
+
+/// The all-users desktop shortcut the Setup option may create.
+fn desktop_shortcut() -> Result<PathBuf> {
+    Ok(PathBuf::from(std::env::var("PUBLIC")?).join(r"Desktop\ExoSnap.lnk"))
 }
 
 fn run_start(ctx: &mut Context, exe: &Path, version: &str, commit: &str) -> Step {
@@ -230,6 +770,14 @@ fn msi_cycle(ctx: &mut Context) -> Step {
         shortcut.is_file(),
         "MSI did not create the Start Menu shortcut"
     );
+    product_ensure!(
+        !desktop_shortcut()?.exists(),
+        "the raw MSI created a desktop shortcut without EXOSNAP_DESKTOP_SHORTCUT=1"
+    );
+    product_ensure!(
+        !reg_key_exists(r"HKLM\SOFTWARE\Codexo\ExoSnap")?,
+        "a fresh install wrote the legacy product key"
+    );
     let exe = root.join("exosnap.exe");
     run_start(ctx, &exe, &version, &commit)?;
     run_start(ctx, &exe, &version, &commit)?;
@@ -254,6 +802,69 @@ fn msi_cycle(ctx: &mut Context) -> Step {
     Ok(())
 }
 
+/// Uninstall with the explicit local-data flag must remove exactly the current
+/// user's `%LOCALAPPDATA%\ExoSnap` and must not reach recordings that live
+/// outside it. The MSI is then reinstalled so later disposable-machine gates
+/// still find an installed product.
+fn msi_user_data_removal(ctx: &mut Context) -> Step {
+    let bundle = ctx.bundle()?;
+    let version = bundle.inventory.product_version.clone();
+    let commit = bundle.inventory.source_commit.clone();
+    let installer = ctx.package(FileRole::Installer)?;
+    let config = PathBuf::from(std::env::var("LOCALAPPDATA")?).join("ExoSnap");
+    let recordings = PathBuf::from(std::env::var("USERPROFILE")?)
+        .join("Videos")
+        .join("ExoSnap");
+
+    if reg_value("installed")?.is_none() {
+        msi(ctx, "/i", &installer, "removal-install.log")?;
+    }
+    fs::create_dir_all(&config)?;
+    fs::write(config.join("settings.ini"), b"removal scenario probe")?;
+    fs::create_dir_all(&recordings)?;
+    let recording = recordings.join("removal-scenario.mkv");
+    fs::write(&recording, b"recording bytes must survive an uninstall")?;
+    let (recording_hash, _) = sha256_file(&recording)?;
+    let config_files = tree_hashes(&config)?.len();
+
+    let log = ctx.scenario_dir.join("removal-uninstall.log");
+    let out = crate::tools::run(
+        Command::new("msiexec.exe")
+            .arg("/x")
+            .arg(&installer)
+            .args(["/qn", "/norestart", "EXOSNAP_REMOVE_USER_DATA=1", "/l*v"])
+            .arg(&log),
+        secs(360.0),
+    )?;
+    ctx.keep(&log);
+    product_ensure!(
+        out.code() == Some(0),
+        "msiexec /x with EXOSNAP_REMOVE_USER_DATA=1 exited {:?}; log: {}",
+        out.code(),
+        log.display()
+    );
+    product_ensure!(
+        !config.exists(),
+        "the explicit uninstall left {} in place",
+        config.display()
+    );
+    product_ensure!(
+        sha256_file(&recording)?.0 == recording_hash,
+        "the explicit uninstall modified a recording outside the local data folder"
+    );
+
+    msi(ctx, "/i", &installer, "removal-restore.log")?;
+    let exe = PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe");
+    product_ensure!(
+        exe.is_file() && reg_value("installed")?.is_some(),
+        "the product was not restored after the removal scenario"
+    );
+    run_start(ctx, &exe, &version, &commit)?;
+    ctx.evidence.put("removedConfigFiles", config_files);
+    ctx.evidence.put("recordingSha256", recording_hash);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,10 +879,10 @@ mod tests {
 
     #[test]
     fn registry_value_parser_handles_paths_and_dword_markers() {
-        let output = "\n    InstallPath    REG_SZ    C:\\Program Files\\Codexo\\ExoSnap\\\n    installed    REG_DWORD    0x1\n";
+        let output = "\n    InstallPath    REG_SZ    C:\\Program Files\\ExoSnap\\\n    installed    REG_DWORD    0x1\n";
         assert_eq!(
             parse_reg_value(output, "InstallPath"),
-            Some(r"C:\Program Files\Codexo\ExoSnap\".into())
+            Some(r"C:\Program Files\ExoSnap\".into())
         );
         assert_eq!(parse_reg_value(output, "installed"), Some("0x1".into()));
     }
