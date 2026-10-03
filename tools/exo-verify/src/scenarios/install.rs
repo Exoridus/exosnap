@@ -447,61 +447,21 @@ fn runtime_sufficient(version: &Option<(u64, u64, u64, u64)>) -> bool {
     version.is_some_and(|(major, minor, build, _)| (major, minor, build) >= (14, 44, 35211))
 }
 
-/// One interactive Setup run for the UI Automation helper.
-struct UiaRun<'a> {
-    setup: &'a Path,
-    mode: &'a str,
-    log_name: &'a str,
-    desktop_shortcut: bool,
-    remove_user_data: bool,
-    click_launch: bool,
-}
-
-/// The interactive Setup is driven by UI Automation inside the machine under
-/// test; this runs the helper and keeps its transcript and page screenshots
-/// beside the Burn log.
-fn run_uia(ctx: &mut Context, script: &Path, run: &UiaRun<'_>) -> Result<crate::tools::Output> {
-    let log = ctx.scenario_dir.join(run.log_name);
-    let screenshots = ctx.scenario_dir.join("screenshots");
-    fs::create_dir_all(&screenshots)?;
-    let mut command = Command::new("powershell.exe");
-    command
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-        ])
-        .arg(script)
-        .arg("-Setup")
-        .arg(run.setup)
-        .arg("-Mode")
-        .arg(run.mode)
-        .arg("-Log")
-        .arg(&log)
-        .arg("-ExpectedExe")
-        .arg(r"C:\Program Files\ExoSnap\exosnap.exe")
-        .arg("-ScreenshotDir")
-        .arg(&screenshots);
-    if run.desktop_shortcut {
-        command.arg("-DesktopShortcut");
-    }
-    if run.remove_user_data {
-        command.arg("-RemoveUserData");
-    }
-    if run.click_launch {
-        command.arg("-ClickLaunch");
-    }
-    let out = crate::tools::run(&mut command, secs(1800.0))?;
-    ctx.keep(&log);
-    for entry in fs::read_dir(&screenshots)? {
-        let path = entry?.path();
-        if path.is_file() {
-            ctx.keep(&path);
+/// Drives one interactive Setup run, keeps its Burn log and page screenshots,
+/// and turns a driver failure into a product failure with the log path.
+fn run_uia(ctx: &mut Context, run: &super::setup_ui::Run<'_>) -> Step {
+    let result = super::setup_ui::drive(run)
+        .map_err(|error| Stop::fail(format!("the interactive Setup failed: {error:#}")));
+    ctx.keep(run.log);
+    if let Ok(entries) = fs::read_dir(run.screenshots) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                ctx.keep(&path);
+            }
         }
     }
-    Ok(out)
+    result
 }
 
 fn setup_interactive(ctx: &mut Context) -> Step {
@@ -512,8 +472,9 @@ fn setup_interactive(ctx: &mut Context) -> Step {
         residue.join("; ")
     );
     let setup = ctx.package(FileRole::Setup)?;
-    let script = ctx.scenario_dir.join("setup_ui.ps1");
-    fs::write(&script, include_str!("setup_ui.ps1"))?;
+    let screenshots = ctx.scenario_dir.join("screenshots");
+    let install_log = ctx.scenario_dir.join("setup-ui-install.log");
+    let uninstall_log = ctx.scenario_dir.join("setup-ui-uninstall.log");
 
     let exe = PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe");
     let shortcut = PathBuf::from(std::env::var("ProgramData")?)
@@ -526,23 +487,19 @@ fn setup_interactive(ctx: &mut Context) -> Step {
 
     // Interactive install with the desktop shortcut chosen and the success
     // page's Launch action exercised.
-    let install = run_uia(
+    run_uia(
         ctx,
-        &script,
-        &UiaRun {
+        &super::setup_ui::Run {
             setup: &setup,
-            mode: "install",
-            log_name: "setup-ui-install.log",
+            mode: super::setup_ui::Mode::Install,
+            log: &install_log,
+            expected_exe: &exe,
+            screenshots: &screenshots,
             desktop_shortcut: true,
             remove_user_data: false,
             click_launch: true,
         },
     )?;
-    product_ensure!(
-        install.code() == Some(0),
-        "the interactive install failed: {}",
-        install.stderr.trim()
-    );
     product_ensure!(exe.is_file(), "the interactive install left no exosnap.exe");
     product_ensure!(
         reg_value("installed")?.is_some(),
@@ -581,23 +538,19 @@ fn setup_interactive(ctx: &mut Context) -> Step {
     let (recording_hash, _) = sha256_file(&recording)?;
 
     // Interactive uninstall with the explicit local-data removal selected.
-    let uninstall = run_uia(
+    run_uia(
         ctx,
-        &script,
-        &UiaRun {
+        &super::setup_ui::Run {
             setup: &setup,
-            mode: "uninstall",
-            log_name: "setup-ui-uninstall.log",
+            mode: super::setup_ui::Mode::Uninstall,
+            log: &uninstall_log,
+            expected_exe: &exe,
+            screenshots: &screenshots,
             desktop_shortcut: false,
             remove_user_data: true,
             click_launch: false,
         },
     )?;
-    product_ensure!(
-        uninstall.code() == Some(0),
-        "the interactive uninstall failed: {}",
-        uninstall.stderr.trim()
-    );
     product_ensure!(
         !exe.exists() && reg_value("installed")?.is_none(),
         "the interactive uninstall left the product installed"

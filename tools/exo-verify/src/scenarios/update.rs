@@ -844,7 +844,7 @@ fn wait_relaunch(target: &Path, old_pid: u32, deadline: Instant) -> Step<u32> {
 
 /// Every running `exosnap.exe` with its image path when it can be read.
 #[cfg(windows)]
-fn exosnap_processes() -> Vec<(u32, Option<PathBuf>)> {
+pub(crate) fn exosnap_processes() -> Vec<(u32, Option<PathBuf>)> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
@@ -904,7 +904,7 @@ fn exosnap_processes() -> Vec<(u32, Option<PathBuf>)> {
 
 /// Ends the relaunched candidate, which no job of this run owns.
 #[cfg(windows)]
-fn terminate(pid: u32) {
+pub(crate) fn terminate(pid: u32) {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
     if let Ok(process) = unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) } {
