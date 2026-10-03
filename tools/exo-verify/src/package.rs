@@ -683,8 +683,12 @@ fn build_setup(
 
 /// The canonical LICENSE as RTF for WixStdBA's offline license page. Plain
 /// text with the two RTF metacharacters escaped and one paragraph per source
-/// line; the page background and ink are the installer's own dark tokens, so
-/// the page reads as part of Setup rather than as a white legal insert.
+/// line.
+///
+/// No colours are emitted. thmutil paints the richedit background only through
+/// WM_CTLCOLOR, which RichEdit ignores, and its own default document surface is
+/// white; forcing the dark theme ink on that control produced near-white text
+/// on white. The control's own document colours are readable on every machine.
 fn license_text_to_rtf(text: &str) -> String {
     let mut body = String::new();
     for line in text.replace("\r\n", "\n").lines() {
@@ -697,7 +701,7 @@ fn license_text_to_rtf(text: &str) -> String {
         body.push_str("\\par\r\n");
     }
     format!(
-        "{{\\rtf1\\ansi\\ansicpg1252\\deff0\\nouicompat{{\\fonttbl{{\\f0\\fswiss Segoe UI;}}}}{{\\colortbl ;\\red14\\green14\\blue16;\\red241\\green241\\blue239;}}\\viewkind4\\uc1\\f0\\fs20\\cf2\\cbpat1 {body}}}"
+        "{{\\rtf1\\ansi\\ansicpg1252\\deff0\\nouicompat{{\\fonttbl{{\\f0\\fswiss Segoe UI;}}}}\\viewkind4\\uc1\\f0\\fs20 {body}}}"
     )
 }
 
@@ -1194,5 +1198,9 @@ mod tests {
         assert!(rtf.contains(r"GPL \\ text \{with\} braces\par"));
         assert!(rtf.contains("second line\\par"));
         assert!(!rtf.contains("text {with} braces"));
+        assert!(
+            !rtf.contains("\\colortbl") && !rtf.contains("\\cf") && !rtf.contains("\\cbpat"),
+            "the license page must use the richedit control's own readable document colours"
+        );
     }
 }

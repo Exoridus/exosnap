@@ -43,6 +43,15 @@
   for Hyperlink, so the link would render but do nothing. A font without
   colours leaves a button fully native; that is deliberate.
 
+  Graphic buttons were evaluated against that accessibility bar and rejected.
+  thmutil ORs BS_OWNERDRAW onto every button that carries an image, and
+  BS_OWNERDRAW replaces the BS_DEFPUSHBUTTON type bit; WixStdBA routes input
+  through IsDialogMessage and nothing sets DM_SETDEFID, so a graphic button
+  would stop responding to a bare Enter. DrawButton also ignores ODS_DISABLED,
+  so a visible disabled graphic button is drawn as enabled. A native button
+  keeps both behaviours, which outranks the accent fill. Revisit only if
+  thmutil grows a default-button and disabled state for owner draw.
+
   Every action row is right aligned against the client edge. thmutil gives a
   negative X the meaning "right edge this far from the right window edge", so
   the rightmost button uses X="-12" (12 px margin), each button to its left
