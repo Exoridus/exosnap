@@ -29,18 +29,23 @@ impl FakeCommands {
 }
 
 impl CommandRunner for FakeCommands {
-    fn run(&self, program: &str, args: &[&str], env: &[(&str, String)]) -> Result<CommandOutput> {
+    fn run(
+        &self,
+        program: &str,
+        args: &[Arg<'_>],
+        env: &[(&str, String)],
+    ) -> Result<CommandOutput> {
         let mut call = vec![program.to_string()];
-        call.extend(args.iter().map(|arg| arg.to_string()));
+        call.extend(args.iter().map(|arg| arg.redacted().to_string()));
         call.extend(env.iter().map(|(name, _value)| format!("{name}=<secret>")));
         self.calls.borrow_mut().push(call);
 
-        match (program, args.first().copied()) {
+        match (program, args.first().map(Arg::expose)) {
             ("choco", Some("pack")) => {
                 let out = args
                     .windows(2)
-                    .find(|pair| pair[0] == "--output-directory")
-                    .map(|pair| PathBuf::from(pair[1]))
+                    .find(|pair| pair[0].expose() == "--output-directory")
+                    .map(|pair| PathBuf::from(pair[1].expose()))
                     .context("choco pack without an output directory")?;
                 fs::write(out.join(format!("exosnap.{VERSION}.nupkg")), b"nupkg bytes")?;
                 Ok(CommandOutput {
@@ -49,11 +54,20 @@ impl CommandRunner for FakeCommands {
                     stderr: String::new(),
                 })
             }
-            ("choco", Some("push")) => Ok(CommandOutput {
-                status: 0,
-                stdout: "pushed to the community feed".into(),
-                stderr: String::new(),
-            }),
+            ("choco", Some("push")) => {
+                // Echo the received key so the test proves the caller redacts
+                // captured output before it reaches a record.
+                let key = args
+                    .windows(2)
+                    .find(|pair| pair[0].expose() == "--api-key")
+                    .map(|pair| pair[1].expose())
+                    .unwrap_or_default();
+                Ok(CommandOutput {
+                    status: 0,
+                    stdout: format!("pushed to the community feed with {key}"),
+                    stderr: String::new(),
+                })
+            }
             ("winget", Some("validate")) => Ok(CommandOutput {
                 status: 0,
                 stdout: "Manifest validation succeeded.".into(),
@@ -66,7 +80,9 @@ impl CommandRunner for FakeCommands {
                 stderr: String::new(),
             }),
             ("gh", _) => {
-                if args.contains(&"--method") && args.contains(&"PUT") {
+                if args.iter().any(|arg| arg.expose() == "--method")
+                    && args.iter().any(|arg| arg.expose() == "PUT")
+                {
                     Ok(CommandOutput {
                         status: 0,
                         stdout: serde_json::to_string(&serde_json::json!({
@@ -362,13 +378,16 @@ fn submit_invokes_only_the_official_programs_with_the_frozen_artifacts() {
         call.first().map(String::as_str) == Some("choco")
             && call.get(1).map(String::as_str) == Some("push")
             && call.iter().any(|arg| arg == "--source")
+            && call
+                .windows(2)
+                .any(|pair| pair[0] == "--api-key" && pair[1] == "***")
     }));
     assert!(calls.iter().any(|call| {
         call.first().map(String::as_str) == Some("wingetcreate")
             && call.get(1).map(String::as_str) == Some("submit")
             && call
                 .windows(2)
-                .any(|pair| pair[0] == "--token" && pair[1] == "winget-secret")
+                .any(|pair| pair[0] == "--token" && pair[1] == "***")
     }));
     assert!(calls.iter().any(|call| {
         call.first().map(String::as_str) == Some("gh")
@@ -376,6 +395,17 @@ fn submit_invokes_only_the_official_programs_with_the_frozen_artifacts() {
             && call.iter().any(|arg| arg == "PUT")
             && call.iter().any(|arg| arg == "GH_TOKEN=<secret>")
     }));
+    let recorded = serde_json::to_string(&calls).unwrap();
+    for secret in ["choco-secret", "winget-secret", "scoop-secret"] {
+        assert!(
+            !recorded.contains(secret),
+            "a credential value must never be recorded as a command argument"
+        );
+    }
+    // The fake Chocolatey echoes the key it received; the submission record
+    // must show the redaction, not the value.
+    assert!(chocolatey.detail.contains("***"), "{}", chocolatey.detail);
+    assert!(!chocolatey.detail.contains("choco-secret"));
     for (result, secret) in [
         (&chocolatey, "choco-secret"),
         (&winget, "winget-secret"),
@@ -385,6 +415,43 @@ fn submit_invokes_only_the_official_programs_with_the_frozen_artifacts() {
         assert!(
             !text.contains(secret),
             "a credential value must never appear in a recorded result"
+        );
+    }
+}
+
+#[test]
+fn the_credential_preflight_reports_presence_and_refuses_a_missing_name() {
+    let complete = FakeSecrets::configured();
+    assert_eq!(
+        credential_status(&complete),
+        vec![
+            ("CHOCOLATEY_API_KEY", true),
+            ("WINGET_SUBMIT_TOKEN", true),
+            ("SCOOP_BUCKET_TOKEN", true),
+        ]
+    );
+    credential_preflight(&complete).unwrap();
+
+    let missing_scoop = FakeSecrets(BTreeMap::from([
+        ("CHOCOLATEY_API_KEY".into(), "choco-secret".into()),
+        ("WINGET_SUBMIT_TOKEN".into(), "winget-secret".into()),
+    ]));
+    assert_eq!(
+        credential_status(&missing_scoop),
+        vec![
+            ("CHOCOLATEY_API_KEY", true),
+            ("WINGET_SUBMIT_TOKEN", true),
+            ("SCOOP_BUCKET_TOKEN", false),
+        ]
+    );
+    let error = credential_preflight(&missing_scoop)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("SCOOP_BUCKET_TOKEN"), "{error}");
+    for secret in ["choco-secret", "winget-secret"] {
+        assert!(
+            !error.contains(secret),
+            "the preflight error must not name a value"
         );
     }
 }

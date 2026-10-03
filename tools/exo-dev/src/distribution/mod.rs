@@ -36,22 +36,75 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
+/// One argument of an external command. A secret argument is handed to the
+/// real process value for value but appears as `***` in every recorded or
+/// printed form, so a credential cannot reach a transcript, an error message
+/// or a submission record.
+pub enum Arg<'a> {
+    Plain(&'a str),
+    Secret(&'a str),
+}
+
+impl<'a> Arg<'a> {
+    /// The value the process must receive. Never use this for display.
+    fn expose(&self) -> &'a str {
+        match self {
+            Self::Plain(value) | Self::Secret(value) => value,
+        }
+    }
+
+    /// The value safe to record or print.
+    fn redacted(&self) -> &'a str {
+        match self {
+            Self::Plain(value) => value,
+            Self::Secret(_) => "***",
+        }
+    }
+}
+
+/// Replaces a credential's exact value anywhere it could have been echoed by
+/// an external program, so captured output can never carry a secret.
+fn redact(text: &str, secret: &str) -> String {
+    if secret.is_empty() {
+        text.to_string()
+    } else {
+        text.replace(secret, "***")
+    }
+}
+
+/// A command line with every secret argument replaced, safe for an error
+/// message. Used when the process could not even be started.
+fn call_description(program: &str, args: &[Arg<'_>]) -> String {
+    let mut text = program.to_string();
+    for arg in args {
+        text.push(' ');
+        text.push_str(arg.redacted());
+    }
+    text
+}
+
 pub trait CommandRunner {
-    fn run(&self, program: &str, args: &[&str], env: &[(&str, String)]) -> Result<CommandOutput>;
+    fn run(&self, program: &str, args: &[Arg<'_>], env: &[(&str, String)])
+    -> Result<CommandOutput>;
 }
 
 pub struct RealCommands;
 
 impl CommandRunner for RealCommands {
-    fn run(&self, program: &str, args: &[&str], env: &[(&str, String)]) -> Result<CommandOutput> {
+    fn run(
+        &self,
+        program: &str,
+        args: &[Arg<'_>],
+        env: &[(&str, String)],
+    ) -> Result<CommandOutput> {
         let mut command = crate::process::command(program);
-        command.args(args);
+        command.args(args.iter().map(Arg::expose));
         for (name, value) in env {
             command.env(name, value);
         }
         let output = command
             .output()
-            .with_context(|| format!("could not run {program}"))?;
+            .with_context(|| format!("could not run {}", call_description(program, args)))?;
         Ok(CommandOutput {
             status: output.status.code().unwrap_or(-1),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -300,13 +353,19 @@ pub fn prepare(
         .out
         .join("packaging/chocolatey")
         .join("exosnap.nuspec");
+    let nuspec_arg = nuspec.to_string_lossy().into_owned();
+    let chocolatey_dir = request
+        .out
+        .join("packaging/chocolatey")
+        .to_string_lossy()
+        .into_owned();
     let pack = runner.run(
         "choco",
         &[
-            "pack",
-            &nuspec.to_string_lossy(),
-            "--output-directory",
-            &request.out.join("packaging/chocolatey").to_string_lossy(),
+            Arg::Plain("pack"),
+            Arg::Plain(&nuspec_arg),
+            Arg::Plain("--output-directory"),
+            Arg::Plain(&chocolatey_dir),
         ],
         &[],
     )?;
@@ -335,9 +394,14 @@ pub fn prepare(
         .unwrap()
         .package_sha256 = Some(nupkg_sha);
 
+    let winget_dir_arg = winget_dir.to_string_lossy().into_owned();
     let winget_validate = runner.run(
         "winget",
-        &["validate", "--manifest", &winget_dir.to_string_lossy()],
+        &[
+            Arg::Plain("validate"),
+            Arg::Plain("--manifest"),
+            Arg::Plain(&winget_dir_arg),
+        ],
         &[],
     )?;
     ensure!(
@@ -575,6 +639,44 @@ fn require_ready(readiness: &ReadinessReport) -> Result<()> {
     Ok(())
 }
 
+/// Credentials a publish operation needs. Every one is checked before the
+/// first external write so a missing later credential cannot leave a channel
+/// already submitted; only PRESENT or MISSING is ever printed.
+pub const SUBMISSION_CREDENTIALS: [&str; 3] = [
+    "CHOCOLATEY_API_KEY",
+    "WINGET_SUBMIT_TOKEN",
+    "SCOOP_BUCKET_TOKEN",
+];
+
+/// Non-empty status of every required submission credential, by name.
+pub fn credential_status(secrets: &dyn SecretSource) -> Vec<(&'static str, bool)> {
+    SUBMISSION_CREDENTIALS
+        .iter()
+        .map(|name| (*name, secrets.get(name).is_some()))
+        .collect()
+}
+
+/// Fails before any external write when a required credential is missing.
+/// Prints one `NAME PRESENT` or `NAME MISSING` line per credential and never
+/// a value, prefix, suffix, length or hash.
+pub fn credential_preflight(secrets: &dyn SecretSource) -> Result<()> {
+    let status = credential_status(secrets);
+    for (name, present) in &status {
+        println!("{name} {}", if *present { "PRESENT" } else { "MISSING" });
+    }
+    let missing: Vec<&str> = status
+        .iter()
+        .filter(|(_, present)| !present)
+        .map(|(name, _)| *name)
+        .collect();
+    ensure!(
+        missing.is_empty(),
+        "required submission credentials are missing: {}",
+        missing.join(", ")
+    );
+    Ok(())
+}
+
 pub fn submit(
     request: &SubmitRequest,
     runner: &dyn CommandRunner,
@@ -590,6 +692,10 @@ pub fn submit(
     }
     let readiness = ReadinessReport::load(&request.prepared.join(READINESS_NAME))?;
     require_ready(&readiness)?;
+    // Every credential the publish operation needs is checked before the first
+    // external write, so a missing later credential cannot leave one channel
+    // submitted and the rest unwritten.
+    credential_preflight(secrets)?;
 
     let (status, url, detail) = match request.channel {
         Channel::Chocolatey => {
@@ -599,23 +705,30 @@ pub fn submit(
             let nupkg = request
                 .prepared
                 .join("packaging/chocolatey")
-                .join(nupkg_name(&readiness.version));
+                .join(nupkg_name(&readiness.version))
+                .to_string_lossy()
+                .into_owned();
+            // Chocolatey consumes an API key only through --api-key or a
+            // previously configured source; it never reads an environment
+            // variable, so the key is passed explicitly for this push.
             let output = runner.run(
                 "choco",
                 &[
-                    "push",
-                    &nupkg.to_string_lossy(),
-                    "--source",
-                    "https://push.chocolatey.org/",
+                    Arg::Plain("push"),
+                    Arg::Plain(&nupkg),
+                    Arg::Plain("--source"),
+                    Arg::Plain("https://push.chocolatey.org/"),
+                    Arg::Plain("--api-key"),
+                    Arg::Secret(&key),
                 ],
-                &[("CHOCOLATEY_API_KEY", key)],
+                &[],
             )?;
+            let stdout = redact(&output.stdout, &key);
+            let stderr = redact(&output.stderr, &key);
             ensure!(
                 output.status == 0,
-                "choco push failed with {}:\n{}{}",
-                output.status,
-                output.stdout,
-                output.stderr
+                "choco push failed with {}:\n{stdout}{stderr}",
+                output.status
             );
             (
                 "SUBMITTED",
@@ -623,7 +736,7 @@ pub fn submit(
                     "https://community.chocolatey.org/packages/exosnap/{}",
                     readiness.version
                 ),
-                output.stdout.trim().to_string(),
+                stdout.trim().to_string(),
             )
         }
         Channel::Winget => {
@@ -635,33 +748,33 @@ pub fn submit(
                 readiness.version
             ));
             let title = format!("New package: Codexo.ExoSnap version {}", readiness.version);
+            let manifest = manifest.to_string_lossy().into_owned();
             let output = runner.run(
                 "wingetcreate",
                 &[
-                    "submit",
-                    "--prtitle",
-                    &title,
-                    "--token",
-                    &token,
-                    &manifest.to_string_lossy(),
+                    Arg::Plain("submit"),
+                    Arg::Plain("--prtitle"),
+                    Arg::Plain(&title),
+                    Arg::Plain("--token"),
+                    Arg::Secret(&token),
+                    Arg::Plain(&manifest),
                 ],
                 &[],
             )?;
+            let stdout = redact(&output.stdout, &token);
+            let stderr = redact(&output.stderr, &token);
             ensure!(
                 output.status == 0,
-                "wingetcreate submit failed with {}:\n{}{}",
-                output.status,
-                output.stdout,
-                output.stderr
+                "wingetcreate submit failed with {}:\n{stdout}{stderr}",
+                output.status
             );
-            let url = output
-                .stdout
+            let url = stdout
                 .split_whitespace()
                 .find(|word| word.starts_with("https://github.com/microsoft/winget-pkgs/pull/"))
                 .context("wingetcreate did not report a pull request URL")?
                 .trim_end_matches(|c: char| !c.is_ascii_digit())
                 .to_string();
-            ("SUBMITTED", url, output.stdout.trim().to_string())
+            ("SUBMITTED", url, stdout.trim().to_string())
         }
         Channel::Scoop => {
             let token = secrets
@@ -672,12 +785,12 @@ pub fn submit(
             let existing = runner.run(
                 "gh",
                 &[
-                    "api",
-                    "--method",
-                    "GET",
-                    "repos/Exoridus/scoop-exosnap/contents/bucket/exosnap.json",
-                    "--jq",
-                    ".sha",
+                    Arg::Plain("api"),
+                    Arg::Plain("--method"),
+                    Arg::Plain("GET"),
+                    Arg::Plain("repos/Exoridus/scoop-exosnap/contents/bucket/exosnap.json"),
+                    Arg::Plain("--jq"),
+                    Arg::Plain(".sha"),
                 ],
                 &[("GH_TOKEN", token.clone())],
             )?;
@@ -691,29 +804,30 @@ pub fn submit(
                 ensure!(
                     existing.stderr.contains("404"),
                     "could not read the bucket manifest: {}",
-                    existing.stderr
+                    redact(&existing.stderr, &token)
                 );
             }
             let body_path = request.out.with_extension("scoop-put.json");
             fs::write(&body_path, serde_json::to_vec(&body)?)?;
+            let body_arg = body_path.to_string_lossy().into_owned();
             let output = runner.run(
                 "gh",
                 &[
-                    "api",
-                    "--method",
-                    "PUT",
-                    "repos/Exoridus/scoop-exosnap/contents/bucket/exosnap.json",
-                    "--input",
-                    &body_path.to_string_lossy(),
+                    Arg::Plain("api"),
+                    Arg::Plain("--method"),
+                    Arg::Plain("PUT"),
+                    Arg::Plain("repos/Exoridus/scoop-exosnap/contents/bucket/exosnap.json"),
+                    Arg::Plain("--input"),
+                    Arg::Plain(&body_arg),
                 ],
-                &[("GH_TOKEN", token)],
+                &[("GH_TOKEN", token.clone())],
             )?;
             ensure!(
                 output.status == 0,
                 "the scoop bucket update failed with {}:\n{}{}",
                 output.status,
-                output.stdout,
-                output.stderr
+                redact(&output.stdout, &token),
+                redact(&output.stderr, &token)
             );
             let response: serde_json::Value = serde_json::from_str(&output.stdout)
                 .context("the bucket update returned no JSON")?;
