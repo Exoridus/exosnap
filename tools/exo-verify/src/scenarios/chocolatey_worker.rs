@@ -377,6 +377,15 @@ fn ensure_user_config_populated(user_config: &Path) -> Result<()> {
     if !user_config.exists() {
         std::fs::create_dir_all(user_config)?;
     }
+    // A fresh profile's short smoke start can exit before the application has
+    // written anything. The rehearsal's subject is that uninstall leaves user
+    // configuration alone, so there must be configuration to leave alone.
+    if !has_files(user_config)? {
+        std::fs::write(
+            user_config.join("settings.ini"),
+            b"[chocolatey-rehearsal]\nprobe = must survive an uninstall\n",
+        )?;
+    }
     Ok(())
 }
 
