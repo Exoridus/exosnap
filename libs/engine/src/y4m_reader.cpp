@@ -1,8 +1,13 @@
 #include "y4m_reader.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string>
 
 #include <charconv>
+#include <string_view>
+#include <system_error>
 
 namespace exosnap::engine {
 

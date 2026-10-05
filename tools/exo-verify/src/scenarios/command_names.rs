@@ -87,10 +87,8 @@ mod tests {
     }
 
     /// Whether a receiver expression (`updater`, `app.client`, `client`, ...)
-    /// names the updater endpoint. The same heuristic the legacy PowerShell
-    /// suite used on its connection variable names: anything mentioning
-    /// `updater` is the updater's channel, everything else is the
-    /// application's.
+    /// names the updater endpoint. A member starting with `updater` names
+    /// that channel; all other receivers name the application's channel.
     fn is_updater_receiver(receiver: &str) -> bool {
         receiver
             .split('.')

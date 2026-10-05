@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -27,12 +29,30 @@ pub enum PowerAction {
 
 #[derive(Default)]
 pub struct Agent {
-    children: HashMap<u64, Child>,
-    next_handle: u64,
+    children: Arc<Mutex<HashMap<u64, Child>>>,
+    next_handle: Arc<AtomicU64>,
     greeted: bool,
 }
 
 impl Agent {
+    /// Starts an independent protocol session sharing the owned child processes.
+    pub fn connection(&self) -> Agent {
+        Agent {
+            children: Arc::clone(&self.children),
+            next_handle: Arc::clone(&self.next_handle),
+            greeted: false,
+        }
+    }
+
+    fn register_child(&self, child: Child) -> Result<Value> {
+        let handle = self.next_handle.fetch_add(1, Ordering::SeqCst) + 1;
+        let pid = child.id();
+        self.children
+            .lock()
+            .map_err(|_| anyhow::anyhow!("process registry poisoned"))?
+            .insert(handle, child);
+        Ok(json!({"handle": handle, "pid": pid}))
+    }
     /// Serves one connection until the peer closes it or requests a power
     /// action. Spawned processes outlive the connection so a reconnecting
     /// host can still wait for them.
@@ -104,31 +124,55 @@ impl Agent {
                     .stderr(Stdio::null())
                     .spawn()
                     .with_context(|| format!("spawn {program}"))?;
-                self.next_handle += 1;
-                let pid = child.id();
-                self.children.insert(self.next_handle, child);
-                Ok(json!({"handle": self.next_handle, "pid": pid}))
+                self.register_child(child)
+            }
+            Request::SpawnLogged {
+                program,
+                args,
+                cwd,
+                env,
+                transcript,
+            } => {
+                let path = Path::new(&transcript);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let log =
+                    std::fs::File::create(path).with_context(|| format!("create {transcript}"))?;
+                let child = command(&program, &args, cwd.as_deref(), &env)
+                    .stdin(Stdio::null())
+                    .stderr(Stdio::from(log.try_clone()?))
+                    .stdout(Stdio::from(log))
+                    .spawn()
+                    .with_context(|| format!("spawn {program}"))?;
+                self.register_child(child)
             }
             Request::Wait { handle, timeout_ms } => {
-                let child = self
-                    .children
-                    .get_mut(&handle)
-                    .with_context(|| format!("no process with handle {handle}"))?;
                 let deadline = Instant::now() + Duration::from_millis(timeout_ms);
                 loop {
+                    let mut children = self
+                        .children
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("process registry poisoned"))?;
+                    let child = children
+                        .get_mut(&handle)
+                        .with_context(|| format!("no process with handle {handle}"))?;
                     if let Some(status) = child.try_wait()? {
-                        self.children.remove(&handle);
+                        children.remove(&handle);
                         return Ok(json!({"exited": true, "exitCode": status.code()}));
                     }
                     if Instant::now() >= deadline {
                         return Ok(json!({"exited": false}));
                     }
+                    drop(children);
                     std::thread::sleep(Duration::from_millis(50));
                 }
             }
             Request::Kill { handle } => {
                 let mut child = self
                     .children
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("process registry poisoned"))?
                     .remove(&handle)
                     .with_context(|| format!("no process with handle {handle}"))?;
                 let _ = child.kill();
@@ -173,7 +217,10 @@ impl Agent {
             }
             Request::Exists { path } => Ok(match std::fs::metadata(&path) {
                 Ok(m) => json!({"exists": true, "isDir": m.is_dir(), "len": m.len()}),
-                Err(_) => json!({"exists": false}),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    json!({"exists": false})
+                }
+                Err(error) => return Err(error).with_context(|| format!("inspect {path}")),
             }),
             Request::ListDir { path } => {
                 let mut entries = Vec::new();
@@ -271,16 +318,44 @@ pub fn exec(
 
 #[cfg(windows)]
 pub fn session_info() -> Value {
+    use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::RemoteDesktop::{
         ProcessIdToSessionId, WTSGetActiveConsoleSessionId,
     };
     use windows::Win32::System::StationsAndDesktops::{
-        CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, OpenInputDesktop,
+        CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, GetProcessWindowStation,
+        GetThreadDesktop, GetUserObjectInformationW, OpenInputDesktop, UOI_NAME,
     };
-    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
+    let name = |handle: HANDLE| -> Option<String> {
+        let mut needed = 0;
+        unsafe {
+            let _ = GetUserObjectInformationW(handle, UOI_NAME, None, 0, Some(&mut needed));
+            if needed == 0 {
+                return None;
+            }
+            let mut buffer = vec![0u16; (needed as usize).div_ceil(2)];
+            GetUserObjectInformationW(
+                handle,
+                UOI_NAME,
+                Some(buffer.as_mut_ptr().cast()),
+                needed,
+                None,
+            )
+            .ok()?;
+            let length = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
+            Some(String::from_utf16_lossy(&buffer[..length]))
+        }
+    };
     let mut session = 0u32;
     let has_session = unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) }.is_ok();
     let console = unsafe { WTSGetActiveConsoleSessionId() };
+    let station = unsafe { GetProcessWindowStation() }
+        .ok()
+        .and_then(|handle| name(HANDLE(handle.0)));
+    let desktop = unsafe { GetThreadDesktop(GetCurrentThreadId()) }
+        .ok()
+        .and_then(|handle| name(HANDLE(handle.0)));
     let input_desktop = unsafe {
         OpenInputDesktop(
             DESKTOP_CONTROL_FLAGS(0),
@@ -296,8 +371,23 @@ pub fn session_info() -> Value {
         "sessionId": has_session.then_some(session),
         "consoleSessionId": console,
         "user": std::env::var("USERNAME").ok(),
-        "interactive": has_session && session != 0 && input_desktop,
+        "windowStation": station,
+        "desktop": desktop,
+        "interactive": interactive_session(has_session.then_some(session), console, station.as_deref(), desktop.as_deref(), input_desktop),
     })
+}
+
+fn interactive_session(
+    session: Option<u32>,
+    console: u32,
+    station: Option<&str>,
+    desktop: Option<&str>,
+    input: bool,
+) -> bool {
+    session.is_some_and(|id| id != 0 && id == console)
+        && station.is_some_and(|s| s.eq_ignore_ascii_case("WinSta0"))
+        && desktop.is_some_and(|s| s.eq_ignore_ascii_case("Default"))
+        && input
 }
 
 #[cfg(not(windows))]
@@ -308,6 +398,76 @@ pub fn session_info() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_measured_console_default_desktop_is_interactive() {
+        assert!(interactive_session(
+            Some(1),
+            1,
+            Some("WinSta0"),
+            Some("Default"),
+            true
+        ));
+        for (session, console, station, desktop, input) in [
+            (None, 1, Some("WinSta0"), Some("Default"), true),
+            (Some(0), 0, Some("WinSta0"), Some("Default"), true),
+            (Some(1), 2, Some("WinSta0"), Some("Default"), true),
+            (Some(1), 1, None, Some("Default"), true),
+            (Some(1), 1, Some("Service"), Some("Default"), true),
+            (Some(1), 1, Some("WinSta0"), Some("Winlogon"), true),
+            (Some(1), 1, Some("WinSta0"), Some("Default"), false),
+        ] {
+            assert!(!interactive_session(
+                session, console, station, desktop, input
+            ));
+        }
+    }
+
+    #[test]
+    fn logged_process_retains_output_and_real_exit_code() {
+        let root = std::env::temp_dir().join(format!("exo-guest-log-test-{}", std::process::id()));
+        let path = root.join("transcript.log");
+        let (program, args) = if cfg!(windows) {
+            (
+                "cmd",
+                vec![
+                    "/d".into(),
+                    "/c".into(),
+                    "echo stdout& echo stderr 1>&2& exit 7".into(),
+                ],
+            )
+        } else {
+            (
+                "sh",
+                vec!["-c".into(), "echo stdout; echo stderr >&2; exit 7".into()],
+            )
+        };
+        let mut agent = Agent::default();
+        agent.handle(hello()).unwrap();
+        let spawned = agent
+            .handle(Request::SpawnLogged {
+                program: program.into(),
+                args,
+                cwd: None,
+                env: BTreeMap::new(),
+                transcript: path.to_string_lossy().into_owned(),
+            })
+            .unwrap();
+        let mut observer = agent.connection();
+        assert!(observer.handle(Request::SessionInfo).is_err());
+        observer.handle(hello()).unwrap();
+        let exited = observer
+            .handle(Request::Wait {
+                handle: spawned["handle"].as_u64().unwrap(),
+                timeout_ms: 10_000,
+            })
+            .unwrap();
+        assert_eq!(exited["exitCode"], 7);
+        let output = std::fs::read_to_string(&path).unwrap();
+        assert!(output.contains("stdout"));
+        assert!(output.contains("stderr"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     struct Duplex {
         input: std::io::Cursor<Vec<u8>>,

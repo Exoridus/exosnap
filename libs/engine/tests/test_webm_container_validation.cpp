@@ -1,3 +1,5 @@
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/error_types.h"
 #include <gtest/gtest.h>
 
 #include <exosnap/engine/recorder_session.h>

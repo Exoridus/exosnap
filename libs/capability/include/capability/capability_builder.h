@@ -3,6 +3,8 @@
 #include "capability_set.h"
 #include "runtime_snapshot.h"
 
+#include <vector>
+
 namespace exosnap::capability {
 
 class CapabilityBuilder {

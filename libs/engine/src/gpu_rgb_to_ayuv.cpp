@@ -2,8 +2,12 @@
 
 #include "measured_shader_compile.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <utility>
+#include <winrt/base.h>
 
 namespace exosnap::engine {
 namespace {

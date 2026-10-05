@@ -52,7 +52,7 @@ endif()
 # PLUGIN, which needs Qt6Svg.dll at runtime without the executable importing a
 # single symbol from it. Dropping the component would still build and still run
 # here, and would ship a package whose logo silently fails to load.
-find_package(Qt6 6.11 QUIET COMPONENTS
+find_package(Qt6 6.12 QUIET COMPONENTS
     Core Gui Widgets Svg Qml Quick QuickControls2 QuickDialogs2 QuickTest Test LabsPlatform)
 
 # A stand-in `exosnap` custom target is created on the deliberate opt-out path
@@ -69,16 +69,16 @@ find_package(Qt6 6.11 QUIET COMPONENTS
 # and even the updater compile, ctest passes, and the compile database contains no
 # app translation unit at all — so a clang-tidy pass over "the changes" analyses
 # nothing and reports clean. That is exactly how this branch's own gate lied once,
-# against a stale cache pinning Qt 6.9 that the new 6.11 minimum then rejected.
+# against a stale cache pinning Qt 6.9 that the new 6.12 minimum then rejected.
 #
 # Not building the app is a legitimate configuration (headless CI, a contributor
 # without Qt), so it stays available -- it just has to be ASKED for, with
 # -DEXOSNAP_BUILD_APP=OFF, instead of being inferred from a failed probe.
 if(EXOSNAP_BUILD_APP AND NOT Qt6_FOUND)
     message(FATAL_ERROR
-        "Qt 6.11 or newer with the Qml/Quick/QuickControls2/QuickDialogs2/QuickTest/Svg/LabsPlatform "
+        "Qt 6.12 or newer with the Qml/Quick/QuickControls2/QuickDialogs2/QuickTest/Svg/LabsPlatform "
         "components was not found, and EXOSNAP_BUILD_APP is ON.\n"
-        "  Install Qt 6.11+ and point CMAKE_PREFIX_PATH or Qt6_DIR at it, or configure "
+        "  Install Qt 6.12+ and point CMAKE_PREFIX_PATH or Qt6_DIR at it, or configure "
         "with -DEXOSNAP_BUILD_APP=OFF to build the engine, tools and tests without the "
         "application. Silently skipping it is not an option: the build would go green "
         "without the binary this project exists to ship.")
@@ -92,7 +92,7 @@ if(NOT EXOSNAP_BUILD_APP)
     return()
 endif()
 
-qt_standard_project_setup(REQUIRES 6.11)
+qt_standard_project_setup(REQUIRES 6.12)
 
 # Re-stated as REQUIRED so a partially-satisfied probe above turns into a hard
 # configure error here rather than a link failure later. Test is not used
@@ -100,7 +100,7 @@ qt_standard_project_setup(REQUIRES 6.11)
 # cmake/exosnap_testing.cmake can only copy a module whose imported target
 # actually exists. Without it a QuickTest binary builds and then fails to START
 # with 0xC0000135.
-find_package(Qt6 6.11 REQUIRED COMPONENTS Qml Quick QuickControls2 QuickDialogs2 QuickTest Test LabsPlatform)
+find_package(Qt6 6.12 REQUIRED COMPONENTS Qml Quick QuickControls2 QuickDialogs2 QuickTest Test LabsPlatform)
 
 # Qt test executables need Qt DLLs on PATH during gtest_discover_tests (POST_BUILD)
 # and during CTest execution. Add Qt's bin directory to the environment so both work.
@@ -1412,90 +1412,6 @@ exosnap_add_gtest(
 )
 target_include_directories(recording_error_detail_text_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(recording_error_detail_text_tests PROPERTIES AUTOMOC ON)
-
-find_program(EXOSNAP_PWSH pwsh)
-if(EXOSNAP_PWSH)
-    # The client's endpoint naming. Deriving the updater child's pipe name
-    # wrongly fails as a connect timeout, which is indistinguishable from "the
-    # child never started" -- the most expensive way to learn about a typo.
-    add_test(NAME live_verify.endpoint_names
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/live-verify-endpoints.tests.ps1")
-    set_tests_properties(live_verify.endpoint_names PROPERTIES TIMEOUT 120 LABELS "live_verify")
-    exosnap_set_test_phase(live_verify.endpoint_names hermetic)
-
-    # The packaging version-drift gate is Rust, not PowerShell: the contract is
-    # `cargo test -p exo-dev release::version::`, not a CTest case here.
-
-    # The third-party identity the release manifest records is Rust:
-    # `cargo test -p exo-verify package::dependency_identity`.
-
-    # The publication policy, offline half only: what packaging/publication-policy.json
-    # is allowed to say about each channel. The feed half is advisory by design, so
-    # it is not a test; its contract is `cargo test -p exo-dev release::feed_drift`.
-
-    # The Hyper-V verification guest recipe. Registered here for the reason the
-    # release-runner cases are: what it is worth testing about a virtual machine is
-    # what happens before one exists -- the three refusals a first attempt hits (not
-    # elevated, not in Hyper-V Administrators, no installation ISO), the plan each
-    # host script would execute, and the pins provisioning refuses to install without.
-    # Every case reads a plan or a refusal; none of them touches Hyper-V, a disk
-    # image, the network or the machine's configuration, so the suite is the same on
-    # a machine that has never had the feature enabled.
-    add_test(NAME live_verify.vm_recipe
-        COMMAND "${EXOSNAP_PWSH}" -NoProfile -File
-            "${PROJECT_SOURCE_DIR}/scripts/tests/vm-recipe.tests.ps1")
-    set_tests_properties(live_verify.vm_recipe PROPERTIES TIMEOUT 300 LABELS "live_verify")
-    exosnap_set_test_phase(live_verify.vm_recipe hermetic)
-
-    # The contracts of the checks the local gate runs. These belong in CTest and
-    # not only in `cargo exo-dev verify`, which runs the checks themselves: a
-    # check that reports PASS is worth nothing until it has been shown to report
-    # FAIL when it should, and running its contracts only from inside the gate it
-    # serves would let a broken gate pass itself. The orchestrator's own
-    # contracts are Rust tests, run by cargo directly in CI for the same reason.
-    #
-    # Label "pipeline", deliberately not "live_verify": these cases guard the
-    # local pipeline rather than the Live Verify runner, and nothing here queries
-    # hardware.
-    #
-    # The Qt/build drift guard (qt-version-consistency, setup-qt-centralized,
-    # no-qmake-project, qt-sdk-path-allowlist) and the source-hygiene
-    # provenance scan are Rust, not PowerShell: their contracts are
-    # `cargo test -p exo-dev drift::` and `cargo test -p exo-dev
-    # source_hygiene::`, not a CTest case here.
-
-    # The subject grammar, the changelog assembler and the release-notes
-    # renderer share one parser, and the release cut is the first place a
-    # disagreement between them would surface -- after the tag is pushed.
-    # Their contract is `cargo test -p exo-dev commit_policy::` and
-    # `cargo test -p exo-dev release::changelog`, not a CTest case here.
-
-    # The cost contract that a pull request title correction cannot re-trigger
-    # the Windows build matrix, and that the metadata verdict is not the same
-    # status context as the code verdict, is `cargo test -p exo-dev pr::`, not
-    # a CTest case here.
-
-    # The hard-wrapped prose guard is retired (StepId::ProseLines removed):
-    # scripts/check-prose-lines.ps1 and its test suite no longer exist.
-
-    # The entry point every other gate runs the suite through, and the digest a
-    # test result is attributed to, are Rust, not PowerShell: the contracts are
-    # `cargo test -p exo-dev test::runner::` and `cargo test -p exo-dev
-    # test::fingerprint::`, not a CTest case here.
-
-    # The host-wide build/tree/device locks (holds and contention from real
-    # child processes, inheritance to a child, an abandoned holder's release)
-    # are Rust, not PowerShell: the contract is `cargo test -p exo-dev
-    # host_lock::`, not a CTest case here.
-elseif(EXOSNAP_REQUIRE_TEST_TOOLS)
-    message(FATAL_ERROR
-        "pwsh was not found, so none of the Live Verify and pipeline script tests would be registered "
-        "-- including the publish lock and the signature verifier. Install PowerShell 7 or configure "
-        "with -DEXOSNAP_REQUIRE_TEST_TOOLS=OFF to accept a reduced suite.")
-else()
-    message(STATUS "pwsh not found: the Live Verify and pipeline script tests will not be registered.")
-endif()
 
 # ---------------------------------------------------------------------------
 # Install — target-independent payload

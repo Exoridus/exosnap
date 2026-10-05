@@ -1,5 +1,7 @@
+#include <cstddef>
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/packet_types.h"
 #include "ffmpeg_aac_encoder.h"
 
 #include <cstdint>

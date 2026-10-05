@@ -25,10 +25,15 @@
 // No `live` label: everything here is deterministic and GPU-/device-free, so it
 // runs on the headless CI runner alongside the rest of the suite.
 
+#include "exosnap/engine/codec_types.h"
+#include <system_error>
 extern "C" {
 #include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/error.h>
+#include <libavutil/log.h>
+#include <libavutil/rational.h>
 }
 
 #include <gtest/gtest.h>

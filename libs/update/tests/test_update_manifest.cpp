@@ -1,8 +1,11 @@
 // test_update_manifest.cpp -- manifest JSON parse tests.
 
 #include <gtest/gtest.h>
+
+#include <string>
 #include <update/manifest_io.h>
 #include <update/update_types.h>
+#include <variant>
 
 using namespace exosnap::update;
 

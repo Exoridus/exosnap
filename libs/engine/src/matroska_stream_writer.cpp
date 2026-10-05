@@ -1,4 +1,12 @@
 #include "matroska_stream_writer.h"
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <iterator>
+#include <memory>
+#include <ratio>
+#include <utility>
+#include <vector>
 
 // libebml / libmatroska headers — suppress MSVC warnings from third-party code
 #ifdef _MSC_VER
@@ -8,21 +16,22 @@
 #pragma warning(disable : 4245) // signed/unsigned mismatch in conversion
 #pragma warning(disable : 4100) // unreferenced formal parameter
 #endif
+#include <ebml/EbmlFloat.h>
 #include <ebml/EbmlHead.h>
+#include <ebml/EbmlMaster.h>
 #include <ebml/EbmlSubHead.h>
 #include <ebml/EbmlVoid.h>
 #include <ebml/IOCallback.h>
-#include <matroska/KaxBlockData.h>
+#include <ebml/c/libebml_t.h>
+#include <matroska/KaxBlock.h>
 #include <matroska/KaxCluster.h>
 #include <matroska/KaxCues.h>
 #include <matroska/KaxCuesData.h>
-#include <matroska/KaxInfo.h>
 #include <matroska/KaxSeekHead.h>
 #include <matroska/KaxSegment.h>
 #include <matroska/KaxSemantic.h>
-#include <matroska/KaxTrackAudio.h>
-#include <matroska/KaxTrackVideo.h>
 #include <matroska/KaxTracks.h>
+#include <matroska/KaxTypes.h>
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif

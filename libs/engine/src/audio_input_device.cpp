@@ -1,6 +1,8 @@
+#include <cstddef>
 #include <exosnap/engine/audio_input_device.h>
 
 // clang-format off
+#include <string>
 #include <windows.h>
 
 #include <mmdeviceapi.h>

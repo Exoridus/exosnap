@@ -1,3 +1,5 @@
+#include "exosnap/engine/codec_types.h"
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include <exosnap/engine/audio_track_model.h>
@@ -10,7 +12,6 @@ namespace {
 
 using exosnap::engine::AudioCodec;
 using exosnap::engine::AudioSourceKind;
-using exosnap::engine::AudioTrackPlan;
 using exosnap::engine::EncodedAudioPacket;
 using exosnap::engine::MicChannelMode;
 using exosnap::engine::RecorderConfig;

@@ -12,128 +12,29 @@
 #include <exosnap/engine/session_stats.h>
 #include <exosnap/engine/webcam_placement.h>
 
+#include "mux_queue.h"
 #include "pipeline_diagnostics_aggregator.h"
+#include "premux_state.h"
 #include "qpc_100ns.h"
+#include "session_failure.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
-#include <variant>
+#include <utility>
 #include <vector>
 
 #include <windows.h>
 
 namespace exosnap::engine {
-
-// ---------------------------------------------------------------------------
-// Mux queue item types
-// ---------------------------------------------------------------------------
-
-struct VideoEosSentinel {};
-struct AudioEosSentinel {
-    uint32_t track_id = 0;
-};
-
-// Marks a segment boundary in the mux queue. Enqueued by VideoThread immediately
-// BEFORE the first packet of the new segment (the forced keyframe), so the mux
-// thread finalizes the current container and opens the next one in stream order.
-// new_segment_index is the 0-based index of the segment that begins after this
-// boundary; trigger records why for logging only.
-struct SplitSentinel {
-    uint32_t new_segment_index = 0;
-    SplitTriggerSource trigger = SplitTriggerSource::ManualButton;
-};
-
-struct MuxItem {
-    // Discriminated union: encoded packet or EOS/split sentinel
-    std::variant<EncodedVideoPacket, EncodedAudioPacket, VideoEosSentinel, AudioEosSentinel, SplitSentinel> payload;
-};
-
-// ---------------------------------------------------------------------------
-// Codec private data (shared between threads via SessionState)
-// ---------------------------------------------------------------------------
-
-struct AudioCodecPrivateSlot {
-    std::vector<uint8_t> bytes;
-    uint32_t codec_delay_samples = 0; // IAudioEncoder::CodecDelaySamples
-};
-
-struct CodecPrivateData {
-    // AV1: AV1CodecConfigurationRecord (4 fixed bytes + the Sequence Header OBU
-    // as configOBUs), as Matroska's V_AV1 mapping defines CodecPrivate.
-    std::vector<uint8_t> av1_codec_private;
-    bool av1_ready = false;
-
-    // H264: SPS+PPS in Annex-B (for MF_MT_MPEG_SEQUENCE_HEADER in IMFSinkWriter)
-    std::vector<uint8_t> h264_sps_pps;
-    bool h264_ready = false;
-
-    // HEVC: VPS+SPS+PPS in Annex-B (for hvcC construction in MuxThread)
-    std::vector<uint8_t> hevc_vps_sps_pps;
-    bool hevc_ready = false;
-
-    static constexpr uint32_t kMaxAudioTracks = 3;
-
-    std::array<AudioCodecPrivateSlot, kMaxAudioTracks> audio_codec_private{};
-    std::array<bool, kMaxAudioTracks> audio_track_ready{};
-
-    [[nodiscard]] bool VideoReady(VideoCodec codec) const noexcept {
-        if (codec == VideoCodec::H264)
-            return h264_ready;
-        if (codec == VideoCodec::Hevc)
-            return hevc_ready;
-        return av1_ready;
-    }
-
-    [[nodiscard]] bool AudioAllReady(uint32_t track_count) const {
-        if (track_count == 0) {
-            return true;
-        }
-        if (track_count > kMaxAudioTracks) {
-            return false;
-        }
-
-        for (uint32_t i = 0; i < track_count; ++i) {
-            if (!audio_track_ready[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-};
-
-// ---------------------------------------------------------------------------
-// First-error-wins failure recorder
-// ---------------------------------------------------------------------------
-
-struct SessionFailure {
-    int32_t error_code = 0; // HRESULT on Windows; 0 == success
-    ErrorPhase error_phase = ErrorPhase::None;
-    std::string error_detail;
-};
-
-// How a producer's wait for mux-queue room ended.
-enum class MuxQueueWait {
-    Ready,    // Room is available; push the packet.
-    Stopping, // The wait ran out while the session was stopping: no room appeared
-              // and this packet is not written. Not a backpressure diagnosis --
-              // a mux that stopped consuming is what the shutdown policy reports.
-    Failed,   // Someone already recorded a cause; do not add a second one.
-    TimedOut, // Real backpressure: the destination cannot keep up.
-};
-
-// ---------------------------------------------------------------------------
-// SessionState — central shared state passed to worker threads
-// ---------------------------------------------------------------------------
 
 enum class OutputIoOperation;
 
@@ -286,126 +187,14 @@ struct SessionState {
     std::mutex snapshot_callback_mutex;
     std::function<void(bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string)> snapshot_callback;
 
-    // First-error-wins: only the first failing thread records here
-    mutable std::mutex failure_mutex;
-    bool failure_recorded = false;
-    SessionFailure failure;
+    PremuxState premux;
 
-    // Pre-mux buffering queues: video and audio are buffered here until
-    // codec-private data from the video track and all expected audio tracks
-    // is available and Matroska tracks can be initialized.
-    //
-    // Limits:
-    //   video_premux limit: 120 packets
-    //   audio_premux limit: 600 packets
-    //
-    // Overflow causes an ErrorPhase::Mux failure.
+    MuxQueue mux_queue;
 
-    static constexpr size_t kVideoPremuxLimit = 120;
-    static constexpr size_t kAudioPremuxLimit = 600;
-
-    std::mutex premux_mutex;
-    std::condition_variable premux_cv;
-
-    std::deque<EncodedVideoPacket> video_premux;
-    std::deque<EncodedAudioPacket> audio_premux;
-
-    // Codec private ready flags (signal from video/audio thread to mux thread)
-    CodecPrivateData codec_private;
-
-    // Mux queue (post-premux phase): after tracks are initialized, encoded
-    // packets are pushed here directly.
-    //
-    // The queue is bounded in steady state (mirror of the premux limits): when
-    // the writer's destination volume cannot keep up (slow NAS, AV scan, low
-    // disk), an unbounded queue grows until OOM with no diagnosis. Producers
-    // block briefly when the queue is full (WaitForMuxQueueSpace) and record an
-    // ErrorPhase::Mux failure if no room appears within the timeout — packets
-    // are never silently dropped. EOS/split sentinels bypass the bound: they
-    // are tiny and shutdown depends on their delivery.
-    static constexpr size_t kMuxQueuePacketLimit = 2048;
-    static constexpr size_t kMuxQueueByteLimit = 256ull * 1024 * 1024;
-    static constexpr unsigned kMuxQueueFullTimeoutMs = 10000;
-
-    // Effective bounds; production leaves the defaults. Tests shrink them to
-    // exercise the overflow path deterministically. Set before Record().
-    size_t mux_queue_packet_limit = kMuxQueuePacketLimit;
-    size_t mux_queue_byte_limit = kMuxQueueByteLimit;
-    unsigned mux_queue_full_timeout_ms = kMuxQueueFullTimeoutMs;
-
-    std::mutex mux_mutex;
-    std::condition_variable mux_cv;       // signals the consumer: items available
-    std::condition_variable mux_space_cv; // signals producers: room freed (or failure)
-    std::deque<MuxItem> mux_queue;
-    size_t mux_queue_bytes = 0; // payload bytes queued; guarded by mux_mutex
-
-    // Payload size of a queued item (sentinels count as 0).
-    [[nodiscard]] static size_t MuxItemPayloadBytes(const MuxItem& item) noexcept {
-        if (const auto* v = std::get_if<EncodedVideoPacket>(&item.payload)) {
-            return v->bytes.size();
-        }
-        if (const auto* a = std::get_if<EncodedAudioPacket>(&item.payload)) {
-            return a->bytes.size();
-        }
-        return 0;
-    }
-
-    // Enqueue one item and wake the consumer. Requires mux_mutex to be held.
-    // Does NOT wait for room — payload producers call WaitForMuxQueueSpace
-    // first; sentinel pushes use this directly (they bypass the bound).
-    void PushMuxItemLocked(MuxItem&& item) {
-        mux_queue_bytes += MuxItemPayloadBytes(item);
-        mux_queue.push_back(std::move(item));
-        mux_cv.notify_one();
-    }
-
-    // Dequeue-side accounting: call with mux_mutex held, passing the item just
-    // popped, so blocked producers wake as room frees up.
-    void OnMuxItemPopped(const MuxItem& item) {
-        const size_t bytes = MuxItemPayloadBytes(item);
-        mux_queue_bytes -= (bytes <= mux_queue_bytes) ? bytes : mux_queue_bytes;
-        mux_space_cv.notify_all();
-    }
-
-    // Block (bounded) until the mux queue has room for one more payload packet.
-    // lk must own mux_mutex.
-    //
-    // Stopping is reported separately from TimedOut because a stop is not a
-    // backpressure fault. A queue that is full when the user stops (slow NAS, AV
-    // scan) stays full: the consumer is draining, not accepting. Collapsing that
-    // into the timeout meant the producer sat here for the full ten seconds and
-    // then recorded "the output destination cannot keep up" for what was an
-    // ordinary stop -- and ten seconds is also the producers' join budget, so the
-    // same stop could instead be reported as a worker hang.
-    [[nodiscard]] MuxQueueWait WaitForMuxQueueSpace(std::unique_lock<std::mutex>& lk) {
-        const auto full = [&] {
-            return mux_queue.size() >= mux_queue_packet_limit || mux_queue_bytes >= mux_queue_byte_limit;
-        };
-        if (!full()) {
-            return MuxQueueWait::Ready;
-        }
-        const auto started = std::chrono::steady_clock::now();
-        const auto finish = [&](MuxQueueWait result) {
-            const auto now = std::chrono::steady_clock::now();
-            diagnostics.OnMuxProducerWait(now, std::chrono::duration<double, std::milli>(now - started).count());
-            return result;
-        };
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(mux_queue_full_timeout_ms);
-        while (full()) {
-            if (HasFailure()) {
-                return finish(MuxQueueWait::Failed); // teardown in progress — never deadlock a producer on the bound
-            }
-            if (mux_space_cv.wait_until(lk, deadline) == std::cv_status::timeout) {
-                if (!full()) {
-                    return finish(MuxQueueWait::Ready);
-                }
-                if (HasFailure()) {
-                    return finish(MuxQueueWait::Failed);
-                }
-                return finish(stop_requested.load() ? MuxQueueWait::Stopping : MuxQueueWait::TimedOut);
-            }
-        }
-        return finish(MuxQueueWait::Ready);
+    [[nodiscard]] MuxQueueWait PushMuxItem(MuxItem item, std::optional<SplitSentinel> split = std::nullopt) {
+        return mux_queue.Push(
+            std::move(item), [this] { return HasFailure(); }, [this] { return stop_requested.load(); },
+            [this](auto now, double duration_ms) { diagnostics.OnMuxProducerWait(now, duration_ms); }, split);
     }
 
     // Live stats (written by worker threads, read by stats timer)
@@ -612,22 +401,9 @@ struct SessionState {
             snapshot_requested.store(false);
             snapshot_callback = nullptr;
         }
-        {
-            std::lock_guard lk(failure_mutex);
-            failure_recorded = false;
-            failure = {};
-        }
-        {
-            std::lock_guard lk(premux_mutex);
-            video_premux.clear();
-            audio_premux.clear();
-            codec_private = {};
-        }
-        {
-            std::lock_guard lk(mux_mutex);
-            mux_queue.clear();
-            mux_queue_bytes = 0;
-        }
+        failure_state_.Reset();
+        premux.Reset();
+        mux_queue.Reset();
         {
             std::lock_guard lk(stats_mutex);
             stats = {};
@@ -653,31 +429,27 @@ struct SessionState {
         NoteCaptureEnded();
         stop_requested.store(true);
         SignalStopEvent();
-        premux_cv.notify_all();
-        mux_cv.notify_all();
-        mux_space_cv.notify_all(); // wake producers blocked on the queue bound
+        premux.NotifyStop();
+        mux_queue.NotifyStop();
     }
 
     // Record first failure; triggers stop_requested.
     // hr: platform error code (HRESULT on Windows); 0 == success.
     void RecordFailure(int32_t hr, ErrorPhase phase, const std::string& detail) {
-        {
-            std::lock_guard lk(failure_mutex);
-            if (!failure_recorded) {
-                failure_recorded = true;
-                failure.error_code = hr;
-                failure.error_phase = phase;
-                failure.error_detail = detail;
-            }
-        }
+        failure_state_.RecordFirst({hr, phase, detail});
         RequestCleanStop();
     }
 
     bool HasFailure() const {
-        // Relaxed: failure_recorded is only read after stop_requested is checked
-        std::lock_guard lk(failure_mutex);
-        return failure_recorded;
+        return failure_state_.HasFailure();
     }
+
+    [[nodiscard]] std::optional<SessionFailure> FailureSnapshot() const {
+        return failure_state_.Snapshot();
+    }
+
+  private:
+    SessionFailureState failure_state_;
 };
 
 } // namespace exosnap::engine

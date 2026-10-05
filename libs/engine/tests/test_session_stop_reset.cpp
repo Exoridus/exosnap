@@ -1,8 +1,19 @@
+#include <cstdint>
 #include <gtest/gtest.h>
 
+#include <barrier>
 #include <chrono>
+#include <future>
 #include <thread>
+#include <utility>
 
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/error_types.h"
+#include "exosnap/engine/packet_types.h"
+#include "exosnap/engine/recorder_session.h"
+#include "mux_queue.h"
+#include "premux_state.h"
+#include "session_internal.h"
 #include "session_stop_reset.h"
 #include "split_sentinel_policy.h"
 
@@ -323,4 +334,69 @@ TEST(ResetForNewRecording, ClearsTheCallerStopMark) {
     state.ResetForNewRecording();
 
     EXPECT_FALSE(state.caller_stop_requested.load());
+}
+
+TEST(RequestCleanStop, WakesPremuxAndFailureWakesBoundedMuxProducer) {
+    using namespace std::chrono_literals;
+    SessionState state;
+    state.mux_queue.Configure({1, 1024, 2s});
+    exosnap::engine::EncodedAudioPacket packet;
+    packet.bytes = {1};
+    ASSERT_EQ(state.PushMuxItem({packet}), exosnap::engine::MuxQueueWait::Ready);
+    auto producer = std::async(std::launch::async, [&] { return state.PushMuxItem({packet}); });
+    auto mux = std::async(std::launch::async, [&] {
+        return state.premux.WaitReady(exosnap::engine::VideoCodec::Av1, 1, [&] { return state.stop_requested.load(); });
+    });
+    EXPECT_TRUE(state.mux_queue.WaitForBlockedProducer(1s));
+    EXPECT_TRUE(state.premux.WaitForWaiter(1s));
+    state.RequestCleanStop();
+    EXPECT_FALSE(mux.get());
+    EXPECT_EQ(producer.wait_for(0ms), std::future_status::timeout);
+    const auto capture_end = state.capture_end_ns.load();
+    state.RecordFailure(1, exosnap::engine::ErrorPhase::Mux, "blocked writer");
+    EXPECT_EQ(producer.wait_for(1s), std::future_status::ready);
+    EXPECT_EQ(producer.get(), exosnap::engine::MuxQueueWait::Failed);
+    EXPECT_EQ(state.capture_end_ns.load(), capture_end);
+    EXPECT_EQ(WaitForSingleObject(state.stop_event, 0), WAIT_OBJECT_0);
+}
+
+TEST(RequestCleanStop, ConcurrentStopAndFailurePreserveAllStopEffects) {
+    SessionState state;
+    std::barrier start(3);
+    std::thread clean_stop([&] {
+        start.arrive_and_wait();
+        state.RequestCleanStop();
+    });
+    std::thread failure([&] {
+        start.arrive_and_wait();
+        state.RecordFailure(7, exosnap::engine::ErrorPhase::Mux, "first failure");
+    });
+    start.arrive_and_wait();
+    clean_stop.join();
+    failure.join();
+    EXPECT_TRUE(state.stop_requested.load());
+    EXPECT_NE(state.capture_end_ns.load(), 0);
+    EXPECT_EQ(WaitForSingleObject(state.stop_event, 0), WAIT_OBJECT_0);
+    const auto capture_end = state.capture_end_ns.load();
+    state.RecordFailure(8, exosnap::engine::ErrorPhase::Shutdown, "later failure");
+    ASSERT_TRUE(state.FailureSnapshot());
+    EXPECT_EQ(state.FailureSnapshot()->error_code, 7);
+    EXPECT_EQ(state.capture_end_ns.load(), capture_end);
+}
+
+TEST(SessionStateReuse, ResetsQueueAccountingPremuxReadinessAndFailureTogether) {
+    SessionState state;
+    exosnap::engine::EncodedVideoPacket packet;
+    packet.bytes = {1, 2, 3};
+    ASSERT_EQ(state.premux.Route(packet, exosnap::engine::VideoCodec::Av1, 0), exosnap::engine::PremuxRoute::Buffered);
+    state.premux.PublishVideo(exosnap::engine::VideoCodec::Av1, {4});
+    packet.bytes = {5, 6};
+    ASSERT_EQ(state.PushMuxItem({std::move(packet)}), exosnap::engine::MuxQueueWait::Ready);
+    state.RecordFailure(1, exosnap::engine::ErrorPhase::Mux, "previous session");
+    state.ResetForNewRecording();
+    EXPECT_EQ(state.mux_queue.Size(), 0u);
+    EXPECT_EQ(state.mux_queue.Bytes(), 0u);
+    EXPECT_TRUE(state.premux.PendingSnapshot().video.empty());
+    EXPECT_FALSE(state.premux.CodecSnapshot().VideoReady(exosnap::engine::VideoCodec::Av1));
+    EXPECT_FALSE(state.HasFailure());
 }

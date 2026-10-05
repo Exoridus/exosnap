@@ -4,6 +4,7 @@
 // already-PQ R10G10B10A2 native sub-path, and only a native HDR10 (FP16 scRGB)
 // session needs a preview-side tone-map.
 
+#include "exosnap/engine/device_generation.h"
 #include <exosnap/engine/preview_tap.h>
 
 #include <gtest/gtest.h>

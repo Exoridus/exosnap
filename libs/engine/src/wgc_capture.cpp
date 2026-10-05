@@ -1,7 +1,14 @@
 #include "wgc_capture.h"
+#include "exosnap/engine/recorder_session.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <dwmapi.h>
+#include <string>
+#include <utility>
+#include <vector>
 #include <windows.h>
+#include <winrt/base.h>
 
 namespace exosnap::engine {
 

@@ -1,5 +1,13 @@
+#include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/pipeline_diagnostics.h"
+#include "exosnap/engine/recorder_session.h"
+#include "exosnap/engine/session_stats.h"
+#include "exosnap/engine/split_trigger_source.h"
+#include "perf_histogram.h"
 #include "pipeline_diagnostics_aggregator.h"
 
 #include <chrono>

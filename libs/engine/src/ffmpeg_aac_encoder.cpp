@@ -1,13 +1,24 @@
 #include "ffmpeg_aac_encoder.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/packet_types.h"
 
+#include <cerrno>
+#include <cstddef>
+#include <cstdint>
 #include <exosnap/engine/logging/logging.h>
+#include <utility>
+#include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/codec.h>
+#include <libavcodec/codec_id.h>
+#include <libavcodec/packet.h>
 #include <libavutil/audio_fifo.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/error.h>
-#include <libavutil/opt.h>
+#include <libavutil/frame.h>
+#include <libavutil/mem.h>
 #include <libavutil/samplefmt.h>
 #include <libswresample/swresample.h>
 }

@@ -19,6 +19,7 @@
 //   - Threading: an instance is single-thread, owned by the thread that owns the
 //     context (VideoThread). It does not own the device/context.
 
+#include <cstddef>
 #include <exosnap/engine/gpu_timestamp_math.h>
 
 #include <d3d11.h>

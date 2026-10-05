@@ -12,7 +12,7 @@
 //! would have been resting on silence.
 //!
 //! So each blocking check owns a canary under
-//! `scripts/tests/fixtures/lint-canaries`: a few lines written to violate
+//! `tools/exo-dev/tests/fixtures/lint-canaries`: a few lines written to violate
 //! exactly that check and nothing else. A check that does not reject its own
 //! canary is not working here, however clean the tree looks, and this fails.
 //! This is the positive half of the contract; the zero-findings pass says the
@@ -27,27 +27,90 @@ use crate::executor::ToolMissing;
 
 /// The blocking clang-tidy checks: a check here fails a build only after a
 /// full pass reports zero findings in repository-owned files (see
-/// `docs/dev/static-analysis.md`). The single source of the six names; a
+/// `docs/dev/static-analysis.md`). The single source of the rule metadata; a
 /// caller that needs to enforce or configure them imports this rather than
 /// keeping its own copy.
-pub const BLOCKING_CHECKS: &[&str] = &[
-    "bugprone-use-after-move",
-    "bugprone-dangling-handle",
-    "readability-misleading-indentation",
-    "clang-analyzer-core.CallAndMessage",
-    "clang-analyzer-core.uninitialized.*",
-    "clang-analyzer-cplusplus.NewDelete*",
-];
+pub struct BlockingRule {
+    pub check: &'static str,
+    pub canary: &'static str,
+    pub directories: &'static [&'static str],
+}
 
-/// The canary file for `BLOCKING_CHECKS[i]`, by position.
-const CANARY_FILES: &[&str] = &[
-    "bugprone-use-after-move.cpp",
-    "bugprone-dangling-handle.cpp",
-    "readability-misleading-indentation.cpp",
-    "clang-analyzer-core.CallAndMessage.cpp",
-    "clang-analyzer-core.uninitialized.cpp",
-    "clang-analyzer-cplusplus.NewDelete.cpp",
-];
+impl BlockingRule {
+    pub fn applies_to(&self, file: &str) -> bool {
+        let file = file.to_ascii_lowercase();
+        self.directories.is_empty()
+            || self
+                .directories
+                .iter()
+                .any(|directory| file.starts_with(directory))
+    }
+}
+
+macro_rules! blocking_rules {
+    ($(($check:literal, $canary:literal, $directories:expr)),* $(,)?) => {
+        pub const BLOCKING_RULES: &[BlockingRule] = &[
+            $(BlockingRule { check: $check, canary: $canary, directories: $directories }),*
+        ];
+        pub const BLOCKING_CHECKS: &[&str] = &[$($check),*];
+        #[cfg(test)]
+        const CANARY_FILES: &[&str] = &[$($canary),*];
+    };
+}
+
+blocking_rules!(
+    (
+        "misc-unused-using-decls",
+        "misc-unused-using-decls.cpp",
+        &[]
+    ),
+    (
+        "misc-include-cleaner",
+        "misc-include-cleaner.cpp",
+        &["libs/engine/", "libs/capability/", "libs/update/"]
+    ),
+    ("misc-unused-parameters", "misc-unused-parameters.cpp", &[]),
+    (
+        "misc-unused-alias-decls",
+        "misc-unused-alias-decls.cpp",
+        &[]
+    ),
+    (
+        "readability-redundant-declaration",
+        "readability-redundant-declaration.cpp",
+        &[]
+    ),
+    (
+        "bugprone-use-after-move",
+        "bugprone-use-after-move.cpp",
+        &[]
+    ),
+    (
+        "bugprone-dangling-handle",
+        "bugprone-dangling-handle.cpp",
+        &[]
+    ),
+    (
+        "readability-misleading-indentation",
+        "readability-misleading-indentation.cpp",
+        &[]
+    ),
+    (
+        "clang-analyzer-core.CallAndMessage",
+        "clang-analyzer-core.CallAndMessage.cpp",
+        &[]
+    ),
+    (
+        "clang-analyzer-core.uninitialized.*",
+        "clang-analyzer-core.uninitialized.cpp",
+        &[]
+    ),
+    (
+        "clang-analyzer-cplusplus.NewDelete*",
+        "clang-analyzer-cplusplus.NewDelete.cpp",
+        &[]
+    ),
+);
 
 #[derive(Debug)]
 pub struct CanaryFinding {
@@ -68,7 +131,7 @@ impl CanaryReport {
 }
 
 /// Runs clang-tidy against the one canary fixture per check under
-/// `scripts/tests/fixtures/lint-canaries`, restricted to `only` when
+/// `tools/exo-dev/tests/fixtures/lint-canaries`, restricted to `only` when
 /// non-empty (every check otherwise). `clang_tidy` overrides autodetection,
 /// which searches PATH only, matching `Get-Command clang-tidy` in the ported
 /// script: unlike clang-format's VS-LLVM/standalone-LLVM/PATH search, the
@@ -87,7 +150,7 @@ pub fn run_canaries(
     let Some(resolved) = resolved else {
         return Err(ToolMissing("check-lint-canaries: clang-tidy was not found.".into()).into());
     };
-    let canary_dir = repo_root.join("scripts/tests/fixtures/lint-canaries");
+    let canary_dir = repo_root.join("tools/exo-dev/tests/fixtures/lint-canaries");
     run(&canary_dir, only, |check, path| {
         invoke(&resolved, check, path)
     })
@@ -113,8 +176,18 @@ fn run(
 ) -> anyhow::Result<CanaryReport> {
     let mut checked = 0;
     let mut failures = Vec::new();
+    for wanted in only {
+        anyhow::ensure!(
+            BLOCKING_CHECKS.contains(&wanted.as_str()),
+            "unknown blocking canary: {wanted}"
+        );
+    }
+    let diagnostic = regex::Regex::new(r"^.+:\d+:\d+: (?:warning|error): .*\[([^\]]+)\]$")
+        .expect("clang-tidy diagnostic");
 
-    for (check, file) in BLOCKING_CHECKS.iter().zip(CANARY_FILES.iter()) {
+    for rule in BLOCKING_RULES {
+        let check = rule.check;
+        let file = rule.canary;
         if !only.is_empty() && !only.iter().any(|wanted| wanted == check) {
             continue;
         }
@@ -130,11 +203,21 @@ fn run(
 
         checked += 1;
         let output = invoke(check, &path)?;
-        // A canary that tripped some other check would answer a different
-        // question, so this looks for the exact check name (its wildcard
-        // suffix stripped) in the output rather than trusting a nonzero exit.
+        // Unknown-check warnings and echoed arguments are not findings.
         let needle = check.trim_end_matches('*');
-        if !output.contains(needle) {
+        let fired = output
+            .lines()
+            .filter_map(|line| diagnostic.captures(line.trim_end()))
+            .any(|record| {
+                record[1].split(',').any(|reported| {
+                    if check.ends_with('*') {
+                        reported.starts_with(needle)
+                    } else {
+                        reported == check
+                    }
+                })
+            });
+        if !fired {
             failures.push(CanaryFinding {
                 check: check.to_string(),
                 detail: "did not fire on its own canary. The check is not working here, so a \
@@ -216,6 +299,19 @@ mod tests {
     }
 
     #[test]
+    fn rule_scopes_match_whole_directories() {
+        let rule = BlockingRule {
+            check: "misc-include-cleaner",
+            canary: "include.cpp",
+            directories: &["libs/engine/"],
+        };
+        assert!(rule.applies_to("libs/engine/src/session.cpp"));
+        assert!(!rule.applies_to("libs/engine-extra/session.cpp"));
+        assert!(!rule.applies_to("app/session.cpp"));
+        assert!(BLOCKING_RULES[0].applies_to("app/session.cpp"));
+    }
+
+    #[test]
     fn a_missing_canary_file_is_a_failure_not_a_skip() {
         let dir = tempfile::tempdir().unwrap();
         let report = run(dir.path(), &[], |_check, _path| Ok(String::new())).unwrap();
@@ -235,11 +331,24 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_check_warning_does_not_prove_a_canary_fired() {
+        let dir = tempfile::tempdir().unwrap();
+        write_canary_files(dir.path());
+        let report = run(dir.path(), &[], |check, _| {
+            Ok(format!("warning: unknown check name '{check}'"))
+        })
+        .unwrap();
+        assert_eq!(report.failures.len(), BLOCKING_CHECKS.len());
+    }
+
+    #[test]
     fn a_canary_whose_output_mentions_the_check_passes() {
         let dir = tempfile::tempdir().unwrap();
         write_canary_files(dir.path());
         let report = run(dir.path(), &[], |check, _path| {
-            Ok(format!("finding: {check}"))
+            Ok(format!(
+                "canary.cpp:1:1: warning: deliberate violation [{check}]"
+            ))
         })
         .unwrap();
         assert!(report.ok());
@@ -252,7 +361,10 @@ mod tests {
         write_canary_files(dir.path());
         let only = vec!["clang-analyzer-cplusplus.NewDelete*".to_string()];
         let report = run(dir.path(), &only, |_check, _path| {
-            Ok("clang-analyzer-cplusplus.NewDeleteLeaks: found a leak".to_string())
+            Ok(
+                "canary.cpp:1:1: warning: found a leak [clang-analyzer-cplusplus.NewDeleteLeaks]"
+                    .to_string(),
+            )
         })
         .unwrap();
         assert!(report.ok());
@@ -265,11 +377,22 @@ mod tests {
         write_canary_files(dir.path());
         let only = vec!["bugprone-dangling-handle".to_string()];
         let report = run(dir.path(), &only, |check, _path| {
-            Ok(format!("finding: {check}"))
+            Ok(format!(
+                "canary.cpp:1:1: warning: deliberate violation [{check}]"
+            ))
         })
         .unwrap();
         assert_eq!(report.checked, 1);
         assert!(report.ok());
+    }
+
+    #[test]
+    fn an_unknown_requested_check_is_not_an_empty_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = run(dir.path(), &["misspelled-check".into()], |_, _| {
+            Ok(String::new())
+        });
+        assert!(result.is_err());
     }
 
     #[test]
@@ -318,6 +441,48 @@ mod tests {
                 "{check} is missing from .clang-tidy's Checks: line"
             );
         }
+    }
+
+    #[test]
+    #[ignore = "requires a real clang-tidy on PATH"]
+    fn configured_header_filter_reports_repository_headers() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let dir = tempfile::tempdir().unwrap();
+        let header_dir = dir.path().join("libs/engine");
+        std::fs::create_dir_all(&header_dir).unwrap();
+        std::fs::write(
+            header_dir.join("probe.h"),
+            "inline int value(int unused) { return 1; }\n",
+        )
+        .unwrap();
+        let source = header_dir.join("probe.cpp");
+        std::fs::write(
+            &source,
+            "#include \"probe.h\"\nint main() { return value(1); }\n",
+        )
+        .unwrap();
+        let tool = autodetect_clang_tidy(&std::env::var_os("PATH").unwrap_or_default())
+            .expect("clang-tidy on PATH");
+        let output = crate::process::command(&tool.to_string_lossy())
+            .arg(format!(
+                "--config-file={}",
+                repo_root.join(".clang-tidy").display()
+            ))
+            .args([
+                "--checks=-*,misc-unused-parameters",
+                "--warnings-as-errors=-*",
+            ])
+            .arg(source)
+            .args(["--", "-std=c++20"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let diagnostics = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            diagnostics.contains("probe.h:1:22: warning:"),
+            "{diagnostics}"
+        );
+        assert!(diagnostics.contains("[misc-unused-parameters]"));
     }
 
     #[test]

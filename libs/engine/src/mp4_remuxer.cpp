@@ -14,12 +14,25 @@
 // Note: _CRT_SECURE_NO_WARNINGS is propagated from the FFmpeg::mux IMPORTED
 // target's INTERFACE_COMPILE_DEFINITIONS — do not redefine it here.
 
+#include <cerrno>
+#include <cstdint>
+#include <ratio>
+#include <system_error>
+#include <utility>
 extern "C" {
-#include <libavcodec/avcodec.h>
+#include <libavcodec/codec_id.h>
+#include <libavcodec/codec_par.h>
+#include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
+#include <libavformat/avio.h>
 #include <libavutil/avutil.h>
+#include <libavutil/dict.h>
+#include <libavutil/error.h>
+#include <libavutil/log.h>
+#include <libavutil/macros.h>
 #include <libavutil/mathematics.h>
-#include <libavutil/opt.h>
+#include <libavutil/pixfmt.h>
+#include <libavutil/rational.h>
 }
 
 // MSVC + C++: override av_err2str to avoid C99 compound literal

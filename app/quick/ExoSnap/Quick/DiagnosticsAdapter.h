@@ -203,6 +203,9 @@ class DiagnosticsAdapter : public QObject {
     // answer arriving.
     void setInDepthEnabled(bool enabled);
     void applyLiveDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
+    [[nodiscard]] const exosnap::engine::RecordingDiagnosticsSnapshot& liveSnapshot() const noexcept {
+        return controller_.liveSnapshot();
+    }
     // The frozen ledger of the recording that just ended, for the session report.
     [[nodiscard]] std::vector<diagnostics::LedgerEntry> frozenLedger() const;
     [[nodiscard]] const std::vector<diagnostics::LedgerEntry>& compensatedConditions() const noexcept {

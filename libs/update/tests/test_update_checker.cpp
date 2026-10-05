@@ -2,8 +2,11 @@
 // CheckForUpdate's result assembly (offer decision, gap notes, all-channel notes).
 
 #include <gtest/gtest.h>
+
+#include <optional>
 #include <update/release_locator.h>
 #include <update/update_checker.h>
+#include <update/update_types.h>
 
 using namespace exosnap::update;
 

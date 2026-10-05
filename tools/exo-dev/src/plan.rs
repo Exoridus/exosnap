@@ -123,11 +123,6 @@ pub fn build(input: &PlanInput) -> Plan {
                 StepId::CommitPolicy if profile.ci => {
                     skip_unless(&mut check, pull_request, "not a pull request");
                 }
-                StepId::ScriptTests => skip_unless(
-                    &mut check,
-                    want(scope.requires_script_tests),
-                    "no script under scripts/ changed",
-                ),
                 StepId::Rust => skip_unless(
                     &mut check,
                     want(scope.requires_rust),
@@ -272,7 +267,6 @@ pub(crate) mod tests {
         StepId::CommitPolicy,
         StepId::Format,
         StepId::NetworkEgress,
-        StepId::ScriptTests,
         StepId::Rust,
         StepId::Configure,
         StepId::QmlLint,
@@ -400,7 +394,7 @@ pub(crate) mod tests {
             &["app/quick/ExoSnap/Quick/RecordPage.qml"][..],
             &["libs/engine/include/exosnap/engine/session.h"][..],
             &["CMakeLists.txt"][..],
-            &["scripts/tests/vm-recipe.tests.ps1"][..],
+            &["tools/exo-verify/src/disposable/hyperv/recipe.rs"][..],
             &[".github/workflows/ci.yml"][..],
             &[][..],
         ] {

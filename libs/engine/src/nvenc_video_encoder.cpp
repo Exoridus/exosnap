@@ -1,5 +1,11 @@
 #include "nvenc_video_encoder.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/interfaces/IVideoEncoder.h"
+#include "exosnap/engine/packet_types.h"
+#include <cstdint>
 #include <d3d11.h>
+#include <string>
+#include <vector>
 
 namespace exosnap::engine {
 

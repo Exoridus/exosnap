@@ -1,6 +1,8 @@
+#include <cstdint>
 #include <exosnap/engine/audio_track_model.h>
 
-#include <algorithm>
+#include <string>
+#include <vector>
 
 namespace exosnap::engine {
 

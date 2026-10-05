@@ -1,5 +1,9 @@
 #include <capability/container_compat_registry.h>
 
+#include <array>
+#include <capability/config_types.h>
+#include <string_view>
+
 namespace exosnap::capability {
 
 // ---------------------------------------------------------------------------

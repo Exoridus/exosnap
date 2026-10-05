@@ -7,6 +7,7 @@
 // re-derive every byte.
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>

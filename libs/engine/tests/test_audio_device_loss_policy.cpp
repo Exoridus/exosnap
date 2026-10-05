@@ -6,6 +6,7 @@
 #include "audio_device_loss_policy.h"
 #include "process_identity.h"
 
+#include <chrono>
 #include <gtest/gtest.h>
 
 using namespace exosnap::engine;

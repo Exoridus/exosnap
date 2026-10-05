@@ -1,5 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <optional>
+#include <string>
+#include <update/update_types.h>
+#include <utility>
+
 #include "../src/install_mode_classify.h"
 
 using exosnap::update::ClassifyInstallMode;

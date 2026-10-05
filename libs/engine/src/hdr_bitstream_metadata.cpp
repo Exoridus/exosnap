@@ -1,7 +1,10 @@
 #include "exosnap/engine/hdr_bitstream_metadata.h"
+#include "exosnap/engine/color_metadata.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <vector>
 
 namespace exosnap::engine::hdr_meta {
 

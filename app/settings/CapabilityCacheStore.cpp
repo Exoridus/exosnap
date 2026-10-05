@@ -16,9 +16,6 @@ namespace {
 
 using capability::CapabilityCacheKey;
 using capability::DisplayHdrFacts;
-using capability::MfWebcamRuntimeFacts;
-using capability::NvidiaRuntimeFacts;
-using capability::OsRuntimeFacts;
 using capability::RuntimeCapabilitySnapshot;
 
 // int64_t (the packed adapter LUID) is round-tripped as a decimal string —

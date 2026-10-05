@@ -1,0 +1,96 @@
+{
+  "packages": [
+    {
+      "reason": "ExoSnap and its updater require the dynamic Visual C++ runtime",
+      "title": "Visual C++ 2015-2022 x64 runtime",
+      "version": "14.51.36247.0",
+      "kind": "winget",
+      "id": "vcredist",
+      "wingetId": "Microsoft.VCRedist.2015+.x64"
+    },
+    {
+      "reason": "the independent oracle for every recorded file",
+      "title": "FFmpeg tools (ffprobe)",
+      "version": "9.0.1",
+      "kind": "winget",
+      "id": "ffmpeg",
+      "wingetId": "Gyan.FFmpeg"
+    },
+    {
+      "title": "Intel PresentMon CLI",
+      "layout": "file",
+      "fileName": "PresentMon.exe",
+      "version": "2.5.1",
+      "kind": "download",
+      "sha256": "9bec3083069f58f911e6a512f4806db51a27bd096103087bc1d05ef54c80a191",
+      "id": "presentmon",
+      "reason": "the independent present-mode oracle; ExoSnap agreeing with itself is not evidence",
+      "urlTemplate": "https://github.com/GameTechDev/PresentMon/releases/download/v{version}/PresentMon-{version}-x64.exe"
+    },
+    {
+      "title": "NirSoft SoundVolumeView",
+      "layout": "zip",
+      "fileName": "SoundVolumeView.exe",
+      "version": "2.53",
+      "kind": "download",
+      "sha256": "ee2c45553fb9fb31b71db88b537c18e25c1a387a4a9009d081bdb38265c68e1f",
+      "id": "soundvolumeview",
+      "reason": "sets the default endpoint and its shared-mode format; its exit code is never the evidence",
+      "urlTemplate": "https://www.nirsoft.net/utils/soundvolumeview-x64.zip"
+    },
+    {
+      "reason": "a render endpoint nothing is routed to, and a device pnputil may disable",
+      "rebootRequired": true,
+      "title": "VB-CABLE virtual audio device",
+      "layout": "zip",
+      "version": "45",
+      "kind": "download",
+      "sha256": "b950e39f01af1d04ea623c8f6d8eb9b6ea5c477c637295fabf20631c85116bfb",
+      "id": "vbcable",
+      "installer": "VBCABLE_Setup_x64.exe",
+      "urlTemplate": "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack{version}.zip"
+    },
+    {
+      "hardwareId": "Root\\MttVDD",
+      "reason": "a monitor with a fixed mode list. A GPU-partitioned guest has no display output of its own, and Output Duplication needs one",
+      "title": "Virtual Display Driver (indirect display driver)",
+      "layout": "zip",
+      "signerSubject": "CN=SignPath Foundation, O=SignPath Foundation, L=Lewes, S=Delaware, C=US",
+      "version": "25.7.23",
+      "kind": "download",
+      "sha256": "e24210692b442b39af763536330ce78b423f19342b7a7792c26de3944e418b3a",
+      "id": "idd",
+      "signerThumbprint": "3CF8CF26D8BA266C3A483AB7D26D4A818E317D76",
+      "urlTemplate": "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/{version}/VirtualDisplayDriver-x86.Driver.Only.zip"
+    },
+    {
+      "title": "NefCon windowless device installer",
+      "layout": "zip",
+      "fileName": "nefconw.exe",
+      "version": "1.14.0",
+      "kind": "download",
+      "sha256": "a15557da24a9efca203158de3b43b0eaf982db231f0194031f1ed428bc13e669",
+      "id": "nefcon",
+      "reason": "creates the root-enumerated device node and binds the signed indirect display driver without UI",
+      "urlTemplate": "https://github.com/nefarius/nefcon/releases/download/v{version}/nefcon_v{version}.zip"
+    }
+  ],
+  "schema": 1,
+  "display": {
+    "configDirectory": "C:\\VirtualDisplayDriver",
+    "refreshRates": [
+      60,
+      144
+    ],
+    "height": 1440,
+    "hdr": false,
+    "width": 2560
+  },
+  "qualifiedDisplayProfile": "mtt",
+  "displayProfile": "mtt",
+  "paths": {
+    "staging": "C:\\ExoSnapProvision",
+    "tools": "C:\\ExoSnapTools",
+    "hostDriverStaging": "C:\\HostDriverStore"
+  }
+}

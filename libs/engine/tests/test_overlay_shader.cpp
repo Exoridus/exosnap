@@ -7,6 +7,7 @@
 // shared constants ever drifts from the key mathematics, this test fails, not a
 // user staring at a green fringe the recording does not have.
 
+#include <cstdint>
 #include <exosnap/engine/overlay_shader.h>
 
 #include <gtest/gtest.h>

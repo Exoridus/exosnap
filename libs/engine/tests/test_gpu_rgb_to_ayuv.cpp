@@ -9,10 +9,12 @@
 
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/color_metadata.h"
 #include "gpu_rgb_to_ayuv.h"
 #include "yuv_to_bgra.h"
 
 #include <d3d11.h>
+#include <string>
 #include <winrt/base.h>
 
 #include <cmath>

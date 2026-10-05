@@ -24,6 +24,10 @@ A settings gesture reaches `SettingsAdapter`, then the existing reconciliation a
 
 The preview is a separate consumer of GPU images, not the capture or encode clock. Idle preview uses capture hubs. Recording preview consumes the composited engine image. An unavailable or slow preview must not hold the recorder's producer or encoder resources indefinitely.
 
+`OverlayAdapter` owns overlay placement, visibility and recording state. `OverlayTelemetryAdapter` projects already-formatted values from the recording adapter and the authoritative Diagnostics pipeline verdict into one visible snapshot. Ordinary changed snapshots publish at least 200 ms apart, with a single-shot monotonic deadline only while different visible data is pending. Identical formatted values and hidden fields do not publish. Recording, visibility, source/content selection, pipeline warning and exposed audio-state changes bypass coalescing. Telemetry collection, session reports and the Diagnostics ledger retain their original cadence.
+
+The publication interval is a UI responsiveness and composition-efficiency policy, not a hardware safety threshold. It is independent of monitor refresh, target FPS, PresentMon and VBlank. Qt, DirectComposition and Windows schedule native presentation. The recording indicator is static; ordinary telemetry does not create a periodic render loop.
+
 Edit opens a recording as a temporary in-memory recipe. Playback decodes the media; export independently copies encoded streams. Closing the workspace releases playback resources but does not cancel an already-committed export. See [edit and export](edit-and-export.md).
 
 ## Startup and shutdown

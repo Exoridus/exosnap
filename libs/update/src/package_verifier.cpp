@@ -2,6 +2,12 @@
 
 #include <update/package_verifier.h>
 
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <ios>
+#include <update/update_types.h>
+
 #include "url_utils.h"
 
 // clang-format off
@@ -18,7 +24,6 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <vector>
 
 namespace exosnap::update {
 namespace {

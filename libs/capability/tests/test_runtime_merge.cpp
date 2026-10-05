@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <vector>
+
 #include <capability/capability_builder.h>
 #include <capability/capability_set.h>
 #include <capability/config_types.h>

@@ -500,7 +500,7 @@ fn a_working_tree_that_changes_during_the_run_invalidates_the_result() {
 #[test]
 fn a_source_that_cannot_be_identified_is_not_a_valid_run() {
     let not_a_repo = tempfile::tempdir().unwrap();
-    std::fs::write(not_a_repo.path().join(".qt-version"), "6.11.2\n").unwrap();
+    std::fs::write(not_a_repo.path().join(".qt-version"), "6.12.0\n").unwrap();
     let tree = labelled_tree();
     let outcome = run(&options(not_a_repo.path(), tree.path()));
     assert_eq!(outcome.code(), 4, "{}", outcome.output);
@@ -1020,7 +1020,7 @@ fn only_the_suite_gets_the_tool_executable() {
 #[test]
 fn the_canonical_qt_install_is_put_in_front_of_the_suite() {
     let qt = tempfile::tempdir().unwrap();
-    let root = qt.path().join("6.11.2").join("msvc2022_64");
+    let root = qt.path().join("6.12.0").join("msvc2022_64");
     std::fs::create_dir_all(root.join("bin")).unwrap();
     std::fs::create_dir_all(root.join("plugins")).unwrap();
     let mut host = RecordingHost::new();
@@ -1045,7 +1045,7 @@ fn a_missing_qt_install_is_a_warning_not_an_error() {
     assert!(
         outcome
             .output
-            .contains("Qt 6.11.2 was not found under the expected install root")
+            .contains("Qt 6.12.0 was not found under the expected install root")
     );
     assert_eq!(
         get(&env, "QT_PLUGIN_PATH").map(str::to_string),
@@ -1163,7 +1163,7 @@ fn the_process_environment_is_left_exactly_as_it_was() {
     ];
     let before: Vec<_> = watched.iter().map(std::env::var_os).collect();
     let qt = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(qt.path().join("6.11.2/msvc2022_64/plugins")).unwrap();
+    std::fs::create_dir_all(qt.path().join("6.12.0/msvc2022_64/plugins")).unwrap();
     let mut host = RecordingHost::new();
     host.vars
         .insert("EXOSNAP_QT_ROOT".into(), qt.path().as_os_str().to_owned());

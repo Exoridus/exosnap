@@ -1,5 +1,8 @@
 #include <capability/capability_cache_key.h>
 
+#include <capability/runtime_snapshot.h>
+#include <string_view>
+
 namespace exosnap::capability {
 
 CapabilityCacheKey BuildCapabilityCacheKey(const AdapterIdentity& identity, std::string_view app_version) {

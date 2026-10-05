@@ -1,7 +1,16 @@
 #include "mixed_audio_src.h"
 
+#include "brickwall_limiter.h"
 #include "discontinuity_gap.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
 #include "output_format_audio_src.h"
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <utility>
+#include <vector>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -82,8 +91,8 @@ void ConvertToFloat32Stereo(const uint8_t* src_bytes, uint32_t src_frames, uint3
 MixedAudioSrc::MixedAudioSrc(std::vector<std::unique_ptr<IAudioCaptureSource>> sources,
                              std::vector<float> source_gain_multipliers, bool limiter_enabled,
                              float limiter_ceiling_linear, std::function<uint64_t()> clock_now_ns)
-    : sources_(std::move(sources)), source_gain_multipliers_(std::move(source_gain_multipliers)),
-      clock_now_ns_(clock_now_ns ? std::move(clock_now_ns) : CaptureClockNs), limiter_enabled_(limiter_enabled),
+    : clock_now_ns_(clock_now_ns ? std::move(clock_now_ns) : CaptureClockNs), sources_(std::move(sources)),
+      source_gain_multipliers_(std::move(source_gain_multipliers)), limiter_enabled_(limiter_enabled),
       limiter_ceiling_linear_((limiter_ceiling_linear > 0.0f) ? limiter_ceiling_linear : 1.0f) {
     for (auto& source : sources_)
         source = std::make_unique<OutputFormatAudioSrc>(std::move(source), kOutputSampleRate, kOutputChannels);

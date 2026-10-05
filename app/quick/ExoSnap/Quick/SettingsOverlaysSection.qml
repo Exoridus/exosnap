@@ -115,7 +115,7 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Diagnostics overlay content")
-        hint: qsTr("Health shows only what can report a problem")
+        hint: qsTr("Health shows pipeline status, problem drops and audio state")
         stacked: root.stacked
         visible: root.settings.showDiagnosticsOverlay
         Layout.fillWidth: true
@@ -139,6 +139,12 @@ ExoCard {
         // Labels pair the overlay's own short token with what it means, so the
         // pill stays readable without the card having to invent a second
         // vocabulary for the same four values.
+        ElementToggle {
+            text: qsTr("health · pipeline status")
+            checked: root.settings.diagnosticsOverlayHealth
+            onToggledByUser: value => root.settings.setDiagnosticsOverlayElement("health", value)
+        }
+
         ElementToggle {
             text: qsTr("fps · capture rate")
             checked: root.settings.diagnosticsOverlayFps
@@ -164,7 +170,7 @@ ExoCard {
         }
 
         ElementToggle {
-            text: qsTr("Muted audio sources")
+            text: qsTr("Muted or degraded audio sources")
             checked: root.settings.diagnosticsOverlayMutedSources
             onToggledByUser: value => root.settings.setDiagnosticsOverlayElement("muted", value)
         }

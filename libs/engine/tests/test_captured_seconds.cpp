@@ -7,6 +7,7 @@
 
 #include "session_stats_collector.h"
 
+#include <chrono>
 #include <gtest/gtest.h>
 
 using exosnap::engine::CapturedSeconds;

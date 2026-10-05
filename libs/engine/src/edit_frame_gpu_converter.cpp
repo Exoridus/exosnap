@@ -1,11 +1,16 @@
+#include <cstdint>
 #include <exosnap/engine/edit_frame_gpu_converter.h>
 #include <exosnap/engine/gpu_surface_inventory.h>
 #include <exosnap/engine/performance_measurements.h>
 
+#include "exosnap/engine/color_metadata.h"
+#include "exosnap/engine/edit_player_engine.h"
 #include "measured_shader_compile.h"
 
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <winrt/base.h>
 
 namespace exosnap::engine {
 namespace {

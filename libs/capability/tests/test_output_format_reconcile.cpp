@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <capability/config_types.h>
+#include <capability/runtime_snapshot.h>
+#include <exosnap/engine/hdr_native.h>
+
 #include <capability/resolver.h>
 #include <capability/translation.h>
 

@@ -1,6 +1,7 @@
 // When a session re-reads the colour facts of the display it captures, and how
 // that answer changes once the OS is reporting the change itself. Pure, no COM.
 
+#include <chrono>
 #include <exosnap/engine/display_color_recheck.h>
 
 #include <gtest/gtest.h>

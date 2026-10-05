@@ -17,6 +17,7 @@ mod job;
 mod manifest;
 mod media;
 mod model;
+mod overlay_presentation;
 mod package;
 mod pattern;
 mod pe;
@@ -134,6 +135,10 @@ enum Command {
     Disposable(DisposableCommand),
     /// Show the deterministic verification stimulus window (used by GPU scenarios).
     Stimulus(stimulus::StimulusArgs),
+    /// Measure real overlay cadence and target presentation in isolated recordings.
+    OverlayPresentation(overlay_presentation::Args),
+    /// Diagnose repeated DISPLAY1 recording ownership without a presentation matrix.
+    DxgiLifecycle(overlay_presentation::LifecycleArgs),
     /// Serve a local HTTPS update feed (used by the update lane).
     #[command(hide = true)]
     Feed(feed::FeedArgs),
@@ -326,6 +331,15 @@ enum ManifestCommand {
 
 #[derive(Subcommand)]
 enum DisposableCommand {
+    /// Build, provision and seal a Hyper-V base image using the native guest agent.
+    #[cfg(windows)]
+    CreateBase(disposable::hyperv::recipe::CreateArgs),
+    /// Measure console, display and driver facts inside a disposable guest.
+    #[cfg(windows)]
+    GuestFacts,
+    /// Follow a running guest's log until its exit file appears, without changing it.
+    #[cfg(windows)]
+    Watch(disposable::hyperv::watch::Args),
     /// Show which disposable backends this host can use.
     Probe,
     /// Register the guest agent Hyper-V socket service on this host (elevated, once).
@@ -896,6 +910,21 @@ fn real_main() -> Result<ExitCode> {
             }
         }
         #[cfg(windows)]
+        Command::Disposable(DisposableCommand::CreateBase(args)) => {
+            disposable::hyperv::recipe::create(args)?;
+        }
+        #[cfg(windows)]
+        Command::Disposable(DisposableCommand::GuestFacts) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&disposable::hyperv::facts::measure()?)?
+            );
+        }
+        #[cfg(windows)]
+        Command::Disposable(DisposableCommand::Watch(args)) => {
+            return disposable::hyperv::watch::run(args);
+        }
+        #[cfg(windows)]
         Command::Disposable(DisposableCommand::RegisterHypervService) => {
             disposable::hyperv::register_service()?;
             println!("registered guest agent service {}", exo_guest::SERVICE_ID);
@@ -940,6 +969,8 @@ fn real_main() -> Result<ExitCode> {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Command::Stimulus(args) => stimulus::run(args)?,
+        Command::OverlayPresentation(args) => overlay_presentation::run(args)?,
+        Command::DxgiLifecycle(args) => overlay_presentation::run_lifecycle(args)?,
         Command::Feed(args) => feed::serve_forever(args)?,
         Command::Control(args) => return Ok(control_cli::run(&args)),
     }

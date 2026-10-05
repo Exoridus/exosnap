@@ -121,14 +121,11 @@ jobs:
   # violations, so the broad clang-tidy pass stays advisory in the
   # advisory-unused-checks job of .github/workflows/advisory-checks.yml.
   #
-  # A small curated clang-tidy subset DOES block, as the "clang-tidy blocking
-  # check set" step inside build-test: bugprone-use-after-move,
-  # bugprone-dangling-handle, clang-analyzer-core.CallAndMessage,
-  # clang-analyzer-core.uninitialized.*, clang-analyzer-cplusplus.NewDelete*.
-  # Each was measured at zero findings in repository-owned files across all
-  # 509 project translation units before it was promoted; see .clang-tidy for
-  # the candidates that did not qualify, and cargo exo-dev lint clang-tidy for
-  # the runner.
+  # Curated clang-tidy checks block in ci-build-debug. The canonical rules,
+  # positive canaries and path scopes live in tools/exo-dev/src/lint/canaries.rs.
+  # Each promotion requires a measured clean scope and a firing canary.
+  # See docs/dev/static-analysis.md for advisory boundaries and
+  # cargo exo-dev lint clang-tidy for the runner.
   #
   # cppcheck DOES run and block here: unlike clang-tidy it reads no compile
   # database (cargo exo-dev lint quality --only cppcheck), so its
@@ -145,28 +142,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      # exo-dev's own tool resolution (tools/exo-dev/src/lint/mod.rs) looks at
-      # PATH and the LLVM install roots, not Cppcheck's own install directory,
-      # so make sure a runner without it already on PATH gets one installed
-      # and exposed the same way a developer machine has it.
-      - name: Ensure cppcheck is on PATH
-        shell: pwsh
-        run: |
-          $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
-            -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty FullName -First 1
-          if (-not $cppcheck) { $cppcheck = (Get-Command cppcheck -ErrorAction SilentlyContinue)?.Source }
-          if (-not $cppcheck) {
-            choco install cppcheck --yes --no-progress 2>&1 | Out-Null
-            $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
-              -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
-              Select-Object -ExpandProperty FullName -First 1
-          }
-          if (-not $cppcheck) {
-            Write-Host "::error::cppcheck not available after install attempt"
-            exit 1
-          }
-          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path -Parent $cppcheck)
+      - name: Provision pinned cppcheck
+        run: cargo exo-dev setup cppcheck
 
       # clang-format plus the build-free packaging, MSI-harvest,
       # privacy-allowlist, network-egress and cppcheck validators. What each of
@@ -176,6 +153,15 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
         run: cargo exo-dev verify --profile ci-lint --event $env:EVENT
+
+      - name: Retain verification failure logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lint-failure-logs
+          path: .workspace/verify/
+          include-hidden-files: true
+          if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
   # Cheap guardrails that block locally and did not block here. Each of them runs
@@ -211,8 +197,7 @@ jobs:
           fetch-depth: 0
 
       - name: Assert PowerShell
-        # ubuntu-24.04 images carry pwsh already, and the guardrail checks that
-        # are not ported yet still run on it. Asserted rather than assumed, so a
+        # ubuntu-24.04 images carry the workflow command shell. Assert it so a
         # runner image that drops it fails here with its name instead of later
         # with a shell error.
         run: pwsh -Version
@@ -259,6 +244,15 @@ jobs:
           fi
           cargo exo-dev "${args[@]}"
 
+      - name: Retain verification failure logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: guardrails-failure-logs
+          path: .workspace/verify/
+          include-hidden-files: true
+          if-no-files-found: warn
+
   # The Rust workspace under tools/ (exo-dev and exo-verify), checked by cargo
   # directly rather than through exo-dev: the orchestrator must not be the only
   # thing that certifies itself. The same commands run as the `rust` step of the
@@ -295,7 +289,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Dev scripts: regression-guard the A/V-sync analyzer against a committed
-  # golden clapper clip. This is a Python + SYSTEM-ffmpeg check (the app ships a
+  # golden clapper clip. Rust calls SYSTEM-ffmpeg for this check (the app ships a
   # mux-only FFmpeg without the signalstats/astats filters the analyzer needs),
   # so ffmpeg is provisioned + version-verified explicitly — the runner image
   # does not guarantee it. Not part of build-test; no GPU, no engine build.
@@ -328,6 +322,15 @@ jobs:
         run: |
           cargo build --manifest-path tools/Cargo.toml -p exo-verify
           cargo exo-dev verify --profile ci-dev-scripts --event $env:EVENT
+
+      - name: Retain verification failure logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dev-tools-failure-logs
+          path: .workspace/verify/
+          include-hidden-files: true
+          if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
   # Detect whether this PR touches packaging-relevant or build/tooling-relevant
@@ -546,7 +549,11 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ctest-logs-windows-x64-ninja-debug
-          path: build/windows-x64-ninja-debug/Testing/Temporary/
+          path: |
+            .workspace/verify/
+            build/windows-x64-ninja-debug/Testing/
+          include-hidden-files: true
+          if-no-files-found: warn
 
   build-test-release:
     name: build-test (windows-x64-release)
@@ -647,7 +654,11 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ctest-logs-windows-x64-ninja-release
-          path: build/windows-x64-ninja-release/Testing/Temporary/
+          path: |
+            .workspace/verify/
+            build/windows-x64-ninja-release/Testing/
+          include-hidden-files: true
+          if-no-files-found: warn
 
       - name: Upload packaging validation report
         if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true' }}
@@ -656,6 +667,7 @@ jobs:
           name: packaging-smoke-report
           path: |
             .workspace/package-smoke/package.json
+          include-hidden-files: true
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------

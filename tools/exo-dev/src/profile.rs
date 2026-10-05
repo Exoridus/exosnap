@@ -35,7 +35,7 @@ pub struct ProfileSpec {
     pub steps: &'static [StepId],
     /// Narrowed by the change set. Only the pre-commit contract is.
     pub scoped: bool,
-    /// A CI job: requires `--event`, streams output, and decides per-event steps.
+    /// A CI job: requires `--event`, defaults to compact output, and selects per-event steps.
     pub ci: bool,
     pub preset: &'static str,
     pub config: &'static str,
@@ -74,6 +74,7 @@ const LOCAL_STEPS: &[StepId] = &[
     StepId::Diff,
     StepId::Drift,
     StepId::SourceHygiene,
+    StepId::AutomationPolicy,
     StepId::DocsSuperpowersRemoved,
     StepId::CommitPolicy,
     StepId::LintCanaries,
@@ -82,7 +83,6 @@ const LOCAL_STEPS: &[StepId] = &[
     StepId::MsiHarvest,
     StepId::PrivacyAllowlist,
     StepId::NetworkEgress,
-    StepId::ScriptTests,
     StepId::Rust,
 ];
 
@@ -164,6 +164,7 @@ impl Profile {
                 steps: &[
                     StepId::Drift,
                     StepId::SourceHygiene,
+                    StepId::AutomationPolicy,
                     StepId::CommitPolicy,
                     StepId::Actionlint,
                     StepId::Zizmor,

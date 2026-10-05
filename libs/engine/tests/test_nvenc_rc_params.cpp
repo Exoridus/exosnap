@@ -1,5 +1,8 @@
+#include "exosnap/engine/codec_types.h"
+#include "nvEncodeAPI.h"
 #include "nvenc_encoder.h"
 
+#include <cstdint>
 #include <gtest/gtest.h>
 
 // Tests for ComputeNvencRcParams / NvencConstQpForCodec — the pure, GPU-free

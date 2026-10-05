@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cstddef>
 #include <gtest/gtest.h>
 
 #include "edit_audio_mix.h"

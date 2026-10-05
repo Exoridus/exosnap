@@ -1,9 +1,16 @@
 #include "flac_audio_encoder.h"
+#include "FLAC/ordinals.h"
+#include "exosnap/engine/packet_types.h"
 
 #include <FLAC/stream_encoder.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace exosnap::engine {
 

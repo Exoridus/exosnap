@@ -1,6 +1,9 @@
 #include "wasapi_loopback_src.h"
 
 #include "discontinuity_gap.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include <cstdint>
+#include <string>
 
 namespace exosnap::engine {
 

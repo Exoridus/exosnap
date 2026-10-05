@@ -5,8 +5,6 @@
 
 #include "nvenc_encoder.h"
 
-#include <vector>
-
 #include <gtest/gtest.h>
 
 using namespace exosnap::engine;

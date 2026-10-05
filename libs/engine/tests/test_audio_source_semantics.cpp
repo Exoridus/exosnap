@@ -1,3 +1,5 @@
+#include "exosnap/engine/error_types.h"
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include <exosnap/engine/audio_track_model.h>

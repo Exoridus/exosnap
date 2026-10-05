@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // EditPlayerSession -- top-level orchestrator for the Edit-page video player
 // (docs/architecture/edit-and-export.md). Owns one
 // EditPlayerEngine (decode) and, when the file has an audio stream, one

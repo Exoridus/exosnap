@@ -1,3 +1,4 @@
+#include "exosnap/engine/packet_types.h"
 #include "nvenc_video_encoder.h"
 #include <exosnap/engine/interfaces/IVideoEncoder.h>
 

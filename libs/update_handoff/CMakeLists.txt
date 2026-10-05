@@ -19,9 +19,9 @@ cmake_minimum_required(VERSION 3.25)
 if(NOT Qt6_FOUND)
     # The SAME floor app/ requires. Without it this probe accepts any Qt6 it finds
     # -- including one a stale cache still points at -- caches that decision, and
-    # then app/'s 6.11 probe fails against it. One version statement per tree, or
+    # then app/'s 6.12 probe fails against it. One version statement per tree, or
     # the first directory to ask silently decides for the last one.
-    find_package(Qt6 6.11 QUIET COMPONENTS Core)
+    find_package(Qt6 6.12 QUIET COMPONENTS Core)
 endif()
 
 if(NOT Qt6_FOUND)

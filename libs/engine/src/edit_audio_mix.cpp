@@ -1,6 +1,10 @@
 #include "edit_audio_mix.h"
+#include "brickwall_limiter.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 
 namespace exosnap::engine {
 

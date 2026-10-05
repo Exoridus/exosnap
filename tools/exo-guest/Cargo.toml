@@ -19,14 +19,30 @@ base64 = "0.22"
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+zip = { version = "7", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
+    "ApplicationModel",
+    "Management_Deployment",
     "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_Security_Cryptography_Catalog",
+    "Win32_Security_Cryptography_Sip",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
     "Win32_Networking_WinSock",
     "Win32_System_Hypervisor",
     "Win32_System_RemoteDesktop",
+    "Win32_System_Registry",
     "Win32_System_Shutdown",
     "Win32_System_StationsAndDesktops",
     "Win32_System_Threading",
+    "Win32_System_WinRT",
 ] }
+wmi = "0.18"
+
+[dev-dependencies]
+tempfile.workspace = true

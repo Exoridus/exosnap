@@ -365,6 +365,9 @@ Item {
         // pushing the log surface off the page once it outgrows the space.
         ExoScrollView {
             id: startupScroll
+            objectName: "quickStartupTraceScroll"
+
+            reserveScrollBarGutters: true
 
             contentWidth: availableWidth
             clip: true

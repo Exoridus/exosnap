@@ -1,11 +1,24 @@
+#include <cstdint>
+#include <cwchar>
 #include <exosnap/engine/recorder_session.h>
 
 #include "audio_thread.h"
 #include "brickwall_limiter.h"
+#include "exosnap/engine/audio_track_model.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/error_types.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include "exosnap/engine/output_geometry.h"
+#include "exosnap/engine/pipeline_diagnostics.h"
+#include "exosnap/engine/preview_tap.h"
+#include "exosnap/engine/session_stats.h"
+#include "exosnap/engine/split_trigger_source.h"
 #include "finalize_join_policy.h"
 #include "mic_dsp_audio_src.h"
 #include "mixed_audio_src.h"
 #include "mux_thread.h"
+#include "pipeline_diagnostics_aggregator.h"
+#include "premux_state.h"
 #include "session_callback_gate.h"
 #include "session_internal.h"
 #include "session_outcome.h"
@@ -28,7 +41,12 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <span>
 #include <string>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 namespace exosnap::engine {
@@ -1068,12 +1086,11 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
     {
         auto& st = *state_ptr;
 
-        std::lock_guard flk(st.failure_mutex);
-        if (st.failure_recorded) {
+        if (const auto failure = st.FailureSnapshot()) {
             result.succeeded = false;
-            result.error_code = st.failure.error_code;
-            result.error_phase = st.failure.error_phase;
-            result.error_detail = st.failure.error_detail;
+            result.error_code = failure->error_code;
+            result.error_phase = failure->error_phase;
+            result.error_detail = failure->error_detail;
         } else {
             result.succeeded = true;
             result.error_code = S_OK;

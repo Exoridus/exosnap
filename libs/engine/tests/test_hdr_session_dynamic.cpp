@@ -2,6 +2,9 @@
 // stop instead. Pure, GPU-free.
 
 #include "../src/hdr_session_dynamic.h"
+#include "C:/Users/User/Development/exosnap/libs/engine/src/frame_luminance.h"
+#include "C:/Users/User/Development/exosnap/libs/engine/src/hdr_tonemap.h"
+#include "exosnap/engine/hdr_native.h"
 
 #include <gtest/gtest.h>
 

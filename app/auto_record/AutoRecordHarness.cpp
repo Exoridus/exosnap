@@ -367,7 +367,11 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
         const exosnap::engine::CaptureBackend capture_backend =
             options.capture_backend == CaptureBackend::Wgc ? exosnap::engine::CaptureBackend::WindowsGraphicsCapture
                                                            : exosnap::engine::CaptureBackend::Default;
-        if (!coordinator.StartRecording(selected_target, audio_state, std::nullopt, capture_backend)) {
+        // A seeded Ready notification delivered after capture is leased returns
+        // that new lease and reopens the preview over the engine's duplication.
+        if (!StartAutoRecordAfterPendingState(app, [&]() {
+                return coordinator.StartRecording(selected_target, audio_state, std::nullopt, capture_backend);
+            })) {
             return FailWith(
                 QStringLiteral("StartRecording refused (coordinator not ready or busy, cycle %1)").arg(cycle + 1));
         }
@@ -390,7 +394,11 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
         // Stop after the requested duration.
         QTimer stopTimer;
         stopTimer.setSingleShot(true);
-        QObject::connect(&stopTimer, &QTimer::timeout, &app, [&coordinator]() { coordinator.StopRecording(); });
+        QObject::connect(&stopTimer, &QTimer::timeout, &app, [&]() {
+            if (hooks.onMeasurementEnd)
+                hooks.onMeasurementEnd();
+            coordinator.StopRecording();
+        });
 
         // Optional pause/resume inside the run. A paused recording must keep
         // producing the requested amount of MEDIA, so the paused interval is

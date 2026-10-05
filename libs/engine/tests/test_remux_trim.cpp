@@ -7,25 +7,14 @@
 // ExtractKeyframeTimestamps is tested for non-empty sorted output and graceful
 // failure on bad input.
 
-extern "C" {
-#include <libavformat/avformat.h>
-#include <libavutil/avutil.h>
-}
-
-// MSVC + C++: override av_err2str to avoid C99 compound literal.
-static inline const char* av_err2str_trim_test(int errnum) noexcept {
-    static thread_local char buf[AV_ERROR_MAX_STRING_SIZE];
-    av_strerror(errnum, buf, sizeof(buf));
-    return buf;
-}
-
+#include <cstdint>
 #include <gtest/gtest.h>
+#include <utility>
 
 #include "exosnap/engine/mp4_remuxer.h"
 #include "matroska_stream_writer.h"
 #include "test_unique_temp.h"
 
-#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -36,7 +25,6 @@ using exosnap::engine::MatroskaStreamConfig;
 using exosnap::engine::MatroskaStreamWriter;
 using exosnap::engine::MuxPacket;
 using exosnap::engine::RemuxNoopCallback;
-using exosnap::engine::RemuxResult;
 using exosnap::engine::RemuxToMkv;
 using exosnap::engine::RemuxToProgressiveMp4;
 using exosnap::engine::TrimRange;

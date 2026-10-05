@@ -19,6 +19,8 @@ pub enum StepId {
     /// dispatches but never a gate, because a release is not where it gets paid
     /// down.
     SourceHygiene,
+    /// First-party reusable automation is Rust, including renamed scripts.
+    AutomationPolicy,
     DocsSuperpowersRemoved,
     /// Commit subjects locally; the pull request title in CI.
     CommitPolicy,
@@ -47,7 +49,6 @@ pub enum StepId {
     /// answer between runs; the known high findings carry an inline ignore at the
     /// step that is the decision, so a new one fails. Medium findings are backlog.
     Zizmor,
-    ScriptTests,
     Rust,
     Configure,
     /// `all_qmllint` over every QML module rather than per-module targets, so a
@@ -74,17 +75,6 @@ pub enum StepId {
     Samples,
 }
 
-/// Who implements a step today.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Implementation {
-    /// exo-dev itself, possibly driving an external tool that stays a process.
-    Native,
-    /// A PowerShell or Python script run unchanged: its exit code is the verdict
-    /// and its output is passed through. `owner` is the Rust module that replaces
-    /// it; a legacy step is a migration state, never a new extension point.
-    Legacy { owner: &'static str },
-}
-
 /// Which host locks a step holds while it runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Locks {
@@ -99,7 +89,6 @@ pub struct Locks {
 pub struct StepInfo {
     pub name: &'static str,
     pub depends_on: &'static [StepId],
-    pub implementation: Implementation,
     pub windows_only: bool,
     /// Set when the step blocks in CI but is deliberately absent from `pre-push`,
     /// with the reason. Every other blocking CI step must also block locally.
@@ -121,6 +110,7 @@ impl StepId {
         StepId::Diff,
         StepId::Drift,
         StepId::SourceHygiene,
+        StepId::AutomationPolicy,
         StepId::DocsSuperpowersRemoved,
         StepId::CommitPolicy,
         StepId::LintCanaries,
@@ -131,7 +121,6 @@ impl StepId {
         StepId::NetworkEgress,
         StepId::Actionlint,
         StepId::Zizmor,
-        StepId::ScriptTests,
         StepId::Rust,
         StepId::Configure,
         StepId::QmlLint,
@@ -153,48 +142,40 @@ impl StepId {
     }
 
     pub fn info(self) -> StepInfo {
-        use Implementation::{Legacy, Native};
-        let step = |name, depends_on, implementation| StepInfo {
+        let step = |name, depends_on| StepInfo {
             name,
             depends_on,
-            implementation,
             windows_only: false,
             ci_only: None,
             locks: Locks::default(),
         };
         match self {
-            StepId::Sanity => step("sanity", &[], Native),
-            StepId::Diff => step("diff", SANITY, Native),
-            StepId::Drift => step("drift", SANITY, Native),
-            StepId::SourceHygiene => step("source-hygiene", SANITY, Native),
-            StepId::DocsSuperpowersRemoved => step("docs-superpowers-removed", SANITY, Native),
-            StepId::CommitPolicy => step("commit-policy", SANITY, Native),
-            StepId::LintCanaries => step("lint-canaries", SANITY, Native),
-            StepId::Format => step("format", SANITY, Native),
-            StepId::PackagingVersion => step("packaging-version", SANITY, Native),
-            StepId::MsiHarvest => step("msi-harvest", SANITY, Native),
-            StepId::PrivacyAllowlist => step("privacy-allowlist", SANITY, Native),
-            StepId::NetworkEgress => step("network-egress", SANITY, Native),
+            StepId::Sanity => step("sanity", &[]),
+            StepId::Diff => step("diff", SANITY),
+            StepId::Drift => step("drift", SANITY),
+            StepId::SourceHygiene => step("source-hygiene", SANITY),
+            StepId::AutomationPolicy => step("automation-policy", SANITY),
+            StepId::DocsSuperpowersRemoved => step("docs-superpowers-removed", SANITY),
+            StepId::CommitPolicy => step("commit-policy", SANITY),
+            StepId::LintCanaries => step("lint-canaries", SANITY),
+            StepId::Format => step("format", SANITY),
+            StepId::PackagingVersion => step("packaging-version", SANITY),
+            StepId::MsiHarvest => step("msi-harvest", SANITY),
+            StepId::PrivacyAllowlist => step("privacy-allowlist", SANITY),
+            StepId::NetworkEgress => step("network-egress", SANITY),
             StepId::Actionlint => StepInfo {
                 ci_only: Some(
                     "a pinned Linux binary the workflow installs by digest; not a developer prerequisite",
                 ),
-                ..step("actionlint", SANITY, Native)
+                ..step("actionlint", SANITY)
             },
             StepId::Zizmor => StepInfo {
                 ci_only: Some(
                     "a pinned tool the workflow installs by version; not a developer prerequisite",
                 ),
-                ..step("zizmor", SANITY, Native)
+                ..step("zizmor", SANITY)
             },
-            StepId::ScriptTests => step(
-                "script-tests",
-                SANITY,
-                Legacy {
-                    owner: "Rust unit tests of each ported module",
-                },
-            ),
-            StepId::Rust => step("rust", SANITY, Native),
+            StepId::Rust => step("rust", SANITY),
             StepId::Configure => StepInfo {
                 windows_only: true,
                 ci_only: Some(
@@ -203,7 +184,7 @@ impl StepId {
                      merge",
                 ),
                 locks: TREE_AND_BUILD,
-                ..step("configure", SANITY, Native)
+                ..step("configure", SANITY)
             },
             StepId::QmlLint => StepInfo {
                 windows_only: true,
@@ -213,7 +194,7 @@ impl StepId {
                      new coverage",
                 ),
                 locks: TREE_AND_BUILD,
-                ..step("qmllint", CONFIGURE, Native)
+                ..step("qmllint", CONFIGURE)
             },
             StepId::Build => StepInfo {
                 windows_only: true,
@@ -222,7 +203,7 @@ impl StepId {
                      compiler leg, which already blocks a pull request before merge",
                 ),
                 locks: TREE_AND_BUILD,
-                ..step("build", CONFIGURE, Native)
+                ..step("build", CONFIGURE)
             },
             // No lock here: the test runner takes the tree lock for the span from
             // its build to its receipt, the build lock around its build and the
@@ -234,7 +215,7 @@ impl StepId {
                     "the full ctest suite on every commit and push duplicated \
                      ci-build-debug/-release, which already run and block on it before merge",
                 ),
-                ..step("tests", BUILD, Native)
+                ..step("tests", BUILD)
             },
             StepId::CppCheck => StepInfo {
                 windows_only: true,
@@ -243,7 +224,7 @@ impl StepId {
                      in ci-lint, which needs no compiler leg because cppcheck reads no compile \
                      database",
                 ),
-                ..step("cppcheck", SANITY, Native)
+                ..step("cppcheck", SANITY)
             },
             // clang-tidy reads compile_commands.json, which configure writes and
             // the build keeps in step with the source. The tree lock keeps a
@@ -256,26 +237,26 @@ impl StepId {
                      every push duplicated that without new coverage",
                 ),
                 locks: TREE_AND_BUILD,
-                ..step("clang-tidy", BUILD, Native)
+                ..step("clang-tidy", BUILD)
             },
             StepId::PackagingSmoke => StepInfo {
                 windows_only: true,
                 ci_only: Some(
                     "packaging is not part of the local blocking contract; CI and the candidate workflow own it",
                 ),
-                ..step("packaging-smoke", BUILD, Native)
+                ..step("packaging-smoke", BUILD)
             },
             StepId::AvSyncGolden => StepInfo {
                 windows_only: true,
                 ci_only: Some(
                     "needs a system FFmpeg with signalstats/astats; not a developer prerequisite",
                 ),
-                ..step("av-sync-golden", SANITY, Native)
+                ..step("av-sync-golden", SANITY)
             },
             StepId::Samples => StepInfo {
                 windows_only: true,
                 ci_only: Some("needs a system FFmpeg and a built exo-verify"),
-                ..step("samples", SANITY, Native)
+                ..step("samples", SANITY)
             },
         }
     }

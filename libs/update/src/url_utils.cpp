@@ -1,5 +1,9 @@
 #include "url_utils.h"
 
+#include <cstddef>
+#include <string>
+#include <string_view>
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 

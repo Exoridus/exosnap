@@ -1,5 +1,11 @@
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <exosnap/engine/audio_track_model.h>
+#include <optional>
+#include <utility>
+#include <vector>
+
 #include <capability/audio_track_preview.h>
 #include <capability/audio_ui_state.h>
 

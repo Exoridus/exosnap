@@ -19,6 +19,8 @@
 #endif
 #include <windows.h>
 
+#include <capability/adapter_enum.h>
+
 #include <dxgi.h>
 
 #include <wrl/client.h>

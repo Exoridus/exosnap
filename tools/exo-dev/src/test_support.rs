@@ -22,7 +22,7 @@ pub mod test_runner;
 /// not a clean initial commit.
 pub fn fixture_repo(files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("create temp dir for fixture repo");
-    run_git(dir.path(), &["init", "-q"]);
+    init_git_repo(dir.path());
     write_files(dir.path(), files);
     run_git(dir.path(), &["add", "-A"]);
     dir
@@ -130,7 +130,7 @@ pub fn copy_dir_all(src: &Path, dst: &Path) {
 /// Turns an existing directory into a git repository with everything in it
 /// committed, so a later edit registers as a dirty tree under `git status`.
 pub fn init_committed_git_repo(dir: &Path) {
-    run_git(dir, &["init", "-q"]);
+    init_git_repo(dir);
     run_git(dir, &["config", "user.email", "fixture@example.invalid"]);
     run_git(dir, &["config", "user.name", "Fixture"]);
     run_git(dir, &["add", "-A"]);
@@ -144,4 +144,11 @@ fn run_git(dir: &Path, args: &[&str]) {
         .status()
         .expect("run git for fixture repo");
     assert!(status.success(), "git {args:?} failed in fixture repo");
+}
+
+/// Initializes a fixture with deterministic LF policy independent of user config.
+pub fn init_git_repo(dir: &Path) {
+    run_git(dir, &["init", "-q"]);
+    run_git(dir, &["config", "core.autocrlf", "false"]);
+    run_git(dir, &["config", "core.eol", "lf"]);
 }

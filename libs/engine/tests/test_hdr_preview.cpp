@@ -5,11 +5,14 @@
 // near mid-grey. These tests pin the reference chain (hdr_preview.h), which the
 // live/snapshot paths use, and check the frame converter tracks it.
 
+#include "exosnap/engine/codec_types.h"
+#include "hdr_pq.h"
 #include "hdr_preview.h"
+#include "yuv_to_bgra.h"
 
+#include <cstddef>
 #include <exosnap/engine/hdr_native.h>
 
-#include <cmath>
 #include <cstdint>
 #include <vector>
 

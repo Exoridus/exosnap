@@ -4,9 +4,11 @@
 // has to keep. The GPU pass that produces the raw numbers is pinned separately in
 // test_gpu_frame_luminance.cpp.
 
+#include <cstddef>
 #include <gtest/gtest.h>
 
 #include "frame_luminance.h"
+#include "hdr_tonemap.h"
 
 #include <array>
 #include <cstdint>

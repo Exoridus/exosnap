@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <!--
     Unattended installation for the ExoSnap release-verification guest.
 
@@ -16,8 +16,8 @@
         is thrown away after every run, so the password is a constant of the
         recipe rather than a secret. Never reuse it anywhere else.
 
-    Display language and formats are en-US so that tool output the harness parses
-    stays invariant; the keyboard is de-DE because the developer types on one.
+    The image uses de-DE language, formats and keyboard settings. Verification
+    reads structured native results rather than localized console messages.
 -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
 
@@ -231,11 +231,6 @@
           <Order>2</Order>
           <Description>Never blank the virtual display</Description>
           <CommandLine>powercfg.exe /change monitor-timeout-ac 0</CommandLine>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Order>3</Order>
-          <Description>Allow the host to run provisioning without an execution-policy prompt</Description>
-          <CommandLine>powershell.exe -NoProfile -Command "Set-ExecutionPolicy -Scope LocalMachine -ExecutionPolicy RemoteSigned -Force"</CommandLine>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>

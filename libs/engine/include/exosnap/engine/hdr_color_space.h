@@ -1,5 +1,7 @@
 #pragma once
 
+#include <windows.h>
+
 #include <dxgicommon.h>
 
 namespace exosnap::engine {

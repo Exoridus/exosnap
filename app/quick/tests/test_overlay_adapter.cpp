@@ -86,9 +86,10 @@ TEST(OverlayContentPolicy, HealthOmitsFpsAndSize) {
         models::ResolveDiagnosticsOverlayContent(DiagnosticsOverlayPreset::Health, QString());
     EXPECT_FALSE(content.fps);
     EXPECT_TRUE(content.drop);
-    EXPECT_TRUE(content.drift);
+    EXPECT_FALSE(content.drift);
     EXPECT_FALSE(content.size);
     EXPECT_TRUE(content.muted_sources);
+    EXPECT_TRUE(content.health);
 }
 
 TEST(OverlayContentPolicy, TechnicalCarriesEveryToken) {
@@ -99,6 +100,7 @@ TEST(OverlayContentPolicy, TechnicalCarriesEveryToken) {
     EXPECT_TRUE(content.drift);
     EXPECT_TRUE(content.size);
     EXPECT_TRUE(content.muted_sources);
+    EXPECT_TRUE(content.health);
 }
 
 TEST(OverlayContentPolicy, CustomReadsTheTokenList) {
@@ -143,6 +145,23 @@ TEST(OverlayContentPolicy, EverythingUntickedIsEmpty) {
     const DiagnosticsOverlayContent content =
         models::ResolveDiagnosticsOverlayContent(DiagnosticsOverlayPreset::Custom, QString());
     EXPECT_TRUE(content.IsEmpty());
+}
+
+TEST(OverlayContentPolicy, LegacyCustomTokensRetainTheirMeaningWithoutAddingHealth) {
+    const auto content =
+        models::ResolveDiagnosticsOverlayContent(DiagnosticsOverlayPreset::Custom, QStringLiteral("drop,drift,muted"));
+    EXPECT_TRUE(content.drop);
+    EXPECT_TRUE(content.drift);
+    EXPECT_TRUE(content.muted_sources);
+    EXPECT_FALSE(content.health);
+}
+
+TEST(OverlayContentPolicy, HealthTokenIsSelectableAndNotEmptyOnItsOwn) {
+    const auto content =
+        models::ResolveDiagnosticsOverlayContent(DiagnosticsOverlayPreset::Custom, QStringLiteral("health,unknown"));
+    EXPECT_TRUE(content.health);
+    EXPECT_FALSE(content.IsEmpty());
+    EXPECT_EQ(models::TokensForDiagnosticsOverlayContent(content), QStringLiteral("health"));
 }
 
 // ---------------------------------------------------------------------------

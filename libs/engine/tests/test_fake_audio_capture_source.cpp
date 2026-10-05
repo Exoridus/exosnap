@@ -1,5 +1,7 @@
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
 #include "fakes/fake_audio_capture_source.h"
 
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include <cstring>

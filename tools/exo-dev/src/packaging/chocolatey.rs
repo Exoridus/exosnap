@@ -19,7 +19,7 @@
 //! Write-Host, a `choco` command, a Chocolatey module import, a private
 //! Chocolatey environment variable or internal variable, the deprecated
 //! `Get-BinRoot`, `Get-WmiObject`, a raw `msiexec` call, or a plain-http URL;
-//! an uninstall script exists at all; and nothing under tools/ besides a
+//! an optional uninstall adapter when present; and nothing under tools/ besides a
 //! `.ps1` file, with no source-control or OS index file.
 //!
 //! The checksum64 placeholder guard is unconditional: `-VersionOnly` skips
@@ -186,7 +186,6 @@ pub fn validate_chocolatey(
     for (path, label) in [
         (&nuspec_path, "exosnap.nuspec"),
         (&install_path, "tools/chocolateyinstall.ps1"),
-        (&uninstall_path, "tools/chocolateyuninstall.ps1"),
     ] {
         if !path.is_file() {
             missing.push(format!("Missing {label}: {}", path.display()));
@@ -198,7 +197,11 @@ pub fn validate_chocolatey(
 
     let nuspec_text = std::fs::read_to_string(&nuspec_path)?;
     let install_text = std::fs::read_to_string(&install_path)?;
-    let uninstall_text = std::fs::read_to_string(&uninstall_path)?;
+    let uninstall_text = match std::fs::read_to_string(&uninstall_path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
 
     let mut report = ValidationReport::default();
 
@@ -382,7 +385,7 @@ pub fn validate_chocolatey(
     );
     find_stale_version_references(
         &mut report,
-        &uninstall_text,
+        uninstall_text.as_deref().unwrap_or_default(),
         "tools/chocolateyuninstall.ps1",
         version,
         &[],
@@ -577,9 +580,10 @@ pub fn validate_chocolatey(
     }
 
     for (label, text) in [
-        ("tools/chocolateyinstall.ps1", &install_text),
-        ("tools/chocolateyuninstall.ps1", &uninstall_text),
+        ("tools/chocolateyinstall.ps1", Some(install_text.as_str())),
+        ("tools/chocolateyuninstall.ps1", uninstall_text.as_deref()),
     ] {
+        let Some(text) = text else { continue };
         static STOP_PREFERENCE: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"(?m)^\s*\$ErrorActionPreference\s*=\s*'Stop'").unwrap());
         if !STOP_PREFERENCE.is_match(text) {
@@ -719,16 +723,15 @@ This description exists only to satisfy the thirty character minimum for the mod
     }
 
     #[test]
-    fn a_missing_uninstall_script_is_a_hard_error() {
+    fn msi_auto_uninstaller_needs_no_repository_hook() {
         let dir = fixture();
         std::fs::remove_file(
             dir.path()
                 .join("packaging/chocolatey/tools/chocolateyuninstall.ps1"),
         )
         .unwrap();
-        let error =
-            validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap_err();
-        assert!(error.to_string().contains("chocolateyuninstall.ps1"));
+        let report = validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap();
+        assert!(report.ok(), "{:?}", report.errors);
     }
 
     #[test]

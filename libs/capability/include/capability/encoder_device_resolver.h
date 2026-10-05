@@ -8,6 +8,7 @@
 #include <exosnap/engine/encoder_device.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <vector>

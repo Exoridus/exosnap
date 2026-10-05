@@ -1,5 +1,6 @@
 #include "exosnap/engine/wgc_acquire_classify.h"
 
+#include <cstdint>
 #include <gtest/gtest.h>
 
 using exosnap::engine::ClassifyWgcAcquireFailure;

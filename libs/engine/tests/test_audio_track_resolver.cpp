@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include <exosnap/engine/audio_track_model.h>
@@ -5,6 +6,7 @@
 #include <cstddef>
 #include <initializer_list>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {

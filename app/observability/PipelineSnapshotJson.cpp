@@ -8,7 +8,6 @@
 namespace exosnap::observability {
 namespace {
 
-using exosnap::engine::MetricAvailability;
 using exosnap::engine::RecordingDiagnosticsSnapshot;
 
 QJsonObject SummaryJson(const RecordingDiagnosticsSnapshot& s) {

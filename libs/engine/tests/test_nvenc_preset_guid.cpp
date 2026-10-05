@@ -1,5 +1,8 @@
+#include "exosnap/engine/codec_types.h"
+#include "nvEncodeAPI.h"
 #include "nvenc_encoder.h"
 
+#include <cstddef>
 #include <gtest/gtest.h>
 
 // Tests for NvencPresetToGuid — the pure, GPU-free mapping from the canonical

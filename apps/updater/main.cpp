@@ -41,6 +41,9 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QQmlApplicationEngine>
+#if !defined(QT_NO_DEBUG)
+#include <QtQml/qqmldebug.h>
+#endif
 #include <QQmlContext>
 #include <QQmlError>
 #include <QQuickStyle>
@@ -370,10 +373,22 @@ void FillManualContext(UpdaterArgs& args) {
 } // namespace
 
 int main(int argc, char** argv) {
+#if !defined(QT_NO_DEBUG)
+    if (qEnvironmentVariableIntValue("EXOSNAP_QML_PREVIEW") == 1) {
+        QQmlDebuggingEnabler::enableDebugging(true);
+    }
+#endif
     // The updater's frontend is Qt Quick; no Widgets and no QApplication are
     // needed for it to render. The application's own QApplication stays where it
     // is (the tray integration), in the other process.
     QGuiApplication app(argc, argv);
+#if !defined(QT_NO_DEBUG)
+    if (qEnvironmentVariableIntValue("EXOSNAP_QML_PREVIEW") == 1) {
+        // Qt snapshots debugger arguments on the first service-list assignment.
+        QQmlDebuggingEnabler::setServices(
+            {QStringLiteral("QmlPreview"), QStringLiteral("CanvasFrameRate"), QStringLiteral("EventReplay")});
+    }
+#endif
 
     const QStringList arguments = QCoreApplication::arguments();
 

@@ -1,9 +1,12 @@
 #include "wasapi_process_loopback_src.h"
 
 #include "discontinuity_gap.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
 #include "process_identity.h"
 
 #include <audioclientactivationparams.h>
+#include <cstdint>
+#include <excpt.h>
 #include <mmdeviceapi.h>
 #include <propidl.h>
 

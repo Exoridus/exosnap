@@ -1,0 +1,51 @@
+name: Portable concurrency sanitizers
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'libs/engine/src/mux_queue.h'
+      - 'libs/engine/src/premux_state.h'
+      - 'libs/engine/src/session_failure.h'
+      - 'libs/engine/src/session_callback_gate.h'
+      - 'libs/engine/src/split_sentinel_policy.h'
+      - 'libs/engine/include/exosnap/engine/packet_types.h'
+      - 'libs/engine/include/exosnap/engine/codec_types.h'
+      - 'libs/engine/include/exosnap/engine/error_types.h'
+      - 'libs/engine/include/exosnap/engine/split_trigger_source.h'
+      - 'libs/engine/tests/test_mux_queue.cpp'
+      - 'libs/engine/tests/test_session_synchronization.cpp'
+      - 'libs/engine/tests/test_session_callback_gate.cpp'
+      - 'libs/engine/tests/portable/**'
+      - '.github/workflows/concurrency-sanitizers.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  tsan:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install Clang and Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang-15 ninja-build
+      - name: Configure production synchronization tests
+        run: cmake -S libs/engine/tests/portable -B build/concurrency-tsan -G Ninja -DCMAKE_CXX_COMPILER=clang++-15 -DCMAKE_BUILD_TYPE=Debug -DEXOSNAP_TSAN=ON
+      - name: Build
+        run: cmake --build build/concurrency-tsan
+      - name: Run ThreadSanitizer
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: ctest --test-dir build/concurrency-tsan --output-on-failure --output-junit tsan-results.xml
+      - name: Retain sanitizer evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: portable-concurrency-tsan
+          path: |
+            build/concurrency-tsan/tsan-results.xml
+            build/concurrency-tsan/Testing/Temporary/LastTest.log
+            build/concurrency-tsan/CMakeFiles/CMakeConfigureLog.yaml

@@ -1,3 +1,8 @@
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/hdr_native.h"
+#include "exosnap/engine/od_output_signature.h"
+#include <cstdint>
+#include <cwchar>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 
 #include <exosnap/engine/hdr_color_space.h>
@@ -7,8 +12,11 @@
 
 #include <chrono>
 #include <cstdio>
-#include <iterator>
+#include <optional>
+#include <string>
+#include <utility>
 #include <vector>
+#include <winrt/base.h>
 
 namespace exosnap::engine {
 

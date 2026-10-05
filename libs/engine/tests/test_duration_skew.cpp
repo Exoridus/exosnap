@@ -10,6 +10,8 @@
 // also erase a real 200 ms loss. Both cases are here, and the second is what
 // proves the first is not just arithmetic.
 
+#include <array>
+#include <cstdint>
 #include <exosnap/engine/session_stats.h>
 
 #include <gtest/gtest.h>

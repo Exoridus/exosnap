@@ -1,9 +1,12 @@
+#include <cstdint>
 #include <gtest/gtest.h>
+
+// Public projections supply the WinRT interface implementation templates.
+#include <winrt/Windows.Graphics.Capture.h> // IWYU pragma: keep
 
 #include <exosnap/engine/wgc_session_config.h>
 
-#include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Graphics.Capture.h>
+#include <winrt/base.h>
 
 namespace exosnap::engine {
 namespace {

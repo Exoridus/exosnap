@@ -1,10 +1,10 @@
 #include "codec_private.h"
 
+#include <cstdint>
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mftransform.h>
 
-#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <vector>

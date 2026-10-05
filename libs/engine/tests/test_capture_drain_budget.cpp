@@ -10,6 +10,7 @@
 // The clock is a parameter, so an endlessly ready source is a loop in a test
 // rather than a machine that has to be made fast enough to reproduce one.
 
+#include <cstdint>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 
 #include <gtest/gtest.h>

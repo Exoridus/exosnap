@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 
-#include <atomic>
 #include <chrono>
 #include <future>
 #include <thread>
@@ -39,12 +38,12 @@ TEST(SessionCallbackGate, CloseWithNothingInFlightDrainsImmediately) {
 TEST(SessionCallbackGate, CloseReportsAnInvocationStillRunning) {
     SessionCallbackGate gate;
     std::promise<void> entered;
-    std::atomic<bool> release{false};
+    std::promise<void> release;
+    auto released = release.get_future();
     std::thread worker([&] {
         gate.Invoke([&] {
             entered.set_value();
-            while (!release.load())
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            released.wait();
         });
     });
     entered.get_future().wait();
@@ -56,7 +55,7 @@ TEST(SessionCallbackGate, CloseReportsAnInvocationStillRunning) {
     EXPECT_LT(std::chrono::steady_clock::now() - before, std::chrono::seconds(2));
     EXPECT_FALSE(gate.IsOpen());
 
-    release.store(true);
+    release.set_value();
     worker.join();
 
     // The late worker is done; anything it fires now is dropped.
@@ -68,26 +67,24 @@ TEST(SessionCallbackGate, CloseReportsAnInvocationStillRunning) {
 TEST(SessionCallbackGate, ConcurrentInvocationsDoNotSerialize) {
     SessionCallbackGate gate;
     std::promise<void> first_entered;
-    std::atomic<bool> release{false};
+    std::promise<void> release;
+    auto released = release.get_future();
     std::thread first([&] {
         gate.Invoke([&] {
             first_entered.set_value();
-            while (!release.load())
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            released.wait();
         });
     });
     first_entered.get_future().wait();
 
     // A second worker's callback (a preview frame while the mux is finalizing a
     // segment) must not wait for the first to finish.
-    std::atomic<bool> second_ran{false};
-    std::thread second([&] { gate.Invoke([&] { second_ran.store(true); }); });
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    while (!second_ran.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    EXPECT_TRUE(second_ran.load());
+    std::promise<void> second_ran;
+    auto second_completed = second_ran.get_future();
+    std::thread second([&] { gate.Invoke([&] { second_ran.set_value(); }); });
+    EXPECT_EQ(second_completed.wait_for(std::chrono::seconds(2)), std::future_status::ready);
 
-    release.store(true);
+    release.set_value();
     first.join();
     second.join();
 }

@@ -1,6 +1,9 @@
 #include "../src/yuv_convert.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
+#include <vector>
 
 namespace exosnap::engine {
 namespace {

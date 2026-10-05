@@ -11,7 +11,7 @@ namespace exosnap::models {
 //
 // WHY THIS IS A POLICY AND NOT QML STATE
 // --------------------------------------
-// Two frontends, a persisted setting and a runtime metric feed all meet here. If
+// Persisted settings and runtime metric feeds meet here. If
 // the element set were assembled in the delegate, "which tokens does Technical
 // contain" would exist once per surface and drift the moment one of them gained
 // a token. Everything below is pure: no Qt widgets, no adapters, no engine.
@@ -28,7 +28,8 @@ namespace exosnap::models {
 //   Drop           RecordViewModel::dropped_frames      (diagnostics capture.frames_dropped_problem)
 //   Drift          RecordViewModel::av_drift_ms         (audio device clock vs QPC timeline)
 //   Size           RecordViewModel::output_size_text    (as above)
-//   MutedSources   RecordViewModel::audio_active_{mic,sys}
+//   MutedSources   RecordViewModelAdapter::confidenceIndicators (muted/degraded audio)
+//   Health         RecordingDiagnosticsSnapshot::health and bottleneck (engine verdict)
 //
 // An element with no producer does not belong in these enums — it would put a
 // toggle in Settings that can only ever produce a placeholder. This is the
@@ -82,6 +83,7 @@ enum class DiagnosticsOverlayElement : std::uint8_t {
     Drift,
     Size,
     MutedSources,
+    Health,
 };
 
 enum class DiagnosticsOverlayPreset : std::uint8_t {
@@ -97,9 +99,10 @@ enum class DiagnosticsOverlayPreset : std::uint8_t {
 struct DiagnosticsOverlayContent {
     bool fps = false;
     bool drop = true;
-    bool drift = true;
+    bool drift = false;
     bool size = false;
     bool muted_sources = true;
+    bool health = true;
 
     // True when nothing at all would be drawn. The overlay hides itself rather
     // than putting an empty pill over the recorded screen.

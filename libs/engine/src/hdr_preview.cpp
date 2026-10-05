@@ -1,5 +1,8 @@
 #include "hdr_preview.h"
+#include "hdr_pq.h"
+#include "yuv_to_bgra.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace exosnap::engine {

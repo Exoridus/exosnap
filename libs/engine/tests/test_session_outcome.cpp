@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/error_types.h"
+#include "exosnap/engine/recorder_session.h"
 #include "session_outcome.h"
 
 using exosnap::engine::ApplyMissingCaptureOutcome;

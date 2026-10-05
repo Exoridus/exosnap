@@ -61,7 +61,6 @@ Window {
     property int overlayState: OverlayAdapter.Hidden
     // The gate the recording side controls; capture exclusion gates on top of it.
     property bool overlayActive: false
-
     property string elapsedText: ""
     property string outputSizeText: ""
     property string sourceNameText: ""
@@ -79,6 +78,10 @@ Window {
     property string driftText: ""
     property bool micMuted: false
     property bool sysMuted: false
+    property bool micDegraded: false
+    property bool sysDegraded: false
+    property string healthText: ""
+    property bool healthWarning: false
 
     property bool showFps: false
     property bool showDrop: true
@@ -88,8 +91,11 @@ Window {
     // as a second token: one value, shown once, if EITHER setting asks for it.
     property bool showDiagnosticsSize: false
     property bool showMutedSources: true
+    property bool showHealth: false
 
     readonly property bool showSize: root.showOutputSize || root.showDiagnosticsSize
+    readonly property bool sizeActive: (root.overlayActive && root.showOutputSize)
+                                      || (root.diagnosticsActive && root.showDiagnosticsSize)
 
     readonly property rect effectiveGeometry: root.monitorGeometry.width > 0 && root.monitorGeometry.height > 0
                                               ? root.monitorGeometry
@@ -108,6 +114,8 @@ Window {
     // same GUI thread as the DXGI preview and this pill's own clock.
     readonly property var diagnosticsTokens: {
         const list = [];
+        if (root.showHealth)
+            list.push("health");
         if (root.showFps)
             list.push("fps");
         if (root.showDrop)
@@ -119,6 +127,8 @@ Window {
 
     function diagnosticsTokenValue(label: string): string {
         switch (label) {
+        case "health":
+            return root.healthText;
         case "fps":
             return root.fpsText;
         case "drop":
@@ -129,8 +139,10 @@ Window {
         return "";
     }
 
-    readonly property bool anyMutedGlyph: root.showMutedSources && (root.micMuted || root.sysMuted)
+    readonly property bool anyMutedGlyph: root.showMutedSources
+                                        && (root.micMuted || root.sysMuted || root.micDegraded || root.sysDegraded)
     readonly property bool diagnosticsContentPresent: root.diagnosticsTokens.length > 0 || root.anyMutedGlyph
+                                                     || root.showDiagnosticsSize
 
     // Paused and Warning used to share caution amber, which made a deliberate
     // pause look like a fault to a user glancing at the corner of a full-screen
@@ -142,7 +154,7 @@ Window {
     readonly property color stateTone: {
         switch (root.overlayState) {
         case OverlayAdapter.Paused:
-            return ExoTheme.overlayPaused;
+            return ExoTheme.overlayAccent;
         case OverlayAdapter.Warning:
             return ExoTheme.overlayWarning;
         default:
@@ -238,43 +250,9 @@ Window {
         property string kind: "recording"
         property color tone: root.stateTone
 
-        // Only the recording dot breathes. Paused is held on purpose and a
-        // warning must not look like it is about to go away.
-        property real breath: 1.0
-
         width: 10
         height: 10
-        opacity: glyph.kind === "recording" ? glyph.breath : 1.0
 
-        // Animated here rather than followed from the shell's frames. This is a
-        // scene graph, so a breathing dot costs nothing and can run for as long
-        // as the recording does; the tray and the taskbar swap whole icons, so
-        // theirs is a short transition instead. Same beat, two policies -- the
-        // PERIOD is the canonical one, and only its amplitude is this surface's
-        // own: at 10 px over arbitrary captured content, the shell frames' few
-        // percent of opacity would not read at all.
-        SequentialAnimation {
-            running: glyph.kind === "recording"
-            loops: Animation.Infinite
-
-            NumberAnimation {
-                target: glyph
-                property: "breath"
-                from: 1.0
-                to: 0.55
-                duration: Brand.recordingBeatMs / 2
-                easing.type: Easing.InOutSine
-            }
-
-            NumberAnimation {
-                target: glyph
-                property: "breath"
-                from: 0.55
-                to: 1.0
-                duration: Brand.recordingBeatMs / 2
-                easing.type: Easing.InOutSine
-            }
-        }
         onKindChanged: requestPaint()
         onToneChanged: requestPaint()
         onPaint: {
@@ -422,18 +400,16 @@ Window {
                         const raw = root.diagnosticsTokenValue(tokenRow.modelData);
                         return raw.length > 0 ? raw : root.unavailable;
                     }
-                    // Zero dropped frames is the one measured "all good" state
-                    // this pill reports in green. Any other count stays neutral
-                    // rather than alarming -- the diagnostics tone is calm,
-                    // never alarmist, and a dropped frame is reported, not
-                    // shouted about.
-                    readonly property bool good: tokenRow.modelData === "drop" && root.dropText === "0"
+                    readonly property bool good: (tokenRow.modelData === "drop" && root.dropText === "0")
+                                                 || (tokenRow.modelData === "health" && root.healthText.length > 0 && !root.healthWarning)
 
                     visible: root.diagnosticsActive
                     spacing: 7
 
                     Text {
-                        text: tokenRow.modelData
+                        text: tokenRow.modelData === "health" ? qsTr("health")
+                              : tokenRow.modelData === "fps" ? qsTr("capture")
+                              : tokenRow.modelData === "drop" ? qsTr("drop") : qsTr("drift")
                         textFormat: Text.PlainText
                         color: ExoTheme.overlayInkMuted
                         font {
@@ -445,7 +421,8 @@ Window {
                     Text {
                         text: tokenRow.resolvedValue
                         textFormat: Text.PlainText
-                        color: tokenRow.good ? ExoTheme.overlaySuccess : ExoTheme.overlayInk
+                        color: tokenRow.modelData === "health" && root.healthWarning ? ExoTheme.overlayWarning
+                               : tokenRow.good ? ExoTheme.overlaySuccess : ExoTheme.overlayInk
                         font {
                             family: ExoTheme.monoFamily
                             pixelSize: 13
@@ -458,7 +435,7 @@ Window {
                     // between two things that are both actually showing.
                     Text {
                         visible: tokenRow.index < root.diagnosticsTokens.length - 1 || root.anyMutedGlyph
-                                 || root.overlayActive
+                                 || root.overlayActive || root.sizeActive
                         text: "·"
                         textFormat: Text.PlainText
                         color: ExoTheme.overlayInkMuted
@@ -474,18 +451,20 @@ Window {
             // rather than anchoring into the positioner.
             MutedGlyph {
                 kind: "mic"
-                visible: root.diagnosticsActive && root.showMutedSources && root.micMuted
+                visible: root.diagnosticsActive && root.showMutedSources && (root.micMuted || root.micDegraded)
+                tone: root.micDegraded ? ExoTheme.overlayWarning : ExoTheme.overlayInkSecondary
                 y: (row.height - height) / 2
             }
 
             MutedGlyph {
                 kind: "sys"
-                visible: root.diagnosticsActive && root.showMutedSources && root.sysMuted
+                visible: root.diagnosticsActive && root.showMutedSources && (root.sysMuted || root.sysDegraded)
+                tone: root.sysDegraded ? ExoTheme.overlayWarning : ExoTheme.overlayInkSecondary
                 y: (row.height - height) / 2
             }
 
             Text {
-                visible: root.anyMutedGlyph && root.overlayActive
+                visible: root.anyMutedGlyph && (root.overlayActive || root.sizeActive)
                 text: "·"
                 textFormat: Text.PlainText
                 color: ExoTheme.overlayInkMuted
@@ -496,6 +475,7 @@ Window {
             }
 
             StateGlyph {
+                objectName: "overlayStateGlyph"
                 anchors.verticalCenter: parent.verticalCenter
                 visible: root.overlayActive
                 kind: {
@@ -531,8 +511,9 @@ Window {
 
             Text {
                 anchors.verticalCenter: parent.verticalCenter
-                visible: root.overlayActive && root.showSize && root.outputSizeText.length > 0
-                text: root.outputSizeText
+                objectName: "overlaySizeLabel"
+                visible: root.sizeActive
+                text: root.outputSizeText || root.unavailable
                 textFormat: Text.PlainText
                 color: ExoTheme.overlayInkSecondary
                 font {

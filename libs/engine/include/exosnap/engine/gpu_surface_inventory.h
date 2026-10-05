@@ -4,6 +4,7 @@
 #endif
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <d3d11.h>
 #include <exosnap/engine/performance_measurements.h>

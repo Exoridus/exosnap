@@ -1,14 +1,19 @@
 #include "wasapi_capture_src.h"
 
 #include "discontinuity_gap.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include "exosnap/engine/recorder_session.h"
 #include "wgc_capture.h"
 
+#include <cstdint>
 #include <functiondiscoverykeys_devpkey.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -368,7 +373,7 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
         if (closestMatch->nSamplesPerSec != kRequiredSampleRate) {
             char buf[196];
             snprintf(buf, sizeof(buf),
-                     "Mic format %u Hz is not supported; set the Windows default input format for this microphone to "
+                     "Mic format %lu Hz is not supported; set the Windows default input format for this microphone to "
                      "48 kHz.",
                      closestMatch->nSamplesPerSec);
             out_error = buf;

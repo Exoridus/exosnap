@@ -1,5 +1,13 @@
+#include <cstdint>
 #include <exosnap/engine/interfaces/VideoEncoderFactory.h>
+#include <memory>
+#include <string>
 
+#include "capability/adapter_enum.h"
+#include "exosnap/engine/backend_tuning.h"
+#include "exosnap/engine/encoder_device.h"
+#include "exosnap/engine/interfaces/IVideoEncoder.h"
+#include "exosnap/engine/recorder_session.h"
 #include "nvenc_video_encoder.h"
 
 namespace exosnap::engine {

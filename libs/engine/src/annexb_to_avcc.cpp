@@ -3,8 +3,10 @@
 #include "rbsp_bit_reader.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <iterator>
+#include <vector>
 
 namespace exosnap::engine::annexb {
 

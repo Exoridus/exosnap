@@ -146,8 +146,10 @@ pub fn residue() -> Result<Vec<String>> {
             found.push(format!("the product registry value {INSTALL_KEY}\\{value}"));
         }
     }
-    if reg_key_exists(USER_KEY)? {
-        found.push(format!("a per-user registry key ({USER_KEY})"));
+    for key in [USER_KEY, r"HKCU\SOFTWARE\Codexo\ExoSnap"] {
+        if reg_key_exists(key)? {
+            found.push(format!("a per-user registry key ({key})"));
+        }
     }
     Ok(found)
 }

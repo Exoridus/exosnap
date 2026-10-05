@@ -3,12 +3,15 @@
 // trace) and never bring it back. Now a lost inner is marked degraded (visible
 // via DegradedSourceCount), the survivors keep mixing, and Reinit reacquires it.
 
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
 #include "mixed_audio_src.h"
 
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace exosnap::engine {

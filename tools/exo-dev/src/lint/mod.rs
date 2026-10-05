@@ -16,6 +16,7 @@
 //! bundled clang-format would not agree with the version the tree is
 //! formatted against.
 
+pub mod advisory;
 pub mod canaries;
 pub mod clang_tidy;
 pub mod format;

@@ -1,5 +1,8 @@
+#include "exosnap/engine/codec_types.h"
+#include "nvEncodeAPI.h"
 #include "nvenc_encoder.h"
 
+#include <cstdint>
 #include <vector>
 
 #include <gtest/gtest.h>

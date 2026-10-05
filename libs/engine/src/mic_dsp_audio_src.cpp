@@ -1,7 +1,16 @@
 #include "mic_dsp_audio_src.h"
+#include "automatic_gain_control.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include "high_pass_filter.h"
+#include "noise_gate.h"
+#include "rnnoise_denoiser.h"
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
 
 namespace exosnap::engine {
 

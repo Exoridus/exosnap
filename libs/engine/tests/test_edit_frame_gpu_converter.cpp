@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/color_metadata.h"
+#include "exosnap/engine/edit_player_engine.h"
 #include "hdr_preview.h"
 #include "yuv_to_bgra.h"
 

@@ -2,6 +2,7 @@
 
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/split_trigger_source.h>
 
 #include "backend_tuning.h"
 #include "codec_types.h"
@@ -250,15 +251,6 @@ struct RecordingSplitSettings {
     std::uint64_t size_bytes = 0;
 
     bool operator==(const RecordingSplitSettings&) const = default;
-};
-
-// What triggered a split. Shared by the manual button and the global hotkey so
-// they route through the exact same typed command path.
-enum class SplitTriggerSource {
-    AutomaticDuration,
-    AutomaticSize,
-    ManualButton,
-    Hotkey,
 };
 
 // Metadata for one finalized media segment, emitted via SegmentCallback as each

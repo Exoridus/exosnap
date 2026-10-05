@@ -82,15 +82,6 @@ endif()
 
 enable_testing()
 
-# A test that is not registered cannot fail. Every tool below is present on a
-# normal developer machine and on CI, so a missing one is an environment defect
-# and not a reason to configure a smaller suite: the run that follows would
-# report a clean pass over a suite quietly missing entire categories, and
-# nothing downstream could tell that from a real one. Turn this OFF only for a
-# deliberately reduced tree, and never for a tree a gate reads.
-option(EXOSNAP_REQUIRE_TEST_TOOLS
-    "Fail configuration when a tool required to register tests is missing" ON)
-
 # Must come before any add_subdirectory(): it edits the global compile/link flags
 # so every translation unit — third_party included — is instrumented.
 include(cmake/exosnap_asan.cmake)
@@ -207,7 +198,7 @@ set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
 # Overridable as before: an explicit Qt6_DIR or CMAKE_PREFIX_PATH wins, because this
 # only fills in when nothing else has.
 if(NOT Qt6_DIR)
-    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.11.2/msvc2022_64")
+    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.12.0/msvc2022_64")
 endif()
 
 add_subdirectory(libs/engine)

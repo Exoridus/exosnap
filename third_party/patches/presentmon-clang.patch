@@ -1,0 +1,91 @@
+diff --git a/PresentData/ETW/Microsoft_Windows_D3D9.h b/PresentData/ETW/Microsoft_Windows_D3D9.h
+index 822c972..dd4f9e4 100644
+--- a/PresentData/ETW/Microsoft_Windows_D3D9.h
++++ b/PresentData/ETW/Microsoft_Windows_D3D9.h
+@@ -32,7 +32,7 @@ enum class Channel : uint8_t {
+     static uint8_t  const Level   = level_; \
+     static uint8_t  const Opcode  = opcode_; \
+     static uint16_t const Task    = task_; \
+-    static Keyword  const Keyword = (Keyword) keyword_; \
++    static Microsoft_Windows_D3D9::Keyword const Keyword = (Microsoft_Windows_D3D9::Keyword) keyword_; \
+ };
+ 
+ EVENT_DESCRIPTOR_DECL(Present_Start, 0x0001, 0x00, 0x10, 0x00, 0x01, 0x0001, 0x8000000000000002)
+diff --git a/PresentData/ETW/Microsoft_Windows_DXGI.h b/PresentData/ETW/Microsoft_Windows_DXGI.h
+index c626924..4aad392 100644
+--- a/PresentData/ETW/Microsoft_Windows_DXGI.h
++++ b/PresentData/ETW/Microsoft_Windows_DXGI.h
+@@ -36,7 +36,7 @@ enum class Channel : uint8_t {
+     static uint8_t  const Level   = level_; \
+     static uint8_t  const Opcode  = opcode_; \
+     static uint16_t const Task    = task_; \
+-    static Keyword  const Keyword = (Keyword) keyword_; \
++    static Microsoft_Windows_DXGI::Keyword const Keyword = (Microsoft_Windows_DXGI::Keyword) keyword_; \
+ };
+ 
+ EVENT_DESCRIPTOR_DECL(PresentMultiplaneOverlay_Start, 0x0037, 0x00, 0x10, 0x00, 0x01, 0x000e, 0x8000000000000002)
+diff --git a/PresentData/ETW/Microsoft_Windows_Dwm_Core.h b/PresentData/ETW/Microsoft_Windows_Dwm_Core.h
+index 41b3404..ccb3688 100644
+--- a/PresentData/ETW/Microsoft_Windows_Dwm_Core.h
++++ b/PresentData/ETW/Microsoft_Windows_Dwm_Core.h
+@@ -58,7 +58,7 @@ enum class Channel : uint8_t {
+     static uint8_t  const Level   = level_; \
+     static uint8_t  const Opcode  = opcode_; \
+     static uint16_t const Task    = task_; \
+-    static Keyword  const Keyword = (Keyword) keyword_; \
++    static Microsoft_Windows_Dwm_Core::Keyword const Keyword = (Microsoft_Windows_Dwm_Core::Keyword) keyword_; \
+ };
+ 
+ // NOTE: SCHEDULE_PRESENT_Start and SCHEDULE_SURFACEUPDATE_Info have the
+diff --git a/PresentData/ETW/Microsoft_Windows_DxgKrnl.h b/PresentData/ETW/Microsoft_Windows_DxgKrnl.h
+index 57e02d7..71085b3 100644
+--- a/PresentData/ETW/Microsoft_Windows_DxgKrnl.h
++++ b/PresentData/ETW/Microsoft_Windows_DxgKrnl.h
+@@ -193,7 +193,7 @@ enum class Channel : uint8_t {
+     static uint8_t  const Level   = level_; \
+     static uint8_t  const Opcode  = opcode_; \
+     static uint16_t const Task    = task_; \
+-    static Keyword  const Keyword = (Keyword) keyword_; \
++    static Microsoft_Windows_DxgKrnl::Keyword const Keyword = (Microsoft_Windows_DxgKrnl::Keyword) keyword_; \
+ };
+ 
+ // NOTE: BlitCancel needs to be added manually if etw_list run on <Win11:
+diff --git a/PresentData/ETW/Microsoft_Windows_Kernel_Process.h b/PresentData/ETW/Microsoft_Windows_Kernel_Process.h
+index 9afdf59..ab5ceaa 100644
+--- a/PresentData/ETW/Microsoft_Windows_Kernel_Process.h
++++ b/PresentData/ETW/Microsoft_Windows_Kernel_Process.h
+@@ -42,7 +42,7 @@ enum class Channel : uint8_t {
+     static uint8_t  const Level   = level_; \
+     static uint8_t  const Opcode  = opcode_; \
+     static uint16_t const Task    = task_; \
+-    static Keyword  const Keyword = (Keyword) keyword_; \
++    static Microsoft_Windows_Kernel_Process::Keyword const Keyword = (Microsoft_Windows_Kernel_Process::Keyword) keyword_; \
+ };
+ 
+ EVENT_DESCRIPTOR_DECL(ProcessStart_Start, 0x0001, 0x03, 0x10, 0x04, 0x01, 0x0001, 0x8000000000000010)
+diff --git a/PresentData/ETW/Microsoft_Windows_Win32k.h b/PresentData/ETW/Microsoft_Windows_Win32k.h
+index 4ffbf24..0bb85f9 100644
+--- a/PresentData/ETW/Microsoft_Windows_Win32k.h
++++ b/PresentData/ETW/Microsoft_Windows_Win32k.h
+@@ -82,7 +82,7 @@ enum class Channel : uint8_t {
+     static uint8_t  const Level   = level_; \
+     static uint8_t  const Opcode  = opcode_; \
+     static uint16_t const Task    = task_; \
+-    static Keyword  const Keyword = (Keyword) keyword_; \
++    static Microsoft_Windows_Win32k::Keyword const Keyword = (Microsoft_Windows_Win32k::Keyword) keyword_; \
+ };
+ 
+ EVENT_DESCRIPTOR_DECL(InputDeviceRead_Stop              , 0x0049, 0x00, 0x15, 0x04, 0x02, 0x0046, 0x0400000000800000)
+diff --git a/PresentData/GpuTrace.hpp b/PresentData/GpuTrace.hpp
+index 5aed1bc..97f4d6d 100644
+--- a/PresentData/GpuTrace.hpp
++++ b/PresentData/GpuTrace.hpp
+@@ -5,7 +5,7 @@
+ #include <stdint.h>
+ #include <unordered_map>
+ 
+-#include "etw/Microsoft_Windows_DxgKrnl.h"
++#include "ETW/Microsoft_Windows_DxgKrnl.h"
+ 
+ struct PresentEvent;
+ struct PMTraceConsumer;

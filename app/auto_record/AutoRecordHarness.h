@@ -2,6 +2,8 @@
 
 #include "../benchmark/BenchmarkReport.h"
 
+#include <QCoreApplication>
+#include <QEvent>
 #include <QString>
 #include <QStringList>
 
@@ -108,6 +110,9 @@ struct BenchmarkHooks {
     // preview counters so no start-up transient lands in the measurement.
     std::function<void()> onMeasurementStart;
 
+    // Called before StopRecording hides recording surfaces or finalizes the pipeline.
+    std::function<void()> onMeasurementEnd;
+
     // The recording result has landed. Called on the Qt main thread; the frontend
     // reads its own preview instrumentation into the neutral contract.
     std::function<benchmark::PreviewMetrics()> samplePreviewMetrics;
@@ -115,6 +120,11 @@ struct BenchmarkHooks {
 
 bool HasAutoRecordRequest(const QStringList& args);
 bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QString* error);
+
+template <typename Start> bool StartAutoRecordAfterPendingState(QCoreApplication& app, Start&& start) {
+    QCoreApplication::sendPostedEvents(&app, QEvent::MetaCall);
+    return start();
+}
 
 // Headless "bare mode" drive loop: builds and drives a standalone
 // exosnap::RecordingCoordinator directly from CLI-configured options, produces a

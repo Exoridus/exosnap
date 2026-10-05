@@ -1,4 +1,5 @@
 #include "exosnap/engine/pipeline_health.h"
+#include <span>
 
 namespace exosnap::engine {
 

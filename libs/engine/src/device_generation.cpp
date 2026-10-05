@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <exosnap/engine/device_generation.h>
 
 #include <atomic>

@@ -266,6 +266,7 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(bool diagnosticsOverlayDrift READ diagnosticsOverlayDrift NOTIFY appSettingsChanged FINAL)
     Q_PROPERTY(bool diagnosticsOverlaySize READ diagnosticsOverlaySize NOTIFY appSettingsChanged FINAL)
     Q_PROPERTY(bool diagnosticsOverlayMutedSources READ diagnosticsOverlayMutedSources NOTIFY appSettingsChanged FINAL)
+    Q_PROPERTY(bool diagnosticsOverlayHealth READ diagnosticsOverlayHealth NOTIFY appSettingsChanged FINAL)
     Q_PROPERTY(bool showQuickControls READ showQuickControls WRITE setShowQuickControls NOTIFY appSettingsChanged FINAL)
     Q_PROPERTY(bool minimizeToTray READ minimizeToTray WRITE setMinimizeToTray NOTIFY appSettingsChanged FINAL)
     Q_PROPERTY(bool hideWindowFromCapture READ hideWindowFromCapture WRITE setHideWindowFromCapture NOTIFY
@@ -542,6 +543,7 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] bool diagnosticsOverlayDrift() const;
     [[nodiscard]] bool diagnosticsOverlaySize() const;
     [[nodiscard]] bool diagnosticsOverlayMutedSources() const;
+    [[nodiscard]] bool diagnosticsOverlayHealth() const;
 
     // Toggling a single element. The current RESOLVED set is the starting point,
     // so unticking one token under Technical yields "Technical minus that token"

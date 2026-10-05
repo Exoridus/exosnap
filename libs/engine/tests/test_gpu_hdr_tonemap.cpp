@@ -11,6 +11,7 @@
 #include <exosnap/engine/gpu_hdr_tonemap.h>
 
 #include <d3d11.h>
+#include <string>
 #include <winrt/base.h>
 
 #include <cmath>

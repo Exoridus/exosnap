@@ -1,4 +1,5 @@
 #include <exosnap/engine/version.h>
+#include <string_view>
 
 namespace exosnap::engine {
 

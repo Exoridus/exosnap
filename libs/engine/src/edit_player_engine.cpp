@@ -1,11 +1,21 @@
 #include "exosnap/engine/edit_player_engine.h"
+#include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <exosnap/engine/performance_measurements.h>
+#include <filesystem>
+#include <functional>
+#include <new>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "edit_audio_mix.h"
 #include "edit_playback_pacing.h"
 #include "edit_player_hw_decode.h"
+#include "exosnap/engine/color_metadata.h"
 #include "exosnap/engine/logging/logging.h"
 #include "hdr_preview.h"
 #include "hdr_tonemap.h"
@@ -14,9 +24,21 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/codec.h>
+#include <libavcodec/defs.h>
+#include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/buffer.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/dict.h>
+#include <libavutil/error.h>
+#include <libavutil/frame.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/mathematics.h>
+#include <libavutil/pixfmt.h>
+#include <libavutil/rational.h>
+#include <libavutil/samplefmt.h>
 #include <libswresample/swresample.h>
 }
 

@@ -24,6 +24,13 @@ enum Command {
     Install,
     /// Remove the logon registration.
     Uninstall,
+    /// Inspect or apply pinned provisioning inside a disposable Hyper-V guest.
+    Provision(exo_guest::provision::ProvisionArgs),
+    /// Attach the disposable guest's interactive session to its console.
+    AttachConsole {
+        #[arg(long)]
+        disposable_vm_id: String,
+    },
 }
 
 const TASK_NAME: &str = "ExoSnap Verification Guest Agent";
@@ -44,7 +51,7 @@ fn serve() -> Result<()> {
     use exo_guest::agent::{Agent, PowerAction};
     use exo_guest::hvsock::{HvListener, parse_guid};
     let listener = HvListener::bind(parse_guid(exo_guest::SERVICE_ID)?)?;
-    let mut agent = Agent::default();
+    let agent = Agent::default();
     loop {
         let mut stream = match listener.accept() {
             Ok(stream) => stream,
@@ -53,7 +60,8 @@ fn serve() -> Result<()> {
                 continue;
             }
         };
-        match agent.serve(&mut stream) {
+        let mut connection = agent.connection();
+        std::thread::spawn(move || match connection.serve(&mut stream) {
             Ok(Some(action)) => {
                 drop(stream);
                 let flag = match action {
@@ -66,7 +74,7 @@ fn serve() -> Result<()> {
             }
             Ok(None) => {}
             Err(e) => eprintln!("exo-guest: connection ended: {e:#}"),
-        }
+        });
     }
 }
 
@@ -83,11 +91,18 @@ fn main() -> ExitCode {
             .and_then(|exe| {
                 let action = format!("\"{}\" serve", exe.display());
                 schtasks(&[
-                    "/Create", "/F", "/TN", TASK_NAME, "/SC", "ONLOGON", "/RL", "HIGHEST", "/TR",
-                    &action,
+                    "/Create", "/F", "/IT", "/TN", TASK_NAME, "/SC", "ONLOGON", "/RL", "HIGHEST",
+                    "/TR", &action,
                 ])
             }),
         Command::Uninstall => schtasks(&["/Delete", "/F", "/TN", TASK_NAME]),
+        Command::Provision(args) => match exo_guest::provision::run(&args) {
+            Ok(code) => return ExitCode::from(code),
+            Err(error) => Err(error),
+        },
+        Command::AttachConsole { disposable_vm_id } => {
+            exo_guest::provision::attach_console(&disposable_vm_id)
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

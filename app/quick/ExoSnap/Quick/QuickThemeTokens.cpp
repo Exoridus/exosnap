@@ -19,7 +19,6 @@ using ui::theme::kDefaultAccentId;
 using ui::theme::kDefaultAppearanceId;
 using ui::theme::kExoAccents;
 using ui::theme::kExoAppearances;
-using ui::theme::kExoThemeMigrations;
 using ui::theme::ThemeKind;
 
 // The tables store line tokens as CSS `rgba(r, g, b, a)` strings, which QColor

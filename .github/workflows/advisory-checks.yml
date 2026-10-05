@@ -1,45 +1,7 @@
 name: Advisory Checks
 
-# ---------------------------------------------------------------------------
-# Advisory unused-code / import checks (PHASE B — NEVER blocks anything)
-#
-# Surfaces stale functions, unused includes, and redundant declarations for
-# human review. Heavy Qt false-positive risk: Qt signals/slots invoked via
-# QMetaObject / connect() string form, moc-generated headers. Do NOT promote
-# any finding to blocking without a triage pass that filters Qt noise.
-#
-# Uses: clang-tidy misc-include-cleaner / misc-unused-* /
-#       readability-redundant-declaration  (advisory only, not in WarningsAsErrors)
-#     + cppcheck --enable=unusedFunction (whole-program, no --error-exitcode)
-#
-# WHY THIS IS ITS OWN WORKFLOW FILE
-#
-# This job used to live in ci.yml and ran on every development-branch push, where it cost
-# up to 45 min of Windows runner time to re-derive a finding list that changes
-# on the scale of weeks, not commits. It is now nightly instead. It could not
-# simply gain a `schedule:` trigger inside ci.yml, for two reasons:
-#
-#   1. The README CI badge reads
-#      img.shields.io/github/actions/workflow/status/.../ci.yml?branch=next,
-#      which reports the conclusion of the most recent ci.yml run on next. A
-#      `schedule:` event always runs on the default branch, so every nightly
-#      would become the newest next run of ci.yml and would drive the badge.
-#      A nightly that times out or trips over a toolchain hiccup would then
-#      paint the CI badge red even though next builds fine. Keeping the nightly
-#      in a separate workflow file keeps it out of ci.yml's history entirely.
-#   2. A `schedule:` trigger on ci.yml would also start the quick checks and,
-#      via their own conditions, potentially the heavy build legs — a scheduled
-#      run is not a pull_request, so any `github.event_name != 'pull_request'`
-#      style clause would let it through. One trigger, one purpose is cheaper
-#      to reason about.
-#
-# There is deliberately NO pull_request trigger. This job takes up to 45 min,
-# and an in-progress check blocks `gh pr merge --auto` regardless of
-# continue-on-error (which only governs how a *completed* failure is treated)
-# — so on a PR it added latency without ever being able to block on findings.
-# Findings change on the scale of weeks; the nightly is the right cadence.
-# Run it on demand via workflow_dispatch when a PR warrants the broad pass.
-# ---------------------------------------------------------------------------
+# Findings are successful measurements. Tool/setup/parse failures fail this
+# workflow. The broad scan runs separately from PR CI because of its cost.
 
 on:
   # Nightly on the default branch. 03:00 UTC is off-peak for GitHub's hosted
@@ -49,9 +11,7 @@ on:
     - cron: '0 3 * * *'
   workflow_dispatch:
 
-# No workflow-level `concurrency:` and no per-job group either — see the job's
-# own comment below. Cancelling this job mid-run reports conclusion "cancelled",
-# which GitHub renders as a failed check on an otherwise-green commit.
+# Keep measurements independent: cancelling a run discards its evidence.
 
 env:
   SCCACHE_GHA_ENABLED: "true"
@@ -60,28 +20,8 @@ jobs:
   advisory-unused-checks:
     name: advisory-unused-checks
     runs-on: windows-2022
-    # The earlier 90-minute ceiling was set from runs in which the clang-tidy
-    # step never started (the command line exceeded the CreateProcess limit and
-    # the step reported success over nothing). Once the batched invocation made
-    # it run, three consecutive nights ended at the ceiling, 82 minutes into
-    # the analysis, with no report. The step runs 900+ units on four cores with
-    # no result cache and no prior duration; ~44 s per Qt-heavy unit puts the
-    # pass near three hours. This is the first ceiling set from that estimate;
-    # the next completed run is the measurement to tighten it by. Without any
-    # explicit ceiling a stalled step ran to GitHub's 6h job default.
+    # Qt-heavy translation units require a larger budget than blocking lint.
     timeout-minutes: 300
-    # NO job-level continue-on-error: only the FINDINGS must never block (their
-    # steps carry their own continue-on-error below). If the toolchain setup,
-    # configure, or build breaks, this nightly must go visibly red — a job-level
-    # continue-on-error would report an overall success over a run that never
-    # actually analyzed anything. Being its own workflow file, a red nightly
-    # never touches the ci.yml badge (see the header above).
-    # Deliberately NOT given a `concurrency:` group: cancelling a slow job
-    # mid-run reports conclusion "cancelled", which reads as a failed check on
-    # an otherwise-green commit. Ungrouped, every trigger gets its own
-    # independent run that always reaches a real conclusion — and with only
-    # schedule + workflow_dispatch as triggers, parallel instances require a
-    # deliberate manual dispatch during the nightly window.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -113,72 +53,21 @@ jobs:
         if: always()
         run: sccache --show-stats
 
-      # clang-tidy advisory pass: misc-include-cleaner, misc-unused-*, readability-redundant-declaration.
-      # These checks are in .clang-tidy Checks but excluded from WarningsAsErrors, so they
-      # produce warnings (exit 0) not errors, and the finding count below is the whole point
-      # of the step.
-      #
-      # exo-dev lint quality, not a clang-tidy invocation written out here. This step used to
-      # pass every tracked source on one command line: ~900 paths is roughly 36 KB against the
-      # 32767-character CreateProcess limit, so the process never started, and with
-      # continue-on-error the run went green without the notice line ever appearing.
-      # exo-dev batches the file list to fit and runs the batches in parallel, and it is the
-      # same invocation local verification uses, so the two cannot drift apart.
-      #
-      # NO continue-on-error. It is the reason the launch failure went unnoticed for as long
-      # as it did. exo-dev separates the two outcomes for us: findings are reported and exit
-      # 0, while "clang-tidy is not installed" and "this tree has no compile database" are
-      # non-zero -- which is exactly the half that must go red.
-      - name: clang-tidy advisory checks
-        shell: pwsh
-        run: |
-          $report = Join-Path $env:RUNNER_TEMP 'clang-tidy-advisory.txt'
-          cargo exo-dev lint quality --only clang-tidy --build-dir build/windows-x64-ninja-debug --report-path $report
-          if ($LASTEXITCODE -ne 0) {
-            throw "exo-dev lint quality could not run clang-tidy (exit $LASTEXITCODE); the advisory pass produced no finding count."
-          }
-          # Counted from the report file rather than the console: the script prints only a
-          # tail, and a count taken from a truncated log is not the count it claims to be.
-          $advisory = 'misc-include-cleaner|misc-unused-using-decls|misc-unused-parameters|misc-unused-alias-decls|readability-redundant-declaration'
-          $findings = @(Get-Content -LiteralPath $report -ErrorAction SilentlyContinue |
-            Where-Object { $_ -match ": (warning|error): " -and $_ -match $advisory })
-          Write-Host "::notice::clang-tidy advisory findings: $($findings.Count) (misc-include-cleaner / misc-unused-* / readability-redundant-declaration)"
-          $findings | Select-Object -First 40 | ForEach-Object { Write-Host "  $_" }
-          if ($findings.Count -gt 40) { Write-Host "  ... ($($findings.Count - 40) more; the full pass is in $report)" }
+      - name: Provision pinned cppcheck
+        run: cargo exo-dev setup cppcheck
 
-      # cppcheck --enable=unusedFunction: whole-program, no --error-exitcode. The only
-      # place this pass runs. It needs a whole-program analysis that cannot share the
-      # per-check one the blocking gate does, and it cannot fail anything, so paying for
-      # it on every local commit and push bought nothing a nightly does not.
+      - name: clang-tidy advisory checks
+        run: cargo exo-dev lint quality --only clang-tidy --build-dir build/windows-x64-ninja-debug --report-path .workspace/advisory/clang-tidy.txt
+
       - name: cppcheck unusedFunction (advisory)
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
-            -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty FullName -First 1
-          if (-not $cppcheck) { $cppcheck = (Get-Command cppcheck -ErrorAction SilentlyContinue)?.Source }
-          if (-not $cppcheck) {
-            # Install cppcheck via winget if not present on the runner
-            winget install --id Cppcheck.Cppcheck --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null
-            $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
-              -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
-              Select-Object -ExpandProperty FullName -First 1
-          }
-          if (-not $cppcheck) {
-            Write-Host "::warning::cppcheck not available — advisory unusedFunction check skipped"
-            exit 0
-          }
-          Write-Host "Running cppcheck --enable=unusedFunction (advisory, no --error-exitcode)..."
-          $findings = & $cppcheck `
-            --enable=unusedFunction --std=c++20 --inline-suppr `
-            --suppressions-list=.cppcheck-suppress --library=windows --library=qt -q `
-            -I libs/engine/include -I libs/capability/include `
-            -i libs/update/third_party libs app 2>&1 |
-            Where-Object { $_ -match '\(unusedFunction\)' }
-          $count = @($findings).Count
-          Write-Host "::notice::cppcheck unusedFunction candidates: $count (advisory — review Qt slots/callbacks before acting)"
-          if ($count -gt 0) {
-            $findings | Select-Object -First 40 | ForEach-Object { Write-Host "  $_" }
-            if ($count -gt 40) { Write-Host "  ... ($($count - 40) more)" }
-          }
+        if: ${{ !cancelled() }}
+        run: cargo exo-dev lint quality --only cppcheck-unused-function --report-path .workspace/advisory/cppcheck.txt
+
+      - name: Retain raw diagnostics, normalized sites and summaries
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: advisory-diagnostics
+          path: .workspace/advisory/
+          include-hidden-files: true
+          if-no-files-found: error

@@ -1,5 +1,12 @@
 #include <gtest/gtest.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <iterator>
+#include <optional>
+#include <string>
 #include <update/swap_engine.h>
+#include <update/update_types.h>
 #define WIN32_LEAN_AND_MEAN
 #include <chrono>
 #include <filesystem>

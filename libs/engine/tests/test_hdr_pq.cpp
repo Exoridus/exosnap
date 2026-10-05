@@ -2,6 +2,8 @@
 // GPU: the compute shader (gpu_hdr_pq.*) replicates hdr_pq.h verbatim, so
 // pinning the CPU reference here pins the encoded HDR10 signal too.
 
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/color_metadata.h"
 #include "hdr_pq.h"
 
 #include <exosnap/engine/hdr_native.h>

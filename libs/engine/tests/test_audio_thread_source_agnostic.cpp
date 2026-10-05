@@ -1,12 +1,20 @@
+#include <cstddef>
 #include <gtest/gtest.h>
 
 #include "audio_thread.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/error_types.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include "exosnap/engine/packet_types.h"
+#include "mux_queue.h"
 #include "session_internal.h"
 
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -127,14 +135,12 @@ class MockAudioCaptureSource : public IAudioCaptureSource {
 std::vector<EncodedAudioPacket> GatherQueuedAudioPackets(SessionState& state) {
     std::vector<EncodedAudioPacket> packets;
     {
-        std::lock_guard lk(state.premux_mutex);
-        for (const auto& pkt : state.audio_premux) {
+        for (const auto& pkt : state.premux.PendingSnapshot().audio) {
             packets.push_back(pkt);
         }
     }
     {
-        std::lock_guard lk(state.mux_mutex);
-        for (const auto& item : state.mux_queue) {
+        for (const auto& item : state.mux_queue.Snapshot()) {
             if (const auto* pkt = std::get_if<EncodedAudioPacket>(&item.payload)) {
                 packets.push_back(*pkt);
             }
@@ -178,8 +184,7 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_SendsEosWithTrackId) {
 
     bool foundEos = false;
     {
-        std::lock_guard lk(state.mux_mutex);
-        for (const auto& item : state.mux_queue) {
+        for (const auto& item : state.mux_queue.Snapshot()) {
             if (const auto* eos = std::get_if<AudioEosSentinel>(&item.payload)) {
                 foundEos = true;
                 EXPECT_EQ(eos->track_id, 1u);
@@ -206,16 +211,14 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_SourceInitFailureRecordsFailure)
     EXPECT_TRUE(state.HasFailure());
 
     {
-        std::lock_guard lk(state.failure_mutex);
-        EXPECT_TRUE(state.failure_recorded);
-        EXPECT_EQ(state.failure.error_phase, ErrorPhase::AudioCapture);
-        EXPECT_NE(state.failure.error_detail.find("Mock source init failure"), std::string::npos);
+        ASSERT_TRUE(state.HasFailure());
+        EXPECT_EQ(state.FailureSnapshot()->error_phase, ErrorPhase::AudioCapture);
+        EXPECT_NE(state.FailureSnapshot()->error_detail.find("Mock source init failure"), std::string::npos);
     }
 
     bool foundEos = false;
     {
-        std::lock_guard lk(state.mux_mutex);
-        for (const auto& item : state.mux_queue) {
+        for (const auto& item : state.mux_queue.Snapshot()) {
             if (std::get_if<AudioEosSentinel>(&item.payload) != nullptr) {
                 foundEos = true;
                 break;
@@ -249,24 +252,21 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_UnrecognizedAudioCodec_FailsInst
 
     EXPECT_TRUE(state.HasFailure());
     {
-        std::lock_guard lk(state.failure_mutex);
-        EXPECT_TRUE(state.failure_recorded);
-        EXPECT_EQ(state.failure.error_phase, ErrorPhase::AudioEncode);
-        EXPECT_NE(state.failure.error_detail.find("Unrecognized audio codec"), std::string::npos);
+        ASSERT_TRUE(state.HasFailure());
+        EXPECT_EQ(state.FailureSnapshot()->error_phase, ErrorPhase::AudioEncode);
+        EXPECT_NE(state.FailureSnapshot()->error_detail.find("Unrecognized audio codec"), std::string::npos);
     }
 
     // The failure must be raised before any encoder (in particular the AAC
     // encoder the old `default:` branch built) gets to run: the track was
     // never published as ready, and no packets or EOS sentinel were queued.
     {
-        std::lock_guard lk(state.premux_mutex);
-        EXPECT_FALSE(state.codec_private.audio_track_ready[1]);
+        EXPECT_FALSE(state.premux.CodecSnapshot().audio_track_ready[1]);
     }
     EXPECT_TRUE(GatherQueuedAudioPackets(state).empty());
     bool foundEos = false;
     {
-        std::lock_guard lk(state.mux_mutex);
-        for (const auto& item : state.mux_queue) {
+        for (const auto& item : state.mux_queue.Snapshot()) {
             if (std::get_if<AudioEosSentinel>(&item.payload) != nullptr) {
                 foundEos = true;
             }
@@ -670,8 +670,7 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_EventDrivenSource_EncodesAllPack
 
     bool foundEos = false;
     {
-        std::lock_guard lk(state.mux_mutex);
-        for (const auto& item : state.mux_queue) {
+        for (const auto& item : state.mux_queue.Snapshot()) {
             if (std::get_if<AudioEosSentinel>(&item.payload) != nullptr) {
                 foundEos = true;
             }
@@ -696,8 +695,7 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_EventDrivenIdleDrain_WakesOnStop
     thread->Start();
     Sleep(50); // let the drain reach its idle wait
 
-    state.stop_requested.store(true);
-    state.SignalStopEvent();
+    state.RequestCleanStop();
 
     EXPECT_TRUE(thread->Join(2000));
     EXPECT_FALSE(state.HasFailure());

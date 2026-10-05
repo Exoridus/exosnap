@@ -1,7 +1,12 @@
 #include "loopback_meter_service.h"
+#include "meter_start_mode.h"
 
 #include <exosnap/engine/audio_meter.h>
 #include <exosnap/engine/interfaces/IAudioCaptureSource.h>
+#include <future>
+#include <stop_token>
+#include <string>
+#include <thread>
 
 #if EXOSNAP_ENGINE_HAS_WASAPI_CAPTURE_SRC
 #include "wasapi_loopback_src.h"

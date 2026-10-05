@@ -1,5 +1,8 @@
+#include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/recorder_session.h"
 #include "wasapi_capture_src.h"
 
 #include <vector>

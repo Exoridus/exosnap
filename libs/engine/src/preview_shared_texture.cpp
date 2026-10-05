@@ -1,7 +1,12 @@
+#include "exosnap/engine/pipeline_diagnostics.h"
+#include <cstdint>
 #include <exosnap/engine/gpu_surface_inventory.h>
 #include <exosnap/engine/preview_shared_texture.h>
 
 #include <cstdio>
+#include <string>
+#include <utility>
+#include <winrt/base.h>
 
 namespace exosnap::engine {
 

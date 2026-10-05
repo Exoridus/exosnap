@@ -1,5 +1,18 @@
 #include <capability/encoder_device_resolver.h>
 
+#include <capability/adapter_capability.h>
+#include <capability/adapter_enum.h>
+#include <capability/capability_set.h>
+#include <capability/config_types.h>
+#include <capability/runtime_snapshot.h>
+#include <capability/support_level.h>
+#include <cstddef>
+#include <cstdint>
+#include <exosnap/engine/encoder_device.h>
+#include <span>
+#include <utility>
+#include <vector>
+
 #include <capability/capability_builder.h>
 
 namespace exosnap::capability {

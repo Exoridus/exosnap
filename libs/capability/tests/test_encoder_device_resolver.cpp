@@ -1,5 +1,14 @@
 #include <gtest/gtest.h>
 
+#include <capability/adapter_capability.h>
+#include <capability/adapter_enum.h>
+#include <capability/config_types.h>
+#include <capability/support_level.h>
+#include <cstddef>
+#include <cstdint>
+#include <exosnap/engine/encoder_device.h>
+#include <vector>
+
 #include <capability/capability_builder.h>
 #include <capability/encoder_device_resolver.h>
 
@@ -15,7 +24,6 @@ using exosnap::capability::BuildEncoderDeviceCandidates;
 using exosnap::capability::CapabilitySetForAdapter;
 using exosnap::capability::EncoderDeviceRequest;
 using exosnap::capability::ResolveEncoderDevice;
-using exosnap::capability::SupportLevel;
 using exosnap::capability::VideoCodec;
 using exosnap::engine::EncoderBackend;
 using exosnap::engine::EncoderDevicePreference;

@@ -99,4 +99,4 @@ Publication remains blocked until a reviewed workflow independently verifies the
 
 ## Implementation and tests
 
-See [shared control](../../libs/control), [application control](../../app/live_verify), [verifier](../../tools/exo-verify), [guest agent](../../tools/exo-guest), [samples](../../tests/samples), [environment tool](../../tools/envctl), and [VM recipe](../../tools/vm). Hostile-input, refusal and fake-provider tests are essential because a real device cannot reliably reproduce every dishonest-success or failed-restore case.
+See [shared control](../../libs/control), [application control](../../app/live_verify), [verifier](../../tools/exo-verify), [guest agent](../../tools/exo-guest), [samples](../../tests/samples), [environment tool](../../tools/envctl), and [VM recipe](../../tools/exo-verify/src/disposable/hyperv/recipe.rs). Hostile-input, refusal and fake-provider tests are essential because a real device cannot reliably reproduce every dishonest-success or failed-restore case.

@@ -10,5 +10,6 @@ pub mod frame;
 #[cfg(windows)]
 pub mod hvsock;
 pub mod protocol;
+pub mod provision;
 
 pub use protocol::{PROTOCOL_VERSION, Request, Response, SERVICE_ID};

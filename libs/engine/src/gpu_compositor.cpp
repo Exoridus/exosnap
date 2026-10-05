@@ -1,12 +1,17 @@
 #include "gpu_compositor.h"
+#include <cstdint>
 #include <exosnap/engine/gpu_surface_inventory.h>
 
+#include "exosnap/engine/overlay_shader.h"
+#include "exosnap/engine/sdr_white_level.h"
+#include "exosnap/engine/webcam_placement.h"
 #include "measured_shader_compile.h"
 
-#include <algorithm>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <optional>
+#include <string>
+#include <winrt/base.h>
 
 namespace exosnap::engine {
 namespace {

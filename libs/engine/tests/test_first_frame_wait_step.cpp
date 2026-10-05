@@ -9,6 +9,7 @@
 // behaviour is pinned without a live capture. The start-hold reuses the already
 // pinned DecideOdReopen budget policy; the start-budget cases are added here too.
 
+#include <cstdint>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 
 #include <chrono>

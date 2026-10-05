@@ -14,6 +14,7 @@
 #include "LogsAdapter.h"
 #include "NotificationsAdapter.h"
 #include "OverlayAdapter.h"
+#include "OverlayTelemetryAdapter.h"
 #include "QuickThemeTokens.h"
 #include "QuickWindowChrome.h"
 #include "QuickWindowGeometry.h"
@@ -90,6 +91,7 @@ class QuickApplication {
     [[nodiscard]] AboutViewModelAdapter* aboutViewModel() noexcept;
     [[nodiscard]] RecordPreviewAdapter* recordPreviewAdapter() noexcept;
     [[nodiscard]] RecordViewModelAdapter* recordViewModelAdapter() noexcept;
+    [[nodiscard]] OverlayTelemetryAdapter* overlayTelemetryAdapter() noexcept;
     [[nodiscard]] SettingsAdapter* settingsAdapter() noexcept;
     [[nodiscard]] DeviceAdapter* deviceAdapter() noexcept;
     [[nodiscard]] DiagnosticsAdapter* diagnosticsAdapter() noexcept;
@@ -574,6 +576,7 @@ class QuickApplication {
     void importPresetsFromFile(const QString& path);
     void wireRecordCommands();
     void synchronizeRecordState();
+    void synchronizeOverlayTelemetry();
     void selectTarget(int target_index, CaptureMode mode);
     void selectRegion(const QRectF& normalized_rect);
     void startRequested();
@@ -747,6 +750,7 @@ class QuickApplication {
     // After record_view_model_: it holds a pointer into it and is constructed
     // with that pointer.
     OverlayAdapter overlay_adapter_;
+    OverlayTelemetryAdapter overlay_telemetry_adapter_;
     RecordPreviewAdapter record_preview_adapter_;
     // Declared BEFORE the coordinator so it is destroyed AFTER it: the coordinator
     // holds an evidence provider that reads this probe. Null until a window target

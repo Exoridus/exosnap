@@ -1,12 +1,18 @@
 #include "exosnap/engine/edit_player_session.h"
 
+#include "exosnap/engine/edit_player_engine.h"
 #include "exosnap/engine/wasapi_audio_render.h"
 #include "playback_clock.h"
 
 #include <atomic>
-#include <cmath>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
+#include <utility>
 
 namespace exosnap::engine {
 

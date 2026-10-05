@@ -56,7 +56,8 @@ class AudioThread : public std::enable_shared_from_this<AudioThread> {
     // exit flush the encoder, publish final stats, and push the EOS sentinel.
     // Codec differences live entirely behind IAudioEncoder (frame sizing and
     // flush semantics are the encoder's own).
-    void EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t channels, AudioSampleFormat source_format);
+    void EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t channels, AudioSampleFormat source_format,
+                    OutputFormatAudioSrc& output_format_source);
 
     std::shared_ptr<SessionState> m_state_ptr;
     SessionState& m_state; // = *m_state_ptr (kept as a reference for Run())
@@ -65,12 +66,7 @@ class AudioThread : public std::enable_shared_from_this<AudioThread> {
     // Non-owning view of source_ when it is a mixer, resolved before the
     // OutputFormatAudioSrc wrapper hides it. Null for a bare single source,
     // which the encode loop mutes by feeding silence instead.
-    MixedAudioSrc* mixed_src_ = nullptr;
-    // Typed, non-owning view of the OutputFormatAudioSrc wrapper that source_
-    // points at after Run() wraps the raw capture source. Lets the
-    // clock-slaving controller drive its compensation without an interface
-    // downcast. Valid for the lifetime of source_.
-    OutputFormatAudioSrc* output_format_src_ = nullptr;
+    MixedAudioSrc* const mixed_src_;
     uint32_t track_id_ = 0;
     // Set once the measured audio zero point (the QPC instant of the first
     // captured sample) has been published for this track. A source that never

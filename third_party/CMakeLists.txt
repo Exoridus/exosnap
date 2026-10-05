@@ -332,11 +332,19 @@ endif()
 # In-process ETW consumer subset (PresentData/ only — NOT the tool repo's main()s).
 # Pinned to a fixed release tag (never a rolling latest — BtbN-pin lesson).
 if(EXOSNAP_WITH_PRESENTMON)
+    set(presentmon_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/presentmon-clang.patch")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${presentmon_patch}")
+    file(SHA256 "${presentmon_patch}" presentmon_patch_sha256)
     FetchContent_Declare(
         presentmon
         GIT_REPOSITORY https://github.com/GameTechDev/PresentMon.git
         GIT_TAG        2ce1158783e570539119f577d894252b395cadca   # == v1.10.0 (pinned by SHA).
         GIT_SHALLOW    TRUE
+        # Qualify enum types hidden by descriptor members for standard C++ lookup.
+        PATCH_COMMAND cargo run --quiet --locked
+            --manifest-path "${PROJECT_SOURCE_DIR}/tools/Cargo.toml" -p exo-dev --
+            apply-dependency-patch --source <SOURCE_DIR> --patch "${presentmon_patch}"
+            --patch-sha256 "${presentmon_patch_sha256}"
     )
     FetchContent_MakeAvailable(presentmon)
 

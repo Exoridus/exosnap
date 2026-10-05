@@ -1,6 +1,9 @@
+#include <cstdint>
 #include <exosnap/engine/wgc_session_config.h>
 
-#include <winrt/Windows.Graphics.Capture.h>
+// Public projections provide inline definitions beyond the SDK's impl declarations.
+#include <winrt/Windows.Graphics.Capture.h> // IWYU pragma: keep
+#include <winrt/base.h>
 
 namespace exosnap::engine {
 namespace {

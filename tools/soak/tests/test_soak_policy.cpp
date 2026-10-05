@@ -8,7 +8,6 @@
 #include <cmath>
 #include <vector>
 
-using exosnap::soak::AbortDecision;
 using exosnap::soak::SampleToJsonLine;
 using exosnap::soak::SoakAbortPolicy;
 using exosnap::soak::SoakMetricsAggregator;
@@ -86,7 +85,7 @@ TEST(SoakAbortPolicy, DriftIgnoredWhenUnavailable) {
     t.sustained_samples = 10;
     auto h = HealthyTimeline(200);
     for (auto& s : h) {
-        s.av_drift_ms = 999.0; // huge, but...
+        s.av_drift_ms = 999.0;        // huge, but...
         s.av_drift_available = false; // ...never reported
     }
     EXPECT_EQ(SoakAbortPolicy{t}.Evaluate(h).verdict, SoakVerdict::Continue);

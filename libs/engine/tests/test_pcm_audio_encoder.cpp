@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/packet_types.h"
 #include "pcm_audio_encoder.h"
 
 #include <cstdint>
