@@ -135,7 +135,7 @@ jobs:
   lint:
     name: lint
     runs-on: windows-2022
-    timeout-minutes: 10
+    timeout-minutes: 20
     concurrency:
       group: ci-${{ github.workflow }}-lint-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
