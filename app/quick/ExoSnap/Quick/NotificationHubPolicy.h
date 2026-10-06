@@ -2,6 +2,7 @@
 
 #include "notifications/NotificationEvent.h"
 
+#include <QCoreApplication>
 #include <QString>
 
 namespace exosnap::notifications {
@@ -97,29 +98,29 @@ namespace exosnap::notifications {
     case NotificationAction::None:
         return QString();
     case NotificationAction::OpenFolder:
-        return QStringLiteral("Show in folder");
+        return QCoreApplication::translate("Notifications", "Show in folder");
     case NotificationAction::OpenRecovery:
-        return QStringLiteral("Recover");
+        return QCoreApplication::translate("Notifications", "Recover");
     case NotificationAction::ChangeFolder:
-        return QStringLiteral("Change folder");
+        return QCoreApplication::translate("Notifications", "Change folder");
     case NotificationAction::ShowFile:
-        return QStringLiteral("Show file");
+        return QCoreApplication::translate("Notifications", "Show file");
     case NotificationAction::Discard:
-        return QStringLiteral("Discard");
+        return QCoreApplication::translate("Notifications", "Discard");
     case NotificationAction::OpenUpdate:
-        return QStringLiteral("View update");
+        return QCoreApplication::translate("Notifications", "View update");
     case NotificationAction::Edit:
-        return QStringLiteral("Edit");
+        return QCoreApplication::translate("Notifications", "Edit");
     case NotificationAction::RelaunchElevated:
-        return QStringLiteral("Restart as administrator");
+        return QCoreApplication::translate("Notifications", "Restart as administrator");
     case NotificationAction::OpenDiagnostics:
-        return QStringLiteral("View diagnostics");
+        return QCoreApplication::translate("Notifications", "View diagnostics");
     case NotificationAction::UndoPresetSwitch:
-        return QStringLiteral("Undo");
+        return QCoreApplication::translate("Notifications", "Undo");
     case NotificationAction::OpenHotkeys:
-        return QStringLiteral("Rebind");
+        return QCoreApplication::translate("Notifications", "Rebind");
     case NotificationAction::SendReport:
-        return QStringLiteral("Send report");
+        return QCoreApplication::translate("Notifications", "Send report");
     }
     // Only reachable through a cast from an out-of-range value.
     return QString();
@@ -136,9 +137,8 @@ namespace exosnap::notifications {
 [[nodiscard]] inline QString SavedRecordingBody(const QString& file_name, int problems) {
     if (problems <= 0)
         return file_name;
-    return file_name + QStringLiteral(" \xc2\xb7 %1 problem%2 observed")
-                           .arg(problems)
-                           .arg(problems == 1 ? QString() : QStringLiteral("s"));
+    return file_name + QStringLiteral(" \xc2\xb7 ") +
+           QCoreApplication::translate("Notifications", "Problems observed: %n", nullptr, problems);
 }
 
 } // namespace exosnap::notifications

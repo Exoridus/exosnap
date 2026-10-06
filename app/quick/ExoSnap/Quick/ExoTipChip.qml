@@ -71,7 +71,7 @@ Rectangle {
                 }
 
                 Label {
-                    text: root.tips.length === 1 ? qsTr("1 tip") : qsTr("%1 tips").arg(root.tips.length)
+                    text: qsTr("Tips: %n", "", root.tips.length)
                     textFormat: Text.PlainText
                     color: ExoTheme.accent
                     Layout.fillWidth: true

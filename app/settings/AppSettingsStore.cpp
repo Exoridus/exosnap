@@ -6,6 +6,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 
+#include "i18n/Language.h"
 #include "settings/ConfigPaths.h"
 #include "ui/theme/ExoSnapThemes.h"
 
@@ -137,6 +138,8 @@ PersistedAppSettings AppSettingsStore::Load() const {
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("appearance"));
+    persisted.ui_language =
+        i18n::NormalizeLanguage(settings.value(QStringLiteral("ui_language"), QStringLiteral("system")).toString());
     // `appearance_id` + `accent_id` replace the single `theme_id`. A store
     // written by an older build carries only `theme_id`, so it is migrated to
     // the closest pair rather than dropped — otherwise every existing install
@@ -293,6 +296,7 @@ bool AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
 
     settings.beginGroup(QStringLiteral("appearance"));
     settings.setValue(QStringLiteral("appearance_id"), settings_snapshot.appearance_id);
+    settings.setValue(QStringLiteral("ui_language"), i18n::NormalizeLanguage(settings_snapshot.ui_language));
     settings.setValue(QStringLiteral("accent_id"), settings_snapshot.accent_id);
     // Dropped rather than left behind: a stale `theme_id` would be picked up
     // again by the migration path above if the new keys were ever cleared, and

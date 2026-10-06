@@ -1,4 +1,5 @@
 #include "OutputPathPolicy.h"
+#include <capability/translatable.h>
 
 #include <windows.h>
 
@@ -390,17 +391,18 @@ std::wstring OutputFolderPolicyMessage(OutputFolderPolicyResult result) {
     case OutputFolderPolicyResult::Ok:
         return L"";
     case OutputFolderPolicyResult::EmptyInput:
-        return L"Output folder is required.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Output folder is required.");
     case OutputFolderPolicyResult::InvalidPath:
-        return L"Output folder path is invalid.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Output folder path is invalid.");
     case OutputFolderPolicyResult::NotAbsolutePath:
-        return L"Output folder must resolve to an absolute Windows path.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Output folder must resolve to an absolute Windows path.");
     case OutputFolderPolicyResult::UnsupportedEnvironmentVariable:
-        return L"Only allowlisted environment variables are supported in output folder.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings",
+                                    L"Only allowlisted environment variables are supported in output folder.");
     case OutputFolderPolicyResult::UnsupportedExpression:
-        return L"Shell expressions are not supported in output folder.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Shell expressions are not supported in output folder.");
     }
-    return L"Output folder is invalid.";
+    return EXOSNAP_TRANSLATABLE("OutputSettings", L"Output folder is invalid.");
 }
 
 std::wstring FilenamePatternPolicyMessage(FilenamePatternPolicyResult result) {
@@ -408,19 +410,19 @@ std::wstring FilenamePatternPolicyMessage(FilenamePatternPolicyResult result) {
     case FilenamePatternPolicyResult::Ok:
         return L"";
     case FilenamePatternPolicyResult::EmptyInput:
-        return L"Filename pattern is required.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Filename pattern is required.");
     case FilenamePatternPolicyResult::ParentTraversalSegment:
-        return L"Filename pattern must not contain '..' segments.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Filename pattern must not contain '..' segments.");
     case FilenamePatternPolicyResult::AbsolutePath:
-        return L"Filename pattern must stay relative to output folder.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Filename pattern must stay relative to output folder.");
     case FilenamePatternPolicyResult::UnsupportedEnvironmentVariable:
-        return L"Environment variables are not allowed in filename pattern.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Environment variables are not allowed in filename pattern.");
     case FilenamePatternPolicyResult::UnsupportedHomeAlias:
-        return L"Home alias is not allowed in filename pattern.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Home alias is not allowed in filename pattern.");
     case FilenamePatternPolicyResult::UnsupportedExpression:
-        return L"Shell expressions are not allowed in filename pattern.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Shell expressions are not allowed in filename pattern.");
     }
-    return L"Filename pattern is invalid.";
+    return EXOSNAP_TRANSLATABLE("OutputSettings", L"Filename pattern is invalid.");
 }
 
 } // namespace exosnap

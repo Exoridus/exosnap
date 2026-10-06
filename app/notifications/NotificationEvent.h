@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QCoreApplication>
 #include <QString>
 #include <QStringList>
 #include <cstdint>
@@ -196,30 +197,33 @@ struct NotificationEvent {
     using exosnap::engine::AudioSourceKind;
     using exosnap::engine::AudioSourceKindBit;
     if ((degraded_source_kinds & AudioSourceKindBit(AudioSourceKind::Mic)) != 0)
-        sources << QStringLiteral("Microphone");
+        sources << QCoreApplication::translate("Notifications", "Microphone");
     if ((degraded_source_kinds &
          (AudioSourceKindBit(AudioSourceKind::Sys) | AudioSourceKindBit(AudioSourceKind::SystemOutput))) != 0)
-        sources << QStringLiteral("System audio");
+        sources << QCoreApplication::translate("Notifications", "System audio");
     if ((degraded_source_kinds & AudioSourceKindBit(AudioSourceKind::App)) != 0)
-        sources << QStringLiteral("Application audio");
+        sources << QCoreApplication::translate("Notifications", "Application audio");
     if (!sources.isEmpty()) {
-        event.title = sources.size() == 1 ? QStringLiteral("%1 went silent").arg(sources.front())
-                                          : QStringLiteral("Audio sources went silent");
-        event.body = QStringLiteral("%1 lost %2 device. Recording continues without %3 while ExoSnap retries the "
-                                    "connection.")
-                         .arg(sources.join(QStringLiteral(", ")),
-                              sources.size() == 1 ? QStringLiteral("its") : QStringLiteral("their"),
-                              sources.size() == 1 ? QStringLiteral("it") : QStringLiteral("them"));
+        event.title = sources.size() == 1
+                          ? QCoreApplication::translate("Notifications", "%1 went silent").arg(sources.front())
+                          : QCoreApplication::translate("Notifications", "Audio sources went silent");
+        event.body = QCoreApplication::translate("Notifications",
+                                                 "Audio unavailable for %1. Recording continues without this audio "
+                                                 "while ExoSnap retries the connection.",
+                                                 nullptr, static_cast<int>(sources.size()))
+                         .arg(sources.join(QStringLiteral(", ")));
         event.action = NotificationAction::OpenDiagnostics;
         return event;
     }
-    event.title =
-        degraded_count == 1 ? QStringLiteral("Audio source went silent") : QStringLiteral("Audio sources went silent");
-    event.body = degraded_count == 1 ? QStringLiteral("An audio source lost its device. Recording continues — "
-                                                      "ExoSnap keeps retrying the connection.")
-                                     : QStringLiteral("%1 audio sources lost their device. Recording continues — "
-                                                      "ExoSnap keeps retrying the connections.")
-                                           .arg(degraded_count);
+    event.title = degraded_count == 1 ? QCoreApplication::translate("Notifications", "Audio source went silent")
+                                      : QCoreApplication::translate("Notifications", "Audio sources went silent");
+    event.body =
+        degraded_count == 1
+            ? QCoreApplication::translate("Notifications", "An audio source lost its device. Recording continues — "
+                                                           "ExoSnap keeps retrying the connection.")
+            : QCoreApplication::translate("Notifications", "%1 audio sources lost their device. Recording continues — "
+                                                           "ExoSnap keeps retrying the connections.")
+                  .arg(degraded_count);
     event.action = NotificationAction::OpenDiagnostics;
     return event;
 }
@@ -247,14 +251,17 @@ struct NotificationEvent {
                                                                      bool exclusive_fullscreen_hint) {
     NotificationEvent event;
     event.type = NotificationType::WindowCaptureStalled;
-    event.title = QStringLiteral("Window capture appears to have stalled");
+    event.title = QCoreApplication::translate("Notifications", "Window capture appears to have stalled");
     const int seconds = static_cast<int>(seconds_without_frames + 0.5);
-    event.body = QStringLiteral("No new frame has arrived from the captured window for %1 seconds. The recording is "
-                                "still running, but the captured window may be frozen.")
-                     .arg(seconds);
+    event.body =
+        QCoreApplication::translate(
+            "Notifications", "No new frame has arrived from the captured window for %1 seconds. The recording is "
+                             "still running, but the captured window may be frozen.")
+            .arg(seconds);
     if (exclusive_fullscreen_hint) {
-        event.body += QStringLiteral(" If the application switched to exclusive fullscreen, set it back to windowed "
-                                     "or borderless mode — or stop the recording.");
+        event.body += QCoreApplication::translate(
+            "Notifications", " If the application switched to exclusive fullscreen, set it back to windowed "
+                             "or borderless mode — or stop the recording.");
     }
     event.action = NotificationAction::OpenDiagnostics;
     return event;
@@ -268,14 +275,17 @@ struct NotificationEvent {
                                                                           const QString& kept_device) {
     NotificationEvent event;
     event.type = NotificationType::AudioDefaultDeviceChanged;
-    event.title = QStringLiteral("Default microphone changed");
-    const QString to =
-        new_device.isEmpty() ? QStringLiteral("another device") : QStringLiteral("\"%1\"").arg(new_device);
-    const QString kept = kept_device.isEmpty() ? QStringLiteral("the device it started with")
-                                               : QStringLiteral("\"%1\"").arg(kept_device);
-    event.body = QStringLiteral("Windows switched the default microphone to %1 while recording. This recording keeps "
-                                "capturing %2; it will not switch mid-file.")
-                     .arg(to, kept);
+    event.title = QCoreApplication::translate("Notifications", "Default microphone changed");
+    const QString to = new_device.isEmpty() ? QCoreApplication::translate("Notifications", "another device")
+                                            : QStringLiteral("\"%1\"").arg(new_device);
+    const QString kept = kept_device.isEmpty()
+                             ? QCoreApplication::translate("Notifications", "the device it started with")
+                             : QStringLiteral("\"%1\"").arg(kept_device);
+    event.body =
+        QCoreApplication::translate(
+            "Notifications", "Windows switched the default microphone to %1 while recording. This recording keeps "
+                             "capturing %2; it will not switch mid-file.")
+            .arg(to, kept);
     event.action = NotificationAction::OpenDiagnostics;
     return event;
 }
@@ -290,16 +300,20 @@ struct NotificationEvent {
                                                                       bool display_missing = false) {
     NotificationEvent event;
     event.type = NotificationType::WindowCaptureStalled;
-    event.title = QStringLiteral("Display capture appears to have stalled");
+    event.title = QCoreApplication::translate("Notifications", "Display capture appears to have stalled");
     const int seconds = static_cast<int>(seconds_without_frames + 0.5);
-    event.body = QStringLiteral("No new frame has arrived from the captured display for %1 seconds. The recording "
-                                "is still running and holds the last picture.")
-                     .arg(seconds);
+    event.body =
+        QCoreApplication::translate("Notifications",
+                                    "No new frame has arrived from the captured display for %1 seconds. The recording "
+                                    "is still running and holds the last picture.")
+            .arg(seconds);
     if (display_missing) {
-        event.body += QStringLiteral(" The captured display is no longer connected; reconnect it, or stop the "
-                                     "recording.");
+        event.body += QCoreApplication::translate(
+            "Notifications", " The captured display is no longer connected; reconnect it, or stop the "
+                             "recording.");
     } else if (display_off) {
-        event.body += QStringLiteral(" The display is off or asleep; wake it, or stop the recording.");
+        event.body += QCoreApplication::translate("Notifications",
+                                                  " The display is off or asleep; wake it, or stop the recording.");
     }
     event.action = NotificationAction::OpenDiagnostics;
     return event;
@@ -326,8 +340,9 @@ struct NotificationEvent {
 [[nodiscard]] inline NotificationEvent MakeElevatedRelaunchOfferEvent() {
     NotificationEvent event;
     event.type = NotificationType::ElevationRequired;
-    event.title = QStringLiteral("Restart as administrator");
-    event.body = QStringLiteral(
+    event.title = QCoreApplication::translate("Notifications", "Restart as administrator");
+    event.body = QCoreApplication::translate(
+        "Notifications",
         "In-depth diagnostics need an elevated process. Restart ExoSnap as administrator to start the traces.");
     event.action = NotificationAction::RelaunchElevated;
     return event;

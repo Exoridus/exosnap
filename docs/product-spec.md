@@ -36,7 +36,9 @@ Modal scrims cover the shell, including its title band; the content card remains
 
 Expert Settings offers an encoding-device row: Auto (default) or one enumerated physical adapter, shown as device name plus its backend. Auto encodes on the capture adapter when that adapter has a compatible, implemented backend; it never picks a different GPU. An explicit device is executable only when it is the capture adapter, because the current pipeline encodes the capture device's surfaces; a device on another adapter is shown unavailable with its reason. Explicit AMD/Intel devices have no implemented backend in this build and are never silently redirected to NVIDIA. The persisted preference stores a PCI fingerprint, not the boot-scoped adapter LUID; a missing or ambiguous device resolves to an honest failure rather than a guessed adapter. Adapter cards in Diagnostics remain inspection surfaces.
 
-### Appearance
+### Appearance and language
+
+UI language offers System, English and Deutsch, with System as the default. German system locales use German; all other system locales fall back to English. A language change is saved immediately and shows a restart indication. The running process keeps its language until restart. The app-launched updater uses the running application's effective language; a manually launched updater uses System. English source text remains the fallback if a catalogue cannot be loaded.
 
 Appearance and accent are independent: Dark or Light, plus Aqua, Sky, Violet or Magenta. Defaults are Dark + Aqua. Changes apply without restart. Unknown stored preferences resolve to a valid default; supported older preference forms are mapped on load.
 

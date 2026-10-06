@@ -90,7 +90,7 @@ Popup {
         implicitHeight: root.availableHeight
         spacing: 0
 
-        RowLayout {
+        ColumnLayout {
             Layout.fillWidth: true
             Layout.leftMargin: ExoTheme.spacingLg
             Layout.rightMargin: ExoTheme.spacingLg
@@ -110,69 +110,73 @@ Popup {
                 }
             }
 
-            // QCR-503. Both of these were a Label carrying an Accessible.Button
-            // role and a TapHandler: they claimed to be buttons to a screen
-            // reader while being unreachable by Tab and inert to Enter/Space.
-            // An AbstractButton around the same Label keeps the presentation
-            // exactly as it was (a word, no chrome) and makes the claim true.
-            AbstractButton {
-                id: markAllReadButton
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: ExoTheme.spacingSm
+                // QCR-503. Both of these were a Label carrying an Accessible.Button
+                // role and a TapHandler: they claimed to be buttons to a screen
+                // reader while being unreachable by Tab and inert to Enter/Space.
+                // An AbstractButton around the same Label keeps the presentation
+                // exactly as it was (a word, no chrome) and makes the claim true.
+                AbstractButton {
+                    id: markAllReadButton
 
-                objectName: "hubMarkAllRead"
-                hoverEnabled: true
-                focusPolicy: Qt.StrongFocus
-                visible: root.notifications.hasEntries
-                padding: ExoTheme.spacingXs
-                Accessible.role: Accessible.Button
-                Accessible.name: qsTr("Mark all read")
-                onClicked: root.notifications.markAllRead()
+                    objectName: "hubMarkAllRead"
+                    hoverEnabled: true
+                    focusPolicy: Qt.StrongFocus
+                    visible: root.notifications.hasEntries
+                    padding: ExoTheme.spacingXs
+                    Accessible.role: Accessible.Button
+                    Accessible.name: qsTr("Mark all read")
+                    onClicked: root.notifications.markAllRead()
 
-                background: Rectangle {
-                    color: "transparent"
-                    border.width: markAllReadButton.visualFocus ? ExoTheme.focusRingWidth : 0
-                    border.color: ExoTheme.text
-                    radius: ExoTheme.radiusXs
-                }
+                    background: Rectangle {
+                        color: "transparent"
+                        border.width: markAllReadButton.visualFocus ? ExoTheme.focusRingWidth : 0
+                        border.color: ExoTheme.text
+                        radius: ExoTheme.radiusXs
+                    }
 
-                contentItem: Label {
-                    text: qsTr("Mark all read")
-                    textFormat: Text.PlainText
-                    color: markAllReadButton.hovered ? ExoTheme.text : ExoTheme.accent
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: ExoTheme.fontSecondary
-                        weight: Font.Medium
+                    contentItem: Label {
+                        text: qsTr("Mark all read")
+                        textFormat: Text.PlainText
+                        color: markAllReadButton.hovered ? ExoTheme.text : ExoTheme.accent
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontSecondary
+                            weight: Font.Medium
+                        }
                     }
                 }
-            }
 
-            AbstractButton {
-                id: clearAllButton
+                AbstractButton {
+                    id: clearAllButton
 
-                objectName: "hubClearAll"
-                hoverEnabled: true
-                focusPolicy: Qt.StrongFocus
-                visible: root.notifications.hasEntries
-                padding: ExoTheme.spacingXs
-                Accessible.role: Accessible.Button
-                Accessible.name: qsTr("Clear all notifications")
-                onClicked: root.notifications.dismissAll()
+                    objectName: "hubClearAll"
+                    hoverEnabled: true
+                    focusPolicy: Qt.StrongFocus
+                    visible: root.notifications.hasEntries
+                    padding: ExoTheme.spacingXs
+                    Accessible.role: Accessible.Button
+                    Accessible.name: qsTr("Clear all notifications")
+                    onClicked: root.notifications.dismissAll()
 
-                background: Rectangle {
-                    color: "transparent"
-                    border.width: clearAllButton.visualFocus ? ExoTheme.focusRingWidth : 0
-                    border.color: ExoTheme.text
-                    radius: ExoTheme.radiusXs
-                }
+                    background: Rectangle {
+                        color: "transparent"
+                        border.width: clearAllButton.visualFocus ? ExoTheme.focusRingWidth : 0
+                        border.color: ExoTheme.text
+                        radius: ExoTheme.radiusXs
+                    }
 
-                contentItem: Label {
-                    text: qsTr("Clear all")
-                    textFormat: Text.PlainText
-                    color: clearAllButton.hovered ? ExoTheme.text : ExoTheme.textMuted
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: ExoTheme.fontSecondary
-                        weight: Font.Medium
+                    contentItem: Label {
+                        text: qsTr("Clear all")
+                        textFormat: Text.PlainText
+                        color: clearAllButton.hovered ? ExoTheme.text : ExoTheme.textMuted
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontSecondary
+                            weight: Font.Medium
+                        }
                     }
                 }
             }

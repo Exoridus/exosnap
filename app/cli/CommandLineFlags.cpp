@@ -59,6 +59,7 @@ constexpr std::array kFlags = {
     KnownFlag{"--window-trace", FlagArity::None},
     KnownFlag{"--hwnd-audit", FlagArity::None},
     KnownFlag{"--pseudo-localize", FlagArity::None},
+    KnownFlag{"--ui-language", FlagArity::Value},
     KnownFlag{"--desktop-pattern", FlagArity::None},
     KnownFlag{"--navigation-lifecycle-test", FlagArity::None},
     KnownFlag{"--preview-smoke-test", FlagArity::None},

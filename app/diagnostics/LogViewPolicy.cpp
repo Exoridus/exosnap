@@ -1,5 +1,6 @@
 #include "LogViewPolicy.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QStringList>
@@ -11,13 +12,13 @@ namespace exosnap::diagnostics {
 QString LogSeverityFilterName(LogSeverityFilter filter) {
     switch (filter) {
     case LogSeverityFilter::All:
-        return QStringLiteral("All");
+        return QCoreApplication::translate("Logs", "All");
     case LogSeverityFilter::Info:
-        return QStringLiteral("Info");
+        return QCoreApplication::translate("Logs", "Info");
     case LogSeverityFilter::Issues:
-        return QStringLiteral("Issues");
+        return QCoreApplication::translate("Logs", "Issues");
     }
-    return QStringLiteral("All");
+    return QCoreApplication::translate("Logs", "All");
 }
 
 bool IsIssueSeverity(LogSeverity severity) noexcept {
@@ -68,9 +69,10 @@ QVector<LogEntry> EntriesInSequenceRange(const QVector<LogEntry>& entries, quint
 
 QString LogStatusText(int visible_count, int total_count, LogSeverityFilter filter, const QString& search_query,
                       const QString& feedback) {
-    const QString search_part =
-        search_query.isEmpty() ? QStringLiteral("no search") : QStringLiteral("search \"%1\"").arg(search_query);
-    QString text = QStringLiteral("Showing %1 of %2 entries \xc2\xb7 %3 \xc2\xb7 %4")
+    const QString search_part = search_query.isEmpty()
+                                    ? QCoreApplication::translate("Logs", "no search")
+                                    : QCoreApplication::translate("Logs", "search \"%1\"").arg(search_query);
+    QString text = QCoreApplication::translate("Logs", "Showing %1 of %2 entries \xc2\xb7 %3 \xc2\xb7 %4")
                        .arg(visible_count)
                        .arg(total_count)
                        .arg(LogSeverityFilterName(filter), search_part);

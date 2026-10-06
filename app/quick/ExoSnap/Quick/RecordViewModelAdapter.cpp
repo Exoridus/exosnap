@@ -1,4 +1,5 @@
 #include "RecordViewModelAdapter.h"
+#include <QCoreApplication>
 
 #include "models/CaptureTargetPresentation.h"
 #include "viewmodels/RecordViewModel.h"
@@ -750,7 +751,7 @@ void RecordViewModelAdapter::synchronize() {
     rebuildRecentRecordings();
 
     if (!selected_target_available_ && state_text_ == QStringLiteral("Ready"))
-        state_text_ = QStringLiteral("No source");
+        state_text_ = QCoreApplication::translate("RecordViewModelAdapter", "No source");
 
     if (previous_state_text != state_text_)
         emit stateTextChanged();
@@ -812,9 +813,9 @@ void RecordViewModelAdapter::updateCapturedFps() {
 }
 
 void RecordViewModelAdapter::rebuildPresentation() {
-    source_name_ = QStringLiteral("No source selected");
-    source_kind_text_ = QStringLiteral("SOURCE");
-    source_detail_text_ = QStringLiteral("Choose a screen, window, or region.");
+    source_name_ = QCoreApplication::translate("RecordViewModelAdapter", "No source selected");
+    source_kind_text_ = QCoreApplication::translate("RecordViewModelAdapter", "SOURCE");
+    source_detail_text_ = QCoreApplication::translate("RecordViewModelAdapter", "Choose a screen, window, or region.");
     if (source_ == nullptr) {
         target_options_revision_.reset();
         target_options_selected_index_.reset();
@@ -894,16 +895,19 @@ void RecordViewModelAdapter::rebuildPresentation() {
     }
 
     if (source_->capture_mode == CaptureMode::Region) {
-        source_kind_text_ = QStringLiteral("REGION");
-        source_name_ = region_selection_needed_ ? QStringLiteral("Select a region") : QStringLiteral("Screen region");
+        source_kind_text_ = QCoreApplication::translate("RecordViewModelAdapter", "REGION");
+        source_name_ = region_selection_needed_
+                           ? QCoreApplication::translate("RecordViewModelAdapter", "Select a region")
+                           : QCoreApplication::translate("RecordViewModelAdapter", "Screen region");
         if (source_->has_region && source_->region.IsValid()) {
-            source_detail_text_ = QStringLiteral("%1 × %2 at %3, %4")
+            source_detail_text_ = QCoreApplication::translate("RecordViewModelAdapter", "%1 × %2 at %3, %4")
                                       .arg(source_->region.width)
                                       .arg(source_->region.height)
                                       .arg(source_->region.x)
                                       .arg(source_->region.y);
         } else {
-            source_detail_text_ = QStringLiteral("Drag over the preview to choose the recorded area.");
+            source_detail_text_ = QCoreApplication::translate("RecordViewModelAdapter",
+                                                              "Drag over the preview to choose the recorded area.");
         }
         return;
     }
@@ -913,8 +917,9 @@ void RecordViewModelAdapter::rebuildPresentation() {
         return;
     const auto& target = source_->targets[static_cast<std::size_t>(index)];
     source_name_ = QString::fromStdString(RecordViewModel::TargetLabelFromCaptureTarget(target));
-    source_kind_text_ = target.kind == exosnap::engine::CaptureTarget::Kind::Window ? QStringLiteral("WINDOW")
-                                                                                    : QStringLiteral("SCREEN");
+    source_kind_text_ = target.kind == exosnap::engine::CaptureTarget::Kind::Window
+                            ? QCoreApplication::translate("RecordViewModelAdapter", "WINDOW")
+                            : QStringLiteral("SCREEN");
     source_detail_text_ = QString::fromUtf8(target.description);
 }
 

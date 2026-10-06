@@ -1,4 +1,5 @@
 #include "EditPlayerAdapter.h"
+#include <QCoreApplication>
 
 #include "EditPlayerWorker.h"
 #include "EditSessionAdapter.h"
@@ -71,7 +72,10 @@ EditPlayerAdapter::EditPlayerAdapter(QObject* parent) : QObject(parent) {
             clip_open_ = opened;
             emit clipOpenChanged();
         }
-        setPlaceholderText(opened ? QString() : (error.isEmpty() ? QStringLiteral("Preview unavailable") : error));
+        setPlaceholderText(
+            opened
+                ? QString()
+                : (error.isEmpty() ? QCoreApplication::translate("EditPlayerAdapter", "Preview unavailable") : error));
     });
     connect(worker_, &EditPlayerWorker::positionAdvanced, this, [this](qint64 position_ms) {
         if (session_ != nullptr)
@@ -210,7 +214,7 @@ void EditPlayerAdapter::openClip(const QString& master_path, qint64 duration_ms)
         emit playingChanged();
     }
     sink_->clear();
-    setPlaceholderText(QStringLiteral("Opening clip\xe2\x80\xa6"));
+    setPlaceholderText(QCoreApplication::translate("EditPlayerAdapter", "Opening clip\xe2\x80\xa6"));
     QMetaObject::invokeMethod(worker_, "open", Qt::QueuedConnection, Q_ARG(QString, master_path),
                               Q_ARG(qint64, duration_ms), Q_ARG(double, currentScreenRefreshHz()));
 }
@@ -226,7 +230,7 @@ void EditPlayerAdapter::closeClip() {
         emit clipOpenChanged();
     }
     sink_->clear();
-    setPlaceholderText(QStringLiteral("Preview unavailable"));
+    setPlaceholderText(QCoreApplication::translate("EditPlayerAdapter", "Preview unavailable"));
     QMetaObject::invokeMethod(worker_, "close", Qt::QueuedConnection);
 }
 

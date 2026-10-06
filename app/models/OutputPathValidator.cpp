@@ -1,4 +1,5 @@
 #include "OutputPathValidator.h"
+#include <capability/translatable.h>
 
 #include <exosnap/engine/recorder_session.h>
 
@@ -67,13 +68,13 @@ std::wstring FolderValidationMessage(FolderValidationResult result) {
     case FolderValidationResult::Ok:
         return L"OK";
     case FolderValidationResult::InvalidPath:
-        return L"Output folder path is invalid.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Output folder path is invalid.");
     case FolderValidationResult::NotWritable:
-        return L"Output folder is not writable.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Output folder is not writable.");
     case FolderValidationResult::CreationFailed:
-        return L"Failed to create output folder.";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Failed to create output folder.");
     }
-    return L"Output folder validation failed.";
+    return EXOSNAP_TRANSLATABLE("OutputSettings", L"Output folder validation failed.");
 }
 
 std::optional<std::filesystem::path> ResolveAvailableOutputPath(const std::filesystem::path& base_path) {

@@ -73,7 +73,7 @@ runs:
 
         case '${{ inputs.profile }}' in
           quick)
-            archives='qtbase qtsvg qtdeclarative'
+            archives='qtbase qtsvg qtdeclarative qttools'
             # Qt 6.12 packages ShaderTools as a module. Requesting it under
             # archives silently omits a required Qt Quick dependency.
             modules='qtshadertools'

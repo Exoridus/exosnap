@@ -995,3 +995,22 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveRemovesTheLegacyThemeIdKey) {
 }
 
 } // namespace exosnap
+
+namespace exosnap {
+TEST(AppSettingsStoreTest, LanguagePreferenceRoundTripsStableTokensAndRejectsUnknownValues) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    AppSettingsStore store(TempSettingsPath(directory));
+    EXPECT_EQ(store.Load().ui_language, QStringLiteral("system"));
+    for (const QString& token : {QStringLiteral("system"), QStringLiteral("en"), QStringLiteral("de")}) {
+        PersistedAppSettings settings;
+        settings.ui_language = token;
+        ASSERT_TRUE(store.Save(settings));
+        EXPECT_EQ(store.Load().ui_language, token);
+    }
+    QSettings raw(TempSettingsPath(directory), QSettings::IniFormat);
+    raw.setValue(QStringLiteral("appearance/ui_language"), QStringLiteral("Deutsch"));
+    raw.sync();
+    EXPECT_EQ(store.Load().ui_language, QStringLiteral("system"));
+}
+} // namespace exosnap

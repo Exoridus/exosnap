@@ -2175,3 +2175,15 @@ target_include_directories(crash_report_qml_adapter_tests
 )
 
 target_compile_definitions(crash_report_qml_adapter_tests PRIVATE NOMINMAX)
+
+foreach(_i18n_scale IN ITEMS 1 1.25 1.5 2)
+    set(_i18n_test "quick.qml.german_text_geometry_${_i18n_scale}")
+    add_test(NAME "${_i18n_test}" COMMAND record_controls_qml_tests
+        -input "${PROJECT_SOURCE_DIR}/app/quick/tests_de")
+    set_tests_properties("${_i18n_test}" PROPERTIES
+        LABELS "quick;quicktest;i18n"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml;EXOSNAP_TEST_UI_LANGUAGE=de;QT_SCALE_FACTOR=${_i18n_scale}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
+    )
+    exosnap_set_test_phase("${_i18n_test}" desktop)
+endforeach()

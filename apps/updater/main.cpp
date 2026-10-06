@@ -1,4 +1,6 @@
 // exosnap-updater -- standalone swap-updater process entry point.
+
+#include <QCoreApplication>
 //
 // Two modes, decided by the command line and nothing else:
 //
@@ -79,6 +81,7 @@
 #include "UpdaterViewAdapter.h"
 #include "UpdaterWorker.h"
 #include "WindowPlacement.h"
+#include "i18n/Language.h"
 #include "quick/ExoSnap/Quick/QuickThemeTokens.h"
 
 // main() itself stays at global scope; everything it drives lives in the
@@ -406,6 +409,7 @@ int main(int argc, char** argv) {
         return index >= 0 && index + 1 < arguments.size() ? arguments.at(index + 1) : QString{};
     };
     const int previewIdx = arguments.indexOf(QStringLiteral("--preview-state"));
+    exosnap::i18n::InstallLanguage(app, option_value(QStringLiteral("--ui-language")));
     const QString appearance = option_value(QStringLiteral("--appearance"));
     const QString screenshot_path = option_value(QStringLiteral("--screenshot"));
     // Loads ExoSnap.Updater/UpdaterMain with the adapter as an initial property.

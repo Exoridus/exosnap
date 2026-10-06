@@ -156,7 +156,7 @@ TestCase {
         recordDriver.seedTargets(1, ["Claude Design - Brave", "Task Manager", "Steam Library", "Notepad", "Terminal"]);
         showTab(page, 1);
         const count = pick(page, "windowsCount");
-        compare(count.text, "5 windows");
+        compare(count.text, "Windows: 5");
         const card = pick(page, "targetCard-window:100");
         compare(card.primaryLabel, "Claude Design");
         compare(card.secondaryLabel, "Brave");
@@ -184,7 +184,7 @@ TestCase {
         page.picker.windowQuery = "task";
         tryCompare(grid, "count", 1);
         compare(pick(page, "targetCard-window:101").primaryLabel, "Task Manager");
-        compare(pick(page, "windowsCount").text, "1 window");
+        compare(pick(page, "windowsCount").text, "Windows: 1");
         compare(page.picker.height, heightBefore);
 
         page.picker.windowQuery = "brave";

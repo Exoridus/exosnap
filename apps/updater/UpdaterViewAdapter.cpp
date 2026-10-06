@@ -1,4 +1,5 @@
 #include "UpdaterViewAdapter.h"
+#include <QCoreApplication>
 
 #include <QVariantMap>
 #include <QtMath>
@@ -11,14 +12,15 @@ namespace {
 QString WidgetLabelForStatus(StepStatus status, bool manual) {
     switch (status) {
     case StepStatus::Done:
-        return QStringLiteral("done");
+        return QCoreApplication::translate("UpdaterViewAdapter", "done");
     case StepStatus::Working:
-        return QStringLiteral("working");
+        return QCoreApplication::translate("UpdaterViewAdapter", "working");
     case StepStatus::Failed:
-        return manual ? QStringLiteral("manual") : QStringLiteral("failed");
+        return manual ? QCoreApplication::translate("UpdaterViewAdapter", "manual")
+                      : QCoreApplication::translate("UpdaterViewAdapter", "failed");
     case StepStatus::Queued:
     default:
-        return QStringLiteral("queued");
+        return QCoreApplication::translate("UpdaterViewAdapter", "queued");
     }
 }
 
@@ -44,17 +46,18 @@ UpdaterViewAdapter::UpdaterViewAdapter(QObject* parent) : QObject(parent) {
 
 QStringList UpdaterViewAdapter::stepLabels() {
     return {
-        QStringLiteral("Downloading update"),   QStringLiteral("Closing previous version"),
-        QStringLiteral("Installing new files"), QStringLiteral("Verifying installation"),
-        QStringLiteral("Launching ExoSnap"),
+        QCoreApplication::translate("UpdaterViewAdapter", "Downloading update"),
+        QCoreApplication::translate("UpdaterViewAdapter", "Closing previous version"),
+        QCoreApplication::translate("UpdaterViewAdapter", "Installing new files"),
+        QCoreApplication::translate("UpdaterViewAdapter", "Verifying installation"),
+        QCoreApplication::translate("UpdaterViewAdapter", "Launching ExoSnap"),
     };
 }
 
 void UpdaterViewAdapter::render(const UpdaterUiState& state) {
     state_ = state;
 
-    const bool failed_terminal =
-        state.variant == TerminalVariant::Amber || state.variant == TerminalVariant::Red;
+    const bool failed_terminal = state.variant == TerminalVariant::Amber || state.variant == TerminalVariant::Red;
     failed_terminal_ = failed_terminal;
     const bool prompting = state.prompt != PromptKind::None;
     const bool success_done = state.variant == TerminalVariant::Success;
@@ -62,15 +65,19 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
     // Eyebrow. Four truths, one line; a manual window at rest says what it IS,
     // not what it is doing.
     if (failed_terminal) {
-        eyebrow_ = state.verification_reinstall ? QStringLiteral("EXOSNAP WAS NOT REINSTALLED")
-                                                : QStringLiteral("EXOSNAP WAS NOT UPDATED");
+        eyebrow_ = state.verification_reinstall
+                       ? QCoreApplication::translate("UpdaterViewAdapter", "EXOSNAP WAS NOT REINSTALLED")
+                       : QCoreApplication::translate("UpdaterViewAdapter", "EXOSNAP WAS NOT UPDATED");
     } else if (prompting) {
-        eyebrow_ = state.prompt == PromptKind::UpToDate    ? QStringLiteral("EXOSNAP IS UP TO DATE")
-                   : state.prompt == PromptKind::Cancelled ? QStringLiteral("EXOSNAP WAS NOT UPDATED")
-                                                           : QStringLiteral("EXOSNAP UPDATER");
+        eyebrow_ = state.prompt == PromptKind::UpToDate
+                       ? QCoreApplication::translate("UpdaterViewAdapter", "EXOSNAP IS UP TO DATE")
+                   : state.prompt == PromptKind::Cancelled
+                       ? QCoreApplication::translate("UpdaterViewAdapter", "EXOSNAP WAS NOT UPDATED")
+                       : QCoreApplication::translate("UpdaterViewAdapter", "EXOSNAP UPDATER");
     } else {
-        eyebrow_ = state.verification_reinstall ? QStringLiteral("REINSTALLING EXOSNAP")
-                                                : QStringLiteral("UPDATING EXOSNAP");
+        eyebrow_ = state.verification_reinstall
+                       ? QCoreApplication::translate("UpdaterViewAdapter", "REINSTALLING EXOSNAP")
+                       : QCoreApplication::translate("UpdaterViewAdapter", "UPDATING EXOSNAP");
     }
 
     // Ring. Indeterminate until the run has measured something.
@@ -79,21 +86,23 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
     if (state.variant == TerminalVariant::Amber) {
         ring_tone_ = QStringLiteral("warning");
         ring_glyph_ = QStringLiteral("warning");
-        ring_description_ = QStringLiteral("Update didn't complete");
+        ring_description_ = QCoreApplication::translate("UpdaterViewAdapter", "Update didn't complete");
     } else if (state.variant == TerminalVariant::Red) {
         ring_tone_ = QStringLiteral("error");
         ring_glyph_ = QStringLiteral("cross");
-        ring_description_ = QStringLiteral("Update failed");
+        ring_description_ = QCoreApplication::translate("UpdaterViewAdapter", "Update failed");
     } else if (state.variant == TerminalVariant::Green || state.variant == TerminalVariant::Success ||
                state.variant == TerminalVariant::RebootRequired) {
         ring_tone_ = QStringLiteral("success");
         ring_glyph_ = QStringLiteral("check");
-        ring_description_ = QStringLiteral("Update complete");
+        ring_description_ = QCoreApplication::translate("UpdaterViewAdapter", "Update complete");
     } else {
         ring_tone_ = QStringLiteral("accent");
         ring_glyph_.clear();
-        ring_description_ = indeterminate_ ? QStringLiteral("Preparing update, progress not measurable yet")
-                                           : QStringLiteral("%1 percent").arg(ring_percent_);
+        ring_description_ =
+            indeterminate_
+                ? QCoreApplication::translate("UpdaterViewAdapter", "Preparing update, progress not measurable yet")
+                : QCoreApplication::translate("UpdaterViewAdapter", "%1 percent").arg(ring_percent_);
     }
 
     // Status row. The same footprint in every state; terminal states use a
@@ -115,27 +124,32 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
         case TerminalVariant::Amber:
             status_glyph_ = QStringLiteral("warning");
             status_tone_ = QStringLiteral("warning");
-            status_headline_ = QStringLiteral("Update didn't complete");
+            status_headline_ = QCoreApplication::translate("UpdaterViewAdapter", "Update didn't complete");
             break;
         case TerminalVariant::Red:
             status_glyph_ = QStringLiteral("cross");
             status_tone_ = QStringLiteral("error");
-            status_headline_ = QStringLiteral("Update failed");
+            status_headline_ = QCoreApplication::translate("UpdaterViewAdapter", "Update failed");
             break;
         case TerminalVariant::Green:
             status_glyph_ = QStringLiteral("check");
             status_tone_ = QStringLiteral("success");
-            status_headline_ = QStringLiteral("Update complete — version %1 is ready").arg(state.to_version);
+            status_headline_ =
+                QCoreApplication::translate("UpdaterViewAdapter", "Update complete — version %1 is ready")
+                    .arg(state.to_version);
             break;
         case TerminalVariant::RebootRequired:
             status_glyph_ = QStringLiteral("check");
             status_tone_ = QStringLiteral("success");
-            status_headline_ = QStringLiteral("Update installed — restart Windows to finish");
+            status_headline_ =
+                QCoreApplication::translate("UpdaterViewAdapter", "Update installed — restart Windows to finish");
             break;
         case TerminalVariant::Success:
             status_glyph_ = QStringLiteral("check");
             status_tone_ = QStringLiteral("accent");
-            status_headline_ = QStringLiteral("Update complete - version %1 is ready").arg(state.to_version);
+            status_headline_ =
+                QCoreApplication::translate("UpdaterViewAdapter", "Update complete - version %1 is ready")
+                    .arg(state.to_version);
             break;
         case TerminalVariant::None:
             break;
@@ -202,50 +216,60 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
 
         panel_kind_ = QStringLiteral("working");
         if (success_done) {
-            panel_title_ = QStringLiteral("Version %1 is ready").arg(state.to_version);
-            panel_detail_ = QStringLiteral("The update is installed and verified.");
-            panel_safety_ = QStringLiteral("ExoSnap is starting automatically.");
+            panel_title_ =
+                QCoreApplication::translate("UpdaterViewAdapter", "Version %1 is ready").arg(state.to_version);
+            panel_detail_ = QCoreApplication::translate("UpdaterViewAdapter", "The update is installed and verified.");
+            panel_safety_ = QCoreApplication::translate("UpdaterViewAdapter", "ExoSnap is starting automatically.");
             panel_glyph_ = QStringLiteral("check");
             panel_tone_ = QStringLiteral("success");
         } else {
             panel_tone_ = QStringLiteral("accent");
             switch (active) {
             case UpStep::Download:
-                panel_title_ = state.verification_reinstall ? QStringLiteral("Downloading update again")
-                                                            : QStringLiteral("Downloading update");
-                panel_detail_ = QStringLiteral("Fetching and checking the signed update.");
-                panel_safety_ = QStringLiteral("Your installed version remains unchanged until installation begins.");
+                panel_title_ = state.verification_reinstall
+                                   ? QCoreApplication::translate("UpdaterViewAdapter", "Downloading update again")
+                                   : QCoreApplication::translate("UpdaterViewAdapter", "Downloading update");
+                panel_detail_ =
+                    QCoreApplication::translate("UpdaterViewAdapter", "Fetching and checking the signed update.");
+                panel_safety_ = QCoreApplication::translate(
+                    "UpdaterViewAdapter", "Your installed version remains unchanged until installation begins.");
                 panel_glyph_ = QStringLiteral("download");
                 break;
             case UpStep::CloseApp:
-                panel_title_ = QStringLiteral("Closing previous version");
-                panel_detail_ = QStringLiteral("Waiting for ExoSnap to close.");
-                panel_safety_ = QStringLiteral("The verified package is ready before ExoSnap closes.");
+                panel_title_ = QCoreApplication::translate("UpdaterViewAdapter", "Closing previous version");
+                panel_detail_ = QCoreApplication::translate("UpdaterViewAdapter", "Waiting for ExoSnap to close.");
+                panel_safety_ = QCoreApplication::translate("UpdaterViewAdapter",
+                                                            "The verified package is ready before ExoSnap closes.");
                 panel_glyph_ = QStringLiteral("close");
                 break;
             case UpStep::Install:
-                panel_title_ = state.verification_reinstall ? QStringLiteral("Reinstalling ExoSnap")
-                                                            : QStringLiteral("Installing new files");
-                panel_detail_ = QStringLiteral("Replacing the application files.");
-                panel_safety_ = QStringLiteral("Keep your computer on while the application files are replaced.");
+                panel_title_ = state.verification_reinstall
+                                   ? QCoreApplication::translate("UpdaterViewAdapter", "Reinstalling ExoSnap")
+                                   : QCoreApplication::translate("UpdaterViewAdapter", "Installing new files");
+                panel_detail_ = QCoreApplication::translate("UpdaterViewAdapter", "Replacing the application files.");
+                panel_safety_ = QCoreApplication::translate(
+                    "UpdaterViewAdapter", "Keep your computer on while the application files are replaced.");
                 panel_glyph_ = QStringLiteral("layers");
                 break;
             case UpStep::Verify:
-                panel_title_ = QStringLiteral("Verifying installation");
-                panel_detail_ = QStringLiteral("Checking the installed files.");
-                panel_safety_ = QStringLiteral("The installed files are checked against the signed release.");
+                panel_title_ = QCoreApplication::translate("UpdaterViewAdapter", "Verifying installation");
+                panel_detail_ = QCoreApplication::translate("UpdaterViewAdapter", "Checking the installed files.");
+                panel_safety_ = QCoreApplication::translate(
+                    "UpdaterViewAdapter", "The installed files are checked against the signed release.");
                 panel_glyph_ = QStringLiteral("shield");
                 break;
             case UpStep::Launch:
-                panel_title_ = QStringLiteral("Launching ExoSnap");
-                panel_detail_ = QStringLiteral("Starting the updated app.");
-                panel_safety_ = QStringLiteral("ExoSnap reopens automatically when the handoff completes.");
+                panel_title_ = QCoreApplication::translate("UpdaterViewAdapter", "Launching ExoSnap");
+                panel_detail_ = QCoreApplication::translate("UpdaterViewAdapter", "Starting the updated app.");
+                panel_safety_ = QCoreApplication::translate(
+                    "UpdaterViewAdapter", "ExoSnap reopens automatically when the handoff completes.");
                 panel_glyph_ = QStringLiteral("spinner");
                 break;
             case UpStep::Count:
-                panel_title_ = QStringLiteral("Preparing update");
-                panel_detail_ = QStringLiteral("Getting the updater ready.");
-                panel_safety_ = QStringLiteral("Your installed version remains unchanged.");
+                panel_title_ = QCoreApplication::translate("UpdaterViewAdapter", "Preparing update");
+                panel_detail_ = QCoreApplication::translate("UpdaterViewAdapter", "Getting the updater ready.");
+                panel_safety_ =
+                    QCoreApplication::translate("UpdaterViewAdapter", "Your installed version remains unchanged.");
                 panel_glyph_ = QStringLiteral("spinner");
                 break;
             }
@@ -268,15 +292,15 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
         if (success_done) {
             // Deliberately no hint: the panel already states what happens next.
             hint_.clear();
-            close_action_label_ = QStringLiteral("Close");
+            close_action_label_ = QCoreApplication::translate("UpdaterViewAdapter", "Close");
             close_action_enabled_ = true;
         } else if (!critical) {
-            hint_ = QStringLiteral("Cancelling discards this update run.");
-            close_action_label_ = QStringLiteral("Cancel update");
+            hint_ = QCoreApplication::translate("UpdaterViewAdapter", "Cancelling discards this update run.");
+            close_action_label_ = QCoreApplication::translate("UpdaterViewAdapter", "Cancel update");
             close_action_enabled_ = true;
         } else {
-            hint_ = QStringLiteral("This phase cannot be interrupted.");
-            close_action_label_ = QStringLiteral("Close");
+            hint_ = QCoreApplication::translate("UpdaterViewAdapter", "This phase cannot be interrupted.");
+            close_action_label_ = QCoreApplication::translate("UpdaterViewAdapter", "Close");
             close_action_enabled_ = false;
         }
     }
@@ -287,12 +311,13 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
     const bool terminal = state.variant != TerminalVariant::None;
     const bool settled = terminal || prompting;
     close_enabled_ = !close_blocked_;
-    close_tooltip_ = close_blocked_ ? QStringLiteral("Please wait - updating")
-                      : settled    ? QStringLiteral("Close")
-                                   : QStringLiteral("Cancel update and close");
-    close_accessible_name_ = close_blocked_ ? QStringLiteral("Close unavailable while updating")
-                             : settled     ? QStringLiteral("Close updater")
-                                           : QStringLiteral("Cancel update and close");
+    close_tooltip_ = close_blocked_ ? QCoreApplication::translate("UpdaterViewAdapter", "Please wait - updating")
+                     : settled      ? QCoreApplication::translate("UpdaterViewAdapter", "Close")
+                                    : QCoreApplication::translate("UpdaterViewAdapter", "Cancel update and close");
+    close_accessible_name_ = close_blocked_
+                                 ? QCoreApplication::translate("UpdaterViewAdapter", "Close unavailable while updating")
+                             : settled ? QCoreApplication::translate("UpdaterViewAdapter", "Close updater")
+                                       : QCoreApplication::translate("UpdaterViewAdapter", "Cancel update and close");
     cancel_confirmation_required_ = !settled && !close_blocked_;
     if (!cancel_confirmation_required_ && cancel_confirmation_visible_) {
         cancel_confirmation_visible_ = false;
@@ -315,8 +340,8 @@ void UpdaterViewAdapter::rebuildStepRows() {
             {QStringLiteral("status"), StatusKey(status)},
             {QStringLiteral("tag"), WidgetLabelForStatus(status, failed_is_manual)},
             {QStringLiteral("manual"), failed_is_manual},
-            {QStringLiteral("accessible"), QStringLiteral("%1, %2").arg(labels.at(i), WidgetLabelForStatus(
-                                                                                   status, failed_is_manual))},
+            {QStringLiteral("accessible"),
+             QStringLiteral("%1, %2").arg(labels.at(i), WidgetLabelForStatus(status, failed_is_manual))},
         });
     }
     step_rows_ = std::move(rows);
@@ -497,15 +522,17 @@ void UpdaterViewAdapter::dismissCancelConfirmation() {
 }
 
 void UpdaterViewAdapter::activateAction(const QString& action) {
-    if (action == QStringLiteral("Retry") || action == QStringLiteral("Re-download"))
+    if (action == QCoreApplication::translate("UpdaterViewAdapter", "Retry") ||
+        action == QCoreApplication::translate("UpdaterViewAdapter", "Re-download"))
         emit retryRequested();
-    else if (action == QStringLiteral("Open ExoSnap"))
+    else if (action == QCoreApplication::translate("UpdaterViewAdapter", "Open ExoSnap"))
         emit openExoSnapRequested();
-    else if (action == QStringLiteral("Check for updates") || action == QStringLiteral("Check again"))
+    else if (action == QCoreApplication::translate("UpdaterViewAdapter", "Check for updates") ||
+             action == QCoreApplication::translate("UpdaterViewAdapter", "Check again"))
         emit checkRequested();
-    else if (action == QStringLiteral("Download update"))
+    else if (action == QCoreApplication::translate("UpdaterViewAdapter", "Download update"))
         emit downloadRequested();
-    else if (action == QStringLiteral("Install now"))
+    else if (action == QCoreApplication::translate("UpdaterViewAdapter", "Install now"))
         emit applyRequested();
     else if (action == close_action_label_ && close_action_visible_ && close_action_enabled_)
         (void)requestClose();

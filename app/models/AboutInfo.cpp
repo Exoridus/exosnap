@@ -21,9 +21,9 @@ constexpr const char* kAppAuthor = "Exoridus";
 constexpr const char* kGitHubUrl = "https://github.com/Exoridus/exosnap";
 constexpr const char* kAuthorProfileUrl = "https://github.com/Exoridus";
 constexpr const char* kReleasesUrl = "https://github.com/Exoridus/exosnap/releases";
-constexpr const char* kAppDescription =
-    "A calm, preview-first screen recorder with a high-performance GPU pipeline, multi-track audio "
-    "routing, and diagnostics when you need them.";
+constexpr const char* kAppDescription = QT_TRANSLATE_NOOP(
+    "AboutInfo", "A calm, preview-first screen recorder with a high-performance GPU pipeline, multi-track audio "
+                 "routing, and diagnostics when you need them.");
 constexpr const char* kDefaultChannel = "Stable";
 constexpr const char* kUnavailableCommit = "Unavailable";
 
@@ -58,7 +58,7 @@ AboutInfo BuildAboutInfo(const QString& channel, exosnap::update::DistributionCo
     info.install_mode_label = ResolveInstallModeLabel(distribution);
     info.channel = channel.trimmed().isEmpty() ? QString::fromLatin1(kDefaultChannel) : channel.trimmed();
     info.author = QString::fromLatin1(kAppAuthor);
-    info.description = QString::fromLatin1(kAppDescription);
+    info.description = QCoreApplication::translate("AboutInfo", kAppDescription);
     info.github_url = QString::fromLatin1(kGitHubUrl);
     info.author_url = QString::fromLatin1(kAuthorProfileUrl);
     info.release_notes_url = QString::fromLatin1(kReleasesUrl);

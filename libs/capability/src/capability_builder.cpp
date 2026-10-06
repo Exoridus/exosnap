@@ -1,4 +1,5 @@
 #include <capability/capability_builder.h>
+#include <capability/translatable.h>
 
 #include <capability/capability_set.h>
 #include <capability/config_types.h>
@@ -16,35 +17,48 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     caps.mf_webcam_available = true; // S4: baseline assumes MF present
 
     caps.containers.emplace(Container::Matroska,
-                            SupportAnnotation{SupportLevel::Available, "Primary validated container."});
+                            SupportAnnotation{SupportLevel::Available,
+                                              EXOSNAP_TRANSLATABLE("Capabilities", "Primary validated container.")});
     caps.containers.emplace(Container::Mp4,
-                            SupportAnnotation{SupportLevel::Available, "Validated MP4 H.264+AAC path."});
-    caps.containers.emplace(Container::WebM,
-                            SupportAnnotation{SupportLevel::Available, "Primary validated WebM container."});
+                            SupportAnnotation{SupportLevel::Available,
+                                              EXOSNAP_TRANSLATABLE("Capabilities", "Validated MP4 H.264+AAC path.")});
+    caps.containers.emplace(
+        Container::WebM, SupportAnnotation{SupportLevel::Available,
+                                           EXOSNAP_TRANSLATABLE("Capabilities", "Primary validated WebM container.")});
 
-    caps.video_codecs.emplace(VideoCodec::Av1, SupportAnnotation{SupportLevel::Available, "Validated NVENC AV1 path."});
+    caps.video_codecs.emplace(
+        VideoCodec::Av1,
+        SupportAnnotation{SupportLevel::Available, EXOSNAP_TRANSLATABLE("Capabilities", "Validated NVENC AV1 path.")});
     caps.video_codecs.emplace(VideoCodec::Hevc,
                               SupportAnnotation{SupportLevel::ValidUnvalidated,
                                                 "HEVC NVENC + Matroska V_MPEGH/ISO/HEVC implemented in 0.7.0; "
                                                 "not yet validated on recording hardware."});
     caps.video_codecs.emplace(VideoCodec::H264,
-                              SupportAnnotation{SupportLevel::Available, "Validated NVENC H.264 path."});
+                              SupportAnnotation{SupportLevel::Available,
+                                                EXOSNAP_TRANSLATABLE("Capabilities", "Validated NVENC H.264 path.")});
 
     caps.audio_codecs.emplace(
         AudioCodec::Opus,
-        SupportAnnotation{SupportLevel::Available, "Opus encoder implemented via libopus (static); M4 Phase 3."});
+        SupportAnnotation{
+            SupportLevel::Available,
+            EXOSNAP_TRANSLATABLE("Capabilities", "Opus encoder implemented via libopus (static); M4 Phase 3.")});
     caps.audio_codecs.emplace(
-        AudioCodec::Aac, SupportAnnotation{SupportLevel::Available,
-                                           "AAC-LC via FFmpeg's bundled native encoder (LGPL); always available."});
+        AudioCodec::Aac,
+        SupportAnnotation{SupportLevel::Available,
+                          EXOSNAP_TRANSLATABLE(
+                              "Capabilities", "AAC-LC via FFmpeg's bundled native encoder (LGPL); always available.")});
     caps.audio_codecs.emplace(
         AudioCodec::Pcm, SupportAnnotation{SupportLevel::Available,
                                            "Uncompressed S16LE PCM (A_PCM/INT/LIT); Matroska-only (0.6.0 Audio v2)."});
-    caps.audio_codecs.emplace(AudioCodec::Flac,
-                              SupportAnnotation{SupportLevel::Available,
-                                                "Lossless FLAC (A_FLAC) via libFLAC; Matroska-only (0.6.0 Audio v2)."});
+    caps.audio_codecs.emplace(
+        AudioCodec::Flac,
+        SupportAnnotation{SupportLevel::Available,
+                          EXOSNAP_TRANSLATABLE("Capabilities",
+                                               "Lossless FLAC (A_FLAC) via libFLAC; Matroska-only (0.6.0 Audio v2).")});
 
-    caps.chroma_modes.emplace(ChromaSubsampling::Cs420,
-                              SupportAnnotation{SupportLevel::Available, "Validated chroma mode."});
+    caps.chroma_modes.emplace(
+        ChromaSubsampling::Cs420,
+        SupportAnnotation{SupportLevel::Available, EXOSNAP_TRANSLATABLE("Capabilities", "Validated chroma mode.")});
     caps.chroma_modes.emplace(ChromaSubsampling::Cs422,
                               SupportAnnotation{SupportLevel::NotImplemented, "4:2:2 path is not implemented."});
     // 4:4:4 is a real 8-bit H.264/HEVC expert path (AYUV input, NVENC High 4:4:4 /
@@ -63,12 +77,16 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     // specific GPU cannot do it (ApplyNvencYuv444Support).
     caps.chroma444.emplace(
         VideoCodec::H264,
-        SupportAnnotation{SupportLevel::ValidUnvalidated,
-                          "H.264 High 4:4:4 Predictive (8-bit); not yet validated on recording hardware."});
+        SupportAnnotation{
+            SupportLevel::ValidUnvalidated,
+            EXOSNAP_TRANSLATABLE("Capabilities",
+                                 "H.264 High 4:4:4 Predictive (8-bit); not yet validated on recording hardware.")});
     caps.chroma444.emplace(
         VideoCodec::Hevc,
-        SupportAnnotation{SupportLevel::ValidUnvalidated,
-                          "HEVC Range Extensions 4:4:4 (8-bit); not yet validated on recording hardware."});
+        SupportAnnotation{
+            SupportLevel::ValidUnvalidated,
+            EXOSNAP_TRANSLATABLE("Capabilities",
+                                 "HEVC Range Extensions 4:4:4 (8-bit); not yet validated on recording hardware.")});
     caps.chroma444.emplace(VideoCodec::Av1, SupportAnnotation{SupportLevel::NotImplemented,
                                                               "AV1 NVENC is 4:2:0 only; use H.264 or HEVC for 4:4:4."});
 
@@ -77,18 +95,26 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
             codec, BFrameCapability{SupportAnnotation{SupportLevel::NotImplemented,
                                                       "B-frame support not yet probed on this hardware."},
                                     0, 0});
-        caps.lookahead.emplace(codec, SupportAnnotation{SupportLevel::NotImplemented,
-                                                        "Lookahead support not yet probed on this hardware."});
-        caps.temporal_aq.emplace(codec, SupportAnnotation{SupportLevel::NotImplemented,
-                                                          "Temporal-AQ support not yet probed on this hardware."});
+        caps.lookahead.emplace(
+            codec, SupportAnnotation{
+                       SupportLevel::NotImplemented,
+                       EXOSNAP_TRANSLATABLE("Capabilities", "Lookahead support not yet probed on this hardware.")});
+        caps.temporal_aq.emplace(
+            codec, SupportAnnotation{
+                       SupportLevel::NotImplemented,
+                       EXOSNAP_TRANSLATABLE("Capabilities", "Temporal-AQ support not yet probed on this hardware.")});
     }
 
-    caps.bit_depths.emplace(BitDepth::Bit8, SupportAnnotation{SupportLevel::Available, "Validated bit depth."});
-    caps.bit_depths.emplace(BitDepth::Bit10,
-                            SupportAnnotation{SupportLevel::ValidUnvalidated,
-                                              "10-bit HEVC/AV1 via NVENC Main10/P010 implemented in 0.7.0 "
-                                              "(SDR BT.709); not yet validated on recording hardware. "
-                                              "Requires HEVC or AV1; H.264 is 8-bit only."});
+    caps.bit_depths.emplace(
+        BitDepth::Bit8,
+        SupportAnnotation{SupportLevel::Available, EXOSNAP_TRANSLATABLE("Capabilities", "Validated bit depth.")});
+    caps.bit_depths.emplace(
+        BitDepth::Bit10,
+        SupportAnnotation{SupportLevel::ValidUnvalidated,
+                          EXOSNAP_TRANSLATABLE("Capabilities",
+                                               "10-bit HEVC/AV1 via NVENC Main10/P010 implemented in 0.7.0 "
+                                               "(SDR BT.709); not yet validated on recording hardware. "
+                                               "Requires HEVC or AV1; H.264 is 8-bit only.")});
 
     // Explicit per-codec HDR10-native (10-bit / P010) capability.
     // HEVC (Main10) and AV1 (Main 10-bit) carry a native PQ/BT.2020 HDR10 signal;
@@ -106,8 +132,11 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
         VideoCodec::Hevc,
         SupportAnnotation{SupportLevel::Available, "HEVC Main10 carries native HDR10 (10-bit/P010, PQ/BT.2020)."});
     caps.hdr10_native.emplace(
-        VideoCodec::H264, SupportAnnotation{SupportLevel::NotImplemented,
-                                            "H.264 has no 10-bit/HDR10 path (8-bit only). Use HEVC or AV1 for HDR10."});
+        VideoCodec::H264,
+        SupportAnnotation{
+            SupportLevel::NotImplemented,
+            EXOSNAP_TRANSLATABLE("Capabilities",
+                                 "H.264 has no 10-bit/HDR10 path (8-bit only). Use HEVC or AV1 for HDR10.")});
 
     caps.resolution_constraint.max_width = 0;
     caps.resolution_constraint.max_height = 0;
@@ -128,9 +157,9 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
     // --- Downgrade rule A: missing NVENC blocks AV1 path ---
     // NVENC is required when the DLL is not present or API version is not valid.
     if (!snapshot.nvidia.nvenc_dll_present || !snapshot.nvidia.nvenc_api_version_valid) {
-        const std::string nvenc_reason =
-            "NVIDIA NVENC is not available on this system. "
-            "Install a supported NVIDIA driver or switch to a non-NVENC recording profile.";
+        const std::string nvenc_reason = EXOSNAP_TRANSLATABLE(
+            "Capabilities", "NVIDIA NVENC is not available on this system. "
+                            "Install a supported NVIDIA driver or switch to a non-NVENC recording profile.");
 
         // Lower the dimension-level annotation for all NVENC codecs.
         caps.video_codecs[VideoCodec::Av1] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
@@ -200,11 +229,14 @@ void ApplyNvencCodecSupport(CapabilitySet& caps, const NvidiaRuntimeFacts& facts
     };
 
     downgrade_if_unsupported(VideoCodec::Av1, facts.nvenc_av1,
-                             "This GPU does not support AV1 NVENC encoding "
-                             "(NVIDIA Ada Lovelace / RTX 40 series or newer is required).");
-    downgrade_if_unsupported(VideoCodec::Hevc, facts.nvenc_hevc,
-                             "This GPU does not support HEVC (H.265) NVENC encoding.");
-    downgrade_if_unsupported(VideoCodec::H264, facts.nvenc_h264, "This GPU does not support H.264 NVENC encoding.");
+                             EXOSNAP_TRANSLATABLE("Capabilities",
+                                                  "This GPU does not support AV1 NVENC encoding "
+                                                  "(NVIDIA Ada Lovelace / RTX 40 series or newer is required)."));
+    downgrade_if_unsupported(
+        VideoCodec::Hevc, facts.nvenc_hevc,
+        EXOSNAP_TRANSLATABLE("Capabilities", "This GPU does not support HEVC (H.265) NVENC encoding."));
+    downgrade_if_unsupported(VideoCodec::H264, facts.nvenc_h264,
+                             EXOSNAP_TRANSLATABLE("Capabilities", "This GPU does not support H.264 NVENC encoding."));
 }
 
 void ApplyNvencYuv444Support(CapabilitySet& caps, const NvidiaRuntimeFacts& facts) {
@@ -224,10 +256,12 @@ void ApplyNvencYuv444Support(CapabilitySet& caps, const NvidiaRuntimeFacts& fact
         }
     };
 
-    downgrade_if_unsupported(VideoCodec::H264, facts.nvenc_yuv444_h264,
-                             "This GPU does not support H.264 4:4:4 (YUV444) NVENC encoding.");
-    downgrade_if_unsupported(VideoCodec::Hevc, facts.nvenc_yuv444_hevc,
-                             "This GPU does not support HEVC 4:4:4 (YUV444) NVENC encoding.");
+    downgrade_if_unsupported(
+        VideoCodec::H264, facts.nvenc_yuv444_h264,
+        EXOSNAP_TRANSLATABLE("Capabilities", "This GPU does not support H.264 4:4:4 (YUV444) NVENC encoding."));
+    downgrade_if_unsupported(
+        VideoCodec::Hevc, facts.nvenc_yuv444_hevc,
+        EXOSNAP_TRANSLATABLE("Capabilities", "This GPU does not support HEVC 4:4:4 (YUV444) NVENC encoding."));
     // AV1 is not probed for 4:4:4 — it has no NVENC 4:4:4 path and stays
     // NotImplemented from the baseline.
 }
@@ -241,19 +275,26 @@ void ApplyNvencAdvancedEncodeSupport(CapabilitySet& caps, const NvidiaRuntimeFac
             return; // codec not advertised at all -> leave NotImplemented/0 baseline
         }
         caps.bframe_capability[codec] = BFrameCapability{
-            SupportAnnotation{adv.max_bframes > 0 ? SupportLevel::ValidUnvalidated : SupportLevel::NotImplemented,
-                              adv.max_bframes > 0
-                                  ? "Probed on this GPU/driver; not yet validated by ExoSnap's own encode path."
-                                  : "GPU/driver reports 0 max B-frames for this codec."},
+            SupportAnnotation{
+                adv.max_bframes > 0 ? SupportLevel::ValidUnvalidated : SupportLevel::NotImplemented,
+                adv.max_bframes > 0
+                    ? EXOSNAP_TRANSLATABLE("Capabilities",
+                                           "Probed on this GPU/driver; not yet validated by ExoSnap's own encode path.")
+                    : "GPU/driver reports 0 max B-frames for this codec."},
             adv.max_bframes, adv.bframe_ref_mode};
         caps.lookahead[codec] = SupportAnnotation{
             adv.lookahead ? SupportLevel::ValidUnvalidated : SupportLevel::NotImplemented,
-            adv.lookahead ? "Probed on this GPU/driver; not yet validated by ExoSnap's own encode path."
-                          : "GPU/driver does not report lookahead support for this codec."};
+            adv.lookahead
+                ? EXOSNAP_TRANSLATABLE("Capabilities",
+                                       "Probed on this GPU/driver; not yet validated by ExoSnap's own encode path.")
+                : "GPU/driver does not report lookahead support for this codec."};
         caps.temporal_aq[codec] = SupportAnnotation{
             adv.temporal_aq ? SupportLevel::ValidUnvalidated : SupportLevel::NotImplemented,
-            adv.temporal_aq ? "Probed on this GPU/driver; not yet validated by ExoSnap's own encode path."
-                            : "GPU/driver does not report Temporal-AQ support for this codec."};
+            adv.temporal_aq
+                ? EXOSNAP_TRANSLATABLE("Capabilities",
+                                       "Probed on this GPU/driver; not yet validated by ExoSnap's own encode path.")
+                : EXOSNAP_TRANSLATABLE("Capabilities",
+                                       "GPU/driver does not report Temporal-AQ support for this codec.")};
     };
     apply(VideoCodec::H264, facts.nvenc_h264, facts.nvenc_adv_h264);
     apply(VideoCodec::Hevc, facts.nvenc_hevc, facts.nvenc_adv_hevc);

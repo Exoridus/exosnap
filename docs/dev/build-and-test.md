@@ -9,7 +9,7 @@ Use Windows 10/11 x64, Visual Studio 2022 Desktop development with C++, PowerShe
 The source language is C++20. NVIDIA NVENC is needed for real recording, not for most pure tests. Rust owns automation and protocol tests in the `tools/` workspace. PowerShell is the Windows command shell, not a separate script-test runtime.
 
 The canonical Qt SDK version is in `.qt-version`; the current minimum is Qt 6.12.
-Provisioning distinguishes base archives from modules: ShaderTools is a separate module.
+Provisioning distinguishes base archives from modules: ShaderTools is a separate module. The Quick profile also requires the qttools archive for Qt LinguistTools (lupdate, lrelease and lcheck).
 Use a fresh build directory when changing the SDK so cached CMake package paths
 and deployment tools cannot retain a different Qt runtime.
 
@@ -141,3 +141,48 @@ The lockfile is part of the tool input. A locked build must fail if dependencies
 ## What a successful local gate does not prove
 
 A GPU-free unit test does not establish real capture/encode behavior, a generated screenshot does not establish native HWND ownership or overlay desktop composition, and a development build is not a signed downloadable release. Report exactly which layers ran. Native window checks, real playback, endpoint unplug and release installation belong to their named runbooks and acceptance scenarios.
+
+## Translation maintenance
+
+English source text is canonical. German is the supported production localization.
+Qt LinguistTools from the same Qt 6.12 SDK is required for application builds.
+Both executables embed the generated catalogue; no loose QM file is needed when
+the updater is staged externally.
+
+The normal pipeline is English source -> TS -> QM -> QTranslator -> QML/C++.
+Refresh source strings, edit the German catalogue in Qt Linguist, and build it:
+
+~~~powershell
+cmake --build --preset windows-x64-ninja-debug --target exosnap_lupdate
+cmake --build --preset windows-x64-ninja-debug --target exosnap_lrelease
+lcheck app/i18n/exosnap_de.ts
+cargo exo-dev test --filter i18n.
+~~~
+
+exosnap_lrelease rejects unfinished translations. The translation tests check
+catalogue structure, complete German plural forms and unchanged placeholders.
+quick.qml.german_text_geometry_* runs the German resource at 100%, 125%, 150%
+and 200%. The existing pseudo-localization tests remain independent and keep
+their geometry stress role.
+
+Use natural German around established technical vocabulary. Keep Encoder,
+Decoder, Codec, Bitrate, B-Frames, Lookahead, Spatial AQ, Temporal AQ, Multipass,
+Preset, HDR/HDR10, SDR, NVENC, AMF, QSV, oneVPL, CQ, VBR, CBR, CFR, VFR, GOP,
+Keyframe, Frame Pacing, Capture, Pipeline, GPU, VRAM, FPS, A/V, PTS and DTS.
+Codec/container names and units retain their established spelling.
+Use Ausgabeauflösung, Bildrate, Aufnahme, Ausgabeordner, Encoder-Preset,
+Keyframe-Intervall and Verworfene Frames consistently.
+
+Translate ordinary user-facing labels, workflow/status copy, errors, warnings,
+tooltips and accessibility strings. Preserve protocol/JSON/automation keys,
+CLI flags, log field/event names, persistent IDs, enum/backend identifiers,
+codec/container identifiers, file paths, commands and raw diagnostic evidence.
+Qt-free policy sources use an extraction-only marker; adapters translate their
+presentation fields with QTranslator, while stable tokens remain unchanged.
+
+System, English and Deutsch persist as system, en and de. System selects German
+only for a German system locale. Changes apply on restart. The running app's
+effective language is passed to an app-launched updater as presentation data;
+manual updater launches use System. A missing translation resource falls back
+to English and never prevents an update. The offline WiX Setup is outside this
+localization surface.

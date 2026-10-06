@@ -52,7 +52,7 @@ Developer prose and code comments are English with ASCII punctuation. Preserve t
 
 Markdown follows the same writing rules. Use fences for literal commands/files/logs/code, not a box around prose. Use a table/list when the set itself is a lookup reference; ordinary explanations stay prose. Write long prose lines with breaks at meaningful boundaries, not a fixed column. Correct text being changed without an unrelated tree-wide style sweep.
 
-Wrap user-visible text for Qt translation as it is written. Current shipped UI is English; German localization is planned. German text uses natural ä/ö/ü/ß, not ASCII transliteration. A font/encoding defect is fixed at that layer. Developer docs remain English regardless of locales.
+Wrap user-visible text for Qt translation as it is written. English source text is the canonical fallback for German localization. German text uses natural ä/ö/ü/ß, not ASCII transliteration. A font/encoding defect is fixed at that layer. Developer docs remain English regardless of locales.
 
 ## Change discipline and validation
 

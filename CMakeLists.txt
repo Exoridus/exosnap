@@ -260,3 +260,57 @@ add_subdirectory(tools/envctl)
 # ---------------------------------------------------------------------------
 exosnap_assert_no_ui_dependency(exosnap_engine)
 exosnap_assert_no_ui_dependency(exosnap_capability)
+
+if(TARGET exosnap_updater)
+    find_package(Qt6 6.12 REQUIRED COMPONENTS Core LinguistTools)
+    exosnap_add_gtest(
+        NAME translation_tests
+        TEST_PREFIX i18n.
+        SOURCES app/tests/test_translation.cpp
+        LIBRARIES Qt6::Core
+    )
+    target_include_directories(translation_tests PRIVATE "${PROJECT_SOURCE_DIR}/app"
+        "${PROJECT_SOURCE_DIR}/libs/engine/include")
+    exosnap_add_gtest(
+        NAME language_fallback_tests
+        TEST_PREFIX i18n.
+        SOURCES app/tests/test_language_fallback.cpp
+        LIBRARIES Qt6::Core
+    )
+    target_include_directories(language_fallback_tests PRIVATE "${PROJECT_SOURCE_DIR}/app")
+    qt_add_resources(translation_tests translation_source
+        PREFIX /exosnap/i18n
+        BASE "${PROJECT_SOURCE_DIR}/app/i18n"
+        FILES app/i18n/exosnap_de.ts
+    )
+    set(_translation_targets exosnap_updater translation_tests)
+    set(_translation_sources exosnap_updater exosnap_updater_logic)
+    if(TARGET exosnap)
+        list(APPEND _translation_targets exosnap)
+        list(APPEND _translation_sources exosnap)
+    endif()
+    if(TARGET record_controls_qml_tests)
+        list(APPEND _translation_targets record_controls_qml_tests)
+    endif()
+    qt_add_translations(
+        TARGETS ${_translation_targets}
+        SOURCE_TARGETS ${_translation_sources}
+        TS_FILES app/i18n/exosnap_de.ts
+        RESOURCE_PREFIX /exosnap/i18n
+        LUPDATE_TARGET exosnap_lupdate
+        LRELEASE_TARGET exosnap_lrelease
+        LUPDATE_OPTIONS -no-obsolete -locations relative
+            -tr-function-alias QT_TRANSLATE_NOOP+=EXOSNAP_TRANSLATABLE
+        SOURCES
+            libs/capability/src/capability_builder.cpp
+            libs/capability/src/container_compat_registry.cpp
+            libs/capability/src/encoder_device_resolver.cpp
+            app/diagnostics/RecommendationEngine.cpp
+            app/diagnostics/DiagnosticsController.cpp
+            app/models/OutputSettingsModel.cpp
+            app/models/OutputPathPolicy.cpp
+            app/models/OutputPathValidator.cpp
+            app/ui/theme/ExoSnapThemes.h
+        LRELEASE_OPTIONS -fail-on-unfinished
+    )
+endif()

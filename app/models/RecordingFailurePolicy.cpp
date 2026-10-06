@@ -1,4 +1,5 @@
 #include "models/RecordingFailurePolicy.h"
+#include <QCoreApplication>
 
 #include "ui/CodecLabels.h"
 
@@ -17,12 +18,15 @@ std::optional<RecordingFailureReport> BuildRecordingFailureReport(const UiRecord
     // Whether anything reached disk decides the whole framing: "could not start"
     // and "stopped unexpectedly" send the user to different places.
     const bool has_partial = result.output_file_bytes > 0;
-    report.title =
-        has_partial ? QStringLiteral("Recording stopped unexpectedly") : QStringLiteral("Recording could not start");
-    report.summary = has_partial
-                         ? QStringLiteral("The recording was interrupted before it finished. A partial file may "
+    report.title = has_partial ? QCoreApplication::translate("RecordingFailurePolicy", "Recording stopped unexpectedly")
+                               : QCoreApplication::translate("RecordingFailurePolicy", "Recording could not start");
+    report.summary =
+        has_partial
+            ? QCoreApplication::translate("RecordingFailurePolicy",
+                                          "The recording was interrupted before it finished. A partial file may "
                                           "have been saved to your output folder.")
-                         : QStringLiteral("ExoSnap couldn't start this recording. The details below may help "
+            : QCoreApplication::translate("RecordingFailurePolicy",
+                                          "ExoSnap couldn't start this recording. The details below may help "
                                           "identify why.");
     report.phase = QString::fromStdWString(result.error_phase);
     report.code = QString::fromStdWString(result.hresult_text);

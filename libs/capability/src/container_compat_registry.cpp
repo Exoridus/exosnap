@@ -1,4 +1,5 @@
 #include <capability/container_compat_registry.h>
+#include <capability/translatable.h>
 
 #include <array>
 #include <capability/config_types.h>
@@ -108,74 +109,95 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
     if (container == Container::Matroska) {
         if (video == VideoCodec::Av1) {
             if (audio == AudioCodec::Opus)
-                return {ContainerCompatLevel::Recommended, "Primary validated MKV path: AV1 NVENC + Opus."};
+                return {ContainerCompatLevel::Recommended,
+                        EXOSNAP_TRANSLATABLE("Capabilities", "Primary validated MKV path: AV1 NVENC + Opus.")};
             if (audio == AudioCodec::Aac)
-                return {ContainerCompatLevel::Recommended, "Validated MKV path: AV1 NVENC + AAC (M3.2)."};
+                return {ContainerCompatLevel::Recommended,
+                        EXOSNAP_TRANSLATABLE("Capabilities", "Validated MKV path: AV1 NVENC + AAC (M3.2).")};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Allowed,
-                        "MKV + AV1 + PCM: uncompressed 16-bit signed little-endian PCM (A_PCM/INT/LIT). "
-                        "Large files; lossless audio. Matroska-only (0.6.0 Audio v2)."};
+                        EXOSNAP_TRANSLATABLE(
+                            "Capabilities",
+                            "MKV + AV1 + PCM: uncompressed 16-bit signed little-endian PCM (A_PCM/INT/LIT). "
+                            "Large files; lossless audio. Matroska-only (0.6.0 Audio v2).")};
             if (audio == AudioCodec::Flac)
                 return {ContainerCompatLevel::Allowed,
-                        "MKV + AV1 + FLAC: lossless FLAC (A_FLAC) via libFLAC. "
-                        "Smaller than PCM, still lossless. Matroska-only (0.6.0 Audio v2)."};
+                        EXOSNAP_TRANSLATABLE("Capabilities",
+                                             "MKV + AV1 + FLAC: lossless FLAC (A_FLAC) via libFLAC. "
+                                             "Smaller than PCM, still lossless. Matroska-only (0.6.0 Audio v2).")};
         }
         if (video == VideoCodec::H264) {
             if (audio == AudioCodec::Aac)
-                return {ContainerCompatLevel::Recommended, "Validated MKV path: H.264 NVENC + AAC."};
+                return {ContainerCompatLevel::Recommended,
+                        EXOSNAP_TRANSLATABLE("Capabilities", "Validated MKV path: H.264 NVENC + AAC.")};
             if (audio == AudioCodec::Opus)
                 return {ContainerCompatLevel::Allowed,
-                        "MKV + H.264 + Opus: Matroska carries Opus natively and the Opus-in-MKV write path "
-                        "is production-validated (AV1+Opus). A dedicated player-matrix pass for this exact "
-                        "pairing is not yet on file (pair-specific compatibility is unvalidated)."};
+                        EXOSNAP_TRANSLATABLE(
+                            "Capabilities",
+                            "MKV + H.264 + Opus: Matroska carries Opus natively and the Opus-in-MKV write path "
+                            "is production-validated (AV1+Opus). A dedicated player-matrix pass for this exact "
+                            "pairing is not yet on file (pair-specific compatibility is unvalidated).")};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Allowed,
-                        "MKV + H.264 + PCM: uncompressed 16-bit signed little-endian PCM (A_PCM/INT/LIT). "
-                        "Large files; lossless audio. Matroska-only (0.6.0 Audio v2)."};
+                        EXOSNAP_TRANSLATABLE(
+                            "Capabilities",
+                            "MKV + H.264 + PCM: uncompressed 16-bit signed little-endian PCM (A_PCM/INT/LIT). "
+                            "Large files; lossless audio. Matroska-only (0.6.0 Audio v2).")};
             if (audio == AudioCodec::Flac)
                 return {ContainerCompatLevel::Allowed,
-                        "MKV + H.264 + FLAC: lossless FLAC (A_FLAC) via libFLAC. "
-                        "Smaller than PCM, still lossless. Matroska-only (0.6.0 Audio v2)."};
+                        EXOSNAP_TRANSLATABLE("Capabilities",
+                                             "MKV + H.264 + FLAC: lossless FLAC (A_FLAC) via libFLAC. "
+                                             "Smaller than PCM, still lossless. Matroska-only (0.6.0 Audio v2).")};
         }
         if (video == VideoCodec::Hevc) {
             if (audio == AudioCodec::Aac)
                 return {ContainerCompatLevel::Allowed,
-                        "MKV + HEVC + AAC: HEVC NVENC with Matroska V_MPEGH/ISO/HEVC (hvcC codec-private, "
-                        "length-prefixed samples). Implemented in 0.7.0."};
+                        EXOSNAP_TRANSLATABLE(
+                            "Capabilities",
+                            "MKV + HEVC + AAC: HEVC NVENC with Matroska V_MPEGH/ISO/HEVC (hvcC codec-private, "
+                            "length-prefixed samples). Implemented in 0.7.0.")};
             if (audio == AudioCodec::Opus)
                 return {ContainerCompatLevel::Allowed,
-                        "MKV + HEVC + Opus: HEVC NVENC with Matroska V_MPEGH/ISO/HEVC (hvcC codec-private, "
-                        "length-prefixed samples). Implemented in 0.7.0."};
+                        EXOSNAP_TRANSLATABLE(
+                            "Capabilities",
+                            "MKV + HEVC + Opus: HEVC NVENC with Matroska V_MPEGH/ISO/HEVC (hvcC codec-private, "
+                            "length-prefixed samples). Implemented in 0.7.0.")};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Allowed,
                         "MKV + HEVC + PCM: HEVC NVENC with Matroska V_MPEGH/ISO/HEVC (hvcC codec-private, "
                         "length-prefixed samples) + uncompressed PCM (A_PCM/INT/LIT). Implemented in 0.7.0."};
             if (audio == AudioCodec::Flac)
                 return {ContainerCompatLevel::Allowed,
-                        "MKV + HEVC + FLAC: HEVC NVENC with Matroska V_MPEGH/ISO/HEVC (hvcC codec-private, "
-                        "length-prefixed samples) + lossless FLAC (A_FLAC). Implemented in 0.7.0."};
+                        EXOSNAP_TRANSLATABLE(
+                            "Capabilities",
+                            "MKV + HEVC + FLAC: HEVC NVENC with Matroska V_MPEGH/ISO/HEVC (hvcC codec-private, "
+                            "length-prefixed samples) + lossless FLAC (A_FLAC). Implemented in 0.7.0.")};
         }
-        return {ContainerCompatLevel::Prohibited, "Unknown MKV combination."};
+        return {ContainerCompatLevel::Prohibited, EXOSNAP_TRANSLATABLE("Capabilities", "Unknown MKV combination.")};
     }
 
     // --- MP4 ---
     if (container == Container::Mp4) {
         // Opus-in-MP4 is Prohibited for all video codecs.
         if (audio == AudioCodec::Opus)
-            return {ContainerCompatLevel::Prohibited, "Opus audio is not supported in MP4. "
-                                                      "Select AAC for MP4 recordings."};
+            return {ContainerCompatLevel::Prohibited,
+                    EXOSNAP_TRANSLATABLE("Capabilities", "Opus audio is not supported in MP4. "
+                                                         "Select AAC for MP4 recordings.")};
 
         if (video == VideoCodec::H264) {
             if (audio == AudioCodec::Aac)
                 return {ContainerCompatLevel::Recommended,
-                        "Primary validated MP4 path: H.264 NVENC + AAC via remux-on-stop."};
+                        EXOSNAP_TRANSLATABLE("Capabilities",
+                                             "Primary validated MP4 path: H.264 NVENC + AAC via remux-on-stop.")};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Experimental,
-                        "MP4 + H.264 + PCM: libavformat writes an ipcm (ISO/IEC 23003-5) sample entry "
-                        "for pcm_s16le/pcm_s24le/pcm_s32le in MP4 (confirmed via ffprobe "
-                        "codec_tag_string=ipcm). ipcm has limited player support — Windows Films & TV, "
-                        "QuickTime, and many NLEs do not play it. Deferred until a broadly-compatible "
-                        "sample-entry mapping (e.g. sowt/in24) is validated; use MKV for PCM."};
+                        EXOSNAP_TRANSLATABLE(
+                            "Capabilities",
+                            "MP4 + H.264 + PCM: libavformat writes an ipcm (ISO/IEC 23003-5) sample entry "
+                            "for pcm_s16le/pcm_s24le/pcm_s32le in MP4 (confirmed via ffprobe "
+                            "codec_tag_string=ipcm). ipcm has limited player support — Windows Films & TV, "
+                            "QuickTime, and many NLEs do not play it. Deferred until a broadly-compatible "
+                            "sample-entry mapping (e.g. sowt/in24) is validated; use MKV for PCM.")};
             if (audio == AudioCodec::Flac)
                 return {ContainerCompatLevel::Experimental,
                         "MP4 + H.264 + FLAC: FLAC-in-MP4 not specified in this build (use MKV for FLAC)."};
@@ -202,30 +224,38 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
             if (audio == AudioCodec::Flac)
                 return {ContainerCompatLevel::Experimental, "MP4 + AV1 + FLAC: not implemented."};
         }
-        return {ContainerCompatLevel::Prohibited, "Unknown MP4 combination."};
+        return {ContainerCompatLevel::Prohibited, EXOSNAP_TRANSLATABLE("Capabilities", "Unknown MP4 combination.")};
     }
 
     // --- WebM ---
     if (container == Container::WebM) {
         // H.264 and HEVC are unconditionally Prohibited in WebM.
         if (video == VideoCodec::H264 || video == VideoCodec::Hevc)
-            return {ContainerCompatLevel::Prohibited, "WebM supports only AV1 in ExoSnap's product matrix. "
-                                                      "H.264 and HEVC are prohibited in WebM."};
+            return {ContainerCompatLevel::Prohibited,
+                    EXOSNAP_TRANSLATABLE("Capabilities", "WebM supports only AV1 in ExoSnap's product matrix. "
+                                                         "H.264 and HEVC are prohibited in WebM.")};
 
         if (video == VideoCodec::Av1) {
             if (audio == AudioCodec::Opus)
-                return {ContainerCompatLevel::Recommended, "Primary validated WebM path: AV1 NVENC + Opus."};
+                return {ContainerCompatLevel::Recommended,
+                        EXOSNAP_TRANSLATABLE("Capabilities", "Primary validated WebM path: AV1 NVENC + Opus.")};
             if (audio == AudioCodec::Aac)
-                return {ContainerCompatLevel::Prohibited, "WebM does not support AAC. Use Opus for WebM recordings."};
+                return {
+                    ContainerCompatLevel::Prohibited,
+                    EXOSNAP_TRANSLATABLE("Capabilities", "WebM does not support AAC. Use Opus for WebM recordings.")};
             if (audio == AudioCodec::Pcm)
-                return {ContainerCompatLevel::Prohibited, "WebM does not support PCM. Use Opus for WebM recordings."};
+                return {
+                    ContainerCompatLevel::Prohibited,
+                    EXOSNAP_TRANSLATABLE("Capabilities", "WebM does not support PCM. Use Opus for WebM recordings.")};
             if (audio == AudioCodec::Flac)
-                return {ContainerCompatLevel::Prohibited, "WebM does not support FLAC. Use Opus for WebM recordings."};
+                return {
+                    ContainerCompatLevel::Prohibited,
+                    EXOSNAP_TRANSLATABLE("Capabilities", "WebM does not support FLAC. Use Opus for WebM recordings.")};
         }
-        return {ContainerCompatLevel::Prohibited, "Unknown WebM combination."};
+        return {ContainerCompatLevel::Prohibited, EXOSNAP_TRANSLATABLE("Capabilities", "Unknown WebM combination.")};
     }
 
-    return {ContainerCompatLevel::Prohibited, "Unknown container."};
+    return {ContainerCompatLevel::Prohibited, EXOSNAP_TRANSLATABLE("Capabilities", "Unknown container.")};
 }
 
 // ---------------------------------------------------------------------------

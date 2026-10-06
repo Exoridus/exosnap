@@ -213,9 +213,9 @@ QVariantList QuickThemeTokens::appearanceOptions() {
     for (const ExoAppearance& appearance : kExoAppearances) {
         QVariantMap entry;
         entry.insert(QStringLiteral("value"), QString::fromUtf8(appearance.id));
-        entry.insert(QStringLiteral("label"), QString::fromUtf8(appearance.name));
+        entry.insert(QStringLiteral("label"), QCoreApplication::translate("Appearance", appearance.name));
         entry.insert(QStringLiteral("selectable"), true);
-        entry.insert(QStringLiteral("reason"), QString::fromUtf8(appearance.intent));
+        entry.insert(QStringLiteral("reason"), QCoreApplication::translate("Appearance", appearance.intent));
         options.append(entry);
     }
     return options;
@@ -227,9 +227,9 @@ QVariantList QuickThemeTokens::accentOptions(const QString& appearance_id) {
     for (const ExoAccent& accent : kExoAccents) {
         QVariantMap entry;
         entry.insert(QStringLiteral("value"), QString::fromUtf8(accent.id));
-        entry.insert(QStringLiteral("label"), QString::fromUtf8(accent.name));
+        entry.insert(QStringLiteral("label"), QCoreApplication::translate("Appearance", accent.name));
         entry.insert(QStringLiteral("selectable"), true);
-        entry.insert(QStringLiteral("reason"), QString::fromUtf8(accent.intent));
+        entry.insert(QStringLiteral("reason"), QCoreApplication::translate("Appearance", accent.intent));
         entry.insert(QStringLiteral("swatch"), QString::fromUtf8(dark ? accent.dark : accent.light));
         options.append(entry);
     }

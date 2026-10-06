@@ -276,6 +276,9 @@ class SettingsAdapter : public QObject {
                    appSettingsChanged FINAL)
 
     // ---- Appearance ---------------------------------------------------------
+    Q_PROPERTY(QVariantList languageOptions READ languageOptions CONSTANT FINAL)
+    Q_PROPERTY(QString uiLanguage READ uiLanguage WRITE setUiLanguage NOTIFY appSettingsChanged FINAL)
+    Q_PROPERTY(bool languageRestartNeeded READ languageRestartNeeded NOTIFY appSettingsChanged FINAL)
     Q_PROPERTY(QVariantList appearanceOptions READ appearanceOptions CONSTANT FINAL)
     Q_PROPERTY(QString appearanceId READ appearanceId WRITE setAppearanceId NOTIFY appSettingsChanged FINAL)
     // Not CONSTANT: each entry carries the accent's swatch as it looks in the
@@ -565,6 +568,9 @@ class SettingsAdapter : public QObject {
     Q_INVOKABLE void setRecordingOverlayElement(const QString& token, bool enabled);
     Q_INVOKABLE void setDiagnosticsOverlayElement(const QString& token, bool enabled);
 
+    [[nodiscard]] QVariantList languageOptions() const;
+    [[nodiscard]] QString uiLanguage() const;
+    [[nodiscard]] bool languageRestartNeeded() const;
     [[nodiscard]] QVariantList appearanceOptions() const;
     [[nodiscard]] QString appearanceId() const;
     [[nodiscard]] QVariantList accentOptions() const;
@@ -698,6 +704,7 @@ class SettingsAdapter : public QObject {
     void setMinimizeToTray(bool value);
     void setHideWindowFromCapture(bool value);
     void setOpenEditorWhenFinished(bool value);
+    void setUiLanguage(const QString& value);
     void setAppearanceId(const QString& value);
     void setAccentId(const QString& value);
     void setDeveloperLogLevel(const QString& value);
@@ -799,6 +806,7 @@ class SettingsAdapter : public QObject {
     RecordingPresetConfig config_;
     bool active_ = false;
     PersistedAppSettings app_settings_;
+    QString startup_language_;
     // caps_ is the effective view for the selected encoder device; base_caps_
     // is the system-wide answer it is derived from. The device catalog is a
     // pure-data snapshot of the composition root's adapter scan.

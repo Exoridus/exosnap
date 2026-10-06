@@ -9,6 +9,8 @@
 #include "QuickApplication.h"
 #include "QuickLiveVerifySource.h"
 #include "QuickWindowGeometry.h"
+#include "i18n/Language.h"
+#include "settings/AppSettingsStore.h"
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
 #include "NotificationsAdapter.h"
 #include "QuickAutoEditHarness.h"
@@ -1211,6 +1213,11 @@ int main(int argc, char* argv[]) {
     // pass (QCR-511). Installed BEFORE the engine loads, so every qsTr() in QML
     // resolves through it on its first evaluation and no retranslate() call is
     // needed. argv-only by design — see PseudoLocalization.h.
+    const int language_argument = arguments.indexOf(QStringLiteral("--ui-language"));
+    const QString language = language_argument >= 0 && language_argument + 1 < arguments.size()
+                                 ? arguments.at(language_argument + 1)
+                                 : exosnap::AppSettingsStore().Load().ui_language;
+    exosnap::i18n::InstallLanguage(app, language);
     if (arguments.contains(QStringLiteral("--pseudo-localize")))
         installPseudoLocalization(app);
 

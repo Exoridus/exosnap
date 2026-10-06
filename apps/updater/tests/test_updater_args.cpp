@@ -199,3 +199,17 @@ TEST(ReadInstalledVersionTest, AnAbsentInstallDirectoryYieldsNothing) {
 }
 
 } // namespace
+
+TEST(UpdaterCommandLine, PresentationLanguageNeverArmsTheUpdatePipeline) {
+    for (const QString& token : {QStringLiteral("system"), QStringLiteral("en"), QStringLiteral("de")}) {
+        const auto parsed = ParseUpdaterCommandLine({QStringLiteral("u"), QStringLiteral("--ui-language"), token});
+        ASSERT_TRUE(parsed.has_value());
+        EXPECT_EQ(parsed->ui_language, token);
+        EXPECT_TRUE(parsed->handoff_path.isEmpty());
+        EXPECT_EQ(ArgsForManualStart(*parsed).mode, UpdaterMode::Manual);
+    }
+    EXPECT_FALSE(
+        ParseUpdaterCommandLine({QStringLiteral("u"), QStringLiteral("--ui-language"), QStringLiteral("Deutsch")})
+            .has_value());
+    EXPECT_FALSE(ParseUpdaterCommandLine({QStringLiteral("u"), QStringLiteral("--ui-language")}).has_value());
+}

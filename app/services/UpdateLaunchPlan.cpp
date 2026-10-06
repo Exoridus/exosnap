@@ -4,6 +4,7 @@
 // unit-tested headless (see app/tests/test_update_launch_plan.cpp).
 
 #include "UpdateService.h"
+#include "i18n/Language.h"
 #include <update/distribution_context.h>
 
 #include <control/options.h>
@@ -134,6 +135,7 @@ QStringList BuildUpdaterArgs(const QString& handoff_path, const QString& automat
     // a handoff field: this names a control session, not a product operation.
     if (!automation_run_id.isEmpty())
         args << QString::fromLatin1(exosnap::control::option::kUpdaterControl) << automation_run_id;
+    args << QStringLiteral("--ui-language") << i18n::EffectiveLanguage(i18n::RunningLanguage());
     return args;
 }
 

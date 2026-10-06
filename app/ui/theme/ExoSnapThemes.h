@@ -1,4 +1,5 @@
 #pragma once
+#include "../../../libs/capability/include/capability/translatable.h"
 
 #include <array>
 #include <string_view>
@@ -91,9 +92,9 @@ struct ExoAccent {
 inline constexpr std::array<ExoAppearance, 2> kExoAppearances = {{
     {
         "dark",
-        "Dark",
+        EXOSNAP_TRANSLATABLE("Appearance", "Dark"),
         ThemeKind::Dark,
-        "Calm graphite \xE2\x80\x94 the shipped default.",
+        EXOSNAP_TRANSLATABLE("Appearance", "Calm graphite \xE2\x80\x94 the shipped default."),
         "#0E0E10",
         "#151517",
         "#1C1C1F",
@@ -132,9 +133,9 @@ inline constexpr std::array<ExoAppearance, 2> kExoAppearances = {{
         // page, which is the light-mode convention (there is no headroom above
         // white to step up into).
         "light",
-        "Light",
+        EXOSNAP_TRANSLATABLE("Appearance", "Light"),
         ThemeKind::Light,
-        "Cool daylight \xE2\x80\x94 a grey ground with near-white surfaces on it.",
+        EXOSNAP_TRANSLATABLE("Appearance", "Cool daylight \xE2\x80\x94 a grey ground with near-white surfaces on it."),
         // The ground is grey and the things ON it are near-white, which is the
         // arrangement a light UI needs to stop reading as one bright sheet. The
         // page carries most of the window's area and sat only two steps below
@@ -184,8 +185,8 @@ inline constexpr std::array<ExoAppearance, 2> kExoAppearances = {{
 inline constexpr std::array<ExoAccent, 4> kExoAccents = {{
     {
         "aqua",
-        "Aqua",
-        "Studio mint \xE2\x80\x94 the ExoSnap default.",
+        EXOSNAP_TRANSLATABLE("Appearance", "Aqua"),
+        EXOSNAP_TRANSLATABLE("Appearance", "Studio mint \xE2\x80\x94 the ExoSnap default."),
         "#9BD9D2",
         "#08130F",
         "#127C74",
@@ -193,8 +194,8 @@ inline constexpr std::array<ExoAccent, 4> kExoAccents = {{
     },
     {
         "sky",
-        "Sky",
-        "Petrol blue \xE2\x80\x94 cooler and quieter.",
+        EXOSNAP_TRANSLATABLE("Appearance", "Sky"),
+        EXOSNAP_TRANSLATABLE("Appearance", "Petrol blue \xE2\x80\x94 cooler and quieter."),
         "#7FB7D9",
         "#06131C",
         "#18708F",
@@ -202,8 +203,8 @@ inline constexpr std::array<ExoAccent, 4> kExoAccents = {{
     },
     {
         "violet",
-        "Violet",
-        "Periwinkle \xE2\x80\x94 more contrast against the neutrals.",
+        EXOSNAP_TRANSLATABLE("Appearance", "Violet"),
+        EXOSNAP_TRANSLATABLE("Appearance", "Periwinkle \xE2\x80\x94 more contrast against the neutrals."),
         "#B6A7E6",
         "#0E0A1E",
         "#6A4FC7",
@@ -211,8 +212,8 @@ inline constexpr std::array<ExoAccent, 4> kExoAccents = {{
     },
     {
         "magenta",
-        "Magenta",
-        "Warm pink \xE2\x80\x94 the most assertive of the four.",
+        EXOSNAP_TRANSLATABLE("Appearance", "Magenta"),
+        EXOSNAP_TRANSLATABLE("Appearance", "Warm pink \xE2\x80\x94 the most assertive of the four."),
         "#E3A0CE",
         "#1C0A16",
         "#A63C7E",

@@ -120,6 +120,7 @@ target_include_directories(exosnap_updater PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${PROJECT_SOURCE_DIR}/app"
     "${_updater_quick_dir}"
+    "${PROJECT_SOURCE_DIR}/libs/capability/include"
 )
 target_link_libraries(exosnap_updater PRIVATE
     Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2

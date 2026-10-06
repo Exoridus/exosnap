@@ -1,4 +1,5 @@
 #include "CrashReportAdapter.h"
+#include <QCoreApplication>
 
 #include <QVariantMap>
 
@@ -29,9 +30,13 @@ QString CrashReportAdapter::availabilityText() const {
     // Both variants end on the same promise, because it is the one thing the
     // user needs to read before deciding anything.
     return context_.dump_available
-               ? QStringLiteral("A local crash dump is available and can help determine the cause. Nothing is sent "
-                                "unless you choose to.")
-               : QStringLiteral("Only limited session context is available. Nothing is sent unless you choose to.");
+               ? QCoreApplication::translate(
+                     "CrashReportAdapter",
+                     "A local crash dump is available and can help determine the cause. Nothing is sent "
+                     "unless you choose to.")
+               : QCoreApplication::translate(
+                     "CrashReportAdapter",
+                     "Only limited session context is available. Nothing is sent unless you choose to.");
 }
 
 const QVariantList& CrashReportAdapter::summaryRows() const noexcept {
@@ -42,25 +47,26 @@ QStringList CrashReportAdapter::includedItems() const {
     // The native dump is a separate binary channel, so paths and usernames are
     // deliberately not promised absent here — see channelNote().
     return {
-        QStringLiteral("Native crash dump, when available"),
-        QStringLiteral("Crash and stack information"),
-        QStringLiteral("Encoder, container, video and audio codec context"),
+        QCoreApplication::translate("CrashReportAdapter", "Native crash dump, when available"),
+        QCoreApplication::translate("CrashReportAdapter", "Crash and stack information"),
+        QCoreApplication::translate("CrashReportAdapter", "Encoder, container, video and audio codec context"),
     };
 }
 
 QStringList CrashReportAdapter::excludedItems() const {
     return {
-        QStringLiteral("Recordings or recording content"),
-        QStringLiteral("Output files"),
-        QStringLiteral("Settings or presets"),
-        QStringLiteral("Application logs"),
+        QCoreApplication::translate("CrashReportAdapter", "Recordings or recording content"),
+        QCoreApplication::translate("CrashReportAdapter", "Output files"),
+        QCoreApplication::translate("CrashReportAdapter", "Settings or presets"),
+        QCoreApplication::translate("CrashReportAdapter", "Application logs"),
     };
 }
 
 QString CrashReportAdapter::channelNote() const {
-    return QStringLiteral("Sent to Sentry's EU region. The native dump is separate from the privacy-scrubbed "
-                          "structured event and can include loaded-module paths, including the ExoSnap install "
-                          "path. Your IP address is used in transit; Sentry is configured not to store it.");
+    return QCoreApplication::translate(
+        "CrashReportAdapter", "Sent to Sentry's EU region. The native dump is separate from the privacy-scrubbed "
+                              "structured event and can include loaded-module paths, including the ExoSnap install "
+                              "path. Your IP address is used in transit; Sentry is configured not to store it.");
 }
 
 bool CrashReportAdapter::rememberChoice() const noexcept {
@@ -92,17 +98,21 @@ void CrashReportAdapter::present(const CrashReportContext& context, bool crash_f
 
 void CrashReportAdapter::rebuildSummaryRows() {
     summary_rows_.clear();
-    summary_rows_.append(Row(QStringLiteral("SESSION"), QStringLiteral("Did not shut down normally")));
-    summary_rows_.append(Row(QStringLiteral("CRASH DUMP"),
-                             context_.dump_available ? QStringLiteral("Available") : QStringLiteral("Unavailable")));
+    summary_rows_.append(Row(QCoreApplication::translate("CrashReportAdapter", "SESSION"),
+                             QCoreApplication::translate("CrashReportAdapter", "Did not shut down normally")));
+    summary_rows_.append(Row(QCoreApplication::translate("CrashReportAdapter", "CRASH DUMP"),
+                             context_.dump_available
+                                 ? QCoreApplication::translate("CrashReportAdapter", "Available")
+                                 : QCoreApplication::translate("CrashReportAdapter", "Unavailable")));
     // The client never symbolicates: the dump holds the rest and Sentry resolves
     // stacks against the PDBs. Saying so is honest; showing an empty "CAUSE"
     // row would read as a value nobody bothered to fill in.
-    summary_rows_.append(Row(QStringLiteral("CAUSE"), QStringLiteral("Not available locally")));
+    summary_rows_.append(Row(QCoreApplication::translate("CrashReportAdapter", "CAUSE"),
+                             QCoreApplication::translate("CrashReportAdapter", "Not available locally")));
     if (!context_.version.trimmed().isEmpty())
-        summary_rows_.append(Row(QStringLiteral("VERSION"), context_.version));
+        summary_rows_.append(Row(QCoreApplication::translate("CrashReportAdapter", "VERSION"), context_.version));
     if (!context_.encoder.trimmed().isEmpty())
-        summary_rows_.append(Row(QStringLiteral("ENCODER"), context_.encoder));
+        summary_rows_.append(Row(QCoreApplication::translate("CrashReportAdapter", "ENCODER"), context_.encoder));
 }
 
 void CrashReportAdapter::commit(CrashReportAction action) {

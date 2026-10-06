@@ -60,39 +60,39 @@ bool previewTraceEnabled() {
 
 QString targetDescription(const exosnap::engine::CaptureTarget& target) {
     const QString description = QString::fromUtf8(target.description);
-    return description.isEmpty() ? QStringLiteral("Primary display") : description;
+    return description.isEmpty() ? QCoreApplication::translate("RecordPreviewAdapter", "Primary display") : description;
 }
 
 QString stateTextFor(UiRecordingState state) {
     switch (state) {
     case UiRecordingState::LoadingCapabilities:
-        return QStringLiteral("Loading capabilities");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Loading capabilities");
     case UiRecordingState::Ready:
-        return QStringLiteral("Ready");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Ready");
     case UiRecordingState::Blocked:
-        return QStringLiteral("Blocked");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Blocked");
     case UiRecordingState::Preparing:
-        return QStringLiteral("Preparing");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Preparing");
     case UiRecordingState::Recording:
-        return QStringLiteral("Recording");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Recording");
     case UiRecordingState::Paused:
-        return QStringLiteral("Paused");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Paused");
     case UiRecordingState::Stopping:
-        return QStringLiteral("Stopping");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Stopping");
     case UiRecordingState::Saving:
-        return QStringLiteral("Saving");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Saving");
     case UiRecordingState::Completed:
-        return QStringLiteral("Completed");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Completed");
     case UiRecordingState::Failed:
-        return QStringLiteral("Failed");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Failed");
     case UiRecordingState::Countdown:
-        return QStringLiteral("Countdown");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Countdown");
     case UiRecordingState::RegionSelecting:
-        return QStringLiteral("Selecting region");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Selecting region");
     case UiRecordingState::ArmedFromRecovery:
-        return QStringLiteral("Recovery paused");
+        return QCoreApplication::translate("RecordPreviewAdapter", "Recovery paused");
     }
-    return QStringLiteral("Unknown");
+    return QCoreApplication::translate("RecordPreviewAdapter", "Unknown");
 }
 
 } // namespace
@@ -312,7 +312,8 @@ QVariantMap RecordPreviewAdapter::benchmarkSnapshot() const {
         {QStringLiteral("preview_coalesced_signals"), QVariant::fromValue<qulonglong>(metrics.coalesced_signals)},
         {QStringLiteral("preview_scene_update_requests"),
          QVariant::fromValue<qulonglong>(metrics.scene_update_requests)},
-        {QStringLiteral("transport"), QStringLiteral("NT shared handle + keyed mutex + GPU CopyResource")},
+        {QStringLiteral("transport"),
+         QCoreApplication::translate("RecordPreviewAdapter", "NT shared handle + keyed mutex + GPU CopyResource")},
         {QStringLiteral("cpu_readback"), false},
         {QStringLiteral("native_child_hwnd"), false},
         {QStringLiteral("recording_state"), recording_state_text_},
@@ -531,7 +532,8 @@ void RecordPreviewAdapter::requestReadyFrame(ReadyFrameComposition composition,
     if (ready_source_handle_ == nullptr || !frame_ready_ ||
         DuplicateHandle(GetCurrentProcess(), ready_source_handle_, GetCurrentProcess(), &duplicate, 0, FALSE,
                         DUPLICATE_SAME_ACCESS) == FALSE) {
-        callback(false, 0, 0, {}, QStringLiteral("No Ready preview frame is available"));
+        callback(false, 0, 0, {},
+                 QCoreApplication::translate("RecordPreviewAdapter", "No Ready preview frame is available"));
         return;
     }
     ReadyFrameSource source;
@@ -621,7 +623,8 @@ void RecordPreviewAdapter::presentEngineSourceIfPossible() {
     HANDLE duplicate = nullptr;
     if (DuplicateHandle(GetCurrentProcess(), static_cast<HANDLE>(engine_source_.handle), GetCurrentProcess(),
                         &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS) == FALSE) {
-        setStatus(QStringLiteral("Preview unavailable · could not duplicate the recording texture"));
+        setStatus(QCoreApplication::translate("RecordPreviewAdapter",
+                                              "Preview unavailable · could not duplicate the recording texture"));
         return;
     }
 
@@ -632,7 +635,7 @@ void RecordPreviewAdapter::presentEngineSourceIfPossible() {
         qInfo("preview-trace: engine-source-presented epoch=%llu presentations=%llu deferrals=%llu",
               engine_source_epoch_, engine_source_presentations_, engine_source_deferrals_);
     }
-    setStatus(QStringLiteral("Live · recording WYSIWYG texture"));
+    setStatus(QCoreApplication::translate("RecordPreviewAdapter", "Live · recording WYSIWYG texture"));
 }
 
 void RecordPreviewAdapter::releaseEngineSource() {
@@ -658,7 +661,7 @@ void RecordPreviewAdapter::startPreview() {
     if (!available) {
         source_name_.clear();
         emit sourceNameChanged();
-        setStatus(QStringLiteral("No capture source is selected"));
+        setStatus(QCoreApplication::translate("RecordPreviewAdapter", "No capture source is selected"));
         // Status, not error. Having chosen nothing yet is the expected empty state,
         // and the Record page already fills the stage with its placeholder --
         // "Choose what to record" plus a Choose source button. A second sentence
@@ -683,10 +686,10 @@ void RecordPreviewAdapter::startPreview() {
         emit frameReadyChanged();
         source_size_ = QSize(1920, 1080);
         emit sourceSizeChanged();
-        setStatus(QStringLiteral("Harness test card"));
+        setStatus(QCoreApplication::translate("RecordPreviewAdapter", "Harness test card"));
         return;
     }
-    setStatus(QStringLiteral("Opening real DXGI preview source…"));
+    setStatus(QCoreApplication::translate("RecordPreviewAdapter", "Opening real DXGI preview source…"));
     const quint64 epoch = source_epoch_.fetch_add(1, std::memory_order_acq_rel) + 1;
     QPointer<RecordPreviewAdapter> safe_self(this);
     QPointer<ExoPreviewItem> safe_item(item_);
@@ -724,7 +727,8 @@ void RecordPreviewAdapter::startPreview() {
                     safe_self->ready_source_cursor_composited_ = cursor_composited->load(std::memory_order_acquire);
                 }
                 safe_item->presentSharedTexture(raw_handle, width, height, tap);
-                safe_self->setStatus(QStringLiteral("Waiting for first GPU frame…"));
+                safe_self->setStatus(
+                    QCoreApplication::translate("RecordPreviewAdapter", "Waiting for first GPU frame…"));
             },
             Qt::QueuedConnection);
     };
@@ -743,8 +747,9 @@ void RecordPreviewAdapter::startPreview() {
     }
     if (!subscribed) {
         source_epoch_.fetch_add(1, std::memory_order_acq_rel);
-        setStatus(QStringLiteral("Preview unavailable"));
-        setError(QStringLiteral("The selected capture source could not be opened on Qt Quick's D3D11 adapter."));
+        setStatus(QCoreApplication::translate("RecordPreviewAdapter", "Preview unavailable"));
+        setError(QCoreApplication::translate(
+            "RecordPreviewAdapter", "The selected capture source could not be opened on Qt Quick's D3D11 adapter."));
         return;
     }
     metrics_timer_.start();
@@ -774,7 +779,7 @@ void RecordPreviewAdapter::stopPreview() {
         emit sourceSizeChanged();
     }
     if (!preview_running_)
-        setStatus(QStringLiteral("Preview inactive"));
+        setStatus(QCoreApplication::translate("RecordPreviewAdapter", "Preview inactive"));
 }
 
 void RecordPreviewAdapter::synchronizeItemState() {
@@ -792,11 +797,11 @@ void RecordPreviewAdapter::synchronizeItemState() {
     }
     setError(item_->errorText());
     if (!error_text_.isEmpty())
-        setStatus(QStringLiteral("Preview unavailable"));
+        setStatus(QCoreApplication::translate("RecordPreviewAdapter", "Preview unavailable"));
     else if (frame_ready_)
         setStatus(engine_feed_expected_.load(std::memory_order_acquire)
-                      ? QStringLiteral("Live · recording WYSIWYG texture")
-                      : QStringLiteral("Live · D3D11 scene texture"));
+                      ? QCoreApplication::translate("RecordPreviewAdapter", "Live · recording WYSIWYG texture")
+                      : QCoreApplication::translate("RecordPreviewAdapter", "Live · D3D11 scene texture"));
 }
 
 void RecordPreviewAdapter::updateMetrics() {

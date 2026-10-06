@@ -1,5 +1,7 @@
 #include "DiagnosticIssueModel.h"
 
+#include <QCoreApplication>
+
 #include <QString>
 
 #include <utility>
@@ -31,11 +33,11 @@ QVariant DiagnosticIssueModel::data(const QModelIndex& index, int role) const {
         return QString::fromUtf8(diagnostics::IssueToneKey(card.tone).data(),
                                  static_cast<qsizetype>(diagnostics::IssueToneKey(card.tone).size()));
     case TitleRole:
-        return Text(card.title);
+        return QCoreApplication::translate("Diagnostics", card.title.c_str());
     case SummaryRole:
-        return Text(card.summary);
+        return QCoreApplication::translate("Diagnostics", card.summary.c_str());
     case WhyRole:
-        return Text(card.why);
+        return QCoreApplication::translate("Diagnostics", card.why.c_str());
     case MeasuredRole:
         return Text(card.measured);
     case LogExcerptRole:
@@ -49,11 +51,11 @@ QVariant DiagnosticIssueModel::data(const QModelIndex& index, int role) const {
     case FixIdRole:
         return Text(card.fix_id);
     case FixLabelRole:
-        return Text(card.fix_label);
+        return QCoreApplication::translate("Diagnostics", card.fix_label.c_str());
     case FixSafetyRole:
         return static_cast<int>(card.fix_safety);
     case FixChangesSummaryRole:
-        return Text(card.fix_changes_summary);
+        return QCoreApplication::translate("Diagnostics", card.fix_changes_summary.c_str());
     default:
         break;
     }

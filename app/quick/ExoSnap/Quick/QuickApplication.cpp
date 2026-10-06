@@ -737,7 +737,8 @@ void QuickApplication::initializeRecordWorkflow() {
         if (state == UiRecordingState::Blocked) {
             QString reason = QString::fromStdWString(record_view_model_.capability_status_text);
             if (reason.isEmpty())
-                reason = QStringLiteral("Recording is blocked by the current system configuration.");
+                reason = QCoreApplication::translate("QuickApplication",
+                                                     "Recording is blocked by the current system configuration.");
             // Raised once per blocked transition, not re-raised while the state
             // holds: the blocker is a standing condition and a toast per state
             // synchronisation would be a stream of the same sentence.
@@ -745,7 +746,7 @@ void QuickApplication::initializeRecordWorkflow() {
                 blocked_page_notice_ = reason;
                 notifications::NotificationEvent event;
                 event.type = notifications::NotificationType::CaptureActionFailed;
-                event.title = QStringLiteral("Recording is blocked");
+                event.title = QCoreApplication::translate("QuickApplication", "Recording is blocked");
                 event.body = reason;
                 // The blocker's own detail lives on the Diagnostics page, which is
                 // where the removed page notice used to send the user.
@@ -927,7 +928,7 @@ void QuickApplication::initializeRecordWorkflow() {
         notifications::NotificationEvent event;
         if (success) {
             event.type = notifications::NotificationType::FrameCaptured;
-            event.title = QStringLiteral("Frame saved");
+            event.title = QCoreApplication::translate("QuickApplication", "Frame saved");
             // The file name, never the path: a toast carrying a full path grows
             // as wide as the deepest folder the user happens to record into.
             event.body = QFileInfo(path).fileName();
@@ -935,8 +936,10 @@ void QuickApplication::initializeRecordWorkflow() {
             event.action_payload = path;
         } else {
             event.type = notifications::NotificationType::CaptureActionFailed;
-            event.title = QStringLiteral("Frame capture failed");
-            event.body = error.isEmpty() ? QStringLiteral("The frame could not be written.") : error;
+            event.title = QCoreApplication::translate("QuickApplication", "Frame capture failed");
+            event.body = error.isEmpty()
+                             ? QCoreApplication::translate("QuickApplication", "The frame could not be written.")
+                             : error;
         }
         notifications_adapter_.manager().Enqueue(std::move(event));
     });
@@ -946,8 +949,10 @@ void QuickApplication::initializeRecordWorkflow() {
             // toast does not move the preview it is talking about.
             notifications::NotificationEvent event;
             event.type = notifications::NotificationType::CaptureActionFailed;
-            event.title = QStringLiteral("Split was not started");
-            event.body = message.isEmpty() ? QStringLiteral("The recording could not be split.") : message;
+            event.title = QCoreApplication::translate("QuickApplication", "Split was not started");
+            event.body = message.isEmpty()
+                             ? QCoreApplication::translate("QuickApplication", "The recording could not be split.")
+                             : message;
             notifications_adapter_.manager().Enqueue(std::move(event));
         }
         synchronizeRecordState();
@@ -958,9 +963,10 @@ void QuickApplication::initializeRecordWorkflow() {
     recording_coordinator_->SetRecoveryProtectionLostCallback([this](const QString& detail) {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::RecoveryProtectionUnavailable;
-        event.title = QStringLiteral("Recovery protection unavailable");
-        event.body = QStringLiteral("This recording has no crash-recovery entry: %1. The recording itself is "
-                                    "unaffected, but it cannot be recovered if ExoSnap is interrupted.")
+        event.title = QCoreApplication::translate("QuickApplication", "Recovery protection unavailable");
+        event.body = QCoreApplication::translate(
+                         "QuickApplication", "This recording has no crash-recovery entry: %1. The recording itself is "
+                                             "unaffected, but it cannot be recovered if ExoSnap is interrupted.")
                          .arg(detail);
         notifications_adapter_.manager().Enqueue(std::move(event));
     });
@@ -1752,8 +1758,9 @@ void QuickApplication::selectRegion(const QRectF& normalized_rect) {
     monitor.cbSize = sizeof(monitor);
     if (target.kind != exosnap::engine::CaptureTarget::Kind::Monitor ||
         GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &monitor) == FALSE) {
-        RaiseCaptureActionFailed(QStringLiteral("Region could not be applied"),
-                                 QStringLiteral("The selected display is no longer available."));
+        RaiseCaptureActionFailed(
+            QCoreApplication::translate("QuickApplication", "Region could not be applied"),
+            QCoreApplication::translate("QuickApplication", "The selected display is no longer available."));
         return;
     }
     const QRectF bounded = normalized_rect.normalized().intersected(QRectF(0.0, 0.0, 1.0, 1.0));
@@ -1765,8 +1772,9 @@ void QuickApplication::selectRegion(const QRectF& normalized_rect) {
     region.width = static_cast<int32_t>(std::lround(bounded.width() * monitor_width));
     region.height = static_cast<int32_t>(std::lround(bounded.height() * monitor_height));
     if (!region.IsValid()) {
-        RaiseCaptureActionFailed(QStringLiteral("Region is too small"),
-                                 QStringLiteral("Select a region at least 64 x 64 pixels."));
+        RaiseCaptureActionFailed(
+            QCoreApplication::translate("QuickApplication", "Region is too small"),
+            QCoreApplication::translate("QuickApplication", "Select a region at least 64 x 64 pixels."));
         return;
     }
     record_view_model_.region = region;
@@ -2861,8 +2869,8 @@ bool QuickApplication::persistAppSettings(SettingsWriteIntent intent) {
                                  QStringLiteral("Failed to write %1").arg(settings_store_.SettingsFilePath()));
     notifications::NotificationEvent event;
     event.type = notifications::NotificationType::SettingsSaveFailed;
-    event.title = QStringLiteral("Settings could not be saved");
-    event.body = QStringLiteral("The change may be lost when ExoSnap restarts.");
+    event.title = QCoreApplication::translate("QuickApplication", "Settings could not be saved");
+    event.body = QCoreApplication::translate("QuickApplication", "The change may be lost when ExoSnap restarts.");
     notifications_adapter_.manager().Enqueue(std::move(event));
     return false;
 }
@@ -2977,7 +2985,9 @@ void QuickApplication::publishPresetTransferFailure(const QString& title, const 
     notifications::NotificationEvent event;
     event.type = notifications::NotificationType::PresetTransferFailed;
     event.title = title;
-    event.body = error.isEmpty() ? QStringLiteral("The preset file could not be read or written.") : error;
+    event.body = error.isEmpty()
+                     ? QCoreApplication::translate("QuickApplication", "The preset file could not be read or written.")
+                     : error;
     event.action = notifications::NotificationAction::SendReport;
     event.action_payload = QStringLiteral("%1 · %2").arg(title, event.body);
     notifications_adapter_.manager().Enqueue(std::move(event));
@@ -2992,7 +3002,7 @@ void QuickApplication::exportSelectedPreset(const QString& path) {
     preset.config = StripEnvironmentFields(live_config_);
     QString error;
     if (!RecordingPresetStore::ExportPresetToFile(preset, path, &error))
-        publishPresetTransferFailure(QStringLiteral("Preset export failed"), error);
+        publishPresetTransferFailure(QCoreApplication::translate("QuickApplication", "Preset export failed"), error);
 }
 
 void QuickApplication::importPresetsFromFile(const QString& path) {
@@ -3006,7 +3016,7 @@ void QuickApplication::importPresetsFromFile(const QString& path) {
     QString error;
     const QVector<RecordingPreset> imported = RecordingPresetStore::ImportPresetsFromFile(path, existing_ids, &error);
     if (imported.isEmpty()) {
-        publishPresetTransferFailure(QStringLiteral("Preset import failed"), error);
+        publishPresetTransferFailure(QCoreApplication::translate("QuickApplication", "Preset import failed"), error);
         return;
     }
     for (const RecordingPreset& preset : imported)
@@ -3148,8 +3158,10 @@ void QuickApplication::persistLiveConfig() {
     // height for a message that is already on screen.
     notifications::NotificationEvent event;
     event.type = notifications::NotificationType::SettingsSaveFailed;
-    event.title = QStringLiteral("Settings could not be saved");
-    event.body = error.isEmpty() ? QStringLiteral("The change may be lost when ExoSnap restarts.") : error;
+    event.title = QCoreApplication::translate("QuickApplication", "Settings could not be saved");
+    event.body = error.isEmpty()
+                     ? QCoreApplication::translate("QuickApplication", "The change may be lost when ExoSnap restarts.")
+                     : error;
     // A failed write is the store's problem, not a setting the user can correct,
     // so the only action worth offering is the one that tells us about it.
     event.action = notifications::NotificationAction::SendReport;
@@ -3203,39 +3215,51 @@ void QuickApplication::applyShellVisualScenarios() {
         notifications_adapter_.manager().Enqueue(std::move(event));
     };
 
-    enqueue(NotificationType::FramesDropped, QStringLiteral("Frames were dropped"),
-            QStringLiteral("122 frames did not reach the encoder during the last recording."),
+    enqueue(NotificationType::FramesDropped, QCoreApplication::translate("QuickApplication", "Frames were dropped"),
+            QCoreApplication::translate("QuickApplication",
+                                        "122 frames did not reach the encoder during the last recording."),
             NotificationAction::OpenDiagnostics);
-    enqueue(NotificationType::HotkeyConflict, QStringLiteral("A hotkey could not be registered"),
-            QStringLiteral("Ctrl+Shift+R is held by another application, so the shortcut is inactive this "
-                           "session. Rebind it in Settings, or close whatever holds it and restart ExoSnap."),
+    enqueue(NotificationType::HotkeyConflict,
+            QCoreApplication::translate("QuickApplication", "A hotkey could not be registered"),
+            QCoreApplication::translate(
+                "QuickApplication", "Ctrl+Shift+R is held by another application, so the shortcut is inactive this "
+                                    "session. Rebind it in Settings, or close whatever holds it and restart ExoSnap."),
             NotificationAction::OpenHotkeys);
-    enqueue(NotificationType::SettingsSaveFailed, QStringLiteral("Settings could not be saved"),
-            QStringLiteral("The settings file is open in another program and could not be written. The change "
-                           "you just made will be lost when ExoSnap restarts, and every further change will "
-                           "fail the same way until the file is released."));
-    enqueue(NotificationType::RecoveryAvailable, QStringLiteral("A recording can be recovered"),
-            QStringLiteral("An unfinished recording from 09 Aug 2026 was found."), NotificationAction::OpenRecovery,
-            NotificationAction::Discard);
+    enqueue(
+        NotificationType::SettingsSaveFailed,
+        QCoreApplication::translate("QuickApplication", "Settings could not be saved"),
+        QCoreApplication::translate(
+            "QuickApplication",
+            "The settings file is open in another program and could not be written. The change you just made will be "
+            "lost when ExoSnap restarts, and every further change will fail the same way until the file is released."));
+    enqueue(NotificationType::RecoveryAvailable,
+            QCoreApplication::translate("QuickApplication", "A recording can be recovered"),
+            QCoreApplication::translate("QuickApplication", "An unfinished recording from 09 Aug 2026 was found."),
+            NotificationAction::OpenRecovery, NotificationAction::Discard);
 
     // Standing: stack above the timed slot instead of replacing anything.
-    enqueue(NotificationType::LowStorage, QStringLiteral("Storage running low"),
-            QStringLiteral("Recording stopped - output drive is critically low on disk space."),
+    enqueue(NotificationType::LowStorage, QCoreApplication::translate("QuickApplication", "Storage running low"),
+            QCoreApplication::translate("QuickApplication",
+                                        "Recording stopped - output drive is critically low on disk space."),
             NotificationAction::ChangeFolder);
-    enqueue(NotificationType::WindowCaptureStalled, QStringLiteral("Window capture appears to have stalled"),
-            QStringLiteral("No new frame has arrived from the captured window for 12 seconds. The recording is "
-                           "still running, but the captured window may be frozen."),
+    enqueue(NotificationType::WindowCaptureStalled,
+            QCoreApplication::translate("QuickApplication", "Window capture appears to have stalled"),
+            QCoreApplication::translate("QuickApplication",
+                                        "No new frame has arrived from the captured window for 12 seconds. The "
+                                        "recording is still running, but the captured window may be frozen."),
             NotificationAction::OpenDiagnostics);
 
     // Timed: whichever of these runs last is the only one left visible.
     if (scenario == "many-info") {
-        enqueue(NotificationType::UpdateAvailable, QStringLiteral("ExoSnap 0.9.1 is available"),
-                QStringLiteral("You are on 0.9.0. The update installs on the next restart."),
+        enqueue(NotificationType::UpdateAvailable,
+                QCoreApplication::translate("QuickApplication", "ExoSnap 0.9.1 is available"),
+                QCoreApplication::translate("QuickApplication",
+                                            "You are on 0.9.0. The update installs on the next restart."),
                 NotificationAction::OpenUpdate);
     } else {
-        enqueue(NotificationType::Saved, QStringLiteral("Recording saved"),
-                QStringLiteral("2026-08-10 21-14-08.mkv - 2:34, 412 MB"), NotificationAction::Edit,
-                NotificationAction::OpenFolder);
+        enqueue(NotificationType::Saved, QCoreApplication::translate("QuickApplication", "Recording saved"),
+                QCoreApplication::translate("QuickApplication", "2026-08-10 21-14-08.mkv - 2:34, 412 MB"),
+                NotificationAction::Edit, NotificationAction::OpenFolder);
     }
 }
 
@@ -3714,7 +3738,8 @@ void QuickApplication::triggerUpdateCheck(bool manual) {
         if (blocker != QLatin1String("updaterRunning")) {
             settings_adapter_.setUpdateStatus(
                 QStringLiteral("error"), QString(), QString(),
-                QStringLiteral("Update checks are paused while a recording is in progress."));
+                QCoreApplication::translate("QuickApplication",
+                                            "Update checks are paused while a recording is in progress."));
         }
         return;
     }
@@ -3736,8 +3761,9 @@ void QuickApplication::onUpdateCheckComplete(const exosnap::update::UpdateCheckR
     const QString last_checked = QDateTime::currentDateTime().toString(QStringLiteral("MMM d, h:mm AP"));
 
     if (result.check_failed || result.error_message) {
-        const QString error_message = result.error_message ? QString::fromStdString(*result.error_message)
-                                                           : QStringLiteral("Couldn't reach the update server.");
+        const QString error_message =
+            result.error_message ? QString::fromStdString(*result.error_message)
+                                 : QCoreApplication::translate("QuickApplication", "Couldn't reach the update server.");
         settings_adapter_.setUpdateStatus(QStringLiteral("error"), QString(), QString(), error_message);
         // "disabled (unofficial build)" is an expected condition, not a failure.
         if (error_message.contains(QStringLiteral("disabled"), Qt::CaseInsensitive))
@@ -3780,7 +3806,7 @@ void QuickApplication::onUpdateCheckComplete(const exosnap::update::UpdateCheckR
     if (result.update_available && !result.verification_reinstall) {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::UpdateAvailable;
-        event.title = QStringLiteral("Update available");
+        event.title = QCoreApplication::translate("QuickApplication", "Update available");
         event.body = update_policy.CanSelfUpdate()
                          ? QCoreApplication::translate("QuickApplication", "Version %1 is ready to install.")
                                .arg(last_available_version_)
@@ -4027,10 +4053,11 @@ void QuickApplication::initializeNotifications() {
                 .arg(settings_store_.SettingsFilePath()));
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::SettingsLoadFailed;
-        event.title = QStringLiteral("Settings could not be read");
-        event.body = QStringLiteral("ExoSnap is running with default settings. Your settings file is left "
-                                    "untouched — changing any setting starts a fresh one and keeps the old "
-                                    "file as settings.ini.corrupt.");
+        event.title = QCoreApplication::translate("QuickApplication", "Settings could not be read");
+        event.body = QCoreApplication::translate(
+            "QuickApplication", "ExoSnap is running with default settings. Your settings file is left "
+                                "untouched — changing any setting starts a fresh one and keeps the old "
+                                "file as settings.ini.corrupt.");
         notifications_adapter_.manager().Enqueue(std::move(event));
     }
 
@@ -4040,8 +4067,9 @@ void QuickApplication::initializeNotifications() {
                                      QStringLiteral("Preset store repaired field-wise on load"));
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::SettingsRepaired;
-        event.title = QStringLiteral("Settings repaired");
-        event.body = QStringLiteral("Some saved settings were invalid and have been repaired.");
+        event.title = QCoreApplication::translate("QuickApplication", "Settings repaired");
+        event.body =
+            QCoreApplication::translate("QuickApplication", "Some saved settings were invalid and have been repaired.");
         notifications_adapter_.manager().Enqueue(std::move(event));
     }
 }
@@ -4168,10 +4196,9 @@ void QuickApplication::initializeRecovery() {
     // without restarting the application.
     notifications::NotificationEvent event;
     event.type = notifications::NotificationType::RecoveryAvailable;
-    event.title = QStringLiteral("Recover last session?");
-    event.body = (candidates == 1)
-                     ? QStringLiteral("A recording from the last session wasn’t finalized.")
-                     : QStringLiteral("%1 recordings from the last session weren’t finalized.").arg(candidates);
+    event.title = QCoreApplication::translate("QuickApplication", "Recover last session?");
+    event.body = QCoreApplication::translate("QuickApplication", "Unfinalized recordings from the last session: %n",
+                                             nullptr, candidates);
     event.action = notifications::NotificationAction::OpenRecovery;
     event.secondary_action = notifications::NotificationAction::Discard;
     notifications_adapter_.manager().Enqueue(std::move(event));
@@ -4314,23 +4341,26 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         notifications::NotificationEvent event;
         if (status == u"success") {
             event.type = notifications::NotificationType::Saved;
-            event.title = QStringLiteral("Recording saved");
-            event.body = QStringLiteral("2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB");
+            event.title = QCoreApplication::translate("QuickApplication", "Recording saved");
+            event.body =
+                QCoreApplication::translate("QuickApplication", "2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB");
             event.action = notifications::NotificationAction::Edit;
             event.secondary_action = notifications::NotificationAction::OpenFolder;
         } else if (status == u"caution") {
             event.type = notifications::NotificationType::FramesDropped;
-            event.title = QStringLiteral("Frames were dropped");
-            event.body = QStringLiteral("122 frames did not reach the encoder during the last recording.");
+            event.title = QCoreApplication::translate("QuickApplication", "Frames were dropped");
+            event.body = QCoreApplication::translate("QuickApplication",
+                                                     "122 frames did not reach the encoder during the last recording.");
         } else if (status == u"error") {
             event.type = notifications::NotificationType::UnexpectedStop;
-            event.title = QStringLiteral("Recording stopped unexpectedly");
-            event.body = QStringLiteral("The encoder reported an error. The partial file was kept.");
+            event.title = QCoreApplication::translate("QuickApplication", "Recording stopped unexpectedly");
+            event.body = QCoreApplication::translate("QuickApplication",
+                                                     "The encoder reported an error. The partial file was kept.");
             event.action = notifications::NotificationAction::ShowFile;
         } else if (status == u"info") {
             event.type = notifications::NotificationType::UpdateAvailable;
-            event.title = QStringLiteral("Update available");
-            event.body = QStringLiteral("ExoSnap 0.9.1 is ready to install.");
+            event.title = QCoreApplication::translate("QuickApplication", "Update available");
+            event.body = QCoreApplication::translate("QuickApplication", "ExoSnap 0.9.1 is ready to install.");
             event.action = notifications::NotificationAction::OpenUpdate;
         } else {
             return false;
@@ -4425,8 +4455,9 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
             // stays the variant for it.
             notifications::NotificationEvent toast;
             toast.type = notifications::NotificationType::WindowCaptureStalled;
-            toast.title = QStringLiteral("Window capture appears to have stalled");
-            toast.body = QStringLiteral("No new frame has arrived for 10 seconds. The recording is still running.");
+            toast.title = QCoreApplication::translate("QuickApplication", "Window capture appears to have stalled");
+            toast.body = QCoreApplication::translate(
+                "QuickApplication", "No new frame has arrived for 10 seconds. The recording is still running.");
             toast.action = notifications::NotificationAction::OpenDiagnostics;
             toast.synthetic = true;
             notifications_adapter_.manager().Enqueue(std::move(toast));
@@ -4777,7 +4808,7 @@ void QuickApplication::publishRecordingResultNotification(const UiRecordingResul
         if (settings_.open_editor_when_finished)
             return;
         event.type = notifications::NotificationType::Saved;
-        event.title = QStringLiteral("Recording saved");
+        event.title = QCoreApplication::translate("QuickApplication", "Recording saved");
         // The name, not the path. A full path is a single unbreakable token --
         // no spaces to wrap at -- so it overran the toast instead of eliding,
         // and it told the user the one thing they already know (where their
@@ -4799,8 +4830,9 @@ void QuickApplication::publishRecordingResultNotification(const UiRecordingResul
         // threshold — an independent one would eventually disagree with the
         // guard that actually acts.
         event.type = notifications::NotificationType::LowStorage;
-        event.title = QStringLiteral("Storage running low");
-        event.body = QStringLiteral("Recording stopped — output drive is critically low on disk space.");
+        event.title = QCoreApplication::translate("QuickApplication", "Storage running low");
+        event.body = QCoreApplication::translate("QuickApplication",
+                                                 "Recording stopped — output drive is critically low on disk space.");
         // Primary action lands on Settings → Output. Dismiss is the hub's own
         // affordance, so no secondary action is set.
         event.action = notifications::NotificationAction::ChangeFolder;
@@ -4816,7 +4848,7 @@ void QuickApplication::publishRecordingResultNotification(const UiRecordingResul
         // that died would otherwise stay silent until they next open the window.
         // The toast carries no detail the modal has; it exists to say "go look".
         event.type = notifications::NotificationType::UnexpectedStop;
-        event.title = QStringLiteral("Recording stopped unexpectedly");
+        event.title = QCoreApplication::translate("QuickApplication", "Recording stopped unexpectedly");
         event.body = result.error_detail.empty() ? QStringLiteral("The recording ended before it was finished.")
                                                  : QString::fromStdWString(result.error_detail);
         // Reveals the partial file when one survived; the modal keeps the full
@@ -5198,7 +5230,7 @@ void QuickApplication::wireTaskbarProgress() {
                              return;
                          notifications::NotificationEvent event;
                          event.type = notifications::NotificationType::Saved;
-                         event.title = QStringLiteral("Export complete");
+                         event.title = QCoreApplication::translate("QuickApplication", "Export complete");
                          event.body = QFileInfo(output_path).fileName();
                          event.action = notifications::NotificationAction::OpenFolder;
                          event.action_payload = output_path;
@@ -5210,7 +5242,7 @@ void QuickApplication::wireTaskbarProgress() {
                              return;
                          notifications::NotificationEvent event;
                          event.type = notifications::NotificationType::UnexpectedStop;
-                         event.title = QStringLiteral("Export failed");
+                         event.title = QCoreApplication::translate("QuickApplication", "Export failed");
                          event.body = error;
                          notifications_adapter_.manager().Enqueue(std::move(event));
                      });
@@ -5601,7 +5633,7 @@ bool QuickApplication::load(bool no_activate) {
                     custom_names << GlobalHotkeyService::ActionDisplayName(action);
                 notifications::NotificationEvent event;
                 event.type = notifications::NotificationType::HotkeyConflict;
-                event.title = QStringLiteral("Hotkey unavailable");
+                event.title = QCoreApplication::translate("QuickApplication", "Hotkey unavailable");
                 event.body = models::HotkeyConflictNotificationBody(custom_names);
                 event.action = notifications::NotificationAction::OpenHotkeys;
                 notifications_adapter_.manager().Enqueue(std::move(event));
@@ -6077,8 +6109,8 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         {
             notifications::NotificationEvent event;
             event.type = notifications::NotificationType::CaptureActionFailed;
-            event.title = QStringLiteral("Output folder is not writable");
-            event.body = QStringLiteral("Choose another folder before recording.");
+            event.title = QCoreApplication::translate("QuickApplication", "Output folder is not writable");
+            event.body = QCoreApplication::translate("QuickApplication", "Choose another folder before recording.");
             // Lands on Settings with the Output card revealed, which is the action
             // the sentence asks for.
             event.action = notifications::NotificationAction::ChangeFolder;

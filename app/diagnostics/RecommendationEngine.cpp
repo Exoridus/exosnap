@@ -1,4 +1,5 @@
 #include "RecommendationEngine.h"
+#include <QCoreApplication>
 
 #include "DiskSpaceThresholds.h"
 
@@ -112,14 +113,20 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     if (live_pacing_.recent_frame_loss > 0) {
         auto impact = MakeResult(
             "rec.output.loss", DiagnosticGroup::Performance, DiagnosticSeverity::Notice,
-            DiagnosticTier::MeasuredProblem, "Recording frames lost", "Real output frame loss was measured.",
-            "Counts processing failures and skipped output slots; excludes selection, coalescing and preview drops.",
+            DiagnosticTier::MeasuredProblem,
+            QCoreApplication::translate("Diagnostics", "Recording frames lost").toStdString(),
+            QCoreApplication::translate("Diagnostics", "Real output frame loss was measured.").toStdString(),
+            QCoreApplication::translate("Diagnostics", "Counts processing failures and skipped output slots; excludes "
+                                                       "selection, coalescing and preview drops.")
+                .toStdString(),
             std::to_string(live_pacing_.recent_frame_loss) + " frames lost");
         impact.impact = impact.current_value;
         impact.measured_value = static_cast<double>(live_pacing_.recent_frame_loss);
         impact.value_unit = "frames";
-        impact.fix_action = FixAction{"settings/video/frame-rate", "Review frame rate", FixAction::Safety::Assisted,
-                                      true, "Open the output frame-rate control."};
+        impact.fix_action = FixAction{
+            "settings/video/frame-rate", QCoreApplication::translate("Diagnostics", "Review frame rate").toStdString(),
+            FixAction::Safety::Assisted, true,
+            QCoreApplication::translate("Diagnostics", "Open the output frame-rate control.").toStdString()};
         checklist.results.push_back(std::move(impact));
     }
     checkRefreshRateMismatch(checklist);
@@ -154,12 +161,19 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
         return;
     if (live_pacing_.recent_affected_slots == 0) {
         if (live_pacing_.selection_samples > 0 && live_present_jitter_ms_ > 8.0) {
-            auto fact = MakeResult("rec.pacing.compensated", DiagnosticGroup::Recommendation, DiagnosticSeverity::Pass,
-                                   DiagnosticTier::Fact, "Source timing irregularity",
-                                   "No output slots affected in the measured window.",
-                                   "Source variation is retained as evidence, not recording loss.",
-                                   std::to_string(live_present_jitter_ms_) + " ms source variation");
-            fact.compensation = "Phase-correct selection remained within one output period.";
+            auto fact = MakeResult(
+                "rec.pacing.compensated", DiagnosticGroup::Recommendation, DiagnosticSeverity::Pass,
+                DiagnosticTier::Fact,
+                QCoreApplication::translate("Diagnostics", "Source timing irregularity").toStdString(),
+                QCoreApplication::translate("Diagnostics", "No output slots affected in the measured window.")
+                    .toStdString(),
+                QCoreApplication::translate("Diagnostics",
+                                            "Source variation is retained as evidence, not recording loss.")
+                    .toStdString(),
+                std::to_string(live_present_jitter_ms_) + " ms source variation");
+            fact.compensation =
+                QCoreApplication::translate("Diagnostics", "Phase-correct selection remained within one output period.")
+                    .toStdString();
             checklist.results.push_back(std::move(fact));
         }
         return;
@@ -167,57 +181,85 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
     const auto count = std::to_string(live_pacing_.recent_affected_slots);
     const bool delayed = live_pacing_.worker_lateness.samples > 0 && live_target_fps_ > 0 &&
                          live_pacing_.worker_lateness.p95_ms > 1000.0 / live_target_fps_;
-    auto r =
-        MakeResult("rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                   DiagnosticTier::MeasuredProblem, "Frame pacing degraded", count + " output slots were affected.",
-                   "Fresh frame selection exceeded one output period, or output slots were skipped. "
-                   "Source variation and expected duplicate frames do not count as recording loss.",
-                   count + " affected output slots", "Review frame pacing and recording frame rate.");
+    auto r = MakeResult(
+        "rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, DiagnosticTier::MeasuredProblem,
+        QCoreApplication::translate("Diagnostics", "Frame pacing degraded").toStdString(),
+        count + " output slots were affected.",
+        QCoreApplication::translate("Diagnostics",
+                                    "Fresh frame selection exceeded one output period, or output slots were skipped. "
+                                    "Source variation and expected duplicate frames do not count as recording loss.")
+            .toStdString(),
+        count + " affected output slots",
+        QCoreApplication::translate("Diagnostics", "Review frame pacing and recording frame rate.").toStdString());
     r.impact = r.summary;
     if (video_memory_.local && video_memory_.local->current_usage_bytes > video_memory_.local->budget_bytes)
-        r.detail += " Process video-memory usage exceeded its DXGI budget in the polling window; timing does not "
-                    "establish causality.";
+        r.detail += QCoreApplication::translate(
+                        "Diagnostics",
+                        " Process video-memory usage exceeded its DXGI budget in the polling window; timing does not "
+                        "establish causality.")
+                        .toStdString();
     if (gpu_.encoder_utilization_percent)
-        r.detail +=
-            " Device encoder utilization: " + std::to_string(static_cast<int>(*gpu_.encoder_utilization_percent)) +
-            "%; utilization alone is not a bottleneck.";
+        r.detail += QCoreApplication::translate("Diagnostics", " Device encoder utilization: ").toStdString() +
+                    std::to_string(static_cast<int>(*gpu_.encoder_utilization_percent)) +
+                    "%; utilization alone is not a bottleneck.";
     r.measured_value = static_cast<double>(live_pacing_.recent_affected_slots);
     r.value_unit = "slots";
     if (delayed)
-        r.detail +=
-            " The recording worker also woke more than one output period late. "
-            "This may include scheduling pressure or preceding recorder work; source jitter alone does not explain it.";
-    r.compensation = "CFR frame selection remained active. Expected source-rate duplicates are excluded.";
-    r.fix_action = FixAction{"fix.fps.cap", "Review frame pacing", FixAction::Safety::Assisted, true,
-                             "Opens the existing frame pacing control."};
+        r.detail += QCoreApplication::translate("Diagnostics",
+                                                " The recording worker also woke more than one output period late. "
+                                                "This may include scheduling pressure or preceding recorder work; "
+                                                "source jitter alone does not explain it.")
+                        .toStdString();
+    r.compensation =
+        QCoreApplication::translate(
+            "Diagnostics", "CFR frame selection remained active. Expected source-rate duplicates are excluded.")
+            .toStdString();
+    r.fix_action =
+        FixAction{"fix.fps.cap", QCoreApplication::translate("Diagnostics", "Review frame pacing").toStdString(),
+                  FixAction::Safety::Assisted, true,
+                  QCoreApplication::translate("Diagnostics", "Opens the existing frame pacing control.").toStdString()};
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
     if (config_.frame_pacing == exosnap::engine::FramePacingMode::Newest) {
-        auto hint = MakeResult("rec.pacing.smooth", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                               DiagnosticTier::Optimisation, "Phase-correct pacing available",
-                               "Nearest-frame selection may reduce source timing error.");
-        hint.fix_action = FixAction{"fix.frame_pacing.smooth", "Use phase-correct pacing", FixAction::Safety::Auto,
-                                    true, "Sets frame pacing to Phase-correct."};
+        auto hint = MakeResult(
+            "rec.pacing.smooth", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+            DiagnosticTier::Optimisation,
+            QCoreApplication::translate("Diagnostics", "Phase-correct pacing available").toStdString(),
+            QCoreApplication::translate("Diagnostics", "Nearest-frame selection may reduce source timing error.")
+                .toStdString());
+        hint.fix_action =
+            FixAction{"fix.frame_pacing.smooth",
+                      QCoreApplication::translate("Diagnostics", "Use phase-correct pacing").toStdString(),
+                      FixAction::Safety::Auto, true,
+                      QCoreApplication::translate("Diagnostics", "Sets frame pacing to Phase-correct.").toStdString()};
         checklist.results.push_back(std::move(hint));
     }
 }
 
 void RecommendationEngine::checkMp4CrashResilience(DiagnosticChecklist& checklist) const {
     if (config_.container == capability::Container::Mp4) {
-        DiagnosticResult r =
-            MakeResult("rec.002", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                       DiagnosticTier::Optimisation, "MP4 is less crash-resilient than MKV",
-                       "MP4 recordings may become unreadable if the app or system crashes during recording.",
-                       "MP4 containers require finalization to write the moov atom. If recording is interrupted, "
-                       "the file may be unrecoverable.",
-                       "Container: MP4", "Consider switching to MKV for long or critical recordings.");
+        DiagnosticResult r = MakeResult(
+            "rec.002", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, DiagnosticTier::Optimisation,
+            "MP4 is less crash-resilient than MKV",
+            "MP4 recordings may become unreadable if the app or system crashes during recording.",
+            QCoreApplication::translate(
+                "Diagnostics",
+                "MP4 containers require finalization to write the moov atom. If recording is interrupted, "
+                "the file may be unrecoverable.")
+                .toStdString(),
+            QCoreApplication::translate("Diagnostics", "Container: MP4").toStdString(),
+            QCoreApplication::translate("Diagnostics", "Consider switching to MKV for long or critical recordings.")
+                .toStdString());
         FixAction fa;
         fa.id = "fix.container.mkv";
-        fa.label = "Switch to MKV";
+        fa.label = QCoreApplication::translate("Diagnostics", "Switch to MKV").toStdString();
         fa.safety = FixAction::Safety::Assisted;
         fa.reversible = true;
         fa.changes_summary =
-            "Opens Output settings to change the recording container to MKV for better crash resilience.";
+            QCoreApplication::translate(
+                "Diagnostics",
+                "Opens Output settings to change the recording container to MKV for better crash resilience.")
+                .toStdString();
         r.fix_action = fa;
         checklist.has_notice = true;
         checklist.results.push_back(std::move(r));
@@ -230,15 +272,23 @@ void RecommendationEngine::checkCodecAvailability(DiagnosticChecklist& checklist
         std::string fallback = "H.264 (NVENC)";
         DiagnosticResult r = MakeResult(
             "rec.003", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
-            "Selected video codec is unavailable", "The selected video codec is not available on this system.",
-            "Codec: " + std::string(capability::ToString(config_.video_codec)) + ". Reason: " + v_ann.reason,
-            "Unavailable", "Switch to " + fallback + " which is available.");
+            QCoreApplication::translate("Diagnostics", "Selected video codec is unavailable").toStdString(),
+            QCoreApplication::translate("Diagnostics", "The selected video codec is not available on this system.")
+                .toStdString(),
+            QCoreApplication::translate("Diagnostics", "Codec: ").toStdString() +
+                std::string(capability::ToString(config_.video_codec)) +
+                QCoreApplication::translate("Diagnostics", ". Reason: ").toStdString() + v_ann.reason,
+            "Unavailable",
+            QCoreApplication::translate("Diagnostics", "Switch to ").toStdString() + fallback + " which is available.");
         FixAction fa;
         fa.id = "fix.codec.video.default";
-        fa.label = "Switch to H.264 (NVENC)";
+        fa.label = QCoreApplication::translate("Diagnostics", "Switch to H.264 (NVENC)").toStdString();
         fa.safety = FixAction::Safety::Auto;
         fa.reversible = true;
-        fa.changes_summary = "Switches the video codec to H.264 (NVENC), which is available on this system.";
+        fa.changes_summary =
+            QCoreApplication::translate("Diagnostics",
+                                        "Switches the video codec to H.264 (NVENC), which is available on this system.")
+                .toStdString();
         r.fix_action = fa;
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
@@ -249,15 +299,22 @@ void RecommendationEngine::checkCodecAvailability(DiagnosticChecklist& checklist
         std::string fallback = "AAC";
         DiagnosticResult r = MakeResult(
             "rec.004", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
-            "Selected audio codec is unavailable", "The selected audio codec is not available on this system.",
-            "Codec: " + std::string(capability::ToString(config_.audio_codec)) + ". Reason: " + a_ann.reason,
-            "Unavailable", "Switch to " + fallback + " which is available.");
+            QCoreApplication::translate("Diagnostics", "Selected audio codec is unavailable").toStdString(),
+            QCoreApplication::translate("Diagnostics", "The selected audio codec is not available on this system.")
+                .toStdString(),
+            QCoreApplication::translate("Diagnostics", "Codec: ").toStdString() +
+                std::string(capability::ToString(config_.audio_codec)) +
+                QCoreApplication::translate("Diagnostics", ". Reason: ").toStdString() + a_ann.reason,
+            "Unavailable",
+            QCoreApplication::translate("Diagnostics", "Switch to ").toStdString() + fallback + " which is available.");
         FixAction fa;
         fa.id = "fix.codec.audio.default";
-        fa.label = "Switch to AAC";
+        fa.label = QCoreApplication::translate("Diagnostics", "Switch to AAC").toStdString();
         fa.safety = FixAction::Safety::Auto;
         fa.reversible = true;
-        fa.changes_summary = "Switches the audio codec to AAC, which is available on this system.";
+        fa.changes_summary = QCoreApplication::translate(
+                                 "Diagnostics", "Switches the audio codec to AAC, which is available on this system.")
+                                 .toStdString();
         r.fix_action = fa;
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
@@ -296,17 +353,20 @@ void RecommendationEngine::checkRecommendedCodec(DiagnosticChecklist& checklist)
     DiagnosticResult r = MakeResult(
         "rec.profile.codec", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, DiagnosticTier::Optimisation,
         "A better GPU-supported codec is available",
-        "Your GPU supports " + best_label + ", which encodes with better quality and efficiency than " + current_label +
-            " at the same bitrate.",
-        "This GPU can hardware-encode " + best_label + " for the current container, but the profile is set to " +
-            current_label + ". " + best_label + " produces smaller files at equal quality.",
-        "Video codec: " + current_label, "Switch the video codec to " + best_label + ".");
+        QCoreApplication::translate("Diagnostics", "Your GPU supports ").toStdString() + best_label +
+            ", which encodes with better quality and efficiency than " + current_label + " at the same bitrate.",
+        QCoreApplication::translate("Diagnostics", "This GPU can hardware-encode ").toStdString() + best_label +
+            " for the current container, but the profile is set to " + current_label + ". " + best_label +
+            " produces smaller files at equal quality.",
+        QCoreApplication::translate("Diagnostics", "Video codec: ").toStdString() + current_label,
+        QCoreApplication::translate("Diagnostics", "Switch the video codec to ").toStdString() + best_label + ".");
     FixAction fa;
     fa.id = "fix.profile.codec.best";
-    fa.label = "Switch to " + best_label;
+    fa.label = QCoreApplication::translate("Diagnostics", "Switch to ").toStdString() + best_label;
     fa.safety = FixAction::Safety::Auto; // config-only, reversible
     fa.reversible = true;
-    fa.changes_summary = "Video codec: " + current_label + " -> " + best_label;
+    fa.changes_summary =
+        QCoreApplication::translate("Diagnostics", "Video codec: ").toStdString() + current_label + " -> " + best_label;
     r.fix_action = fa;
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
@@ -321,22 +381,29 @@ void RecommendationEngine::checkColorRange(DiagnosticChecklist& checklist) const
     if (config_.color_range != capability::ColorRange::Full) {
         return;
     }
-    DiagnosticResult r =
-        MakeResult("rec.color.range", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                   DiagnosticTier::Optimisation, "Full color range is set",
-                   "Common players such as VLC display full-range video too dark. Limited is the compatible choice.",
-                   "The recording is configured with Full (0-255) colour range. Several widely-used players, "
-                   "including VLC, ignore the range flag and always expand playback as Limited (16-235), so "
-                   "Full-range recordings can look crushed or too dark in those players. Limited range decodes "
-                   "correctly everywhere, including players that do read the range flag.",
-                   "Colour range: Full",
-                   "Switch to Limited colour range for compatibility with players that ignore the range flag.");
+    DiagnosticResult r = MakeResult(
+        "rec.color.range", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, DiagnosticTier::Optimisation,
+        QCoreApplication::translate("Diagnostics", "Full color range is set").toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics",
+            "Common players such as VLC display full-range video too dark. Limited is the compatible choice.")
+            .toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics", "The recording is configured with Full (0-255) colour range. Several widely-used players, "
+                           "including VLC, ignore the range flag and always expand playback as Limited (16-235), so "
+                           "Full-range recordings can look crushed or too dark in those players. Limited range decodes "
+                           "correctly everywhere, including players that do read the range flag.")
+            .toStdString(),
+        QCoreApplication::translate("Diagnostics", "Colour range: Full").toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics", "Switch to Limited colour range for compatibility with players that ignore the range flag.")
+            .toStdString());
     FixAction fa;
     fa.id = "fix.color.range";
-    fa.label = "Switch to Limited";
+    fa.label = QCoreApplication::translate("Diagnostics", "Switch to Limited").toStdString();
     fa.safety = FixAction::Safety::Auto; // config-only, reversible
     fa.reversible = true;
-    fa.changes_summary = "Colour range: Full -> Limited";
+    fa.changes_summary = QCoreApplication::translate("Diagnostics", "Colour range: Full -> Limited").toStdString();
     r.fix_action = fa;
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
@@ -391,17 +458,22 @@ void RecommendationEngine::checkHdrH264Blocker(DiagnosticChecklist& checklist) c
     DiagnosticResult r = MakeResult(
         "rec.hdr.h264", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
         current_label + " cannot record HDR10",
-        current_label + " has no 10-bit/HDR10 path. Switch to " + proposed_label + " to record the HDR signal.",
+        current_label +
+            QCoreApplication::translate("Diagnostics", " has no 10-bit/HDR10 path. Switch to ").toStdString() +
+            proposed_label + " to record the HDR signal.",
         "HDR10 recording is enabled and the capture target's display is in HDR, but " + current_label +
             " is an 8-bit-only codec with no HDR10 (10-bit/P010, PQ/BT.2020) path. AV1 and HEVC can "
             "carry the native HDR10 signal.",
-        "Video codec: " + current_label + ", HDR: HDR10 (native)", "Switch the video codec to " + proposed_label + ".");
+        QCoreApplication::translate("Diagnostics", "Video codec: ").toStdString() + current_label +
+            ", HDR: HDR10 (native)",
+        QCoreApplication::translate("Diagnostics", "Switch the video codec to ").toStdString() + proposed_label + ".");
     FixAction fa;
     fa.id = fix_id;
-    fa.label = "Switch to " + proposed_label;
+    fa.label = QCoreApplication::translate("Diagnostics", "Switch to ").toStdString() + proposed_label;
     fa.safety = FixAction::Safety::Auto; // config-only, reversible
     fa.reversible = true;
-    fa.changes_summary = "Video codec: " + current_label + " -> " + proposed_label;
+    fa.changes_summary = QCoreApplication::translate("Diagnostics", "Video codec: ").toStdString() + current_label +
+                         " -> " + proposed_label;
     r.fix_action = fa;
     checklist.has_blocker = true;
     checklist.results.push_back(std::move(r));
@@ -413,19 +485,28 @@ void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist)
         // file). Surfaced here as a COUNTED blocker so the Diagnostics header reflects it
         // (red container + Blockers count). Previously this only showed on the pipeline
         // Disk card and never propagated up to the verdict.
-        DiagnosticResult r =
-            MakeResult("rec.output.writable", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
-                       DiagnosticTier::Blocker, "Output folder is not writable",
-                       "Recording cannot start — the selected output folder cannot be written to.",
-                       "The writability probe failed to create a file in the output folder. Choose a different "
-                       "folder or fix the folder's permissions.",
-                       "Not writable", "Change the output folder to a writable location.");
+        DiagnosticResult r = MakeResult(
+            "rec.output.writable", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
+            DiagnosticTier::Blocker,
+            QCoreApplication::translate("Diagnostics", "Output folder is not writable").toStdString(),
+            QCoreApplication::translate("Diagnostics",
+                                        "Recording cannot start — the selected output folder cannot be written to.")
+                .toStdString(),
+            QCoreApplication::translate(
+                "Diagnostics", "The writability probe failed to create a file in the output folder. Choose a different "
+                               "folder or fix the folder's permissions.")
+                .toStdString(),
+            QCoreApplication::translate("Diagnostics", "Not writable").toStdString(),
+            QCoreApplication::translate("Diagnostics", "Change the output folder to a writable location.")
+                .toStdString());
         FixAction fa;
         fa.id = "fix.output.change_folder";
-        fa.label = "Change output folder";
+        fa.label = QCoreApplication::translate("Diagnostics", "Change output folder").toStdString();
         fa.safety = FixAction::Safety::Assisted;
         fa.reversible = true;
-        fa.changes_summary = "Opens Output settings to select a writable output folder.";
+        fa.changes_summary =
+            QCoreApplication::translate("Diagnostics", "Opens Output settings to select a writable output folder.")
+                .toStdString();
         r.fix_action = fa;
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
@@ -443,21 +524,31 @@ void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist)
 
     if (free_bytes <= kHardStopFreeBytes) {
         // rec.007: hard-stop blocker — recording is blocked until free space is recovered.
-        DiagnosticResult r = MakeResult("rec.007", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
-                                        DiagnosticTier::Blocker, "Insufficient disk space — recording blocked",
-                                        "Less than 500 MB free on the output drive. Recording cannot start.",
-                                        "Free space: " + free_gb_str +
+        DiagnosticResult r = MakeResult(
+            "rec.007", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
+            QCoreApplication::translate("Diagnostics", "Insufficient disk space — recording blocked").toStdString(),
+            QCoreApplication::translate("Diagnostics",
+                                        "Less than 500 MB free on the output drive. Recording cannot start.")
+                .toStdString(),
+            QCoreApplication::translate("Diagnostics", "Free space: ").toStdString() + free_gb_str +
+                QCoreApplication::translate("Diagnostics",
                                             " GB. "
                                             "At least 500 MB must be available before recording can begin. "
-                                            "Free up disk space or switch to a different output drive.",
-                                        free_gb_str + " GB free",
-                                        "Free up disk space or change the output folder to a drive with more space.");
+                                            "Free up disk space or switch to a different output drive.")
+                    .toStdString(),
+            free_gb_str + " GB free",
+            QCoreApplication::translate("Diagnostics",
+                                        "Free up disk space or change the output folder to a drive with more space.")
+                .toStdString());
         FixAction fa;
         fa.id = "fix.output.change_folder";
-        fa.label = "Change output folder";
+        fa.label = QCoreApplication::translate("Diagnostics", "Change output folder").toStdString();
         fa.safety = FixAction::Safety::Assisted;
         fa.reversible = true;
-        fa.changes_summary = "Opens Output settings to select an output folder on a drive with more free space.";
+        fa.changes_summary =
+            QCoreApplication::translate(
+                "Diagnostics", "Opens Output settings to select an output folder on a drive with more free space.")
+                .toStdString();
         r.fix_action = fa;
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
@@ -468,17 +559,25 @@ void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist)
         // rec.005: soft warning — recording is still allowed but space is getting low.
         DiagnosticResult r = MakeResult(
             "rec.005", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, DiagnosticTier::MeasuredProblem,
-            "Output drive is low on space", "Less than 2 GB free on the output drive.",
-            "Free space: " + free_gb_str +
-                " GB. "
-                "Recording may stop automatically if space runs out during a session.",
-            free_gb_str + " GB free", "Free up disk space or switch to a different output drive.");
+            QCoreApplication::translate("Diagnostics", "Output drive is low on space").toStdString(),
+            QCoreApplication::translate("Diagnostics", "Less than 2 GB free on the output drive.").toStdString(),
+            QCoreApplication::translate("Diagnostics", "Free space: ").toStdString() + free_gb_str +
+                QCoreApplication::translate("Diagnostics",
+                                            " GB. "
+                                            "Recording may stop automatically if space runs out during a session.")
+                    .toStdString(),
+            free_gb_str + " GB free",
+            QCoreApplication::translate("Diagnostics", "Free up disk space or switch to a different output drive.")
+                .toStdString());
         FixAction fa;
         fa.id = "fix.output.change_folder";
-        fa.label = "Change output folder";
+        fa.label = QCoreApplication::translate("Diagnostics", "Change output folder").toStdString();
         fa.safety = FixAction::Safety::Assisted;
         fa.reversible = true;
-        fa.changes_summary = "Opens Output settings to select an output folder on a drive with more free space.";
+        fa.changes_summary =
+            QCoreApplication::translate(
+                "Diagnostics", "Opens Output settings to select an output folder on a drive with more free space.")
+                .toStdString();
         r.fix_action = fa;
         checklist.has_notice = true;
         checklist.results.push_back(std::move(r));
@@ -507,19 +606,31 @@ void RecommendationEngine::checkOutputFilesystem(DiagnosticChecklist& checklist)
     // informed and can act before starting a long recording.
     DiagnosticResult r = MakeResult(
         "rec.008", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, DiagnosticTier::Optimisation,
-        "Output volume uses FAT32 — 4 GiB file size limit",
-        "FAT32 volumes cannot store files larger than 4 GiB. Long recordings will fail when this limit is reached.",
-        "The configured output folder is on a FAT32 volume. A single recording file cannot exceed 4,294,967,295 bytes "
-        "(~4 GiB). High-bitrate or long recordings will be cut off once the limit is reached.",
-        "Filesystem: FAT32",
-        "Move the output folder to an NTFS or exFAT volume to remove the 4 GiB per-file restriction.");
+        QCoreApplication::translate("Diagnostics", "Output volume uses FAT32 — 4 GiB file size limit").toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics",
+            "FAT32 volumes cannot store files larger than 4 GiB. Long recordings will fail when this limit is reached.")
+            .toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics", "The configured output folder is on a FAT32 volume. A single recording file cannot exceed "
+                           "4,294,967,295 bytes "
+                           "(~4 GiB). High-bitrate or long recordings will be cut off once the limit is reached.")
+            .toStdString(),
+        QCoreApplication::translate("Diagnostics", "Filesystem: FAT32").toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics",
+            "Move the output folder to an NTFS or exFAT volume to remove the 4 GiB per-file restriction.")
+            .toStdString());
     FixAction fa;
     fa.id = "fix.output.fat32_folder";
-    fa.label = "Change output folder";
+    fa.label = QCoreApplication::translate("Diagnostics", "Change output folder").toStdString();
     fa.safety = FixAction::Safety::Assisted;
     fa.reversible = true;
     fa.changes_summary =
-        "Opens Output settings to move the output folder to an NTFS or exFAT volume (no 4 GiB file size limit).";
+        QCoreApplication::translate(
+            "Diagnostics",
+            "Opens Output settings to move the output folder to an NTFS or exFAT volume (no 4 GiB file size limit).")
+            .toStdString();
     r.fix_action = fa;
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
@@ -529,16 +640,26 @@ void RecommendationEngine::checkProfileSupport(DiagnosticChecklist& checklist) c
     if (!is_profile_supported_) {
         DiagnosticResult r = MakeResult(
             "rec.006", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
-            "Recording profile is not supported",
-            "The current recording profile cannot be used with available hardware.",
-            "Your selected profile requires codecs or features not available on this system.", "Profile: unsupported",
-            "Select an available profile or adjust settings to match available capabilities.");
+            QCoreApplication::translate("Diagnostics", "Recording profile is not supported").toStdString(),
+            QCoreApplication::translate("Diagnostics",
+                                        "The current recording profile cannot be used with available hardware.")
+                .toStdString(),
+            QCoreApplication::translate(
+                "Diagnostics", "Your selected profile requires codecs or features not available on this system.")
+                .toStdString(),
+            QCoreApplication::translate("Diagnostics", "Profile: unsupported").toStdString(),
+            QCoreApplication::translate(
+                "Diagnostics", "Select an available profile or adjust settings to match available capabilities.")
+                .toStdString());
         FixAction fa;
         fa.id = "fix.profile.select";
-        fa.label = "Choose a supported profile";
+        fa.label = QCoreApplication::translate("Diagnostics", "Choose a supported profile").toStdString();
         fa.safety = FixAction::Safety::Assisted;
         fa.reversible = true;
-        fa.changes_summary = "Opens Settings to select a recording profile supported by your hardware.";
+        fa.changes_summary =
+            QCoreApplication::translate("Diagnostics",
+                                        "Opens Settings to select a recording profile supported by your hardware.")
+                .toStdString();
         r.fix_action = fa;
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
@@ -547,21 +668,30 @@ void RecommendationEngine::checkProfileSupport(DiagnosticChecklist& checklist) c
 
 void RecommendationEngine::checkAudioContainerCompat(DiagnosticChecklist& checklist) const {
     if (config_.audio_codec == capability::AudioCodec::Flac && config_.container == capability::Container::Mp4) {
-        DiagnosticResult r =
-            MakeResult("rec.009", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
-                       "FLAC is not supported in MP4",
-                       "FLAC audio cannot be muxed into an MP4 container. Switch to MKV or change the audio "
-                       "codec to AAC.",
-                       "FLAC audio cannot be muxed into an MP4 container. Switch to MKV or change the audio "
-                       "codec to AAC.",
-                       "Audio: FLAC, Container: MP4", "Switch the container to MKV or select a different audio codec.");
+        DiagnosticResult r = MakeResult(
+            "rec.009", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
+            "FLAC is not supported in MP4",
+            QCoreApplication::translate(
+                "Diagnostics", "FLAC audio cannot be muxed into an MP4 container. Switch to MKV or change the audio "
+                               "codec to AAC.")
+                .toStdString(),
+            QCoreApplication::translate(
+                "Diagnostics", "FLAC audio cannot be muxed into an MP4 container. Switch to MKV or change the audio "
+                               "codec to AAC.")
+                .toStdString(),
+            QCoreApplication::translate("Diagnostics", "Audio: FLAC, Container: MP4").toStdString(),
+            QCoreApplication::translate("Diagnostics", "Switch the container to MKV or select a different audio codec.")
+                .toStdString());
         FixAction fa;
         fa.id = "fix.audio.flac_to_mkv";
-        fa.label = "Switch container to MKV";
+        fa.label = QCoreApplication::translate("Diagnostics", "Switch container to MKV").toStdString();
         fa.safety = FixAction::Safety::Assisted;
         fa.reversible = true;
         fa.changes_summary =
-            "Opens Output settings to change the recording container to MKV, which supports FLAC audio.";
+            QCoreApplication::translate(
+                "Diagnostics",
+                "Opens Output settings to change the recording container to MKV, which supports FLAC audio.")
+                .toStdString();
         r.fix_action = fa;
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
@@ -569,19 +699,28 @@ void RecommendationEngine::checkAudioContainerCompat(DiagnosticChecklist& checkl
     }
 
     if (config_.audio_codec == capability::AudioCodec::Opus && config_.container == capability::Container::Mp4) {
-        DiagnosticResult r =
-            MakeResult("rec.009", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                       DiagnosticTier::Optimisation, "Opus in MP4 has limited player compatibility",
-                       "Opus audio in MP4 is not widely supported. AAC is the recommended audio codec for MP4.",
-                       "Opus audio in MP4 is not widely supported. AAC is the recommended audio codec for MP4.",
-                       "Audio: Opus, Container: MP4",
-                       "Switch the audio codec to AAC for better compatibility with MP4 containers.");
+        DiagnosticResult r = MakeResult(
+            "rec.009", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, DiagnosticTier::Optimisation,
+            QCoreApplication::translate("Diagnostics", "Opus in MP4 has limited player compatibility").toStdString(),
+            QCoreApplication::translate(
+                "Diagnostics", "Opus audio in MP4 is not widely supported. AAC is the recommended audio codec for MP4.")
+                .toStdString(),
+            QCoreApplication::translate(
+                "Diagnostics", "Opus audio in MP4 is not widely supported. AAC is the recommended audio codec for MP4.")
+                .toStdString(),
+            QCoreApplication::translate("Diagnostics", "Audio: Opus, Container: MP4").toStdString(),
+            QCoreApplication::translate("Diagnostics",
+                                        "Switch the audio codec to AAC for better compatibility with MP4 containers.")
+                .toStdString());
         FixAction fa;
         fa.id = "fix.audio.opus_to_aac";
-        fa.label = "Switch audio codec to AAC";
+        fa.label = QCoreApplication::translate("Diagnostics", "Switch audio codec to AAC").toStdString();
         fa.safety = FixAction::Safety::Auto;
         fa.reversible = true;
-        fa.changes_summary = "Switches the audio codec to AAC for better compatibility with MP4 containers.";
+        fa.changes_summary =
+            QCoreApplication::translate("Diagnostics",
+                                        "Switches the audio codec to AAC for better compatibility with MP4 containers.")
+                .toStdString();
         r.fix_action = fa;
         checklist.has_notice = true;
         checklist.results.push_back(std::move(r));
@@ -590,21 +729,30 @@ void RecommendationEngine::checkAudioContainerCompat(DiagnosticChecklist& checkl
 
 void RecommendationEngine::checkVideoBitDepthContainerCompat(DiagnosticChecklist& checklist) const {
     if (config_.video_codec == capability::VideoCodec::Hevc && config_.container == capability::Container::WebM) {
-        DiagnosticResult r =
-            MakeResult("rec.010", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
-                       "HEVC is not supported in WebM",
-                       "WebM only supports AV1 and VP9 video codecs. HEVC (H.265) cannot be muxed into a "
-                       "WebM container.",
-                       "WebM only supports AV1 and VP9 video codecs. HEVC (H.265) cannot be muxed into a "
-                       "WebM container.",
-                       "Video: HEVC, Container: WebM", "Switch the container to MKV, which supports HEVC video.");
+        DiagnosticResult r = MakeResult(
+            "rec.010", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
+            QCoreApplication::translate("Diagnostics", "HEVC is not supported in WebM").toStdString(),
+            QCoreApplication::translate(
+                "Diagnostics", "WebM only supports AV1 and VP9 video codecs. HEVC (H.265) cannot be muxed into a "
+                               "WebM container.")
+                .toStdString(),
+            QCoreApplication::translate(
+                "Diagnostics", "WebM only supports AV1 and VP9 video codecs. HEVC (H.265) cannot be muxed into a "
+                               "WebM container.")
+                .toStdString(),
+            QCoreApplication::translate("Diagnostics", "Video: HEVC, Container: WebM").toStdString(),
+            QCoreApplication::translate("Diagnostics", "Switch the container to MKV, which supports HEVC video.")
+                .toStdString());
         FixAction fa;
         fa.id = "fix.video.hevc_webm";
-        fa.label = "Switch container to MKV";
+        fa.label = QCoreApplication::translate("Diagnostics", "Switch container to MKV").toStdString();
         fa.safety = FixAction::Safety::Assisted;
         fa.reversible = true;
         fa.changes_summary =
-            "Opens Output settings to change the recording container to MKV, which supports HEVC video.";
+            QCoreApplication::translate(
+                "Diagnostics",
+                "Opens Output settings to change the recording container to MKV, which supports HEVC video.")
+                .toStdString();
         r.fix_action = fa;
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
@@ -612,21 +760,30 @@ void RecommendationEngine::checkVideoBitDepthContainerCompat(DiagnosticChecklist
     }
 
     if (config_.video_codec == capability::VideoCodec::H264 && config_.container == capability::Container::WebM) {
-        DiagnosticResult r =
-            MakeResult("rec.010", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
-                       "H.264 is not supported in WebM",
-                       "WebM only supports AV1 and VP9 video codecs. H.264 cannot be muxed into a WebM "
-                       "container.",
-                       "WebM only supports AV1 and VP9 video codecs. H.264 cannot be muxed into a WebM "
-                       "container.",
-                       "Video: H.264, Container: WebM", "Switch the container to MKV, which supports H.264 video.");
+        DiagnosticResult r = MakeResult(
+            "rec.010", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
+            QCoreApplication::translate("Diagnostics", "H.264 is not supported in WebM").toStdString(),
+            QCoreApplication::translate(
+                "Diagnostics", "WebM only supports AV1 and VP9 video codecs. H.264 cannot be muxed into a WebM "
+                               "container.")
+                .toStdString(),
+            QCoreApplication::translate(
+                "Diagnostics", "WebM only supports AV1 and VP9 video codecs. H.264 cannot be muxed into a WebM "
+                               "container.")
+                .toStdString(),
+            QCoreApplication::translate("Diagnostics", "Video: H.264, Container: WebM").toStdString(),
+            QCoreApplication::translate("Diagnostics", "Switch the container to MKV, which supports H.264 video.")
+                .toStdString());
         FixAction fa;
         fa.id = "fix.video.h264_webm";
-        fa.label = "Switch container to MKV";
+        fa.label = QCoreApplication::translate("Diagnostics", "Switch container to MKV").toStdString();
         fa.safety = FixAction::Safety::Assisted;
         fa.reversible = true;
         fa.changes_summary =
-            "Opens Output settings to change the recording container to MKV, which supports H.264 video.";
+            QCoreApplication::translate(
+                "Diagnostics",
+                "Opens Output settings to change the recording container to MKV, which supports H.264 video.")
+                .toStdString();
         r.fix_action = fa;
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
@@ -652,31 +809,50 @@ void RecommendationEngine::checkExclusiveWindowTarget(DiagnosticChecklist& check
         "rec.capture.exclusive_window", DiagnosticGroup::Recommendation,
         proven ? DiagnosticSeverity::Blocker : DiagnosticSeverity::Pass,
         proven ? DiagnosticTier::Blocker : DiagnosticTier::Optimisation,
-        proven ? "Selected window is in exclusive fullscreen and produces no frames"
-               : "Selected window may be in exclusive fullscreen",
-        proven ? "The selected window is in exclusive fullscreen; window capture records a black/frozen frame."
+        proven ? QCoreApplication::translate("Diagnostics",
+                                             "Selected window is in exclusive fullscreen and produces no frames")
+                     .toStdString()
+               : QCoreApplication::translate("Diagnostics", "Selected window may be in exclusive fullscreen")
+                     .toStdString(),
+        proven ? QCoreApplication::translate(
+                     "Diagnostics",
+                     "The selected window is in exclusive fullscreen; window capture records a black/frozen frame.")
+                     .toStdString()
                : "A fullscreen hint was observed; no capture failure has been established.",
-        proven ? "The window capture API (WGC) produced no usable frame for the selected window — a legacy "
-                 "exclusive-fullscreen application bypasses the desktop compositor, so window capture records "
-                 "a black or frozen picture. Record the monitor instead (which can capture exclusive "
-                 "fullscreen), or switch the game to borderless / windowed fullscreen."
-               : "The selected window covers its monitor with no border and a fullscreen signal is present, "
-                 "which usually means legacy exclusive fullscreen. Window capture often records a black frame "
-                 "in that mode. Record the monitor instead, or switch the game to borderless.",
-        proven ? "Window capture: no frames (exclusive fullscreen)" : "Window looks like exclusive fullscreen",
-        "Set the game to Borderless / Windowed Fullscreen to capture the window directly.");
+        proven ? QCoreApplication::translate(
+                     "Diagnostics",
+                     "The window capture API (WGC) produced no usable frame for the selected window — a legacy "
+                     "exclusive-fullscreen application bypasses the desktop compositor, so window capture records "
+                     "a black or frozen picture. Record the monitor instead (which can capture exclusive "
+                     "fullscreen), or switch the game to borderless / windowed fullscreen.")
+                     .toStdString()
+               : QCoreApplication::translate(
+                     "Diagnostics",
+                     "The selected window covers its monitor with no border and a fullscreen signal is present, "
+                     "which usually means legacy exclusive fullscreen. Window capture often records a black frame "
+                     "in that mode. Record the monitor instead, or switch the game to borderless.")
+                     .toStdString(),
+        proven ? QCoreApplication::translate("Diagnostics", "Window capture: no frames (exclusive fullscreen)")
+                     .toStdString()
+               : QCoreApplication::translate("Diagnostics", "Window looks like exclusive fullscreen").toStdString(),
+        QCoreApplication::translate("Diagnostics",
+                                    "Set the game to Borderless / Windowed Fullscreen to capture the window directly.")
+            .toStdString());
 
     FixAction fa;
     fa.id = "fix.capture.monitor_instead";
-    fa.label = "Record the monitor instead";
+    fa.label = QCoreApplication::translate("Diagnostics", "Record the monitor instead").toStdString();
     // Auto (executable) but NEVER one-click: retargeting changes the recording
     // scope and track structure, so the confirm's changes_summary is mandatory.
     fa.safety = FixAction::Safety::Auto;
     fa.reversible = true;
-    fa.changes_summary = "Records the whole monitor that hosts this window instead of the window itself. "
-                         "The recording will include everything on that monitor (other windows, notifications), "
-                         "and the per-application (APP) audio row is removed — only System and Microphone audio "
-                         "remain. You can switch back to window capture at any time.";
+    fa.changes_summary =
+        QCoreApplication::translate(
+            "Diagnostics", "Records the whole monitor that hosts this window instead of the window itself. "
+                           "The recording will include everything on that monitor (other windows, notifications), "
+                           "and the per-application (APP) audio row is removed — only System and Microphone audio "
+                           "remain. You can switch back to window capture at any time.")
+            .toStdString();
     r.fix_action = fa;
 
     if (proven) {
@@ -699,22 +875,29 @@ void RecommendationEngine::checkExclusiveFullscreen(DiagnosticChecklist& checkli
     r.group = DiagnosticGroup::Recommendation;
     r.severity = DiagnosticSeverity::Pass;
     r.tier = DiagnosticTier::Fact;
-    r.title = "Captured source is in exclusive fullscreen";
-    r.summary = "Captured source is in exclusive fullscreen";
-    r.detail = "The source presents in legacy exclusive fullscreen. Desktop/window capture often records "
-               "a black frame in this mode. Switch the game to borderless (windowed-fullscreen) so the "
-               "compositor can present it for capture.";
-    r.current_value = "Present mode: Exclusive fullscreen";
-    r.recommendation = "Set the game to Borderless / Windowed Fullscreen.";
+    r.title = QCoreApplication::translate("Diagnostics", "Captured source is in exclusive fullscreen").toStdString();
+    r.summary = QCoreApplication::translate("Diagnostics", "Captured source is in exclusive fullscreen").toStdString();
+    r.detail =
+        QCoreApplication::translate(
+            "Diagnostics", "The source presents in legacy exclusive fullscreen. Desktop/window capture often records "
+                           "a black frame in this mode. Switch the game to borderless (windowed-fullscreen) so the "
+                           "compositor can present it for capture.")
+            .toStdString();
+    r.current_value = QCoreApplication::translate("Diagnostics", "Present mode: Exclusive fullscreen").toStdString();
+    r.recommendation =
+        QCoreApplication::translate("Diagnostics", "Set the game to Borderless / Windowed Fullscreen.").toStdString();
     r.timestamp = NowTimestamp();
 
     FixAction fa;
     fa.id = "fix.present.borderless";
-    fa.label = "How to switch to borderless";
+    fa.label = QCoreApplication::translate("Diagnostics", "How to switch to borderless").toStdString();
     fa.safety = FixAction::Safety::External; // Only the source application owns its display mode.
     fa.reversible = true;
-    fa.changes_summary = "Opens guidance for switching the captured game to borderless fullscreen (the app cannot "
-                         "change another application's display mode for you).";
+    fa.changes_summary =
+        QCoreApplication::translate(
+            "Diagnostics", "Opens guidance for switching the captured game to borderless fullscreen (the app cannot "
+                           "change another application's display mode for you).")
+            .toStdString();
     r.fix_action = fa;
     checklist.results.push_back(std::move(r));
 }
@@ -723,13 +906,15 @@ void RecommendationEngine::checkDpcLatency(DiagnosticChecklist& checklist) const
     if (!dpc_ || !dpc_->available || dpc_->max_latency_us <= 1000.0)
         return;
     auto r = MakeResult("rec.dpc.latency", DiagnosticGroup::Performance, DiagnosticSeverity::Pass, DiagnosticTier::Fact,
-                        "Kernel latency evidence", "A DPC/ISR latency peak was observed.",
+                        QCoreApplication::translate("Diagnostics", "Kernel latency evidence").toStdString(),
+                        "A DPC/ISR latency peak was observed.",
                         "A cumulative peak cannot establish temporal correlation or the cause of recording impact.",
                         std::to_string(static_cast<long>(dpc_->max_latency_us)) + " us");
     r.measured_value = dpc_->max_latency_us;
     r.value_unit = "us";
     if (!dpc_->worst_driver.empty())
-        r.detail += " Peak driver: " + dpc_->worst_driver + ".";
+        r.detail +=
+            QCoreApplication::translate("Diagnostics", " Peak driver: ").toStdString() + dpc_->worst_driver + ".";
     checklist.results.push_back(std::move(r));
 }
 
@@ -741,8 +926,13 @@ void RecommendationEngine::checkDiscardedPresents(DiagnosticChecklist& checklist
         return;
     auto r = MakeResult(
         "rec.present.discarded", DiagnosticGroup::Display, DiagnosticSeverity::Pass, DiagnosticTier::Fact,
-        "Discarded source presents", "Presentation evidence, independent of recording loss.",
-        "The compositor discarded source presents. These counts do not establish damage to recorded output.");
+        QCoreApplication::translate("Diagnostics", "Discarded source presents").toStdString(),
+        QCoreApplication::translate("Diagnostics", "Presentation evidence, independent of recording loss.")
+            .toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics",
+            "The compositor discarded source presents. These counts do not establish damage to recorded output.")
+            .toStdString());
     r.measured_value = ratio * 100.0;
     r.value_unit = "%";
     r.current_value = std::to_string(static_cast<long>(ratio * 100.0)) + "% discarded";
@@ -752,9 +942,12 @@ void RecommendationEngine::checkDiscardedPresents(DiagnosticChecklist& checklist
 void RecommendationEngine::checkPresentModeFlips(DiagnosticChecklist& checklist) const {
     if (!present_ || !present_->attributed || present_->mode_flip_count < 5)
         return;
-    auto r = MakeResult("rec.present.modeflip", DiagnosticGroup::Display, DiagnosticSeverity::Pass,
-                        DiagnosticTier::Fact, "Presentation mode changes", "The source changed presentation mode.",
-                        "Mode changes alone do not establish capture or recording impact.");
+    auto r = MakeResult(
+        "rec.present.modeflip", DiagnosticGroup::Display, DiagnosticSeverity::Pass, DiagnosticTier::Fact,
+        QCoreApplication::translate("Diagnostics", "Presentation mode changes").toStdString(),
+        QCoreApplication::translate("Diagnostics", "The source changed presentation mode.").toStdString(),
+        QCoreApplication::translate("Diagnostics", "Mode changes alone do not establish capture or recording impact.")
+            .toStdString());
     r.measured_value = static_cast<double>(present_->mode_flip_count);
     r.current_value = std::to_string(present_->mode_flip_count) + " changes";
     checklist.results.push_back(std::move(r));
@@ -767,20 +960,33 @@ void RecommendationEngine::checkDiskWriteStall(DiagnosticChecklist& checklist) c
         "rec.disk.writestall", DiagnosticGroup::Storage,
         live_disk_pressure_ ? DiagnosticSeverity::Notice : DiagnosticSeverity::Pass,
         live_disk_pressure_ ? DiagnosticTier::MeasuredProblem : DiagnosticTier::Fact,
-        live_disk_pressure_ ? "Storage backpressure" : "Storage latency spike",
-        live_disk_pressure_ ? "The recording output queue is under write pressure." : "No measured queue impact.",
-        "Buffered write latency is measured at the file writer. It does not measure physical disk latency.",
+        live_disk_pressure_ ? QCoreApplication::translate("Diagnostics", "Storage backpressure").toStdString()
+                            : QCoreApplication::translate("Diagnostics", "Storage latency spike").toStdString(),
+        live_disk_pressure_
+            ? QCoreApplication::translate("Diagnostics", "The recording output queue is under write pressure.")
+                  .toStdString()
+            : QCoreApplication::translate("Diagnostics", "No measured queue impact.").toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics",
+            "Buffered write latency is measured at the file writer. It does not measure physical disk latency.")
+            .toStdString(),
         std::to_string(static_cast<long>(live_disk_peak_write_ms_)) + " ms peak write");
     r.measured_value = live_disk_peak_write_ms_;
     r.value_unit = "ms";
     if (live_disk_pressure_) {
         r.impact = r.summary;
-        r.recommendation = "Review the recording folder and available drive throughput.";
-        r.fix_action = FixAction{"fix.disk.writestall", "Review output folder", FixAction::Safety::Assisted, true,
-                                 "Opens the output folder setting."};
+        r.recommendation =
+            QCoreApplication::translate("Diagnostics", "Review the recording folder and available drive throughput.")
+                .toStdString();
+        r.fix_action = FixAction{
+            "fix.disk.writestall", QCoreApplication::translate("Diagnostics", "Review output folder").toStdString(),
+            FixAction::Safety::Assisted, true,
+            QCoreApplication::translate("Diagnostics", "Opens the output folder setting.").toStdString()};
         checklist.has_notice = true;
     } else {
-        r.compensation = "The output buffers absorbed the measured write spike.";
+        r.compensation =
+            QCoreApplication::translate("Diagnostics", "The output buffers absorbed the measured write spike.")
+                .toStdString();
     }
     checklist.results.push_back(std::move(r));
 }
@@ -791,23 +997,36 @@ void RecommendationEngine::checkUnresolvedSavedDisplay(DiagnosticChecklist& chec
     }
 
     const std::string which =
-        saved_display_label_.empty() ? std::string("The saved display") : ("\"" + saved_display_label_ + "\"");
+        saved_display_label_.empty()
+            ? std::string(QCoreApplication::translate("Diagnostics", "The saved display").toStdString())
+            : ("\"" + saved_display_label_ + "\"");
 
     DiagnosticResult r = MakeResult(
         "display.saved.unresolved", DiagnosticGroup::Display, DiagnosticSeverity::Notice,
-        DiagnosticTier::MeasuredProblem, "Saved display not found",
-        "The display this preset recorded from is not currently connected, so no capture source is selected.",
-        which + " could not be matched to any connected display. This happens after that monitor is unplugged, or "
+        DiagnosticTier::MeasuredProblem,
+        QCoreApplication::translate("Diagnostics", "Saved display not found").toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics",
+            "The display this preset recorded from is not currently connected, so no capture source is selected.")
+            .toStdString(),
+        which +
+            QCoreApplication::translate(
+                "Diagnostics",
+                " could not be matched to any connected display. This happens after that monitor is unplugged, or "
                 "after swapping cables between two identical monitors that report no serial number. Recording still "
-                "works — choose a source to record now, and it will be remembered.",
-        which + " is unavailable", "Choose a capture source to record now.");
+                "works — choose a source to record now, and it will be remembered.")
+                .toStdString(),
+        which + " is unavailable",
+        QCoreApplication::translate("Diagnostics", "Choose a capture source to record now.").toStdString());
 
     FixAction fa;
     fa.id = "fix.display.reselect";
-    fa.label = "Choose a source";
+    fa.label = QCoreApplication::translate("Diagnostics", "Choose a source").toStdString();
     fa.safety = FixAction::Safety::Assisted;
     fa.reversible = true;
-    fa.changes_summary = "Opens the source picker so you can pick a display or window to record.";
+    fa.changes_summary = QCoreApplication::translate(
+                             "Diagnostics", "Opens the source picker so you can pick a display or window to record.")
+                             .toStdString();
     r.fix_action = fa;
 
     checklist.has_notice = true;
@@ -827,26 +1046,36 @@ void RecommendationEngine::checkAudioSourceDegraded(DiagnosticChecklist& checkli
     }
     const std::string n = std::to_string(live_audio_degraded_sources_);
     const bool plural = live_audio_degraded_sources_ != 1;
-    const std::string source_word = plural ? "audio sources are" : "An audio source is";
+    const std::string source_word =
+        plural ? "audio sources are" : QCoreApplication::translate("Diagnostics", "An audio source is").toStdString();
     if (live_audio_endpoint_in_use_) {
         // The endpoint is still there; another application holds it exclusively.
         // "Reconnect the device" would send the user to the wrong place.
         DiagnosticResult taken = MakeResult(
             "rec.audio.endpoint_taken", DiagnosticGroup::Audio, DiagnosticSeverity::Notice,
-            DiagnosticTier::MeasuredProblem, "Another application took the audio device",
+            DiagnosticTier::MeasuredProblem,
+            QCoreApplication::translate("Diagnostics", "Another application took the audio device").toStdString(),
             source_word + " silent because another application holds the audio device in exclusive mode.",
-            "The device is still present but refused ExoSnap when it tried to reopen it, which is what happens "
-            "while another application has taken exclusive control of it. Video and every other audio source "
-            "are untouched; the source resumes on its own the moment the device is released.",
+            QCoreApplication::translate(
+                "Diagnostics",
+                "The device is still present but refused ExoSnap when it tried to reopen it, which is what happens "
+                "while another application has taken exclusive control of it. Video and every other audio source "
+                "are untouched; the source resumes on its own the moment the device is released.")
+                .toStdString(),
             n + " audio source" + (plural ? "s" : "") + " refused as in use",
-            "Close the application that has taken the device, or in Windows Sound open the device's Properties, "
-            "Advanced tab, and clear \"Allow applications to take exclusive control of this device\".");
+            QCoreApplication::translate(
+                "Diagnostics",
+                "Close the application that has taken the device, or in Windows Sound open the device's Properties, "
+                "Advanced tab, and clear \"Allow applications to take exclusive control of this device\".")
+                .toStdString());
         FixAction taken_fix;
         taken_fix.id = "fix.audio.check_devices";
-        taken_fix.label = "Check audio devices";
+        taken_fix.label = QCoreApplication::translate("Diagnostics", "Check audio devices").toStdString();
         taken_fix.safety = FixAction::Safety::Assisted;
         taken_fix.reversible = true;
-        taken_fix.changes_summary = "Opens Audio settings so you can reselect the capture device.";
+        taken_fix.changes_summary =
+            QCoreApplication::translate("Diagnostics", "Opens Audio settings so you can reselect the capture device.")
+                .toStdString();
         taken.fix_action = taken_fix;
         checklist.has_notice = true;
         checklist.results.push_back(std::move(taken));
@@ -854,22 +1083,32 @@ void RecommendationEngine::checkAudioSourceDegraded(DiagnosticChecklist& checkli
     }
     DiagnosticResult r = MakeResult(
         "rec.audio.degraded", DiagnosticGroup::Audio, DiagnosticSeverity::Notice, DiagnosticTier::MeasuredProblem,
-        "Audio device lost — recording continues",
-        source_word + " silent because the capture device dropped out. The recording keeps running.",
+        QCoreApplication::translate("Diagnostics", "Audio device lost — recording continues").toStdString(),
+        source_word + QCoreApplication::translate(
+                          "Diagnostics", " silent because the capture device dropped out. The recording keeps running.")
+                          .toStdString(),
         n + " of " +
             std::to_string(live_audio_track_count_ == 0 ? live_audio_degraded_sources_ : live_audio_track_count_) +
-            " audio track(s) lost their capture device mid-recording and are contributing honest silence. Video and "
-            "every other audio source are untouched; the source reactivates automatically the moment the device "
-            "returns.",
+            QCoreApplication::translate(
+                "Diagnostics",
+                " audio track(s) lost their capture device mid-recording and are contributing honest silence. Video "
+                "and "
+                "every other audio source are untouched; the source reactivates automatically the moment the device "
+                "returns.")
+                .toStdString(),
         n + " audio source" + (plural ? "s" : "") + " degraded to silence",
-        "Reconnect the audio device (or check Windows Sound settings). No action is required to keep recording — the "
-        "gap is filled with silence and the source recovers on its own.");
+        QCoreApplication::translate("Diagnostics", "Reconnect the audio device (or check Windows Sound settings). No "
+                                                   "action is required to keep recording — the "
+                                                   "gap is filled with silence and the source recovers on its own.")
+            .toStdString());
     FixAction fa;
     fa.id = "fix.audio.check_devices";
-    fa.label = "Check audio devices";
+    fa.label = QCoreApplication::translate("Diagnostics", "Check audio devices").toStdString();
     fa.safety = FixAction::Safety::Assisted; // app cannot re-plug a device for the user
     fa.reversible = true;
-    fa.changes_summary = "Opens Audio settings so you can reselect or reconnect the capture device.";
+    fa.changes_summary = QCoreApplication::translate(
+                             "Diagnostics", "Opens Audio settings so you can reselect or reconnect the capture device.")
+                             .toStdString();
     r.fix_action = fa;
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
@@ -890,14 +1129,19 @@ std::vector<DiagnosticResult> RecommendationEngine::GenerateEnvironmentFacts() c
     // why the provider's own state is reported separately.
     const std::string elevation_summary =
         elevated_ ? "Elevated"
-                  : "Standard - core recording health available; optional traces depend on the token's rights";
+                  : QCoreApplication::translate(
+                        "Diagnostics",
+                        "Standard - core recording health available; optional traces depend on the token's rights")
+                        .toStdString();
     facts.push_back(MakeResult("fact.elevation", DiagnosticGroup::ConfigSnapshot, DiagnosticSeverity::Pass,
                                DiagnosticTier::Fact, "Elevation", elevation_summary));
     if (live_audio_format_available_) {
-        const std::string value =
-            std::to_string(live_audio_sample_rate_) + " Hz · " + std::to_string(live_audio_channels_) + " ch";
+        const std::string value = std::to_string(live_audio_sample_rate_) +
+                                  QCoreApplication::translate("Diagnostics", " Hz · ").toStdString() +
+                                  std::to_string(live_audio_channels_) + " ch";
         facts.push_back(MakeResult("fact.audio.format", DiagnosticGroup::Audio, DiagnosticSeverity::Pass,
-                                   DiagnosticTier::Fact, "Audio format", value));
+                                   DiagnosticTier::Fact,
+                                   QCoreApplication::translate("Diagnostics", "Audio format").toStdString(), value));
     }
     return facts;
 }
@@ -908,10 +1152,14 @@ void RecommendationEngine::checkFramePacingDuplication(DiagnosticChecklist& chec
     const double ratio = static_cast<double>(live_frames_duplicated_) / live_frames_emitted_;
     if (ratio < 0.25 || live_capture_starved_)
         return;
-    auto r =
-        MakeResult("rec.pacing.duplication", DiagnosticGroup::Performance, DiagnosticSeverity::Pass,
-                   DiagnosticTier::Fact, "Source frames held for CFR", "Expected for static or slower sources.",
-                   "Repeating the previous picture preserves output cadence. Duplicate frames are not encoder loss.");
+    auto r = MakeResult(
+        "rec.pacing.duplication", DiagnosticGroup::Performance, DiagnosticSeverity::Pass, DiagnosticTier::Fact,
+        QCoreApplication::translate("Diagnostics", "Source frames held for CFR").toStdString(),
+        QCoreApplication::translate("Diagnostics", "Expected for static or slower sources.").toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics",
+            "Repeating the previous picture preserves output cadence. Duplicate frames are not encoder loss.")
+            .toStdString());
     r.measured_value = ratio * 100.0;
     r.value_unit = "%";
     r.current_value = std::to_string(live_frames_duplicated_) + " repeated frames";
@@ -926,16 +1174,27 @@ void RecommendationEngine::checkAudioClockSaturated(DiagnosticChecklist& checkli
     // ppm is parts per million of playback rate: 1 ppm is 3.6 ms per hour.
     const double ms_per_hour = std::abs(live_clock_ppm_) * 3.6;
     const std::string rate = std::to_string(static_cast<long>(ms_per_hour + 0.5));
-    DiagnosticResult r =
-        MakeResult("rec.audio.clock_saturated", DiagnosticGroup::Audio, DiagnosticSeverity::Notice,
-                   DiagnosticTier::MeasuredProblem, "Audio clock drifts faster than correction can absorb",
-                   "The audio device's clock runs away from the system clock by more than the recorder can compensate.",
-                   "Clock correction is at its limit (about " + rate +
-                       " ms per hour) and the remaining offset keeps growing, so audio and video separate over a long "
-                       "recording. This is the device's clock, not the recording settings.",
-                   "Clock slaving saturated at " + rate + " ms/h",
-                   "Keep recordings shorter, or use a different audio device (USB and Bluetooth devices with their own "
-                   "clock are the usual cause).");
+    DiagnosticResult r = MakeResult(
+        "rec.audio.clock_saturated", DiagnosticGroup::Audio, DiagnosticSeverity::Notice,
+        DiagnosticTier::MeasuredProblem,
+        QCoreApplication::translate("Diagnostics", "Audio clock drifts faster than correction can absorb")
+            .toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics",
+            "The audio device's clock runs away from the system clock by more than the recorder can compensate.")
+            .toStdString(),
+        QCoreApplication::translate("Diagnostics", "Clock correction is at its limit (about ").toStdString() + rate +
+            QCoreApplication::translate(
+                "Diagnostics",
+                " ms per hour) and the remaining offset keeps growing, so audio and video separate over a long "
+                "recording. This is the device's clock, not the recording settings.")
+                .toStdString(),
+        QCoreApplication::translate("Diagnostics", "Clock slaving saturated at ").toStdString() + rate + " ms/h",
+        QCoreApplication::translate(
+            "Diagnostics",
+            "Keep recordings shorter, or use a different audio device (USB and Bluetooth devices with their own "
+            "clock are the usual cause).")
+            .toStdString());
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
 }
@@ -968,15 +1227,25 @@ void RecommendationEngine::checkCaptureAdapterMismatch(DiagnosticChecklist& chec
     if (proven_unable) {
         DiagnosticResult r = MakeResult(
             "rec.capture.adapter_mismatch", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
-            DiagnosticTier::Blocker, "The NVIDIA encoder cannot record this display",
-            "This display is driven by " + driver + ", and opening the encoder for it failed.",
-            "Capture opens on the adapter that owns the display, and the hardware encoder has to be reachable "
-            "from that device. On this machine it was tried and it failed, so a recording started now would "
-            "fail with an error that reads like a codec or driver problem.",
-            a.encoder_failure_detail.empty() ? "Display adapter: " + driver
-                                             : "Display adapter: " + driver + " -- " + a.encoder_failure_detail,
-            "In NVIDIA Control Panel, Manage 3D settings, set the preferred graphics processor to the NVIDIA "
-            "GPU, or connect the display to the NVIDIA outputs, or record a display the NVIDIA GPU drives.");
+            DiagnosticTier::Blocker,
+            QCoreApplication::translate("Diagnostics", "The NVIDIA encoder cannot record this display").toStdString(),
+            QCoreApplication::translate("Diagnostics", "This display is driven by ").toStdString() + driver +
+                ", and opening the encoder for it failed.",
+            QCoreApplication::translate(
+                "Diagnostics",
+                "Capture opens on the adapter that owns the display, and the hardware encoder has to be reachable "
+                "from that device. On this machine it was tried and it failed, so a recording started now would "
+                "fail with an error that reads like a codec or driver problem.")
+                .toStdString(),
+            a.encoder_failure_detail.empty()
+                ? QCoreApplication::translate("Diagnostics", "Display adapter: ").toStdString() + driver
+                : QCoreApplication::translate("Diagnostics", "Display adapter: ").toStdString() + driver + " -- " +
+                      a.encoder_failure_detail,
+            QCoreApplication::translate(
+                "Diagnostics",
+                "In NVIDIA Control Panel, Manage 3D settings, set the preferred graphics processor to the NVIDIA "
+                "GPU, or connect the display to the NVIDIA outputs, or record a display the NVIDIA GPU drives.")
+                .toStdString());
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
         return;
@@ -984,16 +1253,26 @@ void RecommendationEngine::checkCaptureAdapterMismatch(DiagnosticChecklist& chec
 
     DiagnosticResult r = MakeResult(
         "rec.capture.adapter_mismatch", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-        DiagnosticTier::MeasuredProblem, "The captured display is not driven by the NVIDIA GPU",
-        "This display is driven by " + driver + "; the NVIDIA encoder may not be reachable from it.",
-        "Capture opens on the adapter that owns the display, and the hardware encoder has to be reachable from "
-        "that device. Many hybrid-GPU machines manage that and record fine, so this is not a verdict on yours "
-        "-- but if a recording of this display fails with what looks like a codec or driver error, this is the "
-        "first thing to check.",
-        "Display adapter: " + driver + " (encoder reachability not measured)",
-        "If a recording of this display fails: in NVIDIA Control Panel, Manage 3D settings, set the preferred "
-        "graphics processor to the NVIDIA GPU, or connect the display to the NVIDIA outputs, or record a "
-        "display the NVIDIA GPU drives.");
+        DiagnosticTier::MeasuredProblem,
+        QCoreApplication::translate("Diagnostics", "The captured display is not driven by the NVIDIA GPU")
+            .toStdString(),
+        QCoreApplication::translate("Diagnostics", "This display is driven by ").toStdString() + driver +
+            "; the NVIDIA encoder may not be reachable from it.",
+        QCoreApplication::translate(
+            "Diagnostics",
+            "Capture opens on the adapter that owns the display, and the hardware encoder has to be reachable from "
+            "that device. Many hybrid-GPU machines manage that and record fine, so this is not a verdict on yours "
+            "-- but if a recording of this display fails with what looks like a codec or driver error, this is the "
+            "first thing to check.")
+            .toStdString(),
+        QCoreApplication::translate("Diagnostics", "Display adapter: ").toStdString() + driver +
+            " (encoder reachability not measured)",
+        QCoreApplication::translate(
+            "Diagnostics",
+            "If a recording of this display fails: in NVIDIA Control Panel, Manage 3D settings, set the preferred "
+            "graphics processor to the NVIDIA GPU, or connect the display to the NVIDIA outputs, or record a "
+            "display the NVIDIA GPU drives.")
+            .toStdString());
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
 }
@@ -1015,11 +1294,17 @@ void RecommendationEngine::checkOutputDriveKind(DiagnosticChecklist& checklist) 
     }
     DiagnosticResult r = MakeResult(
         "rec.output.drive_kind", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-        DiagnosticTier::Optimisation, "The output folder is on " + std::string(kind),
-        "Writes there can stall long enough to drop frames.",
-        "The recorder writes the file as it records; a volume whose write latency spikes (network shares, USB "
-        "sticks, SD cards) back-pressures the capture. This is a property of the drive, not of the settings.",
-        std::string("Output volume: ") + kind, "Record to a local SSD and copy the file afterwards.");
+        DiagnosticTier::Optimisation,
+        QCoreApplication::translate("Diagnostics", "The output folder is on ").toStdString() + std::string(kind),
+        QCoreApplication::translate("Diagnostics", "Writes there can stall long enough to drop frames.").toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics",
+            "The recorder writes the file as it records; a volume whose write latency spikes (network shares, USB "
+            "sticks, SD cards) back-pressures the capture. This is a property of the drive, not of the settings.")
+            .toStdString(),
+        std::string(QCoreApplication::translate("Diagnostics", "Output volume: ").toStdString()) + kind,
+        QCoreApplication::translate("Diagnostics", "Record to a local SSD and copy the file afterwards.")
+            .toStdString());
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
 }
@@ -1033,14 +1318,25 @@ void RecommendationEngine::checkGpuContention(DiagnosticChecklist& checklist) co
         live_target_fps_for_gpu_ > 0.0 ? std::to_string(1000.0 / live_target_fps_for_gpu_).substr(0, 4) : "the";
     DiagnosticResult r = MakeResult(
         "rec.gpu.contention", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-        DiagnosticTier::MeasuredProblem, "Recorder GPU work exceeded its frame budget",
-        "The GPU finishes the recorder's frame work later than the frame budget while the recorder's own "
-        "submissions stay cheap.",
-        "Measured on the GPU with timestamp queries: the recorder's passes take " + gpu_ms + " ms (p99) against " +
-            budget +
-            " ms per frame. Recorder GPU timestamps do not identify which application or driver caused the delay.",
+        DiagnosticTier::MeasuredProblem,
+        QCoreApplication::translate("Diagnostics", "Recorder GPU work exceeded its frame budget").toStdString(),
+        QCoreApplication::translate(
+            "Diagnostics",
+            "The GPU finishes the recorder's frame work later than the frame budget while the recorder's own "
+            "submissions stay cheap.")
+            .toStdString(),
+        QCoreApplication::translate("Diagnostics",
+                                    "Measured on the GPU with timestamp queries: the recorder's passes take ")
+                .toStdString() +
+            gpu_ms + " ms (p99) against " + budget +
+            QCoreApplication::translate(
+                "Diagnostics",
+                " ms per frame. Recorder GPU timestamps do not identify which application or driver caused the delay.")
+                .toStdString(),
         "GPU frame work " + gpu_ms + " ms p99 vs " + budget + " ms budget",
-        "Cap the game's frame rate, lower its graphics settings, or lower the recording resolution.");
+        QCoreApplication::translate(
+            "Diagnostics", "Cap the game's frame rate, lower its graphics settings, or lower the recording resolution.")
+            .toStdString());
     r.measured_value = live_gpu_exec_p99_ms_;
     if (live_target_fps_for_gpu_ > 0.0)
         r.budget_value = 1000.0 / live_target_fps_for_gpu_;
