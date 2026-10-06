@@ -1,4 +1,5 @@
 #include "matroska_stream_writer.h"
+#include "matroska_packet_timestamps.h"
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -24,6 +25,7 @@
 #include <ebml/IOCallback.h>
 #include <ebml/c/libebml_t.h>
 #include <matroska/KaxBlock.h>
+#include <matroska/KaxBlockData.h>
 #include <matroska/KaxCluster.h>
 #include <matroska/KaxCues.h>
 #include <matroska/KaxCuesData.h>
@@ -373,6 +375,11 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
             libebml::GetChild<libmatroska::KaxTrackFlagDefault>(vid).SetValue(1);
             libebml::GetChild<libmatroska::KaxTrackFlagLacing>(vid).SetValue(0);
             libebml::GetChild<libmatroska::KaxCodecID>(vid).SetValue(m_config.video_codec_id);
+            libebml::GetChild<libmatroska::KaxMaxBlockAdditionID>(vid).SetValue(kPacketTimestampBlockId);
+            auto& timestamps = libebml::GetChild<libmatroska::KaxBlockAdditionMapping>(vid);
+            libebml::GetChild<libmatroska::KaxBlockAddIDValue>(timestamps).SetValue(kPacketTimestampBlockId);
+            libebml::GetChild<libmatroska::KaxBlockAddIDType>(timestamps).SetValue(kPacketTimestampMappingType);
+            libebml::GetChild<libmatroska::KaxBlockAddIDName>(timestamps).SetValue("ExoSnap packet timestamps v1");
             if (!m_config.video_codec_private.empty()) {
                 libebml::GetChild<libmatroska::KaxCodecPrivate>(vid).CopyBuffer(
                     m_config.video_codec_private.data(), static_cast<uint32_t>(m_config.video_codec_private.size()));
@@ -504,9 +511,9 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                 const uint64_t codec_delay_ns = static_cast<uint64_t>(pre_skip) * 1000000000ULL / 48000u;
                 libebml::GetChild<libmatroska::KaxCodecDelay>(aud).SetValue(codec_delay_ns);
                 libebml::GetChild<libmatroska::KaxSeekPreRoll>(aud).SetValue(80000000ULL);
-                libebml::GetChild<libmatroska::KaxTrackDefaultDuration>(aud).SetValue(
-                    static_cast<uint64_t>(std::max<uint32_t>(1u, m_config.opus_frame_samples)) * 1000000000ULL /
-                    48000u);
+                if (m_config.opus_frame_samples > 0)
+                    libebml::GetChild<libmatroska::KaxTrackDefaultDuration>(aud).SetValue(
+                        static_cast<uint64_t>(m_config.opus_frame_samples) * 1000000000ULL / 48000u);
             } else if (m_config.audio_codec == StreamAudioCodec::Pcm) {
                 // Uncompressed PCM. No CodecPrivate; the bit depth is carried
                 // in the track audio header below. audio_float selects the
@@ -575,20 +582,21 @@ bool MatroskaStreamWriter::Push(MuxPacket packet) {
 
     WindowEntry e;
     e.pts_ns = packet.pts_ns;
+    e.ordering_ns = packet.dts_ns.value_or(static_cast<int64_t>(packet.pts_ns));
+    e.dts_ns = packet.dts_ns;
     e.track_num = packet.track_num;
     e.is_key = packet.is_key;
     e.bytes = std::move(packet.bytes);
 
-    if (e.pts_ns > m_max_pushed_pts_ns)
-        m_max_pushed_pts_ns = e.pts_ns;
+    m_max_pushed_ordering_ns = (std::max)(e.ordering_ns, m_max_pushed_ordering_ns);
 
-    // Insert keeping the window sorted ascending by PTS. The window is small
+    // Interleave by decode time while retaining presentation timestamps. The window is small
     // (a few seconds) so a back-to-front insertion scan is cheap; equal PTS
     // preserves push order (stable) which matches the old stable_sort.
     auto it = m_window.end();
     while (it != m_window.begin()) {
         auto prev = std::prev(it);
-        if (prev->pts_ns <= e.pts_ns)
+        if (prev->ordering_ns <= e.ordering_ns)
             break;
         it = prev;
     }
@@ -604,13 +612,15 @@ bool MatroskaStreamWriter::Push(MuxPacket packet) {
 }
 
 bool MatroskaStreamWriter::DrainWindow(bool force) {
-    // Emit from the front (oldest PTS) while either forcing, or the front packet
+    // Emit from the front (oldest decode time) while either forcing, or the front packet
     // is far enough behind the newest pushed PTS that no earlier packet can still
     // arrive within the reorder horizon. Also enforce the hard count ceiling so a
     // stalled track can never blow RAM.
     while (!m_window.empty()) {
         const WindowEntry& front = m_window.front();
-        const bool behind_horizon = (m_max_pushed_pts_ns >= front.pts_ns + m_config.reorder_window_ns);
+        const bool behind_horizon =
+            m_max_pushed_ordering_ns >= front.ordering_ns &&
+            static_cast<uint64_t>(m_max_pushed_ordering_ns - front.ordering_ns) >= m_config.reorder_window_ns;
         const bool over_capacity = m_window.size() > m_config.reorder_window_max_packets;
         if (!force && !behind_horizon && !over_capacity)
             break;
@@ -643,9 +653,10 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
     bool need_new_cluster = m_first_cluster;
     if (!m_first_cluster && m_cluster != nullptr) {
         const int64_t rel_ms = static_cast<int64_t>(pkt_ms) - static_cast<int64_t>(m_cluster_start_ms);
-        if (rel_ms > kMaxClusterRelativeMs) {
+        if (rel_ms > kMaxClusterRelativeMs || rel_ms < -kMaxClusterRelativeMs) {
             need_new_cluster = true;
-        } else if (e.is_key && e.track_num == 1 && (pkt_ms - m_cluster_start_ms) >= kClusterBoundaryMs) {
+        } else if (e.is_key && e.track_num == 1 && pkt_ms >= m_cluster_start_ms &&
+                   (pkt_ms - m_cluster_start_ms) >= kClusterBoundaryMs) {
             need_new_cluster = true;
         }
     }
@@ -668,10 +679,30 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
         std::vector<uint8_t>& stored = m_cluster_bytes.back();
 
         auto* data_buf = new libmatroska::DataBuffer(stored.data(), static_cast<uint32_t>(stored.size()));
-        auto& sb = libebml::AddNewChild<libmatroska::KaxSimpleBlock>(*m_cluster);
-        sb.SetParent(*m_cluster);
-        sb.AddFrame(*track_entry, e.pts_ns, *data_buf, libmatroska::LACING_NONE);
-        sb.SetKeyframe(e.is_key);
+        if (e.track_num == 1 && e.dts_ns) {
+            auto& group = libebml::AddNewChild<libmatroska::KaxBlockGroup>(*m_cluster);
+            group.SetParent(*m_cluster);
+            group.AddFrame(*track_entry, e.pts_ns, *data_buf, libmatroska::LACING_NONE);
+            if (!e.is_key) {
+                // Zero denotes a dependency whose exact reference picture is
+                // unknown. Omitting ReferenceBlock would mark this as a keyframe.
+                libebml::GetChild<libmatroska::KaxReferenceBlock>(group).SetReferencedTimecode(0);
+            }
+            if (m_config.frame_rate_num > 0 && m_config.frame_rate_den > 0)
+                group.SetBlockDuration(static_cast<uint64_t>(m_config.frame_rate_den) * 1000000000ULL /
+                                       m_config.frame_rate_num);
+            auto& additions = libebml::GetChild<libmatroska::KaxBlockAdditions>(group);
+            auto& more = libebml::GetChild<libmatroska::KaxBlockMore>(additions);
+            libebml::GetChild<libmatroska::KaxBlockAddID>(more).SetValue(kPacketTimestampBlockId);
+            const auto timestamps = EncodeMatroskaPacketTimestamps(e.pts_ns, *e.dts_ns);
+            libebml::GetChild<libmatroska::KaxBlockAdditional>(more).CopyBuffer(
+                timestamps.data(), static_cast<uint32_t>(timestamps.size()));
+        } else {
+            auto& sb = libebml::AddNewChild<libmatroska::KaxSimpleBlock>(*m_cluster);
+            sb.SetParent(*m_cluster);
+            sb.AddFrame(*track_entry, e.pts_ns, *data_buf, libmatroska::LACING_NONE);
+            sb.SetKeyframe(e.is_key);
+        }
 
         if (e.is_key && e.track_num == 1)
             m_pending_cue_ms.push_back(pkt_ms);

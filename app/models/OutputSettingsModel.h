@@ -1,6 +1,7 @@
 #pragma once
 
 #include <capability/config_types.h>
+#include <exosnap/engine/backend_tuning.h>
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/output_geometry.h>
 
@@ -94,6 +95,10 @@ struct OutputSettingsModel {
     // NVENC P1-P7 speed/quality choice, independent of constant quantizer.
     // Applied when the next recording initializes its encoder, not live.
     exosnap::engine::NvencPreset nvenc_preset = exosnap::engine::NvencPreset::P4;
+    // Requested backend tuning survives temporary codec/device restrictions.
+    // Recording admission resolves it against the selected adapter's facts and
+    // takes the preset from nvenc_preset, the app's existing preference owner.
+    exosnap::engine::NvencTuning nvenc_tuning;
     // Tone-map to SDR by default. Native HDR10 requires a compatible source,
     // codec and 10-bit path, enforced by the capability resolver.
     exosnap::engine::HdrMode hdr_mode = exosnap::engine::HdrMode::TonemapSdr;

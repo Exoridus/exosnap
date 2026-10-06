@@ -10,6 +10,7 @@
 
 #include <capability/capability_set.h>
 #include <capability/encoder_device_resolver.h>
+#include <capability/nvenc_tuning_policy.h>
 
 #include <QObject>
 #include <QString>
@@ -109,6 +110,31 @@ class SettingsAdapter : public QObject {
     // owns P1-P7; it is empty when the selected/runtime device is not NVENC.
     Q_PROPERTY(QVariantList nvencPresetOptions READ nvencPresetOptions NOTIFY optionsChanged FINAL)
     Q_PROPERTY(int nvencPreset READ nvencPreset WRITE setNvencPreset NOTIFY configChanged FINAL)
+    Q_PROPERTY(bool nvencAdvancedRelevant READ nvencAdvancedRelevant NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(QVariantList nvencBframesOptions READ nvencBframesOptions NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(int nvencBframes READ nvencBframes WRITE setNvencBframes NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(QString nvencBframesHint READ nvencBframesHint NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(QVariantList nvencBRefOptions READ nvencBRefOptions NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(int nvencBRef READ nvencBRef WRITE setNvencBRef NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool nvencBRefRelevant READ nvencBRefRelevant NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(QString nvencBRefHint READ nvencBRefHint NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool nvencLookahead READ nvencLookahead WRITE setNvencLookahead NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool nvencLookaheadSupported READ nvencLookaheadSupported NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(QString nvencLookaheadHint READ nvencLookaheadHint NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(
+        int nvencLookaheadDepth READ nvencLookaheadDepth WRITE setNvencLookaheadDepth NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(int nvencLookaheadMinDepth READ nvencLookaheadMinDepth NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(int nvencLookaheadMaxDepth READ nvencLookaheadMaxDepth NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool nvencSpatialAq READ nvencSpatialAq WRITE setNvencSpatialAq NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool nvencSpatialAqSupported READ nvencSpatialAqSupported NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(QString nvencSpatialAqHint READ nvencSpatialAqHint NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool nvencTemporalAq READ nvencTemporalAq WRITE setNvencTemporalAq NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool nvencTemporalAqSupported READ nvencTemporalAqSupported NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(QString nvencTemporalAqHint READ nvencTemporalAqHint NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(QVariantList nvencMultipassOptions READ nvencMultipassOptions NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(int nvencMultipass READ nvencMultipass WRITE setNvencMultipass NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool nvencMultipassRelevant READ nvencMultipassRelevant NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(QString nvencMultipassHint READ nvencMultipassHint NOTIFY optionsChanged FINAL)
     Q_PROPERTY(QString formatSummary READ formatSummary NOTIFY configChanged FINAL)
     Q_PROPERTY(QString compatNotice READ compatNotice NOTIFY configChanged FINAL)
     Q_PROPERTY(bool compatOk READ compatOk NOTIFY configChanged FINAL)
@@ -423,6 +449,30 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] const QString& encoderDeviceHint() const noexcept;
     [[nodiscard]] const QVariantList& nvencPresetOptions() const noexcept;
     [[nodiscard]] int nvencPreset() const noexcept;
+    [[nodiscard]] bool nvencAdvancedRelevant() const noexcept;
+    [[nodiscard]] const QVariantList& nvencBframesOptions() const noexcept;
+    [[nodiscard]] int nvencBframes() const noexcept;
+    [[nodiscard]] QString nvencBframesHint() const;
+    [[nodiscard]] const QVariantList& nvencBRefOptions() const noexcept;
+    [[nodiscard]] int nvencBRef() const noexcept;
+    [[nodiscard]] bool nvencBRefRelevant() const noexcept;
+    [[nodiscard]] QString nvencBRefHint() const;
+    [[nodiscard]] bool nvencLookahead() const noexcept;
+    [[nodiscard]] bool nvencLookaheadSupported() const noexcept;
+    [[nodiscard]] QString nvencLookaheadHint() const;
+    [[nodiscard]] int nvencLookaheadDepth() const noexcept;
+    [[nodiscard]] int nvencLookaheadMinDepth() const noexcept;
+    [[nodiscard]] int nvencLookaheadMaxDepth() const noexcept;
+    [[nodiscard]] bool nvencSpatialAq() const noexcept;
+    [[nodiscard]] bool nvencSpatialAqSupported() const noexcept;
+    [[nodiscard]] QString nvencSpatialAqHint() const;
+    [[nodiscard]] bool nvencTemporalAq() const noexcept;
+    [[nodiscard]] bool nvencTemporalAqSupported() const noexcept;
+    [[nodiscard]] QString nvencTemporalAqHint() const;
+    [[nodiscard]] const QVariantList& nvencMultipassOptions() const noexcept;
+    [[nodiscard]] int nvencMultipass() const noexcept;
+    [[nodiscard]] bool nvencMultipassRelevant() const noexcept;
+    [[nodiscard]] QString nvencMultipassHint() const;
     // The runtime resolution the frontend should carry into the session, built
     // from the same candidate scan the UI shows. Empty/unresolved is a valid
     // answer and carries its structured reason.
@@ -632,6 +682,13 @@ class SettingsAdapter : public QObject {
     void setHdrMode(int value);
     void setEncoderDevice(int value);
     void setNvencPreset(int value);
+    void setNvencBframes(int value);
+    void setNvencBRef(int value);
+    void setNvencLookahead(bool value);
+    void setNvencLookaheadDepth(int value);
+    void setNvencSpatialAq(bool value);
+    void setNvencTemporalAq(bool value);
+    void setNvencMultipass(int value);
     void setQualityPreset(int value);
     void setCq(int value);
     void setRateControl(int value);
@@ -842,6 +899,10 @@ class SettingsAdapter : public QObject {
     QVariantList hdr_mode_options_;
     QVariantList encoder_device_options_;
     QVariantList nvenc_preset_options_;
+    capability::NvencTuningResolution nvenc_tuning_resolution_;
+    QVariantList nvenc_bframes_options_;
+    QVariantList nvenc_b_ref_options_;
+    QVariantList nvenc_multipass_options_;
     QString encoder_device_hint_;
     QVariantList quality_preset_options_;
     QVariantList rate_control_options_;

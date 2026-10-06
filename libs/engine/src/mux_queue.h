@@ -16,6 +16,9 @@
 namespace exosnap::engine {
 
 struct VideoEosSentinel {};
+struct VideoProgressSentinel {
+    uint64_t safe_before_pts_ns = 0;
+};
 struct AudioEosSentinel {
     uint32_t track_id = 0;
 };
@@ -24,7 +27,9 @@ struct SplitSentinel {
     SplitTriggerSource trigger = SplitTriggerSource::ManualButton;
 };
 struct MuxItem {
-    std::variant<EncodedVideoPacket, EncodedAudioPacket, VideoEosSentinel, AudioEosSentinel, SplitSentinel> payload;
+    std::variant<EncodedVideoPacket, EncodedAudioPacket, VideoEosSentinel, AudioEosSentinel, SplitSentinel,
+                 VideoProgressSentinel>
+        payload;
 };
 
 enum class MuxQueueWait { Ready, Stopping, Failed, TimedOut };
@@ -88,6 +93,10 @@ class MuxQueue {
         PushLocked(MuxItem{sentinel});
     }
     void PushSentinel(AudioEosSentinel sentinel) {
+        std::lock_guard lock(mutex_);
+        PushLocked(MuxItem{sentinel});
+    }
+    void PushSentinel(VideoProgressSentinel sentinel) {
         std::lock_guard lock(mutex_);
         PushLocked(MuxItem{sentinel});
     }

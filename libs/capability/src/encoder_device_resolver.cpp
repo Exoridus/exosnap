@@ -228,6 +228,15 @@ CapabilitySet CapabilitySetForAdapter(const CapabilitySet& base, const AdapterIn
     result.runtime.adapter.adapter_luid = adapter.luid;
     result.runtime.adapter.vendor_id = adapter.vendor_id;
 
+    result.runtime.nvidia.nvenc_codec_probed = false;
+    for (const VideoCodec codec : AllVideoCodecs()) {
+        result.bframe_capability[codec] = {
+            {SupportLevel::NotImplemented, "Advanced encoder support has not been confirmed for this adapter."}, 0, 0};
+        result.lookahead[codec] = {SupportLevel::NotImplemented,
+                                   "Lookahead support has not been confirmed for this adapter."};
+        result.temporal_aq[codec] = {SupportLevel::NotImplemented,
+                                     "Temporal AQ support has not been confirmed for this adapter."};
+    }
     if (adapter.vendor != AdapterVendor::Nvidia) {
         const std::string reason =
             EXOSNAP_TRANSLATABLE("Capabilities", "No encoder backend is implemented for this adapter in this build.");
@@ -245,6 +254,13 @@ CapabilitySet CapabilitySetForAdapter(const CapabilitySet& base, const AdapterIn
         facts.nvenc_yuv444_hevc = capability.yuv444_hevc;
         ApplyNvencCodecSupport(result, facts);
         ApplyNvencYuv444Support(result, facts);
+        facts.nvenc_adv_h264 = {capability.max_bframes_h264, capability.bframe_ref_mode_h264, capability.lookahead_h264,
+                                capability.temporal_aq_h264};
+        facts.nvenc_adv_hevc = {capability.max_bframes_hevc, capability.bframe_ref_mode_hevc, capability.lookahead_hevc,
+                                capability.temporal_aq_hevc};
+        facts.nvenc_adv_av1 = {capability.max_bframes_av1, capability.bframe_ref_mode_av1, capability.lookahead_av1,
+                               capability.temporal_aq_av1};
+        ApplyNvencAdvancedEncodeSupport(result, facts);
     }
 
     // A combo override can pin an unavailable codec back to Available; scoped

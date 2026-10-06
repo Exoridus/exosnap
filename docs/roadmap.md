@@ -29,7 +29,7 @@ These are explicitly postponed, not silently implied by any current surface. v0.
 
 ### Update lifecycle and distribution (v0.11+)
 
-Evaluate whether updater distribution, temporary runtime staging and installation ownership can be simplified without changing the verified release trust chain. Preserve distinct portable, Windows Installer and package-manager responsibilities. Validate renamed/removed runtime files, locked files, interrupted updates and restoration. A separately downloadable bootstrapper is an option to evaluate, not a shipped feature. The current staged updater and install-mode-specific apply logic remain unchanged in v0.10.
+Distribution ownership and package-manager delegation are implemented. Evaluate whether external updater distribution and temporary runtime staging can be simplified without changing the verified release trust chain. Preserve distinct portable, Windows Installer and package-manager responsibilities. Continue qualification of renamed/removed runtime files, locked files, interrupted updates and restoration. A separately downloadable bootstrapper remains an option to evaluate.
 
 ### Region workflow (v0.11+)
 
@@ -41,7 +41,7 @@ Evaluate a PresentMon Service client or another narrowly scoped collector only i
 
 ### Overlay presentation policy (post-v0.10)
 
-Measure the effects of overlay visibility and repaint cadence separately across relevant Windows, driver, display and game configurations. Evaluate low-distraction/default policies from recording and gameplay impact, not from overlay frame rate alone. Do not promise VRR, Independent Flip or DWM neutrality solely because an overlay is capture-excluded or redraws infrequently. The overlays already render with Qt Quick; their migration is not pending work.
+Overlay publication is change-driven and coalesced, and the recording indicator is static. Focused HCIF acceptance covers the qualified configuration. Extend qualification to other hardware, VRR and PresentModes, and distinguish physical tearing/scanout behavior from presentation telemetry. Do not promise VRR, Independent Flip or DWM neutrality solely because an overlay is capture-excluded or redraws infrequently.
 
 ## Hardware reach and media capability
 
@@ -53,7 +53,7 @@ AV1-in-MP4 and PCM-in-MP4 require a concrete sample-entry and player/editor matr
 
 ## Changes that must earn their cost
 
-Encoder tuning beyond the current pipeline, including B-frames, lookahead, adaptive quantization and deeper overlap, needs measured quality-per-bitrate and latency gains using the [quality workflow](dev/encoder-quality-matrix.md). A higher preset number is not itself evidence of a better recording experience.
+Capability-gated NVENC Expert controls cover B-frames, B-frame references, lookahead, adaptive quantization and multipass. Defaults and automatic recommendations still require measured quality-per-bitrate and latency gains using the [quality workflow](dev/encoder-quality-matrix.md). A valid Expert feature can remain off by default. A higher preset number is not itself evidence of a better recording experience.
 
 GPU-native editor decode transport is a possible optimization if measured readback/upload cost justifies sharing the decoder and renderer device. The current hardware decode path deliberately reads back to the same plane representation as software decode.
 

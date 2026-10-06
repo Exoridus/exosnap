@@ -158,6 +158,16 @@ TEST(PipelineSnapshotJson, ProblemDropsUseTheEngineDefinitionAndNotTheTotal) {
               static_cast<double>(s.capture.frames_dropped_problem()));
 }
 
+TEST(PipelineSnapshotJson, VfrEncoderHeartbeatsStaySeparateFromCfrDuplicates) {
+    auto snapshot = HealthyRecording();
+    snapshot.capture.frames_duplicated = 5;
+    snapshot.capture.vfr_encoder_heartbeats = 72;
+    const auto json = PipelineSnapshotToJson(snapshot);
+    EXPECT_EQ(At(json, {"capture", "duplicates"}).toDouble(), 5);
+    EXPECT_EQ(At(json, {"capture", "vfrEncoderHeartbeats"}).toDouble(), 72);
+    EXPECT_EQ(At(json, {"capture", "problemDrops"}).toDouble(), 0);
+}
+
 TEST(PipelineSnapshotJson, WindowCaptureReportsPresentCadenceAsUnsupportedNotMerelyMissing) {
     exosnap::engine::RecordingDiagnosticsSnapshot s = HealthyRecording();
     s.capture.source_type = exosnap::engine::CaptureSourceType::Window;
@@ -463,6 +473,28 @@ TEST(SettingsSnapshotJson, RunningLevelComesFromTheEncoderAndNotFromASecondCopyO
     EXPECT_EQ(At(json, {"effective", "video", "encoderPreset"}).toString(), QStringLiteral("P6"));
     EXPECT_EQ(At(json, {"running", "encoderPreset"}).toString(), QStringLiteral("P6"));
     EXPECT_TRUE(At(json, {"running", "live"}).toBool());
+}
+
+TEST(SettingsSnapshotJson, AdvancedNvencDiagnosticsDistinguishRequestedAndRunningValues) {
+    SettingsSnapshotInputs inputs;
+    inputs.requested = MakeDefaultPreset().config;
+    inputs.requested.output.nvenc_tuning.bframes = 3;
+    inputs.requested.output.nvenc_tuning.multipass = exosnap::engine::NvencMultipass::FullResolution;
+    inputs.effective = inputs.requested;
+    inputs.running.valid = true;
+    inputs.running.bframes = 2;
+    inputs.running.backend_b_ref_mode = "middle";
+    inputs.running.backend_multipass = "single";
+    inputs.running.input_slots = 24;
+    inputs.running.output_depth = 22;
+    const auto json = SettingsSnapshotToJson(inputs);
+    EXPECT_EQ(At(json, {"requested", "video", "nvencTuning", "bframes"}).toInt(), 3);
+    EXPECT_EQ(At(json, {"requested", "video", "nvencTuning", "multipass"}).toString(), "full");
+    EXPECT_EQ(At(json, {"running", "bframes"}).toInt(), 2);
+    EXPECT_EQ(At(json, {"running", "backendBRefMode"}).toString(), "middle");
+    EXPECT_EQ(At(json, {"running", "backendMultipass"}).toString(), "single");
+    EXPECT_EQ(At(json, {"running", "inputSlots"}).toInt(), 24);
+    EXPECT_EQ(At(json, {"running", "outputDepth"}).toInt(), 22);
 }
 
 TEST(SettingsSnapshotJson, TheOutputFolderIsReportedAsItsRootAndNeverInFull) {

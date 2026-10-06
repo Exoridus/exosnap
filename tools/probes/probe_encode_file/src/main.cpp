@@ -1,11 +1,7 @@
-// probe_encode_file — reads a Y4M reference clip, drives it through the real
-// NvencVideoEncoder (the same class video_thread.cpp uses), and writes a raw
-// elementary stream: Annex-B concatenation for H.264/HEVC (NVENC already
-// emits start-coded NAL units for those two codecs), IVF framing for AV1
-// (whose raw OBU output is not self-delimited the way Annex-B is). No muxing
-// — ffmpeg can decode either output directly. Backs
-// `exo-dev encoder-quality-matrix`. Never touches the ExoSnap
-// application itself — this is a standalone CLI dev tool.
+// Reads an 8-bit 4:2:0 Y4M reference through the production NVENC encoder.
+// Elementary output is Annex-B for H.264/HEVC and IVF for AV1. Optional
+// Matroska and MP4 output exercises the production writer and remux paths.
+// Used by exo-dev encoder-quality-matrix without starting the application.
 //
 // Usage:
 //   probe_encode_file --y4m clip.y4m --out out.h264 --vcodec h264 --preset p4 --rc cq --cq 24
@@ -20,9 +16,10 @@
 //   --cq        <n>      CQ value 1-51, used when --rc cq (default 24)
 //   --bitrate   <kbps>   target bitrate, used when --rc vbr|cbr (default 6000)
 //   --keyint    <secs>   keyframe interval in seconds (default 2.0)
-//   --bframes   <n>      accepted but NOT YET applied by the encoder — printed as such
-//   --lookahead           accepted but NOT YET applied by the encoder — printed as such
-//   --temporal-aq         accepted but NOT YET applied by the encoder — printed as such
+//   --vfr               configure the VFR submission regime
+//   --bframes   <n>      explicit B-frame count, capability-validated by the encoder
+//   --b-ref     off|each|middle, --lookahead, --lookahead-depth <n>
+//   --spatial-aq, --temporal-aq, --multipass single|quarter|full
 //
 // Exit code 0 on success; prints one summary line and returns 1 on any failure.
 
@@ -32,13 +29,24 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
+#include "annexb_to_avcc.h"
+#include "annexb_to_hvcc.h"
+#include "codec_private.h"
 #include "elementary_stream_writer.h"
+#include "matroska_stream_writer.h"
 #include "nvenc_video_encoder.h"
 #include "y4m_reader.h"
 #include "yuv_convert.h"
+#include <capability/adapter_capability.h>
+#include <capability/adapter_enum.h>
 
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/mp4_remuxer.h>
+
+extern "C" {
+#include <libavutil/mathematics.h>
+}
 
 #include <algorithm>
 #include <chrono>
@@ -56,15 +64,17 @@ namespace {
 struct Options {
     std::string y4m_path;
     std::string out_path;
+    std::string mkv_path;
+    std::string mp4_path;
+    bool capabilities = false;
+    bool constant_frame_rate = true;
     VideoCodec vcodec = VideoCodec::Av1;
     NvencPreset preset = NvencPreset::P4;
     RateControlMode rc = RateControlMode::ConstantQuality;
     uint32_t cq = 24;
     uint32_t bitrate_kbps = 6000;
     float keyint_secs = 2.0f;
-    int bframes = 0;
-    bool lookahead = false;
-    bool temporal_aq = false;
+    NvencTuning tuning;
 };
 
 bool ParseVideoCodec(const std::string& s, VideoCodec& out) {
@@ -125,7 +135,17 @@ bool ParseOptions(int argc, char** argv, Options& out, std::string& err) {
             return true;
         };
 
-        if (arg == "--y4m") {
+        if (arg == "--vfr") {
+            out.constant_frame_rate = false;
+        } else if (arg == "--capabilities") {
+            out.capabilities = true;
+        } else if (arg == "--mp4-output") {
+            if (!needValue(out.mp4_path))
+                return false;
+        } else if (arg == "--mkv-output") {
+            if (!needValue(out.mkv_path))
+                return false;
+        } else if (arg == "--y4m") {
             if (!needValue(out.y4m_path))
                 return false;
         } else if (arg == "--out") {
@@ -172,18 +192,67 @@ bool ParseOptions(int argc, char** argv, Options& out, std::string& err) {
             if (!needValue(v)) {
                 return false;
             }
-            out.bframes = std::stoi(v);
+            const auto value = std::stoul(v);
+            if (value > 31 || v.front() == '-') {
+                err = "--bframes requires 0..31";
+                return false;
+            }
+            out.tuning.bframes = static_cast<uint32_t>(value);
+        } else if (arg == "--b-ref") {
+            std::string v;
+            if (!needValue(v))
+                return false;
+            if (v == "off")
+                out.tuning.b_ref_mode = NvencBRefMode::Off;
+            else if (v == "each")
+                out.tuning.b_ref_mode = NvencBRefMode::Each;
+            else if (v == "middle")
+                out.tuning.b_ref_mode = NvencBRefMode::Middle;
+            else {
+                err = "--b-ref requires off|each|middle";
+                return false;
+            }
+        } else if (arg == "--lookahead-depth") {
+            std::string v;
+            if (!needValue(v))
+                return false;
+            const auto value = std::stoul(v);
+            if (value < 1 || value > 31) {
+                err = "--lookahead-depth requires 1..31";
+                return false;
+            }
+            out.tuning.lookahead_depth = static_cast<uint32_t>(value);
+        } else if (arg == "--spatial-aq") {
+            out.tuning.spatial_aq = true;
+        } else if (arg == "--multipass") {
+            std::string v;
+            if (!needValue(v))
+                return false;
+            if (v == "single")
+                out.tuning.multipass = NvencMultipass::SinglePass;
+            else if (v == "quarter")
+                out.tuning.multipass = NvencMultipass::QuarterResolution;
+            else if (v == "full")
+                out.tuning.multipass = NvencMultipass::FullResolution;
+            else {
+                err = "--multipass requires single|quarter|full";
+                return false;
+            }
         } else if (arg == "--lookahead") {
-            out.lookahead = true;
+            out.tuning.lookahead = true;
         } else if (arg == "--temporal-aq") {
-            out.temporal_aq = true;
+            out.tuning.temporal_aq = true;
         } else {
             err = "unknown option " + arg;
             return false;
         }
     }
-    if (out.y4m_path.empty() || out.out_path.empty()) {
+    if (!out.capabilities && (out.y4m_path.empty() || out.out_path.empty())) {
         err = "--y4m and --out are required";
+        return false;
+    }
+    if (!out.mp4_path.empty() && (out.mkv_path.empty() || out.vcodec == VideoCodec::Av1)) {
+        err = "--mp4-output requires --mkv-output and H.264 or HEVC";
         return false;
     }
     return true;
@@ -214,16 +283,100 @@ bool ReadWholeFile(const std::string& path, std::string& out) {
     return static_cast<bool>(f) || f.eof();
 }
 
+bool WriteMatroska(const Options& opt, const Y4mHeader& header, const std::vector<EncodedVideoPacket>& packets) {
+    if (packets.empty())
+        return false;
+    MatroskaStreamConfig config;
+    config.output_path = opt.mkv_path;
+    config.encode_width = header.width;
+    config.encode_height = header.height;
+    config.frame_rate_num = header.fps_num;
+    config.frame_rate_den = header.fps_den;
+    config.color = ColorMetadata::Sdr709();
+    const auto& first = packets.front().bytes;
+    std::vector<uint8_t> parameterSets;
+    if (opt.vcodec == VideoCodec::H264) {
+        config.video_codec_id = "V_MPEG4/ISO/AVC";
+        if (!annexb::ExtractH264SpsAndPps(first.data(), first.size(), parameterSets) ||
+            !annexb::BuildAvccFromAnnexBSpsAndPps(parameterSets, config.video_codec_private))
+            return false;
+    } else if (opt.vcodec == VideoCodec::Hevc) {
+        config.video_codec_id = "V_MPEGH/ISO/HEVC";
+        if (!annexb::ExtractHevcVpsSpsPps(first.data(), first.size(), parameterSets) ||
+            !annexb::BuildHvccFromAnnexBVpsSpsPps(parameterSets, config.video_codec_private))
+            return false;
+    } else {
+        config.video_codec_id = "V_AV1";
+        char reason[256]{};
+        if (!codec_private::DeriveAv1CodecPrivate(first.data(), first.size(), config.video_codec_private, reason,
+                                                  sizeof(reason)))
+            return false;
+    }
+    MatroskaStreamWriter writer;
+    if (!writer.Open(config)) {
+        printf("[probe] Matroska Open: %s\n", writer.error().c_str());
+        return false;
+    }
+    for (const auto& packet : packets) {
+        MuxPacket mux;
+        mux.track_num = 1;
+        mux.pts_ns = packet.pts_ns;
+        mux.dts_ns = packet.dts_ns;
+        mux.is_key = packet.keyframe;
+        if (opt.vcodec == VideoCodec::H264) {
+            if (!annexb::ConvertAnnexBToAvcc(packet.bytes.data(), packet.bytes.size(), mux.bytes))
+                return false;
+        } else if (opt.vcodec == VideoCodec::Hevc) {
+            if (!annexb::ConvertAnnexBToHevcSample(packet.bytes.data(), packet.bytes.size(), mux.bytes))
+                return false;
+        } else {
+            mux.bytes = packet.bytes;
+        }
+        if (!writer.Push(std::move(mux))) {
+            printf("[probe] Matroska Push: %s\n", writer.error().c_str());
+            return false;
+        }
+    }
+    if (!writer.Finalize()) {
+        printf("[probe] Matroska Finalize: %s\n", writer.error().c_str());
+        return false;
+    }
+    return true;
+}
+
+void PrintCapabilities() {
+    for (const auto& adapter : exosnap::capability::EnumerateAdapters()) {
+        const auto caps = exosnap::capability::ProbeAdapterEncoderCapability(adapter);
+        printf("[probe] ADAPTER name=%s probed=%d backend=%s\n", adapter.name.c_str(), caps.probed ? 1 : 0,
+               caps.backend_label.c_str());
+        printf("[probe] CAPS codec=h264 supported=%d max_bframes=%d b_ref=%d lookahead=%d temporal_aq=%d\n", caps.h264,
+               caps.max_bframes_h264, caps.bframe_ref_mode_h264, caps.lookahead_h264, caps.temporal_aq_h264);
+        printf("[probe] CAPS codec=hevc supported=%d max_bframes=%d b_ref=%d lookahead=%d temporal_aq=%d\n", caps.hevc,
+               caps.max_bframes_hevc, caps.bframe_ref_mode_hevc, caps.lookahead_hevc, caps.temporal_aq_hevc);
+        printf("[probe] CAPS codec=av1 supported=%d max_bframes=%d b_ref=%d lookahead=%d temporal_aq=%d\n", caps.av1,
+               caps.max_bframes_av1, caps.bframe_ref_mode_av1, caps.lookahead_av1, caps.temporal_aq_av1);
+    }
+}
 } // namespace
 
 int main(int argc, char** argv) {
     Options opt;
     std::string err;
-    if (!ParseOptions(argc, argv, opt, err)) {
+    bool parsed = false;
+    try {
+        parsed = ParseOptions(argc, argv, opt, err);
+    } catch (const std::exception& error) {
+        err = error.what();
+    }
+    if (!parsed) {
         printf("[probe] argument error: %s\n", err.c_str());
         return 1;
     }
 
+    if (opt.capabilities) {
+        PrintCapabilities();
+        return 0;
+    }
     printf("[probe] reading %s\n", opt.y4m_path.c_str());
     std::string fileData;
     if (!ReadWholeFile(opt.y4m_path, fileData)) {
@@ -238,16 +391,9 @@ int main(int argc, char** argv) {
     }
     printf("[probe] %ux%u @ %u/%u fps\n", header->width, header->height, header->fps_num, header->fps_den);
 
-    printf("[probe] applied encoder fields: vcodec=%d preset=%d rc=%d cq=%u bitrate_kbps=%u keyint_secs=%.2f\n",
+    printf("[probe] applied encoder fields: vcodec=%d preset=%d rc=%d cq=%u bitrate_kbps=%u keyint_secs=%.2f cfr=%d\n",
            static_cast<int>(opt.vcodec), static_cast<int>(opt.preset), static_cast<int>(opt.rc), opt.cq,
-           opt.bitrate_kbps, opt.keyint_secs);
-    if (opt.bframes != 0 || opt.lookahead || opt.temporal_aq) {
-        printf("[probe] NOTE: --bframes/--lookahead/--temporal-aq were requested (bframes=%d lookahead=%d "
-               "temporal_aq=%d) but NvencVideoEncoder has no setter for them yet — NOT applied. This run measures "
-               "the baseline encoder only.\n",
-               opt.bframes, opt.lookahead ? 1 : 0, opt.temporal_aq ? 1 : 0);
-    }
-
+           opt.bitrate_kbps, opt.keyint_secs, opt.constant_frame_rate ? 1 : 0);
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     if (!CreateDevice(device, context))
@@ -255,10 +401,12 @@ int main(int argc, char** argv) {
 
     NvencVideoEncoder enc;
     enc.SetCodec(opt.vcodec);
-    enc.SetPreset(opt.preset);
+    opt.tuning.preset = opt.preset;
+    enc.SetTuning(opt.tuning);
     enc.SetCq(opt.cq);
     enc.SetRateControl(opt.rc, opt.bitrate_kbps);
     enc.SetKeyframeIntervalSecs(opt.keyint_secs);
+    enc.SetConstantFrameRate(opt.constant_frame_rate);
     enc.SetColor(ColorMetadata::Sdr709());
 
     if (!enc.Open(device.Get(), err)) {
@@ -270,7 +418,14 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    constexpr int kSlotCount = 8;
+    const auto init = enc.GetInitInfo();
+    printf("[probe] RESOLVED bframes=%u b_ref=%.*s lookahead=%u spatial_aq=%d temporal_aq=%d multipass=%.*s slots=%u "
+           "output_depth=%u\n",
+           init.bframes, static_cast<int>(init.backend_b_ref_mode.size()), init.backend_b_ref_mode.data(),
+           init.lookahead_frames, init.spatial_aq ? 1 : 0, init.temporal_aq ? 1 : 0,
+           static_cast<int>(init.backend_multipass.size()), init.backend_multipass.data(), init.input_slots,
+           init.output_depth);
+    const int kSlotCount = enc.SlotCount();
     std::vector<ComPtr<ID3D11Texture2D>> textures(kSlotCount);
     for (int i = 0; i < kSlotCount; ++i) {
         D3D11_TEXTURE2D_DESC desc{};
@@ -298,6 +453,7 @@ int main(int argc, char** argv) {
     size_t offset = header->header_bytes;
     uint64_t frameIdx = 0;
     bool encodeError = false;
+    uint64_t peakBacklog = 0;
 
     // Per-frame encoder cost: the wait for a free input slot (the encoder's own
     // backpressure) plus submit and reap. Reading the Y4M, the I420->NV12
@@ -370,6 +526,7 @@ int main(int argc, char** argv) {
         frameMs.push_back(
             slotWaitMs +
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submitStart).count());
+        peakBacklog = (std::max)(peakBacklog, enc.PendingFrames());
         ++frameIdx;
     }
 
@@ -384,7 +541,16 @@ int main(int argc, char** argv) {
             allPackets.push_back(std::move(p));
     }
 
+    const auto pendingAfterFlush = enc.PendingFrames();
     enc.Destroy();
+    if (allPackets.size() != frameIdx || pendingAfterFlush != 0) {
+        printf("[probe] incomplete drain: submitted=%llu packets=%zu pending=%llu\n",
+               static_cast<unsigned long long>(frameIdx), allPackets.size(),
+               static_cast<unsigned long long>(pendingAfterFlush));
+        encodeError = true;
+    }
+    printf("[probe] BACKLOG peak=%llu after_flush=%llu\n", static_cast<unsigned long long>(peakBacklog),
+           static_cast<unsigned long long>(pendingAfterFlush));
 
     if (encodeError) {
         printf("[probe] RESULT: FAIL\n");
@@ -403,7 +569,12 @@ int main(int argc, char** argv) {
         out.write(reinterpret_cast<const char*>(fileHeader.data()), static_cast<std::streamsize>(fileHeader.size()));
         for (size_t i = 0; i < allPackets.size(); ++i) {
             const auto& pkt = allPackets[i];
-            const auto frameHeader = BuildIvfFrameHeader(static_cast<uint32_t>(pkt.bytes.size()), i);
+            // IVF timestamps remain presentation ticks while packets arrive in decode order.
+            const auto ptsTicks =
+                av_rescale_q(static_cast<int64_t>(pkt.pts_ns), AVRational{1, 1000000000},
+                             AVRational{static_cast<int>(header->fps_den), static_cast<int>(header->fps_num)});
+            const auto frameHeader =
+                BuildIvfFrameHeader(static_cast<uint32_t>(pkt.bytes.size()), static_cast<uint64_t>(ptsTicks));
             out.write(reinterpret_cast<const char*>(frameHeader.data()),
                       static_cast<std::streamsize>(frameHeader.size()));
             out.write(reinterpret_cast<const char*>(pkt.bytes.data()), static_cast<std::streamsize>(pkt.bytes.size()));
@@ -436,6 +607,30 @@ int main(int argc, char** argv) {
         const double mean = total / static_cast<double>(frameMs.size());
         printf("[probe] TIMING frames=%zu mean=%.3fms p50=%.3fms p99=%.3fms max=%.3fms sustained=%.1ffps\n",
                frameMs.size(), mean, at(50.0), at(99.0), sorted.back(), mean > 0.0 ? 1000.0 / mean : 0.0);
+    }
+    if (!opt.mkv_path.empty() && !WriteMatroska(opt, *header, allPackets)) {
+        printf("[probe] Matroska output failed\n");
+        return 1;
+    }
+    if (!opt.mp4_path.empty()) {
+        const auto result = RemuxToProgressiveMp4(opt.mkv_path, opt.mp4_path);
+        if (!result.success) {
+            printf("[probe] MP4 remux failed: %s\n", result.message.c_str());
+            return 1;
+        }
+    }
+    std::vector<double> outputLatency;
+    for (const auto& packet : allPackets) {
+        if (packet.encode_latency_ms >= 0)
+            outputLatency.push_back(packet.encode_latency_ms);
+    }
+    if (!outputLatency.empty()) {
+        std::sort(outputLatency.begin(), outputLatency.end());
+        const auto percentile = [&outputLatency](double fraction) {
+            return outputLatency[static_cast<size_t>(fraction * static_cast<double>(outputLatency.size() - 1))];
+        };
+        printf("[probe] ENCODER_LATENCY samples=%zu p50=%.3fms p99=%.3fms max=%.3fms\n", outputLatency.size(),
+               percentile(0.50), percentile(0.99), outputLatency.back());
     }
     printf("[probe] RESULT: PASS\n");
     return 0;

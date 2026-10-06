@@ -328,3 +328,18 @@ TEST(EncoderDeviceCapabilityView, ProbedNvidiaDeviceDropsExactlyTheUnsupportedCo
     EXPECT_TRUE(exosnap::capability::IsSelectable(view.QueryVideoCodec(VideoCodec::H264)));
     EXPECT_TRUE(exosnap::capability::IsSelectable(view.QueryVideoCodec(VideoCodec::Hevc)));
 }
+
+TEST(EncoderDeviceResolver, AdvancedCapabilitiesNeverLeakFromAnotherAdapter) {
+    auto base = exosnap::capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    base.runtime.nvidia.nvenc_codec_probed = true;
+    base.runtime.nvidia.nvenc_h264 = true;
+    base.runtime.nvidia.nvenc_adv_h264 = {3, 2, true, true};
+    exosnap::capability::ApplyNvencAdvancedEncodeSupport(base, base.runtime.nvidia);
+    auto scoped = CapabilitySetForAdapter(base, MakeAdapter("NVIDIA", AdapterVendor::Nvidia, 2), NvencCapability());
+    EXPECT_EQ(scoped.QueryBFrames(VideoCodec::H264).max_bframes, 0);
+    EXPECT_FALSE(exosnap::capability::IsSelectable(scoped.QueryLookahead(VideoCodec::H264)));
+    EXPECT_FALSE(exosnap::capability::IsSelectable(scoped.QueryTemporalAq(VideoCodec::H264)));
+    auto intel = CapabilitySetForAdapter(base, MakeAdapter("Intel", AdapterVendor::Intel, 3), {});
+    EXPECT_EQ(intel.QueryBFrames(VideoCodec::H264).max_bframes, 0);
+    EXPECT_FALSE(exosnap::capability::IsSelectable(intel.QueryLookahead(VideoCodec::H264)));
+}

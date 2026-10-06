@@ -903,7 +903,33 @@ void SettingsAdapter::rebuildOptions() {
     }
 
     nvenc_preset_options_.clear();
+    auto requested_tuning = out.nvenc_tuning;
+    requested_tuning.preset = out.nvenc_preset;
+    nvenc_tuning_resolution_ =
+        capability::ResolveNvencTuning(requested_tuning, caps_, out.video_codec, config_.video.rate_control);
+    nvenc_bframes_options_.clear();
+    nvenc_b_ref_options_.clear();
+    nvenc_multipass_options_.clear();
     if (resolved_encoder_backend_ == exosnap::engine::EncoderBackend::Nvenc) {
+        nvenc_bframes_options_.append(makeOption(0, tr("Off")));
+        for (int count = 1; count <= nvenc_tuning_resolution_.max_bframes; ++count) {
+            nvenc_bframes_options_.append(makeOption(count, QString::number(count)));
+        }
+        for (const auto mode : nvenc_tuning_resolution_.b_ref_modes) {
+            const QString label = mode == exosnap::engine::NvencBRefMode::Each     ? tr("Every B-frame")
+                                  : mode == exosnap::engine::NvencBRefMode::Middle ? tr("Middle B-frame")
+                                                                                   : tr("Off");
+            nvenc_b_ref_options_.append(makeOption(static_cast<int>(mode), label));
+        }
+        nvenc_multipass_options_.append(
+            makeOption(static_cast<int>(exosnap::engine::NvencMultipass::SinglePass), tr("Single pass")));
+        if (nvenc_tuning_resolution_.multipass_supported) {
+            nvenc_multipass_options_.append(
+                makeOption(static_cast<int>(exosnap::engine::NvencMultipass::QuarterResolution),
+                           tr("Quarter-resolution multipass")));
+            nvenc_multipass_options_.append(makeOption(
+                static_cast<int>(exosnap::engine::NvencMultipass::FullResolution), tr("Full-resolution multipass")));
+        }
         for (const auto& control : capability::OptionQuery(caps_).GetBackendTuningControls()) {
             if (control.key == "preset") {
                 for (const auto& choice : control.choices)
@@ -1314,6 +1340,101 @@ const QVariantList& SettingsAdapter::nvencPresetOptions() const noexcept {
 }
 int SettingsAdapter::nvencPreset() const noexcept {
     return static_cast<int>(config_.output.nvenc_preset);
+}
+
+bool SettingsAdapter::nvencAdvancedRelevant() const noexcept {
+    return resolved_encoder_backend_ == exosnap::engine::EncoderBackend::Nvenc;
+}
+const QVariantList& SettingsAdapter::nvencBframesOptions() const noexcept {
+    return nvenc_bframes_options_;
+}
+int SettingsAdapter::nvencBframes() const noexcept {
+    return static_cast<int>(nvenc_tuning_resolution_.tuning.bframes);
+}
+QString SettingsAdapter::nvencBframesHint() const {
+    if (nvenc_tuning_resolution_.bframes_reason ==
+        "AV1 B-frame counts above 7 require hierarchical reference mode, which this SDK does not implement.")
+        return tr("AV1 B-frame counts above 7 require hierarchical reference mode, which this SDK does not implement.");
+    if (nvenc_tuning_resolution_.tuning.bframes != config_.output.nvenc_tuning.bframes)
+        return tr("Saved B-frame count is unavailable on this codec/device. The supported count is applied.");
+    if (!nvenc_tuning_resolution_.available)
+        return tr("NVENC support for this adapter and codec has not been confirmed.");
+    return nvenc_tuning_resolution_.max_bframes == 0 ? tr("The GPU/driver reports no B-frame support for this codec.")
+                                                     : QString();
+}
+const QVariantList& SettingsAdapter::nvencBRefOptions() const noexcept {
+    return nvenc_b_ref_options_;
+}
+int SettingsAdapter::nvencBRef() const noexcept {
+    return static_cast<int>(nvenc_tuning_resolution_.tuning.b_ref_mode);
+}
+bool SettingsAdapter::nvencBRefRelevant() const noexcept {
+    return nvencAdvancedRelevant() && nvenc_tuning_resolution_.tuning.bframes > 0;
+}
+QString SettingsAdapter::nvencBRefHint() const {
+    if (nvenc_tuning_resolution_.tuning.b_ref_mode != config_.output.nvenc_tuning.b_ref_mode)
+        return tr("Saved B-frame reference mode is unavailable on this codec/device.");
+    return nvenc_tuning_resolution_.b_ref_modes.size() <= 1
+               ? tr("No B-frame reference mode is supported for this count, codec and GPU.")
+               : QString();
+}
+bool SettingsAdapter::nvencLookahead() const noexcept {
+    return nvencAdvancedRelevant() && nvenc_tuning_resolution_.tuning.lookahead;
+}
+bool SettingsAdapter::nvencLookaheadSupported() const noexcept {
+    return nvencAdvancedRelevant() && nvenc_tuning_resolution_.lookahead_supported;
+}
+QString SettingsAdapter::nvencLookaheadHint() const {
+    if (nvencAdvancedRelevant() && nvenc_tuning_resolution_.lookahead_max_depth == 0 &&
+        capability::IsSelectable(caps_.QueryLookahead(config_.output.video_codec)))
+        return tr("Reduce the B-frame count to enable Lookahead.");
+    if (config_.output.nvenc_tuning.lookahead && !nvencLookahead())
+        return tr("Saved Lookahead preference is unavailable on this codec/device.");
+    return nvencLookaheadSupported() ? QString()
+                                     : tr("Lookahead support has not been confirmed for this codec/device.");
+}
+int SettingsAdapter::nvencLookaheadDepth() const noexcept {
+    return static_cast<int>(nvenc_tuning_resolution_.tuning.lookahead_depth);
+}
+int SettingsAdapter::nvencLookaheadMinDepth() const noexcept {
+    return static_cast<int>(nvenc_tuning_resolution_.lookahead_min_depth);
+}
+int SettingsAdapter::nvencLookaheadMaxDepth() const noexcept {
+    return static_cast<int>(nvenc_tuning_resolution_.lookahead_max_depth);
+}
+bool SettingsAdapter::nvencSpatialAq() const noexcept {
+    return nvenc_tuning_resolution_.tuning.spatial_aq;
+}
+bool SettingsAdapter::nvencSpatialAqSupported() const noexcept {
+    return nvencAdvancedRelevant() && nvenc_tuning_resolution_.spatial_aq_supported;
+}
+QString SettingsAdapter::nvencSpatialAqHint() const {
+    return nvencSpatialAqSupported() ? QString()
+                                     : tr("NVENC support for this adapter and codec has not been confirmed.");
+}
+bool SettingsAdapter::nvencTemporalAq() const noexcept {
+    return nvenc_tuning_resolution_.tuning.temporal_aq;
+}
+bool SettingsAdapter::nvencTemporalAqSupported() const noexcept {
+    return nvencAdvancedRelevant() && nvenc_tuning_resolution_.temporal_aq_supported;
+}
+QString SettingsAdapter::nvencTemporalAqHint() const {
+    if (config_.output.nvenc_tuning.temporal_aq && !nvencTemporalAq())
+        return tr("Saved Temporal AQ preference is unavailable on this codec/device.");
+    return nvencTemporalAqSupported() ? QString()
+                                      : tr("Temporal AQ support has not been confirmed for this codec/device.");
+}
+const QVariantList& SettingsAdapter::nvencMultipassOptions() const noexcept {
+    return nvenc_multipass_options_;
+}
+int SettingsAdapter::nvencMultipass() const noexcept {
+    return static_cast<int>(nvenc_tuning_resolution_.tuning.multipass);
+}
+bool SettingsAdapter::nvencMultipassRelevant() const noexcept {
+    return nvencAdvancedRelevant() && nvenc_tuning_resolution_.multipass_supported;
+}
+QString SettingsAdapter::nvencMultipassHint() const {
+    return nvencMultipassRelevant() ? QString() : tr("Multipass rate control is available with VBR or CBR.");
 }
 const QString& SettingsAdapter::formatSummary() const noexcept {
     return format_summary_;
@@ -2084,6 +2205,59 @@ void SettingsAdapter::setNvencPreset(int value) {
         return;
     }
     config_.output.nvenc_preset = preset;
+    applyConfigEdit();
+}
+
+void SettingsAdapter::setNvencBframes(int value) {
+    if (controls_locked_ || !nvencAdvancedRelevant() || value < 0 || value > nvenc_tuning_resolution_.max_bframes ||
+        config_.output.nvenc_tuning.bframes == static_cast<uint32_t>(value))
+        return;
+    config_.output.nvenc_tuning.bframes = static_cast<uint32_t>(value);
+    applyConfigEdit();
+}
+void SettingsAdapter::setNvencBRef(int value) {
+    const auto mode = static_cast<exosnap::engine::NvencBRefMode>(value);
+    const auto& modes = nvenc_tuning_resolution_.b_ref_modes;
+    if (controls_locked_ || !nvencBRefRelevant() || std::find(modes.begin(), modes.end(), mode) == modes.end() ||
+        config_.output.nvenc_tuning.b_ref_mode == mode)
+        return;
+    config_.output.nvenc_tuning.b_ref_mode = mode;
+    applyConfigEdit();
+}
+void SettingsAdapter::setNvencLookahead(bool value) {
+    if (controls_locked_ || !nvencLookaheadSupported() || config_.output.nvenc_tuning.lookahead == value)
+        return;
+    config_.output.nvenc_tuning.lookahead = value;
+    applyConfigEdit();
+}
+void SettingsAdapter::setNvencLookaheadDepth(int value) {
+    if (controls_locked_ || !nvencLookahead() || value < nvencLookaheadMinDepth() || value > nvencLookaheadMaxDepth() ||
+        config_.output.nvenc_tuning.lookahead_depth == static_cast<uint32_t>(value))
+        return;
+    config_.output.nvenc_tuning.lookahead_depth = static_cast<uint32_t>(value);
+    applyConfigEdit();
+}
+void SettingsAdapter::setNvencSpatialAq(bool value) {
+    if (controls_locked_ || !nvencSpatialAqSupported() || config_.output.nvenc_tuning.spatial_aq == value)
+        return;
+    config_.output.nvenc_tuning.spatial_aq = value;
+    applyConfigEdit();
+}
+void SettingsAdapter::setNvencTemporalAq(bool value) {
+    if (controls_locked_ || !nvencTemporalAqSupported() || config_.output.nvenc_tuning.temporal_aq == value)
+        return;
+    config_.output.nvenc_tuning.temporal_aq = value;
+    applyConfigEdit();
+}
+void SettingsAdapter::setNvencMultipass(int value) {
+    const auto mode = static_cast<exosnap::engine::NvencMultipass>(value);
+    if (controls_locked_ || !nvencMultipassRelevant() ||
+        (mode != exosnap::engine::NvencMultipass::SinglePass &&
+         mode != exosnap::engine::NvencMultipass::QuarterResolution &&
+         mode != exosnap::engine::NvencMultipass::FullResolution) ||
+        config_.output.nvenc_tuning.multipass == mode)
+        return;
+    config_.output.nvenc_tuning.multipass = mode;
     applyConfigEdit();
 }
 

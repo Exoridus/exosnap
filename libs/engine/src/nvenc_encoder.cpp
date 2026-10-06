@@ -1,4 +1,5 @@
 #include "nvenc_encoder.h"
+#include "exosnap/engine/backend_tuning.h"
 #include "exosnap/engine/codec_types.h"
 #include "exosnap/engine/color_metadata.h"
 #include "nvEncodeAPI.h"
@@ -8,6 +9,7 @@
 #include <exosnap/engine/logging/logging.h>
 #include <exosnap/engine/packet_types.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -19,6 +21,61 @@
 #include <vector>
 
 namespace exosnap::engine {
+
+bool ValidateNvencTuning(const NvencTuning& tuning, const NvencAdvancedCaps& caps, RateControlMode rc,
+                         std::string& error, VideoCodec codec) {
+    error.clear();
+    if (tuning.bframes > MaxNvencBframes(codec, tuning.b_ref_mode, caps.max_bframes))
+        error = "NVENC B-frame count exceeds the supported resource/capability limit";
+    else if (tuning.b_ref_mode != NvencBRefMode::Off &&
+             (tuning.bframes == 0 || (tuning.b_ref_mode == NvencBRefMode::Each && (caps.b_ref_mode & 1u) == 0) ||
+              (tuning.b_ref_mode == NvencBRefMode::Middle && ((caps.b_ref_mode & 2u) == 0 || tuning.bframes < 2)) ||
+              (tuning.b_ref_mode != NvencBRefMode::Each && tuning.b_ref_mode != NvencBRefMode::Middle)))
+        error = "NVENC B-frame reference mode is unsupported for this configuration";
+    else if (tuning.lookahead && (!caps.lookahead || tuning.lookahead_depth == 0 ||
+                                  tuning.lookahead_depth > MaxNvencLookaheadDepth(tuning.bframes)))
+        error = "NVENC Lookahead depth is unsupported for this configuration";
+    else if (tuning.temporal_aq && !caps.temporal_aq)
+        error = "NVENC Temporal AQ is unsupported";
+    else if (tuning.multipass != NvencMultipass::SinglePass && rc == RateControlMode::ConstantQuality)
+        error = "NVENC Multipass requires VBR or CBR rate control";
+    return error.empty();
+}
+
+uint32_t NvencResourceDepth(const NvencTuning& tuning, bool async) noexcept {
+    return tuning.bframes == 0 && !tuning.lookahead
+               ? (async ? 2 : 4)
+               : tuning.bframes + 5 + (tuning.lookahead ? tuning.lookahead_depth : 0);
+}
+
+void ApplyAdvancedTuningToNvenc(NV_ENC_CONFIG& config, VideoCodec codec, const NvencTuning& tuning) noexcept {
+    config.frameIntervalP = static_cast<int32_t>(tuning.bframes + 1);
+    config.rcParams.enableLookahead = tuning.lookahead ? 1 : 0;
+    config.rcParams.lookaheadDepth = tuning.lookahead ? static_cast<uint16_t>(tuning.lookahead_depth) : 0;
+    config.rcParams.enableExtLookahead = 0;
+    config.rcParams.lookaheadLevel = NV_ENC_LOOKAHEAD_LEVEL_0;
+    // IDRs and metadata are scheduled by media time. Adaptive I/B decisions
+    // must not silently change the declared GOP structure or split boundaries.
+    config.rcParams.disableIadapt = 1;
+    config.rcParams.disableBadapt = 1;
+    config.rcParams.zeroReorderDelay = 0;
+    config.rcParams.enableAQ = tuning.spatial_aq ? 1 : 0;
+    config.rcParams.aqStrength = tuning.spatial_aq ? 8 : 0;
+    config.rcParams.enableTemporalAQ = tuning.temporal_aq ? 1 : 0;
+    config.rcParams.multiPass = tuning.multipass == NvencMultipass::QuarterResolution
+                                    ? NV_ENC_TWO_PASS_QUARTER_RESOLUTION
+                                : tuning.multipass == NvencMultipass::FullResolution ? NV_ENC_TWO_PASS_FULL_RESOLUTION
+                                                                                     : NV_ENC_MULTI_PASS_DISABLED;
+    const auto b_ref = tuning.b_ref_mode == NvencBRefMode::Each     ? NV_ENC_BFRAME_REF_MODE_EACH
+                       : tuning.b_ref_mode == NvencBRefMode::Middle ? NV_ENC_BFRAME_REF_MODE_MIDDLE
+                                                                    : NV_ENC_BFRAME_REF_MODE_DISABLED;
+    if (codec == VideoCodec::H264)
+        config.encodeCodecConfig.h264Config.useBFramesAsRef = b_ref;
+    else if (codec == VideoCodec::Hevc)
+        config.encodeCodecConfig.hevcConfig.useBFramesAsRef = b_ref;
+    else
+        config.encodeCodecConfig.av1Config.useBFramesAsRef = b_ref;
+}
 
 namespace {
 
@@ -746,18 +803,22 @@ void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) 
     }
 }
 
-uint32_t ComputeNvencGopBackstop(uint32_t gop_length, bool constant_frame_rate) noexcept {
+uint32_t ComputeNvencGopBackstop(uint32_t gop_length, bool constant_frame_rate, uint32_t bframes) noexcept {
     // See nvenc_encoder.h: NVENC's gopLength/idrPeriod timer counts SUBMITTED
     // PICTURES. That matches the media-time cadence only under CFR submission;
     // under VFR passthrough a source faster than the configured rate reaches
     // gop_length submissions before the media-time boundary and the driver would
     // insert an IDR the submission side never predicted.
-    return constant_frame_rate ? gop_length : NVENC_INFINITE_GOPLENGTH;
+    if (constant_frame_rate)
+        return gop_length;
+    // Infinite GOP is specified only for frameIntervalP=1. Use the largest
+    // finite uint32_t GOP with B-frames so media-time FORCEIDR remains in charge.
+    return bframes == 0 ? NVENC_INFINITE_GOPLENGTH : NVENC_INFINITE_GOPLENGTH - 1;
 }
 
 void ApplyAdaptiveQuantizationToNvenc(NV_ENC_CONFIG& cfg) noexcept {
-    cfg.rcParams.enableAQ = 0;         // spatial AQ — measured net-negative under CONSTQP
-    cfg.rcParams.enableTemporalAQ = 0; // capability-gated and undocumented without lookahead
+    cfg.rcParams.enableAQ = 0;         // conservative default; explicit Expert tuning is applied afterwards
+    cfg.rcParams.enableTemporalAQ = 0; // explicit Temporal AQ requires its capability query
     cfg.rcParams.aqStrength = 0;       // 0 = driver auto-selection; irrelevant while AQ is off
 }
 
@@ -895,16 +956,25 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     m_encodeConfig.rcParams.averageBitRate = rc.averageBitRate;
     m_encodeConfig.rcParams.maxBitRate = rc.maxBitRate;
 
-    // Zero lookahead and P-only: prevents 8-slot NVENC input ring from exhausting.
-    // AV1 P4 constraint — do not change frameIntervalP.
-    m_encodeConfig.rcParams.enableLookahead = 0;
-    m_encodeConfig.rcParams.lookaheadDepth = 0;
-    m_encodeConfig.frameIntervalP = 1;
-
-    // Pin the adaptive-quantization state explicitly, so it no longer depends on
-    // the driver's per-preset default — see ApplyAdaptiveQuantizationToNvenc.
-    ApplyAdaptiveQuantizationToNvenc(m_encodeConfig);
-
+    NvencAdvancedCaps advanced_caps;
+    int cap = 0;
+    std::string cap_error;
+    if (QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_NUM_MAX_BFRAMES, cap, cap_error) && cap > 0)
+        advanced_caps.max_bframes = static_cast<uint32_t>(cap);
+    cap = 0;
+    if (QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_SUPPORT_BFRAME_REF_MODE, cap, cap_error) && cap > 0)
+        advanced_caps.b_ref_mode = static_cast<uint32_t>(cap);
+    cap = 0;
+    advanced_caps.lookahead =
+        QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_SUPPORT_LOOKAHEAD, cap, cap_error) && cap != 0;
+    cap = 0;
+    advanced_caps.temporal_aq =
+        QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ, cap, cap_error) && cap != 0;
+    if (!ValidateNvencTuning(m_advancedTuning, advanced_caps, m_rateControlMode, out_error, m_codec))
+        return false;
+    ApplyAdvancedTuningToNvenc(m_encodeConfig, m_codec, m_advancedTuning);
+    m_activeDepth = static_cast<int32_t>(NvencResourceDepth(m_advancedTuning));
+    m_slots.resize(static_cast<size_t>((std::max)(8, m_activeDepth)));
     return true;
 }
 
@@ -966,21 +1036,17 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     // disabled (infinite) under VFR, where a frame counter would fire before the
     // media-time cadence below — see ComputeNvencGopBackstop.
     const uint32_t kGopFrames = ComputeGopLength(m_keyframeIntervalSecs, frame_rate_num, frame_rate_den);
-    ApplyGopToNvenc(m_encodeConfig, m_codec, ComputeNvencGopBackstop(kGopFrames, m_constantFrameRate));
-    // Remember the IDR cadence and (re)build the HDR metadata payloads for this
-    // session. The cadence runs on media time: no GOP anchor exists yet, so the
-    // first submitted frame — always an IDR — anchors the GOP and carries the
-    // metadata. The submission-side keyframe prediction in EncodeFrame relies on
-    // this cadence AND on frameIntervalP = 1 / no lookahead / no adaptive I:
-    // enabling any of those desynchronizes the predicted GOP phase from NVENC's
-    // real IDR placement (metadata would land on non-IDR frames — legal but
-    // off-cadence). Revisit the prediction if that changes.
+    ApplyGopToNvenc(m_encodeConfig, m_codec,
+                    ComputeNvencGopBackstop(kGopFrames, m_constantFrameRate, m_advancedTuning.bframes));
+    // FORCEIDR and disabled adaptive insertion keep metadata and split
+    // boundaries on the media-time schedule even when output is reordered.
     m_gopLength = kGopFrames;
     m_frameIntervalNs = ComputeFrameIntervalNs(frame_rate_num, frame_rate_den);
     m_gopDurationNs = m_frameIntervalNs * kGopFrames;
     m_haveGopStart = false;
     m_gopStartPtsNs = 0;
     m_loggedKeyframePredictionMismatch = false;
+    m_decodeTimeline.Reset(m_advancedTuning.bframes, m_frameIntervalNs);
     BuildHdrBitstreamPayloads();
 
     GUID codecGuid = NV_ENC_CODEC_AV1_GUID;
@@ -1016,6 +1082,7 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     m_asyncMode =
         QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT, capAsync, asyncCapsError) &&
         capAsync != 0;
+    m_activeDepth = static_cast<int32_t>(NvencResourceDepth(m_advancedTuning, m_asyncMode));
 
     NV_ENC_INITIALIZE_PARAMS p{};
     p.version = NV_ENC_INITIALIZE_PARAMS_VER;
@@ -1079,6 +1146,22 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
         }
         return false;
     }
+    // Publish headers before delayed first output so audio startup buffering
+    // does not grow with B-frame or lookahead depth.
+    m_sequenceHeader.assign(64 * 1024, 0);
+    uint32_t header_size = 0;
+    NV_ENC_SEQUENCE_PARAM_PAYLOAD header{};
+    header.version = NV_ENC_SEQUENCE_PARAM_PAYLOAD_VER;
+    header.inBufferSize = static_cast<uint32_t>(m_sequenceHeader.size());
+    header.spsppsBuffer = m_sequenceHeader.data();
+    header.outSPSPPSPayloadSize = &header_size;
+    st = m_funcs.nvEncGetSequenceParams(m_encoder, &header);
+    if (st != NV_ENC_SUCCESS || header_size == 0 || header_size > m_sequenceHeader.size()) {
+        m_sequenceHeader.clear();
+        out_error = std::string("nvEncGetSequenceParams: ") + NvencStatusName(st);
+        return false;
+    }
+    m_sequenceHeader.resize(header_size);
     return true;
 }
 
@@ -1087,23 +1170,8 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
 // ---------------------------------------------------------------------------
 
 bool NvencEncoder::CreateBitstreamBuffer(std::string& out_error) {
-    if (!m_asyncMode) {
-        NV_ENC_CREATE_BITSTREAM_BUFFER bsp{};
-        bsp.version = NV_ENC_CREATE_BITSTREAM_BUFFER_VER;
-        NVENCSTATUS st = m_funcs.nvEncCreateBitstreamBuffer(m_encoder, &bsp);
-        if (st != NV_ENC_SUCCESS) {
-            out_error = std::string("nvEncCreateBitstreamBuffer: ") + NvencStatusName(st);
-            return false;
-        }
-        m_bitstreamBuffer = bsp.bitstreamBuffer;
-        return true;
-    }
-
-    // Async mode: kMaxOutputResources bitstream buffers + one auto-reset
-    // completion event each, registered with the driver, plus one reserved
-    // EOS event. All kMaxOutputResources are allocated regardless of
-    // m_activeDepth — see the m_outputResources member comment.
-    for (int32_t i = 0; i < kMaxOutputResources; ++i) {
+    m_outputResources.resize(static_cast<size_t>((std::max)(4, m_activeDepth)));
+    for (int32_t i = 0; i < static_cast<int32_t>(m_outputResources.size()); ++i) {
         NV_ENC_CREATE_BITSTREAM_BUFFER bsp{};
         bsp.version = NV_ENC_CREATE_BITSTREAM_BUFFER_VER;
         NVENCSTATUS st = m_funcs.nvEncCreateBitstreamBuffer(m_encoder, &bsp);
@@ -1113,6 +1181,9 @@ bool NvencEncoder::CreateBitstreamBuffer(std::string& out_error) {
             return false;
         }
         m_outputResources[i].bitstream = bsp.bitstreamBuffer;
+
+        if (!m_asyncMode)
+            continue;
 
         HANDLE ev = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
         if (ev == nullptr) {
@@ -1132,6 +1203,9 @@ bool NvencEncoder::CreateBitstreamBuffer(std::string& out_error) {
         }
         m_outputResources[i].event = ev;
     }
+
+    if (!m_asyncMode)
+        return true;
 
     m_eosEvent = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (m_eosEvent == nullptr) {
@@ -1196,8 +1270,8 @@ void NvencEncoder::DestroyOutputRing() noexcept {
 // ---------------------------------------------------------------------------
 
 bool NvencEncoder::RegisterSlotTexture(int32_t slot_idx, ID3D11Texture2D* texture, std::string& out_error) {
-    if (slot_idx < 0 || slot_idx >= 8) {
-        out_error = "RegisterSlotTexture: slot_idx out of range [0,7]";
+    if (slot_idx < 0 || slot_idx >= SlotCount()) {
+        out_error = "RegisterSlotTexture: slot_idx out of range";
         return false;
     }
     if (m_slots[slot_idx].registeredResource != nullptr) {
@@ -1239,12 +1313,12 @@ bool NvencEncoder::RegisterSlotTexture(int32_t slot_idx, ID3D11Texture2D* textur
 // ---------------------------------------------------------------------------
 
 int32_t NvencEncoder::AcquireFreeSlot() {
-    for (int i = 0; i < 8; ++i) {
-        int32_t idx = (m_slotCursor + i) % 8;
+    for (int i = 0; i < SlotCount(); ++i) {
+        int32_t idx = (m_slotCursor + i) % SlotCount();
         InputSlot& slot = m_slots[idx];
         if (!slot.in_flight && !slot.mapped) {
             slot.in_flight = true;
-            m_slotCursor = (idx + 1) % 8;
+            m_slotCursor = (idx + 1) % SlotCount();
             return idx;
         }
     }
@@ -1256,7 +1330,7 @@ int32_t NvencEncoder::AcquireFreeSlot() {
 // ---------------------------------------------------------------------------
 
 void NvencEncoder::ReleaseSlot(int32_t slot_idx) noexcept {
-    if (slot_idx < 0 || slot_idx >= 8)
+    if (slot_idx < 0 || slot_idx >= SlotCount())
         return;
     InputSlot& slot = m_slots[slot_idx];
     if (slot.mapped && slot.mappedResource != nullptr) {
@@ -1273,113 +1347,63 @@ void NvencEncoder::ReleaseSlot(int32_t slot_idx) noexcept {
 
 bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error, bool non_blocking,
                                            NVENCSTATUS* out_lock_status) {
-    // Async mode: the FIFO head names its own output-ring bitstream (chosen at
-    // submission time, see EncodeFrame); sync mode always uses the single
-    // shared buffer. Peeked before locking because which buffer to lock
-    // depends on it.
-    NV_ENC_OUTPUT_PTR bitstreamToLock = m_bitstreamBuffer;
-    if (m_asyncMode && !m_pending.empty()) {
-        const int32_t headOutIdx = m_pending.front().out_idx;
-        if (headOutIdx >= 0 && headOutIdx < kMaxOutputResources)
-            bitstreamToLock = m_outputResources[headOutIdx].bitstream;
+    if (m_pending.empty()) {
+        out_error = "NVENC output has no pending resource";
+        if (out_lock_status)
+            *out_lock_status = NV_ENC_ERR_GENERIC;
+        return false;
     }
-
-    NV_ENC_LOCK_BITSTREAM lockBS{};
-    lockBS.version = NV_ENC_LOCK_BITSTREAM_VER;
-    lockBS.outputBitstream = bitstreamToLock;
-    lockBS.doNotWait = non_blocking ? 1 : 0;
-
-    NVENCSTATUS st = m_funcs.nvEncLockBitstream(m_encoder, &lockBS);
-    if (out_lock_status != nullptr)
-        *out_lock_status = st;
-    if (st != NV_ENC_SUCCESS) {
-        // On LOCK_BUSY nothing has been popped/consumed yet (the pending PTS/slot
-        // are still queued), so a non-blocking caller can safely retry.
-        out_error = std::string("nvEncLockBitstream: ") + NvencStatusName(st);
+    const PendingFrame resource = m_pending.front();
+    const NV_ENC_OUTPUT_PTR bitstream = m_outputResources[resource.out_idx].bitstream;
+    NV_ENC_LOCK_BITSTREAM lock{};
+    lock.version = NV_ENC_LOCK_BITSTREAM_VER;
+    lock.outputBitstream = bitstream;
+    lock.doNotWait = non_blocking ? 1 : 0;
+    const NVENCSTATUS status = m_funcs.nvEncLockBitstream(m_encoder, &lock);
+    if (out_lock_status)
+        *out_lock_status = status;
+    if (status != NV_ENC_SUCCESS) {
+        out_error = std::string("nvEncLockBitstream: ") + NvencStatusName(status);
         return false;
     }
 
-    uint64_t ts_ns = 0;
-    double latency_ms = -1.0;
-    bool outputTsMismatch = false;
-    bool keyframePredictionMismatch = false;
-    const bool actualIsIdr = (lockBS.pictureType == NV_ENC_PIC_TYPE_IDR);
-    if (!m_pending.empty()) {
-        const PendingFrame pf = m_pending.front();
-        m_pending.pop_front();
-        ts_ns = pf.pts_ns;
-        // True submit -> bitstream-available latency for this frame. In the P5-P7
-        // buffered case the consumed output belongs to an earlier submission, so
-        // this is the only place the correct latency can be measured (the video
-        // thread's call-site bracket would attribute it to the wrong frame).
-        latency_ms =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pf.submit_time).count();
-
-        // outputTimeStamp is expected to echo the inputTimeStamp of the frame
-        // that produced this bitstream (verified live on real hardware across
-        // all three codecs and both P4/P7 presets, 0 mismatches over 360
-        // frames; FFmpeg's NVENC wrapper also trusts this echo unconditionally,
-        // with no cross-check, across its entire supported hardware range). A
-        // mismatch means PTS assignment can no longer be trusted for this
-        // packet — treated as data corruption, not a recoverable warning. The
-        // slot/pending cleanup above has already happened, so it is safe to
-        // abort here.
-        outputTsMismatch = (lockBS.outputTimeStamp != pf.input_ts);
-        if (outputTsMismatch) {
-            const std::string mismatchMsg = FormatOutputTsMismatchError(pf.input_ts, lockBS.outputTimeStamp);
-            logging::log(logging::LogLevel::Error, "nvenc.order_validation", mismatchMsg);
-            m_funcs.nvEncUnlockBitstream(m_encoder, bitstreamToLock);
-            out_error = mismatchMsg;
-            return false;
-        }
-
-        // Keyframe-prediction validation. When the actual pictureType confirms
-        // the prediction, the submission-side GOP anchor stays untouched — it is
-        // several frames ahead of this packet under async buffering, and
-        // rewinding it from here stretched every GOP by the in-flight depth.
-        // Only an unpredicted real IDR resyncs the anchor (to that packet's
-        // media time); a mismatch is logged/counted, never fatal at this stage —
-        // the actual pictureType (isKey below) remains authoritative for muxing
-        // regardless.
-        keyframePredictionMismatch = (pf.predicted_keyframe != actualIsIdr);
-        if (keyframePredictionMismatch && !m_loggedKeyframePredictionMismatch) {
-            m_loggedKeyframePredictionMismatch = true;
-            logging::log(logging::LogLevel::Warn, "nvenc.order_validation",
-                         FormatKeyframePredictionMismatchWarning(pf.predicted_keyframe, actualIsIdr));
-        }
-        m_gopStartPtsNs = ResyncGopStartFromActual(pf.predicted_keyframe, actualIsIdr, pf.pts_ns, m_gopStartPtsNs);
-
-        // Release the associated input slot.
-        if (pf.slot_idx >= 0 && pf.slot_idx < 8) {
-            InputSlot& slot = m_slots[pf.slot_idx];
-            if (slot.mapped && slot.mappedResource != nullptr) {
-                m_funcs.nvEncUnmapInputResource(m_encoder, slot.mappedResource);
-                slot.mappedResource = nullptr;
-            }
-            slot.mapped = false;
-            slot.in_flight = false;
-        }
-
-        // Async mode: this output-ring slot is free again for a future submission.
-        if (m_asyncMode && pf.out_idx >= 0 && pf.out_idx < kMaxOutputResources) {
-            m_outputResources[pf.out_idx].in_flight = false;
-        }
+    // Buffers/events complete in submission order. Picture timestamps are in
+    // presentation order and can name a different submission when B-frames
+    // reorder the bitstream. Releasing that picture's input resource here
+    // would violate the driver's ownership of the queued resource sample.
+    const auto picture = TakeNvencPictureMetadata(m_pictureMetadata, lock.outputTimeStamp);
+    if (!picture) {
+        out_error = FormatOutputTsMismatchError(resource.input_ts, lock.outputTimeStamp);
+        m_funcs.nvEncUnlockBitstream(m_encoder, bitstream);
+        if (out_lock_status)
+            *out_lock_status = NV_ENC_ERR_GENERIC;
+        return false;
     }
-
-    bool isKey = actualIsIdr || (lockBS.pictureType == NV_ENC_PIC_TYPE_I);
-
-    out_packet.pts_ns = ts_ns;
-    out_packet.keyframe = isKey;
-    out_packet.encode_latency_ms = latency_ms;
-    out_packet.output_ts_mismatch = outputTsMismatch;
-    out_packet.keyframe_prediction_mismatch = keyframePredictionMismatch;
-    out_packet.bytes.assign(static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr),
-                            static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr) + lockBS.bitstreamSizeInBytes);
-
-    m_funcs.nvEncUnlockBitstream(m_encoder, bitstreamToLock);
+    const bool actual_idr = lock.pictureType == NV_ENC_PIC_TYPE_IDR;
+    const bool mismatch = picture->predicted_keyframe != actual_idr;
+    if (mismatch && !m_loggedKeyframePredictionMismatch) {
+        m_loggedKeyframePredictionMismatch = true;
+        logging::log(logging::LogLevel::Warn, "nvenc.order_validation",
+                     FormatKeyframePredictionMismatchWarning(picture->predicted_keyframe, actual_idr));
+    }
+    m_gopStartPtsNs =
+        ResyncGopStartFromActual(picture->predicted_keyframe, actual_idr, picture->pts_ns, m_gopStartPtsNs);
+    out_packet.pts_ns = picture->pts_ns;
+    const int64_t decode_time = m_decodeTimeline.Next();
+    if (m_advancedTuning.bframes > 0)
+        out_packet.dts_ns = decode_time;
+    out_packet.keyframe = actual_idr || (m_codec == VideoCodec::Av1 && lock.pictureType == NV_ENC_PIC_TYPE_I);
+    out_packet.encode_latency_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - picture->submit_time).count();
+    out_packet.keyframe_prediction_mismatch = mismatch;
+    out_packet.bytes.assign(static_cast<const uint8_t*>(lock.bitstreamBufferPtr),
+                            static_cast<const uint8_t*>(lock.bitstreamBufferPtr) + lock.bitstreamSizeInBytes);
+    m_funcs.nvEncUnlockBitstream(m_encoder, bitstream);
+    m_pending.pop_front();
+    ReleaseSlot(resource.slot_idx);
+    m_outputResources[resource.out_idx].in_flight = false;
     return true;
 }
-
 // ---------------------------------------------------------------------------
 // WaitAndConsumeOneAsync (internal)
 // ---------------------------------------------------------------------------
@@ -1418,8 +1442,8 @@ EventDrainStep NvencEncoder::WaitAndConsumeOneAsync(HANDLE event, double budget_
 
 bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height,
                                std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) {
-    if (slot_idx < 0 || slot_idx >= 8) {
-        out_error = "EncodeFrame: slot_idx out of range [0,7]";
+    if (slot_idx < 0 || slot_idx >= SlotCount()) {
+        out_error = "EncodeFrame: slot_idx out of range";
         return false;
     }
     InputSlot& slot = m_slots[slot_idx];
@@ -1437,7 +1461,7 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     // this always terminates (each WaitAndConsumeOneAsync call is itself
     // budget-bounded).
     int32_t out_idx = -1;
-    if (m_asyncMode) {
+    {
         for (;;) {
             bool inFlight[kMaxOutputResources] = {};
             for (int32_t i = 0; i < m_activeDepth; ++i)
@@ -1455,11 +1479,27 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
             constexpr double kSlotWaitBudgetMs = 2000.0;
             EncodedVideoPacket drained;
             std::string waitErr;
-            const HANDLE headEvent = m_outputResources[m_pending.front().out_idx].event;
-            const EventDrainStep step = WaitAndConsumeOneAsync(headEvent, kSlotWaitBudgetMs, drained, waitErr);
-            if (step != EventDrainStep::Consume) {
-                out_error = waitErr;
-                return false;
+            if (m_asyncMode) {
+                const HANDLE headEvent = m_outputResources[m_pending.front().out_idx].event;
+                const EventDrainStep step = WaitAndConsumeOneAsync(headEvent, kSlotWaitBudgetMs, drained, waitErr);
+                if (step != EventDrainStep::Consume) {
+                    out_error = waitErr;
+                    return false;
+                }
+            } else {
+                auto started = std::chrono::steady_clock::now();
+                for (;;) {
+                    NVENCSTATUS lock_status;
+                    if (LockAndConsumeBitstream(drained, waitErr, true, &lock_status))
+                        break;
+                    const double elapsed =
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+                    if (NextFlushDrainStep(lock_status, elapsed, kSlotWaitBudgetMs) != FlushDrainStep::Retry) {
+                        out_error = waitErr;
+                        return false;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
             }
             out_packets.push_back(std::move(drained));
         }
@@ -1535,22 +1575,17 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     }
     pic.inputTimeStamp = m_frameIdx++;
 
-    if (m_asyncMode) {
-        pic.outputBitstream = m_outputResources[out_idx].bitstream;
+    pic.outputBitstream = m_outputResources[out_idx].bitstream;
+    if (m_asyncMode)
         pic.completionEvent = m_outputResources[out_idx].event;
-        m_outputResources[out_idx].in_flight = true;
-    } else {
-        pic.outputBitstream = m_bitstreamBuffer;
-    }
-
-    // Record this submission before the encode call (FIFO: one entry per submitted
-    // frame). submit_time stamps the start of the encode so the consuming lock can
-    // report the true per-frame latency, independent of preset buffering. input_ts
-    // and predicted_keyframe are captured here (submission-side truth) so the
-    // consuming lock can validate them against the driver's actual
-    // outputTimeStamp / pictureType. out_idx is -1 in sync mode (unused).
+    m_outputResources[out_idx].in_flight = true;
+    // Retain resource ownership before submitting. The timestamp lookup remains
+    // independent of this FIFO so reordered output cannot release a later slot.
     m_pending.push_back(
         PendingFrame{pts_ns, slot_idx, std::chrono::steady_clock::now(), pic.inputTimeStamp, isKeyframe, out_idx});
+
+    m_pictureMetadata.push_back(m_pending.back());
+    m_decodeTimeline.Submit(pts_ns);
 
     st = m_funcs.nvEncEncodePicture(m_encoder, &pic);
 
@@ -1566,18 +1601,8 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
         EncodedVideoPacket pkt;
         std::string lockErr;
         if (!LockAndConsumeBitstream(pkt, lockErr)) {
-            // Bitstream lock failed: clean up the current slot.
-            m_funcs.nvEncUnmapInputResource(m_encoder, slot.mappedResource);
-            slot.mappedResource = nullptr;
-            slot.mapped = false;
-            slot.in_flight = false;
-
-            // Take back THIS submission's entry, by identity. The lock may or may
-            // not have consumed the front (it pops before it validates), and
-            // either way the front is the oldest buffered frame, not this one:
-            // popping it here left a frame the driver still owned without an
-            // entry, and this frame with one.
-            DiscardRejectedSubmission(m_pending, pic.inputTimeStamp);
+            // The submission was accepted. Keep its resources owned until
+            // drain/teardown, even if retrieval fails.
             out_error = lockErr;
             return false;
         }
@@ -1598,7 +1623,7 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
 
         // This submission will never complete — free its output-ring slot
         // back rather than leaving it permanently marked in-flight.
-        if (m_asyncMode && out_idx >= 0 && out_idx < kMaxOutputResources) {
+        if (out_idx >= 0 && out_idx < kMaxOutputResources) {
             m_outputResources[out_idx].in_flight = false;
         }
 
@@ -1606,6 +1631,8 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
         // is the oldest frame still buffered inside the encoder, whose slot and
         // output buffer remain valid and whose output is still coming.
         DiscardRejectedSubmission(m_pending, pic.inputTimeStamp);
+        DiscardRejectedSubmission(m_pictureMetadata, pic.inputTimeStamp);
+        m_decodeTimeline.RejectLast();
 
         out_error = std::string("nvEncEncodePicture: ") + NvencStatusName(st);
         return false;
@@ -1686,7 +1713,7 @@ bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::stri
     // EOS and finalises. LockAndConsumeBitstream releases each slot on consume.
     constexpr double kFlushDrainBudgetMs = 2000.0;
     auto lastProgress = std::chrono::steady_clock::now();
-    for (int i = 0; i < m_needMoreInputCount;) {
+    while (!m_pending.empty()) {
         if (m_pending.empty())
             break;
 
@@ -1700,7 +1727,6 @@ bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::stri
         const FlushDrainStep step = NextFlushDrainStep(lockStatus, elapsedMs, kFlushDrainBudgetMs);
         if (step == FlushDrainStep::Consume) {
             out_packets.push_back(std::move(pkt));
-            ++i;
             lastProgress = std::chrono::steady_clock::now();
             continue;
         }
@@ -1799,14 +1825,10 @@ void NvencEncoder::Destroy() {
     UnregisterAllSlots();
 
     // Teardown order: events unregistered+closed, then bitstream buffer(s),
-    // then the encoder itself. DestroyOutputRing() is a no-op in sync mode
-    // (m_outputResources/m_eosEvent were never populated).
+    // then the encoder itself. Sync mode also owns an output buffer ring.
     DestroyOutputRing();
+    m_sequenceHeader.clear();
 
-    if (m_encoder && m_funcs.nvEncDestroyBitstreamBuffer && m_bitstreamBuffer) {
-        m_funcs.nvEncDestroyBitstreamBuffer(m_encoder, m_bitstreamBuffer);
-        m_bitstreamBuffer = nullptr;
-    }
     if (m_encoder && m_funcs.nvEncDestroyEncoder) {
         m_funcs.nvEncDestroyEncoder(m_encoder);
         m_encoder = nullptr;

@@ -6,6 +6,7 @@
 
 #include "exosnap/engine/logging/logging.h"
 #include "qpc_100ns.h"
+#include "vfr_encode_policy.h"
 #include "video_epoch_log.h"
 
 #include <optional>
@@ -25,6 +26,22 @@ std::optional<std::string> FieldValue(const std::vector<exosnap::engine::logging
 }
 
 } // namespace
+
+TEST(VfrEncodePolicy, HeartbeatsOnlyWhileBufferedAndAfterOneSecond) {
+    using exosnap::engine::NeedsVfrEncoderHeartbeat;
+    EXPECT_FALSE(NeedsVfrEncoderHeartbeat(0, true, 120000000000ULL, 0));
+    EXPECT_FALSE(NeedsVfrEncoderHeartbeat(32, false, 120000000000ULL, 0));
+    EXPECT_FALSE(NeedsVfrEncoderHeartbeat(32, true, 999999999, 0));
+    EXPECT_TRUE(NeedsVfrEncoderHeartbeat(32, true, 1000000000, 0));
+    EXPECT_FALSE(NeedsVfrEncoderHeartbeat(32, true, 500000000, 1000000000));
+}
+
+TEST(VfrEncodePolicy, LateCaptureCannotPrecedeCommittedAudioOrHeartbeat) {
+    using exosnap::engine::VfrPicturePts;
+    EXPECT_EQ(VfrPicturePts(100, 90, 80), 100u);
+    EXPECT_EQ(VfrPicturePts(90, 100, 80), 101u);
+    EXPECT_EQ(VfrPicturePts(100, 90, 120000000000ULL), 120000000000ULL);
+}
 
 TEST(VideoEpochLog, CarriesTheEpochItsUnitAndTheCounterFrequency) {
     const auto fields = exosnap::engine::VideoEpochLogFields(123456789012345ULL, 10000000ULL,

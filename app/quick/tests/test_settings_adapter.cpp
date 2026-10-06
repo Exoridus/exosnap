@@ -1208,6 +1208,149 @@ TEST_F(SettingsAdapterTest, EncoderDeviceOptionsStartWithAuto) {
     EXPECT_EQ(adapter.encoderDevice(), 0);
 }
 
+TEST_F(SettingsAdapterTest, AdvancedNvencWishesSurviveCodecAndRateControlRestrictions) {
+    auto probe = MakeNvencProbe();
+    probe.max_bframes_h264 = 4;
+    probe.bframe_ref_mode_h264 = 2;
+    probe.lookahead_h264 = true;
+    probe.temporal_aq_h264 = true;
+    adapter.setEncoderDevices({MakeDevice("NVENC device", capability::AdapterVendor::Nvidia, 1)}, {probe});
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::H264));
+    adapter.setNvencBframes(3);
+    adapter.setNvencBRef(static_cast<int>(exosnap::engine::NvencBRefMode::Middle));
+    adapter.setNvencLookahead(true);
+    adapter.setNvencLookaheadDepth(28);
+    adapter.setNvencTemporalAq(true);
+    adapter.setNvencSpatialAq(true);
+    adapter.setRateControl(static_cast<int>(exosnap::engine::RateControlMode::VariableBitrate));
+    adapter.setNvencMultipass(static_cast<int>(exosnap::engine::NvencMultipass::FullResolution));
+    ASSERT_EQ(adapter.nvencBframes(), 3);
+    ASSERT_TRUE(adapter.nvencLookahead());
+    EXPECT_EQ(adapter.nvencLookaheadMaxDepth(), 28);
+    EXPECT_EQ(adapter.nvencBRefOptions().size(), 2);
+
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::Av1));
+    EXPECT_EQ(adapter.nvencBframes(), 0);
+    EXPECT_FALSE(adapter.nvencLookahead());
+    EXPECT_FALSE(adapter.nvencTemporalAq());
+    EXPECT_FALSE(adapter.nvencBRefRelevant());
+    EXPECT_FALSE(adapter.nvencBframesHint().isEmpty());
+    EXPECT_EQ(adapter.config().output.nvenc_tuning.bframes, 3u);
+    EXPECT_TRUE(adapter.config().output.nvenc_tuning.lookahead);
+
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::H264));
+    EXPECT_EQ(adapter.nvencBframes(), 3);
+    EXPECT_TRUE(adapter.nvencLookahead());
+    EXPECT_TRUE(adapter.nvencTemporalAq());
+    EXPECT_EQ(adapter.nvencBRef(), static_cast<int>(exosnap::engine::NvencBRefMode::Middle));
+    adapter.setRateControl(static_cast<int>(exosnap::engine::RateControlMode::ConstantQuality));
+    EXPECT_FALSE(adapter.nvencMultipassRelevant());
+    EXPECT_EQ(adapter.nvencMultipass(), static_cast<int>(exosnap::engine::NvencMultipass::SinglePass));
+    EXPECT_TRUE(adapter.nvencSpatialAqSupported());
+    EXPECT_TRUE(adapter.nvencSpatialAq());
+    adapter.setRateControl(static_cast<int>(exosnap::engine::RateControlMode::ConstantBitrate));
+    EXPECT_EQ(adapter.nvencMultipass(), static_cast<int>(exosnap::engine::NvencMultipass::FullResolution));
+}
+
+TEST_F(SettingsAdapterTest, AdvancedNvencRejectsUnavailableValuesAndLockedEdits) {
+    auto probe = MakeNvencProbe();
+    probe.max_bframes_h264 = 2;
+    probe.bframe_ref_mode_h264 = 2;
+    probe.lookahead_h264 = true;
+    adapter.setEncoderDevices({MakeDevice("NVENC device", capability::AdapterVendor::Nvidia, 1)}, {probe});
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::H264));
+    adapter.setNvencBframes(3);
+    EXPECT_EQ(adapter.nvencBframes(), 0);
+    adapter.setNvencBframes(1);
+    adapter.setNvencBRef(static_cast<int>(exosnap::engine::NvencBRefMode::Middle));
+    EXPECT_EQ(adapter.nvencBRef(), static_cast<int>(exosnap::engine::NvencBRefMode::Off));
+    adapter.setNvencLookahead(true);
+    adapter.setNvencLookaheadDepth(31);
+    EXPECT_EQ(adapter.nvencLookaheadDepth(), 16);
+    adapter.setNvencTemporalAq(true);
+    EXPECT_FALSE(adapter.nvencTemporalAq());
+    adapter.setControlsLocked(true);
+    adapter.setNvencBframes(2);
+    adapter.setNvencLookahead(false);
+    adapter.setNvencSpatialAq(true);
+    EXPECT_EQ(adapter.nvencBframes(), 1);
+    EXPECT_TRUE(adapter.nvencLookahead());
+    EXPECT_FALSE(adapter.nvencSpatialAq());
+}
+
+TEST_F(SettingsAdapterTest, MaximumBframesDisableLookaheadWithoutLosingTheSavedWish) {
+    auto probe = MakeNvencProbe();
+    probe.max_bframes_h264 = 31;
+    probe.bframe_ref_mode_h264 = 3;
+    probe.lookahead_h264 = true;
+    adapter.setEncoderDevices({MakeDevice("NVENC device", capability::AdapterVendor::Nvidia, 1)}, {probe});
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::H264));
+    adapter.setNvencLookahead(true);
+    ASSERT_TRUE(adapter.nvencLookahead());
+    adapter.setNvencBframes(31);
+    EXPECT_FALSE(adapter.nvencLookaheadSupported());
+    EXPECT_FALSE(adapter.nvencLookahead());
+    EXPECT_EQ(adapter.nvencLookaheadMaxDepth(), 0);
+    EXPECT_EQ(adapter.nvencLookaheadDepth(), 0);
+    EXPECT_EQ(adapter.nvencLookaheadHint(), QStringLiteral("Reduce the B-frame count to enable Lookahead."));
+    EXPECT_TRUE(adapter.config().output.nvenc_tuning.lookahead);
+    EXPECT_EQ(adapter.config().output.nvenc_tuning.lookahead_depth, 16u);
+    EXPECT_EQ(adapter.nvencBRefOptions().size(), 3);
+    adapter.setNvencLookahead(false);
+    EXPECT_TRUE(adapter.config().output.nvenc_tuning.lookahead);
+    adapter.setNvencBframes(30);
+    EXPECT_TRUE(adapter.nvencLookaheadSupported());
+    EXPECT_TRUE(adapter.nvencLookahead());
+    EXPECT_EQ(adapter.nvencLookaheadMaxDepth(), 1);
+    EXPECT_EQ(adapter.nvencLookaheadDepth(), 1);
+    EXPECT_TRUE(adapter.nvencLookaheadHint().isEmpty());
+}
+
+TEST_F(SettingsAdapterTest, Av1BframesUseKnownSdkLimitAndRetainLargerSavedWish) {
+    auto probe = MakeNvencProbe();
+    probe.max_bframes_av1 = 31;
+    probe.bframe_ref_mode_av1 = 7;
+    probe.lookahead_av1 = true;
+    adapter.setEncoderDevices({MakeDevice("NVENC device", capability::AdapterVendor::Nvidia, 1)}, {probe});
+    auto config = adapter.config();
+    config.output.video_codec = VideoCodec::Av1;
+    config.output.nvenc_tuning.bframes = 31;
+    config.output.nvenc_tuning.lookahead = true;
+    config.output.nvenc_tuning.lookahead_depth = 16;
+    adapter.setConfig(config);
+    EXPECT_EQ(adapter.nvencBframes(), 7);
+    EXPECT_EQ(adapter.config().output.nvenc_tuning.bframes, 31u);
+    EXPECT_EQ(adapter.nvencBframesOptions().size(), 8);
+    EXPECT_EQ(adapter.nvencBRefOptions().size(), 3);
+    EXPECT_TRUE(adapter.nvencLookaheadSupported());
+    EXPECT_TRUE(adapter.nvencLookahead());
+    EXPECT_EQ(adapter.nvencLookaheadDepth(), 16);
+    EXPECT_EQ(
+        adapter.nvencBframesHint(),
+        QStringLiteral(
+            "AV1 B-frame counts above 7 require hierarchical reference mode, which this SDK does not implement."));
+}
+
+TEST_F(SettingsAdapterTest, AdvancedNvencWishesSurviveAnUnavailableBackend) {
+    auto probe = MakeNvencProbe();
+    probe.max_bframes_h264 = 2;
+    probe.lookahead_h264 = true;
+    adapter.setEncoderDevices({MakeDevice("NVENC device", capability::AdapterVendor::Nvidia, 1),
+                               MakeDevice("Intel device", capability::AdapterVendor::Intel, 2)},
+                              {probe, capability::AdapterEncoderCapability{}});
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::H264));
+    adapter.setEncoderDevice(1);
+    adapter.setNvencBframes(2);
+    adapter.setNvencLookahead(true);
+    adapter.setEncoderDevice(2);
+    EXPECT_FALSE(adapter.nvencAdvancedRelevant());
+    EXPECT_TRUE(adapter.nvencBframesOptions().isEmpty());
+    EXPECT_EQ(adapter.config().output.nvenc_tuning.bframes, 2u);
+    adapter.setEncoderDevice(1);
+    EXPECT_EQ(adapter.nvencBframes(), 2);
+    EXPECT_TRUE(adapter.nvencLookahead());
+}
+
 } // namespace
 } // namespace exosnap::quick
 

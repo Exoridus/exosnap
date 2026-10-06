@@ -72,6 +72,7 @@
 #include <capability/capability_builder.h>
 #include <capability/codec_selection.h>
 #include <capability/encoder_device_resolver.h>
+#include <capability/nvenc_tuning_policy.h>
 #include <capability/support_level.h>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 
@@ -1852,7 +1853,9 @@ bool QuickApplication::startRecordingNow() {
     recording_coordinator_->SetOutputTargetContext(context);
     recording_coordinator_->SetOutputSettings(live_config_.output);
     recording_coordinator_->SetVideoSettings(live_config_.video);
-    recording_coordinator_->SetEncoderDeviceResolution(resolveEncoderDeviceFor(target));
+    const auto encoder_device = resolveEncoderDeviceFor(target);
+    const auto encoder_caps = encoderCapabilitiesFor(encoder_device);
+    recording_coordinator_->SetEncoderDeviceResolution(encoder_device, &encoder_caps);
     recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
     record_view_model_.ResetStats();
     recording_coordinator_->StartRecording(target, record_view_model_.audio_ui_state, crop);
@@ -3709,6 +3712,13 @@ QuickApplication::EffectiveRecordingConfig QuickApplication::resolveEffectiveCon
     effective.config.video.frame_rate_num = resolved.frame_rate_num;
     effective.config.video.frame_rate_den = resolved.frame_rate_den;
     effective.config.video.frame_pacing = resolved.frame_pacing;
+    const auto encoder_caps = encoderCapabilitiesFor(resolveEncoderDeviceFor(selectedCaptureTarget()));
+    auto tuning = effective.config.output.nvenc_tuning;
+    tuning.preset = effective.config.output.nvenc_preset;
+    effective.config.output.nvenc_tuning =
+        capability::ResolveNvencTuning(tuning, encoder_caps, effective.config.output.video_codec,
+                                       effective.config.video.rate_control)
+            .tuning;
     return effective;
 }
 
@@ -5783,6 +5793,17 @@ QuickApplication::resolveEncoderDeviceFor(const std::optional<exosnap::engine::C
     }
     device.reason = resolution.reason;
     return device;
+}
+
+capability::CapabilitySet
+QuickApplication::encoderCapabilitiesFor(const exosnap::engine::ResolvedEncoderDevice& device) const {
+    const auto& adapters = device_adapter_.adapterInfos();
+    const auto& adapter_capabilities = device_adapter_.adapterCapabilities();
+    for (size_t i = 0; i < std::min(adapters.size(), adapter_capabilities.size()); ++i) {
+        if (adapters[i].luid == device.adapter_luid)
+            return capability::CapabilitySetForAdapter(capabilities_, adapters[i], adapter_capabilities[i]);
+    }
+    return {};
 }
 
 unsigned long QuickApplication::presentTargetPidForSelection() const {

@@ -155,16 +155,19 @@ void ProbeNvencGuidsOnDevice(HMODULE dll, ID3D11Device* device, AdapterEncoderCa
                 };
                 if (out.h264) {
                     out.max_bframes_h264 = query_cap(NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_NUM_MAX_BFRAMES);
+                    out.bframe_ref_mode_h264 = query_cap(NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORT_BFRAME_REF_MODE);
                     out.lookahead_h264 = query_cap(NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORT_LOOKAHEAD) != 0;
                     out.temporal_aq_h264 = query_cap(NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ) != 0;
                 }
                 if (out.hevc) {
                     out.max_bframes_hevc = query_cap(NV_ENC_CODEC_HEVC_GUID, NV_ENC_CAPS_NUM_MAX_BFRAMES);
+                    out.bframe_ref_mode_hevc = query_cap(NV_ENC_CODEC_HEVC_GUID, NV_ENC_CAPS_SUPPORT_BFRAME_REF_MODE);
                     out.lookahead_hevc = query_cap(NV_ENC_CODEC_HEVC_GUID, NV_ENC_CAPS_SUPPORT_LOOKAHEAD) != 0;
                     out.temporal_aq_hevc = query_cap(NV_ENC_CODEC_HEVC_GUID, NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ) != 0;
                 }
                 if (out.av1) {
                     out.max_bframes_av1 = query_cap(NV_ENC_CODEC_AV1_GUID, NV_ENC_CAPS_NUM_MAX_BFRAMES);
+                    out.bframe_ref_mode_av1 = query_cap(NV_ENC_CODEC_AV1_GUID, NV_ENC_CAPS_SUPPORT_BFRAME_REF_MODE);
                     out.lookahead_av1 = query_cap(NV_ENC_CODEC_AV1_GUID, NV_ENC_CAPS_SUPPORT_LOOKAHEAD) != 0;
                     out.temporal_aq_av1 = query_cap(NV_ENC_CODEC_AV1_GUID, NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ) != 0;
                 }

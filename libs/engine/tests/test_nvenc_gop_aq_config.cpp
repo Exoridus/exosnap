@@ -1,8 +1,10 @@
+#include "exosnap/engine/backend_tuning.h"
 #include "exosnap/engine/codec_types.h"
 #include "nvEncodeAPI.h"
 #include "nvenc_encoder.h"
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -24,6 +26,159 @@
 //   rcParams.{enableAQ, enableTemporalAQ, aqStrength}
 
 namespace exosnap::engine {
+
+TEST(NvencAdvancedTuning, ConservativeDefaultsOverridePreset) {
+    NV_ENC_CONFIG config{};
+    config.frameIntervalP = 4;
+    config.rcParams.enableLookahead = 1;
+    config.rcParams.enableAQ = 1;
+    config.rcParams.enableTemporalAQ = 1;
+    config.rcParams.multiPass = NV_ENC_TWO_PASS_FULL_RESOLUTION;
+    for (const auto codec : {VideoCodec::H264, VideoCodec::Hevc, VideoCodec::Av1}) {
+        ApplyAdvancedTuningToNvenc(config, codec, {});
+        EXPECT_EQ(config.frameIntervalP, 1);
+        EXPECT_FALSE(config.rcParams.enableLookahead);
+        EXPECT_EQ(config.rcParams.lookaheadDepth, 0);
+        EXPECT_FALSE(config.rcParams.enableAQ);
+        EXPECT_FALSE(config.rcParams.enableTemporalAQ);
+        EXPECT_EQ(config.rcParams.multiPass, NV_ENC_MULTI_PASS_DISABLED);
+    }
+}
+
+TEST(NvencAdvancedTuning, MapsEveryExpertFeatureExplicitly) {
+    NvencTuning tuning;
+    tuning.bframes = 3;
+    tuning.b_ref_mode = NvencBRefMode::Middle;
+    tuning.lookahead = true;
+    tuning.lookahead_depth = 20;
+    tuning.spatial_aq = true;
+    tuning.temporal_aq = true;
+    tuning.multipass = NvencMultipass::QuarterResolution;
+    for (const auto codec : {VideoCodec::H264, VideoCodec::Hevc, VideoCodec::Av1}) {
+        NV_ENC_CONFIG config{};
+        ApplyAdvancedTuningToNvenc(config, codec, tuning);
+        EXPECT_EQ(config.frameIntervalP, 4);
+        EXPECT_TRUE(config.rcParams.enableLookahead);
+        EXPECT_EQ(config.rcParams.lookaheadDepth, 20);
+        EXPECT_TRUE(config.rcParams.disableIadapt);
+        EXPECT_TRUE(config.rcParams.disableBadapt);
+        EXPECT_TRUE(config.rcParams.enableAQ);
+        EXPECT_EQ(config.rcParams.aqStrength, 8);
+        EXPECT_TRUE(config.rcParams.enableTemporalAQ);
+        EXPECT_EQ(config.rcParams.multiPass, NV_ENC_TWO_PASS_QUARTER_RESOLUTION);
+        const auto b_ref = codec == VideoCodec::H264   ? config.encodeCodecConfig.h264Config.useBFramesAsRef
+                           : codec == VideoCodec::Hevc ? config.encodeCodecConfig.hevcConfig.useBFramesAsRef
+                                                       : config.encodeCodecConfig.av1Config.useBFramesAsRef;
+        EXPECT_EQ(b_ref, NV_ENC_BFRAME_REF_MODE_MIDDLE);
+    }
+    EXPECT_EQ(NvencResourceDepth(tuning), 28u);
+    tuning.lookahead_depth = MaxNvencLookaheadDepth(tuning.bframes);
+    EXPECT_EQ(NvencResourceDepth(tuning), 36u);
+    EXPECT_EQ(NvencResourceDepth({}), 2u);
+    EXPECT_EQ(NvencResourceDepth({}, false), 4u);
+    EXPECT_EQ(NvencResourceDepth(tuning, false), 36u);
+}
+
+TEST(NvencAdvancedTuning, FailsClosedAndChecksJointLimits) {
+    NvencTuning tuning;
+    NvencAdvancedCaps caps;
+    std::string error;
+    EXPECT_TRUE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error));
+    tuning.bframes = 2;
+    EXPECT_FALSE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error));
+    caps.max_bframes = 3;
+    caps.b_ref_mode = 2;
+    caps.lookahead = true;
+    caps.temporal_aq = true;
+    tuning.b_ref_mode = NvencBRefMode::Each;
+    EXPECT_FALSE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error));
+    tuning.b_ref_mode = NvencBRefMode::Middle;
+    tuning.lookahead = true;
+    tuning.lookahead_depth = 30;
+    EXPECT_FALSE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error));
+    tuning.lookahead_depth = 29;
+    EXPECT_TRUE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error));
+    tuning.multipass = NvencMultipass::FullResolution;
+    EXPECT_FALSE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error));
+    EXPECT_TRUE(ValidateNvencTuning(tuning, caps, RateControlMode::VariableBitrate, error));
+    tuning.lookahead = false;
+    tuning.temporal_aq = true;
+    EXPECT_TRUE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantBitrate, error));
+}
+
+TEST(NvencAdvancedTuning, ReferenceCapabilityBitsPermitOnlyKnownModes) {
+    NvencTuning tuning;
+    tuning.bframes = 2;
+    NvencAdvancedCaps caps;
+    caps.max_bframes = 31;
+    std::string error;
+    for (uint32_t bits = 0; bits < 8; ++bits) {
+        caps.b_ref_mode = bits;
+        tuning.b_ref_mode = NvencBRefMode::Each;
+        EXPECT_EQ(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error), (bits & 1u) != 0)
+            << "capability " << bits;
+        tuning.b_ref_mode = NvencBRefMode::Middle;
+        EXPECT_EQ(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error), (bits & 2u) != 0)
+            << "capability " << bits;
+    }
+    caps.b_ref_mode = 7;
+    tuning.b_ref_mode = static_cast<NvencBRefMode>(4);
+    EXPECT_FALSE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error));
+    tuning.b_ref_mode = NvencBRefMode::Middle;
+    tuning.bframes = 1;
+    EXPECT_FALSE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error));
+}
+
+TEST(NvencAdvancedTuning, Av1CountsRequireAnExecutableSdkMode) {
+    NvencTuning tuning;
+    tuning.b_ref_mode = NvencBRefMode::Middle;
+    NvencAdvancedCaps caps;
+    caps.max_bframes = 31;
+    caps.b_ref_mode = 7;
+    std::string error;
+    tuning.bframes = 7;
+    EXPECT_TRUE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error, VideoCodec::Av1));
+    tuning.bframes = 8;
+    EXPECT_FALSE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error, VideoCodec::Av1));
+    EXPECT_EQ(MaxNvencBframes(VideoCodec::Av1, NvencBRefMode::Middle, 31), 7u);
+    EXPECT_EQ(MaxNvencBframes(VideoCodec::Av1, NvencBRefMode::Middle, 2), 2u);
+    EXPECT_EQ(MaxNvencBframes(VideoCodec::H264, NvencBRefMode::Middle, 7), 7u);
+}
+
+TEST(NvencReordering, PictureMetadataIsIndependentOfResourceFifo) {
+    struct Metadata {
+        uint64_t input_ts;
+        uint64_t pts;
+    };
+    std::deque<Metadata> metadata{{0, 0}, {1, 10}, {2, 20}, {3, 30}};
+    const auto reference = TakeNvencPictureMetadata(metadata, 3);
+    ASSERT_TRUE(reference);
+    EXPECT_EQ(reference->pts, 30u);
+    EXPECT_EQ(metadata.front().input_ts, 0u);
+    EXPECT_FALSE(TakeNvencPictureMetadata(metadata, 3));
+    EXPECT_EQ(metadata.size(), 3u);
+    EXPECT_EQ(TakeNvencPictureMetadata(metadata, 1)->pts, 10u);
+}
+
+TEST(NvencReordering, DecodeTimelinePreservesVfrGapsAndPreroll) {
+    NvencDecodeTimeline timeline;
+    timeline.Reset(2, 10);
+    for (const uint64_t pts : {0u, 10u, 40u, 70u})
+        timeline.Submit(pts);
+    EXPECT_EQ(timeline.Next(), -40);
+    EXPECT_EQ(timeline.Next(), -20);
+    EXPECT_EQ(timeline.Next(), 0);
+    EXPECT_EQ(timeline.Next(), 10);
+    timeline.Submit(100);
+    timeline.RejectLast();
+    timeline.Submit(100);
+    timeline.Submit(130);
+    EXPECT_EQ(timeline.Next(), 40);
+    EXPECT_EQ(timeline.Next(), 70);
+    timeline.Reset(0, 10);
+    timeline.Submit(55);
+    EXPECT_EQ(timeline.Next(), 55);
+}
 
 // ---------------------------------------------------------------------------
 // ComputeGopLength — interval X @ fps -> gopLength (round-to-nearest)
@@ -126,6 +281,22 @@ TEST(ComputeNvencGopBackstop, Vfr_DisablesTheFrameCountBackstop) {
     // the counter is disabled rather than guessed at.
     EXPECT_EQ(ComputeNvencGopBackstop(120u, /*constant_frame_rate=*/false), NVENC_INFINITE_GOPLENGTH);
     EXPECT_EQ(ComputeNvencGopBackstop(30u, /*constant_frame_rate=*/false), NVENC_INFINITE_GOPLENGTH);
+}
+
+TEST(ComputeNvencGopBackstop, ReorderedVfrUsesFiniteGopRequiredBySdk) {
+    for (uint32_t bframes = 1; bframes <= 31; ++bframes) {
+        EXPECT_EQ(ComputeNvencGopBackstop(120, false, bframes), NVENC_INFINITE_GOPLENGTH - 1);
+        EXPECT_EQ(ComputeNvencGopBackstop(120, true, bframes), 120u);
+        for (const auto codec : {VideoCodec::H264, VideoCodec::Hevc, VideoCodec::Av1}) {
+            NV_ENC_CONFIG config{};
+            ApplyGopToNvenc(config, codec, ComputeNvencGopBackstop(120, false, bframes));
+            EXPECT_EQ(config.gopLength, NVENC_INFINITE_GOPLENGTH - 1);
+            const auto idr = codec == VideoCodec::H264   ? config.encodeCodecConfig.h264Config.idrPeriod
+                             : codec == VideoCodec::Hevc ? config.encodeCodecConfig.hevcConfig.idrPeriod
+                                                         : config.encodeCodecConfig.av1Config.idrPeriod;
+            EXPECT_EQ(idr, NVENC_INFINITE_GOPLENGTH - 1);
+        }
+    }
 }
 
 TEST(ApplyGopToNvenc, VfrBackstopReachesEveryCodecsIdrPeriod) {

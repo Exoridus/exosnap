@@ -11,6 +11,7 @@
 #include <exosnap/engine/mp4_remuxer.h>
 
 #include <capability/capability_builder.h>
+#include <capability/nvenc_tuning_policy.h>
 #include <capability/runtime_snapshot.h>
 
 #include <windows.h>
@@ -177,7 +178,9 @@ void ApplyOutputSettingsToRecorderConfig(exosnap::engine::RecorderConfig& config
     // The NVENC preset is carried as backend-specific tuning. It stays in the
     // config while a non-NVENC device is selected so switching back restores it,
     // but only the NVENC factory alternative ever reads it.
-    config.backend_tuning = exosnap::engine::NvencTuning{settings.nvenc_preset};
+    auto tuning = settings.nvenc_tuning;
+    tuning.preset = settings.nvenc_preset;
+    config.backend_tuning = tuning;
     config.output_width = 0;
     config.output_height = 0;
     config.output_fit = settings.resolution.fit;
@@ -869,6 +872,7 @@ bool RecordingCoordinator::StartRecording(const exosnap::engine::CaptureTarget& 
     ctx.webcam_settings = webcam_settings_;
     ctx.resolved_user_config = resolved_user_config_;
     ctx.caps = caps_;
+    ctx.encoder_caps = encoder_caps_;
     ctx.output_target_context =
         has_output_target_context_ ? output_target_context_ : BuildFilenameContextFromTarget(target);
     ctx.has_output_target_context = true;
@@ -1123,6 +1127,22 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     config.encoder_device = ctx.video_settings.encoder_device;
     config.resolved_encoder_device = ctx.resolved_encoder_device;
     ApplyOutputSettingsToRecorderConfig(config, ctx.output_settings);
+    if (const auto* requested = exosnap::engine::GetNvencTuning(config.backend_tuning)) {
+        const auto resolved =
+            capability::ResolveNvencTuning(*requested, ctx.encoder_caps ? *ctx.encoder_caps : ctx.caps,
+                                           ctx.resolved_user_config.video_codec, config.rate_control_mode);
+        auto compared_request = *requested;
+        if (!compared_request.lookahead)
+            compared_request.lookahead_depth = resolved.tuning.lookahead_depth;
+        if (compared_request != resolved.tuning) {
+            diagnostics::AppLog::warning(QStringLiteral("record.reconcile"),
+                                         QStringLiteral("field=nvenc_tuning requested tuning was reconciled: %1")
+                                             .arg(resolved.reason.empty()
+                                                      ? QStringLiteral("codec/device feature or resource limits")
+                                                      : QString::fromStdString(resolved.reason)));
+        }
+        config.backend_tuning = resolved.tuning;
+    }
     config.target = target;
     config.capture_backend = ctx.capture_backend;
     config.crop_region = ctx.crop_region;
@@ -2802,8 +2822,10 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
     split_settings_.duration_ms = SplitDurationMs(output_settings_.split);
     split_settings_.size_bytes = SplitSizeBytes(output_settings_.split);
 }
-void RecordingCoordinator::SetEncoderDeviceResolution(const exosnap::engine::ResolvedEncoderDevice& resolved) {
+void RecordingCoordinator::SetEncoderDeviceResolution(const exosnap::engine::ResolvedEncoderDevice& resolved,
+                                                      const capability::CapabilitySet* capabilities) {
     resolved_encoder_device_ = resolved;
+    encoder_caps_ = capabilities ? std::optional(*capabilities) : std::nullopt;
 }
 
 void RecordingCoordinator::SetVideoSettings(const VideoSettingsModel& settings) {

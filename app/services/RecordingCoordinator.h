@@ -361,7 +361,8 @@ class RecordingCoordinator {
     // adapters present and the selected capture target. The frontend owns the
     // adapter scan, so it resolves and passes the answer here; the engine
     // verifies it again against the actual capture adapter at start.
-    void SetEncoderDeviceResolution(const exosnap::engine::ResolvedEncoderDevice& resolved);
+    void SetEncoderDeviceResolution(const exosnap::engine::ResolvedEncoderDevice& resolved,
+                                    const capability::CapabilitySet* capabilities = nullptr);
     void SetOutputTargetContext(const FilenameTargetContext& context);
 
     // Returns the recording output directory in effect at the moment of the call.
@@ -524,6 +525,7 @@ class RecordingCoordinator {
         FilenameTargetContext output_target_context;
         bool has_output_target_context = false;
         capability::CapabilitySet caps;
+        std::optional<capability::CapabilitySet> encoder_caps;
         // Measured exclusive-fullscreen verdict for a window target, resolved on
         // the UI thread (the evidence producer is not worker-thread-safe) and
         // carried here for the worker's admission gate. None for monitor targets.
@@ -693,6 +695,7 @@ class RecordingCoordinator {
     OutputSettingsModel output_settings_;
     VideoSettingsModel video_settings_;
     exosnap::engine::ResolvedEncoderDevice resolved_encoder_device_;
+    std::optional<capability::CapabilitySet> encoder_caps_;
     WebcamSettings webcam_settings_;
     WebcamService webcam_service_;
     // Owned rather than borrowed: it must outlive any session that composites

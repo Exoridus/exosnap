@@ -55,3 +55,16 @@ For the full reference set, a proposed default must improve median BD-rate by at
 These are explicit project acceptance criteria, not physical constants. Revisit them deliberately with evidence. A preset increase, spatial/temporal AQ flag or deeper asynchronous queue does not earn a default change without measured user benefit and reliable output.
 
 The current workflow does not establish 10-bit/HDR quality, every advanced SDK tuning feature or cross-vendor equivalence. Add the relevant reference formats and hardware before making those claims. [Soak testing](soak-and-recovery-drills.md) independently checks endurance/synchronization; a quality sweep is not a reliability gate.
+
+## Advanced-feature scouts
+
+`probe_encode_file` applies explicit `--bframes`, `--b-ref off|each|middle`, `--lookahead`, `--lookahead-depth`, `--spatial-aq`, `--temporal-aq` and `--multipass single|quarter|full` through the production NVENC wrapper. Invalid codec/hardware combinations fail at encoder initialization. `--capabilities` prints authoritative per-adapter facts without encoding. Input slot count comes from the configured backend, not a probe constant. The resolved summary records actual features, input slots and output depth. The backlog summary and submitted/encoded/drained count check expose incomplete EOS drain. TIMING measures encoder service cost including slot waits, excluding reference reads and CPU uploads. It does not measure a live capture tick or desktop presentation.
+
+The same advanced flags are available on `exo-dev encoder-quality-matrix` and apply identically to every cell in a run. Use one output prefix per feature variant. Select P4 with a small explicit point set for scouting, then use four points only for candidates that warrant BD-rate confirmation. The baseline invocation remains unchanged. CQ spatial AQ remains opt-in and has not earned a default recommendation. Multipass is meaningful for VBR/CBR and is rejected for CQ. Use the probe directly for targeted CBR compatibility and timing checks.
+
+The matrix preserves each probe log and encoded file in its artifact directory. `<output>.evidence.json` records requested tuning, reference/probe/encoded SHA-256 digests and artifact paths. The normal report includes FFmpeg/libvmaf versions and quality tails. Add actual GPU, driver and SDK identity to the evidence. Requested flags alone never establish what ran.
+
+`probe_encode_file --mkv-output <path>` also writes the packets through the production Matroska writer, including actual codec-private extraction and decode-order interleaving. Inspect this file with ffprobe and full FFmpeg decode, then exercise production MP4 delivery, seeks, trim and split boundaries. Elementary-stream scoring alone cannot prove recording-container compatibility.
+
+Feature availability and default policy are separate decisions. Hardware support plus correct engine/mux behavior can qualify an Expert control. Changing defaults still requires the full representative-set gate above. If motion, stable content and scrolling text references are unavailable, report the default measurement as blocked and retain conservative defaults.
+`probe_encode_file --vfr` separately exercises VFR encoder initialization. The quality matrix uses the reference clip's CFR cadence; it does not measure static-source VFR capture behavior.

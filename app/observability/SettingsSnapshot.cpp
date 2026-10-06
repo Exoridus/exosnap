@@ -105,6 +105,21 @@ QJsonObject VideoConfigJson(const RecordingPresetConfig& config) {
     json.insert(QStringLiteral("framePacing"), FramePacingName(video.frame_pacing));
 
     json.insert(QStringLiteral("encoderPreset"), EncoderPresetName(out.nvenc_preset));
+    const auto& tuning = out.nvenc_tuning;
+    QJsonObject nvenc;
+    nvenc.insert(QStringLiteral("bframes"), static_cast<double>(tuning.bframes));
+    nvenc.insert(QStringLiteral("bRefMode"), tuning.b_ref_mode == exosnap::engine::NvencBRefMode::Each     ? "each"
+                                             : tuning.b_ref_mode == exosnap::engine::NvencBRefMode::Middle ? "middle"
+                                                                                                           : "off");
+    nvenc.insert(QStringLiteral("lookahead"), tuning.lookahead);
+    nvenc.insert(QStringLiteral("lookaheadDepth"), static_cast<double>(tuning.lookahead_depth));
+    nvenc.insert(QStringLiteral("spatialAQ"), tuning.spatial_aq);
+    nvenc.insert(QStringLiteral("temporalAQ"), tuning.temporal_aq);
+    nvenc.insert(QStringLiteral("multipass"),
+                 tuning.multipass == exosnap::engine::NvencMultipass::QuarterResolution ? "quarter"
+                 : tuning.multipass == exosnap::engine::NvencMultipass::FullResolution  ? "full"
+                                                                                        : "single");
+    json.insert(QStringLiteral("nvencTuning"), nvenc);
     json.insert(QStringLiteral("rateControl"), RateControlName(video.rate_control));
     json.insert(QStringLiteral("cq"), static_cast<double>(video.cq));
     json.insert(QStringLiteral("bitrateKbps"), static_cast<double>(video.bitrate_kbps));
@@ -340,6 +355,7 @@ QJsonObject RunningJson(const exosnap::engine::EncoderInitInfo& init, bool live)
     if (!init.valid)
         return json;
     json.insert(QStringLiteral("videoCodec"), ui::videoCodecLabel(init.codec));
+    json.insert(QStringLiteral("backendId"), QString::fromUtf8(init.backend_id));
     json.insert(QStringLiteral("encoderPreset"),
                 QString::fromUtf8(init.backend_preset.data(), static_cast<qsizetype>(init.backend_preset.size())));
     json.insert(QStringLiteral("rateControl"), RateControlName(init.rc_mode));
@@ -348,6 +364,10 @@ QJsonObject RunningJson(const exosnap::engine::EncoderInitInfo& init, bool live)
     json.insert(QStringLiteral("maxBitrateKbps"), static_cast<double>(init.max_bitrate_kbps));
     json.insert(QStringLiteral("gopLength"), static_cast<double>(init.gop_length));
     json.insert(QStringLiteral("bframes"), static_cast<double>(init.bframes));
+    json.insert(QStringLiteral("backendBRefMode"), QString::fromUtf8(init.backend_b_ref_mode));
+    json.insert(QStringLiteral("backendMultipass"), QString::fromUtf8(init.backend_multipass));
+    json.insert(QStringLiteral("inputSlots"), static_cast<double>(init.input_slots));
+    json.insert(QStringLiteral("outputDepth"), static_cast<double>(init.output_depth));
     json.insert(QStringLiteral("lookaheadFrames"), static_cast<double>(init.lookahead_frames));
     json.insert(QStringLiteral("temporalAQ"), init.temporal_aq);
     json.insert(QStringLiteral("spatialAQ"), init.spatial_aq);

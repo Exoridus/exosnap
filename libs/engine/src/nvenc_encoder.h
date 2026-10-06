@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,7 @@
 
 #include "nvEncodeAPI.h"
 
+#include <exosnap/engine/backend_tuning.h>
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/color_metadata.h>
 #include <exosnap/engine/pipeline_diagnostics.h>
@@ -23,6 +25,74 @@
 namespace exosnap::engine {
 
 struct EncodedVideoPacket;
+
+template <typename MetadataQueue>
+std::optional<typename MetadataQueue::value_type> TakeNvencPictureMetadata(MetadataQueue& metadata,
+                                                                           uint64_t output_timestamp) {
+    for (auto it = metadata.begin(); it != metadata.end(); ++it) {
+        if (it->input_ts == output_timestamp) {
+            const auto picture = *it;
+            metadata.erase(it);
+            return picture;
+        }
+    }
+    return std::nullopt;
+}
+
+struct NvencAdvancedCaps {
+    uint32_t max_bframes = 0;
+    uint32_t b_ref_mode = 0;
+    bool lookahead = false;
+    bool temporal_aq = false;
+};
+
+bool ValidateNvencTuning(const NvencTuning& tuning, const NvencAdvancedCaps& caps, RateControlMode rc,
+                         std::string& error, VideoCodec codec = VideoCodec::H264);
+void ApplyAdvancedTuningToNvenc(NV_ENC_CONFIG& config, VideoCodec codec, const NvencTuning& tuning) noexcept;
+uint32_t NvencResourceDepth(const NvencTuning& tuning, bool async = true) noexcept;
+
+// Input timestamps feed a decode clock independently of output picture PTS.
+// The initial negative schedule permits B-frame decoder preroll. Afterwards
+// the submission timeline preserves VFR gaps without guessing a constant rate.
+class NvencDecodeTimeline {
+  public:
+    void Reset(uint32_t bframes, uint64_t interval_ns) {
+        m_timestamps.clear();
+        m_bframes = bframes;
+        m_interval_ns = interval_ns;
+        m_outputs = 0;
+        m_delay_ns = 0;
+    }
+    void Submit(uint64_t pts_ns) {
+        m_timestamps.push_back(pts_ns);
+    }
+    void RejectLast() {
+        m_timestamps.pop_back();
+    }
+    int64_t Next() {
+        if (m_outputs >= m_bframes) {
+            const int64_t dts = static_cast<int64_t>(m_timestamps.front());
+            m_timestamps.pop_front();
+            ++m_outputs;
+            return dts;
+        }
+        if (m_delay_ns == 0) {
+            m_delay_ns = m_timestamps.size() > m_bframes ? m_timestamps[m_bframes] - m_timestamps.front()
+                                                         : m_bframes * m_interval_ns;
+        }
+        const int64_t dts = static_cast<int64_t>(m_timestamps.front()) -
+                            static_cast<int64_t>(m_delay_ns * (m_bframes - m_outputs) / m_bframes);
+        ++m_outputs;
+        return dts;
+    }
+
+  private:
+    std::deque<uint64_t> m_timestamps;
+    uint32_t m_bframes = 0;
+    uint64_t m_interval_ns = 0;
+    uint64_t m_outputs = 0;
+    uint64_t m_delay_ns = 0;
+};
 
 // NVENC error helpers
 const char* NvencStatusName(NVENCSTATUS st) noexcept;
@@ -126,11 +196,9 @@ std::size_t DiscardRejectedSubmission(PendingQueue& pending, uint64_t rejected_i
 // FindFreeOutputSlot — pure, testable round-robin scan for a free async
 // output-ring slot. Same round-robin-from-cursor pattern as
 // AcquireFreeSlot (member function, mutates m_slots for the 8-slot input
-// ring), generalised into a pure function over an explicit in-flight array so
-// the output ring's free/in-flight bookkeeping is unit-testable without a
-// live NVENC session. "Oldest in-flight" needs no separate helper: with
-// frameIntervalP=1 (no B-frames/lookahead) output order == submission order,
-// so the oldest is always the PendingFrame FIFO head. No GPU/NVENC session.
+// ring), generalised into a pure function over an explicit in-flight array.
+// Buffer completion follows submission order even when picture timestamps
+// are reordered. The oldest resource is therefore the submission FIFO head.
 // ---------------------------------------------------------------------------
 struct FreeOutputSlotResult {
     int32_t slot_idx = -1;   // -1 if every slot in [0, count) is in-flight
@@ -254,11 +322,11 @@ void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) 
 //     time, i.e. well before the 2 s media-time boundary. NVENC would insert an
 //     IDR nobody predicted: permanent keyframe_prediction_mismatches, perpetual
 //     emergency re-anchoring, and HDR10 metadata attached to the wrong picture.
-//     The backstop is therefore disabled (NVENC_INFINITE_GOPLENGTH — the
-//     documented pattern for a client that drives IDRs itself; valid because
-//     frameIntervalP is 1 / no B-frames).
+//     Zero B-frames uses NVENC_INFINITE_GOPLENGTH. Reordered VFR uses the largest
+//     finite uint32_t GOP because the SDK requires frameIntervalP=1 for infinite
+//     GOP. Media-time FORCEIDR restarts this counter long before it expires.
 // ---------------------------------------------------------------------------
-uint32_t ComputeNvencGopBackstop(uint32_t gop_length, bool constant_frame_rate) noexcept;
+uint32_t ComputeNvencGopBackstop(uint32_t gop_length, bool constant_frame_rate, uint32_t bframes = 0) noexcept;
 
 // ---------------------------------------------------------------------------
 // ApplyAdaptiveQuantizationToNvenc — pure, testable. Pins the whole AQ state
@@ -275,10 +343,9 @@ uint32_t ComputeNvencGopBackstop(uint32_t gop_length, bool constant_frame_rate) 
 // rows whose rate control is VBR or CBR. Revisit if the product ever moves to
 // VBR + targetQuality — that is the configuration the recommendation belongs to.
 //
-// Temporal AQ additionally has a capability gate (NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ)
-// and is not documented as valid without lookahead, which this pipeline does not
-// use. aqStrength stays 0 (driver auto-selection) so nothing is implied about a
-// strength while AQ is off. No GPU/NVENC session required.
+// Temporal AQ additionally has a capability gate (NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ).
+// These are conservative defaults. ApplyAdvancedTuningToNvenc resolves explicit
+// Expert choices after capability validation. No GPU/NVENC session required.
 // ---------------------------------------------------------------------------
 void ApplyAdaptiveQuantizationToNvenc(NV_ENC_CONFIG& cfg) noexcept;
 
@@ -405,6 +472,20 @@ class NvencEncoder {
     // see NvencPresetToGuid.
     void SetPreset(NvencPreset preset) noexcept {
         m_preset = preset;
+        m_advancedTuning.preset = preset;
+    }
+
+    void SetTuning(const NvencTuning& tuning) noexcept {
+        m_advancedTuning = tuning;
+        m_preset = tuning.preset;
+    }
+
+    [[nodiscard]] int32_t SlotCount() const noexcept {
+        return static_cast<int32_t>(m_slots.size());
+    }
+
+    [[nodiscard]] std::vector<uint8_t> SequenceHeader() const {
+        return m_sequenceHeader;
     }
 
     // Set canonical rate-control mode and target bitrate (kbps).
@@ -459,6 +540,14 @@ class NvencEncoder {
         info.lookahead_frames = m_encodeConfig.rcParams.enableLookahead ? m_encodeConfig.rcParams.lookaheadDepth : 0;
         info.temporal_aq = m_encodeConfig.rcParams.enableTemporalAQ != 0;
         info.spatial_aq = m_encodeConfig.rcParams.enableAQ != 0;
+        info.backend_b_ref_mode = m_advancedTuning.b_ref_mode == NvencBRefMode::Each     ? "each"
+                                  : m_advancedTuning.b_ref_mode == NvencBRefMode::Middle ? "middle"
+                                                                                         : "off";
+        info.backend_multipass = m_encodeConfig.rcParams.multiPass == NV_ENC_TWO_PASS_QUARTER_RESOLUTION ? "quarter"
+                                 : m_encodeConfig.rcParams.multiPass == NV_ENC_TWO_PASS_FULL_RESOLUTION  ? "full"
+                                                                                                         : "single";
+        info.input_slots = static_cast<uint32_t>(m_slots.size());
+        info.output_depth = static_cast<uint32_t>(m_activeDepth);
         info.bit_depth = m_bitDepth;
         info.chroma = m_chroma;
         info.color_full_range = (m_color.range == ColorRange::Full);
@@ -496,11 +585,11 @@ class NvencEncoder {
     bool CreateBitstreamBuffer(std::string& out_error);
 
     // Register one slot's D3D11 texture with NVENC (NV12 for 8-bit, P010 for 10-bit).
-    // Must be called after InitEncoder, once per slot (0..7).
+    // Must be called after InitEncoder, once per slot (0..SlotCount()-1).
     bool RegisterSlotTexture(int32_t slot_idx, ID3D11Texture2D* texture, std::string& out_error);
 
     // Acquire the next free input slot for writing.
-    // Returns slot index (0–7) or -1 if none free.
+    // Returns a slot index or -1 if none free.
     int32_t AcquireFreeSlot();
 
     // Release a slot that was acquired but not submitted (error path only).
@@ -565,31 +654,15 @@ class NvencEncoder {
     void* m_encoder = nullptr;
     NV_ENC_PRESET_CONFIG m_presetConfig{};
     NV_ENC_CONFIG m_encodeConfig{};
-    // Sync-mode single output buffer (unchanged — the sync path remains fully
-    // intact as the capability fallback). Unused when m_asyncMode is true.
-    NV_ENC_OUTPUT_PTR m_bitstreamBuffer = nullptr;
-
-    // Async-mode output ring. kMaxOutputResources is the allocation ceiling
-    // (covers the observed P6/P7 pipeline depth, plus headroom for a future
-    // higher-depth pipeline once lookahead/B-frames need one);
-    // m_activeDepth (1..kMaxOutputResources) is how many of them are
-    // actually used by Submit/Reap this session. All kMaxOutputResources
-    // bitstream buffers and events are created unconditionally, so any depth up
-    // to the ceiling costs no additional video memory over depth 1.
-    //
-    // Depth 2 is the measured optimum: at depth 1 every submission first waits
-    // for the previous frame's completion event, which costs ~0.64 ms per frame
-    // (360 frames, AV1 P4, 1440p60); depth 2 removes that and depth 4 adds
-    // nothing further. Output is byte-identical at depths 1, 2 and 4 — the depth
-    // only pipelines submission against completion, it never changes an encode
-    // decision.
-    static constexpr int32_t kMaxOutputResources = 4;
+    // Advanced tuning retains enough queued IO samples for B-frame reorder,
+    // lookahead and SDK pipeline slack. Baseline keeps its measured depth 2.
+    static constexpr int32_t kMaxOutputResources = 36;
     struct OutputResource {
         NV_ENC_OUTPUT_PTR bitstream = nullptr;
         HANDLE event = nullptr;
         bool in_flight = false;
     };
-    std::array<OutputResource, kMaxOutputResources> m_outputResources{};
+    std::vector<OutputResource> m_outputResources;
     int32_t m_activeDepth = 2;
     int32_t m_outputCursor = 0;
     bool m_asyncMode = false;
@@ -598,8 +671,8 @@ class NvencEncoder {
     // NvEncEncodePicture call — this one is reserved for that purpose.
     HANDLE m_eosEvent = nullptr;
 
-    // Input-slot ring: 8 independent NV12 input resources
-    std::array<InputSlot, 8> m_slots;
+    // Backend-owned input ring, sized after tuning has been validated.
+    std::vector<InputSlot> m_slots = std::vector<InputSlot>(8);
     int32_t m_slotCursor = 0;
 
     VideoCodec m_codec = VideoCodec::Av1;
@@ -616,31 +689,22 @@ class NvencEncoder {
     // NEED_MORE_INPUT is not fatal: retain pending ownership and drain output.
     // Buffering increases latency and input-slot pressure.
     NvencPreset m_preset = NvencPreset::P4;
+    NvencTuning m_advancedTuning;
+    std::vector<uint8_t> m_sequenceHeader;
     // Resolved via NvencPresetToGuid(m_preset) in FetchPresetConfig(); the member
     // initializer here is only the value before FetchPresetConfig() first runs.
     GUID m_presetGuid = NV_ENC_PRESET_P4_GUID;
     const NV_ENC_TUNING_INFO m_tuningInfo = NV_ENC_TUNING_INFO_HIGH_QUALITY;
 
-    // One entry per submitted frame not yet returned as output. Consolidates the
-    // former parallel PTS/slot FIFOs into a single record so the submit timestamp
-    // travels with each in-flight frame; the consuming lock computes the true
-    // submit->ready latency from it (carried out on EncodedVideoPacket::
-    // encode_latency_ms). Output order == submission order today (frameIntervalP=1,
-    // no lookahead), so front() is always the next output — behaviour-identical to
-    // the previous two-FIFO scheme.
+    // Submission samples own input and output resources until FIFO completion.
+    // Picture metadata is tracked separately because the returned bitstream
+    // can describe a different input timestamp under frame reordering.
     struct PendingFrame {
         uint64_t pts_ns = 0;
         int32_t slot_idx = -1;
         std::chrono::steady_clock::time_point submit_time{};
-        // Order-validation fields: the inputTimeStamp submitted for this frame
-        // (compared against lockBS.outputTimeStamp on consume — a mismatch is
-        // fatal, see LockAndConsumeBitstream) and the submission-side keyframe
-        // prediction (compared against the actual lockBS.pictureType, warn-only).
         uint64_t input_ts = 0;
         bool predicted_keyframe = false;
-        // Which output-ring slot this submission's bitstream/event lives in
-        // (async mode only; -1/unused in sync mode, which has a single shared
-        // m_bitstreamBuffer and no completion event).
         int32_t out_idx = -1;
     };
     // A deque rather than a queue: a rejected submission has to remove ITS OWN
@@ -648,6 +712,8 @@ class NvencEncoder {
     // the oldest frame still in flight, whose slot and output buffer the driver
     // still owns. See DiscardRejectedSubmission.
     std::deque<PendingFrame> m_pending;
+    std::deque<PendingFrame> m_pictureMetadata;
+    NvencDecodeTimeline m_decodeTimeline;
 
     // Latched by Open/Configure when the driver's status says the device cannot
     // encode, never on a transient failure. See IsEncoderUnreachableStatus.

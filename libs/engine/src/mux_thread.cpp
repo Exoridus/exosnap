@@ -9,6 +9,7 @@
 #include "exosnap/engine/recorder_session.h"
 #include "exosnap/engine/split_trigger_source.h"
 #include "matroska_stream_writer.h"
+#include "mux_audio_hold.h"
 #include "mux_queue.h"
 #include "pipeline_diagnostics_aggregator.h"
 #include "premux_state.h"
@@ -24,10 +25,10 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
-#include <deque>
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ratio>
 #include <span>
 #include <string>
@@ -76,14 +77,12 @@ bool MuxThread::Join(unsigned timeout_ms) {
 }
 
 // ---------------------------------------------------------------------------
-// Run — streaming MKV write (constant-RAM via bounded reorder window) with
-// in-place segment splitting (SPLIT-RECORDING-R1).
+// Run - streaming MKV write with bounded packet holds and segment splitting.
 //
 // A split is a SplitSentinel in the mux queue (emitted by VideoThread right
-// before the forced-keyframe that begins the new segment). On the sentinel the
-// current MatroskaStreamWriter is Finalize()d (drain window, Cues, Duration,
-// SeekHead, Segment size, close) and the segment's metadata is reported via the
-// segment callback. The next video packet's session PTS becomes the new
+// before the forced-keyframe that begins the new segment). The keyframe PTS
+// partitions held audio before finalizing the current writer and reporting its
+// metadata through the segment callback. The keyframe's session PTS becomes the new
 // segment's epoch; every packet is rebased to segment-local time (PTS - epoch)
 // before Push. Because each writer owns exactly one file and frees clusters as
 // it goes, a failure opening/writing segment N cannot touch segments 1..N-1.
@@ -372,7 +371,7 @@ void MuxThread::Run() {
     // --- A/V timestamp alignment, resolved incrementally (see header note) ---
     bool epoch_resolved = false;
     uint64_t video_epoch_100ns = 0;
-    std::deque<EncodedAudioPacket> pending_audio;
+    MuxAudioHold pending_audio;
 
     auto resolve_epoch = [&]() {
         if (epoch_resolved)
@@ -431,37 +430,49 @@ void MuxThread::Run() {
     // and the audio queue is independent -- so audio can arrive first, and
     // writing it before the epoch exists is what put ten-minute timestamps in a
     // freshly-opened file.
-    std::deque<EncodedAudioPacket> segment_pending_audio;
+    MuxAudioHold segment_pending_audio;
     // Audio that belonged to a segment already closed. Counted, not just dropped.
     uint64_t trimmed_audio_packets = 0;
     // Highest aligned session PTS actually WRITTEN per audio track, so the
     // duration reported for audio describes the file rather than the encoder.
     std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> aligned_audio_end_ns{};
+    MuxAudioHold audio_hold;
+    std::optional<SplitSentinel> pending_split;
 
     std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> audio_codec_delay_ns{};
     for (uint32_t i = 0; i < track_count; ++i) {
         audio_codec_delay_ns[i] = static_cast<uint64_t>(audioCp[i].codec_delay_samples) * 1000000000ULL /
                                   std::max<uint32_t>(1u, m_state.config.audio_sample_rate);
     }
-    auto push_audio = [&](EncodedAudioPacket&& payload) {
+    auto align_audio = [&](EncodedAudioPacket& payload) -> bool {
         if (write_error || !seg.writer)
-            return;
+            return false;
         if (payload.track_id >= track_count || payload.track_id >= CodecPrivateData::kMaxAudioTracks) {
             std::fprintf(stderr, "MuxThread: skipping audio packet with out-of-range track_id=%u (track_count=%u)\n",
                          payload.track_id, track_count);
-            return;
+            return false;
         }
         uint64_t shifted_pts_ns = payload.pts_ns;
         if (!ShiftAudioPts(payload.pts_ns, audio_shift_for(payload.track_id), shifted_pts_ns)) {
-            return; // this audio predates the first video frame — trimmed, not written at 0
+            return false; // audio predates the first video frame
         }
         payload.pts_ns = shifted_pts_ns;
+        return true;
+    };
+    auto push_audio = [&](EncodedAudioPacket&& payload) {
+        if (write_error || !seg.writer)
+            return;
         const SegmentLocalPts placed = PlaceOnSegmentTimeline(payload.pts_ns, seg.epoch_set, seg.epoch_session_pts_ns);
         if (placed.placement == SegmentPlacement::Defer) {
             // No epoch yet: hold it rather than write a session PTS into a
             // segment-local timeline. Drained by drain_segment_pending_audio as
             // soon as the first video packet of this segment sets the epoch.
-            segment_pending_audio.push_back(std::move(payload));
+            if (!segment_pending_audio.Push(std::move(payload))) {
+                write_error = true;
+                m_state.diagnostics.OnMuxFailure();
+                m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                      "Audio waiting for the segment epoch exceeded the mux byte or media-time limit");
+            }
             return;
         }
         if (placed.placement == SegmentPlacement::Trim) {
@@ -510,8 +521,7 @@ void MuxThread::Run() {
         }
         // The epoch was just set from this packet when it is the segment's first,
         // so Write is the only outcome here; Defer cannot happen and a video
-        // packet before its own segment's epoch would be a re-ordered stream the
-        // encoder does not produce.
+        // packet before its own segment's IDR epoch violates a closed GOP.
         const SegmentLocalPts placed = PlaceOnSegmentTimeline(payload.pts_ns, seg.epoch_set, seg.epoch_session_pts_ns);
         if (placed.placement != SegmentPlacement::Write) {
             write_error = true;
@@ -524,6 +534,8 @@ void MuxThread::Run() {
         MuxPacket mp;
         mp.pts_ns = local;
         mp.track_num = 1;
+        if (payload.dts_ns)
+            mp.dts_ns = *payload.dts_ns - static_cast<int64_t>(seg.epoch_session_pts_ns);
         mp.is_key = payload.keyframe;
         // H.264/HEVC samples must be length-prefixed to match the avcC/hvcC
         // CodecPrivate written into the Tracks element. A failed conversion used
@@ -564,33 +576,59 @@ void MuxThread::Run() {
         }
     };
 
+    auto drain_audio_hold = [&](bool all) {
+        while (!write_error) {
+            auto packet = all ? audio_hold.Pop() : audio_hold.PopEligible();
+            if (!packet)
+                break;
+            push_audio(std::move(*packet));
+        }
+    };
+    auto hold_audio = [&](EncodedAudioPacket&& payload) {
+        if (!align_audio(payload))
+            return;
+        if (!audio_hold.Push(std::move(payload))) {
+            write_error = true;
+            m_state.diagnostics.OnMuxFailure();
+            m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                  "Audio waiting for video exceeded the mux byte or media-time limit");
+        }
+    };
+    auto buffer_pending_audio = [&](EncodedAudioPacket&& payload) {
+        if (!pending_audio.Push(std::move(payload))) {
+            write_error = true;
+            m_state.diagnostics.OnMuxFailure();
+            m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                  "Audio waiting for the video epoch exceeded the mux byte or media-time limit");
+        }
+    };
     auto drain_pending_audio = [&]() {
         if (!epoch_resolved)
             return;
-        while (!pending_audio.empty() && !write_error) {
-            push_audio(std::move(pending_audio.front()));
-            pending_audio.pop_front();
+        while (!write_error) {
+            auto packet = pending_audio.Pop();
+            if (!packet)
+                break;
+            hold_audio(std::move(*packet));
         }
     };
 
     // Called once the current segment's epoch is known. Each held packet goes
-    // back through push_audio, which now places it -- written or trimmed. Moved
-    // out of the deque first so a packet that defers again (it cannot, the epoch
-    // is set) could not loop forever.
+    // back through push_audio on its already aligned timeline.
     auto drain_segment_pending_audio = [&]() {
-        if (!seg.epoch_set || segment_pending_audio.empty())
+        if (!seg.epoch_set)
             return;
-        std::deque<EncodedAudioPacket> held;
-        held.swap(segment_pending_audio);
-        while (!held.empty() && !write_error) {
-            push_audio(std::move(held.front()));
-            held.pop_front();
+        while (!write_error) {
+            auto packet = segment_pending_audio.Pop();
+            if (!packet)
+                break;
+            push_audio(std::move(*packet));
         }
     };
 
-    // Begin a new segment at a SplitSentinel: finalize the current segment, then
-    // open the next. The new epoch is captured from the next video packet.
-    auto begin_new_segment = [&](const SplitSentinel& s) {
+    // The adjacent keyframe provides the actual split boundary. Audio may have
+    // arrived ahead of this delayed video output and still belongs to either file.
+    auto begin_new_segment = [&](const SplitSentinel& s, uint64_t boundary_ns) {
         if (write_error)
             return;
         // Flush any buffered pre-epoch audio into the OLD segment first -- both
@@ -598,6 +636,12 @@ void MuxThread::Run() {
         // the recording) and anything held for this segment, which still has its
         // own epoch and can therefore still place it.
         drain_pending_audio();
+        while (!write_error) {
+            auto packet = audio_hold.PopBefore(boundary_ns);
+            if (!packet)
+                break;
+            push_audio(std::move(*packet));
+        }
         drain_segment_pending_audio();
         finalize_segment(/*session_end=*/false);
         // finalize_segment() sets write_error on a finalize/I-O failure (failure
@@ -623,8 +667,21 @@ void MuxThread::Run() {
             if (!payload.bytes.empty()) {
                 m_state.diagnostics.OnMuxPacket(payload.bytes.size());
                 resolve_epoch();
+                if (pending_split) {
+                    if (!payload.keyframe) {
+                        write_error = true;
+                        m_state.diagnostics.OnMuxFailure();
+                        m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Split boundary video is not a keyframe");
+                        return;
+                    }
+                    begin_new_segment(*pending_split, payload.pts_ns);
+                    pending_split.reset();
+                }
+                const uint64_t video_pts_ns = payload.pts_ns;
                 push_video(std::move(payload));
+                audio_hold.AdvanceVideo(video_pts_ns);
                 drain_pending_audio();
+                drain_audio_hold(false);
                 drain_segment_pending_audio();
             }
         } else if constexpr (std::is_same_v<T, EncodedAudioPacket>) {
@@ -633,15 +690,35 @@ void MuxThread::Run() {
                 resolve_epoch();
                 if (epoch_resolved) {
                     drain_pending_audio();
-                    push_audio(std::move(payload));
+                    hold_audio(std::move(payload));
+                    drain_audio_hold(video_eos && !pending_split);
                 } else {
-                    pending_audio.push_back(std::move(payload));
+                    buffer_pending_audio(std::move(payload));
                 }
             }
+        } else if constexpr (std::is_same_v<T, VideoProgressSentinel>) {
+            if (pending_split) {
+                write_error = true;
+                m_state.diagnostics.OnMuxFailure();
+                m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Video progress interrupted a split boundary");
+                return;
+            }
+            audio_hold.AdvanceVideo(payload.safe_before_pts_ns);
+            drain_pending_audio();
+            drain_audio_hold(false);
         } else if constexpr (std::is_same_v<T, SplitSentinel>) {
-            begin_new_segment(payload);
+            if (pending_split) {
+                write_error = true;
+                m_state.diagnostics.OnMuxFailure();
+                m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Split boundary has no adjacent keyframe");
+                return;
+            }
+            pending_split = payload;
         } else if constexpr (std::is_same_v<T, VideoEosSentinel>) {
             video_eos = true;
+            drain_pending_audio();
+            if (!pending_split)
+                drain_audio_hold(true);
         } else if constexpr (std::is_same_v<T, AudioEosSentinel>) {
             if (payload.track_id < track_count && payload.track_id < CodecPrivateData::kMaxAudioTracks)
                 audio_eos[payload.track_id] = true;
@@ -655,8 +732,11 @@ void MuxThread::Run() {
             if (pkt.bytes.empty())
                 continue;
             resolve_epoch();
+            const uint64_t video_pts_ns = pkt.pts_ns;
             push_video(std::move(pkt));
+            audio_hold.AdvanceVideo(video_pts_ns);
             drain_pending_audio();
+            drain_audio_hold(false);
             drain_segment_pending_audio();
         }
         for (auto& pkt : pending.audio) {
@@ -665,9 +745,10 @@ void MuxThread::Run() {
             resolve_epoch();
             if (epoch_resolved) {
                 drain_pending_audio();
-                push_audio(std::move(pkt));
+                hold_audio(std::move(pkt));
+                drain_audio_hold(false);
             } else {
-                pending_audio.push_back(std::move(pkt));
+                buffer_pending_audio(std::move(pkt));
             }
         }
     }
@@ -767,20 +848,27 @@ void MuxThread::Run() {
     // If the epoch never resolved (no video frame at all), flush whatever audio
     // was buffered un-rebased so it is not silently lost.
     if (!epoch_resolved) {
-        while (!pending_audio.empty() && !write_error) {
-            push_audio(std::move(pending_audio.front()));
-            pending_audio.pop_front();
+        while (!write_error) {
+            auto packet = pending_audio.Pop();
+            if (!packet)
+                break;
+            if (align_audio(*packet))
+                push_audio(std::move(*packet));
         }
     }
+    if (pending_split && !write_error) {
+        write_error = true;
+        m_state.diagnostics.OnMuxFailure();
+        m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Split boundary ended before its keyframe arrived");
+    }
+    drain_audio_hold(true);
     // Audio still held for the last segment. With an epoch it is placed as
     // usual; without one this segment never got a video packet, so there is no
     // timeline to place it on and it is counted as trimmed rather than written
     // at a timestamp that means nothing.
     drain_segment_pending_audio();
-    if (!segment_pending_audio.empty()) {
-        trimmed_audio_packets += segment_pending_audio.size();
-        segment_pending_audio.clear();
-    }
+    while (segment_pending_audio.Pop())
+        ++trimmed_audio_packets;
 
     // The aligned audio ends, published where the collector can compare them
     // against the video duration on the same timeline.

@@ -164,4 +164,123 @@ ExoCard {
             onValueActivated: value => root.settings.nvencPreset = value
         }
     }
+
+    ExoSettingRow {
+        label: qsTr("B-frames")
+        info: qsTr("Reordered frames can improve compression. They increase encoder buffering and may affect compatibility with players and editing tools.")
+        warning: root.settings.nvencBframesHint
+        stacked: root.stacked
+        visible: root.settings.expertMode && root.settings.nvencAdvancedRelevant
+        Layout.fillWidth: true
+        ExoSelect {
+            options: root.settings.nvencBframesOptions
+            value: root.settings.nvencBframes
+            enabled: !root.settings.controlsLocked && root.settings.nvencBframesOptions.length > 1
+            Layout.fillWidth: true
+            Accessible.name: qsTr("B-frames")
+            onValueActivated: value => root.settings.nvencBframes = value
+        }
+    }
+
+    ExoSettingRow {
+        label: qsTr("B-frame reference mode")
+        info: qsTr("Using B-frames as references may improve compression and increases dependencies within a GOP.")
+        warning: root.settings.nvencBRefHint
+        stacked: root.stacked
+        visible: root.settings.expertMode && root.settings.nvencBRefRelevant
+        Layout.fillWidth: true
+        ExoSelect {
+            options: root.settings.nvencBRefOptions
+            value: root.settings.nvencBRef
+            enabled: !root.settings.controlsLocked && root.settings.nvencBRefOptions.length > 1
+            Layout.fillWidth: true
+            Accessible.name: qsTr("B-frame reference mode")
+            onValueActivated: value => root.settings.nvencBRef = value
+        }
+    }
+
+    ExoSettingRow {
+        label: qsTr("Lookahead")
+        info: qsTr("Analyzes upcoming frames before encoding. It increases latency, GPU work and memory use.")
+        warning: root.settings.nvencLookaheadHint
+        stacked: root.stacked
+        controlWidth: ExoTheme.controlSlotSwitch
+        visible: root.settings.expertMode && root.settings.nvencAdvancedRelevant
+        Layout.fillWidth: true
+        ExoSwitch {
+            checked: root.settings.nvencLookahead
+            enabled: !root.settings.controlsLocked && root.settings.nvencLookaheadSupported
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+            Accessible.name: qsTr("Lookahead")
+            onToggledByUser: value => root.settings.nvencLookahead = value
+        }
+    }
+
+    ExoSettingRow {
+        label: qsTr("Lookahead depth")
+        hint: qsTr("Frames buffered for analysis")
+        stacked: root.stacked
+        visible: root.settings.expertMode && root.settings.nvencLookahead
+        Layout.fillWidth: true
+        ExoNumberField {
+            from: root.settings.nvencLookaheadMinDepth
+            to: root.settings.nvencLookaheadMaxDepth
+            value: root.settings.nvencLookaheadDepth
+            enabled: !root.settings.controlsLocked
+            Layout.fillWidth: true
+            Accessible.name: qsTr("Lookahead depth")
+            onValueCommitted: value => root.settings.nvencLookaheadDepth = value
+        }
+    }
+
+    ExoSettingRow {
+        label: qsTr("Spatial AQ")
+        info: qsTr("Redistributes quality within each frame. It uses GPU work and can trade small text detail for quality in other regions. It is off by default, including CQ.")
+        warning: root.settings.nvencSpatialAqHint
+        stacked: root.stacked
+        controlWidth: ExoTheme.controlSlotSwitch
+        visible: root.settings.expertMode && root.settings.nvencAdvancedRelevant
+        Layout.fillWidth: true
+        ExoSwitch {
+            checked: root.settings.nvencSpatialAq
+            enabled: !root.settings.controlsLocked && root.settings.nvencSpatialAqSupported
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+            Accessible.name: qsTr("Spatial AQ")
+            onToggledByUser: value => root.settings.nvencSpatialAq = value
+        }
+    }
+
+    ExoSettingRow {
+        label: qsTr("Temporal AQ")
+        info: qsTr("Redistributes quality across frames according to motion. It uses GPU work and can increase bitrate variation.")
+        warning: root.settings.nvencTemporalAqHint
+        stacked: root.stacked
+        controlWidth: ExoTheme.controlSlotSwitch
+        visible: root.settings.expertMode && root.settings.nvencAdvancedRelevant
+        Layout.fillWidth: true
+        ExoSwitch {
+            checked: root.settings.nvencTemporalAq
+            enabled: !root.settings.controlsLocked && root.settings.nvencTemporalAqSupported
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+            Accessible.name: qsTr("Temporal AQ")
+            onToggledByUser: value => root.settings.nvencTemporalAq = value
+        }
+    }
+
+    ExoSettingRow {
+        label: qsTr("Multipass")
+        info: qsTr("An extra analysis pass may improve bitrate allocation for VBR and CBR. Full-resolution analysis costs more GPU work than quarter-resolution analysis.")
+        warning: root.settings.nvencMultipassHint
+        stacked: root.stacked
+        visible: root.settings.expertMode && root.settings.nvencMultipassRelevant
+        Layout.fillWidth: true
+        ExoSelect {
+            options: root.settings.nvencMultipassOptions
+            value: root.settings.nvencMultipass
+            enabled: !root.settings.controlsLocked
+            Layout.fillWidth: true
+            Accessible.name: qsTr("Multipass")
+            onValueActivated: value => root.settings.nvencMultipass = value
+        }
+    }
 }

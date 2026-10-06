@@ -303,6 +303,14 @@ TEST(SessionReport, CarriesVideoPacing) {
     EXPECT_EQ(counters[QStringLiteral("frames_dropped")].toObject()[QStringLiteral("processing_failure")].toInt(), 7);
 }
 
+TEST(SessionReport, VfrEncoderHeartbeatsStaySeparateFromCfrDuplicates) {
+    auto inputs = MakeInputs();
+    inputs.snapshot.capture.vfr_encoder_heartbeats = 72;
+    const auto counters = Parse(BuildSessionReportJson(inputs))[QStringLiteral("counters")].toObject();
+    EXPECT_EQ(counters[QStringLiteral("frames_duplicated")].toInt(), 5);
+    EXPECT_EQ(counters[QStringLiteral("vfr_encoder_heartbeats")].toInt(), 72);
+}
+
 TEST(SessionReport, KeyframePredictionMismatchesAreReported) {
     // Warn-only during the recording, so the end-of-session total is the only
     // place a soak run can see the enforced keyframe cadence diverged at all.

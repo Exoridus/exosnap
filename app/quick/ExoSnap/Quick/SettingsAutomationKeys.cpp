@@ -103,6 +103,17 @@ const std::array<EnumEntry, 7> kEncoderPresets{{
     {"P7", static_cast<int>(exosnap::engine::NvencPreset::P7)},
 }};
 
+const std::array<EnumEntry, 3> kNvencBRefModes{{
+    {"off", static_cast<int>(exosnap::engine::NvencBRefMode::Off)},
+    {"each", static_cast<int>(exosnap::engine::NvencBRefMode::Each)},
+    {"middle", static_cast<int>(exosnap::engine::NvencBRefMode::Middle)},
+}};
+const std::array<EnumEntry, 3> kNvencMultipass{{
+    {"single", static_cast<int>(exosnap::engine::NvencMultipass::SinglePass)},
+    {"quarter", static_cast<int>(exosnap::engine::NvencMultipass::QuarterResolution)},
+    {"full", static_cast<int>(exosnap::engine::NvencMultipass::FullResolution)},
+}};
+
 const std::array<EnumEntry, 4> kRateControls{{
     {"constantQuality", static_cast<int>(exosnap::engine::RateControlMode::ConstantQuality)},
     {"variableBitrate", static_cast<int>(exosnap::engine::RateControlMode::VariableBitrate)},
@@ -264,6 +275,20 @@ QVector<KeyDescriptor> BuildKeys() {
     // --- Recording: encoder ---------------------------------------------------
     keys.append(EnumKey("video.nvencPreset", "NVENC speed/quality preset", kEncoderPresets,
                         &SettingsAdapter::nvencPreset, &SettingsAdapter::setNvencPreset));
+    keys.append(IntKey("video.nvencBframes", "NVENC B-frame count", &SettingsAdapter::nvencBframes,
+                       &SettingsAdapter::setNvencBframes));
+    keys.append(EnumKey("video.nvencBRef", "NVENC B-frame reference mode", kNvencBRefModes, &SettingsAdapter::nvencBRef,
+                        &SettingsAdapter::setNvencBRef));
+    keys.append(BoolKey("video.nvencLookahead", "NVENC Lookahead", &SettingsAdapter::nvencLookahead,
+                        &SettingsAdapter::setNvencLookahead));
+    keys.append(IntKey("video.nvencLookaheadDepth", "NVENC Lookahead depth", &SettingsAdapter::nvencLookaheadDepth,
+                       &SettingsAdapter::setNvencLookaheadDepth));
+    keys.append(BoolKey("video.nvencSpatialAq", "NVENC Spatial AQ", &SettingsAdapter::nvencSpatialAq,
+                        &SettingsAdapter::setNvencSpatialAq));
+    keys.append(BoolKey("video.nvencTemporalAq", "NVENC Temporal AQ", &SettingsAdapter::nvencTemporalAq,
+                        &SettingsAdapter::setNvencTemporalAq));
+    keys.append(EnumKey("video.nvencMultipass", "NVENC Multipass", kNvencMultipass, &SettingsAdapter::nvencMultipass,
+                        &SettingsAdapter::setNvencMultipass));
     // Deprecated alias: this key always addressed the NVENC preset. It keeps
     // the same values and meaning, so existing automation scripts are not
     // silently re-pointed at a different backend.

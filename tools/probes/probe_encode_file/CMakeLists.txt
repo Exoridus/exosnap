@@ -24,6 +24,8 @@ add_executable(probe_encode_file
 
 target_link_libraries(probe_encode_file PRIVATE
     exosnap_engine
+    exosnap_capability
+    FFmpeg::mux
     exosnap::warnings
     d3d11.lib
 )
@@ -37,3 +39,11 @@ target_compile_definitions(probe_encode_file PRIVATE NOMINMAX)
 
 set_property(TARGET probe_encode_file PROPERTY CXX_STANDARD 20)
 set_property(TARGET probe_encode_file PROPERTY CXX_STANDARD_REQUIRED ON)
+
+if(WIN32 AND EXOSNAP_FFMPEG_DLLS)
+    add_custom_command(TARGET probe_encode_file POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${EXOSNAP_FFMPEG_DLLS} "$<TARGET_FILE_DIR:probe_encode_file>"
+        COMMAND_EXPAND_LISTS
+    )
+endif()

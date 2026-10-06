@@ -240,6 +240,21 @@ TEST(PipelineDiagnostics, ResetStampsGenerationAndClearsCounters) {
     EXPECT_EQ(s.video_encoder.forced_keyframes, 0u);
 }
 
+TEST(PipelineDiagnostics, VfrHeartbeatsRemainSeparateFromCfrDuplicatesAndLoss) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnFrameDuplicated();
+    agg.OnVfrEncoderHeartbeat();
+    agg.OnVfrEncoderHeartbeat();
+    const auto summary = agg.BuildPerfSummary();
+    EXPECT_EQ(summary.duplicated_frames, 1u);
+    EXPECT_EQ(summary.vfr_encoder_heartbeats, 2u);
+    EXPECT_EQ(summary.dropped_backpressure, 0u);
+    EXPECT_EQ(summary.dropped_processing_failure, 0u);
+    agg.Reset(2, MakeConfig());
+    EXPECT_EQ(agg.BuildPerfSummary().vfr_encoder_heartbeats, 0u);
+}
+
 TEST(PipelineDiagnostics, RecordingSnapshotIsValidInitializingIsNot) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());

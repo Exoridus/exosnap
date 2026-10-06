@@ -20,6 +20,8 @@
 #include "models/RecordingPreset.h"
 #include "settings/RecordingPresetStore.h"
 
+#include <toml++/toml.hpp>
+
 namespace exosnap {
 namespace {
 
@@ -379,6 +381,52 @@ TEST(RecordingPresetStore, NvencPresetPersists_P7) {
         EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, exosnap::engine::NvencPreset::P7);
     }
 
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, AdvancedNvencWishesPersistForLiveAndNamedPresets) {
+    const QString path = UniqueTempPath();
+    RecordingPreset preset = MakeDefaultPreset();
+    preset.id = GeneratePresetId();
+    preset.name = "Advanced NVENC";
+    auto& tuning = preset.config.output.nvenc_tuning;
+    tuning.bframes = 3;
+    tuning.b_ref_mode = exosnap::engine::NvencBRefMode::Middle;
+    tuning.lookahead = true;
+    tuning.lookahead_depth = 28;
+    tuning.spatial_aq = true;
+    tuning.temporal_aq = true;
+    tuning.multipass = exosnap::engine::NvencMultipass::FullResolution;
+    RecordingPresetStore store(path);
+    store.Save({preset}, preset.id, preset.config);
+    const auto loaded = store.Load();
+    ASSERT_EQ(loaded.user_presets.size(), 1u);
+    EXPECT_EQ(loaded.user_presets[0].config.output.nvenc_tuning, tuning);
+    ASSERT_TRUE(loaded.live.has_value());
+    EXPECT_EQ(loaded.live->output.nvenc_tuning, tuning);
+    EXPECT_FALSE(loaded.repaired);
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, MalformedAdvancedNvencFieldsFallBackToConservativeValues) {
+    const QString path = UniqueTempPath();
+    auto preset = MakeDefaultPreset();
+    preset.id = GeneratePresetId();
+    RecordingPresetStore store(path);
+    store.Save({preset}, preset.id, preset.config);
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly | QIODevice::Text));
+    QString toml = QString::fromUtf8(file.readAll());
+    file.close();
+    toml.replace(QStringLiteral("bframes = 0"), QStringLiteral("bframes = -1"));
+    toml.replace(QStringLiteral("b_ref_mode = \"off\""), QStringLiteral("b_ref_mode = \"invalid\""));
+    toml.replace(QStringLiteral("lookahead_depth = 16"), QStringLiteral("lookahead_depth = 999"));
+    toml.replace(QStringLiteral("multipass = \"single\""), QStringLiteral("multipass = \"invalid\""));
+    ASSERT_NO_THROW(static_cast<void>(toml::parse(toml.toStdString())));
+    ASSERT_TRUE(WriteTomlString(path, toml));
+    const auto loaded = store.Load();
+    ASSERT_TRUE(loaded.live.has_value());
+    EXPECT_EQ(loaded.live->output.nvenc_tuning, exosnap::engine::NvencTuning{});
     CleanupFile(path);
 }
 
