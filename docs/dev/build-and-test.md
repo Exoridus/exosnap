@@ -9,7 +9,7 @@ Use Windows 10/11 x64, Visual Studio 2022 Desktop development with C++, PowerShe
 The source language is C++20. NVIDIA NVENC is needed for real recording, not for most pure tests. Rust owns automation and protocol tests in the `tools/` workspace. PowerShell is the Windows command shell, not a separate script-test runtime.
 
 The canonical Qt SDK version is in `.qt-version`; the current minimum is Qt 6.12.
-Provisioning distinguishes base archives from modules: ShaderTools is a separate module.
+Provisioning distinguishes base archives from modules: ShaderTools is a separate module. The Quick profile also requires the qttools archive for Qt LinguistTools (lupdate, lrelease and lcheck).
 Use a fresh build directory when changing the SDK so cached CMake package paths
 and deployment tools cannot retain a different Qt runtime.
 
