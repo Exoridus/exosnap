@@ -1390,8 +1390,9 @@ QString SettingsAdapter::nvencLookaheadHint() const {
         return tr("Reduce the B-frame count to enable Lookahead.");
     if (config_.output.nvenc_tuning.lookahead && !nvencLookahead())
         return tr("Saved Lookahead preference is unavailable on this codec/device.");
-    return nvencLookaheadSupported() ? QString()
-                                     : tr("Lookahead support has not been confirmed for this codec/device.");
+    return nvencLookaheadSupported()
+               ? tr("Maximum Lookahead depth: %1 (limited to reduce encoder memory use).").arg(nvencLookaheadMaxDepth())
+               : tr("Lookahead support has not been confirmed for this codec/device.");
 }
 int SettingsAdapter::nvencLookaheadDepth() const noexcept {
     return static_cast<int>(nvenc_tuning_resolution_.tuning.lookahead_depth);

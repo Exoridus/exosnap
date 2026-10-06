@@ -17,9 +17,11 @@ enum class NvencMultipass { SinglePass, QuarterResolution, FullResolution };
     return reported_max < sdk_max ? reported_max : sdk_max;
 }
 
-// The SDK bounds internal lookahead jointly with the B-frame count.
+// The SDK bounds lookahead jointly with B-frames. The product also caps depth at 16 to bound surface memory before
+// resolution-aware budgeting is available.
 [[nodiscard]] constexpr uint32_t MaxNvencLookaheadDepth(uint32_t bframes) noexcept {
-    return bframes < 31 ? 31 - bframes : 0;
+    const uint32_t sdk_max = bframes < 31 ? 31 - bframes : 0;
+    return sdk_max < 16 ? sdk_max : 16;
 }
 
 // NVENC-specific tuning. P1-P7 is a speed/quality trade-off that only NVENC

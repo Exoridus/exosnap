@@ -1226,7 +1226,9 @@ TEST_F(SettingsAdapterTest, AdvancedNvencWishesSurviveCodecAndRateControlRestric
     adapter.setNvencMultipass(static_cast<int>(exosnap::engine::NvencMultipass::FullResolution));
     ASSERT_EQ(adapter.nvencBframes(), 3);
     ASSERT_TRUE(adapter.nvencLookahead());
-    EXPECT_EQ(adapter.nvencLookaheadMaxDepth(), 28);
+    EXPECT_EQ(adapter.nvencLookaheadMaxDepth(), 16);
+    EXPECT_EQ(adapter.nvencLookaheadDepth(), 16);
+    EXPECT_EQ(adapter.config().output.nvenc_tuning.lookahead_depth, 16u);
     EXPECT_EQ(adapter.nvencBRefOptions().size(), 2);
 
     adapter.setVideoCodec(static_cast<int>(VideoCodec::Av1));
@@ -1303,7 +1305,8 @@ TEST_F(SettingsAdapterTest, MaximumBframesDisableLookaheadWithoutLosingTheSavedW
     EXPECT_TRUE(adapter.nvencLookahead());
     EXPECT_EQ(adapter.nvencLookaheadMaxDepth(), 1);
     EXPECT_EQ(adapter.nvencLookaheadDepth(), 1);
-    EXPECT_TRUE(adapter.nvencLookaheadHint().isEmpty());
+    EXPECT_EQ(adapter.nvencLookaheadHint(),
+              QStringLiteral("Maximum Lookahead depth: 1 (limited to reduce encoder memory use)."));
 }
 
 TEST_F(SettingsAdapterTest, Av1BframesUseKnownSdkLimitAndRetainLargerSavedWish) {

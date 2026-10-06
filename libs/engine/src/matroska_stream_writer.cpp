@@ -307,7 +307,7 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
         {
             libebml::EbmlHead ebml_head;
             if (m_config.webm) {
-                // WebM: DocType "webm", versions 2/2, AV1 or VP8/VP9 video with
+                // WebM: DocType "webm", AV1 or VP8/VP9 video with
                 // Opus or Vorbis audio only. Anything else would be a Matroska
                 // file wearing the wrong name.
                 if (m_config.video_codec_id != "V_AV1" || m_config.audio_codec == StreamAudioCodec::Aac ||
@@ -317,7 +317,7 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                     return false;
                 }
                 libebml::GetChild<libebml::EDocType>(ebml_head).SetValue("webm");
-                libebml::GetChild<libebml::EDocTypeVersion>(ebml_head).SetValue(2);
+                libebml::GetChild<libebml::EDocTypeVersion>(ebml_head).SetValue(4);
                 libebml::GetChild<libebml::EDocTypeReadVersion>(ebml_head).SetValue(2);
             } else {
                 libebml::GetChild<libebml::EDocType>(ebml_head).SetValue("matroska");

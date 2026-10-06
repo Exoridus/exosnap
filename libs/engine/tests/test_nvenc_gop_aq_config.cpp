@@ -50,7 +50,7 @@ TEST(NvencAdvancedTuning, MapsEveryExpertFeatureExplicitly) {
     tuning.bframes = 3;
     tuning.b_ref_mode = NvencBRefMode::Middle;
     tuning.lookahead = true;
-    tuning.lookahead_depth = 20;
+    tuning.lookahead_depth = 16;
     tuning.spatial_aq = true;
     tuning.temporal_aq = true;
     tuning.multipass = NvencMultipass::QuarterResolution;
@@ -59,7 +59,7 @@ TEST(NvencAdvancedTuning, MapsEveryExpertFeatureExplicitly) {
         ApplyAdvancedTuningToNvenc(config, codec, tuning);
         EXPECT_EQ(config.frameIntervalP, 4);
         EXPECT_TRUE(config.rcParams.enableLookahead);
-        EXPECT_EQ(config.rcParams.lookaheadDepth, 20);
+        EXPECT_EQ(config.rcParams.lookaheadDepth, 16);
         EXPECT_TRUE(config.rcParams.disableIadapt);
         EXPECT_TRUE(config.rcParams.disableBadapt);
         EXPECT_TRUE(config.rcParams.enableAQ);
@@ -71,12 +71,24 @@ TEST(NvencAdvancedTuning, MapsEveryExpertFeatureExplicitly) {
                                                        : config.encodeCodecConfig.av1Config.useBFramesAsRef;
         EXPECT_EQ(b_ref, NV_ENC_BFRAME_REF_MODE_MIDDLE);
     }
-    EXPECT_EQ(NvencResourceDepth(tuning), 28u);
+    EXPECT_EQ(NvencResourceDepth(tuning), 24u);
     tuning.lookahead_depth = MaxNvencLookaheadDepth(tuning.bframes);
-    EXPECT_EQ(NvencResourceDepth(tuning), 36u);
+    EXPECT_EQ(NvencResourceDepth(tuning), 24u);
     EXPECT_EQ(NvencResourceDepth({}), 2u);
     EXPECT_EQ(NvencResourceDepth({}, false), 4u);
-    EXPECT_EQ(NvencResourceDepth(tuning, false), 36u);
+    EXPECT_EQ(NvencResourceDepth(tuning, false), 24u);
+}
+
+TEST(NvencAdvancedTuning, ProductLookaheadCapBoundsResourcesAndRetainsSdkJointLimit) {
+    EXPECT_EQ(MaxNvencLookaheadDepth(0), 16u);
+    EXPECT_EQ(MaxNvencLookaheadDepth(7), 16u);
+    EXPECT_EQ(MaxNvencLookaheadDepth(30), 1u);
+    EXPECT_EQ(MaxNvencLookaheadDepth(31), 0u);
+    NvencTuning tuning;
+    tuning.bframes = 7;
+    tuning.lookahead = true;
+    tuning.lookahead_depth = MaxNvencLookaheadDepth(tuning.bframes);
+    EXPECT_EQ(NvencResourceDepth(tuning), 28u);
 }
 
 TEST(NvencAdvancedTuning, FailsClosedAndChecksJointLimits) {
@@ -94,9 +106,9 @@ TEST(NvencAdvancedTuning, FailsClosedAndChecksJointLimits) {
     EXPECT_FALSE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error));
     tuning.b_ref_mode = NvencBRefMode::Middle;
     tuning.lookahead = true;
-    tuning.lookahead_depth = 30;
+    tuning.lookahead_depth = 17;
     EXPECT_FALSE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error));
-    tuning.lookahead_depth = 29;
+    tuning.lookahead_depth = 16;
     EXPECT_TRUE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error));
     tuning.multipass = NvencMultipass::FullResolution;
     EXPECT_FALSE(ValidateNvencTuning(tuning, caps, RateControlMode::ConstantQuality, error));

@@ -483,6 +483,30 @@ TEST_F(StreamWriterTest, ReorderedVideoRetainsDecodeOrderAndPresentationTimestam
     }
     ASSERT_TRUE(writer.Finalize()) << writer.error();
     const auto file = ReadFile(tmp_);
+    const auto track_elements = [&]() {
+        for (const auto& element : SegmentChildren(file)) {
+            if (element.id == kIdTracks)
+                return ParseChildren(file, element.data_off, element.data_off + element.data_size);
+        }
+        return std::vector<EbmlNode>{};
+    }();
+    ASSERT_FALSE(track_elements.empty());
+    const auto video =
+        ParseChildren(file, track_elements[0].data_off, track_elements[0].data_off + track_elements[0].data_size);
+    const auto mapping = std::find_if(video.begin(), video.end(), [](const EbmlNode& n) { return n.id == 0x41E4; });
+    ASSERT_NE(mapping, video.end());
+    const auto mapping_fields = ParseChildren(file, mapping->data_off, mapping->data_off + mapping->data_size);
+    const auto mapping_id =
+        std::find_if(mapping_fields.begin(), mapping_fields.end(), [](const EbmlNode& n) { return n.id == 0x41F0; });
+    const auto mapping_type =
+        std::find_if(mapping_fields.begin(), mapping_fields.end(), [](const EbmlNode& n) { return n.id == 0x41E7; });
+    ASSERT_NE(mapping_id, mapping_fields.end());
+    ASSERT_NE(mapping_type, mapping_fields.end());
+    EXPECT_EQ(ReadUInt(file, *mapping_id), exosnap::engine::kPacketTimestampBlockId);
+    EXPECT_EQ(ReadUInt(file, *mapping_type), exosnap::engine::kPacketTimestampMappingType);
+    const auto maximum_id = std::find_if(video.begin(), video.end(), [](const EbmlNode& n) { return n.id == 0x55EE; });
+    ASSERT_NE(maximum_id, video.end());
+    EXPECT_EQ(ReadUInt(file, *maximum_id), exosnap::engine::kPacketTimestampBlockId);
     std::vector<uint64_t> actual_pts;
     std::vector<uint8_t> markers;
     std::vector<int64_t> actual_dts;
@@ -500,18 +524,34 @@ TEST_F(StreamWriterTest, ReorderedVideoRetainsDecodeOrderAndPresentationTimestam
                     std::find_if(group.begin(), group.end(), [](const EbmlNode& n) { return n.id == 0xA1; });
                 ASSERT_NE(found, group.end());
                 block = *found;
+                const auto reference =
+                    std::find_if(group.begin(), group.end(), [](const EbmlNode& n) { return n.id == 0xFB; });
+                if (markers.empty()) {
+                    EXPECT_EQ(reference, group.end());
+                } else {
+                    ASSERT_NE(reference, group.end());
+                    EXPECT_EQ(ReadUInt(file, *reference), 0u);
+                    EXPECT_EQ(std::count_if(group.begin(), group.end(), [](const EbmlNode& n) { return n.id == 0xFB; }),
+                              1);
+                }
                 const auto additions =
                     std::find_if(group.begin(), group.end(), [](const EbmlNode& n) { return n.id == 0x75A1; });
                 ASSERT_NE(additions, group.end());
                 const auto more = ParseChildren(file, additions->data_off, additions->data_off + additions->data_size);
                 ASSERT_EQ(more.size(), 1u);
                 const auto fields = ParseChildren(file, more[0].data_off, more[0].data_off + more[0].data_size);
+                const auto addition_id =
+                    std::find_if(fields.begin(), fields.end(), [](const EbmlNode& n) { return n.id == 0xEE; });
+                ASSERT_NE(addition_id, fields.end());
+                EXPECT_EQ(ReadUInt(file, *addition_id), exosnap::engine::kPacketTimestampBlockId);
                 const auto payload =
                     std::find_if(fields.begin(), fields.end(), [](const EbmlNode& n) { return n.id == 0xA5; });
                 ASSERT_NE(payload, fields.end());
                 const auto timestamps = exosnap::engine::DecodeMatroskaPacketTimestamps(
                     {file.data() + payload->data_off, payload->data_size});
                 ASSERT_TRUE(timestamps);
+                ASSERT_LT(markers.size(), pts.size());
+                EXPECT_EQ(timestamps->pts_ns, pts[markers.size()]);
                 actual_dts.push_back(timestamps->dts_ns);
             } else if (child.id != 0xA3)
                 continue;
@@ -527,6 +567,35 @@ TEST_F(StreamWriterTest, ReorderedVideoRetainsDecodeOrderAndPresentationTimestam
     EXPECT_EQ(actual_dts, (std::vector<int64_t>{dts.begin(), dts.end()}));
     EXPECT_EQ(CountCuePoints(file), 1);
     EXPECT_GE(ReadDurationMs(file), 3000);
+}
+
+TEST_F(StreamWriterTest, WebmTimestampMappingDeclaresVersionFourButPlaybackNeedsOnlyTwo) {
+    auto config = MakeConfig(tmp_, false, true);
+    config.webm = true;
+    config.video_codec_id = "V_AV1";
+    config.video_codec_private.clear();
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config)) << writer.error();
+    MuxPacket packet;
+    packet.track_num = 1;
+    packet.is_key = true;
+    packet.pts_ns = 0;
+    packet.dts_ns = -33333333;
+    packet.bytes = {0x12, 0x00};
+    ASSERT_TRUE(writer.Push(std::move(packet))) << writer.error();
+    ASSERT_TRUE(writer.Finalize()) << writer.error();
+    const auto file = ReadFile(tmp_);
+    const auto root = ParseChildren(file, 0, file.size());
+    const auto header = std::find_if(root.begin(), root.end(), [](const EbmlNode& n) { return n.id == 0x1A45DFA3; });
+    ASSERT_NE(header, root.end());
+    const auto fields = ParseChildren(file, header->data_off, header->data_off + header->data_size);
+    const auto version = std::find_if(fields.begin(), fields.end(), [](const EbmlNode& n) { return n.id == 0x4287; });
+    const auto read_version =
+        std::find_if(fields.begin(), fields.end(), [](const EbmlNode& n) { return n.id == 0x4285; });
+    ASSERT_NE(version, fields.end());
+    ASSERT_NE(read_version, fields.end());
+    EXPECT_EQ(ReadUInt(file, *version), 4u);
+    EXPECT_EQ(ReadUInt(file, *read_version), 2u);
 }
 
 TEST(MatroskaPacketTimestampMetadata, RejectsMalformedRecognizedPayload) {

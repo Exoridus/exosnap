@@ -47,7 +47,7 @@ TEST(NvencTuningPolicy, UnprobedAndOtherBackendsFailClosed) {
             .available);
 }
 
-TEST(NvencTuningPolicy, ReconcilesCountReferenceAndSdkDepthTogether) {
+TEST(NvencTuningPolicy, ReconcilesCountReferenceAndProductDepthTogether) {
     auto caps = SupportedCaps();
     NvencTuning requested;
     requested.bframes = 20;
@@ -59,9 +59,9 @@ TEST(NvencTuningPolicy, ReconcilesCountReferenceAndSdkDepthTogether) {
     EXPECT_TRUE(result.available);
     EXPECT_EQ(result.tuning.bframes, 3u);
     EXPECT_EQ(result.tuning.b_ref_mode, NvencBRefMode::Middle);
-    EXPECT_EQ(result.tuning.lookahead_depth, 28u);
+    EXPECT_EQ(result.tuning.lookahead_depth, 16u);
     EXPECT_EQ(result.lookahead_min_depth, 1u);
-    EXPECT_EQ(result.lookahead_max_depth, 28u);
+    EXPECT_EQ(result.lookahead_max_depth, 16u);
     requested.bframes = 0;
     result =
         ResolveNvencTuning(requested, caps, exosnap::capability::VideoCodec::H264, RateControlMode::ConstantQuality);
