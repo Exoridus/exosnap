@@ -1045,7 +1045,7 @@ pub fn run(args: &CampaignArgs) -> anyhow::Result<ExitCode> {
         "probe_sha256": file_sha256(&manifest.probe)?, "configuration": "Release", "build_receipt": build, "capabilities": capabilities,
         "gpu_driver": capture(Path::new("nvidia-smi"), &["--query-gpu=name,driver_version,uuid", "--format=csv,noheader"] )?,
         "nvenc_sdk": manifest.nvenc_sdk, "ffmpeg": manifest.ffmpeg, "ffmpeg_sha256": file_sha256(&manifest.ffmpeg)?,
-        "ffmpeg_version": capture(&manifest.ffmpeg, &["-version"] )?, "libvmaf": manifest.libvmaf, "model": manifest.model,
+        "ffmpeg_version": capture(&manifest.ffmpeg, &["-version"] )?, "libvmaf": manifest.libvmaf, "model": manifest.model, "scoring_threads": crate::host_lock::job_budget(None),
         "ffprobe": manifest.ffprobe, "ffprobe_sha256": file_sha256(&manifest.ffprobe)?, "references": references,
         "tuning": [variants("cq").into_iter().map(|(name, tuning)| json!({"name": name, "tuning": tuning})).collect::<Vec<_>>(), variants("vbr").into_iter().map(|(name, tuning)| json!({"name": name, "tuning": tuning})).collect::<Vec<_>>()],
         "runner_sha256": file_sha256(&std::env::current_exe()?)?});
@@ -1140,6 +1140,10 @@ pub fn run(args: &CampaignArgs) -> anyhow::Result<ExitCode> {
                 ensure!(
                     file_sha256(&manifest.ffmpeg)? == environment["ffmpeg_sha256"],
                     "scoring executable changed"
+                );
+                ensure!(
+                    json!(crate::host_lock::job_budget(None)) == environment["scoring_threads"],
+                    "scoring thread budget changed"
                 );
                 ensure!(
                     capture(

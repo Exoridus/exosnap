@@ -31,6 +31,8 @@ Repeat for H.264/HEVC and each reference. The baseline sweep compares P4/P7 unde
 
 Metric sanity constructs identity, mild/severe degradation and a one-frame temporal shift. Identity must rank above progressively degraded candidates, and the shifted sequence must not look equivalent. Run it when the scoring path or reference changes. A tool that produces a number is not necessarily measuring aligned frames.
 
+Scoring sets libvmaf's thread count to the available CPU count minus two, with a minimum of one. The campaign records this budget as scoring identity. It does not change the model, sampled frames or quality gates.
+
 Two normalization rules are load-bearing:
 
 - Pair frames by index, with matching timestamps, rather than letting container timestamp quantization shift frame pairing.

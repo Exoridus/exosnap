@@ -74,8 +74,9 @@ pub fn probe_encode_argv(
 /// that file's directory instead.
 pub fn measure_quality_filter_arg(vmaf_log_name: &str) -> String {
     let norm = METRIC_INPUT_NORMALISATION;
+    let threads = crate::host_lock::job_budget(None);
     format!(
-        "[0:v]{norm}[dist];[1:v]{norm}[ref];[dist][ref]libvmaf=log_path={vmaf_log_name}:log_fmt=json:feature=name=psnr|name=float_ssim"
+        "[0:v]{norm}[dist];[1:v]{norm}[ref];[dist][ref]libvmaf=log_path={vmaf_log_name}:log_fmt=json:n_threads={threads}:feature=name=psnr|name=float_ssim"
     )
 }
 
@@ -269,6 +270,7 @@ mod tests {
     fn measure_quality_argv_puts_the_distorted_input_before_the_reference() {
         let filter_arg = measure_quality_filter_arg("label.vmaf.json");
         assert!(filter_arg.contains("log_path=label.vmaf.json"));
+        assert!(filter_arg.contains(&format!("n_threads={}", crate::host_lock::job_budget(None))));
         assert!(filter_arg.contains("feature=name=psnr|name=float_ssim"));
         let argv = measure_quality_argv("ffmpeg", "dist.h264", "ref.y4m", &filter_arg);
         assert_eq!(
