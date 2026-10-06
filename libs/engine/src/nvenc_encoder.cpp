@@ -1714,9 +1714,6 @@ bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::stri
     constexpr double kFlushDrainBudgetMs = 2000.0;
     auto lastProgress = std::chrono::steady_clock::now();
     while (!m_pending.empty()) {
-        if (m_pending.empty())
-            break;
-
         EncodedVideoPacket pkt;
         std::string lockErr;
         NVENCSTATUS lockStatus = NV_ENC_SUCCESS;

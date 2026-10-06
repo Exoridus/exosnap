@@ -484,7 +484,7 @@ class NvencEncoder {
         return static_cast<int32_t>(m_slots.size());
     }
 
-    [[nodiscard]] std::vector<uint8_t> SequenceHeader() const {
+    [[nodiscard]] const std::vector<uint8_t>& SequenceHeader() const {
         return m_sequenceHeader;
     }
 
