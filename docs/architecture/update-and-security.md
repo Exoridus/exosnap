@@ -8,17 +8,53 @@ Automatic update checks default off, including official builds. Manual checks ar
 
 Update checks use the public GitHub release feed without a token and compare versions locally. The fixed checker User-Agent is not the installed application version. Crash upload is a separate, consent-gated Sentry path. No account, analytics or recording upload is introduced by either feature. External server configuration is not proved by a source-code inspection; the [privacy review](../privacy-review.md) records that verification boundary.
 
+## Distribution and update ownership
+
+`libs/update` resolves one `DistributionContext`. `InstallMode` describes physical deployment: `Portable` is a replaceable application tree, and `Installed` is structurally owned by Windows Installer. `DistributionOwner` describes the distribution channel independently. Settings, About, update preparation, launch eligibility and live verification consume this context and its pure `ResolveUpdatePolicy` result.
+
+| InstallMode | DistributionOwner | Update route |
+|---|---|---|
+| Portable | Direct | BuiltInPortableSwap |
+| Installed | Direct | BuiltInMsi |
+| Either | WinGet | ExternalPackageManager |
+| Either | Chocolatey | ExternalPackageManager |
+| Portable (or Installed defensively) | Scoop | ExternalPackageManager |
+| Either | UnknownManaged | ExternalPackageManager, notify-only |
+
+Stable owner tokens are `direct`, `winget`, `chocolatey`, `scoop` and `unknown`. An explicit unrecognized value stays `UnknownManaged`; absence is a separate legacy case.
+
+For an MSI tree, the detector reads `installed`, `InstallPath` and `DistributionOwner` from the same open installation record. The authoritative product record is `HKLM\Software\ExoSnap`. Existing legacy/per-user record fallback remains path-matched and never mixes an owner's value from another record. A missing owner resolves to Direct for compatibility. Recognized MSI values are `direct`, `winget` and `chocolatey`; a present empty, malformed or unsupported value is externally managed.
+
+The MSI public property `EXOSNAP_DISTRIBUTION_OWNER` accepts exactly `direct`, `winget` or `chocolatey`. An explicit recognized caller value wins. Without it, the installer preserves the existing persisted owner across repair and major upgrade, including an unknown retained value, rather than converting it to Direct. Only a fresh installation with neither value defaults to `direct`. Invalid explicit caller values fail installation before any write. Standard MSI AppSearch cannot distinguish a missing value from an existing empty string. A small embedded, read-only MSI action queries existence and the registry value type in the same HKLM64 product key. A present empty, incorrectly typed or otherwise unreadable marker resolves conservatively to `unknown` instead of the fresh-install default. The action modifies only MSI session properties and is not part of the application or staged updater runtime. The marker belongs to the same product registry component as `installed` and `InstallPath`.
+
+WinGet supplies `EXOSNAP_DISTRIBUTION_OWNER=winget` through the manifest's custom installer switch. Chocolatey's official-MSI wrapper supplies `EXOSNAP_DISTRIBUTION_OWNER=chocolatey` in `silentArgs`. Source validators and release rendering require these switches. The app does not run `winget list` or inspect Chocolatey package directories at startup.
+
+Scoop remains Portable with owner Scoop. The resolver prefers adjacent regular `scoop-install.json` / `scoop-manifest.json` files. Older Scoop versions use an adjacent `install.json` and `manifest.json` pair; those require recognizable install source/architecture and release asset metadata. Compatible path evidence includes `.../scoop/apps/exosnap/...` and relocated `.../apps/exosnap/current`. It does not depend on `%USERPROFILE%\scoop` and does not add an ExoSnap marker file.
+
+Managed installations retain manual and enabled automatic release checks, version validation and release notes. They skip self-apply manifest/signature transaction preparation and never stage the updater, write an apply handoff, download an installation payload for self-apply, run the portable swap or execute ExoSnap's MSI apply path. The standalone updater independently resolves the target installation's ownership before download/apply, including app-handoff mode; its externally staged location is not ownership evidence.
+
+The existing Settings card shows the manager and offers Copy command, without running, elevating or shelling any manager:
+
+| Owner | Recommended command |
+|---|---|
+| WinGet | `winget upgrade --id Codexo.ExoSnap --exact` |
+| Chocolatey | `choco upgrade exosnap` |
+| Scoop | `scoop update exosnap` |
+| UnknownManaged | No guessed command. Update with the package manager that installed ExoSnap. |
+
+Ownership attribution is installer metadata, not a cryptographic guarantee. WinGet's caller-controlled `--override` can replace manifest switches. Installations predating this marker, or arriving without the owner switch, remain Direct through the legacy fallback. There is no reliable retroactive WinGet/Chocolatey discovery. The first future manager-driven upgrade passing its owner property establishes durable ownership. Ordinary later MSI maintenance without an explicit owner preserves it. There is no in-app ownership override.
+
 ## Signed release trust chain
 
 The update manifest is verified with the embedded Ed25519 public key over its exact received bytes **before** parsing any manifest field. Detached signature and manifest must belong together. Package download is selected from the verified manifest and SHA-256 checked through a file handle that denies modification/replacement while the verified package is consumed.
 
-The update applies only the offered target and refuses downgrade. Exact full-version equality is used for identity-sensitive operations; version precedence is for ordering, not for proving that two artifacts are the same release. The current installation mode determines whether update means portable swap, MSI execution or notify-only Scoop behavior.
+The update applies only the offered target and refuses downgrade. Exact full-version equality is used for identity-sensitive operations; version precedence is for ordering, not for proving that two artifacts are the same release. Distribution ownership determines who applies an update; physical installation mode determines the built-in mechanism for a Direct installation.
 
 The signature authenticates a release-key authorization, not arbitrary local metadata or a claim that no administrator could alter the installation. A writable handoff is not an authorization token.
 
 ## Versioned application handoff
 
-`libs/update_handoff` owns the common document contract. The application resolves the offered release and stages its manifest/signature on the check worker. Applying atomically writes the handoff and starts `exosnap-updater.exe --apply-handoff <path>`. A failed manifest fetch does not turn a known newer release into "up to date"; apply remains refused with the actual reason.
+`libs/update_handoff` owns the common document contract. For Direct self-updatable installations, the application resolves the offered release and stages its manifest/signature on the check worker. Applying atomically writes the handoff and starts `exosnap-updater.exe --apply-handoff <path>`. A failed manifest fetch does not turn a known newer release into "up to date"; apply remains refused with the actual reason.
 
 The handoff includes its schema version, non-secret transaction ID, exact current/target versions, installation mode/path, parent PID, manifest/signature paths and the reinstall flag. The updater validates the document and installation context, re-verifies the signed manifest, matches the target exactly and then downloads the verified package. In app-handoff mode it **does not resolve a release feed again**. A release published after the offer cannot silently replace that offer.
 
@@ -30,7 +66,8 @@ The transaction ID correlates the application's child-launch snapshot, updater i
 
 The updater is staged outside the live installation with the runtime files it needs, so it does not prevent replacing itself. The staged set is the Quick runtime the updater process links, its QML import trees (the Controls module and the Basic style it uses) and the windows platform plugin; a missing entry fails staging before any update action instead of launching a half-deployed UI. The app's card enters Updater running on launch and Pending only after the marked close/handoff is accepted. A child that exits before handoff re-arms an actionable state instead of leaving a persisted pending fiction.
 
-Portable update uses staged replacement: old installation to backup, verified new tree to live, installed-version/health checks, then approved relaunch and cleanup. Failure can restore the backup; if restoration itself fails, report the stranded/unknown state. Interrupted swaps are inspected and self-healed before another normal update proceeds.
+The bundled updater uses `QGuiApplication` and the `ExoSnap.Updater` QML module. There is no separately downloaded mandatory latest updater or bootstrap updater protocol. Portable update uses staged replacement: old installation to backup, verified new tree to live, installed-version/health checks, then approved relaunch and cleanup. Failure can restore the backup; if restoration itself fails, report the stranded/unknown state. Interrupted swaps are inspected and self-healed before another normal update proceeds.
+The fresh release is extracted into a sibling `ExoSnap.new` tree. After the old process exits, same-volume directory renames move `ExoSnap` to `ExoSnap.old` and then `ExoSnap.new` to `ExoSnap`. Each rename is a metadata operation; the two-rename sequence is crash-recoverable, not a single filesystem transaction. Existing process-exit waits, instance checks, orphaned-swap repair and rollback remain required. No file-by-file overwrite or rename of a running executable is used. Backup deletion follows successful verification/relaunch.
 Each directory rename retries access, sharing and lock violations with a short bounded backoff, because the exited application, its crash handler or a file scanner can hold a handle inside the tree for a moment after the process is gone.
 Any other error, or a lock that outlasts the budget, fails the step with the last Windows error written to the updater's standard error.
 

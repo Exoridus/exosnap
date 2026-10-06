@@ -83,7 +83,7 @@ Use a disposable install tree or OS. Never use the maintainer's working installa
 | Download failure/cancel | Installed version untouched; failure and intentional cancellation remain distinct; retries are offered only where they can change the outcome |
 | Critical close guard | Installing, verifying and launching cannot be interrupted through ordinary window-close routes |
 | Restore failure | Failure status names whether the portable tree is intact, restored, stranded or unknown; no blanket MSI rollback guarantee |
-| Managed install | Scoop never uses the swap updater |
+| Managed install | WinGet, Chocolatey, Scoop and unknown-managed trees never self-apply; direct portable/MSI routes remain available |
 | Clean installation | No dependency on a development Qt/FFmpeg/PATH; first launch uses defaults; required runtime prerequisite is satisfied by the chosen distribution |
 
 ### 5a. Verification reinstall and channel guards

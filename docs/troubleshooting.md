@@ -60,7 +60,7 @@ MKV and MP4 export use a new file or confirmed overwrite. A destination failure 
 
 Automatic checks are off by default. Choose the appropriate Stable/Preview channel and explicitly check. The application-driven Update action authorizes one pinned signed version. The manually launched updater separately asks to check, download and install. A canceled download changes nothing.
 
-Stop recording/finalization before updating. A Scoop-managed installation must be updated through Scoop. A signature or hash failure is not a warning to bypass. Recheck/redownload only through the offered flow. Portable rollback can restore a backup, but a failed restoration must be investigated. An MSI failure is governed by Windows Installer; do not assume ExoSnap verified a rollback outcome it cannot observe.
+Stop recording/finalization before updating. Package-managed installs show their owner and a Copy command action where known. Use `winget upgrade --id Codexo.ExoSnap --exact`, `choco upgrade exosnap` or `scoop update exosnap`. Unknown-managed installations require the original package manager. Older MSI installs without an ownership marker use the Direct legacy route until a manager-driven upgrade establishes ownership.
 
 ## Share evidence
 
