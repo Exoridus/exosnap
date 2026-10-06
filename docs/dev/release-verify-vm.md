@@ -118,6 +118,31 @@ The file's content is printed, not substituted for the watch exit code. Stopping
 
 ## Validation limits
 
+The ignored MSI ownership smoke uses a sealed non-GPU base and two complete MSI packages
+with distinct ProductCodes and the same UpgradeCode. It runs real Windows Installer operations
+for fresh Direct ownership, Direct major upgrade, explicit WinGet ownership, ownership preservation
+without a caller property, explicit Chocolatey ownership, invalid-property rejection and uninstall.
+It inspects the product registry record, installed tree, upgrade log and installed-product inventory.
+It does not launch ExoSnap or a package manager.
+
+Set `EXO_VERIFY_MSI_SMOKE_ARTIFACTS` to an inventory JSON with `sourceCommit` and a two-element
+`packages` array. Each package supplies an absolute `path`, lowercase `sha256`, `productCode`,
+`upgradeCode` and `productVersion`. An optional `runtime` object supplies the absolute `path`
+to the repository-pinned Visual C++ redistributable. Set `EXO_VERIFY_MSI_SMOKE_OUT` to a fresh
+absolute evidence directory and `EXO_VERIFY_HYPERV_BASE` to the sealed base manifest.
+
+```powershell
+cargo test --manifest-path tools/Cargo.toml -p exo-verify `
+    disposable::tests::msi_distribution_ownership_system_smoke -- --ignored --exact --nocapture
+```
+
+The guest test refuses execution without the owned VM's matching Hyper-V registry identity
+or when an existing installation tree or product marker is present. The host test collects
+`ownership.result.json`, verbose MSI logs and a transcript before VM/disk cleanup.
+An invalid owner must fail with error 1603 while preserving the previous tree and owner.
+Distinct ProductCodes can exercise a real major upgrade at the same numeric version through
+the MSI's same-version-upgrade policy. This does not prove a higher-version or downgrade scenario.
+
 ```powershell
 cargo test --manifest-path tools/Cargo.toml -p exo-verify disposable::
 cargo test --manifest-path tools/Cargo.toml -p exo-guest
