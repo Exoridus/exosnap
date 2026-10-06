@@ -14,6 +14,22 @@ UpdaterController MakeController() {
     return UpdaterController(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
 }
 
+TEST(UpdaterController, ManagedInstallRefusalShowsGuidanceWithoutRetry) {
+    UpdaterController c = MakeController();
+    c.onStepStarted(UpStep::Download);
+    const QString reason =
+        QStringLiteral("This installation is managed by Scoop. Update it with scoop update exosnap.");
+    c.onSelfUpdateBlocked(reason);
+    EXPECT_EQ(c.state().headline, QStringLiteral("Update this installation with its package manager"));
+    EXPECT_EQ(c.state().detail_text, reason);
+    EXPECT_FALSE(c.state().detail_text.contains(QStringLiteral("internet")));
+    EXPECT_EQ(c.state().primary_action, QStringLiteral("Close"));
+    EXPECT_TRUE(c.state().secondary_action.isEmpty());
+    EXPECT_EQ(c.flowState().phase, exosnap::update::UpdatePhase::Failed);
+    EXPECT_FALSE(c.flowState().retry_entry_step.has_value());
+    EXPECT_EQ(c.flowState().install_state, exosnap::update::InstallState::Intact);
+}
+
 TEST(UpdaterController, InitialStateIsAllQueuedRingZero) {
     UpdaterController c = MakeController();
     const UpdaterUiState& s = c.state();

@@ -42,9 +42,8 @@ struct AboutCopyFields {
 };
 
 [[nodiscard]] QString FormatBuildTimestampForDisplay(const QString& iso8601_utc);
-[[nodiscard]] QString ResolveInstallModeLabel(exosnap::update::InstallMode install_mode, bool is_scoop);
-[[nodiscard]] AboutInfo BuildAboutInfo(const QString& channel, exosnap::update::InstallMode install_mode,
-                                       bool is_scoop);
+[[nodiscard]] QString ResolveInstallModeLabel(exosnap::update::DistributionContext distribution);
+[[nodiscard]] AboutInfo BuildAboutInfo(const QString& channel, exosnap::update::DistributionContext distribution);
 [[nodiscard]] AboutCopyFields MakeAboutCopyFields(const AboutInfo& info, const QString& executable_path,
                                                   const QString& executable_sha256);
 [[nodiscard]] QString BuildAboutCopyText(const AboutCopyFields& fields);

@@ -1,4 +1,5 @@
 #pragma once
+#include <update/update_types.h>
 
 #include "models/AudioMeterScale.h"
 #include "models/CrashReportPolicy.h"
@@ -297,6 +298,10 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(QString updateStatusText READ updateStatusText NOTIFY updateStatusChanged FINAL)
     Q_PROPERTY(QString updateActionText READ updateActionText NOTIFY updateStatusChanged FINAL)
     Q_PROPERTY(bool updateActionEnabled READ updateActionEnabled NOTIFY updateStatusChanged FINAL)
+    Q_PROPERTY(bool updateManaged READ updateManaged NOTIFY updateStatusChanged)
+    Q_PROPERTY(QString updateManagerText READ updateManagerText NOTIFY updateStatusChanged)
+    Q_PROPERTY(QString updateManagerHint READ updateManagerHint NOTIFY updateStatusChanged)
+    Q_PROPERTY(QString updateManagerCommand READ updateManagerCommand NOTIFY updateStatusChanged)
     Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY updateStatusChanged FINAL)
     Q_PROPERTY(bool whatsNewAvailable READ whatsNewAvailable NOTIFY updateStatusChanged FINAL)
     // The offered release tag verbatim. Read by the card's "See what's new in
@@ -373,6 +378,13 @@ class SettingsAdapter : public QObject {
     // rows: { action, label, binding, isDefault } per hotkey action.
     void setHotkeyRows(QVariantList rows);
     void setHotkeyError(int action, QString message);
+    void setDistributionContext(exosnap::update::DistributionContext distribution);
+    [[nodiscard]] bool updateManaged() const noexcept;
+    [[nodiscard]] QString updateManagerText() const;
+    [[nodiscard]] QString updateManagerHint() const;
+    [[nodiscard]] QString updateManagerCommand() const;
+    Q_INVOKABLE QString copyUpdateCommand();
+
     void setUpdateStatus(const QString& state, const QString& available_version, const QString& last_checked,
                          const QString& detail = QString());
 
@@ -886,6 +898,7 @@ class SettingsAdapter : public QObject {
     double app_meter_db_ = -std::numeric_limits<double>::infinity();
     double microphone_meter_db_ = -std::numeric_limits<double>::infinity();
 
+    exosnap::update::DistributionContext distribution_{};
     QString update_state_ = QStringLiteral("uptodate");
     QString update_status_text_;
     QString update_action_text_;

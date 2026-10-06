@@ -71,3 +71,9 @@ exosnap_add_gtest(
     SOURCES test_update_checker.cpp
     LIBRARIES exosnap::update
 )
+
+exosnap_add_gtest(
+    NAME    test_distribution_context
+    SOURCES test_distribution_context.cpp
+    LIBRARIES exosnap::update
+)

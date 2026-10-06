@@ -17,6 +17,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -459,6 +460,170 @@ TEST(VerifyPackageHandle, NullOrInvalidHandleIsPackageNotFound) {
 // I/O, so this exercises the emission contract only.
 // ---------------------------------------------------------------------------
 
+TEST(SelfUpdateRefusalReason, UnknownManagedOwnerHasGenericPackageManagerGuidance) {
+    EXPECT_EQ(
+        SelfUpdateRefusalReason(
+            {exosnap::update::InstallMode::Portable, exosnap::update::DistributionOwner::UnknownManaged}),
+        QStringLiteral(
+            "This installation is managed externally. Update it with the package manager that installed ExoSnap."));
+}
+
+TEST(SelfUpdateRefusalReason, DirectTargetsHaveNoRefusalReason) {
+    for (const auto mode : {exosnap::update::InstallMode::Portable, exosnap::update::InstallMode::Installed}) {
+        EXPECT_TRUE(SelfUpdateRefusalReason({mode, exosnap::update::DistributionOwner::Direct}).isEmpty());
+    }
+}
+
+class ManagedTargetWorkerTest : public ResolveStagedRootTest {
+  protected:
+    void TearDown() override {
+        std::error_code ec;
+        fs::remove_all(DownloadDirectory(), ec);
+        ResolveStagedRootTest::TearDown();
+    }
+
+    fs::path DownloadDirectory() const {
+        return fs::temp_directory_path() / L"ExoSnapUpdate" / root_.filename();
+    }
+
+    UpdaterArgs Args(exosnap::update::UpdaterMode mode, exosnap::update::InstallMode install_mode) const {
+        UpdaterArgs args;
+        args.mode = mode;
+        args.install_mode = install_mode;
+        args.install_dir = QString::fromStdWString(root_.wstring());
+        args.current_version = QStringLiteral("0.8.1");
+        args.target_version = QString::fromStdWString(root_.filename().wstring());
+        args.app_pid = ::GetCurrentProcessId();
+        args.base_url = QStringLiteral("http://127.0.0.1/releases");
+        return args;
+    }
+
+    void ExpectRefused(UpdaterArgs args, std::optional<UpStep> entry) {
+        UpdaterWorker worker(std::move(args));
+        std::vector<UpStep> started;
+        std::vector<UpStep> done;
+        int failures = 0;
+        int blocked = 0;
+        QString detail;
+        bool reached_result = false;
+        QObject::connect(&worker, &UpdaterWorker::stepStarted, [&](UpStep s) { started.push_back(s); });
+        QObject::connect(&worker, &UpdaterWorker::stepDone, [&](UpStep s) { done.push_back(s); });
+        QObject::connect(&worker, &UpdaterWorker::failed, [&](FailureCase, const QString&) { ++failures; });
+        QObject::connect(&worker, &UpdaterWorker::selfUpdateBlocked, [&](const QString& text) {
+            ++blocked;
+            detail = text;
+        });
+        QObject::connect(&worker, &UpdaterWorker::downloadProgress, [&](quint64, quint64) { reached_result = true; });
+        QObject::connect(&worker, &UpdaterWorker::readyToApply, [&] { reached_result = true; });
+        QObject::connect(&worker, &UpdaterWorker::allDone, [&] { reached_result = true; });
+        if (entry.has_value()) {
+            worker.run(*entry);
+        } else {
+            worker.download();
+        }
+        EXPECT_EQ(failures, 0);
+        EXPECT_EQ(blocked, 1);
+        EXPECT_EQ(detail,
+                  QStringLiteral("This installation is managed by Scoop. Update it with scoop update exosnap."));
+        EXPECT_TRUE(started.empty());
+        EXPECT_TRUE(done.empty());
+        EXPECT_FALSE(reached_result);
+        EXPECT_TRUE(fs::exists(root_ / "exosnap.exe"));
+        EXPECT_TRUE(fs::exists(root_ / "scoop-install.json"));
+        EXPECT_EQ(fs::file_size(root_ / "exosnap.exe"), 1u);
+        EXPECT_EQ(fs::file_size(root_ / "scoop-install.json"), 1u);
+        EXPECT_FALSE(fs::exists(root_.wstring() + L".new"));
+        EXPECT_FALSE(fs::exists(root_.wstring() + L".old"));
+        EXPECT_FALSE(fs::exists(DownloadDirectory()));
+        EXPECT_EQ(std::distance(fs::directory_iterator(root_), fs::directory_iterator{}), 2);
+    }
+};
+
+TEST_F(ManagedTargetWorkerTest, ManualDownloadIsRefusedBeforeAnyWorkerStep) {
+    Touch(root_ / "exosnap.exe");
+    Touch(root_ / "scoop-install.json");
+    ExpectRefused(Args(exosnap::update::UpdaterMode::Manual, exosnap::update::InstallMode::Portable), std::nullopt);
+}
+
+TEST_F(ManagedTargetWorkerTest, TargetOwnershipIsReadAtOperationEntry) {
+    Touch(root_ / "exosnap.exe");
+    UpdaterWorker worker(Args(exosnap::update::UpdaterMode::Manual, exosnap::update::InstallMode::Portable));
+    Touch(root_ / "scoop-install.json");
+    int started = 0;
+    int blocked = 0;
+    QObject::connect(&worker, &UpdaterWorker::stepStarted, [&](UpStep) { ++started; });
+    QObject::connect(&worker, &UpdaterWorker::selfUpdateBlocked, [&](const QString&) { ++blocked; });
+    worker.download();
+    EXPECT_EQ(started, 0);
+    EXPECT_EQ(blocked, 1);
+    EXPECT_FALSE(fs::exists(DownloadDirectory()));
+}
+
+TEST_F(ManagedTargetWorkerTest, HandoffAndRetryEntriesCannotBypassTargetOwnership) {
+    Touch(root_ / "exosnap.exe");
+    Touch(root_ / "scoop-install.json");
+    for (const auto mode : {exosnap::update::UpdaterMode::Manual, exosnap::update::UpdaterMode::AppHandoff}) {
+        for (const auto install_mode :
+             {exosnap::update::InstallMode::Portable, exosnap::update::InstallMode::Installed}) {
+            for (const auto entry :
+                 {UpStep::Download, UpStep::CloseApp, UpStep::Install, UpStep::Verify, UpStep::Launch}) {
+                SCOPED_TRACE(static_cast<int>(mode));
+                SCOPED_TRACE(static_cast<int>(install_mode));
+                SCOPED_TRACE(static_cast<int>(entry));
+                ExpectRefused(Args(mode, install_mode), entry);
+            }
+        }
+    }
+}
+
+TEST_F(ManagedTargetWorkerTest, ApplyIsRefusedBeforeAppClose) {
+    Touch(root_ / "exosnap.exe");
+    Touch(root_ / "scoop-install.json");
+    UpdaterWorker worker(Args(exosnap::update::UpdaterMode::Manual, exosnap::update::InstallMode::Portable));
+    int started = 0;
+    int failures = 0;
+    QString detail;
+    QObject::connect(&worker, &UpdaterWorker::stepStarted, [&](UpStep) { ++started; });
+    QObject::connect(&worker, &UpdaterWorker::selfUpdateBlocked, [&](const QString& text) {
+        ++failures;
+        detail = text;
+    });
+    worker.apply();
+    EXPECT_EQ(started, 0);
+    EXPECT_EQ(failures, 1);
+    EXPECT_TRUE(detail.contains(QStringLiteral("scoop update exosnap")));
+    EXPECT_TRUE(fs::exists(root_ / "exosnap.exe"));
+}
+
+TEST_F(ManagedTargetWorkerTest, CheckStillReachesFeedValidation) {
+    Touch(root_ / "exosnap.exe");
+    Touch(root_ / "scoop-install.json");
+    UpdaterWorker worker(Args(exosnap::update::UpdaterMode::Manual, exosnap::update::InstallMode::Portable));
+    bool checking = false;
+    QString detail;
+    QObject::connect(&worker, &UpdaterWorker::checkStarted, [&] { checking = true; });
+    QObject::connect(&worker, &UpdaterWorker::failed, [&](FailureCase, const QString& text) { detail = text; });
+    worker.check();
+    EXPECT_TRUE(checking);
+    EXPECT_EQ(detail, QStringLiteral("base URL must be https://"));
+}
+
+TEST_F(ResolveStagedRootTest, DirectPortableTargetRetainsDownloadPlan) {
+    Touch(root_ / "exosnap.exe");
+    UpdaterArgs args;
+    args.install_mode = exosnap::update::InstallMode::Portable;
+    args.install_dir = QString::fromStdWString(root_.wstring());
+    args.base_url = QStringLiteral("http://127.0.0.1/releases");
+    UpdaterWorker worker(args);
+    std::vector<UpStep> started;
+    QString detail;
+    QObject::connect(&worker, &UpdaterWorker::stepStarted, [&](UpStep s) { started.push_back(s); });
+    QObject::connect(&worker, &UpdaterWorker::failed, [&](FailureCase, const QString& text) { detail = text; });
+    worker.run(UpStep::Download);
+    EXPECT_EQ(started, std::vector<UpStep>{UpStep::Download});
+    EXPECT_EQ(detail, QStringLiteral("base URL must be https://"));
+    EXPECT_TRUE(fs::exists(root_ / "exosnap.exe"));
+}
 TEST(UpdaterWorkerSmoke, InvalidBaseUrlEmitsDownloadFailed) {
     UpdaterArgs args;
     args.channel = exosnap::update::UpdateChannel::Stable;

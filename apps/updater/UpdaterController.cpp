@@ -1,5 +1,7 @@
 #include "UpdaterController.h"
 
+#include <QCoreApplication>
+
 #include <algorithm>
 
 namespace exosnap::updater {
@@ -215,6 +217,17 @@ void UpdaterController::onCheckBlocked(const QString& reason) {
     state_.secondary_action.clear();
     flow_.target_version.clear();
     setPhase(UpdatePhase::Idle);
+}
+
+void UpdaterController::onSelfUpdateBlocked(const QString& reason) {
+    onFailure(FailureCase::DownloadFailed, {});
+    state_.headline =
+        QCoreApplication::translate("UpdaterController", "Update this installation with its package manager");
+    state_.detail_text = reason;
+    state_.safety_text = QCoreApplication::translate("UpdaterController", "Nothing was installed or changed.");
+    state_.primary_action = QCoreApplication::translate("UpdaterController", "Close");
+    state_.secondary_action.clear();
+    flow_.retry_entry_step.reset();
 }
 
 void UpdaterController::onCancelled() {

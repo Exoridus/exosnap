@@ -10,6 +10,23 @@
 
 namespace exosnap::quick {
 namespace {
+TEST(AboutDistribution, InstallationLabelsUseResolvedOwnership) {
+    namespace upd = exosnap::update;
+    EXPECT_EQ(exosnap::models::ResolveInstallModeLabel({upd::InstallMode::Portable, upd::DistributionOwner::Direct}),
+              QStringLiteral("Portable"));
+    EXPECT_EQ(exosnap::models::ResolveInstallModeLabel({upd::InstallMode::Installed, upd::DistributionOwner::Direct}),
+              QStringLiteral("MSI"));
+    EXPECT_EQ(exosnap::models::ResolveInstallModeLabel({upd::InstallMode::Installed, upd::DistributionOwner::WinGet}),
+              QStringLiteral("WinGet"));
+    EXPECT_EQ(
+        exosnap::models::ResolveInstallModeLabel({upd::InstallMode::Installed, upd::DistributionOwner::Chocolatey}),
+        QStringLiteral("Chocolatey"));
+    EXPECT_EQ(exosnap::models::ResolveInstallModeLabel({upd::InstallMode::Portable, upd::DistributionOwner::Scoop}),
+              QStringLiteral("Scoop"));
+    EXPECT_EQ(
+        exosnap::models::ResolveInstallModeLabel({upd::InstallMode::Installed, upd::DistributionOwner::UnknownManaged}),
+        QStringLiteral("Externally managed"));
+}
 
 QGuiApplication* ensureApplication() {
     if (auto* existing = qobject_cast<QGuiApplication*>(QCoreApplication::instance()))

@@ -70,7 +70,6 @@
 #include <update/update_types.h>
 #include <update_handoff/handoff.h>
 
-#include "quick/ExoSnap/Quick/QuickThemeTokens.h"
 #include "UpdaterArgs.h"
 #include "UpdaterAutomation.h"
 #include "UpdaterCommandPolicy.h"
@@ -80,6 +79,7 @@
 #include "UpdaterViewAdapter.h"
 #include "UpdaterWorker.h"
 #include "WindowPlacement.h"
+#include "quick/ExoSnap/Quick/QuickThemeTokens.h"
 
 // main() itself stays at global scope; everything it drives lives in the
 // updater namespace.
@@ -362,7 +362,7 @@ QString AcceptHandoff(const QString& path, UpdaterArgs* args, const UpdaterComma
 void FillManualContext(UpdaterArgs& args) {
     const auto registry_path = exosnap::update::ReadInstallPath();
     const ManualContext context =
-        ResolveManualContext(exosnap::update::DetectInstallMode(),
+        ResolveManualContext(exosnap::update::DetectDistributionContext().install_mode,
                              registry_path.has_value() ? QString::fromStdWString(*registry_path) : QString(),
                              QCoreApplication::applicationDirPath());
     args.install_mode = context.install_mode;
@@ -637,6 +637,13 @@ int main(int argc, char** argv) {
         render();
     });
 
+    QObject::connect(&worker, &UpdaterWorker::selfUpdateBlocked, &view_adapter, [&](const QString& reason) {
+        in_flight = false;
+        controller->onSelfUpdateBlocked(reason);
+        std::fprintf(stderr, "exosnap-updater: built-in update refused: %s\n", qPrintable(reason));
+        render();
+    });
+
     QObject::connect(&worker, &UpdaterWorker::cancelled, &view_adapter, [&] {
         in_flight = false;
         controller->onCancelled();
@@ -692,7 +699,8 @@ int main(int argc, char** argv) {
     QObject::connect(&view_adapter, &UpdaterViewAdapter::checkRequested, &view_adapter, [&] { (void)doCheck(); });
     QObject::connect(&view_adapter, &UpdaterViewAdapter::downloadRequested, &view_adapter,
                      [&] { (void)start(&UpdaterWorker::download); });
-    QObject::connect(&view_adapter, &UpdaterViewAdapter::applyRequested, &view_adapter, [&] { (void)start(&UpdaterWorker::apply); });
+    QObject::connect(&view_adapter, &UpdaterViewAdapter::applyRequested, &view_adapter,
+                     [&] { (void)start(&UpdaterWorker::apply); });
 
     const auto doRetry = [&] {
         if (in_flight) {

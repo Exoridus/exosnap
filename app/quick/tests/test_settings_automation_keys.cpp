@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QSet>
@@ -41,7 +42,7 @@ QCoreApplication* EnsureApplication() {
     static int argc = 1;
     static char app_name[] = "settings_automation_tests";
     static char* argv[] = {app_name, nullptr};
-    static QCoreApplication app(argc, argv);
+    static QGuiApplication app(argc, argv);
     return &app;
 }
 

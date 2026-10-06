@@ -2,6 +2,7 @@
 
 #include "QuickThemeTokens.h"
 
+#include <QClipboard>
 #include <QGuiApplication>
 #include <QPalette>
 #include <QThreadPool>
@@ -48,6 +49,14 @@ class SignalCounter {
 // seeded with the static validated baseline and the shipped default preset.
 class SettingsAdapterTest : public ::testing::Test {
   protected:
+    static void SetUpTestSuite() {
+        if (!QCoreApplication::instance()) {
+            static int argc = 1;
+            static char name[] = "settings_qml_adapter_tests";
+            static char* argv[] = {name, nullptr};
+            static QGuiApplication application(argc, argv);
+        }
+    }
     void SetUp() override {
         adapter.setCapabilities(capability::CapabilityBuilder::BuildStaticValidatedBaseline());
         adapter.setConfig(MakeDefaultPreset().config);
@@ -541,6 +550,76 @@ TEST_F(SettingsAdapterTest, UpdateStatusDrivesActionTextAndWhatsNewVisibility) {
     EXPECT_TRUE(adapter.updateActionEnabled());
     EXPECT_TRUE(adapter.whatsNewAvailable());
     EXPECT_TRUE(adapter.updateActionText().contains(QStringLiteral("v1.2")));
+}
+
+TEST_F(SettingsAdapterTest, ManagedOfferKeepsReleaseNotesAndCheckAction) {
+    adapter.setUpdateStatus(QStringLiteral("managed"), QStringLiteral("1.2.3"), QString());
+    EXPECT_TRUE(adapter.whatsNewAvailable());
+    EXPECT_TRUE(adapter.updateStatusText().contains(QStringLiteral("1.2.3")));
+    EXPECT_EQ(adapter.updateActionText(), QStringLiteral("Check for updates"));
+    EXPECT_TRUE(adapter.updateActionEnabled());
+}
+
+TEST_F(SettingsAdapterTest, ManagedDistributionsKeepDiscoveryNotesAndCopyExactCommands) {
+    namespace upd = exosnap::update;
+    struct ManagedCase {
+        upd::DistributionOwner owner;
+        const char* label;
+        const char* command;
+    };
+    const ManagedCase cases[] = {
+        {upd::DistributionOwner::WinGet, "WinGet", "winget upgrade --id Codexo.ExoSnap --exact"},
+        {upd::DistributionOwner::Chocolatey, "Chocolatey", "choco upgrade exosnap"},
+        {upd::DistributionOwner::Scoop, "Scoop", "scoop update exosnap"},
+        {upd::DistributionOwner::UnknownManaged, "externally", ""},
+    };
+    SignalCounter apply(adapter, &SettingsAdapter::updatePrimaryActionRequested);
+    SignalCounter check(adapter, &SettingsAdapter::checkForUpdatesRequested);
+    SignalCounter notes(adapter, &SettingsAdapter::whatsNewRequested);
+    int expected_checks = 0;
+    int expected_notes = 0;
+    for (const auto& test : cases) {
+        adapter.setDistributionContext({upd::InstallMode::Installed, test.owner});
+        adapter.setUpdateStatus(QStringLiteral("available"), QStringLiteral("1.2.3"), QString());
+        EXPECT_TRUE(adapter.updateManaged());
+        EXPECT_EQ(adapter.updateState(), QStringLiteral("managed"));
+        EXPECT_TRUE(adapter.updateAvailable());
+        EXPECT_TRUE(adapter.whatsNewAvailable());
+        EXPECT_TRUE(adapter.updateStatusText().contains(QStringLiteral("1.2.3")));
+        EXPECT_TRUE(adapter.updateManagerText().contains(QString::fromUtf8(test.label)));
+        EXPECT_EQ(adapter.updateManagerCommand(), QString::fromUtf8(test.command));
+        EXPECT_EQ(adapter.copyUpdateCommand(), QString::fromUtf8(test.command));
+        if (test.command[0] != '\0')
+            EXPECT_EQ(QGuiApplication::clipboard()->text(), QString::fromUtf8(test.command));
+        else
+            EXPECT_EQ(adapter.updateManagerHint(), QStringLiteral("This installation is managed externally. Update it "
+                                                                  "with the package manager that installed ExoSnap."));
+        adapter.runUpdatePrimaryAction();
+        EXPECT_EQ(apply.count(), 0);
+        EXPECT_EQ(check.count(), ++expected_checks);
+        adapter.showWhatsNew();
+        EXPECT_EQ(notes.count(), ++expected_notes);
+        adapter.setUpdateStatus(QStringLiteral("uptodate"), QString(), QStringLiteral("today"));
+        EXPECT_TRUE(adapter.updateManaged());
+        EXPECT_TRUE(adapter.updateStatusText().contains(QStringLiteral("Up to date")));
+        EXPECT_TRUE(adapter.updateActionEnabled());
+        adapter.setUpdateStatus(QStringLiteral("error"), QString(), QString(), QStringLiteral("offline"));
+        EXPECT_EQ(adapter.updateStatusText(), QStringLiteral("offline"));
+        EXPECT_TRUE(adapter.updateManaged());
+        EXPECT_TRUE(adapter.updateActionEnabled());
+        EXPECT_EQ(adapter.updateActionText(), QStringLiteral("Check for updates"));
+    }
+}
+
+TEST_F(SettingsAdapterTest, DirectUpdateKeepsBuiltInAction) {
+    adapter.setUpdateStatus(QStringLiteral("available"), QStringLiteral("1.2.3"), QString());
+    SignalCounter apply(adapter, &SettingsAdapter::updatePrimaryActionRequested);
+    SignalCounter check(adapter, &SettingsAdapter::checkForUpdatesRequested);
+    EXPECT_FALSE(adapter.updateManaged());
+    EXPECT_TRUE(adapter.copyUpdateCommand().isEmpty());
+    adapter.runUpdatePrimaryAction();
+    EXPECT_EQ(apply.count(), 1);
+    EXPECT_EQ(check.count(), 0);
 }
 
 TEST_F(SettingsAdapterTest, RecordingLockDisablesTheUpdateAction) {

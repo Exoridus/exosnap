@@ -16,7 +16,9 @@
 #include <QProcessEnvironment>
 #include <QString>
 #include <QStringList>
+#include <functional>
 #include <optional>
+#include <update/update_checker.h>
 #include <update/update_service_interface.h>
 #include <update/update_types.h>
 #include <update_handoff/handoff.h>
@@ -52,7 +54,11 @@ class UpdateService final : public QObject {
     Q_OBJECT
 
   public:
+    using CheckFunction = std::function<exosnap::update::UpdateCheckResult(const exosnap::update::CheckParams&)>;
+
     explicit UpdateService(RecordingCoordinator* coordinator, QObject* parent = nullptr);
+    UpdateService(RecordingCoordinator* coordinator, exosnap::update::DistributionContext distribution,
+                  QObject* parent = nullptr, CheckFunction check = {});
     ~UpdateService() override;
 
     // Wire (or replace) the RecordingCoordinator backing the recording guard.
@@ -159,13 +165,6 @@ class UpdateService final : public QObject {
     };
     [[nodiscard]] UpdaterLaunchInfo LastUpdaterLaunch() const;
 
-    // Notify-only Scoop detection (case-insensitive, both path separators): true
-    // when app_dir_path sits under a Scoop tree — either the default
-    // "…/scoop/apps/…" layout, or a relocated $env:SCOOP root that still uses the
-    // "…/apps/<name>/current" junction layout. Scoop installs are updated via
-    // `scoop update exosnap`, not the staged swap.
-    [[nodiscard]] static bool IsScoopManagedInstall(const QString& app_dir_path);
-
     // Handoff: launch the verified installer. User must confirm in UI first.
     void HandoffToInstaller(const QString& installer_path);
 
@@ -246,11 +245,7 @@ class UpdateService final : public QObject {
 // main.cpp sets QT_QPA_DISABLE_REDIRECTION_SURFACE=1 with qputenv so this
 // application's Quick window does not flash a white redirection bitmap at
 // startup. qputenv writes the process environment, and a child inherits it. The
-// updater is Qt WIDGETS, and Widgets paint into exactly the redirection surface
-// that flag removes -- inherited, it yields a correctly sized window that Windows
-// reports as visible and that renders nothing at all. That window is the only
-// user interface left on the machine once the updater has closed the app, so a
-// declined or failed update becomes unreadable rather than merely ugly.
+// updater uses its own Qt Quick process and QPA surface configuration.
 [[nodiscard]] QProcessEnvironment UpdaterChildEnvironment(const QProcessEnvironment& parent);
 
 // The document itself, assembled from what this process knows. Pure so the
@@ -271,7 +266,7 @@ BuildUpdateHandoff(const exosnap::update::UpdateState& st, const UpdateService::
 // Resolve the Settings updates-card state string from a completed check. Pure so
 // the loop-guard / recovery semantics can be unit-tested headless:
 //   * !update_available                        -> "uptodate"
-//   * is_scoop                                 -> "scoop"   (notify-only)
+//   * externally managed                       -> "managed" (notify-only)
 //   * verify mode AND available == current     -> "verify-reinstall" (
 //                                                 the offered version IS the
 //                                                 running one, on purpose)
@@ -283,13 +278,14 @@ BuildUpdateHandoff(const exosnap::update::UpdateState& st, const UpdateService::
 // clears the in-process stamp before checking, so the same still-applicable
 // version can resolve to "available" again.
 //
-// Order notes: Scoop wins over everything offerable — a Scoop tree is never
+// Order notes: External ownership wins over everything offerable. A managed tree is never
 // touched by the staged swap, verification mode included. The verification
 // reinstall outranks the loop guard because the whole point of that mode is to
 // re-run the swap for the version already installed; the mode itself is
 // non-persistent, so it cannot leave the card stuck.
-[[nodiscard]] QString ResolveUpdateCardState(bool update_available, bool is_scoop, const QString& applied_version,
-                                             const QString& available_version, bool verify_reinstall_mode = false,
+[[nodiscard]] QString ResolveUpdateCardState(bool update_available, exosnap::update::DistributionContext distribution,
+                                             const QString& applied_version, const QString& available_version,
+                                             bool verify_reinstall_mode = false,
                                              const QString& current_version = QString(),
                                              UpdateHandoffPhase handoff_phase = UpdateHandoffPhase::Idle);
 

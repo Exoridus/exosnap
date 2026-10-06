@@ -1433,6 +1433,7 @@ exosnap_add_gtest(
         Qt6::Core
         Qt6::Gui
         Qt6::Qml
+        exosnap::update
         exosnap_output_model_test_support
         exosnap::capability
         exosnap_engine

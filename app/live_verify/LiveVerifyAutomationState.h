@@ -1,4 +1,5 @@
 #pragma once
+#include <update/update_types.h>
 
 // LiveVerifyAutomationState.h -- the product state the control channel is
 // allowed to observe, as one flat value type.
@@ -130,10 +131,11 @@ struct AutomationState {
 
     // --- Update --------------------------------------------------------------
     // The update card's own state string, verbatim: "unchecked" | "checking" |
-    // "uptodate" | "available" | "scoop" | "updater-running" | "pending" |
+    // "uptodate" | "available" | "managed" | "updater-running" | "pending" |
     // "verify-reinstall" | "error". Deliberately the SAME vocabulary the product
     // uses rather than a parallel enum -- a second spelling of the same fact is
     // a second thing that can be wrong, and this one is what the user sees.
+    exosnap::update::DistributionContext update_distribution;
     QString update_state;
     QString update_channel;
     // The running build's full version, and the offered release tag verbatim
@@ -149,7 +151,7 @@ struct AutomationState {
     // command cannot disagree.
     bool update_action_enabled = false;
     // Why an update action is refused, in product vocabulary: "" (nothing in the
-    // way) | "recording" | "finalizing" | "scoop" | "updaterRunning" |
+    // way) | "recording" | "finalizing" | "managed" | "updaterRunning" |
     // "restartPending". Not a message -- a runner branches on this.
     QString update_blocker;
 
