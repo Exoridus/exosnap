@@ -64,6 +64,18 @@ pub enum Request {
         #[serde(default)]
         env: BTreeMap<String, String>,
     },
+    /// Starts a process with stdout and stderr captured in one guest file.
+    #[serde(rename_all = "camelCase")]
+    SpawnLogged {
+        program: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+        transcript: String,
+    },
     /// Waits up to `timeoutMs` for a spawned process. Not having exited yet
     /// is a result, not an error.
     #[serde(rename_all = "camelCase")]

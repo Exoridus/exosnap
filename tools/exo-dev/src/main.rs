@@ -8,7 +8,7 @@ use exo_dev::benchmark::run::Frontend;
 use exo_dev::executor::{Context, DryRunExecutor, RealExecutor};
 use exo_dev::git::Git;
 use exo_dev::plan::{self, Event, PlanInput};
-use exo_dev::process::StepRunner;
+use exo_dev::process::{OutputMode, StepRunner};
 use exo_dev::profile::Profile;
 use exo_dev::report::{self, ReceiptFacts};
 use exo_dev::run::{self, Executor};
@@ -25,6 +25,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Apply a dependency patch, accepting an already patched source tree.
+    ApplyDependencyPatch {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        patch: PathBuf,
+        #[arg(long)]
+        patch_sha256: Option<String>,
+    },
+
+    /// Provision pinned analysis tools for CI.
+    Setup {
+        #[arg(value_parser = ["cppcheck"])]
+        tool: String,
+    },
     /// Run a verification profile: the local contracts or a CI job's gate.
     Verify(Box<VerifyArgs>),
     /// Git hook entry points, called by the scripts in .githooks.
@@ -42,6 +57,17 @@ enum Command {
     Lint {
         #[command(subcommand)]
         command: LintCommand,
+    },
+    /// Report Qt's native QML compilation coverage and retain per-function details.
+    QmlAotStats {
+        #[arg(long, default_value = "build/windows-x64-ninja-release")]
+        build_dir: PathBuf,
+        #[arg(long, default_value = "Release")]
+        config: String,
+        #[arg(long, default_value_t = 2)]
+        jobs: usize,
+        #[arg(long)]
+        report_path: Option<PathBuf>,
     },
     /// Build one CMake tree and run its CTest suite in an isolated
     /// environment: a throwaway EXOSNAP_CONFIG_DIR, offscreen Qt and the
@@ -471,6 +497,12 @@ enum PrivacyCommand {
 
 #[derive(Subcommand)]
 enum CheckCommand {
+    /// Reject standalone automation outside the external packaging adapter.
+    AutomationPolicy {
+        /// Validate index contents, including unstaged edits and deletions.
+        #[arg(long)]
+        staged: bool,
+    },
     /// The four build/Qt drift invariants: qt-version-consistency,
     /// setup-qt-centralized, no-qmake-project, qt-sdk-path-allowlist.
     Drift,
@@ -554,7 +586,7 @@ enum CheckCommand {
 #[derive(Subcommand)]
 enum LintCommand {
     /// Runs clang-tidy against the one canary fixture per blocking check
-    /// under scripts/tests/fixtures/lint-canaries, and fails if a check no
+    /// under tools/exo-dev/tests/fixtures/lint-canaries, and fails if a check no
     /// longer fires on its own canary.
     Canaries {
         /// Explicit path to clang-tidy.exe. Autodetected from PATH when
@@ -602,7 +634,7 @@ enum LintCommand {
     /// gate for clang-tidy, while cppcheck fails the run on any finding.
     Quality {
         /// Restrict to one pass. Both run when omitted.
-        #[arg(long, value_parser = ["cppcheck", "clang-tidy"])]
+        #[arg(long, value_parser = ["cppcheck", "cppcheck-unused-function", "clang-tidy"])]
         only: Option<String>,
         /// Directory containing compile_commands.json for the clang-tidy
         /// pass. Defaults to the Ninja debug then release preset.
@@ -619,6 +651,9 @@ enum LintCommand {
         /// carries a summary.
         #[arg(long)]
         report_path: Option<PathBuf>,
+        /// Use a clang-tidy compatible with the compilation database's compiler.
+        #[arg(long)]
+        clang_tidy: Option<PathBuf>,
     },
 }
 
@@ -761,7 +796,10 @@ struct VerifyArgs {
     /// verification workspace.
     #[arg(long)]
     result_path: Option<PathBuf>,
-    /// Lines of a failed step's log printed at the end.
+    /// Console output policy. Auto selects compact output in CI or when redirected.
+    #[arg(long, value_enum, default_value = "auto")]
+    output: OutputMode,
+    /// Maximum lines of a failed step's log to print.
     #[arg(long, default_value_t = 120)]
     failure_tail_lines: usize,
     /// Execute nothing: every applicable check passes unless named by
@@ -827,8 +865,39 @@ fn run_cli() -> anyhow::Result<ExitCode> {
     let cwd = std::env::current_dir()?;
     let repo_root = Git::discover(&cwd).context("not inside a git work tree")?;
     match cli.command {
+        Command::ApplyDependencyPatch {
+            source,
+            patch,
+            patch_sha256,
+        } => {
+            let result =
+                exo_dev::dependency_patch::apply(&source, &patch, patch_sha256.as_deref())?;
+            println!("dependency patch: {result:?}");
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Command::Setup { .. } => {
+            exo_dev::setup::cppcheck()?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Verify(args) => verify(&repo_root, *args),
         Command::Check { check } => match check {
+            CheckCommand::AutomationPolicy { staged } => {
+                let findings = if staged {
+                    exo_dev::automation_policy::check_staged(&repo_root)?
+                } else {
+                    exo_dev::automation_policy::check(&repo_root)?
+                };
+                for finding in &findings {
+                    eprintln!("{finding}");
+                }
+                if findings.is_empty() {
+                    println!("automation-policy: OK");
+                    Ok(ExitCode::SUCCESS)
+                } else {
+                    Ok(ExitCode::FAILURE)
+                }
+            }
             CheckCommand::Drift => check_drift(&repo_root),
             CheckCommand::SourceHygiene { base, all, only } => {
                 check_source_hygiene(&repo_root, base, all, only)
@@ -858,6 +927,21 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 check_packaging_version(&repo_root, version)
             }
         },
+        Command::QmlAotStats {
+            build_dir,
+            config,
+            jobs,
+            report_path,
+        } => {
+            exo_dev::qml_aot::report(
+                &repo_root,
+                &build_dir,
+                &config,
+                jobs,
+                report_path.as_deref(),
+            )?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Lint { command } => match command {
             LintCommand::Canaries { clang_tidy, only } => {
                 lint_canaries(&repo_root, clang_tidy, only)
@@ -886,7 +970,16 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 base,
                 jobs,
                 report_path,
-            } => lint_quality(&repo_root, only, build_dir, base, jobs, report_path),
+                clang_tidy,
+            } => lint_quality(
+                &repo_root,
+                only,
+                build_dir,
+                base,
+                jobs,
+                report_path,
+                clang_tidy,
+            ),
         },
         Command::Test(args) => test(&repo_root, args),
         Command::Pr { pr } => match pr {
@@ -2413,15 +2506,19 @@ fn lint_quality(
     base: Option<String>,
     jobs: usize,
     report_path: Option<PathBuf>,
+    clang_tidy: Option<PathBuf>,
 ) -> anyhow::Result<ExitCode> {
     let only = match only.as_deref() {
         None => None,
         Some("cppcheck") => Some(exo_dev::lint::quality::Only::CppCheck),
+        Some("cppcheck-unused-function") => {
+            Some(exo_dev::lint::quality::Only::CppCheckUnusedFunction)
+        }
         Some("clang-tidy") => Some(exo_dev::lint::quality::Only::ClangTidy),
         Some(other) => bail!("unknown --only '{other}'"),
     };
 
-    let report = match exo_dev::lint::quality::run(
+    let report = match exo_dev::lint::quality::run_with_tool(
         repo_root,
         build_dir.as_deref(),
         base.as_deref(),
@@ -2429,6 +2526,7 @@ fn lint_quality(
         jobs,
         report_path.as_deref(),
         None,
+        clang_tidy.as_deref(),
     ) {
         Ok(report) => report,
         Err(error) => return quality_tool_missing_exit(error),
@@ -2439,13 +2537,7 @@ fn lint_quality(
             "clang-tidy ADVISORY: {} translation unit(s) ({}) in {} batch(es), {} parallel job(s)",
             clang_tidy.analyzed, clang_tidy.scope, clang_tidy.batches, clang_tidy.jobs
         );
-        if clang_tidy.findings.is_empty() {
-            println!("clang-tidy: OK");
-        } else {
-            for finding in &clang_tidy.findings {
-                println!("{finding}");
-            }
-        }
+        print!("{}", clang_tidy.normalized.summary());
     } else if let Some(reason) = &report.clang_tidy_skip_reason {
         println!("clang-tidy: SKIP ({reason})");
     }
@@ -2479,6 +2571,11 @@ fn verify(repo_root: &std::path::Path, args: VerifyArgs) -> anyhow::Result<ExitC
         Profile::PreCommit
     };
     let spec = profile.spec();
+    let output = if spec.ci {
+        args.output.resolve(true, false)
+    } else {
+        args.output.resolve_environment()
+    };
     let event = match (&args.event, spec.ci) {
         (Some(name), true) => Event::parse(name),
         (None, true) => bail!("profile '{}' is a CI job and needs --event", spec.name),
@@ -2525,33 +2622,35 @@ fn verify(repo_root: &std::path::Path, args: VerifyArgs) -> anyhow::Result<ExitC
     let log_dir = repo_root.join(".workspace").join("verify");
     let mode = if spec.scoped { "Fast" } else { "Full" };
     let short_head = head.as_deref().map_or("?", |h| &h[..h.len().min(8)]);
-    println!();
-    println!(
-        "exo-dev verify ({}) - HEAD {short_head}{}",
-        spec.name,
-        if dirty { " +dirty" } else { "" }
-    );
-    if spec.scoped {
-        let categories = if scope.categories.is_empty() {
-            "nothing".to_string()
-        } else {
-            scope.categories.join(", ")
-        };
+    if !output.is_silent() {
+        println!();
         println!(
-            "  scope: {categories} ({} file(s))",
-            scope.changed_files.len()
+            "exo-dev verify ({}) - HEAD {short_head}{}",
+            spec.name,
+            if dirty { " +dirty" } else { "" }
         );
-        for reason in &scope.escalation_reasons {
-            println!("  escalated: {reason}");
+        if spec.scoped {
+            let categories = if scope.categories.is_empty() {
+                "nothing".to_string()
+            } else {
+                scope.categories.join(", ")
+            };
+            println!(
+                "  scope: {categories} ({} file(s))",
+                scope.changed_files.len()
+            );
+            for reason in &scope.escalation_reasons {
+                println!("  escalated: {reason}");
+            }
+        } else {
+            println!("  scope: everything (this profile claims completeness)");
         }
-    } else {
-        println!("  scope: everything (this profile claims completeness)");
+        println!(
+            "  jobs: {jobs} of {} cores (cmake --build --parallel, ctest -j, clang-tidy -j)",
+            std::thread::available_parallelism().map_or(1, usize::from)
+        );
+        println!();
     }
-    println!(
-        "  jobs: {jobs} of {} cores (cmake --build --parallel, ctest -j, clang-tidy -j)",
-        std::thread::available_parallelism().map_or(1, usize::from)
-    );
-    println!();
 
     let mut executor: Box<dyn Executor> = if args.dry_run {
         Box::new(DryRunExecutor::new(
@@ -2576,36 +2675,20 @@ fn verify(repo_root: &std::path::Path, args: VerifyArgs) -> anyhow::Result<ExitC
             dirty,
             runner: StepRunner {
                 log_dir: log_dir.clone(),
-                stream: spec.ci,
+                output,
                 failure_tail_lines: args.failure_tail_lines,
                 env: Vec::new(),
             },
         };
-        Box::new(RealExecutor::new(ctx, &plan))
+        Box::new(RealExecutor::new(ctx))
     };
 
-    let result = run::run(&plan, executor.as_mut());
+    let result = run::run_with_output(&plan, executor.as_mut(), output);
 
-    println!();
-    for line in report::summary(&result) {
-        println!("{line}");
-    }
-    let failures = report::failure_report(&result);
-    if !failures.is_empty() {
-        println!();
-        println!("evidence:");
-        for line in failures {
-            println!("  {line}");
+    if output == OutputMode::Verbose {
+        for line in report::summary(&result) {
+            println!("{line}");
         }
-    }
-    if !result.tool_missing.is_empty() {
-        println!();
-        println!(
-            "exo-dev verify ({}) could not run: {}. Install the missing tool(s): a gate that never \
-             started is not a gate that passed.",
-            spec.name,
-            result.tool_missing.join(", ")
-        );
     }
 
     let document = report::receipt(
@@ -2625,14 +2708,19 @@ fn verify(repo_root: &std::path::Path, args: VerifyArgs) -> anyhow::Result<ExitC
         .unwrap_or_else(|| log_dir.join("latest.json"));
     report::save(&document, &result_path)
         .with_context(|| format!("could not write {}", result_path.display()))?;
-    println!();
-    println!("summary: {}", result_path.display());
+    if !output.is_silent() {
+        println!("summary: {}", result_path.display());
+    }
 
     if result.passed {
-        println!("exo-dev verify ({}): passed", spec.name);
+        if !output.is_silent() {
+            println!("exo-dev verify ({}): passed", spec.name);
+        }
         Ok(ExitCode::SUCCESS)
     } else {
-        println!("exo-dev verify ({}): FAILED", spec.name);
+        if !output.is_silent() {
+            println!("exo-dev verify ({}): FAILED", spec.name);
+        }
         Ok(ExitCode::FAILURE)
     }
 }

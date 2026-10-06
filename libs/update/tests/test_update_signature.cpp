@@ -4,12 +4,15 @@
 // the tests are fully deterministic without requiring the CI secret.
 
 #include <algorithm>
+
+#include <cstdint>
 #include <cstring>
 #include <gtest/gtest.h>
 #include <string>
 #include <update/ed25519_verify.h>
 #include <update/manifest_io.h>
 #include <update/update_types.h>
+#include <variant>
 
 using namespace exosnap::update;
 

@@ -5,13 +5,20 @@
 //   - the source is reacquired via Reinit and the EOS is still emitted,
 //   - a merged track survives one dead inner while the survivor keeps mixing.
 
+#include <cstddef>
 #include <gtest/gtest.h>
 
 #include <Audioclient.h>
 
 #include "audio_thread.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include "exosnap/engine/packet_types.h"
+#include "exosnap/engine/pipeline_diagnostics.h"
 #include "mixed_audio_src.h"
+#include "mux_queue.h"
 #include "pipeline_diagnostics_aggregator.h"
+#include "session_failure.h"
 #include "session_internal.h"
 
 #include <cmath>
@@ -23,6 +30,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -430,8 +438,7 @@ class OutageSource : public IAudioCaptureSource {
 };
 
 bool HasEos(SessionState& state) {
-    std::lock_guard lk(state.mux_mutex);
-    for (const auto& item : state.mux_queue) {
+    for (const auto& item : state.mux_queue.Snapshot()) {
         if (std::get_if<AudioEosSentinel>(&item.payload) != nullptr) {
             return true;
         }
@@ -445,14 +452,12 @@ bool HasEos(SessionState& state) {
 std::vector<EncodedAudioPacket> GatherAudioPacketsInOrder(SessionState& state) {
     std::vector<EncodedAudioPacket> packets;
     {
-        std::lock_guard lk(state.premux_mutex);
-        for (const auto& pkt : state.audio_premux) {
+        for (const auto& pkt : state.premux.PendingSnapshot().audio) {
             packets.push_back(pkt);
         }
     }
     {
-        std::lock_guard lk(state.mux_mutex);
-        for (const auto& item : state.mux_queue) {
+        for (const auto& item : state.mux_queue.Snapshot()) {
             if (const auto* pkt = std::get_if<EncodedAudioPacket>(&item.payload)) {
                 packets.push_back(*pkt);
             }
@@ -547,10 +552,9 @@ uint64_t LongestZeroRunFrames(const std::vector<int16_t>& samples, uint32_t chan
 // private up front lets the worker's packets go to the bounded mux queue
 // instead of piling up against the 600-packet pre-mux limit.
 void MarkVideoTrackReady(SessionState& state) {
-    std::lock_guard lk(state.premux_mutex);
-    state.codec_private.av1_ready = true;
-    state.codec_private.h264_ready = true;
-    state.codec_private.hevc_ready = true;
+    state.premux.PublishVideo(exosnap::engine::VideoCodec::Av1, {});
+    state.premux.PublishVideo(exosnap::engine::VideoCodec::H264, {});
+    state.premux.PublishVideo(exosnap::engine::VideoCodec::Hevc, {});
 }
 
 // One recording driven through a full outage: every source of the track loses
@@ -600,14 +604,46 @@ FullOutageRun RunFullOutage(AudioCodec codec, bool merged, std::chrono::millisec
     }
 
     auto thread = std::make_shared<AudioThread>(state_ptr, std::move(track_source), 0);
-    thread->Start();
-    EXPECT_TRUE(thread->Join(15000));
-
     FullOutageRun run;
+    thread->Start();
+
+    // Short clock-driven buffers can reach the packet bound during an outage.
+    // Consume them while the worker runs, as an active mux destination would.
+    const auto drain_mux = [&] {
+        const size_t pending = state.mux_queue.Size();
+        for (size_t i = 0; i < pending; ++i) {
+            auto item = state.mux_queue.Pop();
+            if (!item) {
+                break;
+            }
+            if (auto* packet = std::get_if<EncodedAudioPacket>(&item->payload)) {
+                run.packets.push_back(std::move(*packet));
+            } else if (std::holds_alternative<AudioEosSentinel>(item->payload)) {
+                run.has_eos = true;
+            }
+        }
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    bool joined = false;
+    while (!joined && std::chrono::steady_clock::now() < deadline) {
+        drain_mux();
+        joined = thread->Join(5);
+    }
+    drain_mux();
+    EXPECT_TRUE(joined);
+    if (!joined) {
+        state.RequestCleanStop();
+        run.failed = true;
+        return run;
+    }
+
     run.failed = state.HasFailure();
+    if (const auto failure = state.FailureSnapshot()) {
+        ADD_FAILURE() << failure->error_detail;
+    }
     run.degraded_occurred = state.stats.audio_degraded_occurred;
-    run.has_eos = HasEos(state);
-    run.packets = GatherAudioPacketsInOrder(state);
+    const auto premux_packets = state.premux.PendingSnapshot().audio;
+    run.packets.insert(run.packets.begin(), premux_packets.begin(), premux_packets.end());
     run.real_frames = static_cast<uint64_t>(opts.pre + opts.post) * kFrames;
 
     // The track is silent from the first source going down until the last one is

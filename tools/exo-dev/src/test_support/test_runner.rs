@@ -349,7 +349,7 @@ fn ninja() -> Option<PathBuf> {
 /// A committed repository the run identifies its source from, with the
 /// `.qt-version` every run reads.
 pub fn source_repo() -> tempfile::TempDir {
-    super::fixture_repo_committed(&[(".qt-version", "6.11.2\n")])
+    super::fixture_repo_committed(&[(".qt-version", "6.12.0\n")])
 }
 
 /// Options for a run of `build_dir` against `repo`, skipping the build and

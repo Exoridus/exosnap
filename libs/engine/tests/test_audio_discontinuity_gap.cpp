@@ -8,16 +8,24 @@
 //   2. the AudioThread behavior: a packet that reports a gap is preceded by
 //      exactly that much synthesized silence, so packet PTS stays continuous.
 
+#include <chrono>
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include "audio_thread.h"
 #include "discontinuity_gap.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include "exosnap/engine/packet_types.h"
+#include "exosnap/engine/pipeline_diagnostics.h"
+#include "exosnap/engine/session_stats.h"
 #include "session_internal.h"
 
 #include <atomic>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -195,14 +203,12 @@ class GapMockSource : public IAudioCaptureSource {
 std::vector<EncodedAudioPacket> GatherQueuedAudioPackets(SessionState& state) {
     std::vector<EncodedAudioPacket> packets;
     {
-        std::lock_guard lk(state.premux_mutex);
-        for (const auto& pkt : state.audio_premux) {
+        for (const auto& pkt : state.premux.PendingSnapshot().audio) {
             packets.push_back(pkt);
         }
     }
     {
-        std::lock_guard lk(state.mux_mutex);
-        for (const auto& item : state.mux_queue) {
+        for (const auto& item : state.mux_queue.Snapshot()) {
             if (const auto* pkt = std::get_if<EncodedAudioPacket>(&item.payload)) {
                 packets.push_back(*pkt);
             }

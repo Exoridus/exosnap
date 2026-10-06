@@ -2,7 +2,9 @@
 
 #include "rbsp_bit_reader.h"
 
+#include <cstdint>
 #include <cstdio>
+#include <vector>
 
 namespace exosnap::engine::annexb {
 

@@ -1,6 +1,14 @@
 #include "mic_meter_service.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include "exosnap/engine/recorder_session.h"
+#include "meter_start_mode.h"
 
 #include <exosnap/engine/audio_meter.h>
+#include <future>
+#include <optional>
+#include <stop_token>
+#include <string>
+#include <thread>
 
 #if EXOSNAP_ENGINE_HAS_WASAPI_CAPTURE_SRC
 #include "wasapi_capture_src.h"

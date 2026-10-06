@@ -1,14 +1,25 @@
+#include <cstdint>
 #include <gtest/gtest.h>
+#include <ios>
+#include <optional>
+#include <system_error>
+#include <utility>
 
 #include "edit_playback_pacing.h"
 #include "exosnap/engine/edit_player_engine.h"
 
 extern "C" {
-#include <libavcodec/avcodec.h>
+#include <libavcodec/codec_id.h>
+#include <libavcodec/defs.h>
+#include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
+#include <libavformat/avio.h>
+#include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/dict.h>
 #include <libavutil/log.h>
+#include <libavutil/mem.h>
+#include <libavutil/samplefmt.h>
 }
 
 #include <atomic>

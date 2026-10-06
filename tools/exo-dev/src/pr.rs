@@ -1091,9 +1091,7 @@ mod tests {
 
     // -- the workflow cost contract ----------------------------------------
     //
-    // Ported from the homegrown test harness the PowerShell script tests used,
-    // read as text rather than as YAML for the same reason that harness gave:
-    // asserting the absence of one word does not justify a YAML dependency.
+    // These token checks do not need to interpret the workflow's YAML structure.
 
     fn workflow(name: &str) -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

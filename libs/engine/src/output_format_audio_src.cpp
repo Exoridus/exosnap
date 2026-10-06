@@ -1,12 +1,14 @@
 #include "output_format_audio_src.h"
 
 #include "discontinuity_gap.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include <memory>
+#include <string>
+#include <utility>
 
 // FFmpeg libswresample and libavutil headers
 extern "C" {
 #include <libavutil/channel_layout.h>
-#include <libavutil/mathematics.h>
-#include <libavutil/opt.h>
 #include <libavutil/samplefmt.h>
 #include <libswresample/swresample.h>
 }

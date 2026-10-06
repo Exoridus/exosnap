@@ -15,9 +15,13 @@
 //     out and releases the state (weak_ptr expires),
 //   * a producer blocked on the mux queue bound never deadlocks teardown.
 
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include "audio_thread.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/error_types.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
 #include "mux_thread.h"
 #include "session_internal.h"
 
@@ -29,6 +33,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -63,7 +68,7 @@ bool PollUntil(const std::function<bool()>& pred, std::chrono::milliseconds budg
 TEST(WorkerTeardownOwnership, AbandonedMuxWorkerKeepsSessionStateAliveUntilItRunsOut) {
     auto state = std::make_shared<SessionState>();
     std::weak_ptr<SessionState> state_weak = state;
-    state->audio_track_count = 1; // nothing marks readiness -> Run() blocks on premux_cv
+    state->audio_track_count = 1; // no headers: Run() waits for premux readiness
 
     auto mux = std::make_shared<MuxThread>(state);
     std::weak_ptr<MuxThread> mux_weak = mux;
@@ -86,8 +91,7 @@ TEST(WorkerTeardownOwnership, AbandonedMuxWorkerKeepsSessionStateAliveUntilItRun
     {
         auto st = state_weak.lock();
         ASSERT_NE(st, nullptr);
-        st->stop_requested.store(true);
-        st->premux_cv.notify_all();
+        st->RequestCleanStop();
     }
 
     // ...and once it runs out, everything it owned is released.
@@ -173,7 +177,7 @@ TEST(WorkerTeardownOwnership, AbandonedAudioWorkerKeepsItsSourceAliveWhileBlocke
     ASSERT_TRUE(PollUntil([&] { return gate->in_acquire.load(); }, std::chrono::seconds(10)));
 
     // Stop is requested, but the thread cannot observe it while blocked.
-    state->stop_requested.store(true);
+    state->RequestCleanStop();
     EXPECT_FALSE(worker->Join(100));
 
     // Session gives up and drops every handle.
@@ -247,21 +251,13 @@ TEST(WorkerTeardownOwnership, ProducerBlockedOnQueueBoundNeverDeadlocksTeardown)
     state->config.audio_codec = AudioCodec::Pcm;
     state->config.audio_bit_depth = 16;
     state->audio_track_count = 1;
-    state->codec_private.av1_ready = true;    // route straight into mux_queue
-    state->mux_queue_packet_limit = 4;        // tiny bound, nobody consumes
-    state->mux_queue_full_timeout_ms = 60000; // the failure path, not the timeout, must unblock
+    state->premux.PublishVideo(exosnap::engine::VideoCodec::Av1, {}); // route straight into mux_queue
+    state->mux_queue.Configure({4, 256ull * 1024 * 1024, std::chrono::milliseconds(60000)});
 
     auto worker = std::make_shared<AudioThread>(state, std::make_unique<EndlessSource>(), 0);
     worker->Start();
 
-    // Wait until the producer has filled the bound (it is now blocked in
-    // WaitForMuxQueueSpace with an hour-scale timeout).
-    ASSERT_TRUE(PollUntil(
-        [&] {
-            std::lock_guard lk(state->mux_mutex);
-            return state->mux_queue.size() >= 4;
-        },
-        std::chrono::seconds(10)));
+    ASSERT_TRUE(state->mux_queue.WaitForBlockedProducer(std::chrono::seconds(10)));
     EXPECT_FALSE(worker->Join(100));
 
     // Teardown: the failure path must wake the blocked producer.

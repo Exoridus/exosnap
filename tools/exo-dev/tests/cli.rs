@@ -39,6 +39,74 @@ fn check<'a>(receipt: &'a Value, name: &str) -> &'a Value {
 }
 
 #[test]
+fn compact_output_reports_each_executed_check_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_exo-dev"))
+        .args([
+            "verify",
+            "--profile",
+            "ci-lint",
+            "--event",
+            "push",
+            "--dry-run",
+            "--output",
+            "compact",
+            "--result-path",
+        ])
+        .arg(dir.path().join("receipt.json"))
+        .current_dir(repo_root())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("RUN sanity"), "{text}");
+    assert_eq!(text.matches("PASS sanity ").count(), 1, "{text}");
+    assert!(!text.contains("simulated"), "{text}");
+    assert!(text.contains("summary:"), "{text}");
+}
+
+#[test]
+fn silent_output_keeps_the_receipt_and_failure_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let receipt = dir.path().join("receipt.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_exo-dev"))
+        .args([
+            "verify",
+            "--profile",
+            "ci-lint",
+            "--event",
+            "push",
+            "--dry-run",
+            "--simulate-fail",
+            "format",
+            "--output",
+            "silent",
+            "--result-path",
+        ])
+        .arg(&receipt)
+        .current_dir(repo_root())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&std::fs::read(receipt).unwrap()).unwrap();
+    assert_eq!(result["result"], "failed");
+}
+
+#[test]
 fn an_all_green_scoped_run_exits_zero_and_says_so() {
     let dir = tempfile::tempdir().unwrap();
     let (code, receipt) = exo_dev(

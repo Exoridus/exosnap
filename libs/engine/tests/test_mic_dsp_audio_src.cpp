@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
 #include "mic_dsp_audio_src.h"
 
 #include <cmath>
@@ -7,6 +9,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace exosnap::engine {

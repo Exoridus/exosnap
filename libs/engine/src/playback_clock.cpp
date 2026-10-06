@@ -1,4 +1,9 @@
 #include "playback_clock.h"
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <span>
 
 namespace exosnap::engine {
 

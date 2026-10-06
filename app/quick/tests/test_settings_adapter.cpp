@@ -900,6 +900,8 @@ TEST_F(SettingsAdapterTest, ElementPropertiesFollowTheSelectedPreset) {
     EXPECT_FALSE(adapter.diagnosticsOverlayFps());
     EXPECT_FALSE(adapter.diagnosticsOverlaySize());
     EXPECT_TRUE(adapter.diagnosticsOverlayDrop());
+    EXPECT_TRUE(adapter.diagnosticsOverlayHealth());
+    EXPECT_FALSE(adapter.diagnosticsOverlayDrift());
 }
 
 // Unticking one token under a named preset yields "that preset minus the token"

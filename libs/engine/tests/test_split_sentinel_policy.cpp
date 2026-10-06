@@ -1,9 +1,10 @@
 // Pure unit tests for ShouldEmitSplitSentinel (split_sentinel_policy.h).
 // No GPU/NVENC session, no video thread.
 
+#include "exosnap/engine/split_trigger_source.h"
 #include "split_sentinel_policy.h"
 
-#include <exosnap/engine/recorder_session.h>
+#include <cstdint>
 
 #include "av_epoch_align.h"
 

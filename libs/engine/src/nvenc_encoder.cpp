@@ -1,5 +1,9 @@
 #include "nvenc_encoder.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/color_metadata.h"
+#include "nvEncodeAPI.h"
 
+#include <cstdint>
 #include <exosnap/engine/hdr_bitstream_metadata.h>
 #include <exosnap/engine/logging/logging.h>
 #include <exosnap/engine/packet_types.h>
@@ -7,8 +11,12 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <ratio>
 #include <sstream>
+#include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace exosnap::engine {
 

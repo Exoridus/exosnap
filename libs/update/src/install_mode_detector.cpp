@@ -2,6 +2,12 @@
 
 #include <update/install_mode_detector.h>
 
+#include <cstddef>
+#include <cwchar>
+#include <optional>
+#include <string>
+#include <update/update_types.h>
+
 #include "install_mode_classify.h"
 
 #define WIN32_LEAN_AND_MEAN

@@ -1,12 +1,20 @@
 #include "opus_audio_encoder.h"
 
 #include "codec_private.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/recorder_session.h"
+#include "opus_defines.h"
+#include "opus_types.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <exosnap/engine/packet_types.h>
 
 #include <opus.h>
 
 #include <algorithm>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace exosnap::engine {

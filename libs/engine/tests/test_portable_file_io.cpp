@@ -1,5 +1,6 @@
 #include "exosnap/engine/portable_file_io.h"
 
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include <cstdio>

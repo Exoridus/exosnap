@@ -10,9 +10,9 @@
 if(NOT Qt6_FOUND OR NOT TARGET Qt6::Qml)
     # The SAME floor app/ requires. Without it this probe accepts any Qt6 it finds
     # -- including one a stale cache still points at -- caches that decision, and
-    # then app/'s 6.11 probe fails against it. One version statement per tree, or
+    # then app/'s 6.12 probe fails against it. One version statement per tree, or
     # the first directory to ask silently decides for the last one.
-    find_package(Qt6 6.11 QUIET COMPONENTS Core Gui Qml Quick QuickControls2)
+    find_package(Qt6 6.12 QUIET COMPONENTS Core Gui Qml Quick QuickControls2)
 endif()
 
 # QTP0001 puts a QML module's resources under /qt/qml, which is one of the

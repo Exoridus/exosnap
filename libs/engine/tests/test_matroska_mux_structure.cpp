@@ -1,4 +1,6 @@
+#include <cstring>
 #include <gtest/gtest.h>
+#include <ios>
 
 // libebml / libmatroska — suppress MSVC warnings from third-party code
 #ifdef _MSC_VER
@@ -8,21 +10,22 @@
 #pragma warning(disable : 4245)
 #pragma warning(disable : 4100)
 #endif
+#include <ebml/EbmlElement.h>
 #include <ebml/EbmlHead.h>
+#include <ebml/EbmlMaster.h>
 #include <ebml/EbmlSubHead.h>
 #include <ebml/EbmlVoid.h>
 #include <ebml/StdIOCallback.h>
-#include <matroska/KaxBlockData.h>
+#include <ebml/c/libebml_t.h>
+#include <matroska/KaxBlock.h>
 #include <matroska/KaxCluster.h>
 #include <matroska/KaxCues.h>
 #include <matroska/KaxCuesData.h>
-#include <matroska/KaxInfo.h>
 #include <matroska/KaxSeekHead.h>
 #include <matroska/KaxSegment.h>
 #include <matroska/KaxSemantic.h>
-#include <matroska/KaxTrackAudio.h>
-#include <matroska/KaxTrackVideo.h>
 #include <matroska/KaxTracks.h>
+#include <matroska/KaxTypes.h>
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif

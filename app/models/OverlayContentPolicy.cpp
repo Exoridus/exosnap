@@ -36,7 +36,7 @@ bool contains(const QStringList& tokens, QLatin1StringView token) {
 } // namespace
 
 bool DiagnosticsOverlayContent::IsEmpty() const noexcept {
-    return !fps && !drop && !drift && !size && !muted_sources;
+    return !fps && !drop && !drift && !size && !muted_sources && !health;
 }
 
 RecordingOverlayState ResolveRecordingOverlayState(const RecordingOverlayStateInputs& inputs) {
@@ -87,6 +87,8 @@ QString TokenFor(RecordingOverlayElement element) {
 
 QString TokenFor(DiagnosticsOverlayElement element) {
     switch (element) {
+    case DiagnosticsOverlayElement::Health:
+        return QString(kHealth);
     case DiagnosticsOverlayElement::Drop:
         return QString(kDrop);
     case DiagnosticsOverlayElement::Drift:
@@ -138,6 +140,8 @@ QString TokensForDiagnosticsOverlayContent(const DiagnosticsOverlayContent& cont
         tokens << QString(kSize);
     if (content.muted_sources)
         tokens << QString(kMutedSources);
+    if (content.health)
+        tokens << QString(kHealth);
     return tokens.join(QLatin1Char(','));
 }
 
@@ -159,12 +163,13 @@ DiagnosticsOverlayContent ResolveDiagnosticsOverlayContent(DiagnosticsOverlayPre
                                                            const QString& custom_tokens) {
     switch (preset) {
     case DiagnosticsOverlayPreset::Health:
-        // drop, drift and the muted-source glyphs are the three tokens that can
-        // say something is wrong with the recording in progress.
+        // The engine verdict supplies the interpretation; raw drift remains
+        // technical evidence rather than a second overlay health policy.
         return DiagnosticsOverlayContent{
-            .fps = false, .drop = true, .drift = true, .size = false, .muted_sources = true};
+            .fps = false, .drop = true, .drift = false, .size = false, .muted_sources = true, .health = true};
     case DiagnosticsOverlayPreset::Technical:
-        return DiagnosticsOverlayContent{.fps = true, .drop = true, .drift = true, .size = true, .muted_sources = true};
+        return DiagnosticsOverlayContent{
+            .fps = true, .drop = true, .drift = true, .size = true, .muted_sources = true, .health = true};
     case DiagnosticsOverlayPreset::Custom:
         break;
     }
@@ -176,6 +181,7 @@ DiagnosticsOverlayContent ResolveDiagnosticsOverlayContent(DiagnosticsOverlayPre
         .drift = contains(tokens, kDrift),
         .size = contains(tokens, kSize),
         .muted_sources = contains(tokens, kMutedSources),
+        .health = contains(tokens, kHealth),
     };
 }
 

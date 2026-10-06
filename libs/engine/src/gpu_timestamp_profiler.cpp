@@ -1,4 +1,7 @@
+#include "exosnap/engine/gpu_timestamp_math.h"
+#include <cstdint>
 #include <exosnap/engine/gpu_timestamp_profiler.h>
+#include <optional>
 
 namespace exosnap::engine {
 

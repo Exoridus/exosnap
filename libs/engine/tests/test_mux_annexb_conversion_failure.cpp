@@ -11,7 +11,12 @@
 #include <gtest/gtest.h>
 
 #include "annexb_to_avcc.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/error_types.h"
+#include "exosnap/engine/packet_types.h"
+#include "exosnap/engine/recorder_session.h"
 #include "matroska_stream_writer.h"
+#include "mux_queue.h"
 #include "mux_thread.h"
 #include "session_internal.h"
 
@@ -19,6 +24,7 @@
 #include <filesystem>
 #include <memory>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include "test_unique_temp.h"
@@ -58,8 +64,7 @@ std::shared_ptr<SessionState> MakeH264State(const std::filesystem::path& out_pat
     const std::vector<uint8_t> au = MakeAnnexBAccessUnit();
     std::vector<uint8_t> sps_pps;
     EXPECT_TRUE(exosnap::engine::annexb::ExtractH264SpsAndPps(au.data(), au.size(), sps_pps));
-    state->codec_private.h264_sps_pps = sps_pps;
-    state->codec_private.h264_ready = true;
+    state->premux.PublishVideo(VideoCodec::H264, sps_pps);
     return state;
 }
 
@@ -70,17 +75,12 @@ void PushVideo(SessionState& state, std::vector<uint8_t> bytes, uint64_t pts_ns)
     pkt.keyframe = true;
     MuxItem item;
     item.payload = std::move(pkt);
-    std::lock_guard lk(state.mux_mutex);
-    state.PushMuxItemLocked(std::move(item));
-    state.mux_cv.notify_all();
+    ASSERT_EQ(state.PushMuxItem(std::move(item)), exosnap::engine::MuxQueueWait::Ready);
+    state.mux_queue.NotifyStop();
 }
 
 void PushVideoEos(SessionState& state) {
-    MuxItem item;
-    item.payload = VideoEosSentinel{};
-    std::lock_guard lk(state.mux_mutex);
-    state.PushMuxItemLocked(std::move(item));
-    state.mux_cv.notify_all();
+    state.mux_queue.PushSentinel(VideoEosSentinel{});
 }
 
 void RemoveQuietly(const std::filesystem::path& p) {
@@ -102,9 +102,8 @@ TEST(MuxAnnexBConversionFailure, UnconvertibleH264PacketFailsTheRecording) {
     ASSERT_TRUE(mux->Join(10000));
 
     ASSERT_TRUE(state->HasFailure());
-    std::lock_guard lk(state->failure_mutex);
-    EXPECT_EQ(state->failure.error_phase, ErrorPhase::Mux);
-    EXPECT_NE(state->failure.error_detail.find("Annex-B"), std::string::npos);
+    EXPECT_EQ(state->FailureSnapshot()->error_phase, ErrorPhase::Mux);
+    EXPECT_NE(state->FailureSnapshot()->error_detail.find("Annex-B"), std::string::npos);
 
     RemoveQuietly(out);
 }
@@ -147,7 +146,7 @@ TEST(MuxOutputFailure, FinalFlushAndClosePropagateToSessionAndSegment) {
         EXPECT_TRUE(std::filesystem::exists(out));
         EXPECT_GT(std::filesystem::file_size(out), 0u);
         if (material)
-            EXPECT_EQ(state->failure.error_phase, ErrorPhase::Mux);
+            EXPECT_EQ(state->FailureSnapshot()->error_phase, ErrorPhase::Mux);
         RemoveQuietly(out);
     }
 }

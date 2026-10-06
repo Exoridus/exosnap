@@ -3,6 +3,9 @@
 #define _CRT_SECURE_NO_WARNINGS
 
 #include <filesystem>
+
+#include <atomic>
+#include <cstdlib>
 #include <gtest/gtest.h>
 #include <update/http_download.h>
 using namespace exosnap::update;

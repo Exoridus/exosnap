@@ -13,6 +13,15 @@
 
 #include <update/swap_engine.h>
 
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <cwchar>
+#include <optional>
+#include <string>
+#include <system_error>
+#include <update/update_types.h>
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 

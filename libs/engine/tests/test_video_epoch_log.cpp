@@ -1,13 +1,17 @@
 // The video-epoch record is read by an analyzer outside the recorder, so its
 // field names, its unit and its source marker are a contract, not a log message.
 
+#include <cstdint>
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/logging/logging.h"
 #include "qpc_100ns.h"
 #include "video_epoch_log.h"
 
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace {
 

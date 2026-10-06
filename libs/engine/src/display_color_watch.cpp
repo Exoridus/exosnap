@@ -1,18 +1,24 @@
+#include <Windows.System.h>
+#include <atomic>
 #include <exosnap/engine/display_color_watch.h>
 
 #include <exosnap/engine/logging/logging.h>
 
 #include <dispatcherqueue.h>
 
-#include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Graphics.Display.h>
-#include <winrt/Windows.System.h>
+#include <memory>
+#include <utility>
+// Public projections provide inline definitions beyond the SDK's impl declarations.
+#include <winrt/Windows.Foundation.h>       // IWYU pragma: keep
+#include <winrt/Windows.Graphics.Display.h> // IWYU pragma: keep
+#include <winrt/Windows.System.h>           // IWYU pragma: keep
 
 #include <windows.graphics.display.interop.h>
 
 #include <span>
 #include <string>
 #include <thread>
+#include <winrt/base.h>
 
 namespace exosnap::engine {
 namespace {

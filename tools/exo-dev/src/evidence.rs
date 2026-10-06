@@ -24,13 +24,14 @@ static BUILD_ERROR: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
+pub(crate) fn is_build_error(line: &str) -> bool {
+    BUILD_ERROR.is_match(line)
+}
+
 /// The first error line of a build log. A parallel build keeps compiling after
 /// the first failure, so the tail is cascade; the cause scrolled past earlier.
 pub fn first_build_error(log: &Path) -> Option<String> {
-    read_lines(log)
-        .into_iter()
-        .find(|line| BUILD_ERROR.is_match(line))
-        .map(|line| line.trim().to_string())
+    crate::process::first_error_line(log).ok().flatten()
 }
 
 /// The CTest names that failed, from an `exo-dev test` summary or a raw ctest
@@ -172,29 +173,11 @@ pub fn qml_diagnostic_commands(
         .collect()
 }
 
-/// The script suites CTest already runs, read from the file that registers them.
-/// They run from CTest only whenever the test step runs unfiltered: running the
-/// orchestrator's own contracts from inside it would let a broken one pass
-/// itself. An unreadable registration site yields nothing, which runs every suite.
-pub fn ctest_script_suites(repo_root: &Path) -> Vec<String> {
-    static SUITE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"scripts/tests/([A-Za-z0-9._-]+\.tests\.ps1)").unwrap());
-    let Ok(text) = std::fs::read_to_string(repo_root.join("app/CMakeLists.txt")) else {
-        return Vec::new();
-    };
-    let names: BTreeSet<String> = SUITE
-        .captures_iter(&text)
-        .map(|c| c[1].to_string())
-        .collect();
-    names.into_iter().collect()
-}
-
 /// Where one analysis tool keeps reusable results on this machine: outside the
 /// repository and every build tree, which a fresh configure, a `git clean` or a
 /// new worktree wipe exactly when replaying results would pay most. The leaf is
 /// derived from the toolchain fingerprint, so a different toolchain addresses a
-/// different directory. Same derivation as the PowerShell callers, so both share
-/// entries.
+/// different directory.
 pub fn tool_cache_dir(tool: &str, fingerprint: &[String], root: Option<&Path>) -> PathBuf {
     let root =
         root.map(Path::to_path_buf)
@@ -406,21 +389,6 @@ mod tests {
             )
             .is_empty()
         );
-    }
-
-    #[test]
-    fn the_ctest_script_suites_are_read_from_their_registration_site() {
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let suites = ctest_script_suites(&repo);
-        assert!(!suites.is_empty());
-        for name in &suites {
-            assert!(
-                repo.join("scripts/tests").join(name).is_file(),
-                "{name} is registered but missing"
-            );
-        }
-        let empty = tempfile::tempdir().unwrap();
-        assert!(ctest_script_suites(empty.path()).is_empty());
     }
 
     #[test]

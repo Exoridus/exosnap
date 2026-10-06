@@ -100,4 +100,38 @@ The `probe_edit_playback` target accepts `--decode-only` or `--decode-upload` af
 
 `--preview-benchmark <report.json> --benchmark-seconds <seconds>` measures preview publication and consumption plus process CPU. Optional `EXOSNAP_PREVIEW_BENCHMARK_STATE=record|settings|minimized`, `EXOSNAP_PREVIEW_BENCHMARK_RATE=0|15|30|60|120` and `EXOSNAP_PREVIEW_BENCHMARK_ANIMATION=0|1` select the isolated measurement state. Reports include logical persistent surface bytes. Keep the source stimulus fixed and avoid competing builds during measurements.
 
+The overlay presentation experiment uses the real HUD and dock during recording.
+Build Release with `EXOSNAP_BUILD_BENCHMARK_HARNESS=ON`, then run
+`exo-verify overlay-presentation --product <exosnap.exe> --mpv <mpv.exe> --media <clip> --presentmon <PresentMon.exe> --out <fresh-directory>`.
+Coordinate desktop use first: this command shows a borderless D3D11 flip-model workload on Display 1,
+places ExoSnap on the secondary display and restores focus to the workload.
+It checks foreground ownership, monitor coverage and bottom-edge occlusion during each sample.
+The primary matrix requires two displays and ETW rights (administrator or Performance Log Users).
+An OFF baseline below 90% independent flip, or more than one target swapchain, stops the matrix without an architectural verdict.
+MPV is a synthetic presentation workload, not commercial-game corroboration.
+
+The default matrix retains one warm-up round, then ten samples per variant with alternating forward/reverse order.
+Each sample uses fresh processes, configuration and recording output, five seconds of recording warm-up and thirty measured seconds.
+`--environment-notes` records operator-known VRR/power facts. `--cadence-only` omits ETW and cannot establish presentation neutrality.
+Artifacts retain binary hashes, native overlay visibility/exclusion, per-window `afterRendering`/`frameSwapped` counts,
+pipeline snapshots, recording benchmark reports and PID/swapchain/QPC-bound PresentMon v1 statistics.
+Qt signals measure render/submission cadence, not displayed overlay frames.
+The probe also counts changed visible telemetry publications separately from rendered frames.
+Missing external latency/GPU values remain unavailable.
+
+`--continue-from <manifest.json>` imports and revalidates completed sample evidence into a fresh output directory,
+then executes only missing round/variant slots. It preserves the interrupted manifest and its error.
+Timing, variant order, workload/tool hashes and effective recording configuration must match.
+A reviewed equivalent product rebuild requires the exact old hash in `--previous-product-sha256`; each sample retains its product identity.
+Continuation is explicit and does not automatically retry or classify a failed attempt. Inspect the retained failure before continuing.
+
+Only the auto-record benchmark reads `EXOSNAP_OVERLAY_PRESENTATION_VARIANT`:
+`off`, `hud-minimal`, `hud-health`, `hud-full`, `dock-only` or `hud-full-dock`.
+It requires isolated configuration and one unpaused benchmark cycle, disables toasts,
+and selects the real Minimal, Health or Technical content presets. The full-dock variant combines Technical with quick controls.
+The default matrix uses these six variants; `--variants` selects a focused subset containing its own OFF baseline.
+The probe observes the production static indicator and change-driven telemetry without forcing updates or freezing values.
+Retired animation and synthetic paint/text cadence variants are rejected rather than mapped to a different workload.
+Ordinary launches do not read the variant override, and the harness uses isolated settings.
+
 Development harness builds accept `EXOSNAP_QML_PROFILE=1` to expose only QML profiler services. `--navigation-lifecycle-test` records first and warm page-ready times and can run with `QT_QPA_PLATFORM=offscreen`. Profiled construction costs include instrumentation overhead. Real click-to-visible latency and idle preview resource measurements require the actual desktop. Compare the application closed, Record visible, another page, minimized, preview Off/limited and recording without inferring game-FPS impact from preview activity alone.

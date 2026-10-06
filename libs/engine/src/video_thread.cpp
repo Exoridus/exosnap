@@ -1,5 +1,20 @@
 #include "video_thread.h"
+#include "capability/adapter_enum.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/color_metadata.h"
+#include "exosnap/engine/encoder_device.h"
+#include "exosnap/engine/error_types.h"
+#include "exosnap/engine/output_geometry.h"
+#include "exosnap/engine/pipeline_diagnostics.h"
+#include "exosnap/engine/recorder_session.h"
+#include "exosnap/engine/split_trigger_source.h"
+#include "frame_luminance.h"
+#include "mux_queue.h"
+#include "premux_state.h"
+#include "qpc_100ns.h"
 #include "webcam_frame_observation.h"
+#include <atomic>
+#include <cstdint>
 #include <exosnap/engine/gpu_surface_inventory.h>
 
 #include "annexb_to_avcc.h"
@@ -43,12 +58,21 @@
 #include <exosnap/engine/sdr_white_level.h>
 #include <exosnap/engine/webcam_placement.h>
 
+#include <functional>
+#include <inspectable.h>
+#include <ios>
+#include <memory>
+#include <mutex>
+#include <ratio>
+#include <string>
+#include <utility>
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
 
-#include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Graphics.Capture.h>
-#include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
+// Public projections provide inline definitions beyond the SDK's impl declarations.
+#include <winrt/Windows.Foundation.h>                  // IWYU pragma: keep
+#include <winrt/Windows.Graphics.Capture.h>            // IWYU pragma: keep
+#include <winrt/Windows.Graphics.DirectX.Direct3D11.h> // IWYU pragma: keep
 
 #include <d3d11.h>
 #include <d3d11_1.h>
@@ -63,6 +87,7 @@
 #include <span>
 #include <sstream>
 #include <vector>
+#include <winrt/base.h>
 
 // ============================================================================
 // D3D11 threading contract
@@ -2950,20 +2975,14 @@ void VideoThread::Run() {
         if (m_state.config.video_codec == VideoCodec::H264 && !h264CodecPrivateReady) {
             std::vector<uint8_t> spsPps;
             if (annexb::ExtractH264SpsAndPps(pkt.bytes.data(), pkt.bytes.size(), spsPps)) {
-                std::lock_guard lk(m_state.premux_mutex);
-                m_state.codec_private.h264_sps_pps = std::move(spsPps);
-                m_state.codec_private.h264_ready = true;
+                m_state.premux.PublishVideo(VideoCodec::H264, std::move(spsPps));
                 h264CodecPrivateReady = true;
-                m_state.premux_cv.notify_all();
             }
         } else if (m_state.config.video_codec == VideoCodec::Hevc && !hevcCodecPrivateReady) {
             std::vector<uint8_t> vpsSpsPps;
             if (annexb::ExtractHevcVpsSpsPps(pkt.bytes.data(), pkt.bytes.size(), vpsSpsPps)) {
-                std::lock_guard lk(m_state.premux_mutex);
-                m_state.codec_private.hevc_vps_sps_pps = std::move(vpsSpsPps);
-                m_state.codec_private.hevc_ready = true;
+                m_state.premux.PublishVideo(VideoCodec::Hevc, std::move(vpsSpsPps));
                 hevcCodecPrivateReady = true;
-                m_state.premux_cv.notify_all();
             } else {
                 logging::log(logging::LogLevel::Warn, "video_thread", "HEVC VPS/SPS/PPS extraction failed on keyframe");
             }
@@ -2971,11 +2990,8 @@ void VideoThread::Run() {
             char reason[256] = {};
             std::vector<uint8_t> cp;
             if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason, sizeof(reason))) {
-                std::lock_guard lk(m_state.premux_mutex);
-                m_state.codec_private.av1_codec_private = std::move(cp);
-                m_state.codec_private.av1_ready = true;
+                m_state.premux.PublishVideo(VideoCodec::Av1, std::move(cp));
                 av1CodecPrivateReady = true;
-                m_state.premux_cv.notify_all();
             } else {
                 logging::LogField fields[] = {{"reason", reason}};
                 logging::log(logging::LogLevel::Warn, "video_thread", "AV1 codec private derivation failed on keyframe",
@@ -2994,20 +3010,15 @@ void VideoThread::Run() {
         captureCodecPrivateFromKeyframe(pkt);
 
         {
-            std::unique_lock lk(m_state.premux_mutex);
-            bool bothReady = m_state.codec_private.VideoReady(m_state.config.video_codec) &&
-                             m_state.codec_private.AudioAllReady(m_state.audio_track_count);
-            if (!bothReady) {
-                if (m_state.video_premux.size() >= SessionState::kVideoPremuxLimit) {
-                    lk.unlock();
+            const auto route = m_state.premux.Route(pkt, m_state.config.video_codec, m_state.audio_track_count);
+            if (route != PremuxRoute::Mux) {
+                if (route == PremuxRoute::Full) {
                     m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
                                           "Pre-mux video buffer limit (120 packets) exceeded "
                                           "before codec private data was ready");
                     return false;
                 }
-                m_state.video_premux.push_back(std::move(pkt));
             } else {
-                lk.unlock();
                 // Segment boundary: if a split is armed and THIS packet is the
                 // forced keyframe, emit a SplitSentinel into the mux queue
                 // immediately before the keyframe so the mux thread finalizes the
@@ -3016,14 +3027,17 @@ void VideoThread::Run() {
                 // epoch is this packet's session PTS, so the auto interval resets
                 // off the actual boundary (manual splits therefore push the next
                 // auto split out by a full interval).
-                std::unique_lock mlk(m_state.mux_mutex);
                 // Bounded steady-state queue: wait for room BEFORE the split
                 // sentinel so the sentinel and its keyframe stay adjacent; block
                 // briefly, then fail cleanly — never drop frames or grow without
                 // limit.
-                const MuxQueueWait room = m_state.WaitForMuxQueueSpace(mlk);
+                std::optional<SplitSentinel> split;
+                if (ShouldEmitSplitSentinel(split_armed, split_forced_pts_ns, pkt.keyframe, pkt.pts_ns)) {
+                    split = SplitSentinel{current_segment_index + 1, split_armed_trigger};
+                }
+                const uint64_t packet_pts_ns = pkt.pts_ns;
+                const MuxQueueWait room = m_state.PushMuxItem(MuxItem{std::move(pkt)}, split);
                 if (room != MuxQueueWait::Ready) {
-                    mlk.unlock();
                     // Only a genuine timeout is backpressure; while stopping, a
                     // mux that stopped consuming is the shutdown policy's report to
                     // make, and an existing failure already names the cause.
@@ -3037,20 +3051,14 @@ void VideoThread::Run() {
                     }
                     return false;
                 }
-                if (ShouldEmitSplitSentinel(split_armed, split_forced_pts_ns, pkt.keyframe, pkt.pts_ns)) {
+                if (split) {
                     ++current_segment_index;
-                    segment_start_session_pts_ns = pkt.pts_ns;
+                    segment_start_session_pts_ns = packet_pts_ns;
                     if (split_auto_enabled) {
                         next_auto_threshold_ns = segment_start_session_pts_ns + split_auto_interval_ns;
                     }
-                    MuxItem split_item;
-                    split_item.payload = SplitSentinel{current_segment_index, split_armed_trigger};
-                    m_state.PushMuxItemLocked(std::move(split_item)); // sentinel: bypasses the bound
                     split_armed = false;
                 }
-                MuxItem mux_item;
-                mux_item.payload = std::move(pkt);
-                m_state.PushMuxItemLocked(std::move(mux_item));
             }
         }
 
@@ -5012,23 +5020,14 @@ end_encode_loop:
             captureCodecPrivateFromKeyframe(pkt);
 
             {
-                std::unique_lock lk(m_state.premux_mutex);
-                bool bothReady = m_state.codec_private.VideoReady(m_state.config.video_codec) &&
-                                 m_state.codec_private.AudioAllReady(m_state.audio_track_count);
-                if (!bothReady) {
-                    if (m_state.video_premux.size() < SessionState::kVideoPremuxLimit) {
-                        m_state.video_premux.push_back(std::move(pkt));
-                    }
-                } else {
-                    lk.unlock();
+                const auto route = m_state.premux.Route(pkt, m_state.config.video_codec, m_state.audio_track_count);
+                if (route == PremuxRoute::Mux) {
                     MuxItem mi;
                     mi.payload = std::move(pkt);
-                    std::unique_lock mlk(m_state.mux_mutex);
                     // Bounded steady-state queue (same policy as the live loop):
                     // wait for room, then fail cleanly rather than grow unbounded.
-                    const MuxQueueWait room = m_state.WaitForMuxQueueSpace(mlk);
+                    const MuxQueueWait room = m_state.PushMuxItem(std::move(mi));
                     if (room != MuxQueueWait::Ready) {
-                        mlk.unlock();
                         // Only a genuine timeout is backpressure (see the live loop).
                         if (room == MuxQueueWait::TimedOut) {
                             m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
@@ -5039,7 +5038,6 @@ end_encode_loop:
                         }
                         break;
                     }
-                    m_state.PushMuxItemLocked(std::move(mi));
                 }
             }
 
@@ -5064,12 +5062,7 @@ end_encode_loop:
     }
 
     // --- Push video EOS sentinel ---
-    {
-        MuxItem eos;
-        eos.payload = VideoEosSentinel{};
-        std::lock_guard lk(m_state.mux_mutex);
-        m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
-    }
+    m_state.mux_queue.PushSentinel(VideoEosSentinel{});
 
     // Cleanup slot views and textures
     for (int32_t i = 0; i < kSlotCount; ++i) {

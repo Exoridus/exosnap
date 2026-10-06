@@ -7,14 +7,17 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 pub const PROTOCOL: u64 = 2;
 
-pub fn pipe_name(role: &str, run_id: &str) -> String {
-    format!(r"\\.\pipe\ExoSnap.{role}.{run_id}")
+pub fn pipe_name(role: &str, run_id: &str) -> Result<String> {
+    if !matches!(role, "LiveVerify" | "Updater") {
+        bail!("unknown control endpoint role {role:?}");
+    }
+    Ok(format!(r"\\.\pipe\ExoSnap.{role}.{run_id}"))
 }
 
 /// A fresh unpredictable run id within the product's accepted alphabet.
@@ -45,6 +48,55 @@ impl std::fmt::Display for Refusal {
     }
 }
 
+fn decode_response(object: Value) -> Result<Result<Value, Refusal>> {
+    let fields = object
+        .as_object()
+        .context("control response is not an object")?;
+    let ok = match fields.get("ok") {
+        None => true,
+        Some(value) => value
+            .as_bool()
+            .context("control response ok is not a boolean")?,
+    };
+    if ok {
+        return Ok(Ok(fields
+            .get("result")
+            .cloned()
+            .unwrap_or(Value::Object(Map::new()))));
+    }
+    let error = fields.get("error").cloned().unwrap_or_default();
+    Ok(Err(Refusal {
+        code: error
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string(),
+        message: error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        requires: error.get("requires").cloned().unwrap_or(Value::Null),
+        actual: error.get("actual").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+fn state_changes(before: &Value, after: &Value) -> Vec<Value> {
+    let fields: BTreeSet<_> = before
+        .as_object()
+        .into_iter()
+        .flat_map(|v| v.keys())
+        .chain(after.as_object().into_iter().flat_map(|v| v.keys()))
+        .collect();
+    fields
+        .into_iter()
+        .filter(|field| before.get(*field) != after.get(*field))
+        .map(
+            |field| json!({"field": field, "before": before.get(field), "after": after.get(field)}),
+        )
+        .collect()
+}
+
 pub struct Client {
     pipe: pipe::Pipe,
     lines: Receiver<Result<String, String>>,
@@ -71,7 +123,7 @@ impl Client {
         timeout: Duration,
         protocol: u64,
     ) -> Result<Client> {
-        let name = pipe_name(role, run_id);
+        let name = pipe_name(role, run_id)?;
         let deadline = Instant::now() + timeout;
         let pipe = loop {
             match pipe::Pipe::open(&name) {
@@ -165,27 +217,7 @@ impl Client {
                 continue;
             }
             self.last_response = object.clone();
-            if object.get("ok").and_then(Value::as_bool) == Some(true) {
-                return Ok(Ok(object
-                    .get("result")
-                    .cloned()
-                    .unwrap_or(Value::Object(Map::new()))));
-            }
-            let error = object.get("error").cloned().unwrap_or_default();
-            return Ok(Err(Refusal {
-                code: error
-                    .get("code")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string(),
-                message: error
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                requires: error.get("requires").cloned().unwrap_or(Value::Null),
-                actual: error.get("actual").cloned().unwrap_or(Value::Null),
-            }));
+            return decode_response(object);
         }
     }
 
@@ -249,14 +281,23 @@ impl Client {
         mut predicate: impl FnMut(&Value) -> bool,
     ) -> Result<Option<Value>> {
         let deadline = Instant::now() + timeout;
+        let mut previous = None;
         loop {
             let value = self.call(command, params.clone())?;
+            if let Some(before) = previous.as_ref() {
+                let changes = state_changes(before, &value);
+                if !changes.is_empty() {
+                    self.transcript
+                        .push(json!({"poll": command, "changes": changes}));
+                }
+            }
             if predicate(&value) {
                 return Ok(Some(value));
             }
             if Instant::now() >= deadline {
                 return Ok(None);
             }
+            previous = Some(value);
             std::thread::sleep(Duration::from_millis(100));
         }
     }
@@ -423,6 +464,66 @@ mod tests {
     use super::*;
 
     #[test]
+    fn state_comparison_names_changed_and_appearing_fields() {
+        let before = json!({"page": "record", "canStart": false});
+        let after = json!({"page": "record", "canStart": true});
+        assert_eq!(
+            state_changes(&before, &after),
+            vec![json!({"field": "canStart", "before": false, "after": true})]
+        );
+        assert!(state_changes(&before, &before).is_empty());
+        assert_eq!(
+            state_changes(
+                &json!({"page": "record"}),
+                &json!({"page": "record", "blockingSurface": "recovery"})
+            ),
+            vec![json!({"field": "blockingSurface", "before": null, "after": "recovery"})]
+        );
+    }
+
+    #[test]
+    fn endpoint_roles_are_distinct_and_unknown_roles_are_refused() {
+        assert_eq!(
+            pipe_name("LiveVerify", "lv-abc").unwrap(),
+            r"\\.\pipe\ExoSnap.LiveVerify.lv-abc"
+        );
+        assert_eq!(
+            pipe_name("Updater", "lv-abc").unwrap(),
+            r"\\.\pipe\ExoSnap.Updater.lv-abc"
+        );
+        assert!(pipe_name("Updaters", "lv-abc").is_err());
+    }
+
+    #[test]
+    fn response_shape_preserves_results_and_structured_refusals() {
+        let refusal = decode_response(json!({"id": "1", "ok": false, "error": {
+            "code": "blocked", "message": "A recordingError surface is open",
+            "requires": {"surface": "none"}, "actual": {"surface": "recordingError"}
+        }}))
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(refusal.code, "blocked");
+        assert_eq!(refusal.message, "A recordingError surface is open");
+        assert_eq!(refusal.requires, json!({"surface": "none"}));
+        assert_eq!(refusal.actual, json!({"surface": "recordingError"}));
+        for input in [
+            json!({"ok": true, "result": {"sequence": 42}}),
+            json!({"result": {"sequence": 42}}),
+        ] {
+            assert_eq!(
+                decode_response(input).unwrap().unwrap(),
+                json!({"sequence": 42})
+            );
+        }
+        assert_eq!(
+            decode_response(json!({"ok": true})).unwrap().unwrap(),
+            json!({})
+        );
+        assert!(decode_response(Value::Null).is_err());
+        assert!(decode_response(json!({"ok": "yes"})).is_err());
+    }
+
+    #[test]
     fn run_ids_fit_the_product_alphabet() {
         let id = new_run_id("exo");
         assert!((8..=64).contains(&id.len()));
@@ -436,7 +537,7 @@ mod tests {
     #[test]
     fn pipe_names_follow_the_role_scheme() {
         assert_eq!(
-            pipe_name("LiveVerify", "abc12345"),
+            pipe_name("LiveVerify", "abc12345").unwrap(),
             r"\\.\pipe\ExoSnap.LiveVerify.abc12345"
         );
     }

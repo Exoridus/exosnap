@@ -1,3 +1,6 @@
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/color_metadata.h"
+#include "nvEncodeAPI.h"
 #include "nvenc_encoder.h"
 
 #include <gtest/gtest.h>

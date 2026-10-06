@@ -28,6 +28,7 @@
 // This module has NO Qt dependency and NO network dependency.
 
 #include <string>
+#include <string_view>
 #include <update/update_types.h>
 #include <variant>
 

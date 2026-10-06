@@ -1,8 +1,13 @@
 #include "pcm_audio_encoder.h"
+#include "exosnap/engine/packet_types.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace exosnap::engine {
 

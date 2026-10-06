@@ -11,13 +11,13 @@
 
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/codec_types.h"
 #include "mux_thread.h"
 #include "session_internal.h"
 
 #include <chrono>
 #include <filesystem>
 #include <memory>
-#include <thread>
 
 #include "test_unique_temp.h"
 
@@ -50,10 +50,7 @@ TEST(MuxStartWithoutHeaders, AStopBeforeTheHeadersRecordsNoFailure) {
 
     // The session stops (user stop, or a capture that never delivered) while the
     // mux is still waiting for headers.
-    state->stop_requested.store(true);
-    state->SignalStopEvent();
-    state->premux_cv.notify_all();
-    state->mux_cv.notify_all();
+    state->RequestCleanStop();
 
     ASSERT_TRUE(mux->Join(5000)) << "the mux must return on the stop instead of waiting on headers that cannot come";
     EXPECT_FALSE(state->HasFailure()) << "the mux reported a failure for a cause that is not its own";
@@ -65,10 +62,7 @@ TEST(MuxStartWithoutHeaders, ItWritesNoFileWhenItNeverGotHeaders) {
 
     auto mux = std::make_shared<MuxThread>(state);
     mux->Start();
-    state->stop_requested.store(true);
-    state->SignalStopEvent();
-    state->premux_cv.notify_all();
-    state->mux_cv.notify_all();
+    state->RequestCleanStop();
     ASSERT_TRUE(mux->Join(5000));
 
     EXPECT_FALSE(std::filesystem::exists(out));
@@ -83,13 +77,10 @@ TEST(MuxStartWithoutHeaders, TheQuietExitDoesNotOutlastTheWait) {
     auto mux = std::make_shared<MuxThread>(state);
     mux->Start();
     // Without a stop the mux stays in its wait rather than exiting.
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_TRUE(state->premux.WaitForWaiter(std::chrono::seconds(2)));
     EXPECT_FALSE(mux->Join(0)) << "the mux left its header wait without being stopped";
 
-    state->stop_requested.store(true);
-    state->SignalStopEvent();
-    state->premux_cv.notify_all();
-    state->mux_cv.notify_all();
+    state->RequestCleanStop();
     EXPECT_TRUE(mux->Join(5000));
 }
 

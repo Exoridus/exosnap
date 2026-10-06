@@ -1,5 +1,7 @@
+#include <cstddef>
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/color_metadata.h"
 #include "yuv_to_bgra.h"
 
 #include <array>

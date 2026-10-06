@@ -16,6 +16,12 @@
 #endif
 #include <windows.h>
 
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include <dxgi.h>
 
 #include <wrl/client.h>

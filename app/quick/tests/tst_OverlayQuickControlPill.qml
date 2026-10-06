@@ -23,6 +23,10 @@ TestCase {
     id: testCase
 
     name: "OverlayQuickControlPill"
+    function init() {
+        failOnWarning(/ReferenceError|TypeError|Binding loop|polish.*loop/);
+    }
+
     when: windowShown
     width: 400
     height: 200
@@ -83,7 +87,7 @@ TestCase {
     // then the plain monitor default.
 
     readonly property rect regionWithRoomBelow: Qt.rect(300, 100, 400, 300)
-    readonly property rect regionNearTheBottom: Qt.rect(300, 700, 400, 190)
+    readonly property rect regionNearTheBottom: Qt.rect(300, 700, 400, 220)
     readonly property rect regionSpanningTheMonitor: Qt.rect(300, 60, 400, 880)
 
     function test_region_mode_prefers_a_placement_below_the_region() {
@@ -162,10 +166,22 @@ TestCase {
     }
 
     function gripOf(pill) {
-        let grip = pill.contentItem.children[0].children[0];
+        let grip = findChild(pill, "quickControlGrip");
         verify(grip);
         verify(grip.width > 0 && grip.height > 0);
         return grip;
+    }
+
+    function actionsOf(pill) {
+        const row = findChild(pill, "quickControlActions");
+        verify(row);
+        return row.children;
+    }
+
+    function closeOf(pill) {
+        const closeButton = findChild(pill, "quickControlClose");
+        verify(closeButton);
+        return closeButton;
     }
 
     // Windows sends a further move whenever a window travels under a pointer
@@ -187,7 +203,7 @@ TestCase {
 
         const startX = pill.x;
         const startY = pill.y;
-        const pressLocal = Qt.point(14, 30);
+        const pressLocal = Qt.point(14, 14);
         // Up rather than down: the default placement already sits on the
         // bottom clamp, so a downward nudge is refused for a reason that has
         // nothing to do with what this function is about.
@@ -218,7 +234,7 @@ TestCase {
 
         const startX = pill.x;
         const startY = pill.y;
-        const pressLocal = Qt.point(14, 30);
+        const pressLocal = Qt.point(14, 14);
         const originX = startX + grip.x + pressLocal.x;
         const originY = startY + grip.y + pressLocal.y;
 
@@ -237,7 +253,7 @@ TestCase {
         let pill = shownPill();
         let grip = gripOf(pill);
 
-        const pressLocal = Qt.point(14, 30);
+        const pressLocal = Qt.point(14, 14);
         const area = testCase.monitor;
 
         mousePress(grip, pressLocal.x, pressLocal.y, Qt.LeftButton);
@@ -252,7 +268,7 @@ TestCase {
         let pill = shownPill();
         let grip = gripOf(pill);
 
-        const pressLocal = Qt.point(14, 30);
+        const pressLocal = Qt.point(14, 14);
         const area = testCase.monitor;
 
         mousePress(grip, pressLocal.x, pressLocal.y, Qt.LeftButton);
@@ -271,8 +287,8 @@ TestCase {
         let grip = gripOf(pill);
         const wasExpanded = pill.expanded;
 
-        mousePress(grip, 14, 30, Qt.LeftButton);
-        mouseRelease(grip, 14, 30, Qt.LeftButton);
+        mousePress(grip, 14, 14, Qt.LeftButton);
+        mouseRelease(grip, 14, 14, Qt.LeftButton);
 
         compare(pill.userPositioned, false);
         compare(pill.expanded, !wasExpanded);
@@ -287,7 +303,7 @@ TestCase {
         let pill = shownPill();
         let grip = gripOf(pill);
 
-        const pressLocal = Qt.point(14, 30);
+        const pressLocal = Qt.point(14, 14);
         mousePress(grip, pressLocal.x, pressLocal.y, Qt.LeftButton);
         dragPointerTo(pill, grip, testCase.monitor.x + testCase.monitor.width + 400,
                       testCase.monitor.y + testCase.monitor.height + 400, 6);
@@ -304,18 +320,10 @@ TestCase {
 
     // ── Close button ─────────────────────────────────────────────────────────
     //
-    // Persisting "closed" is Main.qml's job (it turns showQuickControls off);
-    // this only pins the button's own contract -- the last button in the row
-    // emits closeRequested(), once, per click.
+    // Main.qml persists the setting. A hide click must not collapse or drag.
     function test_the_close_button_emits_close_requested() {
         let pill = shownPill();
-        // contentItem.children[0] is the Rectangle; .children[1] inside it is
-        // the button Row, the same nesting gripOf() reaches .children[0] (the
-        // grip Item) through.
-        let buttons = pill.contentItem.children[0].children[1];
-        verify(buttons);
-        let closeButton = buttons.children[buttons.children.length - 1];
-        verify(closeButton);
+        const closeButton = closeOf(pill);
 
         let spy = createTemporaryObject(signalSpyComponent, testCase, {target: pill, signalName: "closeRequested"});
         verify(spy);
@@ -323,8 +331,190 @@ TestCase {
         mouseClick(closeButton, closeButton.width / 2, closeButton.height / 2, Qt.LeftButton);
 
         compare(spy.count, 1);
+        compare(pill.expanded, true);
+        compare(pill.userPositioned, false);
     }
 
+    function test_close_and_grip_are_stacked_to_the_right_of_transport() {
+        let pill = shownPill();
+        const grip = gripOf(pill);
+        const closeButton = closeOf(pill);
+        const captureButton = actionsOf(pill)[2];
+        const closePos = closeButton.mapToItem(pill.contentItem, 0, 0);
+        const gripPos = grip.mapToItem(pill.contentItem, 0, 0);
+        const capturePos = captureButton.mapToItem(pill.contentItem, 0, 0);
+
+        verify(gripPos.x >= capturePos.x + captureButton.width,
+               "the drag grip belongs to the secondary column at the right");
+        compare(closePos.x, gripPos.x);
+        verify(closePos.y + closeButton.height <= gripPos.y,
+               "close and drag hit targets must not overlap");
+    }
+
+    function test_collapsed_dock_keeps_hide_and_expand_accessible() {
+        const pill = shownPill();
+        const grip = gripOf(pill);
+        grip.Accessible.pressAction();
+        compare(pill.expanded, false);
+        const closeButton = closeOf(pill);
+        verify(closeButton.visible);
+        verify(grip.visible);
+        compare(closeButton.Accessible.name, "Hide quick controls");
+        const spy = createTemporaryObject(signalSpyComponent, testCase,
+            {target: pill, signalName: "closeRequested"});
+        closeButton.Accessible.pressAction();
+        compare(spy.count, 1);
+        compare(pill.expanded, false);
+        compare(pill.userPositioned, false);
+    }
+
+    function test_slim_dock_balances_transport_and_secondary_surface_spacing_data() {
+        return [{tag: "expanded", expanded: true}, {tag: "collapsed", expanded: false}];
+    }
+
+    function test_slim_dock_balances_transport_and_secondary_surface_spacing(data) {
+        const pill = shownPill();
+        pill.expanded = data.expanded;
+        waitForRendering(pill.contentItem);
+        if (data.expanded) {
+            const stopSurface = actionsOf(pill)[1].children[0];
+            const stopPos = stopSurface.mapToItem(pill.contentItem, 0, 0);
+            compare(stopPos.y, pill.buttonGap);
+            compare(pill.height - stopPos.y - stopSurface.height, pill.buttonGap);
+        }
+        const closeButton = closeOf(pill);
+        const grip = gripOf(pill);
+        const closeGlyph = closeButton.children[1];
+        const gripGlyph = grip.children[1];
+        const closePos = closeGlyph.mapToItem(pill.contentItem, 0, 0);
+        const gripPos = gripGlyph.mapToItem(pill.contentItem, 0, 0);
+        const closeInkHeight = closeGlyph.height * 0.5 + 1.6;
+        const gripInkHeight = gripGlyph.height * 0.45 + 1.8;
+        const above = closePos.y + (closeGlyph.height - closeInkHeight) / 2;
+        const gripInkTop = gripPos.y + (gripGlyph.height - gripInkHeight) / 2;
+        const between = gripInkTop - above - closeInkHeight;
+        const below = pill.height - gripInkTop - gripInkHeight;
+        fuzzyCompare(above, between, 0.001);
+        fuzzyCompare(between, below, 0.001);
+        compare(pill.width - grip.x - grip.width, 2);
+        compare(closeButton.height, 24);
+        compare(grip.height, 24);
+        for (const target of [closeButton, grip]) {
+            const surface = target.children[0];
+            verify(surface.y >= 0 && surface.y + surface.height <= target.height);
+        }
+    }
+
+    function test_compact_dock_preserves_distinct_usable_hit_targets() {
+        const pill = shownPill();
+        verify(pill.width < 268 && pill.height <= 60);
+        const actions = actionsOf(pill);
+        compare(actions.length, 3);
+        for (const action of actions) {
+            verify(action.width >= 44 && action.height >= 44);
+        }
+        for (const secondary of [closeOf(pill), gripOf(pill)]) {
+            verify(secondary.width >= 24 && secondary.height >= 24);
+            const pos = secondary.mapToItem(pill.contentItem, 0, 0);
+            verify(pos.x >= 0 && pos.y >= 0);
+            verify(pos.x + secondary.width <= pill.width);
+            verify(pos.y + secondary.height <= pill.height);
+        }
+    }
+
+    function test_user_placed_secondary_column_stays_under_pointer_when_toggled() {
+        const pill = shownPill();
+        const grip = gripOf(pill);
+        mousePress(grip, 14, 14, Qt.LeftButton);
+        dragPointerTo(pill, grip, 1000, 500, 3);
+        mouseRelease(grip, 14, 14, Qt.LeftButton);
+        verify(pill.userPositioned);
+        const columnX = pill.x + grip.x;
+        const columnY = pill.y + grip.y;
+        const expandedWidth = pill.width;
+        grip.Accessible.pressAction();
+        compare(pill.expanded, false);
+        tryVerify(() => pill.width < expandedWidth);
+        tryVerify(() => grip.x < 20);
+        compare(pill.x + grip.x, columnX);
+        compare(pill.y + grip.y, columnY);
+        grip.Accessible.pressAction();
+        compare(pill.expanded, true);
+        tryCompare(pill, "width", expandedWidth);
+        tryVerify(() => grip.x > 100);
+        compare(pill.x + grip.x, columnX);
+        compare(pill.y + grip.y, columnY);
+    }
+
+    function test_subthreshold_motion_keeps_default_placement_live() {
+        let pill = shownPill();
+        let grip = gripOf(pill);
+        const x = pill.x;
+        const y = pill.y;
+        mousePress(grip, 14, 14, Qt.LeftButton);
+        dragPointerTo(pill, grip, x + grip.x + 16, y + grip.y + 14, 1);
+        compare(pill.x, x);
+        compare(pill.y, y);
+        mouseRelease(grip, 16, 14, Qt.LeftButton);
+        compare(pill.userPositioned, false);
+        compare(pill.expanded, false);
+        pill.monitorGeometry = Qt.rect(-1920, -200, 1920, 1080);
+        compare(pill.x, pill.defaultPos.x);
+        compare(pill.y, pill.defaultPos.y);
+    }
+
+    function test_expanding_user_placed_dock_keeps_it_inside_monitor() {
+        let pill = shownPill();
+        pill.expanded = false;
+        let grip = gripOf(pill);
+        mousePress(grip, 14, 14, Qt.LeftButton);
+        dragPointerTo(pill, grip, 2000, 600, 3);
+        mouseRelease(grip, 14, 14, Qt.LeftButton);
+        verify(pill.userPositioned);
+        pill.expanded = true;
+        tryVerify(() => pill.x + pill.width <= testCase.monitor.x + testCase.monitor.width, 1000, "x=" + pill.x + " width=" + pill.width);
+        pill.monitorGeometry = Qt.rect(-1920, -100, 1280, 720);
+        verify(pill.x >= -1920 && pill.x + pill.width <= -640);
+        verify(pill.y >= -100 && pill.y + pill.height <= 620);
+        verify(pill.userPositioned);
+    }
+
+    function test_grip_exposes_collapse_and_expand_accessibly() {
+        let pill = shownPill();
+        let grip = gripOf(pill);
+        compare(grip.Accessible.role, Accessible.Button);
+        compare(grip.Accessible.name, "Collapse quick controls");
+        grip.Accessible.pressAction();
+        compare(pill.expanded, false);
+        compare(grip.Accessible.name, "Expand quick controls");
+        grip.Accessible.pressAction();
+        compare(pill.expanded, true);
+        compare(pill.userPositioned, false);
+    }
+
+    function test_control_actions_emit_once_and_follow_paused_state() {
+        let pill = shownPill();
+        const buttons = actionsOf(pill);
+        const signals = ["pauseResumeRequested", "stopRequested", "captureFrameRequested"];
+        const names = ["Pause recording", "Stop recording", "Capture frame"];
+        for (let i = 0; i < 3; ++i) {
+            compare(buttons[i].Accessible.role, Accessible.Button);
+            compare(buttons[i].Accessible.name, names[i]);
+            let spy = createTemporaryObject(signalSpyComponent, testCase, {target: pill, signalName: signals[i]});
+            buttons[i].Accessible.pressAction();
+            compare(spy.count, 1);
+        }
+        pill.paused = true;
+        compare(buttons[0].Accessible.name, "Resume recording");
+        compare(buttons[0].glyphKind, "resume");
+        const resumeSpy = createTemporaryObject(signalSpyComponent, testCase,
+            {target: pill, signalName: "pauseResumeRequested"});
+        buttons[0].Accessible.pressAction();
+        compare(resumeSpy.count, 1);
+        verify((pill.flags & Qt.WindowDoesNotAcceptFocus) !== 0);
+        compare(pill.flags & Qt.WindowTransparentForInput, 0);
+        compare(pill.transientParent, null);
+    }
     Component {
         id: signalSpyComponent
 

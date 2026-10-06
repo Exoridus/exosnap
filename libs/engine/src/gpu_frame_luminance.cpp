@@ -1,11 +1,17 @@
 #include "gpu_frame_luminance.h"
 
+#include "frame_luminance.h"
 #include "measured_shader_compile.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <utility>
+#include <winrt/base.h>
 
 namespace exosnap::engine {
 namespace {

@@ -85,11 +85,11 @@ pub fn check(root: &Path) -> anyhow::Result<DriftReport> {
         return Ok(DriftReport { violations });
     }
 
-    let excluded = regex::Regex::new(r"(?i)^scripts/tests/").unwrap();
+    let excluded = regex::Regex::new(r"(?i)^tools/exo-dev/tests/fixtures/").unwrap();
     // Where a Qt version literal is load-bearing. Documentation and changelogs
     // legitimately name older versions and are not checked.
     let version_scanned = regex::Regex::new(
-        r"(?i)(^CMakeLists\.txt$|(^|/)CMakeLists\.txt$|\.cmake$|^CMakePresets\.json$|^scripts/.*\.ps1$|^\.github/.*\.ya?ml$)",
+        r"(?i)(^CMakeLists\.txt$|(^|/)CMakeLists\.txt$|\.cmake$|^CMakePresets\.json$|^\.github/.*\.ya?ml$)",
     )
     .unwrap();
     let yaml = regex::Regex::new(r"(?i)\.ya?ml$").unwrap();
@@ -193,11 +193,7 @@ mod tests {
     /// missing canonical version); `overrides` adds to or replaces them.
     fn fixture(remove: &[&str], overrides: &[(&str, &str)]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(dir.path())
-            .status()
-            .unwrap();
+        crate::test_support::init_git_repo(dir.path());
 
         let mut base: BTreeMap<&str, String> = BTreeMap::new();
         base.insert(".qt-version", "6.11.1\n".into());
@@ -431,8 +427,8 @@ mod tests {
         let dir = fixture(
             &[],
             &[(
-                "scripts/new-thing.ps1",
-                "$root = 'C:/Qt/6.11.1/msvc2022_64'\n",
+                "cmake/new-target.cmake",
+                "set(QT_ROOT C:/Qt/6.11.1/msvc2022_64)\n",
             )],
         );
         let report = check(dir.path()).unwrap();
@@ -476,8 +472,8 @@ mod tests {
     }
 
     #[test]
-    fn scripts_tests_directory_is_excluded_entirely() {
-        let dir = fixture(&[], &[("scripts/tests/fixture.pro", "")]);
+    fn tool_fixtures_directory_is_excluded_entirely() {
+        let dir = fixture(&[], &[("tools/exo-dev/tests/fixtures/fixture.pro", "")]);
         let report = check(dir.path()).unwrap();
         assert!(report.violations.is_empty());
     }

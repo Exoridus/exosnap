@@ -1,9 +1,10 @@
 #include "rnnoise_denoiser.h"
 
+#include <cstdint>
 #include <rnnoise.h>
 
-#include <algorithm>
 #include <cstddef>
+#include <vector>
 
 namespace exosnap::engine {
 

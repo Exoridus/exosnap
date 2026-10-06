@@ -1756,6 +1756,10 @@ bool SettingsAdapter::diagnosticsOverlayMutedSources() const {
     return resolvedDiagnosticsOverlayContent().muted_sources;
 }
 
+bool SettingsAdapter::diagnosticsOverlayHealth() const {
+    return resolvedDiagnosticsOverlayContent().health;
+}
+
 void SettingsAdapter::setRecordingOverlayElement(const QString& token, bool enabled) {
     models::RecordingOverlayContent content = resolvedRecordingOverlayContent();
     if (token == models::TokenFor(models::RecordingOverlayElement::Elapsed)) {
@@ -1793,6 +1797,8 @@ void SettingsAdapter::setDiagnosticsOverlayElement(const QString& token, bool en
         content.size = enabled;
     } else if (token == models::TokenFor(models::DiagnosticsOverlayElement::MutedSources)) {
         content.muted_sources = enabled;
+    } else if (token == models::TokenFor(models::DiagnosticsOverlayElement::Health)) {
+        content.health = enabled;
     } else {
         return;
     }

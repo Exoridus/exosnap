@@ -102,6 +102,9 @@ set_target_properties(test_updater_window_smoke PROPERTIES AUTOMOC ON)
 target_include_directories(test_updater_window_smoke
     PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>")
 add_dependencies(test_updater_window_smoke exosnap_updater)
+set_property(TEST updater.test_updater_window_smoke APPEND PROPERTY LABELS aot)
+set_property(TEST updater.test_updater_window_smoke APPEND PROPERTY ENVIRONMENT
+    QV4_FAIL_ON_INVALID_AOT=1 EXOSNAP_QML_PREVIEW=0)
 
 # Copy and progress semantics on the same projection: long values stay complete,
 # the pre-flight ring measures nothing, and the terminal/eyebrow emphasis rules

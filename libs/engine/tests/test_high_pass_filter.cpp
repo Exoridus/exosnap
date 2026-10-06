@@ -1,3 +1,6 @@
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include "high_pass_filter.h"

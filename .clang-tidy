@@ -14,11 +14,11 @@
 #   readability-uppercase-literal-suffix          purely cosmetic (20.0f vs 20.0F)
 #   readability-implicit-bool-conversion          noisy against Win32 BOOL/HRESULT idioms
 #   readability-math-missing-parentheses          pedantic; harms readable arithmetic
-#   readability-function-cognitive-complexity     would force risky refactors of device-enumeration/COM code
+#   readability-function-cognitive-complexity     advisory ranking only; native/state-machine complexity needs review
 #   readability-identifier-length                 single-char variables are idiomatic in loops and math
 #   modernize-use-designated-initializers         C++20 stylistic; not idiomatic across this codebase
 #   modernize-use-trailing-return-type            LLVM style uses leading return types
-#   bugprone-easily-swappable-parameters          design taste, not a real bug; very noisy
+#   bugprone-easily-swappable-parameters          targeted public Engine API report; noisy in native SDK plumbing
 #   cppcoreguidelines-pro-bounds-* (pointer-arithmetic / array-to-pointer-decay / constant-array-index)
 #                                                 required for C/Win32 API interop
 #   cppcoreguidelines-owning-memory               COM/Win32 raw handles are not gsl::owner
@@ -29,21 +29,11 @@
 #   cppcoreguidelines-non-private-member-variables-in-classes / -avoid-non-const-global-variables /
 #   cppcoreguidelines-macro-usage                 design taste; case-by-case, not a hard rule
 #
-# Advisory / non-blocking checks (PHASE B — enabled below, excluded from WarningsAsErrors):
-#   misc-include-cleaner         surfaces unused #includes; heavy Qt false-positives (moc headers)
-#   misc-unused-using-decls      stale using declarations; Qt meta-object slots cause false-positives
-#   misc-unused-parameters       unused parameters (ADVISORY: Qt signal/slot/callback signatures)
-#   misc-unused-alias-decls      stale type aliases
-#   readability-redundant-declaration  duplicate forward declarations
-# All five are informational only — do NOT promote to blocking without a human triage pass.
+# Advisory checks (enabled below, excluded from WarningsAsErrors):
+#   misc-include-cleaner         blocking in core libraries through exo-dev; advisory elsewhere
+# Promote only after triaging repository-owned findings and proving a positive canary.
 #
-# Blocking check set (enforced in CI by cargo exo-dev lint clang-tidy):
-#   bugprone-use-after-move
-#   bugprone-dangling-handle
-#   readability-misleading-indentation
-#   clang-analyzer-core.CallAndMessage
-#   clang-analyzer-core.uninitialized.*
-#   clang-analyzer-cplusplus.NewDelete*
+# tools/exo-dev/src/lint/canaries.rs owns the blocking check metadata.
 # A check may fail a build only after a full pass reports zero findings in
 # repository-owned files. That measurement, and the candidates it disqualified,
 # are recorded in docs/dev/static-analysis.md -- repeat it before extending this
@@ -117,10 +107,6 @@ ExtraArgs:
 WarningsAsErrors: >
   *,
   -misc-include-cleaner,
-  -misc-unused-using-decls,
-  -misc-unused-parameters,
-  -misc-unused-alias-decls,
-  -readability-redundant-declaration,
   bugprone-use-after-move,
   bugprone-dangling-handle,
   readability-misleading-indentation,
@@ -132,5 +118,10 @@ WarningsAsErrors: >
 # keeps C4062 and C4061 off at every warning level, so cmake/exosnap_warnings.cmake
 # raises C4062 to level 4 explicitly and /WX makes it an error.
 # clang-diagnostic-switch still reports the same thing wherever clang-tidy runs.
-HeaderFilterRegex: '^(?!.*third_party/).*'
+HeaderFilterRegex: '[/\\](app|apps|libs|tools|tests)[/\\]'
+ExcludeHeaderFilterRegex: '[/\\]third_party[/\\]'
+# Windows umbrella headers expose declarations from SDK implementation headers.
+# Keep direct standard/project includes checked without recommending SDK internals.
+CheckOptions:
+  misc-include-cleaner.IgnoreHeaders: '[/\\]Windows Kits[/\\]10[/\\]Include[/\\][^/\\]+[/\\](um|shared|ucrt)[/\\].*;[/\\]cppwinrt[/\\]winrt[/\\]impl[/\\].*'
 FormatStyle: file

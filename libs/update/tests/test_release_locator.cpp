@@ -1,7 +1,10 @@
 // test_release_locator.cpp -- GitHub release/asset locator + package selection.
 
 #include <gtest/gtest.h>
+#include <string>
+
 #include <update/release_locator.h>
+#include <update/update_types.h>
 using namespace exosnap::update;
 
 namespace {

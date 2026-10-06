@@ -1,6 +1,9 @@
 #include "../src/elementary_stream_writer.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
+#include <vector>
 
 namespace exosnap::engine {
 namespace {

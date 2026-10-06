@@ -11,6 +11,9 @@
 // monocypher-ed25519.h already has proper extern "C" guards for C++ callers.
 
 #include <monocypher-ed25519.h>
+
+#include <cstddef>
+#include <cstdint>
 #include <update/ed25519_verify.h>
 
 namespace exosnap::update {

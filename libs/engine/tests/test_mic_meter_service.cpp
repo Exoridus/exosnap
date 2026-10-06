@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
+#include <optional>
+#include <string>
 
+#include "exosnap/engine/recorder_session.h"
 #include "mic_meter_service.h"
 
 namespace exosnap::engine {

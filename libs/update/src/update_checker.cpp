@@ -1,7 +1,11 @@
 // update_checker.cpp -- GitHub Releases API update check (WinHTTP).
 
 #include <update/release_locator.h>
+
+#include <cstddef>
+#include <string_view>
 #include <update/update_checker.h>
+#include <update/update_types.h>
 
 // WinHTTP is available on all supported Windows versions (Vista+).
 #define WIN32_LEAN_AND_MEAN

@@ -1,7 +1,13 @@
 // release_locator.cpp -- newest-qualifying-release selection + asset extraction.
 
 #include <nlohmann/json.hpp>
+
+#include <exception>
+#include <nlohmann/json_fwd.hpp>
+#include <optional>
 #include <update/release_locator.h>
+#include <update/update_types.h>
+#include <utility>
 
 #include <algorithm>
 #include <functional>

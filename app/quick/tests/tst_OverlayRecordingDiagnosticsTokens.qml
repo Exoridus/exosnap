@@ -24,6 +24,10 @@ TestCase {
     id: testCase
 
     name: "OverlayRecordingDiagnosticsTokens"
+    function init() {
+        failOnWarning(/ReferenceError|TypeError|Binding loop|polish.*loop/);
+    }
+
     when: windowShown
     width: 400
     height: 200
@@ -62,6 +66,66 @@ TestCase {
         compare(overlay.diagnosticsTokens[0], "fps");
         compare(overlay.diagnosticsTokens[1], "drop");
         compare(overlay.diagnosticsTokens[2], "drift");
+    }
+
+    function test_recording_indicator_has_no_running_animation() {
+        let overlay = createTemporaryObject(overlayComponent, testCase, {overlayState: 1, overlayActive: true});
+        verify(overlay);
+        let glyph = findChild(overlay, "overlayStateGlyph");
+        verify(glyph);
+        for (const item of glyph.data) {
+            if (item.running !== undefined)
+                compare(item.running, false);
+        }
+    }
+
+    function test_health_and_degraded_audio_are_distinct_and_keep_delegates() {
+        let overlay = createTemporaryObject(overlayComponent, testCase, {
+            showHealth: true, showFps: false, showDrop: true, showDrift: false,
+            showMutedSources: true, healthText: "OK", healthWarning: false
+        });
+        let row = tokens(overlay);
+        compare(overlay.diagnosticsTokens[0], "health");
+        let health = row.itemAt(0);
+        compare(health.resolvedValue, "OK");
+        verify(health.good);
+        overlay.healthText = "ENC!";
+        overlay.healthWarning = true;
+        compare(row.itemAt(0), health);
+        compare(health.resolvedValue, "ENC!");
+        verify(!health.good);
+        verify(!overlay.anyMutedGlyph);
+        overlay.micDegraded = true;
+        verify(overlay.anyMutedGlyph);
+        overlay.micDegraded = false;
+        verify(!overlay.anyMutedGlyph);
+    }
+
+    function test_diagnostics_size_is_visible_content_without_recording_section() {
+        let overlay = createTemporaryObject(overlayComponent, testCase, {
+            overlayActive: false, diagnosticsActive: true, showFps: false, showDrop: false,
+            showDrift: false, showHealth: false, showMutedSources: false, showDiagnosticsSize: true
+        });
+        verify(overlay.diagnosticsContentPresent);
+        verify(overlay.sizeActive);
+        let size = findChild(overlay, "overlaySizeLabel");
+        verify(size);
+        compare(size.text, "42 MB");
+        overlay.outputSizeText = "";
+        compare(size.text, overlay.unavailable);
+    }
+
+    function test_pause_resume_and_warning_glyph_changes_are_synchronous() {
+        let overlay = createTemporaryObject(overlayComponent, testCase, {overlayActive: true});
+        let glyph = findChild(overlay, "overlayStateGlyph");
+        overlay.overlayState = 1;
+        compare(glyph.kind, "recording");
+        overlay.overlayState = 2;
+        compare(glyph.kind, "paused");
+        overlay.overlayState = 1;
+        compare(glyph.kind, "recording");
+        overlay.overlayState = 3;
+        compare(glyph.kind, "warning");
     }
 
     function test_a_measured_value_moving_keeps_the_same_delegates() {
@@ -268,6 +332,80 @@ TestCase {
         let overlay = createTemporaryObject(overlayComponent, testCase,
             Object.assign({monitorGeometry: source}, props));
         verify(overlay);
+        verifyContained(overlay, source);
+    }
+
+    function findClock(item, text) {
+        if (item.text === text)
+            return item;
+        for (const child of item.children || []) {
+            const result = findClock(child, text);
+            if (result)
+                return result;
+        }
+        return null;
+    }
+
+    function test_clock_transitions_keep_width_and_anchor_stable() {
+        let overlay = createTemporaryObject(overlayComponent, testCase, {
+            overlayActive: true, diagnosticsActive: false, elapsedText: "00:00:09",
+            monitorGeometry: Qt.rect(-1920, -100, 1920, 1080)
+        });
+        const clock = findClock(overlay.contentItem, "00:00:09");
+        verify(clock);
+        const width = overlay.width;
+        const anchor = overlay.x + clock.mapToItem(overlay.contentItem, clock.width, 0).x;
+        for (const time of ["00:00:10", "00:09:59", "00:10:00", "00:59:59", "01:00:00"]) {
+            overlay.elapsedText = time;
+            compare(overlay.width, width);
+            compare(overlay.x + clock.mapToItem(overlay.contentItem, clock.width, 0).x, anchor);
+        }
+    }
+
+    function test_recording_pause_and_warning_have_distinct_visual_states() {
+        let overlay = createTemporaryObject(overlayComponent, testCase);
+        overlay.overlayState = OverlayAdapter.Recording;
+        const recording = String(overlay.stateTone);
+        overlay.overlayState = OverlayAdapter.Paused;
+        const paused = String(overlay.stateTone);
+        overlay.overlayState = OverlayAdapter.Warning;
+        const warning = String(overlay.stateTone);
+        verify(recording !== paused && paused !== warning && recording !== warning, recording + "," + paused + "," + warning + " enums=" + OverlayAdapter.Recording + "," + OverlayAdapter.Paused + "," + OverlayAdapter.Warning);
+        verify((overlay.flags & Qt.WindowTransparentForInput) !== 0);
+        verify((overlay.flags & Qt.WindowDoesNotAcceptFocus) !== 0);
+        compare(overlay.transientParent, null);
+    }
+
+    function test_static_recording_preserves_hud_geometry_and_opacity() {
+        const overlay = createTemporaryObject(overlayComponent, testCase, {
+            overlayState: OverlayAdapter.Recording, overlayActive: true,
+            diagnosticsActive: false, elapsedText: "00:00:09"
+        });
+        const geometry = Qt.rect(overlay.x, overlay.y, overlay.width, overlay.height);
+        const glyph = findChild(overlay, "overlayStateGlyph");
+        verify(glyph);
+        compare(glyph.opacity, 1.0);
+        wait(150);
+        compare(glyph.opacity, 1.0);
+        compare(Qt.rect(overlay.x, overlay.y, overlay.width, overlay.height), geometry);
+        verify((overlay.flags & Qt.WindowTransparentForInput) !== 0);
+        compare(overlay.elapsedText, "00:00:09");
+    }
+
+    function test_full_display_source_contains_the_pill() {
+        const source = Qt.rect(1920, 0, 2560, 1440);
+        let overlay = createTemporaryObject(overlayComponent, testCase, {
+            overlayActive: true, monitorGeometry: source
+        });
+        verifyContained(overlay, source);
+    }
+
+    function test_long_source_name_with_diagnostics_stays_contained() {
+        const source = Qt.rect(-1280, -720, 1280, 720);
+        let overlay = createTemporaryObject(overlayComponent, testCase, {
+            overlayActive: true, diagnosticsActive: true, showSourceName: true,
+            sourceNameText: "Long application title ".repeat(40), monitorGeometry: source
+        });
         verifyContained(overlay, source);
     }
 }

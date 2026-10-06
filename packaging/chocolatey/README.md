@@ -4,9 +4,12 @@ Source-of-truth Chocolatey package for ExoSnap, submitted to the [community repo
 
 - `exosnap.nuspec` - package metadata and the `vcredist140` dependency
 - `tools/chocolateyinstall.ps1` - downloads and installs the official MSI
-- `tools/chocolateyuninstall.ps1` - hands the ProductCode back to `msiexec`
 
 This is a thin download-at-install package. It embeds no binaries, which is why it needs neither `tools/LICENSE.txt` nor `tools/VERIFICATION.txt`: those are required only when a package ships the software itself. `url64bit` always points at the immutable public GitHub Release MSI asset, never at a mutable or pre-release URL, and `checksum64` is the SHA-256 published beside it.
+
+## External package adapter
+
+Chocolatey's [MSI package contract](https://docs.chocolatey.org/en-us/guides/create/create-msi-package/) uses `chocolateyinstall.ps1` to pass the remote URL, SHA-256, architecture and silent arguments to `Install-ChocolateyPackage`. The nuspec has no equivalent remote-MSI installation fields. This one file is the exact external-format exception in `exo-dev check automation-policy`; it contains only package metadata and Chocolatey helper calls. Rust owns package generation, version/checksum validation and distribution policy. The same documented contract supports automatic MSI uninstall without `chocolateyuninstall.ps1`.
 
 ## The checksum placeholder
 
@@ -34,7 +37,7 @@ A submission is reviewed by a human moderator after two automated services have 
 
 ## Uninstall
 
-The MSI owns the ExoSnap installation, Add/Remove Programs entry and Start Menu shortcut. Empty shared parent directories/registry keys are not necessarily owned or removed by that product. `tools/chocolateyuninstall.ps1` therefore only resolves the ProductCode and delegates. It deletes nothing itself. User configuration under `%LOCALAPPDATA%\ExoSnap` is not installed by the MSI and deliberately survives an uninstall.
+The MSI owns the ExoSnap installation, Add/Remove Programs entry and Start Menu shortcut. Empty shared parent directories/registry keys are not necessarily owned or removed by that product. Chocolatey records the MSI installation and its automatic uninstaller delegates to Windows Installer. No repository uninstall hook is needed. User configuration under `%LOCALAPPDATA%\ExoSnap` is not installed by the MSI and deliberately survives an uninstall.
 
 ## Runtime dependency
 

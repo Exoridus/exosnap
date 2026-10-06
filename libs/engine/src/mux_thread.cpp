@@ -3,10 +3,20 @@
 #include "annexb_to_avcc.h"
 #include "annexb_to_hvcc.h"
 #include "av_epoch_align.h"
+#include "exosnap/engine/audio_track_model.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/error_types.h"
+#include "exosnap/engine/recorder_session.h"
+#include "exosnap/engine/split_trigger_source.h"
 #include "matroska_stream_writer.h"
+#include "mux_queue.h"
+#include "pipeline_diagnostics_aggregator.h"
+#include "premux_state.h"
 #include "session_internal.h"
 #include "split_sentinel_policy.h"
 
+#include <atomic>
+#include <cstdint>
 #include <exosnap/engine/logging/logging.h>
 #include <exosnap/engine/packet_types.h>
 
@@ -14,9 +24,11 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
-#include <cstring>
 #include <deque>
 #include <filesystem>
+#include <memory>
+#include <mutex>
+#include <ratio>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -92,31 +104,15 @@ uint64_t QueryFileSizeBytes(const std::filesystem::path& path) {
 
 void MuxThread::Run() {
     // --- Step 1: Wait for codec private data to be ready ---
-    uint32_t track_count = 0;
-    {
-        std::unique_lock lk(m_state.premux_mutex);
-        m_state.premux_cv.wait(lk, [&] {
-            return (m_state.codec_private.VideoReady(m_state.config.video_codec) &&
-                    m_state.codec_private.AudioAllReady(m_state.audio_track_count)) ||
-                   m_state.stop_requested.load();
-        });
-
-        if (!(m_state.codec_private.VideoReady(m_state.config.video_codec) &&
-              m_state.codec_private.AudioAllReady(m_state.audio_track_count))) {
-            lk.unlock();
-            // The only exit from the wait without headers is a stop, so the mux is
-            // never the reason they are missing: it is simply the first worker to
-            // notice. Recording a Mux failure here latched that misattribution as
-            // the session's outcome, and a capture that delivered nothing (or a
-            // stop that arrived before capture started) was reported as a mux
-            // problem. Leave the outcome to the session, which knows both.
-            logging::log(logging::LogLevel::Info, "mux_thread",
-                         "stopped before any codec private data arrived; no file written", {});
-            return;
-        }
-
-        track_count = m_state.audio_track_count;
+    if (!m_state.premux.WaitReady(m_state.config.video_codec, m_state.audio_track_count,
+                                  [&] { return m_state.stop_requested.load(); })) {
+        // Only stop releases a waiter before codec readiness. The session owns
+        // the outcome for a capture that produced no headers or stopped early.
+        logging::log(logging::LogLevel::Info, "mux_thread",
+                     "stopped before any codec private data arrived; no file written", {});
+        return;
     }
+    const uint32_t track_count = m_state.audio_track_count;
 
     if (track_count > CodecPrivateData::kMaxAudioTracks) {
         m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Mux, "Audio track count exceeds maximum supported");
@@ -127,23 +123,23 @@ void MuxThread::Run() {
     std::vector<uint8_t> video_codec_private;
     std::array<AudioCodecPrivateSlot, CodecPrivateData::kMaxAudioTracks> audioCp{};
     {
-        std::lock_guard lk(m_state.premux_mutex);
+        const auto codec_private = m_state.premux.CodecSnapshot();
         if (m_state.config.video_codec == VideoCodec::H264) {
-            if (!annexb::BuildAvccFromAnnexBSpsAndPps(m_state.codec_private.h264_sps_pps, video_codec_private)) {
+            if (!annexb::BuildAvccFromAnnexBSpsAndPps(codec_private.h264_sps_pps, video_codec_private)) {
                 m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Failed to build AVCC from H.264 SPS/PPS for Matroska");
                 return;
             }
         } else if (m_state.config.video_codec == VideoCodec::Hevc) {
-            if (!annexb::BuildHvccFromAnnexBVpsSpsPps(m_state.codec_private.hevc_vps_sps_pps, video_codec_private)) {
+            if (!annexb::BuildHvccFromAnnexBVpsSpsPps(codec_private.hevc_vps_sps_pps, video_codec_private)) {
                 m_state.RecordFailure(E_FAIL, ErrorPhase::Mux,
                                       "Failed to build hvcC from HEVC VPS/SPS/PPS for Matroska");
                 return;
             }
         } else {
-            video_codec_private = m_state.codec_private.av1_codec_private;
+            video_codec_private = codec_private.av1_codec_private;
         }
         for (uint32_t i = 0; i < track_count; ++i) {
-            audioCp[i] = m_state.codec_private.audio_codec_private[i];
+            audioCp[i] = codec_private.audio_codec_private[i];
         }
     }
 
@@ -654,8 +650,8 @@ void MuxThread::Run() {
 
     // 2a. Drain premux buffers (packets captured before tracks were initialized).
     {
-        std::lock_guard lk(m_state.premux_mutex);
-        for (auto& pkt : m_state.video_premux) {
+        auto pending = m_state.premux.TakePending();
+        for (auto& pkt : pending.video) {
             if (pkt.bytes.empty())
                 continue;
             resolve_epoch();
@@ -663,7 +659,7 @@ void MuxThread::Run() {
             drain_pending_audio();
             drain_segment_pending_audio();
         }
-        for (auto& pkt : m_state.audio_premux) {
+        for (auto& pkt : pending.audio) {
             if (pkt.bytes.empty())
                 continue;
             resolve_epoch();
@@ -674,8 +670,6 @@ void MuxThread::Run() {
                 pending_audio.push_back(std::move(pkt));
             }
         }
-        m_state.video_premux.clear();
-        m_state.audio_premux.clear();
     }
 
     // Size-split threshold (SPLIT-BY-SIZE-R1): 0 means disabled.
@@ -738,26 +732,18 @@ void MuxThread::Run() {
         if (m_state.HasFailure() || write_error)
             break;
 
-        std::unique_lock lk(m_state.mux_mutex);
-        m_state.mux_cv.wait_for(lk, std::chrono::milliseconds(5),
-                                [&] { return !m_state.mux_queue.empty() || m_state.stop_requested.load(); });
-        const uint32_t mux_queue_depth = static_cast<uint32_t>(m_state.mux_queue.size());
+        const auto mux_queue_depth =
+            static_cast<uint32_t>(m_state.mux_queue.WaitForItems([&] { return m_state.stop_requested.load(); }));
         if (m_state.HasFailure())
             break;
 
         const auto mux_t0 = std::chrono::steady_clock::now();
         bool processed_any = false;
-        while (!m_state.mux_queue.empty()) {
-            MuxItem item = std::move(m_state.mux_queue.front());
-            m_state.mux_queue.pop_front();
-            m_state.OnMuxItemPopped(item); // free room; wakes bound-blocked producers
-            lk.unlock();
+        while (auto item = m_state.mux_queue.Pop()) {
             std::visit([&](auto&& payload) { handle_payload(std::move(payload), videoEos, audioEosReceived); },
-                       item.payload);
-            lk.lock();
+                       item->payload);
             processed_any = true;
         }
-        lk.unlock();
         if (processed_any) {
             const auto mux_t1 = std::chrono::steady_clock::now();
             m_state.diagnostics.OnMuxLatency(mux_t1,
@@ -772,15 +758,9 @@ void MuxThread::Run() {
         // Same shape as the main loop: a split sentinel here finalizes a file
         // and runs the segment callback, and a producer that is still pushing
         // its own EOS must not wait on the queue lock for that.
-        std::unique_lock lk(m_state.mux_mutex);
-        while (!m_state.mux_queue.empty()) {
-            MuxItem item = std::move(m_state.mux_queue.front());
-            m_state.mux_queue.pop_front();
-            m_state.OnMuxItemPopped(item);
-            lk.unlock();
+        while (auto item = m_state.mux_queue.Pop()) {
             std::visit([&](auto&& payload) { handle_payload(std::move(payload), videoEos, audioEosReceived); },
-                       item.payload);
-            lk.lock();
+                       item->payload);
         }
     }
 

@@ -1,5 +1,14 @@
 #include <capability/translation.h>
 
+#include <capability/capability_set.h>
+#include <capability/config_types.h>
+#include <capability/resolver.h>
+#include <capability/user_config.h>
+#include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/recorder_session.h>
+#include <string>
+
 #include <stdexcept>
 
 namespace exosnap::capability {

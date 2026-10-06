@@ -1,11 +1,12 @@
 #include <exosnap/engine/gpu_hdr_tonemap.h>
 
-#include "hdr_tonemap.h"
-
 #include "measured_shader_compile.h"
 
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <utility>
+#include <winrt/base.h>
 
 namespace exosnap::engine {
 namespace {

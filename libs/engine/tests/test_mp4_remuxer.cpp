@@ -21,12 +21,20 @@
 //      actually-full disk.
 
 // libavformat
+#include "exosnap/engine/color_metadata.h"
+#include <ios>
+#include <system_error>
+#include <utility>
 extern "C" {
+#include <libavcodec/codec_id.h>
 #include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/error.h>
+#include <libavutil/macros.h>
 #include <libavutil/mastering_display_metadata.h>
 #include <libavutil/pixfmt.h>
+#include <libavutil/rational.h>
 }
 
 // MSVC + C++: av_err2str fix
@@ -114,8 +122,6 @@ using exosnap::engine::ColorRange;
 using exosnap::engine::MatroskaStreamConfig;
 using exosnap::engine::MatroskaStreamWriter;
 using exosnap::engine::MuxPacket;
-using exosnap::engine::RemuxNoopCallback;
-using exosnap::engine::RemuxResult;
 using exosnap::engine::RemuxToMkv;
 using exosnap::engine::RemuxToProgressiveMp4;
 

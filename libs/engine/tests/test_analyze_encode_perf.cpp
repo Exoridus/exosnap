@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include "perf_histogram.h"
@@ -8,9 +9,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <span>
 #include <string>
+#include <system_error>
 #include <vector>
 
 // End-to-end check of `exo-dev perf-analyze`: write a synthetic engine.jsonl

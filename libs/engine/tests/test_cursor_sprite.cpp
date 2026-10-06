@@ -4,6 +4,8 @@
 // origin crops into the bitmap, the target edge crops the extent, and a sprite
 // wider than 256 px per axis is rejected as malformed.
 
+#include <cstddef>
+#include <cstdint>
 #include <exosnap/engine/cursor_sprite.h>
 
 #include <gtest/gtest.h>

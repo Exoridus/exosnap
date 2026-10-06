@@ -14,7 +14,9 @@
 
 #include <exosnap/engine/recorder_session.h>
 
+#include <cstdint>
 #include <memory>
+#include <string>
 
 namespace exosnap::engine {
 

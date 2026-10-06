@@ -1,11 +1,19 @@
 #include <gtest/gtest.h>
+#include <utility>
 
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
 #include "matroska_stream_writer.h"
 #include "mixed_audio_src.h"
 #include "test_unique_temp.h"
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/codec.h>
+#include <libavcodec/codec_id.h>
+#include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
+#include <libavutil/avutil.h>
+#include <libavutil/frame.h>
+#include <libavutil/samplefmt.h>
 }
 #include "output_format_audio_src.h"
 #include <filesystem>

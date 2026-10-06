@@ -378,7 +378,7 @@ fn judge_crosscheck(
     Ok(())
 }
 
-fn split_csv(line: &str) -> Step<Vec<String>> {
+pub(crate) fn split_csv(line: &str) -> Step<Vec<String>> {
     let mut fields = Vec::new();
     let mut current = String::new();
     let mut chars = line.trim_end_matches('\r').chars().peekable();

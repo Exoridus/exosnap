@@ -1,4 +1,6 @@
 #include "elementary_stream_writer.h"
+#include <cstdint>
+#include <vector>
 
 namespace exosnap::engine {
 

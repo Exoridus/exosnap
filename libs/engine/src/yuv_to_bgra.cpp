@@ -1,4 +1,6 @@
 #include "yuv_to_bgra.h"
+#include "exosnap/engine/color_metadata.h"
+#include <cstdint>
 
 // The SIMD path below is x86-only. Everything stays buildable elsewhere: the
 // capability query then reports false and the dispatcher never leaves the

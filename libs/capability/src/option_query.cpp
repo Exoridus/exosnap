@@ -1,5 +1,12 @@
 #include <capability/option_query.h>
 
+#include <capability/resolver.h>
+#include <capability/support_level.h>
+#include <capability/user_config.h>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include <capability/config_types.h>
 
 namespace exosnap::capability {

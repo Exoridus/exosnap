@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
+
 #include <string>
 #include <vector>
 

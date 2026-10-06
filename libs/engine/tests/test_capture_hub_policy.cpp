@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <exosnap/engine/capture_hub_policy.h>
+#include <initializer_list>
 
 namespace {
 

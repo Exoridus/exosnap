@@ -47,6 +47,7 @@
 #include <QMetaMethod>
 #include <QMetaProperty>
 #include <QPainter>
+#include <QQmlListReference>
 #include <QQuickItem>
 #include <QQuickItemGrabResult>
 #include <QQuickStyle>
@@ -579,6 +580,58 @@ exosnap::EditContext navigationTestEditContext() {
     return context;
 }
 
+int checkLogsStartupLayout(QQuickWindow* window) {
+    auto* page = window->findChild<QQuickItem*>(QStringLiteral("quickLogsPage"));
+    auto* scroll = window->findChild<QQuickItem*>(QStringLiteral("quickStartupTraceScroll"));
+    if (page == nullptr || scroll == nullptr)
+        return failNavigationLifecycle("Logs startup trace surface is missing");
+
+    const QSize original_size = window->size();
+    const auto restore_size = qScopeGuard([window, original_size]() { window->resize(original_size); });
+    for (const QSize size : {QSize(1280, 820), QSize(window->minimumWidth(), window->minimumHeight())}) {
+        window->resize(size);
+        const auto frame = page->grabToImage();
+        if (!frame)
+            return failNavigationLifecycle("Logs frame capture could not start");
+        QElapsedTimer timer;
+        timer.start();
+        while (frame->image().isNull()) {
+            if (timer.hasExpired(5000))
+                return failNavigationLifecycle("Logs frame did not finish rendering");
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        }
+
+        const qreal available_width = scroll->property("availableWidth").toReal();
+        const qreal content_width = scroll->property("contentWidth").toReal();
+        const QQmlListReference children(scroll, "contentChildren");
+        auto* table = children.count() == 1 ? qobject_cast<QQuickItem*>(children.at(0)) : nullptr;
+        if (!(available_width > 0 && available_width <= scroll->width()) || table == nullptr ||
+            qAbs(content_width - available_width) > 0.5 || qAbs(table->width() - available_width) > 0.5)
+            return failNavigationLifecycle("Logs startup trace width does not fit its viewport");
+
+        auto* flickable = scroll->property("flickable").value<QQuickItem*>();
+        if (flickable == nullptr || !(flickable->height() > 0) || !page->isVisible() || !scroll->isVisible())
+            return failNavigationLifecycle("Logs startup trace viewport is not usable");
+        const qreal maximum = qMax(0.0, flickable->property("contentHeight").toReal() - flickable->height());
+        bool settled = false;
+        if (!QMetaObject::invokeMethod(scroll, "scrollToEnd", Q_RETURN_ARG(bool, settled)) || !settled ||
+            qAbs(flickable->property("contentY").toReal() - maximum) > 0.5)
+            return failNavigationLifecycle("Logs startup trace cannot scroll to its end");
+        if (!QMetaObject::invokeMethod(scroll, "scrollToHome", Q_RETURN_ARG(bool, settled)) || !settled ||
+            qAbs(flickable->property("contentY").toReal()) > 0.5)
+            return failNavigationLifecycle("Logs startup trace cannot scroll home");
+
+        for (const auto& entry : exosnap::diagnostics::AppLog::history()) {
+            if (entry.message.contains(QStringLiteral("binding loop"), Qt::CaseInsensitive) ||
+                entry.message.contains(QStringLiteral("polish loop"), Qt::CaseInsensitive) ||
+                entry.message.contains(QStringLiteral("polish() loop"), Qt::CaseInsensitive))
+                return failNavigationLifecycle(qPrintable(entry.message));
+        }
+        qInfo("logs-layout: width=%d content_width=%.1f rendered=1", size.width(), content_width);
+    }
+    return 0;
+}
+
 int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplication& application) {
     if (window == nullptr)
         return failNavigationLifecycle("no root window");
@@ -620,6 +673,8 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
         if (shell->property("currentPage").toInt() != 2 ||
             shell->property("diagnosticsSection").toInt() != exosnap::quick::ShellAdapter::DiagnosticsLogs)
             return failNavigationLifecycle("a logs navigation did not normalize to Diagnostics + logs");
+        if (const int layout_result = checkLogsStartupLayout(window); layout_result != 0)
+            return layout_result;
         if (automation.Reveal(QStringLiteral("logs"), QStringLiteral("no-such-target"), &error) !=
             exosnap::live_verify::LiveVerifySource::RevealOutcome::UnknownTarget)
             return failNavigationLifecycle("an unknown reveal target right after navigation was not reported as such");
@@ -957,7 +1012,19 @@ int main(int argc, char* argv[]) {
     if (!qEnvironmentVariableIsSet("QT_QPA_DISABLE_REDIRECTION_SURFACE"))
         qputenv("QT_QPA_DISABLE_REDIRECTION_SURFACE", "1");
 
+#if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS) && !defined(QT_NO_DEBUG)
+    if (qEnvironmentVariableIntValue("EXOSNAP_QML_PREVIEW") == 1) {
+        QQmlDebuggingEnabler::enableDebugging(true);
+    }
+#endif
     QApplication app(argc, argv);
+#if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS) && !defined(QT_NO_DEBUG)
+    if (qEnvironmentVariableIntValue("EXOSNAP_QML_PREVIEW") == 1) {
+        // Qt snapshots debugger arguments on the first service-list assignment.
+        QQmlDebuggingEnabler::setServices(
+            {QStringLiteral("QmlPreview"), QStringLiteral("CanvasFrameRate"), QStringLiteral("EventReplay")});
+    }
+#endif
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
     if (qEnvironmentVariableIntValue("EXOSNAP_QML_PROFILE") == 1) {
         QQmlDebuggingEnabler::setServices(QQmlDebuggingEnabler::profilerServices());

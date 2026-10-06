@@ -7,11 +7,14 @@
 // rejected frame's entry in place. These cases drive the removal over a FIFO of
 // the real entry type with no encoder session behind it.
 
+#include "nvEncodeAPI.h"
 #include "nvenc_encoder.h"
 
+#include <cstdint>
 #include <deque>
 
 #include <gtest/gtest.h>
+#include <initializer_list>
 
 using namespace exosnap::engine;
 

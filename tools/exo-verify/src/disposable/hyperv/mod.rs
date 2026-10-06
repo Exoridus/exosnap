@@ -5,7 +5,10 @@
 //! immutable infrastructure described by a manifest; a base whose bytes no
 //! longer match that manifest is refused rather than booted.
 
+pub mod facts;
+pub mod recipe;
 mod vhd;
+pub mod watch;
 mod wmi;
 
 use anyhow::{Context as _, Result, bail};
@@ -41,6 +44,10 @@ pub struct BaseManifest {
     pub memory_mb: u64,
     #[serde(default = "default_processors")]
     pub processors: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<recipe::GpuConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<facts::DisplayRequirement>,
 }
 
 fn default_memory() -> u64 {
@@ -197,6 +204,7 @@ pub fn register_service() -> Result<()> {
 pub struct GuestClient {
     stream: hvsock::HvStream,
     next: u64,
+    deadline: Option<Instant>,
 }
 
 impl GuestClient {
@@ -210,12 +218,19 @@ impl GuestClient {
             match hvsock::HvStream::connect(vm, service, Duration::from_secs(10)) {
                 Ok(stream) => {
                     stream.set_timeout(Duration::from_secs(120))?;
-                    let mut client = GuestClient { stream, next: 0 };
+                    let mut client = GuestClient {
+                        stream,
+                        next: 0,
+                        deadline: Some(deadline),
+                    };
                     match client.call(Request::Hello {
                         protocol: PROTOCOL_VERSION,
                         nonce: nonce.clone(),
                     }) {
-                        Ok(reply) if reply["nonce"] == nonce.as_str() => return Ok(client),
+                        Ok(reply) if reply["nonce"] == nonce.as_str() => {
+                            client.deadline = None;
+                            return Ok(client);
+                        }
                         Ok(reply) => last = Some(anyhow::anyhow!("unexpected hello reply {reply}")),
                         Err(e) => last = Some(e),
                     }
@@ -230,6 +245,20 @@ impl GuestClient {
     }
 
     pub fn call(&mut self, request: Request) -> Result<Value> {
+        let timeout = match &request {
+            Request::Exec { timeout_ms, .. } | Request::Wait { timeout_ms, .. } => {
+                Duration::from_millis(*timeout_ms).saturating_add(Duration::from_secs(30))
+            }
+            _ => Duration::from_secs(120),
+        };
+        let timeout = self
+            .deadline
+            .map(|d| timeout.min(d.saturating_duration_since(Instant::now())))
+            .unwrap_or(timeout);
+        if timeout.is_zero() {
+            bail!("guest request deadline expired");
+        }
+        self.stream.set_timeout(timeout)?;
         self.next += 1;
         let id = self.next;
         frame::write(&mut self.stream, &Envelope { id, request })?;
@@ -312,6 +341,8 @@ pub struct HyperV {
     disk: Option<PathBuf>,
     run: Option<PathBuf>,
     client: Option<GuestClient>,
+    network: recipe::NetworkMode,
+    network_switch: Option<String>,
 }
 
 impl HyperV {
@@ -320,6 +351,7 @@ impl HyperV {
             .map(PathBuf::from)
             .with_context(|| format!("set {BASE_ENV} to the base image manifest"))?;
         let (manifest, base) = BaseManifest::load(&path)?;
+        let (network, network_switch) = recipe::network_from_environment()?;
         Ok(HyperV {
             manifest,
             base,
@@ -328,6 +360,8 @@ impl HyperV {
             disk: None,
             run: None,
             client: None,
+            network,
+            network_switch,
         })
     }
 
@@ -373,6 +407,17 @@ impl DisposableWindows for HyperV {
             processors: self.manifest.processors,
             vhdx: &disk.to_string_lossy(),
         })?;
+        self.hypervisor = Some(hypervisor);
+        self.vm = Some(vm);
+        let vm = self.vm.as_ref().context("defined VM was lost")?;
+        recipe::configure_security(&name)?;
+        let gpu_readback = self
+            .manifest
+            .gpu
+            .as_ref()
+            .map(|gpu| recipe::configure_partition(&name, gpu))
+            .transpose()?;
+        recipe::configure_network(&name, self.network, self.network_switch.as_deref())?;
         std::fs::write(
             run.host.join("environment.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -380,14 +425,15 @@ impl DisposableWindows for HyperV {
                 "vmId": vm.id,
                 "vmName": name,
                 "base": self.manifest,
+                "gpuReadback": gpu_readback,
+                "network": self.network,
+                "networkSwitch": self.network_switch,
             }))?,
         )?;
-        self.hypervisor = Some(hypervisor);
-        self.vm = Some(vm);
         Ok(())
     }
 
-    fn start(&mut self, _run: &RunDir) -> Result<()> {
+    fn start(&mut self, run: &RunDir) -> Result<()> {
         self.hypervisor()?
             .start(self.vm.as_ref().context("no VM")?)?;
         self.reconnect(Duration::from_secs(600))?;
@@ -395,13 +441,47 @@ impl DisposableWindows for HyperV {
         loop {
             let gate = self.client()?.call(Request::GateReady)?;
             if gate["ready"].as_bool() == Some(true) {
-                return Ok(());
+                break;
             }
             if Instant::now() >= deadline {
                 bail!("the guest never reached an interactive session: {gate}");
             }
             std::thread::sleep(Duration::from_secs(5));
         }
+        if self.manifest.gpu.is_some() || self.manifest.display.is_some() {
+            self.client()?.push_file(
+                &run.payload().join("exo-verify.exe"),
+                &format!(r"{GUEST_ROOT}\payload\exo-verify.exe"),
+            )?;
+            let receipt = self.client()?.call(Request::Exec {
+                program: format!(r"{GUEST_ROOT}\payload\exo-verify.exe"),
+                args: vec!["disposable".into(), "guest-facts".into()],
+                cwd: None,
+                env: Default::default(),
+                timeout_ms: 60_000,
+            })?;
+            if receipt["exitCode"].as_i64() != Some(0) {
+                bail!("guest readiness measurement failed: {receipt}");
+            }
+            let measured: Value = serde_json::from_str(
+                receipt["stdout"]
+                    .as_str()
+                    .context("guest facts output absent")?,
+            )?;
+            std::fs::write(
+                run.host.join("readiness.json"),
+                serde_json::to_vec_pretty(&measured)?,
+            )?;
+            let unmet = facts::unmet(
+                &measured,
+                self.manifest.gpu.as_ref(),
+                self.manifest.display.as_ref(),
+            );
+            if !unmet.is_empty() {
+                bail!("guest readiness unproven: {}", unmet.join("; "));
+            }
+        }
+        Ok(())
     }
 
     fn execute(&mut self, command: &GuestCommand) -> Result<i32> {
@@ -414,18 +494,12 @@ impl DisposableWindows for HyperV {
                     .push_file(&path, &format!(r"{GUEST_ROOT}\payload\{name}"))?;
             }
         }
-        let mut line = format!("\"{}\"", command.program);
-        for arg in &command.args {
-            line.push_str(&format!(" \"{}\"", arg.replace('"', "\\\"")));
-        }
-        let spawned = self.client()?.call(Request::Spawn {
-            program: "cmd.exe".into(),
-            args: vec![
-                "/c".into(),
-                format!(r"{line} > {GUEST_ROOT}\transcript.log 2>&1"),
-            ],
+        let spawned = self.client()?.call(Request::SpawnLogged {
+            program: command.program.clone(),
+            args: command.args.clone(),
             cwd: Some(GUEST_ROOT.into()),
             env: Default::default(),
+            transcript: format!(r"{GUEST_ROOT}\transcript.log"),
         })?;
         let handle = spawned["handle"]
             .as_u64()
@@ -437,6 +511,12 @@ impl DisposableWindows for HyperV {
                 timeout_ms: 30_000,
             })?;
             if waited["exited"].as_bool() == Some(true) {
+                self.client()?.call(Request::WriteFile {
+                    path: format!(r"{GUEST_ROOT}\out\campaign.exit"),
+                    data: base64::engine::general_purpose::STANDARD
+                        .encode(serde_json::to_vec(&waited)?),
+                    append: false,
+                })?;
                 return Ok(waited["exitCode"].as_i64().unwrap_or(-1) as i32);
             }
             if Instant::now() >= deadline {
@@ -452,10 +532,10 @@ impl DisposableWindows for HyperV {
     fn collect(&mut self, run: &RunDir) -> Result<()> {
         let client = self.client()?;
         client.pull_tree(&format!(r"{GUEST_ROOT}\out"), &run.out())?;
-        let _ = client.pull_file(
+        client.pull_file(
             &format!(r"{GUEST_ROOT}\transcript.log"),
             &run.host.join("transcript.log"),
-        );
+        )?;
         Ok(())
     }
 
@@ -522,6 +602,8 @@ mod tests {
             sha256: crate::bundle::sha256_bytes(b"sealed"),
             memory_mb: 4096,
             processors: 2,
+            gpu: None,
+            display: None,
         };
         assert!(manifest.verify(&vhdx).is_err(), "writable base accepted");
         let mut permissions = std::fs::metadata(&vhdx).unwrap().permissions();

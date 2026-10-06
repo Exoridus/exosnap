@@ -1,26 +1,19 @@
-// Steady-state mux queue backpressure.
-//
-// The premux buffers are bounded, but once codec-private data is ready the
-// producers used to push into mux_queue unchecked: a destination volume that
-// cannot keep up (slow NAS, AV scan, low disk) made the queue grow until OOM
-// with no diagnosis. These tests pin the bound:
-//   * a full queue blocks the producer and times out into a deterministic
-//     ErrorPhase::Mux failure — no silent packet drops, no unbounded growth,
-//   * a draining consumer wakes a blocked producer,
-//   * a recorded failure wakes a blocked producer (teardown never deadlocks
-//     on the bound).
+// A stalled writer must become a mux failure through the real audio producer.
 
+#include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include "audio_thread.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/error_types.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
 #include "session_internal.h"
 
-#include <atomic>
 #include <chrono>
 #include <memory>
 #include <string>
-#include <thread>
-#include <variant>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -28,187 +21,10 @@ namespace {
 using exosnap::engine::AudioCodec;
 using exosnap::engine::AudioSampleFormat;
 using exosnap::engine::AudioThread;
-using exosnap::engine::EncodedAudioPacket;
 using exosnap::engine::ErrorPhase;
 using exosnap::engine::IAudioCaptureSource;
-using exosnap::engine::MuxItem;
-using exosnap::engine::MuxQueueWait;
 using exosnap::engine::RawAudioBuffer;
 using exosnap::engine::SessionState;
-
-MuxItem MakeAudioItem(size_t payload_bytes) {
-    EncodedAudioPacket pkt;
-    pkt.bytes.assign(payload_bytes, 0x5A);
-    MuxItem item;
-    item.payload = std::move(pkt);
-    return item;
-}
-
-// ---------------------------------------------------------------------------
-// SessionState-level bound semantics
-// ---------------------------------------------------------------------------
-
-TEST(MuxQueueBackpressure, FullQueueTimesOutDeterministically) {
-    auto state_ptr = std::make_shared<SessionState>();
-    SessionState& state = *state_ptr;
-    state.mux_queue_packet_limit = 4;
-    state.mux_queue_full_timeout_ms = 50;
-
-    {
-        std::unique_lock lk(state.mux_mutex);
-        for (int i = 0; i < 4; ++i) {
-            ASSERT_EQ(state.WaitForMuxQueueSpace(lk), MuxQueueWait::Ready);
-            state.PushMuxItemLocked(MakeAudioItem(16));
-        }
-        const auto t0 = std::chrono::steady_clock::now();
-        EXPECT_EQ(state.WaitForMuxQueueSpace(lk), MuxQueueWait::TimedOut);
-        const auto elapsed = std::chrono::steady_clock::now() - t0;
-        EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 40);
-    }
-    EXPECT_EQ(state.mux_queue.size(), 4u);
-}
-
-TEST(MuxQueueBackpressure, ByteLimitBlocksBeforePacketLimit) {
-    auto state_ptr = std::make_shared<SessionState>();
-    SessionState& state = *state_ptr;
-    state.mux_queue_packet_limit = 1000;
-    state.mux_queue_byte_limit = 64;
-    state.mux_queue_full_timeout_ms = 50;
-
-    std::unique_lock lk(state.mux_mutex);
-    ASSERT_EQ(state.WaitForMuxQueueSpace(lk), MuxQueueWait::Ready);
-    state.PushMuxItemLocked(MakeAudioItem(64)); // reaches the byte bound
-    EXPECT_EQ(state.WaitForMuxQueueSpace(lk), MuxQueueWait::TimedOut);
-}
-
-TEST(MuxQueueBackpressure, DrainingConsumerWakesBlockedProducer) {
-    auto state_ptr = std::make_shared<SessionState>();
-    SessionState& state = *state_ptr;
-    state.mux_queue_packet_limit = 2;
-    state.mux_queue_full_timeout_ms = 5000;
-
-    {
-        std::unique_lock lk(state.mux_mutex);
-        state.PushMuxItemLocked(MakeAudioItem(16));
-        state.PushMuxItemLocked(MakeAudioItem(16));
-    }
-
-    std::atomic<bool> pushed{false};
-    std::thread producer([&] {
-        std::unique_lock lk(state.mux_mutex);
-        if (state.WaitForMuxQueueSpace(lk) == MuxQueueWait::Ready) {
-            state.PushMuxItemLocked(MakeAudioItem(16));
-            pushed.store(true);
-        }
-    });
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    EXPECT_FALSE(pushed.load());
-
-    // Consumer pops one item — the producer must wake and push.
-    {
-        std::lock_guard lk(state.mux_mutex);
-        MuxItem item = std::move(state.mux_queue.front());
-        state.mux_queue.pop_front();
-        state.OnMuxItemPopped(item);
-    }
-    producer.join();
-    EXPECT_TRUE(pushed.load());
-    EXPECT_EQ(state.mux_queue.size(), 2u);
-}
-
-TEST(MuxQueueBackpressure, RecordedFailureWakesBlockedProducer) {
-    auto state_ptr = std::make_shared<SessionState>();
-    SessionState& state = *state_ptr;
-    state.mux_queue_packet_limit = 1;
-    state.mux_queue_full_timeout_ms = 60000; // must NOT be what unblocks us
-
-    {
-        std::unique_lock lk(state.mux_mutex);
-        state.PushMuxItemLocked(MakeAudioItem(16));
-    }
-
-    std::atomic<MuxQueueWait> wait_result{MuxQueueWait::Ready};
-    std::atomic<bool> done{false};
-    std::thread producer([&] {
-        std::unique_lock lk(state.mux_mutex);
-        wait_result.store(state.WaitForMuxQueueSpace(lk));
-        done.store(true);
-    });
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    EXPECT_FALSE(done.load());
-
-    state.RecordFailure(E_FAIL, ErrorPhase::Mux, "test failure");
-
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!done.load() && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    EXPECT_TRUE(done.load()) << "failure must wake a producer blocked on the queue bound";
-    producer.join();
-    EXPECT_EQ(wait_result.load(), MuxQueueWait::Failed);
-}
-
-// A stop must NOT abandon the bound: the producers' final drain runs with
-// stop_requested already raised and the mux still consuming, so giving up here
-// would discard the tail of the recording -- everything between the last flush
-// and end of stream.
-TEST(MuxQueueBackpressure, AStoppingSessionStillWaitsForRoomSoTheTailIsWritten) {
-    auto state_ptr = std::make_shared<SessionState>();
-    SessionState& state = *state_ptr;
-    state.mux_queue_packet_limit = 1;
-    state.mux_queue_full_timeout_ms = 5000;
-
-    {
-        std::unique_lock lk(state.mux_mutex);
-        state.PushMuxItemLocked(MakeAudioItem(16));
-    }
-    state.RequestCleanStop();
-
-    std::atomic<bool> pushed{false};
-    std::thread producer([&] {
-        std::unique_lock lk(state.mux_mutex);
-        if (state.WaitForMuxQueueSpace(lk) == MuxQueueWait::Ready) {
-            state.PushMuxItemLocked(MakeAudioItem(16));
-            pushed.store(true);
-        }
-    });
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    EXPECT_FALSE(pushed.load()) << "the drain gave up on a stopping session instead of waiting for room";
-
-    {
-        std::lock_guard lk(state.mux_mutex);
-        MuxItem item = std::move(state.mux_queue.front());
-        state.mux_queue.pop_front();
-        state.OnMuxItemPopped(item);
-    }
-    producer.join();
-    EXPECT_TRUE(pushed.load());
-}
-
-// REGRESSION: only when the wait actually runs out while stopping is the packet
-// lost -- and that is a mux that stopped consuming, which the shutdown policy
-// reports. Recording it as backpressure told the user "the output destination
-// cannot keep up" about an ordinary stop.
-TEST(MuxQueueBackpressure, AnExhaustedWaitWhileStoppingIsNotBackpressure) {
-    auto state_ptr = std::make_shared<SessionState>();
-    SessionState& state = *state_ptr;
-    state.mux_queue_packet_limit = 1;
-    state.mux_queue_full_timeout_ms = 50;
-
-    {
-        std::unique_lock lk(state.mux_mutex);
-        state.PushMuxItemLocked(MakeAudioItem(16));
-    }
-    state.RequestCleanStop();
-
-    std::unique_lock lk(state.mux_mutex);
-    EXPECT_EQ(state.WaitForMuxQueueSpace(lk), MuxQueueWait::Stopping);
-    lk.unlock();
-    EXPECT_FALSE(state.HasFailure()) << "an ordinary stop must not be recorded as mux backpressure";
-}
 
 // ---------------------------------------------------------------------------
 // Producer-level behavior: AudioThread against a stalled consumer
@@ -217,7 +33,7 @@ TEST(MuxQueueBackpressure, AnExhaustedWaitWhileStoppingIsNotBackpressure) {
 // Delivers `packet_count` Float32 packets as fast as the thread drains them.
 class FloodMockSource : public IAudioCaptureSource {
   public:
-    FloodMockSource(std::atomic<bool>* stop_flag, size_t packet_count) : stop_flag_(stop_flag) {
+    FloodMockSource(SessionState& state, size_t packet_count) : state_(state) {
         packets_ = packet_count;
         data_.assign(static_cast<size_t>(kFramesPerPacket) * kChannels, 0.1f);
     }
@@ -231,8 +47,7 @@ class FloodMockSource : public IAudioCaptureSource {
             return 0;
         if (delivered_ < packets_)
             return kFramesPerPacket;
-        if (stop_flag_)
-            stop_flag_->store(true);
+        state_.RequestCleanStop();
         return 0;
     }
     bool AcquireBuffer(RawAudioBuffer& out, std::string&) override {
@@ -249,8 +64,8 @@ class FloodMockSource : public IAudioCaptureSource {
             return;
         acquired_ = false;
         ++delivered_;
-        if (delivered_ >= packets_ && stop_flag_)
-            stop_flag_->store(true);
+        if (delivered_ >= packets_)
+            state_.RequestCleanStop();
     }
     uint32_t SampleRate() const override {
         return 48000;
@@ -271,7 +86,7 @@ class FloodMockSource : public IAudioCaptureSource {
     static constexpr uint32_t kChannels = 2;
 
   private:
-    std::atomic<bool>* stop_flag_ = nullptr;
+    SessionState& state_;
     bool initialized_ = false;
     bool acquired_ = false;
     size_t packets_ = 0;
@@ -290,26 +105,21 @@ TEST(MuxQueueBackpressure, AudioProducerFailsInsteadOfUnboundedGrowth) {
     state.config.audio_codec = AudioCodec::Pcm;
     state.config.audio_bit_depth = 16;
     state.audio_track_count = 1;
-    state.mux_queue_packet_limit = 8;
-    state.mux_queue_full_timeout_ms = 100;
+    state.mux_queue.Configure({8, 256ull * 1024 * 1024, std::chrono::milliseconds(100)});
 
     // Video codec private already ready: packets route past the premux phase.
-    state.codec_private.av1_ready = true;
+    state.premux.PublishVideo(exosnap::engine::VideoCodec::Av1, {});
 
-    auto source = std::make_unique<FloodMockSource>(&state.stop_requested, 100);
+    auto source = std::make_unique<FloodMockSource>(state, 100);
     auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
     thread->Start();
     ASSERT_TRUE(thread->Join(15000));
 
-    EXPECT_TRUE(state.HasFailure());
-    {
-        std::lock_guard lk(state.failure_mutex);
-        EXPECT_EQ(state.failure.error_phase, ErrorPhase::Mux);
-    }
+    ASSERT_TRUE(state.HasFailure());
+    EXPECT_EQ(state.FailureSnapshot()->error_phase, ErrorPhase::Mux);
 
     // Bounded: at most the limit plus the EOS sentinel the drain still enqueues.
-    std::lock_guard lk(state.mux_mutex);
-    EXPECT_LE(state.mux_queue.size(), 8u + 2u);
+    EXPECT_LE(state.mux_queue.Size(), 8u + 2u);
 }
 
 } // namespace

@@ -22,7 +22,6 @@ pub struct Scope {
     pub requires_tests: bool,
     pub requires_full_tests: bool,
     pub test_filter: String,
-    pub requires_script_tests: bool,
     pub requires_static_analysis: bool,
     pub requires_rust: bool,
     pub escalation_reasons: Vec<String>,
@@ -51,7 +50,6 @@ impl Scope {
             scope.requires_qmllint = true;
             scope.requires_tests = true;
             scope.requires_full_tests = true;
-            scope.requires_script_tests = true;
             scope.requires_static_analysis = true;
             scope.requires_rust = true;
             scope.escalation_reasons =
@@ -121,7 +119,6 @@ impl Scope {
                     scope.requires_tests = true;
                     test_filters.insert(QUICK_TEST_FILTER);
                 }
-                Class::Scripts => scope.requires_script_tests = true,
                 Class::Workflow | Class::Docs | Class::Data => {}
                 Class::Other => {
                     scope.requires_configure = true;
@@ -174,7 +171,6 @@ enum Class {
     Header,
     Cpp,
     Qml,
-    Scripts,
     Workflow,
     Docs,
     Data,
@@ -189,7 +185,6 @@ impl Class {
             Class::Header => "header",
             Class::Cpp => "cpp",
             Class::Qml => "qml",
-            Class::Scripts => "scripts",
             Class::Workflow => "workflow",
             Class::Docs => "docs",
             Class::Data => "data",
@@ -202,7 +197,7 @@ fn classify(path: &str) -> Class {
     static RULES: LazyLock<Vec<(Regex, Class)>> = LazyLock::new(|| {
         [
             (
-                r"(?i)^tools/(Cargo\.(toml|lock)|(exo-verify|exo-dev)/(Cargo\.toml|.+\.(rs|toml|json|md)))$|(?i)^\.cargo/config\.toml$",
+                r"(?i)^tools/(Cargo\.(toml|lock)|(exo-verify|exo-dev|exo-guest)/(Cargo\.toml|.+\.(rs|toml|json|md)))$|(?i)^\.cargo/config\.toml$",
                 Class::Rust,
             ),
             (
@@ -212,7 +207,6 @@ fn classify(path: &str) -> Class {
             (r"(?i)\.(h|hpp|hxx|inl)$", Class::Header),
             (r"(?i)\.(cpp|cc|cxx)$", Class::Cpp),
             (r"(?i)\.(qml|mjs)$", Class::Qml),
-            (r"(?i)^scripts/", Class::Scripts),
             (
                 r"(?i)^\.github/|(?i)^\.githooks/|(?i)^\.gitattributes$|(?i)^\.gitignore$|(?i)^\.qt-version$",
                 Class::Workflow,
@@ -304,16 +298,10 @@ mod tests {
     }
 
     #[test]
-    fn a_script_change_runs_the_script_tests_and_nothing_heavier() {
-        let s = scope(&["scripts/tests/vm-recipe.tests.ps1"]);
-        assert!(s.requires_script_tests);
-        assert!(!s.requires_build);
-    }
-
-    #[test]
     fn a_rust_tooling_change_runs_the_rust_gate_without_building_the_product() {
         let s = scope(&[
             "tools/exo-verify/src/scenarios/audio.rs",
+            "tools/exo-guest/src/provision.rs",
             "tools/exo-dev/src/plan.rs",
             "tools/exo-dev/Cargo.toml",
             "tools/Cargo.toml",

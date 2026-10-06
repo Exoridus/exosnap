@@ -1,10 +1,14 @@
+#include <cstddef>
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/color_metadata.h"
 #include "yuv_to_bgra.h"
 
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <ratio>
+#include <string>
 #include <vector>
 
 // Micro-benchmark for the NV12/P010 -> BGRA conversion that runs

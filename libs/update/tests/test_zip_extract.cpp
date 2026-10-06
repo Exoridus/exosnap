@@ -1,10 +1,17 @@
 // test_zip_extract.cpp -- vendored-miniz zip extraction + zip-slip guard tests.
 
 #include <filesystem>
+
+#include <cstring>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <initializer_list>
+#include <iterator>
 #include <miniz.h>
+#include <string>
+#include <system_error>
 #include <update/zip_extract.h>
+#include <utility>
 namespace fs = std::filesystem;
 using namespace exosnap::update;
 

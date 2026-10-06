@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/overlay_shader.h"
+#include "exosnap/engine/recorder_session.h"
+#include "exosnap/engine/visual_generations.h"
+#include "exosnap/engine/webcam_placement.h"
 #include "gpu_compositor.h"
 #include "session_internal.h"
 #include "webcam_frame_observation.h"
@@ -8,12 +12,15 @@
 #include <exosnap/engine/gpu_surface_inventory.h>
 
 #include <d3d11.h>
+#include <memory>
+#include <optional>
 #include <winrt/base.h>
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
+#include <string>
 #include <vector>
 
 namespace {

@@ -5,6 +5,7 @@
 // no OS capture indicator. Used in place of WGC when target is a Monitor.
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>

@@ -22,6 +22,7 @@
 
 #include "finalize_join_policy.h"
 
+#include <cstdint>
 #include <gtest/gtest.h>
 
 using namespace exosnap::engine;

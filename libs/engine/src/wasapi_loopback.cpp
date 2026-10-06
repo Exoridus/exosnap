@@ -7,6 +7,7 @@
 // WideToUtf8 is declared in wgc_capture.h; include it directly
 #include "wgc_capture.h"
 
+#include <cstdint>
 #include <functiondiscoverykeys_devpkey.h>
 #include <initguid.h>
 

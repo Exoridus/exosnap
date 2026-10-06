@@ -1,5 +1,6 @@
 #include "exosnap/engine/frame_pacing.h"
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 

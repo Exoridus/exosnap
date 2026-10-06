@@ -1,15 +1,29 @@
 #include "synthetic_session.h"
 
 #include "audio_thread.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/error_types.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include "exosnap/engine/packet_types.h"
+#include "exosnap/engine/pipeline_diagnostics.h"
+#include "exosnap/engine/session_stats.h"
+#include "mux_queue.h"
 #include "mux_thread.h"
+#include "premux_state.h"
 #include "session_internal.h"
 #include "session_stats_collector.h"
 
-#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace exosnap::engine::testutil {
@@ -176,15 +190,11 @@ SyntheticSessionResult SyntheticSession::Run() {
     std::thread video_feeder([&, state_ptr] {
         SessionState& st = *state_ptr;
         {
-            std::lock_guard lk(st.premux_mutex);
             if (is_h264) {
-                st.codec_private.h264_sps_pps = FakeH264AnnexbSpsPps();
-                st.codec_private.h264_ready = true;
+                st.premux.PublishVideo(VideoCodec::H264, FakeH264AnnexbSpsPps());
             } else {
-                st.codec_private.av1_codec_private = FakeAv1CodecPrivate();
-                st.codec_private.av1_ready = true;
+                st.premux.PublishVideo(VideoCodec::Av1, FakeAv1CodecPrivate());
             }
-            st.premux_cv.notify_all();
         }
 
         // A real 60 fps capture delivers frames slowly enough (~16 ms apart) that
@@ -194,40 +204,29 @@ SyntheticSessionResult SyntheticSession::Run() {
         // publishes its codec-private. Wait for audio readiness first (it is
         // independent of video and arrives within ms) so the pre-mux never overflows.
         {
-            std::unique_lock lk(st.premux_mutex);
-            st.premux_cv.wait_for(lk, std::chrono::seconds(15), [&] {
-                return st.codec_private.AudioAllReady(st.audio_track_count) || st.HasFailure() ||
-                       st.stop_requested.load();
-            });
+            st.premux.WaitAudioReady(st.audio_track_count, std::chrono::seconds(15),
+                                     [&] { return st.HasFailure() || st.stop_requested.load(); });
         }
 
         auto route_video = [&](EncodedVideoPacket&& pkt) -> bool {
-            std::unique_lock lk(st.premux_mutex);
-            const bool both_ready = st.codec_private.VideoReady(st.config.video_codec) &&
-                                    st.codec_private.AudioAllReady(st.audio_track_count);
-            if (!both_ready) {
-                if (st.video_premux.size() >= SessionState::kVideoPremuxLimit) {
-                    lk.unlock();
+            const auto route = st.premux.Route(pkt, st.config.video_codec, st.audio_track_count);
+            if (route != PremuxRoute::Mux) {
+                if (route == PremuxRoute::Full) {
                     st.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux, "video pre-mux overflow (synthetic)");
                     return false;
                 }
-                st.video_premux.push_back(std::move(pkt));
                 return true;
             }
-            lk.unlock();
             MuxItem mi;
             mi.payload = std::move(pkt);
-            std::unique_lock mlk(st.mux_mutex);
-            const MuxQueueWait room = st.WaitForMuxQueueSpace(mlk);
+            const MuxQueueWait room = st.PushMuxItem(std::move(mi));
             if (room != MuxQueueWait::Ready) {
-                mlk.unlock();
                 // Mirrors the real producers: only a genuine timeout is backpressure.
                 if (room == MuxQueueWait::TimedOut) {
                     st.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux, "mux queue overflow (synthetic)");
                 }
                 return false;
             }
-            st.PushMuxItemLocked(std::move(mi));
             return true;
         };
 
@@ -256,10 +255,7 @@ SyntheticSessionResult SyntheticSession::Run() {
         // Even on an early cooperative stop we still enqueue EOS so the mux thread
         // finalizes what it has (an ordered stop). A "killed mid-recording" partial
         // is modelled by truncating the finalized file, not by abandoning threads.
-        MuxItem eos;
-        eos.payload = VideoEosSentinel{};
-        std::lock_guard lk(st.mux_mutex);
-        st.PushMuxItemLocked(std::move(eos));
+        st.mux_queue.PushSentinel(VideoEosSentinel{});
     });
 
     std::unique_ptr<SessionStatsCollector> collector;
@@ -287,8 +283,7 @@ SyntheticSessionResult SyntheticSession::Run() {
         return result;
     }
     if (state.HasFailure()) {
-        std::lock_guard lk(state.failure_mutex);
-        result.error = "session failure: " + state.failure.error_detail;
+        result.error = "session failure: " + state.FailureSnapshot()->error_detail;
         return result;
     }
     std::error_code ec;

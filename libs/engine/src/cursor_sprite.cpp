@@ -1,6 +1,8 @@
+#include <cstdint>
 #include <exosnap/engine/cursor_sprite.h>
 
 #include <cstring>
+#include <utility>
 #include <vector>
 
 namespace exosnap::engine {

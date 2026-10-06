@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use crate::evidence;
 use crate::host_lock::{self, HostLock, LockKind};
 use crate::msvc;
-use crate::plan::{Check, Event, Plan};
-use crate::process::{StepExit, StepRunner, tail};
+use crate::plan::{Check, Event};
+use crate::process::{StepExit, StepRunner};
 use crate::profile::ProfileSpec;
 use crate::run::{Executor, Outcome, Status};
 use crate::step::StepId;
@@ -58,8 +58,6 @@ struct Opts<'a> {
     cwd: Option<&'a Path>,
     /// Print and record the first compiler, linker or generator error.
     first_error: bool,
-    /// The exit code a script uses to say the tool it delegates to is missing.
-    tool_missing_exit: Option<i32>,
     env: &'a [(String, String)],
 }
 
@@ -67,7 +65,6 @@ pub struct RealExecutor {
     ctx: Context,
     msvc_ready: bool,
     failed_tests: Vec<String>,
-    tests_unfiltered: bool,
     /// Inherit marks of the host locks the running step holds.
     lock_env: Vec<(String, String)>,
     /// The locks, MSVC import and environment the test runner uses.
@@ -75,15 +72,11 @@ pub struct RealExecutor {
 }
 
 impl RealExecutor {
-    pub fn new(ctx: Context, plan: &Plan) -> RealExecutor {
-        let tests_unfiltered = plan.check(StepId::Tests).is_some_and(|c| {
-            c.applicable && c.evidence_str("filter").unwrap_or_default().is_empty()
-        });
+    pub fn new(ctx: Context) -> RealExecutor {
         RealExecutor {
             ctx,
             msvc_ready: false,
             failed_tests: Vec::new(),
-            tests_unfiltered,
             lock_env: Vec::new(),
             tests_host: Box::new(crate::test::host::RealHost::default()),
         }
@@ -104,20 +97,7 @@ impl RealExecutor {
             StepExit::Code(0) => Outcome::pass("").with_log(&log_text),
             StepExit::NotFound => {
                 let reason = format!("{program} is not installed or not on PATH");
-                println!();
-                println!("---- {name} ----");
-                println!("{reason}");
-                Outcome::new(Status::ToolMissing, reason).with_log(&log_text)
-            }
-            StepExit::Code(code) if Some(code) == opts.tool_missing_exit => {
-                let reason = tail(&log, usize::MAX)
-                    .into_iter()
-                    .find(|line| line.contains("NOT_RUN"))
-                    .map(|line| line.trim().to_string())
-                    .unwrap_or_else(|| "the tool it delegates to is not installed".into());
-                println!();
-                println!("---- {name} ----");
-                println!("{reason}");
+
                 Outcome::new(Status::ToolMissing, reason).with_log(&log_text)
             }
             StepExit::Code(code) => {
@@ -125,12 +105,8 @@ impl RealExecutor {
                 if opts.first_error
                     && let Some(first) = evidence::first_build_error(&log)
                 {
-                    println!();
-                    println!("---- {name} first error ----");
-                    println!("{first}");
                     detail = format!("{detail}; first error: {first}");
                 }
-                self.ctx.runner.print_tail(name, &log);
                 Outcome::fail(detail).with_log(&log_text)
             }
         }
@@ -148,7 +124,9 @@ impl RealExecutor {
         }
         match msvc::environment() {
             Ok(Some((compiler, variables))) => {
-                println!("msvc: {}", compiler.display());
+                if !self.ctx.runner.output_mode().is_silent() {
+                    println!("msvc: {}", compiler.display());
+                }
                 self.ctx.runner.env = variables
                     .into_iter()
                     .map(|(k, v)| (OsString::from(k), OsString::from(v)))
@@ -187,7 +165,7 @@ impl RealExecutor {
             let path = (kind == LockKind::Tree).then_some(tree.as_path());
             let lock = host_lock::acquire(kind, path, &holder)
                 .map_err(|error| Outcome::fail(format!("{error:#}")))?;
-            if lock.waited().as_secs() >= 2 {
+            if lock.waited().as_secs() >= 2 && !self.ctx.runner.output_mode().is_silent() {
                 let what = match kind {
                     LockKind::Tree => format!("tree lock on {}", tree.display()),
                     LockKind::Build => "host build lock".to_string(),
@@ -201,62 +179,6 @@ impl RealExecutor {
             held.push(lock);
         }
         Ok(held)
-    }
-
-    fn script_tests(&self) -> Outcome {
-        let dir = self.ctx.repo_root.join("scripts/tests");
-        let mut suites: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .map(|entries| {
-                entries
-                    .filter_map(Result::ok)
-                    .map(|e| e.path())
-                    .filter(|p| p.is_file() && p.to_string_lossy().ends_with(".tests.ps1"))
-                    .collect()
-            })
-            .unwrap_or_default();
-        suites.sort();
-        let mut left_to_ctest = 0;
-        if self.tests_unfiltered {
-            let covered = evidence::ctest_script_suites(&self.ctx.repo_root);
-            let before = suites.len();
-            suites.retain(|p| {
-                let name = p.file_name().unwrap().to_string_lossy().into_owned();
-                !covered.contains(&name)
-            });
-            left_to_ctest = before - suites.len();
-        }
-        for suite in &suites {
-            let name = suite.file_name().unwrap().to_string_lossy().into_owned();
-            let stem = name.trim_end_matches(".ps1");
-            let outcome = self.step(
-                &format!("script-tests.{stem}"),
-                "pwsh",
-                vec![
-                    "-NoProfile".into(),
-                    "-NonInteractive".into(),
-                    "-File".into(),
-                    suite.display().to_string(),
-                ],
-                Opts::default(),
-            );
-            if outcome.status != Status::Pass {
-                let mut failed = Outcome::new(
-                    if outcome.status == Status::ToolMissing {
-                        Status::ToolMissing
-                    } else {
-                        Status::Fail
-                    },
-                    format!("{name} failed"),
-                );
-                failed.evidence = outcome.evidence;
-                return failed;
-            }
-        }
-        let mut detail = format!("{} script test file(s)", suites.len());
-        if left_to_ctest > 0 {
-            detail.push_str(&format!("; {left_to_ctest} left to CTest"));
-        }
-        Outcome::pass(detail)
     }
 
     /// `exo-verify.exe` built from the current tree, so a step that needs its
@@ -327,29 +249,14 @@ impl RealExecutor {
         Outcome::pass("format, clippy, tests")
     }
 
-    /// Runs an in-process (native) check. Writes the step's log to the same
-    /// place a spawned process's would land, so `--failure-tail-lines` and the
-    /// receipt's evidence work unchanged; streams that log inside a
-    /// `::group::`/`::endgroup::` pair in CI, matching how `StepRunner::run`
-    /// streams a child process's output; and turns `f`'s result into an
-    /// `Outcome` that can never pass silently.
-    ///
-    /// `f` returns the text to write to the step's log (typically the rendered
-    /// violations or findings) alongside the `Outcome` to report. An `Err`
-    /// becomes `Status::Fail`, printing the same `---- {name} ----` / reason
-    /// block the process path prints for a missing tool -- except when the
-    /// error downcasts to `ToolMissing`, which instead becomes
-    /// `Status::ToolMissing`: a required tool that is absent is never
-    /// conflated with an ordinary failure.
+    /// Persists native diagnostics before presenting them through the same
+    /// console policy as external steps. Missing tools remain a separate verdict.
     fn native(&self, name: &str, f: impl FnOnce() -> anyhow::Result<(String, Outcome)>) -> Outcome {
         let (log_text, mut outcome) = match f() {
             Ok(pair) => pair,
             Err(error) => match error.downcast::<ToolMissing>() {
                 Ok(missing) => {
                     let reason = missing.0;
-                    println!();
-                    println!("---- {name} ----");
-                    println!("{reason}");
                     (reason.clone(), Outcome::new(Status::ToolMissing, reason))
                 }
                 Err(error) => {
@@ -358,24 +265,27 @@ impl RealExecutor {
                 }
             },
         };
-
         let log_path = self.ctx.runner.log_path(name);
-        match std::fs::create_dir_all(&self.ctx.runner.log_dir)
+        if let Err(error) = std::fs::create_dir_all(&self.ctx.runner.log_dir)
             .and_then(|()| std::fs::write(&log_path, &log_text))
         {
-            Ok(()) => outcome = outcome.with_log(&log_path.display().to_string()),
-            Err(error) => eprintln!("exo-dev: could not write {}: {error}", log_path.display()),
+            return Outcome::fail(format!("could not persist {}: {error}", log_path.display()));
         }
-
-        if self.ctx.runner.stream {
-            println!("::group::{name}");
-            for line in log_text.lines() {
-                println!("{line}");
+        outcome = outcome.with_log(&log_path.display().to_string());
+        if self.ctx.runner.streams() {
+            print!("{log_text}");
+            if !log_text.is_empty() && !log_text.ends_with('\n') {
+                println!();
             }
-            println!("::endgroup::");
         }
-        if outcome.status == Status::Fail {
-            self.ctx.runner.print_tail(name, &log_path);
+        if matches!(outcome.status, Status::Fail | Status::ToolMissing) {
+            let detail = outcome.detail.lines().next().unwrap_or_default();
+            let status = format!(
+                "{}: {}",
+                outcome.status.as_str(),
+                detail.chars().take(500).collect::<String>()
+            );
+            self.ctx.runner.print_failure(name, &status, &log_path);
         }
         outcome
     }
@@ -675,7 +585,15 @@ impl RealExecutor {
                     .to_vec(),
                 Opts::default(),
             ),
-            StepId::ScriptTests => self.script_tests(),
+            StepId::AutomationPolicy => self.native("automation-policy", || {
+                let findings = if self.ctx.staged {
+                    crate::automation_policy::check_staged(&self.ctx.repo_root)?
+                } else {
+                    crate::automation_policy::check(&self.ctx.repo_root)?
+                };
+                let ok = findings.is_empty();
+                Ok((findings.join("\n"), if ok { Outcome::pass("automation-policy: OK") } else { Outcome::fail("prohibited automation") }))
+            }),
             StepId::Rust => self.rust(),
             StepId::Configure => {
                 let mut args = vec!["--preset".to_string(), self.ctx.preset.clone()];
@@ -986,7 +904,7 @@ impl Executor for RealExecutor {
         let tree = self.ctx.tree();
         let registration =
             evidence::ctest_registration(&tree, &self.ctx.config, &self.ctx.runner.env);
-        if registration.is_empty() {
+        if registration.is_empty() && !self.ctx.runner.output_mode().is_silent() {
             println!();
             println!(
                 "no CTest registration could be read from {}; the QuickTest re-run is skipped",
@@ -1009,11 +927,12 @@ impl Executor for RealExecutor {
             }
             let _ = crate::process::query(process);
             if command.output_path.is_file() {
-                println!();
-                println!("---- {} (QuickTest report) ----", command.test_name);
-                for line in tail(&command.output_path, 60) {
-                    println!("{line}");
-                }
+                self.ctx.runner.print_failure(
+                    &command.test_name,
+                    "QuickTest diagnosis",
+                    &command.output_path,
+                );
+
                 produced.push(command.output_path.display().to_string());
             }
         }
@@ -1076,6 +995,30 @@ mod tests {
     use crate::profile::Profile;
     use crate::scope::Scope;
 
+    #[test]
+    fn native_output_is_fully_persisted_in_compact_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut executor = executor(dir.path());
+        executor.ctx.runner.output = crate::process::OutputMode::Compact;
+        let text = "native diagnostic\n".repeat(20_000);
+        let outcome = executor.native("large-native", || Ok((text.clone(), Outcome::pass("done"))));
+        assert_eq!(outcome.status, Status::Pass);
+        let log = outcome.evidence["log"].as_str().unwrap();
+        assert_eq!(std::fs::read_to_string(log).unwrap(), text);
+    }
+
+    #[test]
+    fn native_log_write_failure_cannot_report_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("file");
+        std::fs::write(&blocked, "occupied").unwrap();
+        let executor = executor(&blocked);
+        let outcome = executor.native("native", || Ok(("complete".into(), Outcome::pass("done"))));
+        assert_eq!(outcome.status, Status::Fail);
+        assert!(outcome.detail.contains("could not persist"));
+        assert!(!outcome.evidence.contains_key("log"));
+    }
+
     fn executor(log_dir: &Path) -> RealExecutor {
         let scope = Scope::everything();
         let input = plan::tests::input(Profile::PrePush, &scope);
@@ -1097,12 +1040,12 @@ mod tests {
             dirty: false,
             runner: StepRunner {
                 log_dir: log_dir.to_path_buf(),
-                stream: false,
+                output: crate::process::OutputMode::Silent,
                 failure_tail_lines: 5,
                 env: Vec::new(),
             },
         };
-        RealExecutor::new(ctx, &plan)
+        RealExecutor::new(ctx)
     }
 
     /// The Tests step against a real configured tree whose one QuickTest

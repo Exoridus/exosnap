@@ -3,6 +3,7 @@
 #include "exosnap/engine/edit_player_session.h"
 
 #include <filesystem>
+#include <string>
 
 namespace {
 

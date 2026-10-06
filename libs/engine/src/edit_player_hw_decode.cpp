@@ -4,6 +4,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+extern "C" {
+#include <libavutil/frame.h>
+#include <libavutil/pixfmt.h>
+}
 
 namespace exosnap::engine {
 

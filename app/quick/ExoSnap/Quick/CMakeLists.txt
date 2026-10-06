@@ -216,6 +216,8 @@ qt_add_qml_module(exosnap
         CaptureTargetStillProvider.h
         OverlayAdapter.cpp
         OverlayAdapter.h
+        OverlayTelemetryAdapter.cpp
+        OverlayTelemetryAdapter.h
         RecordViewModelAdapter.cpp
         RecordViewModelAdapter.h
         RecordingErrorAdapter.cpp
@@ -837,8 +839,8 @@ exosnap_set_test_phase(quick.qml.about_smoke desktop)
 # test. Runs offscreen with the rest of the suite; no window reaches the screen.
 add_test(NAME quick.qml.navigation_lifecycle COMMAND exosnap --navigation-lifecycle-test)
 set_tests_properties(quick.qml.navigation_lifecycle PROPERTIES
-    LABELS "quick"
-    ENVIRONMENT "EXOSNAP_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-config/navigation_lifecycle"
+    LABELS "quick;aot"
+    ENVIRONMENT "EXOSNAP_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-config/navigation_lifecycle;QV4_FAIL_ON_INVALID_AOT=1;EXOSNAP_QML_PREVIEW=0"
 )
 exosnap_set_test_phase(quick.qml.navigation_lifecycle desktop)
 
@@ -902,6 +904,7 @@ qt_add_qml_module(record_controls_qml_tests
     # undefined reference, and `all_qmllint` reported one unqualified-access
     # error per token line.
     SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/OverlayStateTestEnums.h
         QuickThemeTokens.cpp
         QuickThemeTokens.h
         # ExoScrollView.qml (below) and ExoTheme.qml both resolve through this
@@ -1056,6 +1059,7 @@ target_compile_definitions(record_controls_qml_tests
 target_include_directories(record_controls_qml_tests
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${EXOSNAP_QUICK_TESTS_DIR}"
         "${PROJECT_SOURCE_DIR}/app"
 )
 
@@ -2053,6 +2057,9 @@ exosnap_add_gtest(
     TEST_PREFIX quick_overlay_adapter.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_overlay_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_overlay_telemetry_adapter.cpp
+        OverlayTelemetryAdapter.cpp
+        OverlayTelemetryAdapter.h
         OverlayAdapter.cpp
         OverlayAdapter.h
         ${PROJECT_SOURCE_DIR}/app/models/OverlayContentPolicy.cpp

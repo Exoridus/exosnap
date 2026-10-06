@@ -5,6 +5,7 @@
 #include <d3d11.h>
 #include <winrt/base.h>
 
+#include <cstdint>
 #include <string>
 
 namespace exosnap::engine {

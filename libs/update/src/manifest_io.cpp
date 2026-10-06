@@ -1,11 +1,18 @@
 // manifest_io.cpp -- ExoSnap update manifest parsing and verification.
 
 #include <array>
+
+#include <cstdint>
 #include <cstring>
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <update/ed25519_verify.h>
 #include <update/manifest_io.h>
+#include <update/update_types.h>
+#include <utility>
 
 namespace exosnap::update {
 

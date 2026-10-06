@@ -1,6 +1,18 @@
 #include "pipeline_diagnostics_aggregator.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/pipeline_diagnostics.h"
+#include "exosnap/engine/recorder_session.h"
+#include "exosnap/engine/session_stats.h"
+#include "exosnap/engine/split_trigger_source.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <mutex>
+#include <ratio>
+#include <string>
 
 namespace exosnap::engine {
 

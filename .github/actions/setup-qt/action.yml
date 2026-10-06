@@ -8,11 +8,8 @@ description: >-
 # their own steps (and, for MSVC, their own composite action) so that a change
 # to how Qt is installed can never move a build or a gate by accident.
 #
-# It exists because the same install-qt-action block had been copy-pasted into
-# seven jobs across five workflows. Every Qt bump then meant seven edits, and
-# the Qt 6.11 uplift proved the failure mode is silent: an archive that moved to
-# being a MODULE keeps installing "successfully" while installing nothing, and
-# the app is then skipped rather than failed.
+# Base archives and separately packaged modules require different installer
+# arguments. Requesting a module as a base archive silently omits it.
 
 inputs:
   profile:
@@ -22,8 +19,8 @@ inputs:
       quick — qtbase, qtsvg, qtdeclarative plus the qtshadertools module. Every
               job that has to produce or analyse the shipping application: the
               ExoSnap frontend IS a Qt Quick program, so without
-              these find_package(Qt6 ... Quick) fails and app/CMakeLists.txt
-              falls back to its "exosnap skipped" stub.
+              these find_package(Qt6 ... Quick) fails and the requested
+              application cannot be configured.
 
       base  — qtbase and qtsvg only. For jobs that build the engine and its
               tests with EXOSNAP_BUILD_APP=OFF and never link the frontend.
@@ -77,9 +74,8 @@ runs:
         case '${{ inputs.profile }}' in
           quick)
             archives='qtbase qtsvg qtdeclarative'
-            # qtshadertools stopped being an archive of the base package in Qt 6.11
-            # and is a MODULE now. Left under `archives:` it installs nothing and
-            # says nothing, and Qt6QuickConfig.cmake then fails the configure.
+            # Qt 6.12 packages ShaderTools as a module. Requesting it under
+            # archives silently omits a required Qt Quick dependency.
             modules='qtshadertools'
             ;;
           base)
@@ -107,10 +103,8 @@ runs:
         arch: ${{ inputs.arch }}
         archives: ${{ steps.resolve.outputs.archives }}
         modules: ${{ steps.resolve.outputs.modules }}
-        # aqtinstall 3.3.0, the newest release on PyPI, cannot install Qt 6.11 at all:
-        # the Qt repository moved to per-architecture folders (.../qt6_6111/
-        # qt6_6111_msvc2022_64/) and 3.3.0 still builds the pre-6.11 path, so it fails
-        # looking for XML data that is not there. Pinned to the upstream commit that
-        # handles the new layout; drop this line once an aqtinstall release includes it.
+        # Released aqtinstall 3.3.0 cannot resolve the per-architecture Qt 6.12
+        # layout (.../qt6_6120/qt6_6120_msvc2022_64/). Keep the pinned layout fix
+        # until a published aqtinstall release includes it.
         aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@16db45a70b5905ad596941b223469bc86a56901e'
         cache: ${{ inputs.cache }}

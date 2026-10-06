@@ -1,5 +1,10 @@
 #include <capability/codec_selection.h>
 
+#include <capability/capability_set.h>
+#include <capability/config_types.h>
+#include <optional>
+#include <string_view>
+
 #include <capability/container_compat_registry.h>
 #include <capability/support_level.h>
 

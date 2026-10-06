@@ -3,8 +3,6 @@ pragma ComponentBehavior: Bound
 import QtQuick
 
 // Draggable quick-control pill: pause/resume, stop, capture frame.
-// Ported from app/ui/overlay/QuickControlPillWindow.cpp.
-//
 // This is the one capture-excluded overlay that is NOT click-through: it is
 // interactive by design, so it deliberately omits
 // Qt.WindowTransparentForInput. Capture exclusion still applies unchanged — the
@@ -59,23 +57,32 @@ Window {
                                              ? root.monitorGeometry
                                              : Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height)
 
-    // ── Overlay tokens (Widgets class, verbatim) ─────────────────────────────
     readonly property color pillBackground: "#CC0C0C0E"  // rgba(12,12,14,0.8)
-    readonly property color pillBorder: "#29FFFFFF"      // rgba(255,255,255,0.16)
+    readonly property color pillBorder: "#1AFFFFFF"
     readonly property color gripTone: "#80FFFFFF"        // rgba(255,255,255,0.5)
-    readonly property color buttonBackground: "#0FFFFFFF"  // rgba(255,255,255,0.06)
-    readonly property color buttonBorder: "#1AFFFFFF"      // rgba(255,255,255,0.1)
+    readonly property color buttonHover: "#14FFFFFF"
+    readonly property color buttonPressed: "#24FFFFFF"
     readonly property color buttonGlyph: "#E6FFFFFF"       // rgba(255,255,255,0.9)
     // Stop is rec-styled: the coral tone, tinted for fill and border. The
     // `overlayError` rung, because this pill is near-black in both appearances
     // and Light's `error` lands at 4.15:1 on it against the Dark rung's 6.66:1.
     readonly property color stopBackground: Qt.alpha(ExoTheme.overlayError, 0.18)
-    readonly property color stopBorder: Qt.alpha(ExoTheme.overlayError, 0.5)
+    readonly property color stopBorder: Qt.alpha(ExoTheme.overlayError, 0.35)
 
-    readonly property int pad: 8
-    readonly property int gripWidth: 28
+    readonly property int pad: 6
+    readonly property int gripWidth: 32
     readonly property int buttonSize: 44
-    readonly property int buttonGap: 8
+    readonly property int buttonGap: 6
+    readonly property int buttonSurfaceSize: 36
+    readonly property int secondarySurfaceSize: 18
+    readonly property int secondaryGlyphSize: 14
+    readonly property int secondaryRightInset: 2
+    // Include the Canvas stroke extents when spacing the visible glyphs.
+    readonly property real closeInkHeight: root.secondaryGlyphSize * 0.5 + 1.6
+    readonly property real gripInkHeight: root.secondaryGlyphSize * 0.45 + 1.8
+    readonly property real secondaryGlyphGap: (root.height - root.closeInkHeight - root.gripInkHeight) / 3
+    readonly property real closeGlyphCenterY: root.secondaryGlyphGap + root.closeInkHeight / 2
+    readonly property real gripGlyphCenterY: root.height - root.secondaryGlyphGap - root.gripInkHeight / 2
 
     // A resting offset for the DEFAULT placement only -- not an enforced
     // safety margin. There is no forced taskbar exclusion: the dock may be
@@ -127,6 +134,7 @@ Window {
     // change need to re-clamp a user-chosen offset rather than recompute the
     // default from scratch.
     property bool userPositioned: false
+    property real previousWidth: 0
 
     signal pauseResumeRequested()
     signal stopRequested()
@@ -153,11 +161,9 @@ Window {
 
     visible: exclusion.granted && root.overlayActive
 
-    // Four buttons now (pause/resume, stop, camera, close), three internal
-    // gaps between them, plus the one gap from the grip to the row.
     width: root.pad + root.gripWidth + root.pad
-           + (root.expanded ? root.buttonGap + 4 * root.buttonSize + 3 * root.buttonGap : 0)
-    height: root.pad + root.buttonSize + root.pad
+           + (root.expanded ? 3 * root.buttonSize + 3 * root.buttonGap : 0)
+    height: root.pad + root.buttonSurfaceSize + root.pad
 
     // defaultPosition() by default. Dragging the grip assigns x/y directly,
     // which replaces these bindings — intentional: once the user has placed
@@ -172,13 +178,24 @@ Window {
     // off-screen on a smaller monitor, or simply not on the new target's
     // monitor at all. Not re-run for an autoplaced pill: that one already
     // tracks the new default through the live x/y bindings.
-    onEffectiveMonitorChanged: {
+    function reclampUserPosition() {
         if (!root.userPositioned)
             return;
         const clamped = root.clampToMonitor(root.x, root.y);
         root.x = clamped.x;
         root.y = clamped.y;
     }
+
+    onEffectiveMonitorChanged: root.reclampUserPosition()
+    onWidthChanged: {
+        // Keep the right-hand grip under the pointer when a placed dock toggles.
+        if (root.userPositioned && root.previousWidth > 0)
+            root.x += root.previousWidth - root.width;
+        root.previousWidth = root.width;
+        root.reclampUserPosition();
+    }
+    onHeightChanged: root.reclampUserPosition()
+    Component.onCompleted: root.previousWidth = root.width
 
     CaptureExclusion {
         id: exclusion
@@ -210,7 +227,7 @@ Window {
 
             const cx = width / 2
             const cy = height / 2
-            const s = 9  // half of the 18 px nominal glyph box
+            const s = Math.min(width, height) / 2
 
             if (glyph.kind === "pause") {
                 const bw = s * 0.30
@@ -267,35 +284,55 @@ Window {
         }
     }
 
-    component PillButton: Rectangle {
+    component PillButton: Item {
         id: button
 
         property string glyphKind: "pause"
         property bool recStyled: false
+        property int surfaceSize: root.buttonSurfaceSize
+        property int glyphSize: 18
+        property real contentCenterY: button.height / 2
+        property color glyphTone: button.recStyled ? ExoTheme.overlayError : root.buttonGlyph
 
         signal activated()
 
         width: root.buttonSize
         height: root.buttonSize
-        radius: 12
-        color: button.recStyled ? root.stopBackground : root.buttonBackground
-        border.width: 1
-        border.color: button.recStyled ? root.stopBorder : root.buttonBorder
 
         Accessible.role: Accessible.Button
         Accessible.onPressAction: button.activated()
 
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: button.contentCenterY - height / 2
+            width: button.surfaceSize
+            height: button.surfaceSize
+            radius: 10
+            color: buttonMouse.pressed ? root.buttonPressed
+                                      : buttonMouse.containsMouse ? root.buttonHover
+                                                                 : button.recStyled ? root.stopBackground : "transparent"
+            border.width: button.recStyled ? 1 : 0
+            border.color: root.stopBorder
+        }
+
         PillGlyph {
-            anchors.centerIn: parent
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: button.contentCenterY - height / 2
+            width: button.glyphSize
+            height: button.glyphSize
             kind: button.glyphKind
-            tone: button.recStyled ? ExoTheme.overlayError : root.buttonGlyph
+            tone: button.glyphTone
         }
 
         MouseArea {
+            id: buttonMouse
+
             anchors.fill: parent
+            hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: button.activated()
         }
+
     }
 
     Rectangle {
@@ -303,17 +340,37 @@ Window {
         color: root.pillBackground
         border.width: 1
         border.color: root.pillBorder
-        radius: 16
+        radius: 14
 
         Item {
             id: grip
+            objectName: "quickControlGrip"
 
-            x: root.pad
+            Accessible.role: Accessible.Button
+            Accessible.name: root.expanded ? qsTr("Collapse quick controls") : qsTr("Expand quick controls")
+            Accessible.description: qsTr("Drag to move quick controls. Click to collapse or expand.")
+            Accessible.onPressAction: root.expanded = !root.expanded
+
+            x: root.width - root.secondaryRightInset - root.gripWidth
+            y: root.height / 2
             width: root.gripWidth
-            height: parent.height
+            height: root.height / 2
+
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                y: root.gripGlyphCenterY - grip.y - height / 2
+                width: root.secondarySurfaceSize
+                height: root.secondarySurfaceSize
+                radius: 6
+                color: gripArea.pressed ? root.buttonPressed
+                                        : gripArea.containsMouse ? root.buttonHover : "transparent"
+            }
 
             PillGlyph {
-                anchors.centerIn: parent
+                anchors.horizontalCenter: parent.horizontalCenter
+                y: root.gripGlyphCenterY - grip.y - height / 2
+                width: root.secondaryGlyphSize
+                height: root.secondaryGlyphSize
                 kind: "grip"
                 tone: root.gripTone
             }
@@ -341,6 +398,7 @@ Window {
                 property bool dragging: false
 
                 anchors.fill: parent
+                hoverEnabled: true
                 cursorShape: gripArea.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
                 acceptedButtons: Qt.LeftButton
                 onPressed: mouse => {
@@ -360,6 +418,11 @@ Window {
                     gripArea.travelled = Math.max(gripArea.travelled,
                                                   Math.abs(pointerX - gripArea.pressGlobal.x)
                                                   + Math.abs(pointerY - gripArea.pressGlobal.y))
+                    // Preserve the default-position bindings until the gesture
+                    // becomes a drag; tiny click motion must not detach them.
+                    if (gripArea.travelled <= 4)
+                        return
+                    root.userPositioned = true
                     // Clamped to the full monitor rectangle, not the work area:
                     // there is no enforced taskbar safety margin, so a manual
                     // drag may place the pill flush against the real screen
@@ -374,14 +437,9 @@ Window {
                                       Math.min(area.y + area.height - root.height,
                                                pointerY - gripArea.grabOffset.y))
                 }
+                onCanceled: gripArea.dragging = false
                 onReleased: {
                     gripArea.dragging = false
-                    // A real drag (not a bare click) means this pill's position
-                    // is now the user's to keep -- see the onEffectiveMonitorChanged
-                    // handler above for what that then does across a monitor
-                    // change.
-                    if (gripArea.travelled > 4)
-                        root.userPositioned = true
                     // A press that never really moved is a click on the grip:
                     // collapse or expand instead of nudging the pill by a pixel.
                     if (gripArea.travelled <= 4)
@@ -391,9 +449,10 @@ Window {
         }
 
         Row {
+            objectName: "quickControlActions"
             anchors {
-                left: grip.right
-                leftMargin: root.buttonGap
+                left: parent.left
+                leftMargin: root.pad
                 verticalCenter: parent.verticalCenter
             }
             spacing: root.buttonGap
@@ -417,15 +476,21 @@ Window {
                 Accessible.name: qsTr("Capture frame")
                 onActivated: root.captureFrameRequested()
             }
+        }
 
-            // A closed dock stays closed: the handler in Main.qml turns the
-            // persisted "show quick controls" setting off rather than just
-            // hiding this session's window, so closing it once is enough.
-            PillButton {
-                glyphKind: "close"
-                Accessible.name: qsTr("Close quick controls")
-                onActivated: root.closeRequested()
-            }
+        PillButton {
+            objectName: "quickControlClose"
+            x: grip.x
+            width: root.gripWidth
+            height: root.height / 2
+            surfaceSize: root.secondarySurfaceSize
+            glyphSize: root.secondaryGlyphSize
+            contentCenterY: root.closeGlyphCenterY
+            glyphTone: root.gripTone
+            glyphKind: "close"
+            Accessible.name: qsTr("Hide quick controls")
+            Accessible.description: qsTr("Enable quick controls again in Settings.")
+            onActivated: root.closeRequested()
         }
     }
 }

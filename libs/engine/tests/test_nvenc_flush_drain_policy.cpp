@@ -9,6 +9,7 @@
 // once LOCK_BUSY persists past the time budget it aborts, and the caller pushes
 // EOS anyway. Pure and D3D/GPU-free.
 
+#include "nvEncodeAPI.h"
 #include "nvenc_encoder.h"
 
 #include <gtest/gtest.h>

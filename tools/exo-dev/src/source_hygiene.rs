@@ -42,7 +42,7 @@ pub const ADVISORY_RULES: &[&str] = &["task-id", "non-ascii-punctuation", "user-
 /// Test fixtures are excluded for the reason `drift.rs` excludes them: a rule
 /// with no rejected fixture has never been shown to reject anything, so the
 /// fixtures contain, by construction, every shape the rules reject.
-const EXCLUDED_PATTERN: &str = r"(?i)^scripts/tests/";
+const EXCLUDED_PATTERN: &str = r"(?i)^tools/exo-dev/tests/fixtures/";
 
 /// The directories this check scans. Documentation and top-level metadata
 /// outside them legitimately narrate history and are not checked.
@@ -835,10 +835,10 @@ mod tests {
     }
 
     #[test]
-    fn scripts_tests_directory_is_excluded_entirely() {
+    fn tool_fixtures_directory_is_excluded_entirely() {
         let dir = fixture_repo(&[(
-            "scripts/tests/fixture.ps1",
-            "# fixes #999\nWrite-Host 'ok'\n",
+            "tools/exo-dev/tests/fixtures/fixture.cpp",
+            "// fixes #999\nint main() {}\n",
         )]);
         // All scope, not a diff scope: this asserts the exclusion itself,
         // independent of whether the fixture repository has a HEAD to diff

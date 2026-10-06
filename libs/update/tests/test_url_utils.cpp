@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+
 #include "../src/url_utils.h"
 
 using namespace exosnap::update;

@@ -1,5 +1,12 @@
+#include <cstdint>
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/backend_tuning.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/encoder_device.h"
+#include "exosnap/engine/interfaces/IVideoEncoder.h"
+#include "exosnap/engine/packet_types.h"
+#include "exosnap/engine/recorder_session.h"
 #include "fakes/fake_video_encoder.h"
 #include "session_internal.h"
 

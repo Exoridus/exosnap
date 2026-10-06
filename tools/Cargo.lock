@@ -432,9 +432,14 @@ dependencies = [
  "anyhow",
  "base64",
  "clap",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "windows",
+ "wmi",
+ "zip",
 ]
 
 [[package]]

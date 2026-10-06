@@ -22,6 +22,7 @@ ApplicationWindow {
     required property CrashReportAdapter crashReport
     required property WhatsNewAdapter whatsNew
     required property OverlayAdapter overlays
+    required property OverlayTelemetryAdapter overlayTelemetry
     required property ShellPresenceAdapter shellPresence
     required property TrayAdapter trayAdapter
     // Set once every close guard has cleared, so the re-issued close() is not
@@ -324,30 +325,35 @@ ApplicationWindow {
     Binding { target: overlayRecordingLoader.item; property: "monitorGeometry"; value: root.overlays.recordedSourceGeometry }
     Binding { target: overlayRecordingLoader.item; property: "overlayState"; value: root.overlays.recordingState }
     Binding { target: overlayRecordingLoader.item; property: "overlayActive"; value: root.overlays.recordingOverlayActive }
-    Binding { target: overlayRecordingLoader.item; property: "elapsedText"; value: root.recordViewModel.elapsedText }
-    Binding { target: overlayRecordingLoader.item; property: "outputSizeText"; value: root.recordViewModel.outputSizeText }
-    Binding { target: overlayRecordingLoader.item; property: "sourceNameText"; value: root.recordViewModel.sourceName }
+    Binding { target: overlayRecordingLoader.item; property: "elapsedText"; value: root.overlayTelemetry.snapshot.elapsedText || "" }
+    Binding { target: overlayRecordingLoader.item; property: "outputSizeText"; value: root.overlayTelemetry.snapshot.outputSizeText || "" }
+    Binding { target: overlayRecordingLoader.item; property: "sourceNameText"; value: root.overlayTelemetry.snapshot.sourceNameText || "" }
     Binding { target: overlayRecordingLoader.item; property: "showElapsed"; value: root.settingsAdapter.recordingOverlayElapsed }
     Binding { target: overlayRecordingLoader.item; property: "showOutputSize"; value: root.settingsAdapter.recordingOverlayOutputSize }
     Binding { target: overlayRecordingLoader.item; property: "showSourceName"; value: root.settingsAdapter.recordingOverlaySourceName }
 
     Binding { target: overlayRecordingLoader.item; property: "diagnosticsActive"; value: root.overlays.diagnosticsOverlayActive }
-    Binding { target: overlayRecordingLoader.item; property: "fpsText"; value: root.recordViewModel.capturedFpsText }
-    Binding { target: overlayRecordingLoader.item; property: "dropText"; value: root.recordViewModel.droppedFramesText }
-    Binding { target: overlayRecordingLoader.item; property: "driftText"; value: root.recordViewModel.driftText }
+    Binding { target: overlayRecordingLoader.item; property: "fpsText"; value: root.overlayTelemetry.snapshot.fpsText || "" }
+    Binding { target: overlayRecordingLoader.item; property: "dropText"; value: root.overlayTelemetry.snapshot.dropText || "" }
+    Binding { target: overlayRecordingLoader.item; property: "driftText"; value: root.overlayTelemetry.snapshot.driftText || "" }
     // "Muted" means the source is NOT part of this recording, which is what the
     // Widgets overlay reported too (its meter callback passed the `*_show`
     // flags, derived from audio_active_*, not the RMS level). Deliberately not
     // derived from the meter: a level of zero is a silent moment, and a glyph
     // that appears every time the user stops talking would report a problem
     // that is not there.
-    Binding { target: overlayRecordingLoader.item; property: "micMuted"; value: !root.recordViewModel.microphoneEnabled }
-    Binding { target: overlayRecordingLoader.item; property: "sysMuted"; value: !root.recordViewModel.systemAudioEnabled }
+    Binding { target: overlayRecordingLoader.item; property: "micMuted"; value: root.overlayTelemetry.snapshot.micMuted || false }
+    Binding { target: overlayRecordingLoader.item; property: "sysMuted"; value: root.overlayTelemetry.snapshot.sysMuted || false }
     Binding { target: overlayRecordingLoader.item; property: "showFps"; value: root.settingsAdapter.diagnosticsOverlayFps }
     Binding { target: overlayRecordingLoader.item; property: "showDrop"; value: root.settingsAdapter.diagnosticsOverlayDrop }
     Binding { target: overlayRecordingLoader.item; property: "showDrift"; value: root.settingsAdapter.diagnosticsOverlayDrift }
     Binding { target: overlayRecordingLoader.item; property: "showDiagnosticsSize"; value: root.settingsAdapter.diagnosticsOverlaySize }
     Binding { target: overlayRecordingLoader.item; property: "showMutedSources"; value: root.settingsAdapter.diagnosticsOverlayMutedSources }
+    Binding { target: overlayRecordingLoader.item; property: "showHealth"; value: root.settingsAdapter.diagnosticsOverlayHealth }
+    Binding { target: overlayRecordingLoader.item; property: "healthText"; value: root.overlayTelemetry.snapshot.healthText || "" }
+    Binding { target: overlayRecordingLoader.item; property: "healthWarning"; value: root.overlayTelemetry.snapshot.healthWarning || false }
+    Binding { target: overlayRecordingLoader.item; property: "micDegraded"; value: root.overlayTelemetry.snapshot.micDegraded || false }
+    Binding { target: overlayRecordingLoader.item; property: "sysDegraded"; value: root.overlayTelemetry.snapshot.sysDegraded || false }
 
     Loader {
         id: overlayCountdownLoader

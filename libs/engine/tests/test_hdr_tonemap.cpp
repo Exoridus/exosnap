@@ -3,6 +3,9 @@
 // HdrToneMapChannel/SrgbOetf verbatim, so pinning the CPU reference here pins
 // the on-screen result too.
 
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/sdr_white_level.h"
+#include "hdr_reference_white.h"
 #include "hdr_tonemap.h"
 #include <exosnap/engine/dxgi_od_capture_src.h>
 

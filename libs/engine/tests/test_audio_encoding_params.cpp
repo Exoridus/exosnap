@@ -6,8 +6,10 @@
 //   - FFmpeg AAC bitrate clamping helpers
 //   - FrameSizeSamples accessor
 
+#include <cstddef>
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/packet_types.h"
 #include "opus_audio_encoder.h"
 
 #if EXOSNAP_ENGINE_HAS_WASAPI_CAPTURE_SRC

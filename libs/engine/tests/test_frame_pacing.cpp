@@ -1,4 +1,6 @@
 #include "exosnap/engine/frame_pacing.h"
+#include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
 #include <span>
 using namespace exosnap::engine;

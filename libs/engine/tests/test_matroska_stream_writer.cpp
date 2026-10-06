@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/color_metadata.h"
 #include "matroska_stream_writer.h"
 #include "test_unique_temp.h"
 
@@ -11,13 +12,19 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <ios>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 extern "C" {
+#include <libavcodec/codec_id.h>
+#include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
+#include <libavutil/avutil.h>
 #include <libavutil/mastering_display_metadata.h>
+#include <libavutil/pixfmt.h>
 }
 
 // These tests exercise the PRODUCTION streaming writer (MatroskaStreamWriter)

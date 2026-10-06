@@ -1,3 +1,6 @@
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include "brickwall_limiter.h"

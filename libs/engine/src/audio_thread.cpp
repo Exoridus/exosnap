@@ -1,4 +1,5 @@
 #include "audio_thread.h"
+#include <atomic>
 #include <exosnap/engine/performance_measurements.h>
 
 #include "audio_clock_drift.h"
@@ -6,14 +7,20 @@
 #include "audio_silence_fill.h"
 #include "av_epoch_align.h"
 #include "clock_slaving.h"
-#include "codec_private.h"
 #include "exosnap/engine/audio_meter.h"
+#include "exosnap/engine/audio_track_model.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/error_types.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include "exosnap/engine/recorder_session.h"
 #include "ffmpeg_aac_encoder.h"
 #include "flac_audio_encoder.h"
 #include "mixed_audio_src.h"
+#include "mux_queue.h"
 #include "opus_audio_encoder.h"
 #include "output_format_audio_src.h"
 #include "pcm_audio_encoder.h"
+#include "premux_state.h"
 #include "session_internal.h"
 
 #include <exosnap/engine/logging/logging.h>
@@ -24,8 +31,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <span>
 #include <string>
+#include <utility>
+#include <vector>
 
 // After the standard headers: avrt.h needs windows.h, which session_internal.h
 // already pulls in, and both bring macros the headers above must not see.
@@ -132,10 +143,8 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
 AudioThread::AudioThread(std::shared_ptr<SessionState> state, std::unique_ptr<IAudioCaptureSource> source,
                          uint32_t track_id, std::vector<AudioSourceKind> source_kinds)
     : m_state_ptr(std::move(state)), m_state(*m_state_ptr), source_(std::move(source)),
-      source_kinds_(std::move(source_kinds)), track_id_(track_id) {
-    // Resolved here, while source_ is still the raw capture source: Run() wraps
-    // it in the output-format decorator, after which the mixer is unreachable.
-    mixed_src_ = dynamic_cast<MixedAudioSrc*>(source_.get());
+      source_kinds_(std::move(source_kinds)), mixed_src_(dynamic_cast<MixedAudioSrc*>(source_.get())),
+      track_id_(track_id) {
 }
 
 AudioThread::~AudioThread() {
@@ -217,19 +226,12 @@ void AudioThread::Run() {
     // the configured audio_sample_rate. Channel count and bit depth are always
     // configurable. When target == 48000/stereo (the default), the decorator is
     // a byte-identical passthrough — no SwrContext is created.
-    {
-        const uint32_t effective_rate =
-            (m_state.config.audio_codec == AudioCodec::Opus) ? 48000u : m_state.config.audio_sample_rate;
-        const uint32_t effective_channels = m_state.config.audio_channels;
-
-        // Wrap source_ so OutputFormatAudioSrc::Init calls the real source's Init
-        // and configures swresample if needed. After this, source_ reports the
-        // target sample_rate/channels. Keep a typed view so the clock-slaving
-        // controller can drive compensation on it.
-        auto wrapper = std::make_unique<OutputFormatAudioSrc>(std::move(source_), effective_rate, effective_channels);
-        output_format_src_ = wrapper.get();
-        source_ = std::move(wrapper);
-    }
+    const uint32_t effective_rate =
+        (m_state.config.audio_codec == AudioCodec::Opus) ? 48000u : m_state.config.audio_sample_rate;
+    const uint32_t effective_channels = m_state.config.audio_channels;
+    auto wrapper = std::make_unique<OutputFormatAudioSrc>(std::move(source_), effective_rate, effective_channels);
+    auto& output_format_source = *wrapper;
+    source_ = std::move(wrapper);
 
     {
         std::string err;
@@ -288,14 +290,10 @@ void AudioThread::Run() {
             uninitCom();
             return;
         }
-        std::lock_guard lk(m_state.premux_mutex);
-        m_state.codec_private.audio_codec_private[track_id_].bytes = std::move(cp);
-        m_state.codec_private.audio_codec_private[track_id_].codec_delay_samples = encoder.CodecDelaySamples();
-        m_state.codec_private.audio_track_ready[track_id_] = true;
-        m_state.premux_cv.notify_all();
+        m_state.premux.PublishAudio(track_id_, {std::move(cp), encoder.CodecDelaySamples()});
     }
 
-    EncodeLoop(encoder, kSampleRate, kChannels, sourceFormat);
+    EncodeLoop(encoder, kSampleRate, kChannels, sourceFormat, output_format_source);
 
     encoder.Shutdown();
     uninitCom();
@@ -306,7 +304,7 @@ void AudioThread::Run() {
 // ---------------------------------------------------------------------------
 
 void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t channels,
-                             AudioSampleFormat source_format) {
+                             AudioSampleFormat source_format, OutputFormatAudioSrc& output_format_source) {
     uint64_t lastAudioPts = 0;
 
     // M4 Phase 4: one audio producer; Phase 5 will instantiate multiple AudioThread workers.
@@ -319,29 +317,24 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             lastAudioPts = pkt.pts_ns;
 
             {
-                std::unique_lock lk(m_state.premux_mutex);
-                bool bothReady = m_state.codec_private.VideoReady(m_state.config.video_codec) &&
-                                 m_state.codec_private.AudioAllReady(m_state.audio_track_count);
-                if (!bothReady) {
-                    if (m_state.audio_premux.size() >= SessionState::kAudioPremuxLimit) {
-                        lk.unlock();
+                uint32_t buffered_depth = 0;
+                const auto route =
+                    m_state.premux.Route(pkt, m_state.config.video_codec, m_state.audio_track_count, buffered_depth);
+                if (route != PremuxRoute::Mux) {
+                    if (route == PremuxRoute::Full) {
                         m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
                                               "Pre-mux audio buffer limit (600 packets) exceeded "
                                               "before codec private data was ready");
                         return false;
                     }
-                    m_state.audio_premux.push_back(std::move(pkt));
-                    m_state.diagnostics.OnAudioPremuxDepth(static_cast<uint32_t>(m_state.audio_premux.size()));
+                    m_state.diagnostics.OnAudioPremuxDepth(buffered_depth);
                 } else {
-                    lk.unlock();
                     MuxItem mi;
                     mi.payload = std::move(pkt);
-                    std::unique_lock mlk(m_state.mux_mutex);
                     // Bounded steady-state queue: block briefly for room, then
                     // fail cleanly — never drop packets or grow without limit.
-                    const MuxQueueWait room = m_state.WaitForMuxQueueSpace(mlk);
+                    const MuxQueueWait room = m_state.PushMuxItem(std::move(mi));
                     if (room != MuxQueueWait::Ready) {
-                        mlk.unlock();
                         // Only a genuine timeout is backpressure (see the video loop).
                         if (room == MuxQueueWait::TimedOut) {
                             m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
@@ -354,7 +347,6 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                         }
                         return false;
                     }
-                    m_state.PushMuxItemLocked(std::move(mi));
                 }
             }
         }
@@ -800,10 +792,10 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                                          std::span<const logging::LogField>(f, std::size(f)));
                         }
                     }
-                    if (clock_slaving_enabled && output_format_src_ != nullptr) {
-                        const double applied = output_format_src_->AppliedCompensationMs();
+                    if (clock_slaving_enabled) {
+                        const double applied = output_format_source.AppliedCompensationMs();
                         if (clock_controller.Update(raw_drift, applied, timing.qpc_position_ns)) {
-                            output_format_src_->SetCompensationPpm(clock_controller.Ppm());
+                            output_format_source.SetCompensationPpm(clock_controller.Ppm());
                             if (!clock_slaving_logged_engage) {
                                 clock_slaving_logged_engage = true;
                                 logging::LogField f[] = {{"track", std::to_string(track_id_)},
@@ -966,10 +958,10 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     // counter, so the tail lands directly after the last real packet. Shutdown()
     // frees the context, so this must run before it; the encoder's own EOS drain
     // must run after, or the tail would sit behind an already-flushed encoder.
-    if (output_format_src_ != nullptr && !failed) {
+    if (!failed) {
         RawAudioBuffer tail{};
         int64_t undrained_frames = 0;
-        const uint32_t tail_frames = output_format_src_->DrainResampler(tail, &undrained_frames);
+        const uint32_t tail_frames = output_format_source.DrainResampler(tail, &undrained_frames);
         // Post-flight fact for the session report: how much tail the drain
         // recovered, and what (if anything) it had to leave behind. The recorded
         // bit is what distinguishes "the drain ran and found nothing" from "the
@@ -1041,12 +1033,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     }
 
     // --- Push audio EOS sentinel ---
-    {
-        MuxItem eos;
-        eos.payload = AudioEosSentinel{track_id_};
-        std::lock_guard lk(m_state.mux_mutex);
-        m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
-    }
+    m_state.mux_queue.PushSentinel(AudioEosSentinel{track_id_});
 }
 
 } // namespace exosnap::engine

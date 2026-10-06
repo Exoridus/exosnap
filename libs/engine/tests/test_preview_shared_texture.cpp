@@ -1,3 +1,5 @@
+#include "exosnap/engine/pipeline_diagnostics.h"
+#include <cstddef>
 #include <gtest/gtest.h>
 
 #include <exosnap/engine/preview_shared_texture.h>
@@ -5,6 +7,7 @@
 #include <d3d11.h>
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
+#include <string>
 #include <winrt/base.h>
 
 #include <cstdint>

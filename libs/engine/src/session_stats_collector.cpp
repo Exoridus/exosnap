@@ -1,11 +1,21 @@
 #include "session_stats_collector.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/pipeline_diagnostics.h"
+#include "exosnap/engine/session_stats.h"
+#include "perf_histogram.h"
+#include "pipeline_diagnostics_aggregator.h"
+#include "session_internal.h"
 
+#include <chrono>
+#include <cstdint>
 #include <exosnap/engine/logging/logging.h>
 
 #include <array>
 #include <cstdio>
+#include <mutex>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace exosnap::engine {

@@ -6,6 +6,12 @@
 
 #include <update/zip_extract.h>
 
+#include <optional>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+
 #include "url_utils.h"
 
 #define WIN32_LEAN_AND_MEAN

@@ -4,13 +4,16 @@
 // and the full histogram. The pure evaluation of those numbers is pinned
 // separately in test_frame_luminance.cpp.
 
+#include <array>
 #include <gtest/gtest.h>
 
 #include "frame_luminance.h"
 #include "gpu_frame_luminance.h"
 #include "hdr_pq.h"
+#include "hdr_reference_white.h"
 
 #include <d3d11.h>
+#include <string>
 #include <winrt/base.h>
 
 #include <algorithm>

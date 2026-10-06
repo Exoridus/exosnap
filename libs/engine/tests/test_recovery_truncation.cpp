@@ -11,10 +11,14 @@
 // MatroskaStreamWriter (real durability flush), so the bytes on disk are the exact
 // cluster layout a killed recording would leave.
 
+#include "exosnap/engine/codec_types.h"
+#include <cstddef>
+#include <ios>
+#include <system_error>
 extern "C" {
 #include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
-#include <libavutil/avutil.h>
+#include <libavutil/log.h>
 }
 
 #include <gtest/gtest.h>

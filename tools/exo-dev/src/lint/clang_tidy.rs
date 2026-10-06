@@ -44,7 +44,10 @@ use regex::Regex;
 use sha2::{Digest, Sha256};
 
 use crate::executor::ToolMissing;
-use crate::lint::{self, canaries::BLOCKING_CHECKS};
+use crate::lint::{
+    self,
+    canaries::{BLOCKING_CHECKS, BLOCKING_RULES},
+};
 
 /// Version of the per-translation-unit cache key composition. There is no
 /// content hash of this module's own source to fold into the key, so this
@@ -55,7 +58,7 @@ use crate::lint::{self, canaries::BLOCKING_CHECKS};
 /// Scoping (which translation units get analysed) does not affect what a
 /// stored entry means and is not a reason to bump this. Nothing else
 /// enforces the bump.
-pub const CACHE_SCHEMA: u32 = 1;
+pub const CACHE_SCHEMA: u32 = 2;
 
 /// Canary translation units, analysed whenever the analysis configuration
 /// itself changes rather than the code it inspects. A change to `.clang-tidy`
@@ -290,6 +293,7 @@ pub fn run_blocking(
 
     let fresh = analyze_pending(&tool, build_dir, &flags, &pending, jobs);
     for (src, output, code) in &fresh {
+        require_analysis(src, output, *code)?;
         results.push((src.clone(), output.clone()));
         if !cache_enabled {
             continue;
@@ -297,12 +301,6 @@ pub fn run_blocking(
         let Some(key) = cache_keys.get(src) else {
             continue;
         };
-        // clang-tidy exits 0 (clean) or 1 (diagnostics emitted); anything else
-        // is the process dying rather than reporting, and its truncated
-        // output must not be stored as this unit's standing verdict.
-        if *code != 0 && *code != 1 {
-            continue;
-        }
         store_cache_entry(cache_dir, key, output);
     }
 
@@ -965,12 +963,8 @@ fn check_matches(check: &str, pattern: &str) -> bool {
     }
 }
 
-/// clang-tidy's exit code is NOT the verdict here. Two pre-existing
-/// conditions make it non-zero for reasons unrelated to the blocking set:
-/// clang parses in MSVC-compat mode and rejects a handful of constructs
-/// cl.exe accepts, and findings inside Qt and Windows SDK headers, which are
-/// not ours to fix. The verdict is therefore: a diagnostic from a blocking
-/// check, located in a file this repository owns.
+/// Infrastructure failures are rejected before extracting findings. A check
+/// blocks only in its repository-owned scope, excluding external SDK findings.
 fn extract_violations(
     results: &[(String, String)],
     repo_root_norm: &str,
@@ -991,12 +985,14 @@ fn extract_violations(
             let col = &caps[3];
             let message = &caps[4];
             let checks_field = caps[5].replace(",-warnings-as-errors", "");
-            let rel = where_.strip_prefix(&root_prefix).unwrap_or(where_.as_str());
+            // Ownership was checked case-insensitively above. ASCII case
+            // folding preserves the prefix length used to retain display case.
+            let rel = &where_[root_prefix.len()..];
             for check in checks_field.split(',') {
                 let check = check.trim();
-                if BLOCKING_CHECKS
+                if BLOCKING_RULES
                     .iter()
-                    .any(|pattern| check_matches(check, pattern))
+                    .any(|rule| rule.applies_to(rel) && check_matches(check, rule.check))
                 {
                     violations.insert(format!("{rel}:{row}:{col} [{check}] {message}"));
                 }
@@ -1006,9 +1002,87 @@ fn extract_violations(
     violations
 }
 
+fn require_analysis(source: &str, output: &str, code: i32) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        matches!(code, 0 | 1),
+        "clang-tidy failed to analyze {source} (exit {code})"
+    );
+    let failed_parse = output.lines().find(|line| {
+        line.contains("[clang-diagnostic-error")
+            || line.contains("[clang-diagnostic-fatal")
+            || line.contains("Error while processing")
+            || line.starts_with("error:")
+    });
+    anyhow::ensure!(
+        failed_parse.is_none(),
+        "clang-tidy could not parse {source}: {}",
+        failed_parse.unwrap_or_default()
+    );
+    anyhow::ensure!(
+        code == 0 || output.lines().any(|line| diagnostic_regex().is_match(line)),
+        "clang-tidy failed without diagnostic evidence for {source}: {output}"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scoped_findings_survive_windows_path_case_changes() {
+        for file in [
+            "c:/repo/libs/engine/file.cpp",
+            "C:/repo/LIBS/ENGINE/file.cpp",
+        ] {
+            let output = format!("{file}:1:1: warning: missing provider [misc-include-cleaner]");
+            assert_eq!(
+                extract_violations(&[("file.cpp".into(), output)], "C:/repo", "C:/repo/build")
+                    .len(),
+                1,
+                "{file}"
+            );
+        }
+    }
+
+    #[test]
+    fn blocking_analysis_rejects_crashes_and_unparsed_translation_units() {
+        for (output, code) in [
+            ("", -1),
+            ("", 2),
+            ("error: invalid argument", 1),
+            ("file.cpp:1:1: error: syntax [clang-diagnostic-error]", 1),
+            (
+                "file.cpp:1:1: fatal error: missing header [clang-diagnostic-error]",
+                0,
+            ),
+        ] {
+            assert!(
+                require_analysis("file.cpp", output, code).is_err(),
+                "{output}, {code}"
+            );
+        }
+        assert!(require_analysis("file.cpp", "", 0).is_ok());
+        assert!(
+            require_analysis(
+                "file.cpp",
+                "file.cpp:1:1: error: violation [bugprone-use-after-move,-warnings-as-errors]",
+                1
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn include_cleaner_blocks_core_libraries_but_remains_advisory_in_app() {
+        let output = ["libs/engine", "libs/capability", "libs/update", "app"]
+            .map(|directory| format!("C:/repo/{directory}/file.cpp:1:1: warning: missing provider [misc-include-cleaner]"))
+            .join("\n");
+        let findings =
+            extract_violations(&[("file.cpp".into(), output)], "C:/repo", "C:/repo/build");
+        assert_eq!(findings.len(), 3);
+        assert!(findings.iter().all(|finding| finding.starts_with("libs/")));
+    }
 
     fn entry(file: &str, output: &str, command: &str) -> CompileEntry {
         CompileEntry {

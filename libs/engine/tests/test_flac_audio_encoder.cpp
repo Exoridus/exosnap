@@ -6,12 +6,17 @@
 // marker and is non-empty, the float→int16 conversion matches the PCM mapping,
 // PTS/frame-counter advance, and degenerate inputs are handled. No GPU / MF.
 
+#include <algorithm>
+#include <cstddef>
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/packet_types.h"
 #include "flac_audio_encoder.h"
 
 #include <cmath>
 #include <cstdint>
+#include <string>
+#include <utility>
 #include <vector>
 
 using exosnap::engine::EncodedAudioPacket;

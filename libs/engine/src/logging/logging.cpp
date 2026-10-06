@@ -1,12 +1,20 @@
+#include "nlohmann/json_fwd.hpp"
+#include "spdlog/common.h"
+#include "spdlog/logger.h"
+#include <chrono>
+#include <cstddef>
 #include <exosnap/engine/logging/logging.h>
 
+#include <memory>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <spdlog/sinks/rotating_file_sink.h>
-#include <spdlog/spdlog.h>
 
 #include <deque>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
+#include <vector>
 
 namespace exosnap::engine::logging {
 

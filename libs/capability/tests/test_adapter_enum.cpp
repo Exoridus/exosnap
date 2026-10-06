@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cstdint>
+
 #include <capability/adapter_enum.h>
 
 namespace exosnap::capability {

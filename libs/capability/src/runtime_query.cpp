@@ -26,6 +26,9 @@
 #endif
 #include <windows.h>
 
+#include <cstdint>
+#include <utility>
+
 // DXGI
 #include <dxgi.h>
 #include <dxgi1_6.h> // IDXGIOutput6::GetDesc1 (per-display HDR facts)

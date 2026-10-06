@@ -2,6 +2,10 @@
 
 #include <update/http_download.h>
 
+#include <atomic>
+#include <cstdint>
+#include <optional>
+
 #include "url_utils.h"
 
 // WinHTTP is available on all supported Windows versions (Vista+).
@@ -10,7 +14,7 @@
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
 
-#include <cstdlib>
+#include <cstdlib> // IWYU pragma: keep - declares the UCRT _wcstoui64 extension.
 #include <iterator>
 #include <string>
 

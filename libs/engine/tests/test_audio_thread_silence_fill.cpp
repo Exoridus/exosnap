@@ -14,9 +14,14 @@
 // PCM makes the payload directly countable: one fed frame is exactly
 // `channels * 2` bytes of int16 with no encoder framing.
 
+#include <cstddef>
 #include <gtest/gtest.h>
 
 #include "audio_thread.h"
+#include "exosnap/engine/codec_types.h"
+#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include "exosnap/engine/packet_types.h"
+#include "mux_queue.h"
 #include "session_internal.h"
 
 #include <algorithm>
@@ -26,6 +31,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -247,22 +253,19 @@ class FastSource : public IAudioCaptureSource {
 };
 
 void MarkVideoTrackReady(SessionState& state) {
-    std::lock_guard lk(state.premux_mutex);
-    state.codec_private.av1_ready = true;
-    state.codec_private.h264_ready = true;
-    state.codec_private.hevc_ready = true;
+    state.premux.PublishVideo(exosnap::engine::VideoCodec::Av1, {});
+    state.premux.PublishVideo(exosnap::engine::VideoCodec::H264, {});
+    state.premux.PublishVideo(exosnap::engine::VideoCodec::Hevc, {});
 }
 
 std::vector<EncodedAudioPacket> GatherAudioPacketsInOrder(SessionState& state) {
     std::vector<EncodedAudioPacket> packets;
     {
-        std::lock_guard lk(state.premux_mutex);
-        for (const auto& pkt : state.audio_premux)
+        for (const auto& pkt : state.premux.PendingSnapshot().audio)
             packets.push_back(pkt);
     }
     {
-        std::lock_guard lk(state.mux_mutex);
-        for (const auto& item : state.mux_queue) {
+        for (const auto& item : state.mux_queue.Snapshot()) {
             if (const auto* pkt = std::get_if<EncodedAudioPacket>(&item.payload))
                 packets.push_back(*pkt);
         }
@@ -278,8 +281,7 @@ uint64_t TotalPcmFrames(const std::vector<EncodedAudioPacket>& packets) {
 }
 
 bool HasEos(SessionState& state) {
-    std::lock_guard lk(state.mux_mutex);
-    for (const auto& item : state.mux_queue) {
+    for (const auto& item : state.mux_queue.Snapshot()) {
         if (std::get_if<AudioEosSentinel>(&item.payload) != nullptr)
             return true;
     }
@@ -337,12 +339,10 @@ QuietRun RunQuiet(QuietSourceOptions opts) {
         while (watching.load()) {
             bool any = false;
             {
-                std::lock_guard lk(state.premux_mutex);
-                any = !state.audio_premux.empty();
+                any = !state.premux.PendingSnapshot().audio.empty();
             }
             if (!any) {
-                std::lock_guard lk(state.mux_mutex);
-                for (const auto& item : state.mux_queue) {
+                for (const auto& item : state.mux_queue.Snapshot()) {
                     if (std::get_if<EncodedAudioPacket>(&item.payload) != nullptr) {
                         any = true;
                         break;

@@ -2,9 +2,12 @@
 
 #include "QuickApplication.h"
 #include "RecordPreviewAdapter.h"
+#include "SettingsAdapter.h"
 
 #include "benchmark/BenchmarkReport.h"
+#include "diagnostics/NativeWindowFacts.h"
 #include "models/VideoSettingsModel.h"
+#include "observability/PipelineSnapshotJson.h"
 #include "services/RecordingCoordinator.h"
 
 #include <QCoreApplication>
@@ -12,12 +15,23 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
+#include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QPointer>
 #include <QQuickWindow>
+#include <QSGRendererInterface>
+#include <QSaveFile>
+#include <QScreen>
 #include <QTimer>
 
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
+#include <memory>
+#include <mutex>
 
 namespace exosnap::quick {
 namespace {
@@ -26,6 +40,214 @@ namespace {
 // capability query. It is a hardware probe, not a UI animation, so a slow
 // machine legitimately needs seconds.
 constexpr int kCoordinatorReadyTimeoutMs = 20000;
+
+qint64 PresentationQpc() {
+    LARGE_INTEGER ticks{};
+    QueryPerformanceCounter(&ticks);
+    return ticks.QuadPart;
+}
+
+class OverlayPresentationProbe final : public QObject {
+  public:
+    OverlayPresentationProbe(QString variant, QString directory, OverlayTelemetryAdapter* telemetry)
+        : variant_(std::move(variant)), directory_(std::move(directory)) {
+        connect(telemetry, &OverlayTelemetryAdapter::snapshotChanged, this, [this] {
+            if (start_qpc_ != 0 && !finished_)
+                ++telemetry_publications_;
+        });
+        connect(&discover_, &QTimer::timeout, this, [this]() { discover(); });
+        discover_.start(50);
+    }
+
+    void start() {
+        discover();
+        {
+            const std::scoped_lock lock(counts_[0]->mutex, counts_[1]->mutex);
+            start_qpc_ = PresentationQpc();
+            for (auto& counts : counts_) {
+                counts->renders = 0;
+                counts->swaps = 0;
+                counts->start_qpc = start_qpc_;
+                counts->measuring = true;
+            }
+        }
+        start_windows_ = windows();
+        start_pipeline_ = pipeline();
+        write(QStringLiteral("overlay-measurement-start.json"), QJsonObject{{QStringLiteral("startQpc"), start_qpc_}});
+    }
+
+    void finish() {
+        if (start_qpc_ == 0 || finished_)
+            return;
+        finished_ = true;
+        qint64 end_qpc = 0;
+        std::array<quint64, 2> renders{};
+        std::array<quint64, 2> swaps{};
+        {
+            const std::scoped_lock lock(counts_[0]->mutex, counts_[1]->mutex);
+            end_qpc = PresentationQpc();
+            for (size_t i = 0; i < counts_.size(); ++i) {
+                counts_[i]->measuring = false;
+                renders[i] = counts_[i]->renders;
+                swaps[i] = counts_[i]->swaps;
+            }
+        }
+        LARGE_INTEGER frequency{};
+        QueryPerformanceFrequency(&frequency);
+        const double seconds = static_cast<double>(end_qpc - start_qpc_) / static_cast<double>(frequency.QuadPart);
+        QJsonArray cadence;
+        for (size_t i = 0; i < counts_.size(); ++i) {
+            cadence.append(QJsonObject{{QStringLiteral("objectName"), names_[i]},
+                                       {QStringLiteral("renders"), static_cast<qint64>(renders[i])},
+                                       {QStringLiteral("frameSwapped"), static_cast<qint64>(swaps[i])},
+                                       {QStringLiteral("rendersPerSecond"), renders[i] / seconds},
+                                       {QStringLiteral("frameSwappedPerSecond"), swaps[i] / seconds}});
+        }
+        write(QStringLiteral("overlay-measurement.json"),
+              QJsonObject{{QStringLiteral("variant"), variant_},
+                          {QStringLiteral("pid"), QCoreApplication::applicationPid()},
+                          {QStringLiteral("startQpc"), start_qpc_},
+                          {QStringLiteral("endQpc"), end_qpc},
+                          {QStringLiteral("qpcFrequency"), frequency.QuadPart},
+                          {QStringLiteral("seconds"), seconds},
+                          {QStringLiteral("telemetryPublications"), static_cast<qint64>(telemetry_publications_)},
+                          {QStringLiteral("telemetryPublicationsPerSecond"), telemetry_publications_ / seconds},
+                          {QStringLiteral("startWindows"), start_windows_},
+                          {QStringLiteral("endWindows"), windows()},
+                          {QStringLiteral("startPipeline"), start_pipeline_},
+                          {QStringLiteral("endPipeline"), pipeline()},
+                          {QStringLiteral("cadence"), cadence}});
+    }
+
+    bool wrote() const {
+        return wrote_ && finished_;
+    }
+    void setCoordinator(RecordingCoordinator* coordinator) {
+        coordinator_ = coordinator;
+    }
+
+  private:
+    struct Counts {
+        std::mutex mutex;
+        bool measuring = false;
+        qint64 start_qpc = 0;
+        quint64 renders = 0;
+        quint64 swaps = 0;
+    };
+
+    QJsonObject pipeline() const {
+        exosnap::engine::RecordingDiagnosticsSnapshot snapshot;
+        if (coordinator_ != nullptr && !coordinator_->LastDiagnosticsSnapshot(&snapshot))
+            snapshot = {};
+        QJsonObject result = observability::PipelineSnapshotToJson(snapshot);
+        // The aggregate has no availability bit. Zero cannot distinguish absent
+        // timestamp samples from zero work, so only positive samples are reported.
+        result.insert(QStringLiteral("recorderGpuPassP99Ms"), snapshot.compositor.gpu_exec_p99_ms > 0.0
+                                                                  ? QJsonValue(snapshot.compositor.gpu_exec_p99_ms)
+                                                                  : QJsonValue(QJsonValue::Null));
+        return result;
+    }
+
+    void discover() {
+        for (QWindow* candidate : QGuiApplication::allWindows()) {
+            for (size_t i = 0; i < names_.size(); ++i) {
+                if (candidate->objectName() != names_[i] || windows_[i] != nullptr)
+                    continue;
+                auto* window = qobject_cast<QQuickWindow*>(candidate);
+                if (window == nullptr)
+                    continue;
+                windows_[i] = window;
+                // These signals originate on the render thread. Count there without
+                // queued GUI work, and keep the counters alive through disconnection.
+                const auto counts = counts_[i];
+                connect(
+                    window, &QQuickWindow::afterRendering, this,
+                    [counts]() {
+                        const std::lock_guard lock(counts->mutex);
+                        if (counts->measuring && PresentationQpc() >= counts->start_qpc)
+                            ++counts->renders;
+                    },
+                    Qt::DirectConnection);
+                connect(
+                    window, &QQuickWindow::frameSwapped, this,
+                    [counts]() {
+                        const std::lock_guard lock(counts->mutex);
+                        if (counts->measuring && PresentationQpc() >= counts->start_qpc)
+                            ++counts->swaps;
+                    },
+                    Qt::DirectConnection);
+            }
+        }
+        if (windows_[0] != nullptr && windows_[1] != nullptr)
+            discover_.stop();
+    }
+
+    QJsonArray windows() const {
+        QJsonArray result;
+        for (size_t i = 0; i < windows_.size(); ++i) {
+            QQuickWindow* window = windows_[i];
+            QJsonObject facts{{QStringLiteral("objectName"), names_[i]},
+                              {QStringLiteral("instantiated"), window != nullptr}};
+            if (window != nullptr) {
+                facts.insert(QStringLiteral("visible"), window->isVisible());
+                facts.insert(QStringLiteral("exposed"), window->isExposed());
+                facts.insert(QStringLiteral("screen"),
+                             window->screen() != nullptr ? window->screen()->name() : QString{});
+                facts.insert(QStringLiteral("graphicsApi"),
+                             static_cast<int>(window->rendererInterface()->graphicsApi()));
+                if (window->handle() != nullptr) {
+                    const auto native = diagnostics::QueryNativeWindowFacts(reinterpret_cast<void*>(window->winId()));
+                    facts.insert(QStringLiteral("hwnd"), static_cast<qint64>(native.hwnd));
+                    facts.insert(QStringLiteral("nativeValid"), native.valid);
+                    facts.insert(QStringLiteral("nativeVisible"),
+                                 IsWindowVisible(reinterpret_cast<HWND>(window->winId())) != FALSE);
+                    facts.insert(QStringLiteral("layered"), native.layered);
+                    facts.insert(QStringLiteral("transparentForInput"), native.transparent_for_input);
+                    facts.insert(QStringLiteral("captureExcluded"),
+                                 native.affinity_known && native.display_affinity == 0x11);
+                    facts.insert(QStringLiteral("x"), native.x);
+                    facts.insert(QStringLiteral("y"), native.y);
+                    facts.insert(QStringLiteral("width"), native.width);
+                    facts.insert(QStringLiteral("height"), native.height);
+                }
+                if (i == 0) {
+                    facts.insert(QStringLiteral("overlayState"), window->property("overlayState").toInt());
+                    facts.insert(QStringLiteral("diagnosticsActive"), window->property("diagnosticsActive").toBool());
+                    for (const char* property :
+                         {"showFps", "showDrop", "showDrift", "showDiagnosticsSize", "showMutedSources", "showHealth"})
+                        facts.insert(QString::fromLatin1(property), window->property(property).toBool());
+                }
+            }
+            result.append(facts);
+        }
+        return result;
+    }
+
+    void write(const QString& name, const QJsonObject& document) {
+        QSaveFile file(QDir(directory_).filePath(name));
+        const QByteArray bytes = QJsonDocument(document).toJson();
+        const bool ok = QDir().mkpath(directory_) && file.open(QIODevice::WriteOnly) &&
+                        file.write(bytes) == bytes.size() && file.commit();
+        wrote_ = wrote_ && ok;
+        if (!ok)
+            qCritical().noquote() << QStringLiteral("overlay measurement write failed: %1").arg(file.fileName());
+    }
+
+    QString variant_;
+    QString directory_;
+    QTimer discover_;
+    quint64 telemetry_publications_ = 0;
+    qint64 start_qpc_ = 0;
+    bool finished_ = false;
+    bool wrote_ = true;
+    QJsonArray start_windows_;
+    QJsonObject start_pipeline_;
+    RecordingCoordinator* coordinator_ = nullptr;
+    const std::array<QString, 2> names_{QStringLiteral("quickOverlayRecording"),
+                                        QStringLiteral("quickOverlayQuickControls")};
+    std::array<QPointer<QQuickWindow>, 2> windows_;
+    std::array<std::shared_ptr<Counts>, 2> counts_{std::make_shared<Counts>(), std::make_shared<Counts>()};
+};
 
 RecordingCoordinator* WaitForCoordinatorReady(QuickApplication& application, int timeout_ms, QString* error) {
     RecordingCoordinator* coordinator = application.recordingCoordinator();
@@ -176,7 +398,6 @@ int CaptureReadyFrame(QCoreApplication& app, RecordingCoordinator& coordinator, 
         qCritical().noquote() << QStringLiteral("auto-record: no preview adapter for --capture-frame-in-ready");
         return 1;
     }
-
     QElapsedTimer clock;
     clock.start();
     {
@@ -256,6 +477,37 @@ int CaptureReadyFrame(QCoreApplication& app, RecordingCoordinator& coordinator, 
 
 int RunQuickAutoRecord(QCoreApplication& app, QuickApplication& application, QQuickWindow* window,
                        const auto_record::AutoRecordOptions& options, benchmark::RunOutcome* out_last_outcome) {
+    const QString variant = qEnvironmentVariable("EXOSNAP_OVERLAY_PRESENTATION_VARIANT");
+    std::unique_ptr<OverlayPresentationProbe> overlay_probe;
+    if (!variant.isEmpty()) {
+        const QStringList variants{QStringLiteral("off"),        QStringLiteral("hud-minimal"),
+                                   QStringLiteral("hud-health"), QStringLiteral("hud-full"),
+                                   QStringLiteral("dock-only"),  QStringLiteral("hud-full-dock")};
+        if (!variants.contains(variant) || options.benchmark_scenario.isEmpty() ||
+            options.benchmark_output_dir.isEmpty() || options.repeat_cycles != 1 || options.pause_at_seconds >= 0 ||
+            qEnvironmentVariableIsEmpty("EXOSNAP_CONFIG_DIR")) {
+            qCritical(
+                "overlay presentation verification requires a valid variant, isolated configuration, one unpaused "
+                "benchmark cycle and an output directory");
+            return 1;
+        }
+        SettingsAdapter* settings = application.settingsAdapter();
+        settings->setShowRecordingOverlay(variant.startsWith(QStringLiteral("hud-")));
+        settings->setShowQuickControls(variant == QStringLiteral("dock-only") ||
+                                       variant.endsWith(QStringLiteral("-dock")));
+        const QString hud_variant = variant.endsWith(QStringLiteral("-dock")) ? variant.chopped(5) : variant;
+        settings->setShowDiagnosticsOverlay(hud_variant == QStringLiteral("hud-full") ||
+                                            variant == QStringLiteral("hud-health"));
+        settings->setShowNotifications(false);
+        settings->setRecordingOverlayPreset(QStringLiteral("minimal"));
+        if (hud_variant == QStringLiteral("hud-full")) {
+            settings->setDiagnosticsOverlayPreset(QStringLiteral("technical"));
+        } else if (variant == QStringLiteral("hud-health")) {
+            settings->setDiagnosticsOverlayPreset(QStringLiteral("health"));
+        }
+        overlay_probe = std::make_unique<OverlayPresentationProbe>(variant, options.benchmark_output_dir,
+                                                                   application.overlayTelemetryAdapter());
+    }
     // Same rule as the Widgets side, resolved by the same function: visible, on
     // the secondary screen when there is one, at one shared logical size.
     if (window != nullptr) {
@@ -272,6 +524,8 @@ int RunQuickAutoRecord(QCoreApplication& app, QuickApplication& application, QQu
         qCritical().noquote() << QStringLiteral("auto-record: %1").arg(wait_error);
         return 1;
     }
+    if (overlay_probe != nullptr)
+        overlay_probe->setCoordinator(coordinator);
 
     // Put the IDLE preview on the requested frame rate before the target is
     // selected, mirroring RecordPage::setVideoSettings on the Widgets side.
@@ -303,19 +557,28 @@ int RunQuickAutoRecord(QCoreApplication& app, QuickApplication& application, QQu
         return CaptureReadyFrame(app, *coordinator, adapter, options);
 
     auto_record::BenchmarkHooks hooks;
-    hooks.onMeasurementStart = [adapter]() {
+    hooks.onMeasurementStart = [adapter, &overlay_probe]() {
         if (adapter != nullptr)
             adapter->resetMetrics();
+        if (overlay_probe != nullptr)
+            overlay_probe->start();
+    };
+    hooks.onMeasurementEnd = [&overlay_probe]() {
+        if (overlay_probe != nullptr)
+            overlay_probe->finish();
     };
     hooks.samplePreviewMetrics = [adapter, window]() {
         return adapter != nullptr ? SampleQuickPreviewMetrics(*adapter, window) : benchmark::PreviewMetrics{};
     };
 
-    // Nothing here switches the QML overlay animation on. The Widgets frontend has
-    // no equivalent, and an extra animated surface on one side only would be a
-    // difference the report could not attribute to the frontends themselves.
-    return auto_record::RunAutoRecordOnCoordinator(app, *coordinator, options, benchmark::Frontend::Quick, hooks,
-                                                   out_last_outcome);
+    const int result = auto_record::RunAutoRecordOnCoordinator(app, *coordinator, options, benchmark::Frontend::Quick,
+                                                               hooks, out_last_outcome);
+    if (overlay_probe != nullptr) {
+        overlay_probe->finish();
+        if (!overlay_probe->wrote())
+            return 1;
+    }
+    return result;
 }
 
 } // namespace exosnap::quick

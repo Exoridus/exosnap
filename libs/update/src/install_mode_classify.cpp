@@ -1,5 +1,9 @@
 #include "install_mode_classify.h"
 
+#include <optional>
+#include <string>
+#include <update/update_types.h>
+
 #include <algorithm>
 #include <cwctype>
 

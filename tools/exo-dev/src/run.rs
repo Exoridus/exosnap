@@ -10,6 +10,7 @@ use std::time::Instant;
 use serde_json::{Map, Value};
 
 use crate::plan::{Check, Plan};
+use crate::process::OutputMode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -115,11 +116,15 @@ impl RunResult {
 
 /// Sequential on purpose. The independent read-only checks after `sanity` take
 /// about twenty-five seconds together on a sixteen-core machine, and the checks
-/// that dominate a run (build, tests, script tests) each own a host lock or the
+/// that dominate a run (build, tests) each own a host lock or the
 /// whole job budget and cannot overlap anything. A parallel phase would buy a few
 /// percent for a second failure ordering to reason about; the durations in the
 /// receipt are where to see whether that has changed.
 pub fn run(plan: &Plan, executor: &mut dyn Executor) -> RunResult {
+    run_with_output(plan, executor, OutputMode::Silent)
+}
+
+pub fn run_with_output(plan: &Plan, executor: &mut dyn Executor, output: OutputMode) -> RunResult {
     let mut results: Vec<CheckResult> = Vec::with_capacity(plan.checks.len());
     let mut failed_by: Option<&'static str> = None;
     let mut tool_missing = Vec::new();
@@ -132,10 +137,7 @@ pub fn run(plan: &Plan, executor: &mut dyn Executor) -> RunResult {
             detail: String::new(),
             duration_ms: 0,
             depends_on: info.depends_on.iter().map(|d| d.name()).collect(),
-            implementation: match info.implementation {
-                crate::step::Implementation::Native => "native",
-                crate::step::Implementation::Legacy { .. } => "legacy",
-            },
+            implementation: "native",
             evidence: check.evidence.clone(),
             diagnostics: Vec::new(),
         };
@@ -161,6 +163,9 @@ pub fn run(plan: &Plan, executor: &mut dyn Executor) -> RunResult {
             result.status = Status::NotRun;
             result.detail = format!("stopped after '{failed}' failed");
         } else {
+            if !output.is_silent() {
+                println!("RUN {}", check.name());
+            }
             let started = Instant::now();
             let outcome = executor.execute(check);
             result.duration_ms = started.elapsed().as_millis();
@@ -191,6 +196,19 @@ pub fn run(plan: &Plan, executor: &mut dyn Executor) -> RunResult {
                 // it can still establish.
                 Status::ToolMissing => tool_missing.push(check.name()),
                 _ => {}
+            }
+            if !output.is_silent() {
+                println!(
+                    "{} {} {:.1}s",
+                    result.status.as_str(),
+                    result.name,
+                    result.duration_ms as f64 / 1000.0
+                );
+                if matches!(result.status, Status::Fail | Status::ToolMissing)
+                    && !result.evidence.contains_key("log")
+                {
+                    println!("{}", result.detail.chars().take(500).collect::<String>());
+                }
             }
         }
         results.push(result);
@@ -299,7 +317,6 @@ pub(crate) mod tests {
             "drift",
             "cppcheck",
             "clang-tidy",
-            "script-tests",
             "rust",
             "network-egress",
         ] {

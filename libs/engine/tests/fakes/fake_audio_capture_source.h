@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <numbers>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace exosnap::engine::testing {
@@ -50,7 +51,10 @@ class FakeAudioCaptureSource final : public IAudioCaptureSource {
         double amplitude = 0.25;
     };
 
-    explicit FakeAudioCaptureSource(Config config = {}) : config_(std::move(config)) {
+    FakeAudioCaptureSource() : FakeAudioCaptureSource(Config{}) {
+    }
+
+    explicit FakeAudioCaptureSource(Config config) : config_(std::move(config)) {
     }
 
     // Queue `count` ordinary buffers of `frames` each.

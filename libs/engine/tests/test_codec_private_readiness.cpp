@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "session_internal.h"
+#include "premux_state.h"
 
 namespace {
 

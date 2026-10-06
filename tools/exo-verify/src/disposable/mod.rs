@@ -196,7 +196,8 @@ pub struct LaneRequest<'a> {
 
 /// Runs one lane inside a fresh environment and returns the guest's own lane
 /// result. Any failure to obtain that result becomes INFRA_ERROR for every
-/// selected scenario; the environment is destroyed in every case.
+/// selected scenario. A guest whose evidence could not be collected is retained
+/// for recovery; successful collection permits cleanup even after a failed run.
 pub fn run_lane(
     backend: &mut dyn DisposableWindows,
     request: &LaneRequest,
@@ -206,8 +207,9 @@ pub fn run_lane(
     let run = RunDir {
         host: host_out.join(format!("{}-{}", backend.kind().name(), request.lane.name())),
     };
-    let outcome = drive(backend, request, &run);
-    let destroyed = backend.destroy();
+    let mut retain = false;
+    let outcome = drive(backend, request, &run, &mut retain);
+    let destroyed = if retain { Ok(()) } else { backend.destroy() };
     let mut result = match (outcome, destroyed) {
         (Ok(result), Ok(())) => result,
         (Ok(_), Err(e)) => synthetic_result(
@@ -216,11 +218,17 @@ pub fn run_lane(
             Verdict::InfraError,
             &format!("disposable environment could not be destroyed: {e:#}"),
         ),
-        (Err(e), _) => synthetic_result(
+        (Err(e), cleanup) => synthetic_result(
             request,
             &started_at,
             Verdict::InfraError,
-            &format!("disposable environment: {e:#}"),
+            &format!(
+                "disposable environment: {e:#}{}",
+                cleanup
+                    .err()
+                    .map(|e| format!("; cleanup: {e:#}"))
+                    .unwrap_or_default()
+            ),
         ),
     };
     result.backend = Some(backend.kind().name().to_string());
@@ -231,10 +239,13 @@ fn drive(
     backend: &mut dyn DisposableWindows,
     request: &LaneRequest,
     run: &RunDir,
+    retain: &mut bool,
 ) -> Result<LaneResult> {
     if run.host.exists() {
-        std::fs::remove_dir_all(&run.host)
-            .with_context(|| format!("clear {}", run.host.display()))?;
+        bail!(
+            "run directory {} already exists; preserve or recover its evidence before choosing a fresh output directory",
+            run.host.display()
+        );
     }
     std::fs::create_dir_all(run.payload())?;
     std::fs::create_dir_all(run.out())?;
@@ -286,13 +297,17 @@ fn drive(
     let budget: Duration = request.scenarios.iter().map(|s| s.timeout).sum();
     backend.prepare(run)?;
     backend.start(run)?;
-    let code = backend.execute(&GuestCommand {
-        program: guest(r"payload\exo-verify.exe"),
-        args,
-        timeout: budget + Duration::from_secs(600),
-    })?;
-    backend.collect(run)?;
-    let _ = backend.stop();
+    let code = execute_and_collect(
+        backend,
+        run,
+        &GuestCommand {
+            program: guest(r"payload\exo-verify.exe"),
+            args,
+            timeout: budget + Duration::from_secs(600),
+        },
+        retain,
+    )?;
+    backend.stop().context("stop the disposable environment")?;
     let file = run
         .out()
         .join(format!("{}.result.json", request.lane.name()));
@@ -308,6 +323,27 @@ fn drive(
         bail!("guest produced a result for lane {}", result.lane);
     }
     Ok(result)
+}
+
+fn execute_and_collect(
+    backend: &mut dyn DisposableWindows,
+    run: &RunDir,
+    command: &GuestCommand,
+    retain: &mut bool,
+) -> Result<i32> {
+    let execution = backend.execute(command);
+    if let Err(collection) = backend.collect(run) {
+        *retain = true;
+        bail!(
+            "evidence collection failed: {collection:#}; the guest and its disk are retained for recovery at {}{}",
+            run.host.display(),
+            execution
+                .err()
+                .map(|e| format!("; execution: {e:#}"))
+                .unwrap_or_default()
+        );
+    }
+    execution
 }
 
 /// A lane result for scenarios that never reached an environment.
@@ -387,6 +423,185 @@ pub fn open(kind: BackendKind) -> Result<Box<dyn DisposableWindows>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct Lifecycle {
+        fail_execute: bool,
+        fail_collect: bool,
+        fail_destroy: bool,
+        result: Option<LaneResult>,
+        events: Vec<&'static str>,
+    }
+
+    impl DisposableWindows for Lifecycle {
+        fn kind(&self) -> BackendKind {
+            BackendKind::HyperV
+        }
+        fn prepare(&mut self, _: &RunDir) -> Result<()> {
+            self.events.push("prepare");
+            Ok(())
+        }
+        fn start(&mut self, _: &RunDir) -> Result<()> {
+            self.events.push("start");
+            Ok(())
+        }
+        fn execute(&mut self, _: &GuestCommand) -> Result<i32> {
+            self.events.push("execute");
+            if self.fail_execute {
+                bail!("campaign failed")
+            }
+            Ok(0)
+        }
+        fn collect(&mut self, run: &RunDir) -> Result<()> {
+            self.events.push("collect");
+            if self.fail_collect {
+                bail!("transport failed")
+            }
+            if let Some(result) = &self.result {
+                std::fs::write(
+                    run.out().join(format!("{}.result.json", result.lane)),
+                    serde_json::to_vec(result)?,
+                )?;
+            }
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<()> {
+            self.events.push("stop");
+            Ok(())
+        }
+        fn destroy(&mut self) -> Result<()> {
+            self.events.push("destroy");
+            if self.fail_destroy {
+                bail!("cleanup failed");
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn evidence_is_rescued_after_failure_and_failed_rescue_preserves_guest() {
+        for fail_execute in [false, true] {
+            for fail_collect in [false, true] {
+                let mut backend = Lifecycle {
+                    fail_execute,
+                    fail_collect,
+                    events: vec![],
+                    ..Default::default()
+                };
+                let mut retain = false;
+                let result = execute_and_collect(
+                    &mut backend,
+                    &RunDir {
+                        host: "unused".into(),
+                    },
+                    &GuestCommand {
+                        program: "unused".into(),
+                        args: vec![],
+                        timeout: Duration::ZERO,
+                    },
+                    &mut retain,
+                );
+                assert_eq!(result.is_err(), fail_execute || fail_collect);
+                assert_eq!(retain, fail_collect);
+                assert_eq!(backend.events, ["execute", "collect"]);
+                if fail_execute && fail_collect {
+                    let detail = result.unwrap_err().to_string();
+                    assert!(detail.contains("campaign failed"));
+                    assert!(detail.contains("transport failed"));
+                    assert!(detail.contains("retained for recovery"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lane_cleanup_is_ordered_and_failed_collection_retains_the_environment() {
+        let scenarios = crate::scenarios::registry();
+        let request = LaneRequest {
+            lane: Lane::CiInstall,
+            profile: "release",
+            bundle: None,
+            only: &[],
+            skip: &[],
+            attest: &[],
+            keep_media: false,
+            scenarios: vec![&scenarios[0]],
+            slot: None,
+        };
+        for (execute, collect, destroy) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (true, true, false),
+            (false, false, true),
+            (true, false, true),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut backend = Lifecycle {
+                fail_execute: execute,
+                fail_collect: collect,
+                fail_destroy: destroy,
+                result: Some(synthetic_result(
+                    &request,
+                    &now_rfc3339(),
+                    Verdict::Pass,
+                    "fixture campaign",
+                )),
+                ..Default::default()
+            };
+            let result = run_lane(&mut backend, &request, directory.path());
+            assert_eq!(
+                result.scenarios[0].verdict,
+                if execute || collect || destroy {
+                    Verdict::InfraError
+                } else {
+                    Verdict::Pass
+                }
+            );
+            assert_eq!(
+                &backend.events[..4],
+                ["prepare", "start", "execute", "collect"]
+            );
+            assert_eq!(backend.events.contains(&"destroy"), !collect);
+            if !execute && !collect {
+                assert_eq!(&backend.events[4..], ["stop", "destroy"]);
+            }
+            if execute && destroy {
+                assert!(result.scenarios[0].detail.contains("campaign failed"));
+                assert!(result.scenarios[0].detail.contains("cleanup failed"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_colliding_run_directory_is_never_cleared() {
+        let directory = tempfile::tempdir().unwrap();
+        let existing = directory
+            .path()
+            .join(format!("hyperv-{}", Lane::CiInstall.name()));
+        std::fs::create_dir(&existing).unwrap();
+        std::fs::write(existing.join("evidence"), "preserve").unwrap();
+        let scenarios = crate::scenarios::registry();
+        let request = LaneRequest {
+            lane: Lane::CiInstall,
+            profile: "release",
+            bundle: None,
+            only: &[],
+            skip: &[],
+            attest: &[],
+            keep_media: false,
+            scenarios: vec![&scenarios[0]],
+            slot: None,
+        };
+        let mut backend = Lifecycle::default();
+        let result = run_lane(&mut backend, &request, directory.path());
+        assert_eq!(result.scenarios[0].verdict, Verdict::InfraError);
+        assert!(!backend.events.contains(&"prepare"));
+        assert_eq!(
+            std::fs::read_to_string(existing.join("evidence")).unwrap(),
+            "preserve"
+        );
+    }
 
     fn host(names: &[&str]) -> CapabilitySet {
         CapabilitySet::from_names(names)

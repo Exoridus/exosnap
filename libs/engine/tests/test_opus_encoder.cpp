@@ -1,5 +1,7 @@
+#include <cstddef>
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/packet_types.h"
 #include "opus_audio_encoder.h"
 
 #include <cmath>

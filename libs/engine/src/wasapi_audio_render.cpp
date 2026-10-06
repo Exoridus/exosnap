@@ -5,7 +5,12 @@
 
 #include <Audioclient.h>
 #include <avrt.h>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
 #include <mmdeviceapi.h>
+#include <mutex>
+#include <string>
 #include <windows.h>
 
 extern "C" {

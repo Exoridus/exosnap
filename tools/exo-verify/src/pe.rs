@@ -121,6 +121,7 @@ pub const WINDOWS_SYSTEM_DLLS: &[&str] = &[
     "msvcrt.dll",
     "user32.dll",
     "gdi32.dll",
+    "mscms.dll",
     "shell32.dll",
     "shlwapi.dll",
     "comdlg32.dll",
@@ -310,6 +311,22 @@ mod tests {
         assert_eq!(
             imports(&synthetic_pe(&["KERNEL32.dll", "Qt6Core.dll"])).unwrap(),
             vec!["KERNEL32.dll", "Qt6Core.dll"]
+        );
+    }
+
+    #[test]
+    fn color_management_is_system_but_missing_plugins_are_not() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("qwindows.dll"),
+            synthetic_pe(&["MSCMS.DLL", "missing-color-plugin.dll"]),
+        )
+        .unwrap();
+        let audit = audit_tree(dir.path()).unwrap();
+        assert_eq!(audit.system, 1);
+        assert_eq!(
+            audit.unresolved,
+            vec!["qwindows.dll -> missing-color-plugin.dll".to_string()]
         );
     }
 

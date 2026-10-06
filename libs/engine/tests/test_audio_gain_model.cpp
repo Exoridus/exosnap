@@ -5,7 +5,6 @@
 
 #include <exosnap/engine/audio_track_model.h>
 
-#include <cmath>
 #include <vector>
 
 namespace {

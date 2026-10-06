@@ -1527,9 +1527,49 @@ void QuickApplication::synchronizeRecordState() {
     // Same cadence and the same reason as the tray: the on-screen overlays are
     // presence surfaces and must never lag the state the window is showing.
     overlay_adapter_.synchronize();
+    synchronizeOverlayTelemetry();
     // After synchronize(), so the tray reads the state the window is about to
     // show rather than the one it is replacing.
     refreshTrayState();
+}
+
+void QuickApplication::synchronizeOverlayTelemetry() {
+    OverlayTelemetryInputs overlay_values;
+    overlay_values.recording = models::ResolveRecordingOverlayContent(
+        models::RecordingOverlayPresetFromToken(settings_.recording_overlay_preset),
+        settings_.recording_overlay_custom_elements);
+    overlay_values.diagnostics = models::ResolveDiagnosticsOverlayContent(
+        models::DiagnosticsOverlayPresetFromToken(settings_.diagnostics_overlay_preset),
+        settings_.diagnostics_overlay_custom_elements);
+    overlay_values.state = static_cast<models::RecordingOverlayState>(overlay_adapter_.recordingState());
+    overlay_values.recording_active = overlay_adapter_.recordingOverlayActive();
+    overlay_values.diagnostics_active = overlay_adapter_.diagnosticsOverlayActive();
+    overlay_values.source_identity = record_view_model_adapter_.selectedTargetIdentity();
+    overlay_values.elapsed = record_view_model_adapter_.elapsedText();
+    overlay_values.size = record_view_model_adapter_.outputSizeText();
+    overlay_values.source_name = record_view_model_adapter_.sourceName();
+    overlay_values.fps = record_view_model_adapter_.capturedFpsText();
+    overlay_values.drops = record_view_model_adapter_.droppedFramesText();
+    overlay_values.drift = record_view_model_adapter_.driftText();
+    for (const QVariant& value : record_view_model_adapter_.confidenceIndicators()) {
+        const QVariantMap audio = value.toMap();
+        const QString key = audio.value(QStringLiteral("key")).toString();
+        const bool muted = !audio.value(QStringLiteral("included")).toBool();
+        const bool degraded = audio.value(QStringLiteral("tone")) == QStringLiteral("warning");
+        if (key == QStringLiteral("microphone")) {
+            overlay_values.mic_muted = muted;
+            overlay_values.mic_degraded = degraded;
+        } else if (key == QStringLiteral("speaker")) {
+            overlay_values.sys_muted = muted;
+            overlay_values.sys_degraded = degraded;
+        }
+    }
+    if (diagnostics_adapter_.recording()) {
+        const auto& snapshot = diagnostics_adapter_.liveSnapshot();
+        overlay_values.health = snapshot.health;
+        overlay_values.bottleneck = snapshot.bottleneck;
+    }
+    overlay_telemetry_adapter_.submit(overlay_values);
 }
 
 void QuickApplication::selectTarget(int target_index, CaptureMode mode) {
@@ -2721,6 +2761,7 @@ void QuickApplication::wireSettingsCommands() {
         // settings edit alone. A toggle made this way could silently stay inert
         // for the rest of the recording it was meant to affect.
         overlay_adapter_.setAppSettings(settings_);
+        synchronizeRecordState();
     });
 
     QObject::connect(&settings_adapter_, &SettingsAdapter::presetSelected, &settings_adapter_,
@@ -4388,6 +4429,7 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
             notifications_adapter_.manager().Enqueue(std::move(toast));
         }
         overlay_adapter_.synchronize();
+        synchronizeOverlayTelemetry();
         return true;
     }
 
@@ -5359,6 +5401,7 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("crashReport"), QVariant::fromValue(&crash_report_adapter_)},
         {QStringLiteral("whatsNew"), QVariant::fromValue(&whats_new_adapter_)},
         {QStringLiteral("overlays"), QVariant::fromValue(&overlay_adapter_)},
+        {QStringLiteral("overlayTelemetry"), QVariant::fromValue(&overlay_telemetry_adapter_)},
         {QStringLiteral("shellPresence"), QVariant::fromValue(&shell_presence_)},
         {QStringLiteral("trayAdapter"), QVariant::fromValue(&tray_adapter_)},
         {QStringLiteral("noActivate"), no_activate},
@@ -5578,6 +5621,10 @@ const RecordViewModel& QuickApplication::recordViewModel() const noexcept {
 }
 RecordViewModelAdapter* QuickApplication::recordViewModelAdapter() noexcept {
     return &record_view_model_adapter_;
+}
+
+OverlayTelemetryAdapter* QuickApplication::overlayTelemetryAdapter() noexcept {
+    return &overlay_telemetry_adapter_;
 }
 SettingsAdapter* QuickApplication::settingsAdapter() noexcept {
     return &settings_adapter_;

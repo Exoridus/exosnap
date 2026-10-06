@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <memory>
 
 #include "../auto_record/AutoRecordHarness.h"
 
@@ -8,6 +9,35 @@ using exosnap::auto_record::HasAutoRecordRequest;
 using exosnap::auto_record::HdrMode;
 using exosnap::auto_record::ParseAutoRecordOptions;
 using exosnap::auto_record::TargetKind;
+
+TEST(AutoRecordHarness, DeliversSeededReadyBeforeCaptureLease) {
+    int argc = 1;
+    char executable[] = "auto-record-test";
+    char* argv[] = {executable, nullptr};
+    std::unique_ptr<QCoreApplication> owned_app;
+    if (QCoreApplication::instance() == nullptr)
+        owned_app = std::make_unique<QCoreApplication>(argc, argv);
+    auto& app = *QCoreApplication::instance();
+    bool lease_owned = false;
+    bool ready_delivered = false;
+    bool premature_return = false;
+    QMetaObject::invokeMethod(
+        &app,
+        [&]() {
+            ready_delivered = true;
+            premature_return = lease_owned;
+        },
+        Qt::QueuedConnection);
+
+    const bool started = exosnap::auto_record::StartAutoRecordAfterPendingState(app, [&]() {
+        EXPECT_TRUE(ready_delivered);
+        lease_owned = true;
+        return false;
+    });
+    EXPECT_FALSE(started);
+    QCoreApplication::sendPostedEvents(&app, QEvent::MetaCall);
+    EXPECT_FALSE(premature_return);
+}
 
 TEST(AutoRecordHarness, HasRequestDetectsFlag) {
     EXPECT_TRUE(HasAutoRecordRequest({QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record")}));
