@@ -434,12 +434,12 @@
     </message>
     <message>
         <location filename="../../libs/capability/src/encoder_device_resolver.cpp" line="+109"/>
-        <location line="+124"/>
+        <location line="+133"/>
         <source>No encoder backend is implemented for this adapter in this build.</source>
         <translation>Für diesen Adapter ist in diesem Build kein Encoder-Backend implementiert.</translation>
     </message>
     <message>
-        <location line="-119"/>
+        <location line="-128"/>
         <source>The encoder capability probe did not complete on this adapter.</source>
         <translation>Die Encoder-Capability-Probe wurde auf diesem Adapter nicht abgeschlossen.</translation>
     </message>
@@ -3996,7 +3996,10 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     <message numerus="yes">
         <location line="+18"/>
         <source>Problems observed: %n</source>
-        <translation><numerusform>Festgestelltes Problem: %n</numerusform><numerusform>Festgestellte Probleme: %n</numerusform></translation>
+        <translation>
+            <numerusform>Festgestelltes Problem: %n</numerusform>
+            <numerusform>Festgestellte Probleme: %n</numerusform>
+        </translation>
     </message>
     <message>
         <location filename="../notifications/NotificationEvent.h" line="+1"/>
@@ -4292,7 +4295,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>QuickApplication</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+749"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+750"/>
         <source>Recording is blocked</source>
         <translation>Aufnahme blockiert</translation>
     </message>
@@ -4352,7 +4355,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Wählen Sie einen Bereich mit mindestens 64 × 64 Pixeln.</translation>
     </message>
     <message>
-        <location line="+1095"/>
+        <location line="+1097"/>
         <location line="+289"/>
         <location line="+69"/>
         <source>Settings could not be saved</source>
@@ -4411,12 +4414,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+4"/>
-        <location line="+1212"/>
+        <location line="+1219"/>
         <source>Window capture appears to have stalled</source>
         <translation>Die Fensteraufnahme scheint stillzustehen</translation>
     </message>
     <message>
-        <location line="-1211"/>
+        <location line="-1218"/>
         <source>No new frame has arrived from the captured window for 12 seconds. The recording is still running, but the captured window may be frozen.</source>
         <translation>Seit 12 Sekunden ist kein neuer Frame vom aufgenommenen Fenster angekommen. Die Aufnahme läuft weiter, das Fenster könnte jedoch eingefroren sein.</translation>
     </message>
@@ -4436,7 +4439,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>2026-08-10 21-14-08.mkv - 2:34, 412 MB</translation>
     </message>
     <message>
-        <location line="+480"/>
+        <location line="+487"/>
         <source>Update checks are paused while a recording is in progress.</source>
         <translation>Während einer Aufnahme wird nicht nach Updates gesucht.</translation>
     </message>
@@ -4487,8 +4490,8 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Letzte Session wiederherstellen?</translation>
     </message>
     <message>
-        <location line="-939"/>
-        <location line="+1084"/>
+        <location line="-946"/>
+        <location line="+1091"/>
         <location line="+467"/>
         <source>Recording saved</source>
         <translation>Aufnahme gespeichert</translation>
@@ -4499,14 +4502,14 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB</translation>
     </message>
     <message>
-        <location line="-1128"/>
-        <location line="+1133"/>
+        <location line="-1135"/>
+        <location line="+1140"/>
         <source>Frames were dropped</source>
         <translation>Frames wurden verworfen</translation>
     </message>
     <message>
-        <location line="-1132"/>
-        <location line="+1133"/>
+        <location line="-1139"/>
+        <location line="+1140"/>
         <source>122 frames did not reach the encoder during the last recording.</source>
         <translation>122 Frames haben den Encoder während der letzten Aufnahme nicht erreicht.</translation>
     </message>
@@ -4527,18 +4530,18 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>ExoSnap 0.9.1 ist zur Installation bereit.</translation>
     </message>
     <message>
-        <location line="-1122"/>
-        <location line="+1592"/>
+        <location line="-1129"/>
+        <location line="+1599"/>
         <source>Storage running low</source>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-4093"/>
+        <location line="-4102"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+3460"/>
+        <location line="+3469"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -4571,7 +4574,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Tastenkürzel nicht verfügbar</translation>
     </message>
     <message>
-        <location line="+476"/>
+        <location line="+487"/>
         <source>Output folder is not writable</source>
         <translation>Ausgabeordner ist nicht beschreibbar</translation>
     </message>
@@ -5213,7 +5216,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>RecordingActions</name>
     <message>
-        <location filename="../services/RecordingCoordinator.cpp" line="+1653"/>
+        <location filename="../services/RecordingCoordinator.cpp" line="+1673"/>
         <source>Split is only available while recording.</source>
         <translation>Aufteilen ist nur während einer Aufnahme möglich.</translation>
     </message>
@@ -5233,7 +5236,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Segment %1 gestartet</translation>
     </message>
     <message>
-        <location line="+1091"/>
+        <location line="+1093"/>
         <source>Failed to write PNG file</source>
         <translation>Die PNG-Datei konnte nicht gespeichert werden</translation>
     </message>
@@ -6130,6 +6133,83 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
         <location line="-10"/>
         <source>Speed versus quality on NVIDIA GPUs (P1-P7)</source>
         <translation>Geschwindigkeit versus Qualität auf NVIDIA-GPUs (P1-P7)</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+11"/>
+        <source>B-frames</source>
+        <translation>B-Frames</translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <source>Reordered frames can improve compression. They increase encoder buffering and may affect compatibility with players and editing tools.</source>
+        <translation>Umgeordnete Frames können die Kompression verbessern. Sie erhöhen die Encoder-Pufferung und können die Kompatibilität mit Playern und Bearbeitungsprogrammen beeinflussen.</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+11"/>
+        <source>B-frame reference mode</source>
+        <translation>B-Frame-Referenzmodus</translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <source>Using B-frames as references may improve compression and increases dependencies within a GOP.</source>
+        <translation>B-Frames als Referenzen können die Kompression verbessern und erhöhen die Abhängigkeiten innerhalb einer GOP.</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+11"/>
+        <source>Lookahead</source>
+        <translation>Lookahead</translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <source>Analyzes upcoming frames before encoding. It increases latency, GPU work and memory use.</source>
+        <translation>Analysiert kommende Frames vor dem Encoding. Erhöht Latenz, GPU-Rechenaufwand und Speicherbedarf.</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+11"/>
+        <source>Lookahead depth</source>
+        <translation>Lookahead-Tiefe</translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <source>Frames buffered for analysis</source>
+        <translation>Für die Analyse gepufferte Frames</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+11"/>
+        <source>Spatial AQ</source>
+        <translation>Spatial AQ</translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <source>Redistributes quality within each frame. It uses GPU work and can trade small text detail for quality in other regions. It is off by default, including CQ.</source>
+        <translation>Verteilt die Qualität innerhalb jedes Frames neu. Benötigt GPU-Rechenleistung und kann feine Textdetails zugunsten anderer Bildbereiche reduzieren. Standardmäßig ausgeschaltet, auch bei CQ.</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+11"/>
+        <source>Temporal AQ</source>
+        <translation>Temporal AQ</translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <source>Redistributes quality across frames according to motion. It uses GPU work and can increase bitrate variation.</source>
+        <translation>Verteilt die Qualität abhängig von der Bewegung über mehrere Frames. Benötigt GPU-Rechenleistung und kann die Bitrate stärker schwanken lassen.</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+11"/>
+        <source>Multipass</source>
+        <translation>Multipass</translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <source>An extra analysis pass may improve bitrate allocation for VBR and CBR. Full-resolution analysis costs more GPU work than quarter-resolution analysis.</source>
+        <translation>Ein zusätzlicher Analysedurchlauf kann die Bitratenverteilung bei VBR und CBR verbessern. Die Analyse mit voller Auflösung benötigt mehr GPU-Rechenleistung als mit Viertelauflösung.</translation>
     </message>
 </context>
 <context>
@@ -8396,12 +8476,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+7"/>
-        <location line="+143"/>
+        <location line="+169"/>
         <source>Auto</source>
         <translation>Auto</translation>
     </message>
     <message>
-        <location line="-139"/>
+        <location line="-165"/>
         <source>Auto (%1)</source>
         <translation>Auto (%1)</translation>
     </message>
@@ -8416,7 +8496,34 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Auf einem anderen Adapter als die Capture-Quelle; Cross-Adapter-Encoding ist nicht implementiert.</translation>
     </message>
     <message>
-        <location line="+40"/>
+        <location line="+22"/>
+        <source>Every B-frame</source>
+        <translation>Jeder B-Frame</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Middle B-frame</source>
+        <translation>Mittlerer B-Frame</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Single pass</source>
+        <translation>Single Pass</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Quarter-resolution multipass</source>
+        <translatorcomment>The row already says Multipass. Use short option labels to avoid truncation.</translatorcomment>
+        <translation>Viertelauflösung</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Full-resolution multipass</source>
+        <translatorcomment>The row already says Multipass. Use short option labels to avoid truncation.</translatorcomment>
+        <translation>Volle Auflösung</translation>
+    </message>
+    <message>
+        <location line="+32"/>
         <source>Constant quality</source>
         <translation>Konstante Qualität</translation>
     </message>
@@ -8433,18 +8540,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <location line="+15"/>
         <location line="+101"/>
-        <location line="+1494"/>
+        <location line="+1643"/>
         <source>%1 fps</source>
         <translation>%1 fps</translation>
     </message>
     <message>
-        <location line="-1594"/>
-        <location line="+1595"/>
+        <location line="-1743"/>
+        <location line="+1744"/>
         <source>Faster than the fastest attached display (%1 Hz)</source>
         <translation>Schneller als der schnellste angeschlossene Bildschirm (%1 Hz)</translation>
     </message>
     <message>
-        <location line="-1578"/>
+        <location line="-1727"/>
         <source>%1 fps (Custom)</source>
         <translation>%1 fps (Benutzerdefiniert)</translation>
     </message>
@@ -8646,32 +8753,34 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>RNNoise</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <location line="+575"/>
-        <location line="+829"/>
+        <location line="-255"/>
+        <location line="+7"/>
+        <location line="+250"/>
+        <location line="+671"/>
+        <location line="+882"/>
         <source>Off</source>
         <translation>Aus</translation>
     </message>
     <message>
-        <location line="-1396"/>
-        <location line="+523"/>
+        <location line="-1545"/>
+        <location line="+619"/>
         <source>Application audio</source>
         <translation>Anwendungsaudio</translation>
     </message>
     <message>
-        <location line="-520"/>
-        <location line="+524"/>
+        <location line="-616"/>
+        <location line="+620"/>
         <source>System audio</source>
         <translation>Systemaudio</translation>
     </message>
     <message>
-        <location line="-521"/>
-        <location line="+524"/>
+        <location line="-617"/>
+        <location line="+620"/>
         <source>Microphone</source>
         <translation>Mikrofon</translation>
     </message>
     <message>
-        <location line="-522"/>
+        <location line="-618"/>
         <source>No audio</source>
         <translation>Kein Audio</translation>
     </message>
@@ -8681,7 +8790,73 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>%1 kbps</translation>
     </message>
     <message>
-        <location line="+174"/>
+        <location line="+162"/>
+        <source>AV1 B-frame counts above 7 require hierarchical reference mode, which this SDK does not implement.</source>
+        <translation>Mehr als 7 B-Frames erfordern bei AV1 einen hierarchischen Referenzmodus, den dieses SDK nicht implementiert.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Saved B-frame count is unavailable on this codec/device. The supported count is applied.</source>
+        <translation>Die gespeicherte Anzahl der B-Frames ist für diesen Codec/dieses Gerät nicht verfügbar. Die unterstützte Anzahl wird angewendet.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+53"/>
+        <source>NVENC support for this adapter and codec has not been confirmed.</source>
+        <translation>Die NVENC-Unterstützung für diesen Adapter und Codec wurde nicht bestätigt.</translation>
+    </message>
+    <message>
+        <location line="-52"/>
+        <source>The GPU/driver reports no B-frame support for this codec.</source>
+        <translation>GPU/Treiber melden für diesen Codec keine Unterstützung für B-Frames.</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Saved B-frame reference mode is unavailable on this codec/device.</source>
+        <translation>Der gespeicherte B-Frame-Referenzmodus ist für diesen Codec/dieses Gerät nicht verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>No B-frame reference mode is supported for this count, codec and GPU.</source>
+        <translation>Für diese Anzahl, diesen Codec und diese GPU wird kein B-Frame-Referenzmodus unterstützt.</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Reduce the B-frame count to enable Lookahead.</source>
+        <translation>Reduzieren Sie die Anzahl der B-Frames, um Lookahead zu aktivieren.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Saved Lookahead preference is unavailable on this codec/device.</source>
+        <translation>Die gespeicherte Lookahead-Einstellung ist für diesen Codec/dieses Gerät nicht verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Maximum Lookahead depth: %1 (limited to reduce encoder memory use).</source>
+        <translation>Maximale Lookahead-Tiefe: %1 (zur Begrenzung des Encoder-Speicherbedarfs).</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Lookahead support has not been confirmed for this codec/device.</source>
+        <translation>Die Lookahead-Unterstützung für diesen Codec/dieses Gerät wurde nicht bestätigt.</translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Saved Temporal AQ preference is unavailable on this codec/device.</source>
+        <translation>Die gespeicherte Temporal-AQ-Einstellung ist für diesen Codec/dieses Gerät nicht verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Temporal AQ support has not been confirmed for this codec/device.</source>
+        <translation>Die Temporal-AQ-Unterstützung für diesen Codec/dieses Gerät wurde nicht bestätigt.</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Multipass rate control is available with VBR or CBR.</source>
+        <translation>Multipass ist bei VBR oder CBR verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+27"/>
         <source>qindex</source>
         <translation>qindex</translation>
     </message>
