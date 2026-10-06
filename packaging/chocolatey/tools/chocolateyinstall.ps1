@@ -14,7 +14,7 @@ $packageArgs = @{
   checksum64     = '0000000000000000000000000000000000000000000000000000000000000000'
   checksumType64 = 'sha256'
   softwareName   = 'ExoSnap*'
-  silentArgs     = '/qn /norestart'
+  silentArgs     = '/qn /norestart EXOSNAP_DISTRIBUTION_OWNER=chocolatey'
   validExitCodes = @(0, 3010, 1641)
 }
 

@@ -105,6 +105,10 @@ pub fn validate_winget(repo_root: &Path, version: &str) -> anyhow::Result<Valida
     let installer_text = std::fs::read_to_string(&installer_path)?;
     let locale_text = std::fs::read_to_string(&locale_path)?;
 
+    if !has_distribution_owner_switch(&installer_text) {
+        report.errors.push("installer manifest: InstallerSwitches.Custom must be EXOSNAP_DISTRIBUTION_OWNER=winget".into());
+    }
+
     for (text, label) in [
         (&version_text, "version manifest"),
         (&installer_text, "installer manifest"),
@@ -293,6 +297,26 @@ pub fn validate_winget(repo_root: &Path, version: &str) -> anyhow::Result<Valida
     Ok(report)
 }
 
+pub(crate) fn has_distribution_owner_switch(text: &str) -> bool {
+    let mut in_switches = false;
+    let mut blocks = 0;
+    let mut owners = Vec::new();
+    for line in text
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+    {
+        if line.trim() == "InstallerSwitches:" {
+            blocks += 1;
+            in_switches = line == "InstallerSwitches:";
+        } else if !line.starts_with(' ') {
+            in_switches = false;
+        } else if in_switches && let Some(value) = line.strip_prefix("  Custom:") {
+            owners.push(value.trim().trim_matches(['\'', '"']));
+        }
+    }
+    blocks == 1 && owners == ["EXOSNAP_DISTRIBUTION_OWNER=winget"]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +335,8 @@ mod tests {
         "PackageIdentifier: Codexo.ExoSnap\n",
         "PackageVersion: 0.10.0\n",
         "InstallerType: wix\n",
+        "InstallerSwitches:\n",
+        "  Custom: EXOSNAP_DISTRIBUTION_OWNER=winget\n",
         "Dependencies:\n",
         "  PackageDependencies:\n",
         "    - PackageIdentifier: Microsoft.VCRedist.2015+.x64\n",
@@ -362,6 +388,39 @@ mod tests {
         let dir = fixture();
         let report = validate_winget(dir.path(), VERSION).unwrap();
         assert!(report.ok(), "{:?}", report.errors);
+    }
+
+    #[test]
+    fn distribution_owner_must_be_an_installer_switch() {
+        for replacement in [
+            "",
+            "InstallerSwitches:\n  Custom: EXOSNAP_DISTRIBUTION_OWNER=direct\n",
+            "Custom: EXOSNAP_DISTRIBUTION_OWNER=winget\n",
+            "# InstallerSwitches:\n#   Custom: EXOSNAP_DISTRIBUTION_OWNER=winget\n",
+            "Dependencies:\n  Custom: EXOSNAP_DISTRIBUTION_OWNER=winget\n",
+        ] {
+            let dir = fixture();
+            let path = dir.path().join(
+                "packaging/winget/manifests/c/Codexo/ExoSnap/0.10.0/Codexo.ExoSnap.installer.yaml",
+            );
+            std::fs::write(
+                path,
+                INSTALLER_MANIFEST.replace(
+                    "InstallerSwitches:\n  Custom: EXOSNAP_DISTRIBUTION_OWNER=winget\n",
+                    replacement,
+                ),
+            )
+            .unwrap();
+            let report = validate_winget(dir.path(), VERSION).unwrap();
+            assert!(
+                report
+                    .errors
+                    .iter()
+                    .any(|e| e.contains("EXOSNAP_DISTRIBUTION_OWNER")),
+                "{replacement:?}: {:?}",
+                report.errors
+            );
+        }
     }
 
     #[test]

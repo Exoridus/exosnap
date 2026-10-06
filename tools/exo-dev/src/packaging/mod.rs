@@ -13,6 +13,7 @@
 
 pub mod chocolatey;
 pub mod msi_harvest;
+mod msi_ownership;
 pub mod scoop;
 pub mod winget;
 

@@ -204,6 +204,9 @@ pub fn validate_chocolatey(
     };
 
     let mut report = ValidationReport::default();
+    if !has_distribution_owner_switch(&install_text) {
+        report.errors.push("chocolateyinstall.ps1: silentArgs must be '/qn /norestart EXOSNAP_DISTRIBUTION_OWNER=chocolatey'".into());
+    }
 
     let nuspec_version = xml_element(&nuspec_text, "version").unwrap_or_default();
     if nuspec_version != version {
@@ -625,6 +628,17 @@ pub fn validate_chocolatey(
     Ok(report)
 }
 
+pub(crate) fn has_distribution_owner_switch(text: &str) -> bool {
+    let values: Vec<_> = text
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.trim().split_once('=')?;
+            (key.trim() == "silentArgs").then_some(value.trim())
+        })
+        .collect();
+    values == ["'/qn /norestart EXOSNAP_DISTRIBUTION_OWNER=chocolatey'"]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -672,6 +686,7 @@ This description exists only to satisfy the thirty character minimum for the mod
         "  url64bit       = 'https://github.com/Exoridus/exosnap/releases/download/v0.10.0/ExoSnap-0.10.0-windows-x64.msi'\n",
         "  checksum64     = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'\n",
         "  checksumType64 = 'sha256'\n",
+        "  silentArgs     = '/qn /norestart EXOSNAP_DISTRIBUTION_OWNER=chocolatey'\n",
         "}\n",
         "Install-ChocolateyPackage @packageArgs\n",
     );
@@ -689,6 +704,38 @@ This description exists only to satisfy the thirty character minimum for the mod
         std::fs::write(choco.join("tools/chocolateyinstall.ps1"), INSTALL).unwrap();
         std::fs::write(choco.join("tools/chocolateyuninstall.ps1"), UNINSTALL).unwrap();
         dir
+    }
+
+    #[test]
+    fn distribution_owner_and_silent_options_are_required() {
+        for replacement in [
+            "",
+            "  silentArgs = '/qn /norestart'\n",
+            "  silentArgs = '/qn /norestart EXOSNAP_DISTRIBUTION_OWNER=direct'\n",
+            "# silentArgs = '/qn /norestart EXOSNAP_DISTRIBUTION_OWNER=chocolatey'\n",
+            "  silentArgs = 'EXOSNAP_DISTRIBUTION_OWNER=chocolatey'\n",
+        ] {
+            let dir = fixture();
+            std::fs::write(
+                dir.path()
+                    .join("packaging/chocolatey/tools/chocolateyinstall.ps1"),
+                INSTALL.replace(
+                    "  silentArgs     = '/qn /norestart EXOSNAP_DISTRIBUTION_OWNER=chocolatey'\n",
+                    replacement,
+                ),
+            )
+            .unwrap();
+            let report =
+                validate_chocolatey(dir.path(), VERSION, ChocolateyMode::default()).unwrap();
+            assert!(
+                report
+                    .errors
+                    .iter()
+                    .any(|e| e.contains("EXOSNAP_DISTRIBUTION_OWNER")),
+                "{replacement:?}: {:?}",
+                report.errors
+            );
+        }
     }
 
     #[test]

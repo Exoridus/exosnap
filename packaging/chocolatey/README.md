@@ -46,3 +46,9 @@ ExoSnap (`exosnap.exe` and the shipped Qt6 DLLs) links the dynamic MSVC runtime 
 Its version is a floor, not a preference: the redistributable must be at least as new as the MSVC toolset that built the release binaries, because a newer toolset may emit calls to runtime exports an older redistributable does not export. Release MSIs are built by the GitHub Actions `windows-2022` image, so the floor tracks that image's MSVC toolset and has to be re-checked whenever the image moves.
 
 Publication follows the current [publication policy](../publication-policy.json) and [release checklist](../../docs/release-checklist.md#8-package-manager-publication). A package source file is not evidence that the community feed has published it.
+
+## Installation ownership
+
+The adapter passes `/qn /norestart EXOSNAP_DISTRIBUTION_OWNER=chocolatey`. The MSI stores this owner with `installed` and `InstallPath` in the 64-bit `HKLM\Software\ExoSnap` product record. Repair or a major upgrade without an explicit caller property preserves a nonempty marker. An explicit `direct`, `winget` or `chocolatey` caller takes precedence, and other explicit values fail MSI launch validation.
+
+An installation created before this marker defaults to Direct until a Chocolatey upgrade passes the property. ExoSnap does not inspect Chocolatey's package database to infer ownership. Direct Setup and a raw MSI preserve an existing manager marker unless a recognized explicit property replaces it.
