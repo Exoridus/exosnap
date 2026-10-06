@@ -8,6 +8,7 @@
 //! `docs/dev/encoder-quality-matrix.md` for the full workflow.
 
 mod bd_rate;
+pub mod campaign;
 mod matrix;
 mod process_args;
 mod quality;
