@@ -875,6 +875,204 @@ fn msi_user_data_removal(ctx: &mut Context) -> Step {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    fn smoke_msi(
+        path: &Path,
+        verb: &str,
+        owner: Option<&str>,
+        log: &Path,
+    ) -> Result<crate::tools::Output> {
+        let mut command = Command::new("msiexec.exe");
+        command
+            .arg(verb)
+            .arg(path)
+            .args(["/qn", "/norestart", "/l*v"])
+            .arg(log);
+        if let Some(owner) = owner {
+            command.arg(format!("EXOSNAP_DISTRIBUTION_OWNER={owner}"));
+        }
+        crate::tools::run(&mut command, secs(360.0))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "runs only in the identity-bound disposable guest created by the MSI smoke host test"]
+    fn msi_distribution_ownership_guest_smoke() -> Result<()> {
+        let payload = PathBuf::from(crate::disposable::GUEST_ROOT).join("payload");
+        let input: serde_json::Value =
+            serde_json::from_slice(&fs::read(payload.join("msi-ownership-smoke.json"))?)?;
+        let vm_id = input["vmId"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("VM identity absent"))?;
+        exo_guest::provision::assert_disposable_guest(vm_id)?;
+        let out = PathBuf::from(crate::disposable::GUEST_ROOT).join("out");
+        fs::create_dir_all(&out)?;
+        let clean_before = super::super::clean::residue()?;
+        assert!(
+            clean_before.is_empty(),
+            "the disposable image is not clean: {clean_before:?}"
+        );
+        assert!(!reg_key_exists(INSTALL_KEY)?);
+        let install_root = PathBuf::from(
+            std::env::var_os("ProgramFiles")
+                .ok_or_else(|| anyhow::anyhow!("ProgramFiles unavailable"))?,
+        )
+        .join("ExoSnap");
+        assert!(
+            !install_root.exists(),
+            "the disposable image contains an existing ExoSnap installation tree"
+        );
+        let packages = input["packages"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("MSI inventory absent"))?;
+        assert_eq!(packages.len(), 2);
+        let paths: Vec<_> = packages
+            .iter()
+            .map(|p| PathBuf::from(p["path"].as_str().unwrap()))
+            .collect();
+        let codes: Vec<_> = packages
+            .iter()
+            .map(|p| p["productCode"].as_str().unwrap())
+            .collect();
+        assert!(codes.iter().all(|code| is_product_code(code)));
+        assert_ne!(codes[0], codes[1]);
+        assert_eq!(packages[0]["upgradeCode"], packages[1]["upgradeCode"]);
+        for (package, path) in packages.iter().zip(&paths) {
+            assert_eq!(sha256_file(path)?.0, package["sha256"].as_str().unwrap());
+        }
+        let minimum: Vec<u64> = crate::package::VC_REDIST_MIN_VERSION
+            .trim_start_matches('v')
+            .split('.')
+            .map(str::parse)
+            .collect::<std::result::Result<_, _>>()?;
+        let runtime_ready =
+            || vc_runtime_version().is_some_and(|(a, b, c, d)| vec![a, b, c, d] >= minimum);
+        if !runtime_ready() {
+            let runtime =
+                PathBuf::from(input["runtime"]["path"].as_str().ok_or_else(|| {
+                    anyhow::anyhow!("the guest needs the pinned Visual C++ runtime")
+                })?);
+            assert_eq!(sha256_file(&runtime)?.0, crate::package::VC_REDIST_SHA256);
+            let installed = crate::tools::run(
+                Command::new(runtime)
+                    .args(["/install", "/quiet", "/norestart", "/log"])
+                    .arg(out.join("runtime.log")),
+                secs(360.0),
+            )?;
+            assert!(
+                matches!(installed.code(), Some(0 | 3010)),
+                "runtime install: {installed:?}"
+            );
+            assert!(
+                runtime_ready(),
+                "runtime install did not establish the MSI prerequisite"
+            );
+        }
+        let mut results = Vec::new();
+        let mut root = PathBuf::new();
+        for (index, (name, package, caller, expected)) in [
+            ("fresh-direct", 0, None, "direct"),
+            ("upgrade-direct", 1, None, "direct"),
+            ("explicit-winget", 0, Some("winget"), "winget"),
+            ("preserve-winget", 1, None, "winget"),
+            ("explicit-chocolatey", 0, Some("chocolatey"), "chocolatey"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let log = out.join(format!("{name}.log"));
+            let installed = smoke_msi(&paths[package], "/i", caller, &log)?;
+            assert!(
+                matches!(installed.code(), Some(0 | 3010)),
+                "{name}: {installed:?}"
+            );
+            assert_eq!(
+                reg_value("DistributionOwner")?.as_deref(),
+                Some(expected),
+                "{name}"
+            );
+            assert_eq!(reg_value("installed")?.as_deref(), Some("0x1"));
+            root = PathBuf::from(
+                reg_value("InstallPath")?.ok_or_else(|| anyhow::anyhow!("InstallPath absent"))?,
+            );
+            assert!(
+                root.join("exosnap.exe").is_file() && root.join("exosnap-updater.exe").is_file()
+            );
+            let arp = exosnap_arp_rows()?;
+            assert_eq!(arp.len(), 1, "{name}: stale product registration");
+            assert!(
+                arp[0]
+                    .uninstall_string
+                    .to_ascii_uppercase()
+                    .contains(&codes[package].to_ascii_uppercase())
+            );
+            let mut previous = None;
+            if index > 0 {
+                let previous_code = codes[1 - package];
+                assert!(!reg_key_exists(&format!(
+                    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{previous_code}"
+                ))?);
+                let text = crate::tools::read_diagnostic_log(&log, "msiexec")?;
+                assert!(
+                    text.contains("WIX_UPGRADE_DETECTED") && text.contains(previous_code),
+                    "{name}: no real major upgrade observed"
+                );
+                previous = Some(previous_code);
+            }
+            results.push(json!({"scenario": name, "owner": expected, "exitCode": installed.code(),
+                "productCode": codes[package], "removedProductCode": previous, "installPath": root}));
+            fs::write(
+                out.join("ownership.result.json"),
+                serde_json::to_vec_pretty(&json!({
+                    "vmId": vm_id, "sourceCommit": input["sourceCommit"], "scenarios": results,
+                }))?,
+            )?;
+            println!("PASS {name}: {expected}");
+        }
+        let before_invalid = tree_hashes(&root)?;
+        let invalid_log = out.join("invalid-owner.log");
+        let invalid = smoke_msi(&paths[1], "/i", Some("invalid-owner"), &invalid_log)?;
+        assert_eq!(invalid.code(), Some(1603));
+        assert!(
+            crate::tools::read_diagnostic_log(&invalid_log, "msiexec")?
+                .contains("EXOSNAP_DISTRIBUTION_OWNER must be direct, winget or chocolatey.")
+        );
+        assert_eq!(
+            reg_value("DistributionOwner")?.as_deref(),
+            Some("chocolatey")
+        );
+        assert_eq!(tree_hashes(&root)?, before_invalid);
+        let arp = exosnap_arp_rows()?;
+        assert_eq!(arp.len(), 1);
+        assert!(
+            arp[0]
+                .uninstall_string
+                .to_ascii_uppercase()
+                .contains(&codes[0].to_ascii_uppercase())
+        );
+        results.push(json!({"scenario": "invalid-owner", "exitCode": invalid.code(), "owner": "chocolatey", "treeUnchanged": true}));
+        let removed = smoke_msi(&paths[0], "/x", None, &out.join("uninstall.log"))?;
+        assert!(
+            matches!(removed.code(), Some(0 | 3010)),
+            "uninstall: {removed:?}"
+        );
+        assert!(!reg_key_exists(INSTALL_KEY)?);
+        assert!(!root.exists());
+        assert!(exosnap_arp_rows()?.is_empty());
+        let residue = super::super::clean::residue()?;
+        assert!(residue.is_empty(), "uninstall residue: {residue:?}");
+        results.push(json!({"scenario": "uninstall", "exitCode": removed.code(), "productMarkerRemoved": true, "residue": residue}));
+        fs::write(
+            out.join("ownership.result.json"),
+            serde_json::to_vec_pretty(&json!({
+                "vmId": vm_id, "sourceCommit": input["sourceCommit"], "packages": packages,
+                "runtimeVersion": vc_runtime_version(), "scenarios": results, "passed": true,
+            }))?,
+        )?;
+        println!("PASS invalid-owner, uninstall, clean-machine");
+        Ok(())
+    }
+
     #[test]
     fn install_scenario_is_restricted_to_disposable_machine() {
         let scenario = &scenarios()[0];

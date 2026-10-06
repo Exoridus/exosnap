@@ -424,6 +424,120 @@ pub fn open(kind: BackendKind) -> Result<Box<dyn DisposableWindows>> {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires a sealed Hyper-V base, explicit MSI smoke artifacts and a fresh output directory"]
+    fn msi_distribution_ownership_system_smoke() -> Result<()> {
+        let artifacts = std::env::var_os("EXO_VERIFY_MSI_SMOKE_ARTIFACTS")
+            .context("set EXO_VERIFY_MSI_SMOKE_ARTIFACTS to the smoke artifact inventory")?;
+        let mut input: serde_json::Value = serde_json::from_slice(&std::fs::read(artifacts)?)?;
+        let packages = input["packages"].as_array().context("packages absent")?;
+        anyhow::ensure!(
+            packages.len() == 2,
+            "two complete MSI packages are required"
+        );
+        anyhow::ensure!(
+            packages[0]["productCode"] != packages[1]["productCode"]
+                && packages[0]["upgradeCode"] == packages[1]["upgradeCode"],
+            "the packages must exercise a major upgrade within one product family"
+        );
+        let run = RunDir {
+            host: std::env::var_os("EXO_VERIFY_MSI_SMOKE_OUT")
+                .map(PathBuf::from)
+                .context("set EXO_VERIFY_MSI_SMOKE_OUT to a fresh absolute output directory")?,
+        };
+        anyhow::ensure!(
+            run.host.is_absolute() && !run.host.exists(),
+            "output must be fresh and absolute"
+        );
+        let base = std::env::var_os(hyperv::BASE_ENV).context("sealed Hyper-V base absent")?;
+        let (manifest, _) = hyperv::BaseManifest::load(Path::new(&base))?;
+        anyhow::ensure!(
+            manifest.gpu.is_none() && manifest.display.is_none(),
+            "the MSI ownership smoke requires a base without GPU or display qualification"
+        );
+        let mut backend = open(BackendKind::HyperV)?;
+        std::fs::create_dir_all(run.payload())?;
+        std::fs::create_dir_all(run.out())?;
+        for (index, package) in input["packages"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            let path = PathBuf::from(package["path"].as_str().context("MSI path absent")?);
+            let hash = crate::bundle::sha256_file(&path)?.0;
+            anyhow::ensure!(
+                package["sha256"].as_str() == Some(hash.as_str()),
+                "MSI artifact hash mismatch"
+            );
+            let name = format!("ownership-{index}.msi");
+            std::fs::copy(path, run.payload().join(&name))?;
+            package["path"] = serde_json::json!(format!(r"{GUEST_ROOT}\payload\{name}"));
+        }
+        if let Some(runtime) = input.get_mut("runtime") {
+            let path = PathBuf::from(runtime["path"].as_str().context("runtime path absent")?);
+            let hash = crate::bundle::sha256_file(&path)?.0;
+            anyhow::ensure!(
+                hash == crate::package::VC_REDIST_SHA256,
+                "runtime does not match the repository pin"
+            );
+            std::fs::copy(path, run.payload().join("vc_redist.x64.exe"))?;
+            runtime["path"] = serde_json::json!(format!(r"{GUEST_ROOT}\payload\vc_redist.x64.exe"));
+            runtime["sha256"] = serde_json::json!(hash);
+        }
+        std::fs::copy(
+            std::env::current_exe()?,
+            run.payload().join("msi-ownership-smoke.exe"),
+        )?;
+        let mut retain = false;
+        let outcome = (|| -> Result<i32> {
+            backend.prepare(&run)?;
+            let environment: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(run.host.join("environment.json"))?)?;
+            input["vmId"] = environment["vmId"].clone();
+            std::fs::write(
+                run.payload().join("msi-ownership-smoke.json"),
+                serde_json::to_vec_pretty(&input)?,
+            )?;
+            backend.start(&run)?;
+            execute_and_collect(
+                backend.as_mut(),
+                &run,
+                &GuestCommand {
+                    program: format!(r"{GUEST_ROOT}\payload\msi-ownership-smoke.exe"),
+                    args: vec![
+                        "--ignored".into(),
+                        "--exact".into(),
+                        "scenarios::install::tests::msi_distribution_ownership_guest_smoke".into(),
+                        "--nocapture".into(),
+                    ],
+                    timeout: Duration::from_secs(1200),
+                },
+                &mut retain,
+            )
+        })();
+        if !retain {
+            let stopped = backend.stop();
+            let destroyed = backend.destroy();
+            std::fs::write(
+                run.host.join("cleanup.json"),
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "stopped": stopped.is_ok(), "destroyed": destroyed.is_ok(),
+                    "stopError": stopped.as_ref().err().map(|e| format!("{e:#}")),
+                    "destroyError": destroyed.as_ref().err().map(|e| format!("{e:#}")),
+                }))?,
+            )?;
+            stopped?;
+            destroyed?;
+        }
+        anyhow::ensure!(
+            outcome? == 0,
+            "the guest smoke failed; inspect its collected result and MSI logs"
+        );
+        Ok(())
+    }
+
     #[derive(Default)]
     struct Lifecycle {
         fail_execute: bool,

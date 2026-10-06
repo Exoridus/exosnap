@@ -1,12 +1,14 @@
 // UpdateLaunchPlan.cpp -- pure, UI-agnostic helpers behind
 // UpdateService::LaunchUpdater(). No Win32: the staging file list, the recursive
-// staging copy, the updater argv, and Scoop-path detection so they can be
+// staging copy, the updater argv, and distribution eligibility so they can be
 // unit-tested headless (see app/tests/test_update_launch_plan.cpp).
 
 #include "UpdateService.h"
+#include <update/distribution_context.h>
 
 #include <control/options.h>
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -159,7 +161,7 @@ exosnap::update_handoff::UpdateHandoff BuildUpdateHandoff(const exosnap::update:
     handoff.current_version = current_version;
     handoff.manifest_path = prepared.manifest_path;
     handoff.manifest_signature_path = prepared.manifest_signature_path;
-    handoff.install_mode = st.install_mode;
+    handoff.install_mode = st.distribution.install_mode;
     handoff.install_dir = install_dir;
     handoff.app_pid = pid;
     // the updater's own same-version gate. Only ever set for a run the
@@ -169,6 +171,10 @@ exosnap::update_handoff::UpdateHandoff BuildUpdateHandoff(const exosnap::update:
 }
 
 QString HandoffRefusalReason(const exosnap::update::UpdateState& st, const UpdateService::PreparedUpdate& prepared) {
+    if (!exosnap::update::ResolveUpdatePolicy(st.distribution).CanSelfUpdate())
+        return QCoreApplication::translate(
+            "UpdateService",
+            "This installation is managed externally. Update it with the package manager that installed ExoSnap.");
     if (st.available_version_raw.empty())
         return QStringLiteral("There is no offered version to hand over.");
     if (!prepared.error.isEmpty())
@@ -185,17 +191,18 @@ QString HandoffRefusalReason(const exosnap::update::UpdateState& st, const Updat
     return {};
 }
 
-QString ResolveUpdateCardState(bool update_available, bool is_scoop, const QString& applied_version,
-                               const QString& available_version, bool verify_reinstall_mode,
-                               const QString& current_version, UpdateHandoffPhase handoff_phase) {
+QString ResolveUpdateCardState(bool update_available, exosnap::update::DistributionContext distribution,
+                               const QString& applied_version, const QString& available_version,
+                               bool verify_reinstall_mode, const QString& current_version,
+                               UpdateHandoffPhase handoff_phase) {
     if (handoff_phase == UpdateHandoffPhase::UpdaterRunning)
         return QStringLiteral("updater-running");
     if (handoff_phase == UpdateHandoffPhase::ClosingForHandoff)
         return QStringLiteral("pending");
     if (!update_available)
         return QStringLiteral("uptodate");
-    if (is_scoop)
-        return QStringLiteral("scoop");
+    if (!exosnap::update::ResolveUpdatePolicy(distribution).CanSelfUpdate())
+        return QStringLiteral("managed");
     // Verification reinstall: the offered version IS the running one.
     // Exact string equality — the engine granted the offer on the same basis.
     if (verify_reinstall_mode && !available_version.isEmpty() && available_version == current_version)
@@ -214,33 +221,6 @@ QString AppliedVersionForCommittedHandoff(const QString& target_version, bool ve
 
 QString ReconcileAppliedVersionOnStartup(const QString& /*persisted_applied_version*/) {
     return {};
-}
-
-bool UpdateService::IsScoopManagedInstall(const QString& app_dir_path) {
-    // Scoop lays apps out under "<scoop root>/apps/<name>/current". Normalise
-    // separators and case first.
-    QString normalised = app_dir_path;
-    normalised.replace(QLatin1Char('\\'), QLatin1Char('/'));
-
-    // Default layout under %USERPROFILE%\scoop (or the shell-global root): the path
-    // carries a literal "/scoop/apps/" marker segment.
-    if (normalised.contains(QStringLiteral("/scoop/apps/"), Qt::CaseInsensitive))
-        return true;
-
-    // Relocated root ($env:SCOOP): "<root>/apps/<name>/current" has no "scoop"
-    // segment, but still uses Scoop's "apps" + "current" junction layout. Require
-    // a "current" component sitting exactly two components after an "apps"
-    // component (i.e. "apps/<name>/current"), not just anywhere in the path, so
-    // trees like "C:/apps/current/ExoSnap" or "D:/Media/current/apps/" don't match.
-    if (normalised.contains(QStringLiteral("/apps/"), Qt::CaseInsensitive)) {
-        const QStringList parts = normalised.split(QLatin1Char('/'), Qt::SkipEmptyParts);
-        for (int i = 0; i < parts.size(); ++i) {
-            if (parts[i].compare(QStringLiteral("apps"), Qt::CaseInsensitive) == 0 && i + 2 < parts.size() &&
-                parts[i + 2].compare(QStringLiteral("current"), Qt::CaseInsensitive) == 0)
-                return true;
-        }
-    }
-    return false;
 }
 
 } // namespace exosnap

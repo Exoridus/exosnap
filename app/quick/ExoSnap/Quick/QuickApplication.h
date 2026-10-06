@@ -690,6 +690,7 @@ class QuickApplication {
 
     AppSettingsStore settings_store_;
     PersistedAppSettings settings_;
+    const exosnap::update::DistributionContext distribution_;
     RecordingPresetStore preset_store_;
     RecordingPresetConfig live_config_;
     // True until the first capability probe has had its say on a first start

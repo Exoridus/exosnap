@@ -71,6 +71,10 @@ namespace exosnap::updater {
 // was pinned (a manual run resolves the channel itself).
 [[nodiscard]] bool TargetVersionAccepts(const QString& target_version, const QString& manifest_version);
 
+// Empty when the resolved installation allows built-in updates. Otherwise,
+// returns package-manager guidance suitable for display without executing it.
+[[nodiscard]] QString SelfUpdateRefusalReason(exosnap::update::DistributionContext distribution);
+
 // msiexec parameter string for a silent install. Normal upgrades use
 // /i "<msi>" /qn /norestart. Verification reinstall mode additionally sets
 // REINSTALL=ALL REINSTALLMODE=vomus so Windows Installer actually reapplies the
@@ -156,7 +160,7 @@ class UpdaterWorker : public QObject {
   public slots:
     // Run the pipeline from `entry` to the end (initial run: Download; retries
     // re-enter per RetryEntryStep). Invoked queued from the GUI thread; emits
-    // either allDone() or exactly one failed(...) before returning.
+    // allDone(), failed(...) or selfUpdateBlocked(...) before returning.
     void run(UpStep entry);
 
     // --- Manual mode: the same pipeline, split at the two points a person has
@@ -198,6 +202,9 @@ class UpdaterWorker : public QObject {
     // documented dev override). Reported separately from failed() because it is
     // not a failure of an update, it is the absence of permission to look.
     void checkBlocked(QString reason);
+    // Built-in download/apply was refused for the target installation. The
+    // reason is trusted package-manager guidance, not a network diagnostic.
+    void selfUpdateBlocked(QString reason);
 
   private:
     // Resolve the newest qualifying release for the channel into release_.
@@ -210,6 +217,7 @@ class UpdaterWorker : public QObject {
     // the four sites where the engine honours the flag; everywhere else a
     // failure is a failure even if a cancel happens to be pending.
     [[nodiscard]] bool abortedByCancel();
+    [[nodiscard]] bool selfUpdateAllowed();
 
     [[nodiscard]] bool resolveRelease(bool* no_release);
     // Manifest + signature + gates + package + hash + portable staging.

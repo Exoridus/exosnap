@@ -472,13 +472,27 @@ TEST(LiveVerifyUpdatePolicy, ApplyNeedsAnOfferedUpdate) {
     EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("update.apply")), UpdateOffered()).allowed());
 
     for (const QString& card : {QStringLiteral("unchecked"), QStringLiteral("uptodate"), QStringLiteral("checking"),
-                                QStringLiteral("scoop"), QStringLiteral("pending"), QStringLiteral("error")}) {
+                                QStringLiteral("managed"), QStringLiteral("pending"), QStringLiteral("error")}) {
         AutomationState state = UpdateOffered();
         state.update_state = card;
         const PreconditionVerdict verdict = Evaluate(*FindCommand(QStringLiteral("update.apply")), state);
         EXPECT_EQ(verdict.code, QString::fromLatin1(error_code::kInvalidState)) << card.toStdString();
         EXPECT_EQ(verdict.actual.value(QStringLiteral("updateState")).toString(), card);
         EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("update.apply"))) << card.toStdString();
+    }
+}
+
+TEST(LiveVerifyUpdatePolicy, ExternalOwnersCannotApplyEvenIfCardClaimsAnOffer) {
+    namespace upd = exosnap::update;
+    for (const auto mode : {upd::InstallMode::Installed, upd::InstallMode::Portable}) {
+        for (const auto owner : {upd::DistributionOwner::WinGet, upd::DistributionOwner::Chocolatey,
+                                 upd::DistributionOwner::Scoop, upd::DistributionOwner::UnknownManaged}) {
+            AutomationState state = UpdateOffered();
+            state.update_distribution = {mode, owner};
+            EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("update.apply")), state).allowed());
+            EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("update.apply")));
+            EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("update.check")), state).allowed());
+        }
     }
 }
 

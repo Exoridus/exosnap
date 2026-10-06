@@ -52,6 +52,59 @@
 
     <Media Id="1" Cabinet="exosnap.cab" EmbedCab="yes" />
 
+    <!-- The caller property has no default: an ordinary repair or direct
+         major upgrade must preserve the existing package-manager owner.
+         Resolve before removing the previous product, in both sequences,
+         so interactive and silent installs use the same persisted marker. -->
+    <Property Id="EXOSNAP_DISTRIBUTION_OWNER" Secure="yes" />
+    <Property Id="EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED" Secure="yes">
+      <RegistrySearch Id="ExoSnapDistributionOwnerRemembered"
+                      Type="raw"
+                      Root="HKLM"
+                      Key="Software\ExoSnap"
+                      Name="DistributionOwner"
+                      Bitness="always64" />
+    </Property>
+    <Property Id="EXOSNAP_DISTRIBUTION_OWNER_PRESENT" Secure="yes" />
+    <Property Id="EXOSNAP_DISTRIBUTION_OWNER_STRING" Secure="yes" />
+    <Property Id="EXOSNAP_RESOLVED_DISTRIBUTION_OWNER" Secure="yes" />
+    <Launch Condition='NOT EXOSNAP_DISTRIBUTION_OWNER OR EXOSNAP_DISTRIBUTION_OWNER = "direct" OR EXOSNAP_DISTRIBUTION_OWNER = "winget" OR EXOSNAP_DISTRIBUTION_OWNER = "chocolatey"'
+            Message="EXOSNAP_DISTRIBUTION_OWNER must be direct, winget or chocolatey." />
+    <!-- AppSearch skips an empty REG_SZ, so a read-only presence probe must
+         distinguish malformed existing markers from genuinely absent ones. -->
+    <Binary Id="DistributionOwnerProbe" SourceFile="$(var.DistributionOwnerProbePath)" />
+    <CustomAction Id="ProbeDistributionOwner"
+                  BinaryRef="DistributionOwnerProbe"
+                  DllEntry="ProbeDistributionOwner"
+                  Execute="immediate"
+                  Return="check" />
+    <CustomAction Id="ResolveDistributionOwnerFromCaller"
+                  Property="EXOSNAP_RESOLVED_DISTRIBUTION_OWNER"
+                  Value="[EXOSNAP_DISTRIBUTION_OWNER]" />
+    <CustomAction Id="ResolveDistributionOwnerFromRegistry"
+                  Property="EXOSNAP_RESOLVED_DISTRIBUTION_OWNER"
+                  Value="[EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED]" />
+    <CustomAction Id="ResolveDistributionOwnerUnknown"
+                  Property="EXOSNAP_RESOLVED_DISTRIBUTION_OWNER"
+                  Value="unknown" />
+    <CustomAction Id="ResolveDistributionOwnerDefault"
+                  Property="EXOSNAP_RESOLVED_DISTRIBUTION_OWNER"
+                  Value="direct" />
+    <InstallUISequence>
+      <Custom Action="ProbeDistributionOwner" After="AppSearch" />
+      <Custom Action="ResolveDistributionOwnerFromCaller" After="ProbeDistributionOwner" Condition="EXOSNAP_DISTRIBUTION_OWNER" />
+      <Custom Action="ResolveDistributionOwnerFromRegistry" After="ResolveDistributionOwnerFromCaller" Condition="NOT EXOSNAP_DISTRIBUTION_OWNER AND EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED AND EXOSNAP_DISTRIBUTION_OWNER_STRING" />
+      <Custom Action="ResolveDistributionOwnerUnknown" After="ResolveDistributionOwnerFromRegistry" Condition="NOT EXOSNAP_DISTRIBUTION_OWNER AND EXOSNAP_DISTRIBUTION_OWNER_PRESENT AND (NOT EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED OR NOT EXOSNAP_DISTRIBUTION_OWNER_STRING)" />
+      <Custom Action="ResolveDistributionOwnerDefault" After="ResolveDistributionOwnerUnknown" Condition="NOT EXOSNAP_DISTRIBUTION_OWNER AND NOT EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED AND NOT EXOSNAP_DISTRIBUTION_OWNER_PRESENT" />
+    </InstallUISequence>
+    <InstallExecuteSequence>
+      <Custom Action="ProbeDistributionOwner" After="AppSearch" />
+      <Custom Action="ResolveDistributionOwnerFromCaller" After="ProbeDistributionOwner" Condition="EXOSNAP_DISTRIBUTION_OWNER" />
+      <Custom Action="ResolveDistributionOwnerFromRegistry" After="ResolveDistributionOwnerFromCaller" Condition="NOT EXOSNAP_DISTRIBUTION_OWNER AND EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED AND EXOSNAP_DISTRIBUTION_OWNER_STRING" />
+      <Custom Action="ResolveDistributionOwnerUnknown" After="ResolveDistributionOwnerFromRegistry" Condition="NOT EXOSNAP_DISTRIBUTION_OWNER AND EXOSNAP_DISTRIBUTION_OWNER_PRESENT AND (NOT EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED OR NOT EXOSNAP_DISTRIBUTION_OWNER_STRING)" />
+      <Custom Action="ResolveDistributionOwnerDefault" After="ResolveDistributionOwnerUnknown" Condition="NOT EXOSNAP_DISTRIBUTION_OWNER AND NOT EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED AND NOT EXOSNAP_DISTRIBUTION_OWNER_PRESENT" />
+    </InstallExecuteSequence>
+
     <!-- Add/Remove Programs uses the product icon, not the executable's. -->
     <Icon Id="ExoSnapAppIcon" SourceFile="$(var.AppIconPath)" />
     <Property Id="ARPPRODUCTICON" Value="ExoSnapAppIcon" />
@@ -109,6 +162,11 @@
                        Key="Software\ExoSnap"
                        Name="InstallPath"
                        Value="[INSTALLFOLDER]"
+                       Type="string" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\ExoSnap"
+                       Name="DistributionOwner"
+                       Value="[EXOSNAP_RESOLVED_DISTRIBUTION_OWNER]"
                        Type="string" />
         <!-- Clear any stale v0.10.0 product marker under the vendor key. A
              legacy handoff component below rewrites only the two values the

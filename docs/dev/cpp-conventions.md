@@ -16,13 +16,13 @@ cppcheck contract.
 | Qt/QML frontend, plain C++ view-models | `app/viewmodels/`, `app/models/` | same directory as the header (no separate `src/`) | `app/tests/` |
 | Qt Quick adapters (`QObject`, exposed to QML) | `app/quick/ExoSnap/Quick/` | same directory | `app/quick/tests/test_*.cpp`, `app/tests/` |
 | QML | `app/quick/ExoSnap/Quick/*.qml` | - | `app/quick/**/tests` (Qt Quick Test) |
-| Updater (separate Qt Widgets app) | `apps/updater/` | same directory | `apps/updater/tests/` |
+| Updater (separate Qt Quick app) | `apps/updater/` | same directory | `apps/updater/tests/` |
 | Rust developer/release tooling | `tools/<crate>/src/` | same directory | `#[cfg(test)]` modules next to the code; `tools/<crate>/tests/` for integration tests |
 
 `libs/engine` is the recording/encode/mux/diagnostics core: no Qt, no
 application policy. `app/` is the Qt Quick frontend and its C++ adapters; it
 submits editable source rows and reads engine state, it does not reimplement
-engine policy. `apps/updater` is a separate Qt Widgets application, not a
+engine policy. `apps/updater` is a separate Qt Quick application, not a
 second product frontend. Business/product policy stays in C++; QML owns
 presentation, layout and interaction (see
 [Product specification](../product-spec.md) for what counts as policy).

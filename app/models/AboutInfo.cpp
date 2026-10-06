@@ -1,7 +1,9 @@
 #include "AboutInfo.h"
+#include <update/distribution_context.h>
 
 #include "ExoSnapBuildInfo.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
@@ -34,15 +36,17 @@ QString FormatBuildTimestampForDisplay(const QString& iso8601_utc) {
     return parsed.toUTC().toString(QStringLiteral("yyyy-MM-dd HH:mm")) + QStringLiteral(" UTC");
 }
 
-QString ResolveInstallModeLabel(exosnap::update::InstallMode install_mode, bool is_scoop) {
-    if (install_mode == exosnap::update::InstallMode::Installed)
-        return QStringLiteral("MSI");
-    if (is_scoop)
-        return QStringLiteral("Scoop");
-    return QStringLiteral("Portable");
+QString ResolveInstallModeLabel(exosnap::update::DistributionContext distribution) {
+    const auto policy = exosnap::update::ResolveUpdatePolicy(distribution);
+    if (!policy.CanSelfUpdate())
+        return policy.manager_label.empty()
+                   ? QCoreApplication::translate("AboutInfo", "Externally managed")
+                   : QString::fromUtf8(policy.manager_label.data(), policy.manager_label.size());
+    return distribution.install_mode == exosnap::update::InstallMode::Installed ? QStringLiteral("MSI")
+                                                                                : QStringLiteral("Portable");
 }
 
-AboutInfo BuildAboutInfo(const QString& channel, exosnap::update::InstallMode install_mode, bool is_scoop) {
+AboutInfo BuildAboutInfo(const QString& channel, exosnap::update::DistributionContext distribution) {
     AboutInfo info;
     info.version = QString::fromLatin1(build::kVersion);
     info.commit_short = QString::fromLatin1(build::kGitCommit);
@@ -51,7 +55,7 @@ AboutInfo BuildAboutInfo(const QString& channel, exosnap::update::InstallMode in
     info.built_display = FormatBuildTimestampForDisplay(info.build_timestamp_utc);
     info.build_id = QString::fromLatin1(build::kBuildId);
     info.configuration = QString::fromLatin1(EXOSNAP_BUILD_CONFIG);
-    info.install_mode_label = ResolveInstallModeLabel(install_mode, is_scoop);
+    info.install_mode_label = ResolveInstallModeLabel(distribution);
     info.channel = channel.trimmed().isEmpty() ? QString::fromLatin1(kDefaultChannel) : channel.trimmed();
     info.author = QString::fromLatin1(kAppAuthor);
     info.description = QString::fromLatin1(kAppDescription);

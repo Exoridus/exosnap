@@ -1,5 +1,8 @@
 #include "SettingsAdapter.h"
+#include <QClipboard>
+#include <QGuiApplication>
 #include <capability/option_query.h>
+#include <update/distribution_context.h>
 
 #include "QuickThemeTokens.h"
 #include "models/FilenameBuilder.h"
@@ -637,11 +640,53 @@ int SettingsAdapter::hotkeyErrorAction() const noexcept {
     return hotkey_error_action_;
 }
 
-void SettingsAdapter::setUpdateStatus(const QString& state, const QString& available_version,
+void SettingsAdapter::setDistributionContext(exosnap::update::DistributionContext distribution) {
+    distribution_ = distribution;
+    emit updateStatusChanged();
+}
+
+bool SettingsAdapter::updateManaged() const noexcept {
+    return !exosnap::update::ResolveUpdatePolicy(distribution_).CanSelfUpdate();
+}
+
+QString SettingsAdapter::updateManagerText() const {
+    if (!updateManaged())
+        return {};
+    const auto label = exosnap::update::ResolveUpdatePolicy(distribution_).manager_label;
+    return label.empty() ? tr("Managed externally")
+                         : tr("Managed by %1").arg(QString::fromUtf8(label.data(), label.size()));
+}
+
+QString SettingsAdapter::updateManagerHint() const {
+    if (!updateManaged())
+        return {};
+    return updateManagerCommand().isEmpty() ? tr("This installation is managed externally. Update it with the package "
+                                                 "manager that installed ExoSnap.")
+                                            : tr("Update this installation with:");
+}
+
+QString SettingsAdapter::updateManagerCommand() const {
+    const auto command = exosnap::update::ResolveUpdatePolicy(distribution_).recommended_command;
+    return QString::fromUtf8(command.data(), command.size());
+}
+
+QString SettingsAdapter::copyUpdateCommand() {
+    const QString command = updateManagerCommand();
+    if (!command.isEmpty())
+        QGuiApplication::clipboard()->setText(command);
+    return command;
+}
+
+void SettingsAdapter::setUpdateStatus(const QString& requested_state, const QString& available_version,
                                       const QString& last_checked, const QString& detail) {
+    const QString state = updateManaged() && (requested_state == QLatin1String("available") ||
+                                              requested_state == QLatin1String("verify-reinstall"))
+                              ? QStringLiteral("managed")
+                              : requested_state;
     update_state_ = state;
     update_available_version_ = available_version;
-    whats_new_available_ = state == QLatin1String("available") && !available_version.isEmpty();
+    whats_new_available_ =
+        (state == QLatin1String("available") || state == QLatin1String("managed")) && !available_version.isEmpty();
 
     if (state == QLatin1String("checking")) {
         update_status_text_ = tr("Checking for updates…");
@@ -661,13 +706,8 @@ void SettingsAdapter::setUpdateStatus(const QString& state, const QString& avail
         update_status_text_ = tr("No update check has run yet.");
         update_action_text_ = tr("Check for updates");
         update_action_enabled_ = true;
-    } else if (state == QLatin1String("scoop")) {
-        // Notify-only: the staged swap never touches a Scoop tree.
-        update_status_text_ = available_version.isEmpty()
-                                  ? tr("Managed by Scoop — update with `scoop update exosnap`.")
-                                  : tr("Version %1 is available. This install is managed by Scoop — update with "
-                                       "`scoop update exosnap`.")
-                                        .arg(available_version);
+    } else if (state == QLatin1String("managed")) {
+        update_status_text_ = tr("Update %1 is available.").arg(available_version);
         update_action_text_ = tr("Check for updates");
         update_action_enabled_ = true;
     } else if (state == QLatin1String("updater-running")) {
@@ -1883,7 +1923,7 @@ bool SettingsAdapter::updateActionEnabled() const noexcept {
     return update_action_enabled_ && !controls_locked_;
 }
 bool SettingsAdapter::updateAvailable() const noexcept {
-    return update_state_ == QLatin1String("available");
+    return update_state_ == QLatin1String("available") || update_state_ == QLatin1String("managed");
 }
 
 const QString& SettingsAdapter::updateAvailableVersion() const noexcept {
@@ -2656,6 +2696,10 @@ void SettingsAdapter::checkForUpdates() {
     emit checkForUpdatesRequested();
 }
 void SettingsAdapter::runUpdatePrimaryAction() {
+    if (updateManaged()) {
+        emit checkForUpdatesRequested();
+        return;
+    }
     emit updatePrimaryActionRequested();
 }
 void SettingsAdapter::showWhatsNew() {

@@ -216,7 +216,7 @@ exosnap_add_app_test_support(exosnap_live_verify
     live_verify/LiveVerifyDispatcher.cpp
     live_verify/LiveVerifyOptions.cpp
 )
-target_link_libraries(exosnap_live_verify PUBLIC Qt6::Core exosnap::control)
+target_link_libraries(exosnap_live_verify PUBLIC Qt6::Core exosnap::control exosnap::update)
 
 # Observability serialization boundary (Wave C). Pure translation from the typed
 # owners -- RecordingDiagnosticsSnapshot, DiagnosticChecklist, RecordingPresetConfig,
@@ -933,7 +933,7 @@ exosnap_add_gtest(
 target_include_directories(edit_timeline_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Pure helpers behind UpdateService::LaunchUpdater: staging file list, updater
-# argv (round-tripped through the updater's own parser), Scoop-path detection.
+# argv (round-tripped through the updater's own parser), distribution eligibility.
 exosnap_add_gtest(
     NAME update_launch_plan_tests
     TEST_PREFIX update_launch.
@@ -1468,3 +1468,33 @@ exosnap_add_gtest(
     LIBRARIES dxgi
 )
 target_include_directories(gpu_telemetry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/libs/engine/include)
+
+exosnap_add_gtest(
+    NAME update_service_distribution_tests
+    TEST_PREFIX update_service.
+    SOURCES
+        tests/test_update_service_distribution.cpp
+        services/UpdateService.cpp
+        services/UpdateLaunchPlan.cpp
+        services/UpdateCheckGate.cpp
+        services/WhatsNewPayload.cpp
+        services/RecordingCoordinator.cpp
+        services/RecordingAdmission.cpp
+        services/AtomicFileOps.cpp
+        models/CaptureTargetPresentation.cpp
+        services/DisplayNumbering.cpp
+        settings/RecoveryManifestStore.cpp
+    LIBRARIES
+        exosnap_output_model_test_support
+        exosnap_device_service_test_support
+        exosnap_diagnostics_test_support
+        Qt6::Core Qt6::Gui
+        exosnap_capability exosnap_engine
+        exosnap::update exosnap::update_handoff exosnap::control
+)
+target_include_directories(update_service_distribution_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+target_compile_definitions(update_service_distribution_tests PRIVATE NOMINMAX)
+target_link_libraries(update_service_distribution_tests PRIVATE
+    mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib shell32.lib)
+add_dependencies(update_service_distribution_tests exosnap_build_info)

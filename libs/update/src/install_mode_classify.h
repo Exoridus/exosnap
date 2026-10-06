@@ -29,6 +29,8 @@ namespace exosnap::update {
 //   install_dir set     the directory the installer stamped
 struct InstallStamp {
     std::wstring install_dir;
+    // Missing is a legacy direct installation. Present but invalid fails closed.
+    std::optional<std::wstring> distribution_owner;
 };
 
 // The install-mode rule: this copy is Installed only when a hive stamped an
@@ -44,5 +46,9 @@ struct InstallStamp {
 // on behalf of a copy that could not show it is the installed one.
 [[nodiscard]] InstallMode ClassifyInstallMode(const std::optional<InstallStamp>& stamp,
                                               const std::wstring& running_exe_dir) noexcept;
+
+[[nodiscard]] DistributionContext ClassifyDistributionContext(const std::optional<InstallStamp>& stamp,
+                                                              const std::wstring& running_exe_dir,
+                                                              bool adjacent_scoop_metadata = false);
 
 } // namespace exosnap::update

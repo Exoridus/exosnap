@@ -116,7 +116,7 @@ url64bit       = '<url>'
 checksum64     = '<sha256>'
 checksumType64 = 'sha256'
 softwareName   = 'ExoSnap*'
-silentArgs     = '/qn /norestart'
+silentArgs     = '/qn /norestart EXOSNAP_DISTRIBUTION_OWNER=chocolatey'
 validExitCodes = @(0, 3010, 1641)
 }
 Install-ChocolateyPackage @packageArgs

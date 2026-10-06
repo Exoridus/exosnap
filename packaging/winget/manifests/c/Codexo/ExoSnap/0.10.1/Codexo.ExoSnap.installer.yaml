@@ -3,6 +3,8 @@ PackageIdentifier: Codexo.ExoSnap
 PackageVersion: 0.10.1
 InstallerType: wix
 Scope: machine
+InstallerSwitches:
+  Custom: EXOSNAP_DISTRIBUTION_OWNER=winget
 InstallModes:
   - silent
   - silentWithProgress

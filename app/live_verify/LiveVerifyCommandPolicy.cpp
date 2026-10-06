@@ -1,4 +1,5 @@
 #include "LiveVerifyCommandPolicy.h"
+#include <update/distribution_context.h>
 
 #include <QJsonArray>
 
@@ -202,7 +203,7 @@ PreconditionVerdict CanCloseEdit(const AutomationState& state) {
 //
 // Both commands read the state the update CARD publishes, not a second derived
 // view of the update engine. The card already resolves every rule that decides
-// whether its button does anything -- the recording guard, the Scoop opt-out,
+// whether its button does anything -- the recording guard, distribution ownership,
 // the loop guard, an updater already running -- and re-deriving those here would
 // be the drift this file exists to prevent.
 
@@ -228,6 +229,9 @@ PreconditionVerdict CanUpdateCheck(const AutomationState& state) {
 }
 
 PreconditionVerdict CanUpdateApply(const AutomationState& state) {
+    if (!exosnap::update::ResolveUpdatePolicy(state.update_distribution).CanSelfUpdate())
+        return Refuse(error_code::kBlocked, QStringLiteral("This installation is managed externally"),
+                      QStringLiteral("canSelfUpdate"), true, false);
     if (!state.update_blocker.isEmpty())
         return RefuseWithUpdateBlocker(state, "update.apply");
     // The two card states whose primary action launches the updater. Every other
@@ -814,6 +818,12 @@ QJsonObject StateToJson(const AutomationState& state, std::uint64_t state_revisi
                                                           ? QJsonValue(QJsonValue::Null)
                                                           : QJsonValue(state.update_available_version));
     update.insert(QStringLiteral("checking"), state.update_checking);
+    const auto update_policy = exosnap::update::ResolveUpdatePolicy(state.update_distribution);
+    update.insert(QStringLiteral("distributionOwner"),
+                  QString::fromUtf8(exosnap::update::DistributionOwnerToken(state.update_distribution.owner).data()));
+    update.insert(QStringLiteral("updateRoute"),
+                  QString::fromUtf8(exosnap::update::UpdateRouteToken(update_policy.route).data()));
+    update.insert(QStringLiteral("canSelfUpdate"), update_policy.CanSelfUpdate());
     update.insert(QStringLiteral("updateAvailable"), state.update_available);
     update.insert(QStringLiteral("actionEnabled"), state.update_action_enabled);
     update.insert(QStringLiteral("blocker"),

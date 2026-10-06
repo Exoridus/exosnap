@@ -10,7 +10,9 @@
 //!     the reference into the auto-generated `_harvest.wxs` fragment. Without
 //!     it the Feature ships no files.
 //!
-//! Cheap enough (no build, no WiX) to run on every pull request.
+//! Also validates the MSI distribution ownership properties, authoritative
+//! registry record and action sequences. No WiX build is needed for these
+//! source checks. A separate opt-in test inspects the compiled MSI.
 
 use std::path::Path;
 
@@ -47,6 +49,8 @@ pub fn validate_msi_harvest(repo_root: &Path) -> anyhow::Result<ValidationReport
         );
     }
 
+    super::msi_ownership::validate(&text, &mut report);
+
     Ok(report)
 }
 
@@ -54,14 +58,7 @@ pub fn validate_msi_harvest(repo_root: &Path) -> anyhow::Result<ValidationReport
 mod tests {
     use super::*;
 
-    const CLEAN_WXS: &str = r#"<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="ExoSnap">
-    <Feature Id="MainFeature">
-      <ComponentGroupRef Id="StagingFiles" />
-    </Feature>
-  </Package>
-</Wix>
-"#;
+    const CLEAN_WXS: &str = include_str!("../../../../packaging/msi/Package.wxs");
 
     fn fixture(wxs: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -117,7 +114,6 @@ mod tests {
     fn both_violations_are_reported_together() {
         let dir = fixture("<Wix><File Source=\"bin\\exosnap.exe\" /></Wix>");
         let report = validate_msi_harvest(dir.path()).unwrap();
-        assert_eq!(report.errors.len(), 2);
         assert!(
             report
                 .errors

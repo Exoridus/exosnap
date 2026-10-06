@@ -61,6 +61,7 @@
 #include <QVariant>
 #include <QVariantMap>
 
+#include <update/distribution_context.h>
 #include <update/install_mode_detector.h>
 // The private message the staged updater posts to ask this process to close for
 // the swap. One header, both sides -- a second copy of the number would compile
@@ -137,9 +138,9 @@ namespace {
     return icon;
 }
 
-models::AboutInfo buildAboutInfo(const PersistedAppSettings& settings) {
-    const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
-    return models::BuildAboutInfo(settings.update_channel, exosnap::update::DetectInstallMode(), is_scoop);
+models::AboutInfo buildAboutInfo(const PersistedAppSettings& settings,
+                                 exosnap::update::DistributionContext distribution) {
+    return models::BuildAboutInfo(settings.update_channel, distribution);
 }
 
 // Labels come from ui/CodecLabels.h -- the documented single source of truth for
@@ -364,9 +365,10 @@ std::optional<std::vector<exosnap::engine::CaptureTarget>> HarnessCaptureTargets
 } // namespace
 
 QuickApplication::QuickApplication()
-    : settings_(settings_store_.Load()), recovery_service_(recovery_manifest_store_),
-      about_view_model_(buildAboutInfo(settings_)), record_view_model_adapter_(&record_view_model_),
-      overlay_adapter_(&record_view_model_), recording_coordinator_(std::make_unique<RecordingCoordinator>()),
+    : settings_(settings_store_.Load()), distribution_(exosnap::update::DetectDistributionContext()),
+      recovery_service_(recovery_manifest_store_), about_view_model_(buildAboutInfo(settings_, distribution_)),
+      record_view_model_adapter_(&record_view_model_), overlay_adapter_(&record_view_model_),
+      recording_coordinator_(std::make_unique<RecordingCoordinator>()),
       webcam_frame_provider_(new RecordWebcamFrameProvider), target_still_provider_(new CaptureTargetStillProvider),
       edit_tile_provider_(new EditTimelineTileProvider) {
     // QCR-201. Latched here for the same reason preset_store_repaired_ is: the
@@ -3528,7 +3530,8 @@ void QuickApplication::initializeEditArea() {
 // saw a blank, clickable control that did nothing.
 
 void QuickApplication::initializeUpdates() {
-    update_service_ = std::make_unique<UpdateService>(recording_coordinator_.get());
+    update_service_ = std::make_unique<UpdateService>(recording_coordinator_.get(), distribution_);
+    settings_adapter_.setDistributionContext(distribution_);
     update_service_->SetChannel(UpdateChannelFromString(settings_.update_channel));
 
     // Handoff truth belongs to the process that accepted the updater's marked
@@ -3600,6 +3603,7 @@ void QuickApplication::initializeUpdates() {
 void QuickApplication::applyUpdateChannel() {
     if (!update_service_)
         return;
+    settings_adapter_.setDistributionContext(distribution_);
     update_service_->SetChannel(UpdateChannelFromString(settings_.update_channel));
     last_available_version_.clear();
     update_handoff_phase_ = UpdateHandoffPhase::Idle;
@@ -3757,10 +3761,10 @@ void QuickApplication::onUpdateCheckComplete(const exosnap::update::UpdateCheckR
     // last successful check rather than resolved a second time.
     last_releases_page_url_ = result.releases_page_url ? QString::fromStdString(*result.releases_page_url) : QString();
 
-    const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
+    const auto update_policy = exosnap::update::ResolveUpdatePolicy(distribution_);
     const QString card_state = exosnap::ResolveUpdateCardState(
-        result.update_available, is_scoop, settings_.applied_version, last_available_version_, verify_update_reinstall_,
-        current_version, update_handoff_phase_);
+        result.update_available, distribution_, settings_.applied_version, last_available_version_,
+        verify_update_reinstall_, current_version, update_handoff_phase_);
     settings_adapter_.setUpdateStatus(card_state, last_available_version_, last_checked);
 
     diagnostics::AppLog::info(
@@ -3773,11 +3777,15 @@ void QuickApplication::onUpdateCheckComplete(const exosnap::update::UpdateCheckR
 
     // Notify-on-available. A verification reinstall is not an available update
     // and must not be advertised as one -- the user asked for it explicitly.
-    if (result.update_available && !result.verification_reinstall && !is_scoop) {
+    if (result.update_available && !result.verification_reinstall) {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::UpdateAvailable;
         event.title = QStringLiteral("Update available");
-        event.body = QStringLiteral("Version %1 is ready to install.").arg(last_available_version_);
+        event.body = update_policy.CanSelfUpdate()
+                         ? QCoreApplication::translate("QuickApplication", "Version %1 is ready to install.")
+                               .arg(last_available_version_)
+                         : QCoreApplication::translate("QuickApplication", "Version %1 is available. %2")
+                               .arg(last_available_version_, settings_adapter_.updateManagerText());
         event.action = notifications::NotificationAction::OpenUpdate;
         notifications_adapter_.manager().Enqueue(std::move(event));
     }
@@ -3787,14 +3795,9 @@ void QuickApplication::runUpdatePrimaryAction() {
     if (!update_service_)
         return;
     const QString state = settings_adapter_.updateState();
-    if (state == QLatin1String("available") || state == QLatin1String("verify-reinstall")) {
+    if (exosnap::update::ResolveUpdatePolicy(distribution_).CanSelfUpdate() &&
+        (state == QLatin1String("available") || state == QLatin1String("verify-reinstall"))) {
         update_service_->LaunchUpdater();
-        return;
-    }
-    if (state == QLatin1String("scoop")) {
-        // Notify-only: a Scoop tree is never touched by the staged swap.
-        RaiseCaptureActionFailed(QStringLiteral("Update is managed by Scoop"),
-                                 QStringLiteral("Run `scoop update exosnap` to update this install."));
         return;
     }
     // Every other state's action is "check again".

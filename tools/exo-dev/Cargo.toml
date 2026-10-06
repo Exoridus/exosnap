@@ -20,6 +20,7 @@ clap.workspace = true
 ed25519-dalek = { version = "2.2", default-features = false, optional = true }
 hex.workspace = true
 regex.workspace = true
+roxmltree = "0.21"
 # Optional, pulled in only by `dev-tools`: the brand mark and icon generators
 # rasterize vector geometry to build .ico frames. No text/font/raster-image
 # support is needed since the marks are drawn from primitives only.

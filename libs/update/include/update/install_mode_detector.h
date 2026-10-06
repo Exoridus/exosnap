@@ -1,15 +1,4 @@
 #pragma once
-// install_mode_detector.h -- Detect whether ExoSnap is running as an
-// installed copy or a portable (ZIP-extracted) copy.
-//
-// Portable detection rule:
-//   An installed copy is stamped by the MSI under
-//     HKLM\Software\Codexo\ExoSnap  (or HKCU on per-user installs):
-//       "installed"   (REG_DWORD == 1)  -- presence marker
-//       "InstallPath" (REG_SZ)          -- install root ([INSTALLFOLDER])
-//   If the marker is absent, we are running in portable mode.
-//   Portable mode = update check may still show notifications; the ZIP
-//   package is applied via a staged swap.
 
 #include <optional>
 #include <string>
@@ -18,12 +7,16 @@
 
 namespace exosnap::update {
 
-// Returns InstallMode::Installed when the "installed" marker (REG_DWORD == 1)
-// is present under HKLM (then HKCU); otherwise Portable.
+// A matching MSI registry record determines physical installation and ownership.
+// Portable ownership uses adjacent Scoop metadata or a recognized Scoop layout.
+// Empty application_directory uses the running executable directory.
+[[nodiscard]] DistributionContext DetectDistributionContext(const std::wstring& application_directory = {}) noexcept;
+
+// Reports only the physical installation axis of DetectDistributionContext().
 [[nodiscard]] InstallMode DetectInstallMode() noexcept;
 
-// Registry Software\Codexo\ExoSnap value "InstallPath" (REG_SZ), HKLM then
-// HKCU; nullopt if unset.
+// Reads InstallPath (REG_SZ) from Software\ExoSnap, then the legacy
+// Software\Codexo\ExoSnap key. HKLM precedes HKCU. Missing values return nullopt.
 [[nodiscard]] std::optional<std::wstring> ReadInstallPath();
 
 } // namespace exosnap::update

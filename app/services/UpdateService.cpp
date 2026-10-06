@@ -2,6 +2,7 @@
 
 #include "UpdateService.h"
 
+#include <update/distribution_context.h>
 #include <update/http_download.h>
 #include <update/install_mode_detector.h>
 #include <update/manifest_io.h>
@@ -10,6 +11,7 @@
 #include <update/update_types.h>
 #include <update_handoff/handoff.h>
 
+#include "../settings/ConfigPaths.h"
 #include "ExoSnapBuildInfo.h" // exosnap::build::kVersion (generated from PROJECT_VERSION)
 #include "RecordingCoordinator.h"
 #include "UpdateCheckGate.h"
@@ -34,6 +36,7 @@
 #include <QThreadPool>
 #include <QWinEventNotifier>
 #include <atomic>
+#include <utility>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -47,7 +50,7 @@ namespace {
 // document plus the manifest bytes it references have to survive exactly that
 // moment.
 [[nodiscard]] QString TransactionsRoot() {
-    const QString local_data = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    const QString local_data = settings::ResolveAppDataDir();
     if (local_data.isEmpty())
         return {};
     return QDir(local_data).filePath(QStringLiteral("update-transactions"));
@@ -131,7 +134,8 @@ class UpdateService::Impl {
   public:
     RecordingCoordinator* coordinator = nullptr;
     exosnap::update::UpdateChannel channel = exosnap::update::UpdateChannel::Stable;
-    exosnap::update::InstallMode install_mode{};
+    exosnap::update::DistributionContext distribution{};
+    UpdateService::CheckFunction check;
     exosnap::update::UpdateState state{};
     // QCR-202. Single-flight admission and completion attribution are the same
     // fact, so they are the same field under the same mutex: a check is in
@@ -212,11 +216,18 @@ class UpdateService::Impl {
 // ---------------------------------------------------------------------------
 // UpdateService
 // ---------------------------------------------------------------------------
-UpdateService::UpdateService(RecordingCoordinator* coordinator, QObject* parent) : QObject(parent), impl_(new Impl) {
+UpdateService::UpdateService(RecordingCoordinator* coordinator, QObject* parent)
+    : UpdateService(coordinator, exosnap::update::DetectDistributionContext(), parent) {
+}
+
+UpdateService::UpdateService(RecordingCoordinator* coordinator, exosnap::update::DistributionContext distribution,
+                             QObject* parent, CheckFunction check)
+    : QObject(parent), impl_(new Impl) {
     impl_->coordinator = coordinator;
-    impl_->install_mode = exosnap::update::DetectInstallMode();
+    impl_->distribution = distribution;
+    impl_->check = std::move(check);
     impl_->state.channel = impl_->channel;
-    impl_->state.install_mode = impl_->install_mode;
+    impl_->state.distribution = distribution;
 }
 
 UpdateService::~UpdateService() {
@@ -375,7 +386,15 @@ void UpdateService::RequestUpdateCheck() {
         // Without this branch a dev build could never exercise its own check,
         // and therefore never the app-to-updater handoff either.
         upd::UpdateCheckResult result;
-        if (feed_override.isEmpty()) {
+        if (impl->check) {
+            const auto blocked = params.recording_guard();
+            if (blocked != upd::UpdateBlockReason::NotBlocked) {
+                result.check_failed = true;
+                result.error_message = "Update check blocked: recording or finalizing";
+            } else {
+                result = impl->check(params);
+            }
+        } else if (feed_override.isEmpty()) {
             result = upd::CheckForUpdate(params);
         } else {
             params.api_base_url = feed_override.toStdString();
@@ -398,7 +417,7 @@ void UpdateService::RequestUpdateCheck() {
         // is newer must never be reported as "up to date" -- it is recorded and
         // refuses the apply with a truthful reason instead.
         std::optional<UpdateService::PreparedUpdate> prepared;
-        if (result.update_available)
+        if (result.update_available && upd::ResolveUpdatePolicy(impl->distribution).CanSelfUpdate())
             prepared = PrepareUpdateTransaction(result);
 
         UpdateCheckCompletion completion;
@@ -423,7 +442,7 @@ void UpdateService::RequestUpdateCheck() {
                 prune_keep_in_flight = impl->last_updater_launch.handoff_path.isEmpty()
                                            ? QString()
                                            : QFileInfo(impl->last_updater_launch.handoff_path).absolutePath();
-                prune = true;
+                prune = upd::ResolveUpdatePolicy(impl->distribution).CanSelfUpdate();
             }
             if (completion.adopt_notes) {
                 impl->gap_notes = result.gap_notes;
@@ -686,7 +705,7 @@ void UpdateService::LaunchUpdater() {
     //
     // The non-static overload, because only it can set the child's environment: the
     // static one hands over this process's own, and that carries the Quick rendering
-    // opt-out the updater's Widgets UI cannot survive (UpdaterChildEnvironment).
+    // opt-out that must not configure the independent updater process.
     qint64 updater_pid = 0;
     QProcess updater;
     updater.setProgram(QDir::toNativeSeparators(staged_exe));
@@ -763,6 +782,12 @@ void UpdateService::LaunchUpdater() {
 
 void UpdateService::HandoffToInstaller(const QString& installer_path) {
     namespace upd = exosnap::update;
+    if (!upd::ResolveUpdatePolicy(impl_->distribution).CanSelfUpdate()) {
+        emit updateError(
+            upd::VerifyResult::PackageNotFound,
+            tr("This installation is managed externally. Update it with the package manager that installed ExoSnap."));
+        return;
+    }
     bool ok = upd::HandoffToInstaller(installer_path.toStdString());
     if (!ok) {
         emit updateError(upd::VerifyResult::PackageNotFound, "Failed to launch installer");

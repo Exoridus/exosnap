@@ -32,6 +32,9 @@ pub fn validate_scoop(repo_root: &Path, version: &str) -> anyhow::Result<Validat
     })?;
 
     let mut report = ValidationReport::default();
+    if manifest.get("shortcuts") != Some(&serde_json::json!([["exosnap.exe", "ExoSnap"]])) {
+        report.errors.push("shortcuts must target exosnap.exe at the Scoop version root beside Scoop's install and manifest metadata".into());
+    }
 
     let manifest_version = manifest
         .get("version")
@@ -177,6 +180,28 @@ mod tests {
         let dir = fixture();
         let report = validate_scoop(dir.path(), VERSION).unwrap();
         assert!(report.ok(), "{:?}", report.errors);
+    }
+
+    #[test]
+    fn scoop_ownership_requires_the_portable_executable_at_the_version_root() {
+        let dir = fixture();
+        std::fs::write(
+            dir.path().join("packaging/scoop/exosnap.json"),
+            MANIFEST.replace(
+                "[\"exosnap.exe\", \"ExoSnap\"]",
+                "[\"bin/exosnap.exe\", \"ExoSnap\"]",
+            ),
+        )
+        .unwrap();
+        let report = validate_scoop(dir.path(), VERSION).unwrap();
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|error| error.contains("version root")),
+            "{:?}",
+            report.errors
+        );
     }
 
     #[test]

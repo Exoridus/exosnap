@@ -114,6 +114,8 @@ class UpdaterController {
     // override). Not a failure of an update -- nothing was attempted -- so it
     // returns to Idle with the reason on the card rather than to Failed.
     void onCheckBlocked(const QString& reason);
+    // Trusted package-manager guidance from a refused built-in update.
+    void onSelfUpdateBlocked(const QString& reason);
     // The run stopped because cancellation was requested and observed. Terminal,
     // and neither a success nor a failure: no failureCase, no retry entry, and
     // the installation is provably untouched (cancellation is only honoured

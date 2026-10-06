@@ -129,6 +129,21 @@ enum class InstallMode : uint8_t {
     Portable = 1,  // extracted ZIP -> staged swap via external updater
 };
 
+enum class DistributionOwner : uint8_t {
+    Direct = 0,
+    WinGet = 1,
+    Chocolatey = 2,
+    Scoop = 3,
+    UnknownManaged = 4,
+};
+
+struct DistributionContext {
+    InstallMode install_mode = InstallMode::Portable;
+    DistributionOwner owner = DistributionOwner::Direct;
+
+    [[nodiscard]] bool operator==(const DistributionContext&) const noexcept = default;
+};
+
 // ---------------------------------------------------------------------------
 // Guard reason -- why an update action is currently blocked
 // ---------------------------------------------------------------------------
@@ -220,7 +235,7 @@ enum class VerifyResult : uint8_t {
 
 struct UpdateState {
     UpdateChannel channel = UpdateChannel::Stable;
-    InstallMode install_mode = InstallMode::Portable;
+    DistributionContext distribution;
     UpdateBlockReason block_reason = UpdateBlockReason::NotBlocked;
 
     std::optional<SemVer> available_version;

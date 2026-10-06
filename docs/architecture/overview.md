@@ -4,7 +4,7 @@ This document owns subsystem boundaries and process composition. User-visible be
 
 ## Processes and layers
 
-ExoSnap is a Windows x64 application with a C++20 recording engine and a Qt Quick frontend. There is one main application, `exosnap.exe`, and a separate update application, `exosnap-updater.exe`. The main application uses `QApplication` because its system-tray integration needs `QSystemTrayIcon`. Its rendered application surfaces are QML and scene-graph items, not a parallel Widgets frontend. The updater owns its separate Widgets window.
+ExoSnap is a Windows x64 application with a C++20 recording engine and a Qt Quick frontend. There is one main application, `exosnap.exe`, and a separate update application, `exosnap-updater.exe`. The main application uses `QApplication` because its system-tray integration needs `QSystemTrayIcon`. Its rendered application surfaces are QML and scene-graph items, not a parallel Widgets frontend. The updater uses `QGuiApplication` and the `ExoSnap.Updater` QML module for its separate Qt Quick window.
 
 | Owner | Responsibility | Must not own |
 |---|---|---|

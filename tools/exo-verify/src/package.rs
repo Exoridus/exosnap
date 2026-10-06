@@ -705,6 +705,22 @@ fn license_text_to_rtf(text: &str) -> String {
     )
 }
 
+fn ownership_probe_path(build_dir: &Path) -> Result<PathBuf> {
+    let directory = build_dir.join("packaging/msi");
+    [
+        directory.join("exosnap-msi-owner-probe.dll"),
+        directory.join("Release/exosnap-msi-owner-probe.dll"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .with_context(|| {
+        format!(
+            "MSI ownership probe is missing from {}. Build exosnap first",
+            directory.display()
+        )
+    })
+}
+
 pub fn run(args: &PackageArgs) -> Result<PackageResult> {
     let repo_root = external_path(&fs::canonicalize(&args.repo_root)?);
     let base = project_version(&repo_root)?;
@@ -828,6 +844,7 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
         None
     } else {
         let wix = crate::tools::require("wix")?;
+        let owner_probe = ownership_probe_path(&args.build_dir)?;
         let msi = out.join(format!("ExoSnap-{version}-{PLATFORM}.msi"));
         let fragment = out.join("_harvest.wxs");
         fs::write(&fragment, harvest_fragment(&staging)?)?;
@@ -853,6 +870,11 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
                 .arg(format!(
                     "AppIconPath={}",
                     repo_root.join("app/assets/brand/exosnap-app.ico").display()
+                ))
+                .arg("-d")
+                .arg(format!(
+                    "DistributionOwnerProbePath={}",
+                    owner_probe.display()
                 ))
                 .arg(repo_root.join("packaging/msi/Package.wxs"))
                 .arg(&fragment),
@@ -1098,6 +1120,26 @@ mod tests {
                 .join(relative),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn ownership_probe_requires_a_built_artifact_from_the_selected_tree() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(ownership_probe_path(directory.path()).is_err());
+        let output = directory.path().join("packaging/msi");
+        fs::create_dir_all(output.join("Release")).unwrap();
+        let multi_config = output.join("Release/exosnap-msi-owner-probe.dll");
+        fs::write(&multi_config, "fixture").unwrap();
+        assert_eq!(
+            ownership_probe_path(directory.path()).unwrap(),
+            multi_config
+        );
+        let single_config = output.join("exosnap-msi-owner-probe.dll");
+        fs::write(&single_config, "fixture").unwrap();
+        assert_eq!(
+            ownership_probe_path(directory.path()).unwrap(),
+            single_config
+        );
     }
 
     #[test]

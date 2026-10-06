@@ -40,6 +40,30 @@ ExoCard {
         }
     }
 
+    Text {
+        visible: root.settings.updateManaged
+        text: root.settings.updateManagerText
+        color: ExoTheme.text
+        Layout.fillWidth: true
+        wrapMode: Text.Wrap
+    }
+
+    Text {
+        visible: root.settings.updateManaged
+        text: root.settings.updateManagerHint
+        color: ExoTheme.textSecondary
+        Layout.fillWidth: true
+        wrapMode: Text.Wrap
+    }
+
+    Text {
+        visible: root.settings.updateManagerCommand.length > 0
+        text: root.settings.updateManagerCommand
+        color: ExoTheme.text
+        Layout.fillWidth: true
+        wrapMode: Text.WrapAnywhere
+    }
+
     RowLayout {
         spacing: ExoTheme.spacingSm
         Layout.fillWidth: true
@@ -50,6 +74,13 @@ ExoCard {
             onClicked: root.settings.updateAvailable
                        ? root.settings.runUpdatePrimaryAction()
                        : root.settings.checkForUpdates()
+        }
+
+        ExoButton {
+            text: qsTr("Copy command")
+            quiet: true
+            visible: root.settings.updateManagerCommand.length > 0
+            onClicked: root.settings.copyUpdateCommand()
         }
 
         // Names the version, as the spec requires: "What's new" alone says nothing

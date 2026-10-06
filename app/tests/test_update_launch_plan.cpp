@@ -5,7 +5,7 @@
 //   * UpdaterStagingFileList()  -- the files copied into the staged updater dir.
 //   * BuildUpdaterArgs()        -- the argv the app hands the staged updater,
 //                                  round-tripped through the updater's own parser.
-//   * UpdateService::IsScoopManagedInstall() -- notify-only Scoop detection.
+//   * HandoffRefusalReason() -- trusted-offer and distribution eligibility.
 
 #include <gtest/gtest.h>
 
@@ -130,11 +130,31 @@ UpdateService::PreparedUpdate PreparedFor(const QString& target) {
     return prepared;
 }
 
+TEST(DistributionHandoff, ManagedOwnersRefuseEvenACompletePreparedOffer) {
+    namespace upd = exosnap::update;
+    for (const auto mode : {upd::InstallMode::Portable, upd::InstallMode::Installed}) {
+        for (const auto owner : {upd::DistributionOwner::WinGet, upd::DistributionOwner::Chocolatey,
+                                 upd::DistributionOwner::Scoop, upd::DistributionOwner::UnknownManaged}) {
+            upd::UpdateState state;
+            state.distribution = {mode, owner};
+            state.available_version_raw = "2.0.0";
+            UpdateService::PreparedUpdate prepared;
+            prepared.target_version = QStringLiteral("2.0.0");
+            prepared.update_transaction_id = QStringLiteral("transaction");
+            prepared.manifest_path = QStringLiteral("manifest.json");
+            prepared.manifest_signature_path = QStringLiteral("manifest.sig");
+            EXPECT_FALSE(exosnap::HandoffRefusalReason(state, prepared).isEmpty());
+            EXPECT_EQ(exosnap::ResolveUpdateCardState(true, state.distribution, QString(), QStringLiteral("2.0.0")),
+                      QStringLiteral("managed"));
+        }
+    }
+}
+
 } // namespace
 
 TEST(BuildUpdateHandoff, PinsTheOfferedVersionAndCarriesTheTrustAnchor) {
     upd::UpdateState st;
-    st.install_mode = upd::InstallMode::Installed;
+    st.distribution.install_mode = upd::InstallMode::Installed;
     st.update_available = true;
     st.available_version = upd::SemVer{0, 9, 1};
     st.available_version_raw = "0.9.1";
@@ -160,7 +180,7 @@ TEST(BuildUpdateHandoff, PassesTheReleaseTagVerbatimNotAReSpelling) {
     // have rendered "0.9.0-beta2" as "0.9.0-rc0", and the manifest gate compares
     // strings -- so a re-spelled target would refuse the very release it pinned.
     upd::UpdateState st;
-    st.install_mode = upd::InstallMode::Portable;
+    st.distribution.install_mode = upd::InstallMode::Portable;
     st.available_version = upd::SemVer{0, 9, 0, true, 0};
     st.available_version_raw = "0.9.0-beta2";
 
@@ -174,7 +194,7 @@ TEST(BuildUpdateHandoff, VerificationReinstallPinsTheIdenticalVersion) {
     // Both gates then agree by construction: the target gate and the verification-reinstall
     // gate compare the same string against the same manifest field.
     upd::UpdateState st;
-    st.install_mode = upd::InstallMode::Portable;
+    st.distribution.install_mode = upd::InstallMode::Portable;
     st.available_version_raw = "0.9.0-rc4";
 
     const auto handoff =
@@ -187,7 +207,7 @@ TEST(BuildUpdateHandoff, VerificationReinstallPinsTheIdenticalVersion) {
 // A normal update run must never hand the updater the verification gate.
 TEST(BuildUpdateHandoff, LeavesVerifyReinstallOffByDefault) {
     upd::UpdateState st;
-    st.install_mode = upd::InstallMode::Installed;
+    st.distribution.install_mode = upd::InstallMode::Installed;
     st.available_version_raw = "0.9.1";
     EXPECT_FALSE(exosnap::BuildUpdateHandoff(st, PreparedFor(QStringLiteral("0.9.1")), QStringLiteral("C:/x"), 1u,
                                              QStringLiteral("0.9.0"), /*verify_reinstall=*/false)
@@ -341,81 +361,40 @@ TEST(VerifyUpdateReinstallFlag, RequiresAnExactMatch) {
         QStringList{QStringLiteral("exosnap.exe"), QStringLiteral("--verify-update-reinstall=1")}));
 }
 
-// -- IsScoopManagedInstall --------------------------------------------------
-
-TEST(IsScoopManagedInstall, TrueForScoopPath) {
-    EXPECT_TRUE(UpdateService::IsScoopManagedInstall(QStringLiteral("C:/Users/x/scoop/apps/exosnap/current")));
-}
-
-TEST(IsScoopManagedInstall, TrueForBackslashAndMixedCase) {
-    EXPECT_TRUE(UpdateService::IsScoopManagedInstall(QStringLiteral("C:\\Users\\x\\Scoop\\Apps\\exosnap\\current")));
-}
-
-TEST(IsScoopManagedInstall, FalseForProgramFiles) {
-    EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("C:/Program Files/Codexo/ExoSnap")));
-}
-
-TEST(IsScoopManagedInstall, FalseForPortableToolsDir) {
-    EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("D:/Tools/ExoSnap")));
-}
-
-// Relocated Scoop root ($env:SCOOP): "<root>/apps/<name>/current" carries no
-// literal "scoop" segment but still uses the apps/current junction layout.
-TEST(IsScoopManagedInstall, TrueForRelocatedRootWithAppsAndCurrent) {
-    EXPECT_TRUE(UpdateService::IsScoopManagedInstall(QStringLiteral("C:/tools/myscoop/apps/exosnap/current")));
-}
-
-TEST(IsScoopManagedInstall, FalseForProgramFilesNoAppsNoCurrent) {
-    EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("C:/Program Files/Codexo/ExoSnap")));
-}
-
-// An "/apps/" segment alone (no "current" component) must not match — that's a
-// generic portable layout, not Scoop's junction tree.
-TEST(IsScoopManagedInstall, FalseForAppsDirWithoutCurrent) {
-    EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("D:/apps/ExoSnap")));
-}
-
-// "apps" and "current" both present but not in Scoop's "apps/<name>/current"
-// adjacency (current isn't exactly two components after apps) must not match.
-TEST(IsScoopManagedInstall, FalseForAppsAndCurrentWrongAdjacency) {
-    EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("C:/apps/current/ExoSnap")));
-}
-
-TEST(IsScoopManagedInstall, FalseForCurrentBeforeApps) {
-    EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("D:/Media/current/apps/")));
-}
-
 // -- ResolveUpdateCardState (loop guard + stuck-pending recovery) -----------
 
 TEST(ResolveUpdateCardState, UpToDateWhenNoUpdate) {
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/false, /*is_scoop=*/false, QString(),
-                                              QStringLiteral("2.0.0")),
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/false, exosnap::update::DistributionContext{},
+                                              QString(), QStringLiteral("2.0.0")),
               QStringLiteral("uptodate"));
 }
 
 TEST(ResolveUpdateCardState, ScoopWinsOverAvailable) {
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/true, QString(),
-                                              QStringLiteral("2.0.0")),
-              QStringLiteral("scoop"));
+    EXPECT_EQ(
+        exosnap::ResolveUpdateCardState(/*update_available=*/true,
+                                        exosnap::update::DistributionContext{exosnap::update::InstallMode::Portable,
+                                                                             exosnap::update::DistributionOwner::Scoop},
+                                        QString(), QStringLiteral("2.0.0")),
+        QStringLiteral("managed"));
 }
 
 TEST(ResolveUpdateCardState, AvailableWhenNoStamp) {
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),
-                                              QStringLiteral("2.0.0")),
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, exosnap::update::DistributionContext{},
+                                              QString(), QStringLiteral("2.0.0")),
               QStringLiteral("available"));
 }
 
 // A stamp can only represent an accepted marked handoff in the current process.
 // While it matches the available version, the card stays "pending".
 TEST(ResolveUpdateCardState, PendingWhenStampMatchesAvailable) {
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QStringLiteral("2.0.0"),
-                                              QStringLiteral("2.0.0")),
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, exosnap::update::DistributionContext{},
+                                              QStringLiteral("2.0.0"), QStringLiteral("2.0.0")),
               QStringLiteral("pending"));
 }
 
 TEST(ResolveUpdateCardState, UpdaterProcessStartIsRunningNotRestartPending) {
     EXPECT_EQ(exosnap::ResolveUpdateCardState(
-                  /*update_available=*/true, /*is_scoop=*/false, QString(), QStringLiteral("2.0.0"),
+                  /*update_available=*/true, exosnap::update::DistributionContext{}, QString(), QStringLiteral("2.0.0"),
                   /*verify_reinstall_mode=*/false, QStringLiteral("1.0.0"),
                   exosnap::UpdateHandoffPhase::UpdaterRunning),
               QStringLiteral("updater-running"));
@@ -423,7 +402,7 @@ TEST(ResolveUpdateCardState, UpdaterProcessStartIsRunningNotRestartPending) {
 
 TEST(ResolveUpdateCardState, MarkedCloseHandoffIsTheOnlyRuntimePendingState) {
     EXPECT_EQ(exosnap::ResolveUpdateCardState(
-                  /*update_available=*/true, /*is_scoop=*/false, QString(), QStringLiteral("2.0.0"),
+                  /*update_available=*/true, exosnap::update::DistributionContext{}, QString(), QStringLiteral("2.0.0"),
                   /*verify_reinstall_mode=*/false, QStringLiteral("1.0.0"),
                   exosnap::UpdateHandoffPhase::ClosingForHandoff),
               QStringLiteral("pending"));
@@ -432,7 +411,7 @@ TEST(ResolveUpdateCardState, MarkedCloseHandoffIsTheOnlyRuntimePendingState) {
 TEST(UpdateHandoffPersistence, LaunchFailureOrAbortLeavesNoAppliedVersion) {
     EXPECT_TRUE(exosnap::AppliedVersionForCommittedHandoff(QString(), false).isEmpty());
     EXPECT_EQ(exosnap::ResolveUpdateCardState(
-                  /*update_available=*/true, /*is_scoop=*/false, QString(), QStringLiteral("2.0.0"),
+                  /*update_available=*/true, exosnap::update::DistributionContext{}, QString(), QStringLiteral("2.0.0"),
                   /*verify_reinstall_mode=*/false, QStringLiteral("1.0.0"), exosnap::UpdateHandoffPhase::Idle),
               QStringLiteral("available"));
 }
@@ -453,8 +432,8 @@ TEST(UpdateHandoffPersistence, EveryFreshProcessDiscardsAStalePendingStamp) {
 
 // A newer version than the stamped one is offered normally.
 TEST(ResolveUpdateCardState, AvailableWhenStampIsOlderVersion) {
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QStringLiteral("2.0.0"),
-                                              QStringLiteral("2.1.0")),
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, exosnap::update::DistributionContext{},
+                                              QStringLiteral("2.0.0"), QStringLiteral("2.1.0")),
               QStringLiteral("available"));
 }
 
@@ -462,20 +441,20 @@ TEST(ResolveUpdateCardState, AvailableWhenStampIsOlderVersion) {
 // With an empty stamp, the same still-applicable version re-arms to "available".
 TEST(ResolveUpdateCardState, RearmsToAvailableAfterManualCheckClearsStamp) {
     // Automatic re-check with the stamp still set -> pending.
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QStringLiteral("2.0.0"),
-                                              QStringLiteral("2.0.0")),
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, exosnap::update::DistributionContext{},
+                                              QStringLiteral("2.0.0"), QStringLiteral("2.0.0")),
               QStringLiteral("pending"));
     // Manual check clears the stamp upstream; resolver now sees an empty stamp.
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),
-                                              QStringLiteral("2.0.0")),
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, exosnap::update::DistributionContext{},
+                                              QString(), QStringLiteral("2.0.0")),
               QStringLiteral("available"));
 }
 
 // -- ResolveUpdateCardState: verification reinstall --------------
 
 TEST(ResolveUpdateCardState, VerifyReinstallWhenModeIsOnAndTheOfferIsTheRunningVersion) {
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),
-                                              QStringLiteral("0.9.0-rc4"), /*verify_reinstall_mode=*/true,
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, exosnap::update::DistributionContext{},
+                                              QString(), QStringLiteral("0.9.0-rc4"), /*verify_reinstall_mode=*/true,
                                               QStringLiteral("0.9.0-rc4")),
               QStringLiteral("verify-reinstall"));
 }
@@ -483,8 +462,8 @@ TEST(ResolveUpdateCardState, VerifyReinstallWhenModeIsOnAndTheOfferIsTheRunningV
 // The mode does not turn every offer into a reinstall: a genuinely newer release
 // is still a normal update.
 TEST(ResolveUpdateCardState, AvailableWhenVerifyModeIsOnButTheOfferIsNewer) {
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),
-                                              QStringLiteral("0.9.0"), /*verify_reinstall_mode=*/true,
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, exosnap::update::DistributionContext{},
+                                              QString(), QStringLiteral("0.9.0"), /*verify_reinstall_mode=*/true,
                                               QStringLiteral("0.9.0-rc4")),
               QStringLiteral("available"));
 }
@@ -492,23 +471,25 @@ TEST(ResolveUpdateCardState, AvailableWhenVerifyModeIsOnButTheOfferIsNewer) {
 // Without the mode, an offer equal to the running version cannot reach the
 // reinstall state at all (the engine would not offer it in the first place).
 TEST(ResolveUpdateCardState, NoVerifyReinstallWhenTheModeIsOff) {
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),
-                                              QStringLiteral("0.9.0-rc4"), /*verify_reinstall_mode=*/false,
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, exosnap::update::DistributionContext{},
+                                              QString(), QStringLiteral("0.9.0-rc4"), /*verify_reinstall_mode=*/false,
                                               QStringLiteral("0.9.0-rc4")),
               QStringLiteral("available"));
 }
 
 // Scoop trees are never touched by the staged swap — not even in verify mode.
 TEST(ResolveUpdateCardState, ScoopStillWinsInVerifyMode) {
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/true, QString(),
-                                              QStringLiteral("0.9.0-rc4"), /*verify_reinstall_mode=*/true,
-                                              QStringLiteral("0.9.0-rc4")),
-              QStringLiteral("scoop"));
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(
+                  /*update_available=*/true,
+                  exosnap::update::DistributionContext{exosnap::update::InstallMode::Portable,
+                                                       exosnap::update::DistributionOwner::Scoop},
+                  QString(), QStringLiteral("0.9.0-rc4"), /*verify_reinstall_mode=*/true, QStringLiteral("0.9.0-rc4")),
+              QStringLiteral("managed"));
 }
 
 TEST(ResolveUpdateCardState, UpToDateStillWinsInVerifyMode) {
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/false, /*is_scoop=*/false, QString(),
-                                              QStringLiteral("0.9.0-rc4"), /*verify_reinstall_mode=*/true,
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/false, exosnap::update::DistributionContext{},
+                                              QString(), QStringLiteral("0.9.0-rc4"), /*verify_reinstall_mode=*/true,
                                               QStringLiteral("0.9.0-rc4")),
               QStringLiteral("uptodate"));
 }
@@ -517,14 +498,15 @@ TEST(ResolveUpdateCardState, UpToDateStillWinsInVerifyMode) {
 // already staged. Re-running the swap for the SAME version is exactly what
 // verification mode is for, so it outranks the guard.
 TEST(ResolveUpdateCardState, VerifyReinstallOutranksThePendingLoopGuard) {
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false,
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, exosnap::update::DistributionContext{},
                                               QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc4"),
                                               /*verify_reinstall_mode=*/true, QStringLiteral("0.9.0-rc4")),
               QStringLiteral("verify-reinstall"));
 }
 
 TEST(ResolveUpdateCardState, VerifyModeWithoutAnOfferedVersionFallsBack) {
-    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(), QString(),
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, exosnap::update::DistributionContext{},
+                                              QString(), QString(),
                                               /*verify_reinstall_mode=*/true, QString()),
               QStringLiteral("available"));
 }
@@ -534,12 +516,8 @@ TEST(ResolveUpdateCardState, VerifyModeWithoutAnOfferedVersionFallsBack) {
 // -- UpdaterChildEnvironment: the app's own rendering opt-out is not the
 //    updater's ----------------------------------------------------------------
 //
-// The app sets QT_QPA_DISABLE_REDIRECTION_SURFACE=1 on itself so its Quick window
-// does not flash a white redirection bitmap at startup. The updater is Qt Widgets,
-// and Widgets paint into exactly the surface that flag removes: inherited, it
-// produces a correctly sized, "visible" window that renders nothing. Measured on
-// the published 0.9.0-rc17 updater -- same binary, same card, exstyle 0x0 without
-// the variable and 0x200000 (WS_EX_NOREDIRECTIONBITMAP) with it.
+// The main app's rendering opt-out must not leak into the independent Qt Quick
+// updater. Its QPA surface is configured by its own process.
 
 TEST(UpdaterChildEnvironment, DropsTheRedirectionSurfaceOptOut) {
     QProcessEnvironment parent;

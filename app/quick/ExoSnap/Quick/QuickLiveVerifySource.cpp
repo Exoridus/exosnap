@@ -1,4 +1,5 @@
 #include "QuickLiveVerifySource.h"
+#include <update/distribution_context.h>
 
 #include "AboutViewModelAdapter.h"
 #include "BlockingSurfaceArbiter.h"
@@ -394,6 +395,8 @@ live_verify::AutomationState QuickLiveVerifySource::State() const {
         state.update_action_enabled = settings->updateActionEnabled();
         state.update_checking = settings->updateState() == QLatin1String("checking");
     }
+    if (const auto* service = application_.updateService())
+        state.update_distribution = service->CurrentState().distribution;
     state.update_current_version = QString::fromLatin1(exosnap::build::kVersion);
     state.update_blocker = application_.updateBlockerReason();
 
@@ -413,7 +416,16 @@ QJsonObject QuickLiveVerifySource::Identity() const {
     json.insert(QStringLiteral("configuration"), about.configuration);
     json.insert(QStringLiteral("officialBuild"), about.official_build);
     json.insert(QStringLiteral("dirtySourceTree"), about.dirty_source_tree);
-    json.insert(QStringLiteral("installMode"), about.install_mode_label);
+    const auto distribution = application_.updateService()->CurrentState().distribution;
+    const auto policy = exosnap::update::ResolveUpdatePolicy(distribution);
+    json.insert(QStringLiteral("installMode"), distribution.install_mode == exosnap::update::InstallMode::Installed
+                                                   ? QStringLiteral("MSI")
+                                                   : QStringLiteral("Portable"));
+    json.insert(QStringLiteral("distributionOwner"),
+                QString::fromUtf8(exosnap::update::DistributionOwnerToken(distribution.owner).data()));
+    json.insert(QStringLiteral("updateRoute"),
+                QString::fromUtf8(exosnap::update::UpdateRouteToken(policy.route).data()));
+    json.insert(QStringLiteral("canSelfUpdate"), policy.CanSelfUpdate());
     json.insert(QStringLiteral("channel"), about.channel);
     json.insert(QStringLiteral("executablePath"), executable);
     json.insert(QStringLiteral("executableSha256"), executable_sha256_);

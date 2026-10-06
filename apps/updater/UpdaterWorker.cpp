@@ -1,8 +1,8 @@
 // UpdaterWorker.cpp -- the background update pipeline (both install modes).
 //
-// Failure mapping follows the failure matrix: every early return emits exactly one
-// failed(FailureCase, detail) signal; the GUI routes Retry back into run()
-// with RetryEntryStep(case). Downloaded artifacts and the swap plan are kept
+// Failure mapping follows the failure matrix. Managed-install refusals report
+// selfUpdateBlocked instead of a retriable pipeline failure. The GUI routes
+// Retry back into run() with RetryEntryStep(case). Artifacts and the swap plan are kept
 // as members so mid-pipeline retries (B1/B2/B3/C1) do not re-download.
 
 #include "UpdaterWorker.h"
@@ -15,6 +15,7 @@
 #include <shellapi.h>
 // clang-format on
 
+#include <QCoreApplication>
 #include <QElapsedTimer>
 
 #include <chrono>
@@ -24,6 +25,7 @@
 #include <sstream>
 #include <variant>
 
+#include <update/distribution_context.h>
 #include <update/http_download.h>
 #include <update/install_mode_detector.h>
 #include <update/manifest_io.h>
@@ -278,6 +280,9 @@ UpdaterWorker::UpdaterWorker(UpdaterArgs args, QObject* parent) : QObject(parent
 
 void UpdaterWorker::run(UpStep entry) {
     cancel_.store(false);
+    if (!selfUpdateAllowed()) {
+        return;
+    }
 
     // A mid-pipeline entry without pipeline state (should not happen -- Retry
     // only re-enters steps that failed after Download populated it) falls back
@@ -328,6 +333,32 @@ bool UpdaterWorker::abortedByCancel() {
     return true;
 }
 
+QString SelfUpdateRefusalReason(exosnap::update::DistributionContext distribution) {
+    const auto policy = exosnap::update::ResolveUpdatePolicy(distribution);
+    if (policy.CanSelfUpdate()) {
+        return {};
+    }
+    if (!policy.recommended_command.empty()) {
+        return QCoreApplication::translate("UpdaterWorker", "This installation is managed by %1. Update it with %2.")
+            .arg(QString::fromUtf8(policy.manager_label.data(), qsizetype(policy.manager_label.size())),
+                 QString::fromUtf8(policy.recommended_command.data(), qsizetype(policy.recommended_command.size())));
+    }
+    return QCoreApplication::translate(
+        "UpdaterWorker",
+        "This installation is managed externally. Update it with the package manager that installed ExoSnap.");
+}
+
+bool UpdaterWorker::selfUpdateAllowed() {
+    // A staged updater runs outside the installation it would replace.
+    const QString reason =
+        SelfUpdateRefusalReason(exosnap::update::DetectDistributionContext(args_.install_dir.toStdWString()));
+    if (reason.isEmpty()) {
+        return true;
+    }
+    emit selfUpdateBlocked(reason);
+    return false;
+}
+
 // ── Manual mode ──────────────────────────────────────────────────────────────
 // The pipeline, split at the two points a person has to be asked. Every step
 // below reuses the same functions the handoff path runs -- there is no second
@@ -375,6 +406,9 @@ void UpdaterWorker::check() {
 
 void UpdaterWorker::download() {
     cancel_.store(false);
+    if (!selfUpdateAllowed()) {
+        return;
+    }
     emit stepStarted(UpStep::Download);
     if (!fetchAndStage()) {
         return;

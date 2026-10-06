@@ -77,6 +77,10 @@ pub fn render_chocolatey(
     copy_tree(&repo_root.join("packaging/chocolatey"), &target)?;
     let install = target.join("tools/chocolateyinstall.ps1");
     let text = fs::read_to_string(&install)?;
+    ensure!(
+        crate::packaging::chocolatey::has_distribution_owner_switch(&text),
+        "the Chocolatey template lost EXOSNAP_DISTRIBUTION_OWNER=chocolatey"
+    );
     let text = replace_once(
         &text,
         &Replacement {
@@ -104,6 +108,10 @@ pub fn render_winget(
     copy_tree(&source, &target)?;
     let installer = target.join("Codexo.ExoSnap.installer.yaml");
     let text = fs::read_to_string(&installer)?;
+    ensure!(
+        crate::packaging::winget::has_distribution_owner_switch(&text),
+        "the WinGet template lost EXOSNAP_DISTRIBUTION_OWNER=winget"
+    );
     let placeholder = format!("'{}'", "0".repeat(64));
     ensure!(
         text.contains(&placeholder),
@@ -262,6 +270,12 @@ mod tests {
             2
         );
         assert!(installer.contains("ReleaseDate: 2026-10-02"));
+        assert!(crate::packaging::winget::has_distribution_owner_switch(
+            &installer
+        ));
+        assert!(crate::packaging::chocolatey::has_distribution_owner_switch(
+            &install
+        ));
         assert!(!installer.contains("ReleaseDate: 2026-09-07"));
         let tracked = fs::read_to_string(dir.path().join("packaging/scoop/exosnap.json")).unwrap();
         assert!(tracked.contains("\"depends\""));
@@ -288,5 +302,49 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("no longer carries"), "{error}");
+    }
+
+    #[test]
+    fn rendering_refuses_templates_that_lost_distribution_ownership() {
+        let dir = packaging_fixture("0.10.0");
+        let install = dir
+            .path()
+            .join("packaging/chocolatey/tools/chocolateyinstall.ps1");
+        let text = fs::read_to_string(&install).unwrap();
+        fs::write(
+            &install,
+            text.replace(" EXOSNAP_DISTRIBUTION_OWNER=chocolatey", ""),
+        )
+        .unwrap();
+        assert!(
+            render_chocolatey(dir.path(), &dir.path().join("out"), &release("0.10.0"))
+                .unwrap_err()
+                .to_string()
+                .contains("EXOSNAP_DISTRIBUTION_OWNER")
+        );
+        let installer = dir.path().join(
+            "packaging/winget/manifests/c/Codexo/ExoSnap/0.10.0/Codexo.ExoSnap.installer.yaml",
+        );
+        let text = fs::read_to_string(&installer).unwrap();
+        fs::write(
+            &installer,
+            text.replace("  Custom: EXOSNAP_DISTRIBUTION_OWNER=winget\n", ""),
+        )
+        .unwrap();
+        let identity = MsiIdentity {
+            product_code: "{11111111-2222-3333-4444-555555555555}".into(),
+            upgrade_code: "{8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D}".into(),
+        };
+        assert!(
+            render_winget(
+                dir.path(),
+                &dir.path().join("out"),
+                &release("0.10.0"),
+                &identity
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("EXOSNAP_DISTRIBUTION_OWNER")
+        );
     }
 }
