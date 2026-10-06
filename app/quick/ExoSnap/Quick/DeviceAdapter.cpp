@@ -281,9 +281,10 @@ QString DeviceAdapter::selectedSubtitle() const {
         return {};
     const auto& adapter = adapters_[static_cast<size_t>(selected_index_)];
     const auto& cap = capabilities_[static_cast<size_t>(selected_index_)];
-    const QString backend =
-        cap.backend_label.empty() ? QStringLiteral("No wired backend") : QString::fromStdString(cap.backend_label);
-    return QStringLiteral("%1 · %2 VRAM").arg(backend, FormatVram(adapter.dedicated_video_memory_bytes));
+    const QString backend = cap.backend_label.empty() ? QCoreApplication::translate("DeviceAdapter", "No wired backend")
+                                                      : QString::fromStdString(cap.backend_label);
+    return QCoreApplication::translate("DeviceAdapter", "%1 · %2 VRAM")
+        .arg(backend, FormatVram(adapter.dedicated_video_memory_bytes));
 }
 
 QString DeviceAdapter::selectedStateBadge() const {
@@ -293,7 +294,8 @@ QString DeviceAdapter::selectedStateBadge() const {
     // encoder right now. Every other adapter — including a probed-but-unused
     // second NVIDIA GPU — reads "Not encoding": a statement about what this
     // machine is doing, not a promise about a backend ExoSnap might ship.
-    return selectedIsActive() ? QStringLiteral("ACTIVE ENCODER") : QStringLiteral("Not encoding");
+    return selectedIsActive() ? QCoreApplication::translate("DeviceAdapter", "ACTIVE ENCODER")
+                              : QCoreApplication::translate("DeviceAdapter", "Not encoding");
 }
 
 bool DeviceAdapter::selectedIsActive() const noexcept {
@@ -335,7 +337,7 @@ void DeviceAdapter::startScan() {
     emit scanStateChanged();
     // Keep an already-populated grid visible across a rescan; only the very
     // first scan replaces the page body with the status line.
-    setStatus(QStringLiteral("Scanning adapters…"), adapters_.empty());
+    setStatus(QCoreApplication::translate("DeviceAdapter", "Scanning adapters…"), adapters_.empty());
 
     // Same off-thread pattern as the Widgets DevicePage: the hardware work runs
     // on a worker QThread and the result is marshalled back to the GUI thread.
@@ -395,7 +397,9 @@ void DeviceAdapter::applyScanResults(std::vector<capability::AdapterInfo> adapte
         // becoming "nothing", and it owes QML the same notification every other
         // selection change does.
         applySelection(-1);
-        setStatus(QStringLiteral("No encoder-capable adapters were found on this system."), true);
+        setStatus(
+            QCoreApplication::translate("DeviceAdapter", "No encoder-capable adapters were found on this system."),
+            true);
         updateSummaryText();
         emit scanCompleted();
         return;
@@ -431,8 +435,9 @@ void DeviceAdapter::rebuildSelectorRows() {
         row.title = AdapterDisplayTitle(adapters_[i]);
         row.kind_badge = KindDisplayName(adapters_[i].kind);
         const std::string& backend_label = capabilities_[i].backend_label;
-        row.backend_line =
-            backend_label.empty() ? QStringLiteral("No wired encoder backend") : QString::fromStdString(backend_label);
+        row.backend_line = backend_label.empty()
+                               ? QCoreApplication::translate("DeviceAdapter", "No wired encoder backend")
+                               : QString::fromStdString(backend_label);
         row.active = static_cast<int>(i) == active_index_;
         row.selected = static_cast<int>(i) == selected_index_;
         rows.push_back(std::move(row));
@@ -501,16 +506,19 @@ void DeviceAdapter::renderCapabilityMatrix() {
     // per-feature detail.
     std::vector<DeviceCapabilityRowModel::Row> rows;
     if (!cap.probed) {
-        rows.push_back({QStringLiteral("Feature detail"), QStringLiteral("Not probed"), {}});
+        rows.push_back({QCoreApplication::translate("DeviceAdapter", "Feature detail"),
+                        QCoreApplication::translate("DeviceAdapter", "Not probed"),
+                        {}});
         capability_model_.setRows(std::move(rows));
         return;
     }
 
     const auto bit10 = caps_.QueryBitDepth(capability::BitDepth::Bit10);
     rows.push_back(
-        {QStringLiteral("10-bit encode (P010)"),
-         QStringLiteral("%1 · system-wide")
-             .arg(capability::IsSelectable(bit10) ? QStringLiteral("Available") : QStringLiteral("Unavailable")),
+        {QCoreApplication::translate("DeviceAdapter", "10-bit encode (P010)"),
+         QCoreApplication::translate("DeviceAdapter", "%1 · system-wide")
+             .arg(capability::IsSelectable(bit10) ? QCoreApplication::translate("DeviceAdapter", "Available")
+                                                  : QCoreApplication::translate("DeviceAdapter", "Unavailable")),
          {}});
 
     if (!cap.backend_label.empty()) {
@@ -524,8 +532,9 @@ void DeviceAdapter::renderCapabilityMatrix() {
         if (capability::IsSelectable(caps_.QueryRateControlMode(exosnap::engine::RateControlMode::ConstantBitrate)))
             modes << QStringLiteral("CBR");
         if (!modes.isEmpty()) {
-            rows.push_back({QStringLiteral("Rate control"),
-                            QStringLiteral("%1 · system-wide").arg(modes.join(QStringLiteral(" · "))),
+            rows.push_back({QCoreApplication::translate("DeviceAdapter", "Rate control"),
+                            QCoreApplication::translate("DeviceAdapter", "%1 · system-wide")
+                                .arg(modes.join(QStringLiteral(" · "))),
                             {}});
         }
     }
@@ -538,7 +547,8 @@ void DeviceAdapter::renderCapabilityMatrix() {
         chroma_chips.append(MakeChip(CodecLabel(capability::VideoCodec::H264), cap.yuv444_h264));
     if (cap.hevc)
         chroma_chips.append(MakeChip(CodecLabel(capability::VideoCodec::Hevc), cap.yuv444_hevc));
-    rows.push_back({QStringLiteral("4:4:4 encode (8-bit)"), QString(), std::move(chroma_chips)});
+    rows.push_back(
+        {QCoreApplication::translate("DeviceAdapter", "4:4:4 encode (8-bit)"), QString(), std::move(chroma_chips)});
 
     // Per-adapter NVENC advanced-encode capability: informational only, no
     // Expert control reads these yet. B-frames shows the max count in the chip
@@ -553,11 +563,12 @@ void DeviceAdapter::renderCapabilityMatrix() {
     add_bframe_chip(cap.h264, capability::VideoCodec::H264, cap.max_bframes_h264);
     add_bframe_chip(cap.hevc, capability::VideoCodec::Hevc, cap.max_bframes_hevc);
     add_bframe_chip(cap.av1, capability::VideoCodec::Av1, cap.max_bframes_av1);
-    rows.push_back({QStringLiteral("B-frames (max)"), QString(), std::move(bframe_chips)});
+    rows.push_back(
+        {QCoreApplication::translate("DeviceAdapter", "B-frames (max)"), QString(), std::move(bframe_chips)});
 
     rows.push_back({QStringLiteral("Lookahead"), QString(),
                     AdvancedEncodeChips(cap, cap.lookahead_h264, cap.lookahead_hevc, cap.lookahead_av1)});
-    rows.push_back({QStringLiteral("Temporal AQ"), QString(),
+    rows.push_back({QCoreApplication::translate("DeviceAdapter", "Temporal AQ"), QString(),
                     AdvancedEncodeChips(cap, cap.temporal_aq_h264, cap.temporal_aq_hevc, cap.temporal_aq_av1)});
 
     capability_model_.setRows(std::move(rows));
@@ -570,18 +581,22 @@ void DeviceAdapter::updateSummaryText() {
         // because NVENC opens on the D3D11 device the capture path created for
         // the target being recorded (video_thread.cpp). Saying "switching is
         // planned" here presented a backlog item as a product capability.
-        text = QStringLiteral("ExoSnap encodes on %1 — the encoder follows the adapter that owns the capture "
-                              "target, and Settings only offers what it can encode. Selecting another card "
-                              "inspects that adapter's capabilities.")
+        text = QCoreApplication::translate(
+                   "DeviceAdapter", "ExoSnap encodes on %1 — the encoder follows the adapter that owns the capture "
+                                    "target, and Settings only offers what it can encode. Selecting another card "
+                                    "inspects that adapter's capabilities.")
                    .arg(AdapterDisplayTitle(adapters_[static_cast<size_t>(active_index_)]));
     } else if (scanned_ && adapters_.empty()) {
-        text = QStringLiteral("No working NVENC encoder was detected — Settings falls back to the static "
-                              "capability baseline.");
+        text = QCoreApplication::translate("DeviceAdapter",
+                                           "No working NVENC encoder was detected — Settings falls back to the static "
+                                           "capability baseline.");
     } else if (scanned_) {
-        text = QStringLiteral("No working NVENC encoder was detected — Settings falls back to the static "
-                              "capability baseline. Selecting a card inspects that adapter's capabilities.");
+        text = QCoreApplication::translate(
+            "DeviceAdapter", "No working NVENC encoder was detected — Settings falls back to the static "
+                             "capability baseline. Selecting a card inspects that adapter's capabilities.");
     } else {
-        text = QStringLiteral("The active encoder device drives Settings' codec, bit-depth, and resolution options.");
+        text = QCoreApplication::translate(
+            "DeviceAdapter", "The active encoder device drives Settings' codec, bit-depth, and resolution options.");
     }
     if (banner_text_ == text)
         return;

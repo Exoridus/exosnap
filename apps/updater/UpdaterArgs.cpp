@@ -89,6 +89,12 @@ std::optional<UpdaterCommandLine> ParseUpdaterCommandLine(const QStringList& arg
             if (!take_value(parsed.handoff_path)) {
                 return std::nullopt;
             }
+        } else if (flag == QStringLiteral("--ui-language")) {
+            if (!take_value(parsed.ui_language))
+                return std::nullopt;
+            if (parsed.ui_language != QLatin1String("en") && parsed.ui_language != QLatin1String("de") &&
+                parsed.ui_language != QLatin1String("system"))
+                return std::nullopt;
         } else if (flag == QStringLiteral("--channel")) {
             if (!take_value(value)) {
                 return std::nullopt;

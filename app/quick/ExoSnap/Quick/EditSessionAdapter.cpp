@@ -1,4 +1,5 @@
 #include "EditSessionAdapter.h"
+#include <QCoreApplication>
 
 #include "diagnostics/AppLog.h"
 #include "models/EditTimelineModel.h"
@@ -349,16 +350,17 @@ void EditSessionAdapter::applyReport(const EditContext& context) {
     const uint64_t total = snapshot.capture.frames_emitted + dropped;
     if (has_snapshot && total > 0) {
         const double percent = 100.0 * static_cast<double>(dropped) / static_cast<double>(total);
-        report_drops_text_ = QStringLiteral("Frame drops: %1%").arg(percent, 0, 'f', 1);
+        report_drops_text_ =
+            QCoreApplication::translate("EditSessionAdapter", "Frame drops: %1%").arg(percent, 0, 'f', 1);
     } else {
-        report_drops_text_ = QStringLiteral("Frame drops: %1").arg(kEmptyValue);
+        report_drops_text_ = QCoreApplication::translate("EditSessionAdapter", "Frame drops: %1").arg(kEmptyValue);
     }
 
     if (context.av_drift_available) {
-        report_drift_text_ =
-            QStringLiteral("Peak A/V drift: \xc2\xb1%1\xc2\xa0ms").arg(context.peak_av_drift_ms, 0, 'f', 0);
+        report_drift_text_ = QCoreApplication::translate("EditSessionAdapter", "Peak A/V drift: \xc2\xb1%1\xc2\xa0ms")
+                                 .arg(context.peak_av_drift_ms, 0, 'f', 0);
     } else {
-        report_drift_text_ = QStringLiteral("Peak A/V drift: %1").arg(kEmptyValue);
+        report_drift_text_ = QCoreApplication::translate("EditSessionAdapter", "Peak A/V drift: %1").arg(kEmptyValue);
     }
 
     // The label is the verdict itself in every case, not only in the two that go
@@ -370,43 +372,43 @@ void EditSessionAdapter::applyReport(const EditContext& context) {
     // verdict and the severity decides only how loudly.
     report_severity_ = ReportSeverity::Neutral;
     if (has_snapshot) {
-        QString health = QStringLiteral("Unknown");
+        QString health = QCoreApplication::translate("EditSessionAdapter", "Unknown");
         switch (snapshot.health) {
         case exosnap::engine::PipelineHealth::Good:
-            health = QStringLiteral("Good");
+            health = QCoreApplication::translate("EditSessionAdapter", "Good");
             break;
         case exosnap::engine::PipelineHealth::Warning:
-            health = QStringLiteral("Warning");
+            health = QCoreApplication::translate("EditSessionAdapter", "Warning");
             report_severity_ = ReportSeverity::Warning;
             break;
         case exosnap::engine::PipelineHealth::Critical:
-            health = QStringLiteral("Critical");
+            health = QCoreApplication::translate("EditSessionAdapter", "Critical");
             report_severity_ = ReportSeverity::Critical;
             break;
         case exosnap::engine::PipelineHealth::Unavailable:
-            health = QStringLiteral("Unavailable");
+            health = QCoreApplication::translate("EditSessionAdapter", "Unavailable");
             break;
         default:
             break;
         }
         report_label_ = health;
-        report_health_text_ = QStringLiteral("Pipeline health: %1").arg(health);
+        report_health_text_ = QCoreApplication::translate("EditSessionAdapter", "Pipeline health: %1").arg(health);
     } else {
         report_label_ = kEmptyValue;
-        report_health_text_ = QStringLiteral("Pipeline health: %1").arg(kEmptyValue);
+        report_health_text_ = QCoreApplication::translate("EditSessionAdapter", "Pipeline health: %1").arg(kEmptyValue);
     }
     emit reportChanged();
 }
 
 void EditSessionAdapter::rebuildFacts() {
     facts_.clear();
-    facts_.append(factRow(QStringLiteral("Duration"), context_.duration));
-    facts_.append(factRow(QStringLiteral("Size"), context_.size));
-    facts_.append(factRow(QStringLiteral("Resolution"), context_.resolution));
-    facts_.append(factRow(QStringLiteral("Frame rate"), context_.fps));
-    facts_.append(factRow(QStringLiteral("Video"), context_.video_codec));
-    facts_.append(factRow(QStringLiteral("Audio"), context_.audio_codec));
-    facts_.append(factRow(QStringLiteral("Container"), context_.container));
+    facts_.append(factRow(QCoreApplication::translate("EditSessionAdapter", "Duration"), context_.duration));
+    facts_.append(factRow(QCoreApplication::translate("EditSessionAdapter", "Size"), context_.size));
+    facts_.append(factRow(QCoreApplication::translate("EditSessionAdapter", "Resolution"), context_.resolution));
+    facts_.append(factRow(QCoreApplication::translate("EditSessionAdapter", "Frame rate"), context_.fps));
+    facts_.append(factRow(QCoreApplication::translate("EditSessionAdapter", "Video"), context_.video_codec));
+    facts_.append(factRow(QCoreApplication::translate("EditSessionAdapter", "Audio"), context_.audio_codec));
+    facts_.append(factRow(QCoreApplication::translate("EditSessionAdapter", "Container"), context_.container));
 }
 
 void EditSessionAdapter::loadMarkers() {
@@ -425,10 +427,12 @@ void EditSessionAdapter::loadMarkers() {
             // No separate marker-error surface — the sidecar is a companion
             // file, and losing an entry costs a bookmark, not the recording.
             if (skipped > 0) {
-                diagnostics::AppLog::warning(QStringLiteral("edit"),
-                                             QStringLiteral("Skipped %1 marker(s) with an unusable time in %2")
-                                                 .arg(skipped)
-                                                 .arg(context_.marker_sidecar_path));
+                diagnostics::AppLog::warning(
+                    QStringLiteral("edit"),
+                    QCoreApplication::translate("EditSessionAdapter",
+                                                "Skipped %1 marker(s) with an unusable time in %2")
+                        .arg(skipped)
+                        .arg(context_.marker_sidecar_path));
             }
             return;
         }

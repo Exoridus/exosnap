@@ -49,8 +49,7 @@ Popup {
     }
     readonly property int windowTotalCount: recordViewModel.windowTargetOptions.length
 
-    readonly property string windowsCountText: windowRows.length === 1 ? qsTr("1 window")
-                                                                       : qsTr("%1 windows").arg(windowRows.length)
+    readonly property string windowsCountText: qsTr("Windows: %n", "", windowRows.length)
 
     // ── Responsive geometry ──────────────────────────────────────────────────
     //

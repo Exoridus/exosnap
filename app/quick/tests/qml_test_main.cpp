@@ -1,4 +1,5 @@
 #include "WhatsNewAdapter.h"
+#include "i18n/Language.h"
 
 #include <QCoreApplication>
 #include <QObject>
@@ -138,6 +139,9 @@ class Setup final : public QObject {
         // binary draws Basic, and a control-metrics assertion could pass here
         // and be wrong in the product.
         QQuickStyle::setStyle(QStringLiteral("Basic"));
+        const QString language = qEnvironmentVariable("EXOSNAP_TEST_UI_LANGUAGE");
+        if (!language.isEmpty())
+            exosnap::i18n::InstallLanguage(*QCoreApplication::instance(), language);
         // After the application exists, so the adapter is built in a live object
         // system rather than during static construction.
         whats_new_driver_ = std::make_unique<WhatsNewTestDriver>();

@@ -1,5 +1,7 @@
 #include "SettingsAdapter.h"
 
+#include <QCoreApplication>
+
 #include "QuickThemeTokens.h"
 
 #include <QClipboard>
@@ -1207,4 +1209,29 @@ TEST_F(SettingsAdapterTest, EncoderDeviceOptionsStartWithAuto) {
 }
 
 } // namespace
+} // namespace exosnap::quick
+
+namespace exosnap::quick {
+TEST_F(SettingsAdapterTest, LanguagePreferenceIsRestartOnlyAndUsesStableTokens) {
+    PersistedAppSettings settings;
+    adapter.setAppSettings(settings);
+    EXPECT_EQ(adapter.uiLanguage(), QStringLiteral("system"));
+    EXPECT_FALSE(adapter.languageRestartNeeded());
+    const QVariantList options = adapter.languageOptions();
+    ASSERT_EQ(options.size(), 3);
+    EXPECT_EQ(options[0].toMap().value(QStringLiteral("value")).toString(), QStringLiteral("system"));
+    EXPECT_EQ(options[1].toMap().value(QStringLiteral("value")).toString(), QStringLiteral("en"));
+    EXPECT_EQ(options[2].toMap().value(QStringLiteral("value")).toString(), QStringLiteral("de"));
+    SignalCounter edits(adapter, &SettingsAdapter::appSettingsEdited);
+    adapter.setUiLanguage(QStringLiteral("de"));
+    EXPECT_EQ(adapter.appSettings().ui_language, QStringLiteral("de"));
+    EXPECT_TRUE(adapter.languageRestartNeeded());
+    EXPECT_EQ(edits.count(), 1);
+    adapter.setUiLanguage(QStringLiteral("de"));
+    EXPECT_EQ(edits.count(), 1);
+    adapter.setUiLanguage(QStringLiteral("system"));
+    EXPECT_FALSE(adapter.languageRestartNeeded());
+    adapter.setUiLanguage(QStringLiteral("unknown"));
+    EXPECT_EQ(adapter.uiLanguage(), QStringLiteral("system"));
+}
 } // namespace exosnap::quick

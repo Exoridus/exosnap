@@ -34,6 +34,7 @@ namespace exosnap::updater {
 // command line touches no file, so it stays pure and the IO failure modes of the
 // handoff document have their own vocabulary.
 struct UpdaterCommandLine {
+    QString ui_language = QStringLiteral("system");
     // Non-empty exactly when --apply-handoff was given; that presence IS the
     // mode, because a handoff is something only a launcher can hand over.
     QString handoff_path;

@@ -1,10 +1,13 @@
 #include "SettingsAdapter.h"
+
 #include <QClipboard>
+#include <QCoreApplication>
 #include <QGuiApplication>
 #include <capability/option_query.h>
 #include <update/distribution_context.h>
 
 #include "QuickThemeTokens.h"
+#include "i18n/Language.h"
 #include "models/FilenameBuilder.h"
 #include "models/OutputPathPolicy.h"
 #include "models/OutputPathValidator.h"
@@ -56,7 +59,7 @@ QVariant makeOption(const QString& value, const QString& label) {
 }
 
 QString fromAnnotation(const capability::SupportAnnotation& annotation) {
-    return QString::fromStdString(annotation.reason);
+    return QCoreApplication::translate("Capabilities", annotation.reason.c_str());
 }
 
 // Physical device name plus the backend this build would run on it. The name
@@ -146,8 +149,10 @@ void SettingsAdapter::requestOutputValidation(OutputValidationTrigger trigger) {
 }
 
 void SettingsAdapter::applyOutputFolderValidation(FolderValidationResult result) {
-    const QString message =
-        result == FolderValidationResult::Ok ? QString() : fromWide(FolderValidationMessage(result));
+    const QString message = result == FolderValidationResult::Ok
+                                ? QString()
+                                : QCoreApplication::translate(
+                                      "OutputSettings", fromWide(FolderValidationMessage(result)).toUtf8().constData());
     if (folder_validation_ == message) {
         return;
     }
@@ -295,7 +300,7 @@ void SettingsAdapter::refreshEncoderDeviceState() {
     }
 
     if (!encoder_resolution_.resolved && !encoder_resolution_.deferred_to_capture) {
-        encoder_device_hint_ = QString::fromStdString(encoder_resolution_.reason);
+        encoder_device_hint_ = QCoreApplication::translate("Capabilities", encoder_resolution_.reason.c_str());
     } else {
         encoder_device_hint_.clear();
     }
@@ -303,6 +308,9 @@ void SettingsAdapter::refreshEncoderDeviceState() {
 
 void SettingsAdapter::setAppSettings(const PersistedAppSettings& settings) {
     app_settings_ = settings;
+    app_settings_.ui_language = i18n::NormalizeLanguage(app_settings_.ui_language);
+    if (startup_language_.isEmpty())
+        startup_language_ = app_settings_.ui_language;
     app_settings_.preview_frame_rate = NormalizePreviewRate(app_settings_.preview_frame_rate);
     emit appSettingsChanged();
 }
@@ -776,7 +784,7 @@ void SettingsAdapter::rebuildOptions() {
                                 (!caps_set_ || capability::IsSelectable(annotation));
         const QString reason = capability::IsContainerCompatSelectable(compat.level)
                                    ? fromAnnotation(annotation)
-                                   : QString::fromUtf8(compat.reason.data(), static_cast<int>(compat.reason.size()));
+                                   : QCoreApplication::translate("Capabilities", std::string(compat.reason).c_str());
         video_codec_options_.append(
             makeOption(static_cast<int>(value), ui::videoCodecLabel(value), selectable, reason));
     }
@@ -789,7 +797,7 @@ void SettingsAdapter::rebuildOptions() {
                                 (!caps_set_ || capability::IsSelectable(annotation));
         const QString reason = capability::IsContainerCompatSelectable(compat.level)
                                    ? fromAnnotation(annotation)
-                                   : QString::fromUtf8(compat.reason.data(), static_cast<int>(compat.reason.size()));
+                                   : QCoreApplication::translate("Capabilities", std::string(compat.reason).c_str());
         audio_codec_options_.append(
             makeOption(static_cast<int>(value), ui::audioCodecLabel(value), selectable, reason));
     }
@@ -874,7 +882,7 @@ void SettingsAdapter::rebuildOptions() {
         bool selectable = candidate.usable();
         QString reason;
         if (!selectable) {
-            reason = QString::fromStdString(candidate.unavailable_reason);
+            reason = QCoreApplication::translate("Capabilities", candidate.unavailable_reason.c_str());
         } else if (capture_adapter_known_) {
             exosnap::engine::PipelineAdapterIdentity capture;
             capture.known = true;
@@ -986,13 +994,19 @@ void SettingsAdapter::rebuildOptions() {
     for (const OutputResolutionMode mode :
          {OutputResolutionMode::Native, OutputResolutionMode::UHD2160, OutputResolutionMode::QHD1440,
           OutputResolutionMode::FHD1080, OutputResolutionMode::HD720, OutputResolutionMode::Custom}) {
-        resolution_options_.append(makeOption(static_cast<int>(mode), fromWide(OutputResolutionModeName(mode))));
+        resolution_options_.append(
+            makeOption(static_cast<int>(mode),
+                       QCoreApplication::translate("OutputSettings",
+                                                   fromWide(OutputResolutionModeName(mode)).toUtf8().constData())));
     }
 
     split_mode_options_.clear();
     for (const SplitRecordingMode mode : {SplitRecordingMode::Every15Min, SplitRecordingMode::Every30Min,
                                           SplitRecordingMode::Every60Min, SplitRecordingMode::Custom}) {
-        split_mode_options_.append(makeOption(static_cast<int>(mode), fromWide(SplitRecordingModeName(mode))));
+        split_mode_options_.append(
+            makeOption(static_cast<int>(mode),
+                       QCoreApplication::translate("OutputSettings",
+                                                   fromWide(SplitRecordingModeName(mode)).toUtf8().constData())));
     }
 
     mic_channel_mode_options_.clear();
@@ -1064,7 +1078,7 @@ void SettingsAdapter::rebuildDerivedText() {
     const auto compat = capability::ContainerCompatRegistry::Query(out.container, out.video_codec, out.audio_codec);
     compat_notice_ = compat.level == capability::ContainerCompatLevel::Recommended
                          ? QString()
-                         : QString::fromUtf8(compat.reason.data(), static_cast<int>(compat.reason.size()));
+                         : QCoreApplication::translate("Capabilities", std::string(compat.reason).c_str());
 
     example_filename_ = fromWide(BuildFilename(out.naming_pattern, out.container, std::time(nullptr)));
     // The whole path a recording would land on, not the folder alone: the folder
@@ -1077,9 +1091,11 @@ void SettingsAdapter::rebuildDerivedText() {
                                QDir(QString::fromStdWString(out.output_folder.wstring())).filePath(example_filename_));
 
     const NormalizedFilenamePattern pattern = NormalizeFilenamePatternInput(out.naming_pattern);
-    pattern_validation_ = pattern.result == FilenamePatternPolicyResult::Ok
-                              ? QString()
-                              : fromWide(FilenamePatternPolicyMessage(pattern.result));
+    pattern_validation_ =
+        pattern.result == FilenamePatternPolicyResult::Ok
+            ? QString()
+            : QCoreApplication::translate("OutputSettings",
+                                          fromWide(FilenamePatternPolicyMessage(pattern.result)).toUtf8().constData());
 
     custom_resolution_validation_.clear();
     if (customResolutionActive()) {
@@ -1095,16 +1111,22 @@ void SettingsAdapter::rebuildDerivedText() {
     const SplitRecordingSettings& split = out.split;
     QStringList split_parts;
     if (split.mode != SplitRecordingMode::Off) {
-        split_parts.append(split.mode == SplitRecordingMode::Custom
-                               ? tr("every %1 min").arg(split.custom_minutes)
-                               : fromWide(SplitRecordingModeName(split.mode)).toLower());
+        split_parts.append(
+            split.mode == SplitRecordingMode::Custom
+                ? tr("every %1 min").arg(split.custom_minutes)
+                : QCoreApplication::translate("OutputSettings",
+                                              fromWide(SplitRecordingModeName(split.mode)).toUtf8().constData())
+                      .toLower());
     }
     if (split.size_mode != SplitSizeMode::Off) {
         split_parts.append(tr("every %1 MB").arg(split.custom_size_mb));
     }
     split_summary_ = split_parts.isEmpty() ? tr("Single file") : tr("New file %1").arg(split_parts.join(tr(" or ")));
 
-    output_summary_ = tr("%1 · %2").arg(fromWide(OutputResolutionModeName(out.resolution.mode)), split_summary_);
+    output_summary_ = tr("%1 · %2").arg(
+        QCoreApplication::translate("OutputSettings",
+                                    fromWide(OutputResolutionModeName(out.resolution.mode)).toUtf8().constData()),
+        split_summary_);
 
     const auto& audio = config_.audio;
     QStringList stages;
@@ -1678,9 +1700,7 @@ void SettingsAdapter::rebuildAudioTargetStrings() {
     audio_target_summary_ =
         audio_track_rows_.isEmpty()
             ? tr("Recording %1 · no audio").arg(target)
-            : tr("Recording %1 · %2")
-                  .arg(target,
-                       audio_track_rows_.size() == 1 ? tr("1 track") : tr("%1 tracks").arg(audio_track_rows_.size()));
+            : tr("Recording %1 · %2").arg(target, tr("Tracks: %n", "", static_cast<int>(audio_track_rows_.size())));
 
     QStringList mic_parts;
     if (!microphoneConnected()) {
@@ -1858,6 +1878,20 @@ QVariantList SettingsAdapter::appearanceOptions() const {
     // Read from the canonical tables rather than restating ids here -- a
     // hand-written list silently offers values that do not exist.
     return QuickThemeTokens::appearanceOptions();
+}
+
+QVariantList SettingsAdapter::languageOptions() const {
+    return {makeOption(QStringLiteral("system"), tr("System")),
+            makeOption(QStringLiteral("en"), QStringLiteral("English")),
+            makeOption(QStringLiteral("de"), QStringLiteral("Deutsch"))};
+}
+
+QString SettingsAdapter::uiLanguage() const {
+    return app_settings_.ui_language;
+}
+
+bool SettingsAdapter::languageRestartNeeded() const {
+    return !startup_language_.isEmpty() && app_settings_.ui_language != startup_language_;
 }
 
 QString SettingsAdapter::appearanceId() const {
@@ -2611,6 +2645,14 @@ void SettingsAdapter::setAppearanceId(const QString& value) {
         return;
     }
     app_settings_.appearance_id = value;
+    commitAppSettingsEdit();
+}
+
+void SettingsAdapter::setUiLanguage(const QString& value) {
+    const QString language = i18n::NormalizeLanguage(value);
+    if (app_settings_.ui_language == language)
+        return;
+    app_settings_.ui_language = language;
     commitAppSettingsEdit();
 }
 

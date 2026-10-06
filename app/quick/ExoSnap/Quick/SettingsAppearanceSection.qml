@@ -19,6 +19,23 @@ ExoCard {
     title: qsTr("Appearance")
 
     ExoSettingRow {
+        label: qsTr("Language")
+        hint: root.settings.languageRestartNeeded
+              ? qsTr("Restart ExoSnap to apply the new language.")
+              : qsTr("System uses German for German system locales, otherwise English.")
+        stacked: root.stacked
+        Layout.fillWidth: true
+
+        ExoSelect {
+            options: root.settings.languageOptions
+            value: root.settings.uiLanguage
+            Accessible.name: qsTr("Language")
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+            onValueActivated: value => root.settings.uiLanguage = value
+        }
+    }
+
+    ExoSettingRow {
         label: qsTr("Mode")
         hint: qsTr("Surface palette · Dark is the shipped default")
         stacked: root.stacked

@@ -1649,7 +1649,8 @@ bool RecordingCoordinator::RequestSplit(exosnap::engine::SplitTriggerSource sour
                                      QStringLiteral("rejected: not recording (state=%1 source=%2)")
                                          .arg(static_cast<int>(st))
                                          .arg(QLatin1String(SplitTriggerName(source))));
-        PostSplitFeedback(false, QStringLiteral("Split is only available while recording."));
+        PostSplitFeedback(false,
+                          QCoreApplication::translate("RecordingActions", "Split is only available while recording."));
         return false;
     }
 
@@ -1664,7 +1665,8 @@ bool RecordingCoordinator::RequestSplit(exosnap::engine::SplitTriggerSource sour
             QStringLiteral("rejected: container does not support split (container=%1 source=%2)")
                 .arg(static_cast<int>(output_settings_.container))
                 .arg(QLatin1String(SplitTriggerName(source))));
-        PostSplitFeedback(false, QStringLiteral("Split recording is only available with MKV or WebM output."));
+        PostSplitFeedback(false, QCoreApplication::translate(
+                                     "RecordingActions", "Split recording is only available with MKV or WebM output."));
         return false;
     }
 
@@ -1690,7 +1692,7 @@ bool RecordingCoordinator::RequestSplit(exosnap::engine::SplitTriggerSource sour
         diagnostics::AppLog::info(QStringLiteral("split"),
                                   QStringLiteral("rejected: the engine is not recording yet (source=%1)")
                                       .arg(QLatin1String(SplitTriggerName(source))));
-        PostSplitFeedback(false, QStringLiteral("The recording has not started yet."));
+        PostSplitFeedback(false, QCoreApplication::translate("RecordingActions", "The recording has not started yet."));
         return false;
     }
     return true;
@@ -1892,7 +1894,7 @@ void RecordingCoordinator::OnSegmentCompleted(const exosnap::engine::CompletedSe
     // segments; the new live segment's human-friendly part number is total+1.
     if (was_split_boundary && is_recording_.load() && segment.succeeded) {
         const qulonglong next_part = static_cast<qulonglong>(total) + 1;
-        PostSplitFeedback(true, QStringLiteral("Started segment %1").arg(next_part));
+        PostSplitFeedback(true, QCoreApplication::translate("RecordingActions", "Started segment %1").arg(next_part));
     }
 }
 
@@ -2983,7 +2985,7 @@ void RecordingCoordinator::WriteSnapshotAndNotify(QThreadPool& pool, FrameCaptur
                                                                          log_context_suffix + QStringLiteral(": ") +
                                                                          out_path);
                     if (cb)
-                        cb(false, {}, QStringLiteral("Failed to write PNG file"));
+                        cb(false, {}, QCoreApplication::translate("RecordingActions", "Failed to write PNG file"));
                 }
             },
             Qt::QueuedConnection);
@@ -3025,7 +3027,8 @@ void RecordingCoordinator::CaptureFrame() {
         if (!ready_frame_requester_) {
             AppLog::warning(QStringLiteral("capture_frame"), QStringLiteral("no preview frame source in Ready state"));
             if (on_frame_captured_)
-                on_frame_captured_(false, {}, QStringLiteral("No preview frame available"));
+                on_frame_captured_(false, {},
+                                   QCoreApplication::translate("RecordingActions", "No preview frame available"));
             return;
         }
 
@@ -3058,7 +3061,8 @@ void RecordingCoordinator::CaptureFrame() {
     AppLog::warning(QStringLiteral("capture_frame"),
                     QStringLiteral("rejected: unsupported state %1").arg(static_cast<int>(st)));
     if (on_frame_captured_)
-        on_frame_captured_(false, {}, QStringLiteral("Capture frame is not available in this state"));
+        on_frame_captured_(
+            false, {}, QCoreApplication::translate("RecordingActions", "Capture frame is not available in this state"));
 }
 
 void RecordingCoordinator::PostStateChange(UiRecordingState new_state) {

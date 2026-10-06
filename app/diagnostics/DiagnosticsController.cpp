@@ -1,4 +1,6 @@
 #include "DiagnosticsController.h"
+#include <QCoreApplication>
+#include <capability/translatable.h>
 
 #include "DiagnosticsPresentation.h"
 
@@ -69,9 +71,9 @@ IssueCard CardFromResult(const DiagnosticResult& result) {
     card.measured = result.current_value;
     card.log_excerpt = result.detail;
     if (!result.compensation.empty())
-        card.log_excerpt += "\nCompensation: " + result.compensation;
+        card.log_excerpt += EXOSNAP_TRANSLATABLE("Diagnostics", "\nCompensation: ") + result.compensation;
     if (!result.likely_cause.empty())
-        card.log_excerpt += "\nLikely cause: " + result.likely_cause;
+        card.log_excerpt += EXOSNAP_TRANSLATABLE("Diagnostics", "\nLikely cause: ") + result.likely_cause;
     card.needs_elevation = NeedsElevation(result.id);
     if (result.fix_action.has_value()) {
         const FixAction& fix = *result.fix_action;
@@ -161,13 +163,13 @@ std::string_view ValueToneKey(ValueTone tone) noexcept {
 std::string_view SelfTestStateLabel(SelfTestState state) noexcept {
     switch (state) {
     case SelfTestState::NotRun:
-        return "Not run";
+        return EXOSNAP_TRANSLATABLE("Diagnostics", "Not run");
     case SelfTestState::Pass:
         return "PASS";
     case SelfTestState::Warn:
         return "WARN";
     }
-    return "Not run";
+    return EXOSNAP_TRANSLATABLE("Diagnostics", "Not run");
 }
 
 std::string_view StageStatusKey(StageStatus status) noexcept {
@@ -263,9 +265,9 @@ std::string PresentModeLabel(exosnap::engine::PresentMode mode) {
     case exosnap::engine::PresentMode::Composed:
         return "Composed";
     case exosnap::engine::PresentMode::IndependentFlip:
-        return "Independent flip";
+        return EXOSNAP_TRANSLATABLE("Diagnostics", "Independent flip");
     case exosnap::engine::PresentMode::ExclusiveFullscreen:
-        return "Exclusive fullscreen";
+        return EXOSNAP_TRANSLATABLE("Diagnostics", "Exclusive fullscreen");
     case exosnap::engine::PresentMode::Unknown:
         return "Unknown";
     }
@@ -343,9 +345,9 @@ std::string PresentSampleModeLabel(PresentMode mode) {
     case PresentMode::Composed:
         return "Composed";
     case PresentMode::IndependentFlip:
-        return "Independent flip";
+        return EXOSNAP_TRANSLATABLE("Diagnostics", "Independent flip");
     case PresentMode::ExclusiveFullscreen:
-        return "Exclusive fullscreen";
+        return EXOSNAP_TRANSLATABLE("Diagnostics", "Exclusive fullscreen");
     case PresentMode::Unknown:
         return "Unknown";
     }
@@ -360,7 +362,7 @@ LiveTile FramePacingTile(const LiveTileInputs& in) {
     const exosnap::engine::RecordingDiagnosticsSnapshot& s = in.snapshot;
     LiveTile tile;
     tile.key = "framePacing";
-    tile.title = "Frame pacing";
+    tile.title = QCoreApplication::translate("Diagnostics", "Frame pacing").toStdString();
     tile.value = Number(s.capture.actual_fps, 2) + " fps";
     tile.sub = Number(s.pacing.affected_slots) + " affected output slots";
     tile.tone =
@@ -368,7 +370,9 @@ LiveTile FramePacingTile(const LiveTileInputs& in) {
     tile.value_tone = OwnedTone(in.ledger, {"rec.001"}, false);
     if (s.pacing.recent_affected_slots > 0)
         tile.tone = TileTone::Notice;
-    tile.detail = tile.tone == TileTone::Neutral ? "Healthy" : "Recording pacing affected";
+    tile.detail = tile.tone == TileTone::Neutral
+                      ? QCoreApplication::translate("Diagnostics", "Healthy").toStdString()
+                      : QCoreApplication::translate("Diagnostics", "Recording pacing affected").toStdString();
     if (s.elapsed_seconds > 0.0) {
         tile.session_detail =
             "session avg " + Number(static_cast<double>(s.capture.frames_emitted) / s.elapsed_seconds, 2) + " fps";
@@ -394,9 +398,10 @@ LiveTile EncoderTile(const LiveTileInputs& in) {
             tile.sub = Join(tile.sub, "budget " + Number(s.video_timing.budget_ms, 2) + " ms");
         tile.sub_tone = OwnedTone(in.ledger, {"rec.gpu.contention"}, /*sticky=*/true);
     } else {
-        tile.sub = "No frame encoded yet";
+        tile.sub = QCoreApplication::translate("Diagnostics", "No frame encoded yet").toStdString();
     }
-    tile.detail = "Backlog " + Number(s.video_encoder.backlog);
+    tile.detail =
+        QCoreApplication::translate("Diagnostics", "Backlog ").toStdString() + Number(s.video_encoder.backlog);
     tile.tone = ToneOfStage(s, {exosnap::engine::PipelineBottleneck::VideoEncoder});
     // The headline is a codec name, and no check measures a codec name.
     tile.value_tone = ValueTone::Neutral;
@@ -418,10 +423,10 @@ LiveTile AudioSyncTile(const LiveTileInputs& in) {
     const exosnap::engine::RecordingDiagnosticsSnapshot& s = in.snapshot;
     LiveTile tile;
     tile.key = "audioSync";
-    tile.title = "Audio sync";
+    tile.title = QCoreApplication::translate("Diagnostics", "Audio sync").toStdString();
     if (!s.audio.active) {
-        tile.value = "No audio";
-        tile.sub = "This recording has no audio track";
+        tile.value = QCoreApplication::translate("Diagnostics", "No audio").toStdString();
+        tile.sub = QCoreApplication::translate("Diagnostics", "This recording has no audio track").toStdString();
         tile.detail.clear();
         return tile;
     }
@@ -432,22 +437,24 @@ LiveTile AudioSyncTile(const LiveTileInputs& in) {
         tile.value = sign + Number(s.av_drift_ms, 1) + " ms";
         tile.value_tone = OwnedTone(in.ledger, {"rec.audio.clock_saturated"}, /*sticky=*/false);
     } else if (drift_faulted) {
-        // Sampled and known-wrong. "Unavailable" would send the reader off to
-        // wait for a value that already arrived, and a number would be a sync
-        // claim the measurement cannot carry.
-        tile.value = "Not measurable";
+        // Sampled and known-wrong. QCoreApplication::translate("Diagnostics", "Unavailable").toStdString() would send
+        // the reader off to wait for a value that already arrived, and a number would be a sync claim the measurement
+        // cannot carry.
+        tile.value = QCoreApplication::translate("Diagnostics", "Not measurable").toStdString();
     } else {
         // A multi-source merge mixes several device clocks and does not report.
         // Zero here would claim perfect sync on a recording nobody measured.
-        tile.value = "Unavailable";
+        tile.value = QCoreApplication::translate("Diagnostics", "Unavailable").toStdString();
     }
 
-    tile.sub = Number(static_cast<uint64_t>(s.audio.sample_rate / 1000)) + " kHz";
+    tile.sub = Number(static_cast<uint64_t>(s.audio.sample_rate / 1000)) +
+               QCoreApplication::translate("Diagnostics", " kHz").toStdString();
     tile.sub = Join(tile.sub, s.audio.channels == 1 ? std::string("Mono") : std::string("Stereo"));
 
     std::string detail;
     if (s.peak_av_drift_availability == exosnap::engine::MetricAvailability::Available)
-        detail = "peak " + Number(s.peak_av_drift_ms, 1) + " ms";
+        detail =
+            QCoreApplication::translate("Diagnostics", "peak ").toStdString() + Number(s.peak_av_drift_ms, 1) + " ms";
     if (s.clock_slaving_active)
         detail = Join(detail, "correcting " + Number(s.clock_slaving_ppm, 0) + " ppm");
     if (s.audio.source_degraded) {
@@ -480,11 +487,13 @@ LiveTile StorageTile(const LiveTileInputs& in) {
     LiveTile tile;
     tile.key = "storage";
     tile.title = "Storage";
-    tile.value = Number(s.disk.throughput_mib_s, 0) + " MiB/s";
+    tile.value =
+        Number(s.disk.throughput_mib_s, 0) + QCoreApplication::translate("Diagnostics", " MiB/s").toStdString();
     // Throughput has no owning check: it is a property of what is being written,
     // not a budget anything is spending. Neutral ink, never a verdict colour.
     tile.value_tone = ValueTone::Neutral;
-    tile.sub = "Write failures " + Number(s.disk.write_failures);
+    tile.sub =
+        QCoreApplication::translate("Diagnostics", "Write failures ").toStdString() + Number(s.disk.write_failures);
     if (s.disk.latency_availability == exosnap::engine::MetricAvailability::Available) {
         tile.sub_tinted = "peak write " + Number(s.disk.peak_write_ms, 0) + " ms";
         tile.sub = Join(tile.sub, tile.sub_tinted);
@@ -492,13 +501,16 @@ LiveTile StorageTile(const LiveTileInputs& in) {
     }
     // Negative means the estimate could not be made (unknown throughput or no
     // free-space reading), which is a different answer from "no time left".
-    tile.detail = s.disk_fill_eta_seconds >= 0.0 ? "Est. remaining " + CoarseDuration(s.disk_fill_eta_seconds)
-                                                 : "Remaining time unavailable";
+    tile.detail = s.disk_fill_eta_seconds >= 0.0
+                      ? QCoreApplication::translate("Diagnostics", "Est. remaining ").toStdString() +
+                            CoarseDuration(s.disk_fill_eta_seconds)
+                      : QCoreApplication::translate("Diagnostics", "Remaining time unavailable").toStdString();
     // disk.throughput_mib_s is an interval rate between publishes; the session
     // average is the bytes actually on disk over the session clock.
     if (s.elapsed_seconds > 0.0) {
         const double mib = static_cast<double>(s.disk.bytes_written) / (1024.0 * 1024.0);
-        tile.session_detail = "session avg " + Number(mib / s.elapsed_seconds, 0) + " MiB/s";
+        tile.session_detail = "session avg " + Number(mib / s.elapsed_seconds, 0) +
+                              QCoreApplication::translate("Diagnostics", " MiB/s").toStdString();
     }
     tile.tone = ToneOfStage(s, {exosnap::engine::PipelineBottleneck::Disk, exosnap::engine::PipelineBottleneck::Muxer});
     if (s.disk.write_failures > 0 && tile.tone == TileTone::Neutral)
@@ -512,13 +524,14 @@ LiveTile StorageTile(const LiveTileInputs& in) {
 // Why an in-depth tile has no number, said in the tile itself. The row is full
 // whenever the switch is on, so a tile with no reading has to account for itself
 // rather than leave a gap where the reader expects a measurement.
-constexpr const char* kNoPresentTrace = "Enhanced presentation telemetry unavailable";
+constexpr const char* kNoPresentTrace =
+    EXOSNAP_TRANSLATABLE("Diagnostics", "Enhanced presentation telemetry unavailable");
 constexpr const char* kNoDpcTrace = "DPC/ISR trace is not reporting";
 
 LiveTile PresentModeTile(const LiveTileInputs& in) {
     LiveTile tile;
     tile.key = "presentMode";
-    tile.title = "Presentation / Mode";
+    tile.title = QCoreApplication::translate("Diagnostics", "Presentation / Mode").toStdString();
     if (!in.present.has_value() || !in.present->available) {
         tile.value = kDash;
         tile.detail = kNoPresentTrace;
@@ -535,7 +548,7 @@ LiveTile PresentModeTile(const LiveTileInputs& in) {
 LiveTile PresentHealthTile(const LiveTileInputs& in) {
     LiveTile tile;
     tile.key = "presentHealth";
-    tile.title = "Presentation / Discards";
+    tile.title = QCoreApplication::translate("Diagnostics", "Presentation / Discards").toStdString();
     if (!in.present.has_value() || !in.present->available) {
         tile.value = kDash;
         tile.detail = kNoPresentTrace;
@@ -576,7 +589,7 @@ LiveTile DpcLatencyTile(const LiveTileInputs& in) {
 LiveTile GpuTimeTile(const LiveTileInputs& in) {
     LiveTile tile;
     tile.key = "gpuTime";
-    tile.title = "GPU / Recorder execution";
+    tile.title = QCoreApplication::translate("Diagnostics", "GPU / Recorder execution").toStdString();
     tile.value = in.gpu_exec_p99_ms > 0.0 ? Number(in.gpu_exec_p99_ms, 2) + " ms" : kDash;
     tile.value_tone = OwnedTone(in.ledger, {"rec.gpu.contention"}, /*sticky=*/false);
     const double budget = FrameBudgetMs(in.snapshot);
@@ -609,41 +622,53 @@ std::vector<LiveTile> BuildLiveTiles(const LiveTileInputs& in) {
         tile.detail = std::move(detail);
         tiles.push_back(std::move(tile));
     };
-    const auto timing = [&evidence](const char* key, const char* title, const exosnap::engine::TimingDistribution& d) {
+    const auto timing = [&evidence](const char* key, const std::string& title,
+                                    const exosnap::engine::TimingDistribution& d) {
         evidence(key, title, d.samples ? Number(d.p95_ms, 2) + " ms p95" : kDash,
-                 d.samples ? "p50 " + Number(d.p50_ms, 2) + " / p99 " + Number(d.p99_ms, 2) + " ms" : "Not measured");
+                 d.samples ? "p50 " + Number(d.p50_ms, 2) + " / p99 " + Number(d.p99_ms, 2) + " ms"
+                           : QCoreApplication::translate("Diagnostics", "Not measured").toStdString());
     };
-    timing("selectionResidual", "Timing / Selection residual", snapshot.pacing.absolute_residual);
-    timing("selectedAge", "Timing / Selected frame age", snapshot.pacing.selected_frame_age);
-    timing("scheduler", "Timing / Worker lateness", snapshot.pacing.worker_lateness);
-    evidence("sourceTiming", "Timing / Source",
+    timing("selectionResidual", QCoreApplication::translate("Diagnostics", "Timing / Selection residual").toStdString(),
+           snapshot.pacing.absolute_residual);
+    timing("selectedAge", QCoreApplication::translate("Diagnostics", "Timing / Selected frame age").toStdString(),
+           snapshot.pacing.selected_frame_age);
+    timing("scheduler", QCoreApplication::translate("Diagnostics", "Timing / Worker lateness").toStdString(),
+           snapshot.pacing.worker_lateness);
+    evidence("sourceTiming", QCoreApplication::translate("Diagnostics", "Timing / Source").toStdString(),
              snapshot.capture.present_cadence_availability == exosnap::engine::MetricAvailability::Available
                  ? Number(snapshot.capture.source_present_jitter_ms, 2) + " ms variation"
                  : kDash,
-             "Raw source variation is not output loss");
-    evidence("ring", "Timing / Selection ring",
+             QCoreApplication::translate("Diagnostics", "Raw source variation is not output loss").toStdString());
+    evidence("ring", QCoreApplication::translate("Diagnostics", "Timing / Selection ring").toStdString(),
              snapshot.pacing.selection_samples ? Number(snapshot.pacing.ring_occupancy) + " frames" : kDash,
              snapshot.pacing.selection_samples
                  ? Number(snapshot.pacing.ring_misses) + " misses; longest duplicate run " +
                        Number(snapshot.pacing.longest_duplicate_run)
-                 : "Present-time selection unavailable");
+                 : QCoreApplication::translate("Diagnostics", "Present-time selection unavailable").toStdString());
     tiles.push_back(GpuTimeTile(in));
     const auto percent = [](const std::optional<double>& v) { return v ? Number(*v, 0) + "%" : std::string(kDash); };
-    evidence("gpuUtilization", "GPU / Device utilization", percent(in.gpu.utilization_percent),
-             "Device-wide; high usage alone is not a problem");
-    evidence("encoderUtilization", "GPU / Encoder utilization", percent(in.gpu.encoder_utilization_percent),
-             in.gpu.metadata.source);
-    evidence("gpuTemperature", "GPU / Temperature",
+    evidence(
+        "gpuUtilization", QCoreApplication::translate("Diagnostics", "GPU / Device utilization").toStdString(),
+        percent(in.gpu.utilization_percent),
+        QCoreApplication::translate("Diagnostics", "Device-wide; high usage alone is not a problem").toStdString());
+    evidence("encoderUtilization",
+             QCoreApplication::translate("Diagnostics", "GPU / Encoder utilization").toStdString(),
+             percent(in.gpu.encoder_utilization_percent), in.gpu.metadata.source);
+    evidence("gpuTemperature", QCoreApplication::translate("Diagnostics", "GPU / Temperature").toStdString(),
              in.gpu.temperature_celsius ? Number(static_cast<uint64_t>(*in.gpu.temperature_celsius)) + " C" : kDash,
-             in.gpu.graphics_clock_mhz ? Number(static_cast<uint64_t>(*in.gpu.graphics_clock_mhz)) + " MHz"
-                                       : "Clock unavailable");
-    evidence("videoMemory", "GPU / Process local memory",
-             in.video_memory.local ? Number(in.video_memory.local->current_usage_bytes / (1024 * 1024)) + " MiB"
+             in.gpu.graphics_clock_mhz ? Number(static_cast<uint64_t>(*in.gpu.graphics_clock_mhz)) +
+                                             QCoreApplication::translate("Diagnostics", " MHz").toStdString()
+                                       : QCoreApplication::translate("Diagnostics", "Clock unavailable").toStdString());
+    evidence("videoMemory", QCoreApplication::translate("Diagnostics", "GPU / Process local memory").toStdString(),
+             in.video_memory.local ? Number(in.video_memory.local->current_usage_bytes / (1024 * 1024)) +
+                                         QCoreApplication::translate("Diagnostics", " MiB").toStdString()
                                    : kDash,
-             in.video_memory.local
-                 ? "Budget " + Number(in.video_memory.local->budget_bytes / (1024 * 1024)) + " MiB; headroom " +
-                       Number(in.video_memory.local->headroom_bytes() / (1024 * 1024)) + " MiB"
-                 : "DXGI budget unavailable");
+             in.video_memory.local ? QCoreApplication::translate("Diagnostics", "Budget ").toStdString() +
+                                         Number(in.video_memory.local->budget_bytes / (1024 * 1024)) +
+                                         QCoreApplication::translate("Diagnostics", " MiB; headroom ").toStdString() +
+                                         Number(in.video_memory.local->headroom_bytes() / (1024 * 1024)) +
+                                         QCoreApplication::translate("Diagnostics", " MiB").toStdString()
+                                   : "DXGI budget unavailable");
     std::string ownership;
     uint64_t logical_bytes = 0;
     for (const auto& surface : in.video_memory.logical_surfaces) {
@@ -652,32 +677,44 @@ std::vector<LiveTile> BuildLiveTiles(const LiveTileInputs& in) {
         logical_bytes += surface.bytes;
         if (!ownership.empty())
             ownership += "; ";
-        ownership += std::string(surface.owner) + " " + Number(surface.bytes / (1024 * 1024)) + " MiB";
+        ownership += std::string(surface.owner) + " " + Number(surface.bytes / (1024 * 1024)) +
+                     QCoreApplication::translate("Diagnostics", " MiB").toStdString();
     }
-    evidence("gpuSurfaceOwnership", "GPU / Tracked surface texels",
-             in.video_memory.logical_surfaces_sampled ? Number(logical_bytes / (1024 * 1024)) + " MiB" : kDash,
-             "All process adapters; excludes driver storage and external pools. " + ownership);
-    evidence("encoderDeviceStats", "GPU / Device encoder sessions",
+    evidence(
+        "gpuSurfaceOwnership", QCoreApplication::translate("Diagnostics", "GPU / Tracked surface texels").toStdString(),
+        in.video_memory.logical_surfaces_sampled
+            ? Number(logical_bytes / (1024 * 1024)) + QCoreApplication::translate("Diagnostics", " MiB").toStdString()
+            : kDash,
+        QCoreApplication::translate("Diagnostics", "All process adapters; excludes driver storage and external pools. ")
+                .toStdString() +
+            ownership);
+    evidence("encoderDeviceStats",
+             QCoreApplication::translate("Diagnostics", "GPU / Device encoder sessions").toStdString(),
              in.gpu.encoder_sessions ? Number(static_cast<uint64_t>(*in.gpu.encoder_sessions)) : kDash,
              in.gpu.encoder_average_latency_us
-                 ? "Average latency " + Number(static_cast<uint64_t>(*in.gpu.encoder_average_latency_us)) +
-                       " us (all encoder sessions)"
-                 : "Session latency unavailable");
-    evidence("gpuPowerState", "GPU / Performance state",
+                 ? QCoreApplication::translate("Diagnostics", "Average latency ").toStdString() +
+                       Number(static_cast<uint64_t>(*in.gpu.encoder_average_latency_us)) + " us (all encoder sessions)"
+                 : QCoreApplication::translate("Diagnostics", "Session latency unavailable").toStdString());
+    evidence("gpuPowerState", QCoreApplication::translate("Diagnostics", "GPU / Performance state").toStdString(),
              in.gpu.performance_state ? "P" + Number(static_cast<uint64_t>(*in.gpu.performance_state)) : kDash,
-             "Read-only device performance state; no thermal or power cause inferred");
+             QCoreApplication::translate("Diagnostics",
+                                         "Read-only device performance state; no thermal or power cause inferred")
+                 .toStdString());
     tiles.push_back(PresentModeTile(in));
     tiles.push_back(PresentHealthTile(in));
     tiles.push_back(DpcLatencyTile(in));
-    evidence("storageLatency", "Storage / Write latency",
+    evidence("storageLatency", QCoreApplication::translate("Diagnostics", "Storage / Write latency").toStdString(),
              snapshot.disk.latency_availability == exosnap::engine::MetricAvailability::Available
                  ? Number(snapshot.disk.peak_write_ms, 1) + " ms peak"
                  : kDash,
-             snapshot.bottleneck == exosnap::engine::PipelineBottleneck::Disk ? "Storage pressure affected the pipeline"
-                                                                              : "No measured storage backpressure");
-    timing("producerWait", "Storage / Producer wait", snapshot.video_queue.producer_wait);
+             snapshot.bottleneck == exosnap::engine::PipelineBottleneck::Disk
+                 ? QCoreApplication::translate("Diagnostics", "Storage pressure affected the pipeline").toStdString()
+                 : QCoreApplication::translate("Diagnostics", "No measured storage backpressure").toStdString());
+    timing("producerWait", QCoreApplication::translate("Diagnostics", "Storage / Producer wait").toStdString(),
+           snapshot.video_queue.producer_wait);
     for (const auto& fact : in.ledger.compensated())
-        evidence("compensated/" + fact.id, "Compensated / " + fact.title,
+        evidence("compensated/" + fact.id,
+                 QCoreApplication::translate("Diagnostics", "Compensated / ").toStdString() + fact.title,
                  Number(static_cast<uint64_t>(fact.count)) + " observed periods", fact.compensation);
     return tiles;
 }
@@ -693,7 +730,9 @@ bool NeedsElevation(std::string_view id) noexcept {
 
 std::string TrimVendorPrefix(std::string adapter_name) {
     // Longest first: "Intel(R) " must win over "Intel ".
-    for (const std::string_view prefix : {"NVIDIA ", "Intel(R) ", "Intel ", "AMD ", "Advanced Micro Devices, Inc. "}) {
+    for (const std::string_view prefix :
+         {"NVIDIA ", EXOSNAP_TRANSLATABLE("Diagnostics", "Intel(R) "), EXOSNAP_TRANSLATABLE("Diagnostics", "Intel "),
+          "AMD ", EXOSNAP_TRANSLATABLE("Diagnostics", "Advanced Micro Devices, Inc. ")}) {
         if (adapter_name.rfind(prefix, 0) == 0) {
             adapter_name.erase(0, prefix.size());
             break;
@@ -754,8 +793,10 @@ Verdict ComputeVerdict(const DiagnosticChecklist& recommendations, int cap_passe
 
     if (!data_ready) {
         verdict.state = VerdictState::Neutral;
-        verdict.headline = "Not checked yet";
-        verdict.subline = "Run a check to see whether this machine is set up to record well.";
+        verdict.headline = QCoreApplication::translate("Diagnostics", "Not checked yet").toStdString();
+        verdict.subline = QCoreApplication::translate(
+                              "Diagnostics", "Run a check to see whether this machine is set up to record well.")
+                              .toStdString();
         return verdict;
     }
 
@@ -778,29 +819,48 @@ Verdict ComputeVerdict(const DiagnosticChecklist& recommendations, int cap_passe
 
     if (verdict.blockers > 0) {
         verdict.state = VerdictState::Blocked;
-        verdict.headline = verdict.blockers == 1 ? std::string("1 thing to fix before recording")
-                                                 : std::to_string(verdict.blockers) + " things to fix before recording";
-        verdict.subline = std::to_string(verdict.blockers) + (verdict.blockers == 1 ? " blocker" : " blockers") +
-                          " must be resolved before recording. See the cards below.";
+        verdict.headline =
+            verdict.blockers == 1
+                ? QCoreApplication::translate("Diagnostics", "1 thing to fix before recording").toStdString()
+                : QCoreApplication::translate("Diagnostics", "%1 things to fix before recording")
+                      .arg(verdict.blockers)
+                      .toStdString();
+        verdict.subline =
+            (verdict.blockers == 1
+                 ? QCoreApplication::translate("Diagnostics",
+                                               "1 blocker must be resolved before recording. See the cards below.")
+                 : QCoreApplication::translate("Diagnostics",
+                                               "%1 blockers must be resolved before recording. See the cards below.")
+                       .arg(verdict.blockers))
+                .toStdString();
         return verdict;
     }
 
     if (verdict.notices > 0) {
         verdict.state = VerdictState::Warn;
-        verdict.headline = verdict.notices == 1
-                               ? std::string("Recording works ") + kDash + " 1 thing could hurt the result"
-                               : std::string("Recording works ") + kDash + " " + std::to_string(verdict.notices) +
-                                     " things could hurt the result";
-        verdict.subline = "You can record, but " + std::to_string(verdict.notices) +
-                          (verdict.notices == 1 ? " issue" : " issues") +
-                          " could affect the result. See the cards below.";
+        verdict.headline =
+            verdict.notices == 1
+                ? std::string(QCoreApplication::translate("Diagnostics", "Recording works ").toStdString()) + kDash +
+                      QCoreApplication::translate("Diagnostics", " 1 thing could hurt the result").toStdString()
+                : std::string(QCoreApplication::translate("Diagnostics", "Recording works ").toStdString()) + kDash +
+                      " " + std::to_string(verdict.notices) +
+                      QCoreApplication::translate("Diagnostics", " things could hurt the result").toStdString();
+        verdict.subline =
+            (verdict.notices == 1
+                 ? QCoreApplication::translate(
+                       "Diagnostics", "You can record, but 1 issue could affect the result. See the cards below.")
+                 : QCoreApplication::translate(
+                       "Diagnostics", "You can record, but %1 issues could affect the result. See the cards below.")
+                       .arg(verdict.notices))
+                .toStdString();
         return verdict;
     }
 
     verdict.state = VerdictState::Ready;
-    verdict.headline = "Ready to record";
+    verdict.headline = QCoreApplication::translate("Diagnostics", "Ready to record").toStdString();
     verdict.subline =
-        std::string("Everything checks out ") + kDash + " " + std::to_string(cap_passes) + " capability checks passed.";
+        std::string(QCoreApplication::translate("Diagnostics", "Everything checks out ").toStdString()) + kDash + " " +
+        QCoreApplication::translate("Diagnostics", "%1 capability checks passed.").arg(cap_passes).toStdString();
     return verdict;
 }
 
@@ -814,10 +874,14 @@ Verdict ComputeRecordingVerdict(const DiagnosticChecklist& live_results, const S
     }
     if (verdict.blockers > 0) {
         verdict.state = VerdictState::Blocked;
-        verdict.headline = verdict.blockers == 1 ? std::string("Recording ") + kDash + " 1 blocking problem"
-                                                 : std::string("Recording ") + kDash + " " +
-                                                       std::to_string(verdict.blockers) + " blocking problems";
-        verdict.subline = "See the cards below.";
+        verdict.headline = verdict.blockers == 1
+                               ? std::string(QCoreApplication::translate("Diagnostics", "Recording ").toStdString()) +
+                                     kDash +
+                                     QCoreApplication::translate("Diagnostics", " 1 blocking problem").toStdString()
+                               : std::string(QCoreApplication::translate("Diagnostics", "Recording ").toStdString()) +
+                                     kDash + " " + std::to_string(verdict.blockers) +
+                                     QCoreApplication::translate("Diagnostics", " blocking problems").toStdString();
+        verdict.subline = QCoreApplication::translate("Diagnostics", "See the cards below.").toStdString();
         return verdict;
     }
 
@@ -825,8 +889,9 @@ Verdict ComputeRecordingVerdict(const DiagnosticChecklist& live_results, const S
     verdict.notices = static_cast<int>(entries.size());
     if (entries.empty()) {
         verdict.state = VerdictState::Ready;
-        verdict.headline = "RECORDING HEALTHY";
-        verdict.subline = "No recording-impacting problems detected.";
+        verdict.headline = QCoreApplication::translate("Diagnostics", "RECORDING HEALTHY").toStdString();
+        verdict.subline =
+            QCoreApplication::translate("Diagnostics", "No recording-impacting problems detected.").toStdString();
         return verdict;
     }
 
@@ -834,9 +899,14 @@ Verdict ComputeRecordingVerdict(const DiagnosticChecklist& live_results, const S
     verdict.state = VerdictState::Warn;
     // Counts only. A headline that moved with the measurement would rewrite
     // itself twice a second on a band the reader is trying to read.
-    verdict.headline = std::string("RECORDING DEGRADED ") + kDash + " " + std::to_string(verdict.notices) +
-                       (verdict.notices == 1 ? " problem observed" : " problems observed") +
-                       (active > 0 ? ", " + std::to_string(active) + " active" : std::string(", quiet now"));
+    verdict.headline =
+        std::string(QCoreApplication::translate("Diagnostics", "RECORDING DEGRADED ").toStdString()) + kDash + " " +
+        std::to_string(verdict.notices) +
+        (verdict.notices == 1 ? QCoreApplication::translate("Diagnostics", " problem observed").toStdString()
+                              : QCoreApplication::translate("Diagnostics", " problems observed").toStdString()) +
+        (active > 0
+             ? ", " + std::to_string(active) + QCoreApplication::translate("Diagnostics", " active").toStdString()
+             : std::string(QCoreApplication::translate("Diagnostics", ", quiet now").toStdString()));
 
     std::string subline;
     for (const LedgerEntry& entry : entries) {
@@ -849,7 +919,8 @@ Verdict ComputeRecordingVerdict(const DiagnosticChecklist& live_results, const S
                              [](const LedgerEntry& a, const LedgerEntry& b) { return a.last_seen_s < b.last_seen_s; });
         subline = last->title;
         if (now_s > last->last_seen_s)
-            subline += ", last seen " + LastSeenAgo(now_s - last->last_seen_s);
+            subline += QCoreApplication::translate("Diagnostics", ", last seen ").toStdString() +
+                       LastSeenAgo(now_s - last->last_seen_s);
     }
     verdict.subline = std::move(subline);
     return verdict;
@@ -865,7 +936,9 @@ TopIssues BuildTopIssues(const capability::ResolveResult& profile_validation,
     for (const auto& invalid : profile_validation.invalidity) {
         IssueCard card;
         card.tone = IssueTone::Blocker;
-        card.title = InvalidFieldDisplayName(invalid.field) + " is not supported";
+        card.title = QCoreApplication::translate("Diagnostics", "%1 is not supported")
+                         .arg(QString::fromStdString(InvalidFieldDisplayName(invalid.field)))
+                         .toStdString();
         card.summary = invalid.message;
         card.why = InvalidFieldActionHint(invalid.field);
         PushCard(issues.cards, std::move(card));
@@ -882,20 +955,28 @@ TopIssues BuildTopIssues(const capability::ResolveResult& profile_validation,
     for (const auto& warning : profile_validation.warnings) {
         IssueCard card;
         card.tone = IssueTone::Notice;
-        card.title = "Configuration needs validation";
+        card.title = QCoreApplication::translate("Diagnostics", "Configuration needs validation").toStdString();
         card.summary = warning.message;
-        card.why = "Run a short recording to validate quality on this machine.";
-        card.log_excerpt = "Code: " + warning.code;
+        card.why =
+            QCoreApplication::translate("Diagnostics", "Run a short recording to validate quality on this machine.")
+                .toStdString();
+        card.log_excerpt = QCoreApplication::translate("Diagnostics", "Code: ").toStdString() + warning.code;
         PushCard(issues.cards, std::move(card));
     }
 
-    if (!hotkeys_ok && hotkeys_summary != "None configured") {
+    if (!hotkeys_ok && hotkeys_summary != QCoreApplication::translate("Diagnostics", "None configured").toStdString()) {
         IssueCard card;
         card.tone = IssueTone::Notice;
-        card.title = "Global hotkeys are not active";
-        card.summary = "Hotkeys are configured but not currently registered.";
-        card.why = "Open the Hotkeys page and reapply the binding if shortcuts do not trigger.";
-        card.log_excerpt = "If the app just launched, this can clear once startup completes.";
+        card.title = QCoreApplication::translate("Diagnostics", "Global hotkeys are not active").toStdString();
+        card.summary =
+            QCoreApplication::translate("Diagnostics", "Hotkeys are configured but not currently registered.")
+                .toStdString();
+        card.why = QCoreApplication::translate(
+                       "Diagnostics", "Open the Hotkeys page and reapply the binding if shortcuts do not trigger.")
+                       .toStdString();
+        card.log_excerpt = QCoreApplication::translate(
+                               "Diagnostics", "If the app just launched, this can clear once startup completes.")
+                               .toStdString();
         PushCard(issues.cards, std::move(card));
     }
 
@@ -942,20 +1023,22 @@ LastSession BuildLastSession(const UiRecordingResult& result, const exosnap::eng
     const uint64_t drops = measured ? s.real_frame_loss() : 0;
     const bool degraded = drops > 0 || s.pacing.affected_slots > 0 || s.audio.source_degraded_occurred ||
                           s.audio.discontinuities > 0 || !frozen_ledger.empty();
-    session.outcome = !result.succeeded ? "Failed"
-                      : !measured       ? "Outcome unavailable"
-                      : degraded        ? "Degraded"
-                                        : "Healthy";
+    session.outcome = !result.succeeded ? QCoreApplication::translate("Diagnostics", "Failed").toStdString()
+                      : !measured ? QCoreApplication::translate("Diagnostics", "Outcome unavailable").toStdString()
+                      : degraded  ? QCoreApplication::translate("Diagnostics", "Degraded").toStdString()
+                                  : QCoreApplication::translate("Diagnostics", "Healthy").toStdString();
 
     // The four facts, in a fixed order. A card whose rows move between recordings
     // cannot be read at a glance, and these are read at a glance or not at all.
     {
         LastSessionFact fact;
         fact.key = "dropped";
-        fact.label = "Real frame loss";
+        fact.label = QCoreApplication::translate("Diagnostics", "Real frame loss").toStdString();
         fact.value = measured ? Number(drops) : std::string(kDash);
         if (measured)
-            fact.sub = "of " + Number(s.capture.frames_captured) + " captured";
+            fact.sub = QCoreApplication::translate("Diagnostics", "of ").toStdString() +
+                       Number(s.capture.frames_captured) +
+                       QCoreApplication::translate("Diagnostics", " captured").toStdString();
         // The one fact of the four that a check owns outright: a dropped frame is
         // missing from the file, which is not a matter of degree.
         if (measured)
@@ -965,7 +1048,7 @@ LastSession BuildLastSession(const UiRecordingResult& result, const exosnap::eng
     {
         LastSessionFact fact;
         fact.key = "achieved";
-        fact.label = "Achieved fps";
+        fact.label = QCoreApplication::translate("Diagnostics", "Achieved fps").toStdString();
         const double target = static_cast<double>(result.frame_rate_num) /
                               (result.frame_rate_den > 0 ? static_cast<double>(result.frame_rate_den) : 1.0);
         if (measured && s.elapsed_seconds > 0.0) {
@@ -973,29 +1056,33 @@ LastSession BuildLastSession(const UiRecordingResult& result, const exosnap::eng
         } else {
             fact.value = kDash;
         }
-        fact.sub = "target " + Number(target, 0) + " fps";
+        fact.sub = QCoreApplication::translate("Diagnostics", "target ").toStdString() + Number(target, 0) + " fps";
         session.facts.push_back(std::move(fact));
     }
     {
         LastSessionFact fact;
         fact.key = "drift";
-        fact.label = "Peak residual drift";
+        fact.label = QCoreApplication::translate("Diagnostics", "Peak residual drift").toStdString();
         // The device-clock residual after correction, not the file's alignment.
         // Nothing here claims the recording is out of sync, so nothing tints it.
         if (measured && s.peak_av_drift_availability == exosnap::engine::MetricAvailability::Available) {
-            fact.value = "peak " + Number(s.peak_av_drift_ms, 1) + " ms";
-            fact.sub = "device clock residual";
+            fact.value = QCoreApplication::translate("Diagnostics", "peak ").toStdString() +
+                         Number(s.peak_av_drift_ms, 1) + " ms";
+            fact.sub = QCoreApplication::translate("Diagnostics", "device clock residual").toStdString();
         } else {
-            fact.value = "Unavailable";
-            fact.sub = "no single audio clock to measure against";
+            fact.value = QCoreApplication::translate("Diagnostics", "Unavailable").toStdString();
+            fact.sub =
+                QCoreApplication::translate("Diagnostics", "no single audio clock to measure against").toStdString();
         }
         session.facts.push_back(std::move(fact));
     }
     {
         LastSessionFact fact;
         fact.key = "file";
-        fact.label = "File";
-        fact.value = result.succeeded ? "Finalized successfully" : "Failed";
+        fact.label = QCoreApplication::translate("Diagnostics", "File").toStdString();
+        fact.value = result.succeeded
+                         ? QCoreApplication::translate("Diagnostics", "Finalized successfully").toStdString()
+                         : QCoreApplication::translate("Diagnostics", "Failed").toStdString();
         fact.sub = Join(HumanBytes(result.output_file_bytes), CodecName(result.video_codec));
         fact.tone = result.succeeded ? ValueTone::Ok : ValueTone::Critical;
         session.facts.push_back(std::move(fact));
@@ -1003,18 +1090,20 @@ LastSession BuildLastSession(const UiRecordingResult& result, const exosnap::eng
 
     LastSessionFact pacing;
     pacing.key = "pacing";
-    pacing.label = "Affected pacing slots";
+    pacing.label = QCoreApplication::translate("Diagnostics", "Affected pacing slots").toStdString();
     pacing.value = measured && s.pacing.output_slots > 0 ? Number(s.pacing.affected_slots) : kDash;
     pacing.tone = measured && s.pacing.affected_slots > 0 ? ValueTone::Warn : ValueTone::Neutral;
     session.facts.push_back(std::move(pacing));
     LastSessionFact interruptions;
     interruptions.key = "interruptions";
-    interruptions.label = "Audio interruptions";
+    interruptions.label = QCoreApplication::translate("Diagnostics", "Audio interruptions").toStdString();
     interruptions.value = measured && s.audio.active &&
                                   s.audio.discontinuity_availability == exosnap::engine::MetricAvailability::Available
                               ? Number(s.audio.discontinuities)
                               : kDash;
-    interruptions.sub = s.audio.source_degraded_occurred ? "Audio source loss occurred" : "";
+    interruptions.sub = s.audio.source_degraded_occurred
+                            ? QCoreApplication::translate("Diagnostics", "Audio source loss occurred").toStdString()
+                            : "";
     session.facts.push_back(std::move(interruptions));
 
     for (const LedgerEntry& entry : frozen_ledger) {
@@ -1046,9 +1135,16 @@ std::vector<KeyValueRow> BuildEnvironmentRows(const std::vector<DiagnosticResult
     // today, so this is a defensive fallback that still mirrors the measured state
     // rather than a fixed string.
     if (rows.empty()) {
-        rows.push_back({"Elevation", elevated ? std::string("Elevated ") + kDash + " optional kernel traces may start"
-                                              : std::string("Standard ") + kDash + " core recording health available " +
-                                                    kMiddot + " optional traces depend on the token's rights"});
+        rows.push_back(
+            {QCoreApplication::translate("Diagnostics", "Elevation").toStdString(),
+             elevated
+                 ? std::string(QCoreApplication::translate("Diagnostics", "Elevated ").toStdString()) + kDash +
+                       QCoreApplication::translate("Diagnostics", " optional kernel traces may start").toStdString()
+                 : std::string(QCoreApplication::translate("Diagnostics", "Standard ").toStdString()) + kDash +
+                       QCoreApplication::translate("Diagnostics", " core recording health available ").toStdString() +
+                       kMiddot +
+                       QCoreApplication::translate("Diagnostics", " optional traces depend on the token's rights")
+                           .toStdString()});
     }
     return rows;
 }
@@ -1088,7 +1184,8 @@ SelfTestReport BuildSelfTestReport(const DiagnosticChecklist& self_test) {
                       result.detail.find(kNotExecutedSentinel) != std::string::npos;
         row.title = result.title;
         row.detail = result.detail;
-        row.status_text = row.not_run ? "Not run" : result.summary;
+        row.status_text =
+            row.not_run ? QCoreApplication::translate("Diagnostics", "Not run").toStdString() : result.summary;
         row.tone = row.not_run ? IssueTone::Pass : ToneOf(result.severity);
         report.rows.push_back(std::move(row));
     }
@@ -1131,7 +1228,9 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
             // The container is a muxer fact and belongs to the pipeline card,
             // not to the tile that answers "what encodes this".
             if (!in.driver_version.empty())
-                tile.sub = Join(tile.sub, "driver " + in.driver_version);
+                tile.sub = Join(tile.sub, QCoreApplication::translate("Diagnostics", "driver %1")
+                                              .arg(QString::fromStdString(in.driver_version))
+                                              .toStdString());
             if (in.caps != nullptr) {
                 // Canon order, not capability order: the row is a fixed reference
                 // the user learns the position of, so a codec never moves because
@@ -1157,7 +1256,7 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
             }
         } else {
             tile.value = kDash;
-            tile.sub = "active encoder";
+            tile.sub = QCoreApplication::translate("Diagnostics", "active encoder").toStdString();
         }
         tiles.push_back(std::move(tile));
     }
@@ -1167,7 +1266,7 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
     {
         ReadinessTile tile;
         tile.key = "disk";
-        tile.title = "Disk";
+        tile.title = QCoreApplication::translate("Diagnostics", "Disk").toStdString();
         if (in.data_ready && in.free_bytes.has_value()) {
             tile.value = HumanBytes(*in.free_bytes);
             if (in.total_bytes > 0) {
@@ -1175,11 +1274,14 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
                 tile.has_usage_bar = true;
                 tile.usage_percent = std::clamp(static_cast<int>(used * 100.0 + 0.5), 0, 100);
             }
-            tile.sub = in.output_drive_label.empty() ? std::string("free ") + kMiddot + " output drive"
-                                                     : std::string("free ") + kMiddot + " " + in.output_drive_label;
+            tile.sub = in.output_drive_label.empty()
+                           ? std::string(QCoreApplication::translate("Diagnostics", "free ").toStdString()) + kMiddot +
+                                 QCoreApplication::translate("Diagnostics", " output drive").toStdString()
+                           : std::string(QCoreApplication::translate("Diagnostics", "free ").toStdString()) + kMiddot +
+                                 " " + in.output_drive_label;
         } else {
             tile.value = kDash;
-            tile.sub = "output drive";
+            tile.sub = QCoreApplication::translate("Diagnostics", "output drive").toStdString();
         }
         tiles.push_back(std::move(tile));
     }
@@ -1190,13 +1292,17 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
     {
         ReadinessTile tile;
         tile.key = "display";
-        tile.title = "Display";
-        std::string target = in.target_is_window ? "application window" : "full display";
+        tile.title = QCoreApplication::translate("Diagnostics", "Display").toStdString();
+        std::string target = in.target_is_window
+                                 ? QCoreApplication::translate("Diagnostics", "application window").toStdString()
+                                 : QCoreApplication::translate("Diagnostics", "full display").toStdString();
         if (in.target_selected && !BlankOrWhitespace(in.target_description))
             target = in.target_description;
         if (in.display_width > 0 && in.display_height > 0) {
             tile.value = std::to_string(in.display_width) + " \xc3\x97 " + std::to_string(in.display_height);
-            tile.sub = Join(std::to_string(in.display_refresh_hz) + " Hz", target);
+            tile.sub = Join(std::to_string(in.display_refresh_hz) +
+                                QCoreApplication::translate("Diagnostics", " Hz").toStdString(),
+                            target);
         } else {
             tile.value = kDash;
             tile.sub = target;
@@ -1213,7 +1319,8 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
             const std::string codec = StripBackendSuffix(AudioCodecDisplayName(in.audio_codec));
             tile.value = codec.empty() ? std::string(kDash) : codec;
             if (in.audio_sources == 0) {
-                tile.sub = std::string("no sources ") + kMiddot + " silent";
+                tile.sub = std::string(QCoreApplication::translate("Diagnostics", "no sources ").toStdString()) +
+                           kMiddot + QCoreApplication::translate("Diagnostics", " silent").toStdString();
             } else {
                 // Non-breaking space between the number and its unit: word-wrap must
                 // never split "48 kHz" across two lines inside the tile subline.
@@ -1222,12 +1329,16 @@ std::vector<ReadinessTile> BuildReadinessTiles(const ReadinessTileInputs& in) {
                 if (trimmed.size() > 2 && trimmed.compare(trimmed.size() - 2, 2, ".0") == 0)
                     trimmed.resize(trimmed.size() - 2);
                 const std::string channels = in.audio_channels <= 1 ? "Mono" : "Stereo";
-                tile.sub = std::to_string(in.audio_sources) + (in.audio_sources == 1 ? " source " : " sources ") +
-                           kMiddot + " " + trimmed + kNarrowNbsp + "kHz " + kMiddot + " " + channels;
+                tile.sub =
+                    std::to_string(in.audio_sources) +
+                    (in.audio_sources == 1 ? QCoreApplication::translate("Diagnostics", " source ").toStdString()
+                                           : QCoreApplication::translate("Diagnostics", " sources ").toStdString()) +
+                    kMiddot + " " + trimmed + kNarrowNbsp +
+                    QCoreApplication::translate("Diagnostics", "kHz ").toStdString() + kMiddot + " " + channels;
             }
         } else {
             tile.value = kDash;
-            tile.sub = "audio sources";
+            tile.sub = QCoreApplication::translate("Diagnostics", "audio sources").toStdString();
         }
         tiles.push_back(std::move(tile));
     }
@@ -1253,7 +1364,7 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildStatic(bool data_ready, boo
     std::vector<PipelineStage> stages;
     stages.reserve(6);
 
-    const auto planned = [&](const char* key, const char* title, const char* tip) {
+    const auto planned = [&](const char* key, const std::string& title, const std::string& tip) {
         PipelineStage stage;
         stage.key = key;
         stage.title = title;
@@ -1264,18 +1375,25 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildStatic(bool data_ready, boo
         stages.push_back(std::move(stage));
     };
 
-    planned("capture", "Source capture", "Live during recording.");
-    planned("queue", "Frame queue", "Live during recording.");
-    planned("compositor", "Compositor", "Live during recording.");
+    planned("capture", QCoreApplication::translate("Diagnostics", "Source capture").toStdString(),
+            QCoreApplication::translate("Diagnostics", "Live during recording.").toStdString());
+    planned("queue", QCoreApplication::translate("Diagnostics", "Frame queue").toStdString(),
+            QCoreApplication::translate("Diagnostics", "Live during recording.").toStdString());
+    planned("compositor", "Compositor",
+            QCoreApplication::translate("Diagnostics", "Live during recording.").toStdString());
 
     if (!data_ready) {
-        planned("encoder", "Encoder", "Run a check to probe the encoder.");
-        planned("muxer", "Muxer", "Run a check to probe the muxer.");
-        planned("disk", "Disk", "Run a check to probe the output path.");
+        planned("encoder", "Encoder",
+                QCoreApplication::translate("Diagnostics", "Run a check to probe the encoder.").toStdString());
+        planned("muxer", "Muxer",
+                QCoreApplication::translate("Diagnostics", "Run a check to probe the muxer.").toStdString());
+        planned("disk", QCoreApplication::translate("Diagnostics", "Disk").toStdString(),
+                QCoreApplication::translate("Diagnostics", "Run a check to probe the output path.").toStdString());
         return stages;
     }
 
-    const auto probed = [&](const char* key, const char* title, bool ok, const char* ok_tip, const char* bad_tip) {
+    const auto probed = [&](const char* key, const std::string& title, bool ok, const std::string& ok_tip,
+                            const std::string& bad_tip) {
         PipelineStage stage;
         stage.key = key;
         stage.title = title;
@@ -1286,12 +1404,22 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildStatic(bool data_ready, boo
         stages.push_back(std::move(stage));
     };
 
-    probed("encoder", "Encoder", encoder_ok, "Selected video encoder is available. Live encoder load is not measured.",
-           "Selected video codec is not available on this system.");
-    probed("muxer", "Muxer", muxer_ok, "Selected container muxer is available. Write throughput is not measured.",
-           "Selected container is not available on this system.");
-    probed("disk", "Disk", disk_ok, "Output path is writable. Live disk throughput is not measured.",
-           "Output path is not writable.");
+    probed("encoder", "Encoder", encoder_ok,
+           QCoreApplication::translate("Diagnostics",
+                                       "Selected video encoder is available. Live encoder load is not measured.")
+               .toStdString(),
+           QCoreApplication::translate("Diagnostics", "Selected video codec is not available on this system.")
+               .toStdString());
+    probed("muxer", "Muxer", muxer_ok,
+           QCoreApplication::translate("Diagnostics",
+                                       "Selected container muxer is available. Write throughput is not measured.")
+               .toStdString(),
+           QCoreApplication::translate("Diagnostics", "Selected container is not available on this system.")
+               .toStdString());
+    probed("disk", QCoreApplication::translate("Diagnostics", "Disk").toStdString(), disk_ok,
+           QCoreApplication::translate("Diagnostics", "Output path is writable. Live disk throughput is not measured.")
+               .toStdString(),
+           QCoreApplication::translate("Diagnostics", "Output path is not writable.").toStdString());
     return stages;
 }
 
@@ -1386,28 +1514,32 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
     {
         PipelineStage stage;
         stage.key = "capture";
-        stage.title = "Source capture";
+        stage.title = QCoreApplication::translate("Diagnostics", "Source capture").toStdString();
         stage.lane = "CPU";
         stage.status = StatusOf(health_of(StageId::SourceCapture));
         stage.value = s.capture.target_fps > 0.0
                           ? Number(s.capture.actual_fps, 1) + " / " + Number(s.capture.target_fps, 1) + " fps"
                           : std::string(kDash);
         stage.tip = (s.capture.acquire_availability == MetricAvailability::Available)
-                        ? "Acquire " + Number(s.capture.acquire_average_ms, 2) + " ms (CPU)"
-                        : "Acquire timing unavailable for this capture mode";
+                        ? QCoreApplication::translate("Diagnostics", "Acquire ").toStdString() +
+                              Number(s.capture.acquire_average_ms, 2) + " ms (CPU)"
+                        : QCoreApplication::translate("Diagnostics", "Acquire timing unavailable for this capture mode")
+                              .toStdString();
         stages.push_back(std::move(stage));
     }
 
     {
         PipelineStage stage;
         stage.key = "queue";
-        stage.title = "Frame queue";
+        stage.title = QCoreApplication::translate("Diagnostics", "Frame queue").toStdString();
         stage.lane = kDash;
         stage.status = StatusOf(health_of(StageId::FrameQueue));
         stage.value = s.video_queue.bounded && s.video_queue.capacity > 0
                           ? Number(s.video_queue.current_depth) + " / " + Number(s.video_queue.capacity)
                           : Number(s.video_queue.current_depth);
-        stage.tip = "Frames waiting between encode and mux (peak " + Number(s.video_queue.peak_depth) + ")";
+        stage.tip =
+            QCoreApplication::translate("Diagnostics", "Frames waiting between encode and mux (peak ").toStdString() +
+            Number(s.video_queue.peak_depth) + ")";
         stages.push_back(std::move(stage));
     }
 
@@ -1418,7 +1550,9 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
         stage.lane = "GPU";
         stage.status = StatusOf(health_of(StageId::Compositor));
         stage.value = ms(s.compositor.average_ms, s.compositor.average_ms > 0.0);
-        stage.tip = "CPU submit (GPU execution time not measured in this view). VPBlt " +
+        stage.tip = QCoreApplication::translate("Diagnostics",
+                                                "CPU submit (GPU execution time not measured in this view). VPBlt ")
+                        .toStdString() +
                     ((s.compositor.vpblt_availability == MetricAvailability::Available)
                          ? Number(s.compositor.vpblt_average_ms, 2) + " ms"
                          : std::string(kDash));
@@ -1432,7 +1566,8 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
         stage.lane = "GPU (NVENC)";
         stage.status = StatusOf(health_of(StageId::Encoder));
         stage.value = ms(s.video_encoder.average_ms, s.video_encoder.average_ms > 0.0);
-        stage.tip = std::string("CPU submit") + kRightArrow + "ready latency (peak " +
+        stage.tip = std::string(QCoreApplication::translate("Diagnostics", "CPU submit").toStdString()) + kRightArrow +
+                    QCoreApplication::translate("Diagnostics", "ready latency (peak ").toStdString() +
                     Number(s.video_encoder.peak_ms, 1) + " ms)";
         stages.push_back(std::move(stage));
     }
@@ -1444,18 +1579,20 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
         stage.lane = "CPU";
         stage.status = StatusOf(health_of(StageId::Muxer));
         stage.value = ms(s.mux.process_average_ms, mux.available);
-        stage.tip = "Mux drain processing (peak " + Number(s.mux.process_peak_ms, 2) + " ms)";
+        stage.tip = QCoreApplication::translate("Diagnostics", "Mux drain processing (peak ").toStdString() +
+                    Number(s.mux.process_peak_ms, 2) + " ms)";
         stages.push_back(std::move(stage));
     }
 
     {
         PipelineStage stage;
         stage.key = "disk";
-        stage.title = "Disk";
+        stage.title = QCoreApplication::translate("Diagnostics", "Disk").toStdString();
         stage.lane = "CPU";
         stage.status = StatusOf(health_of(StageId::Disk));
         stage.value = ms(s.disk.average_write_ms, disk.available);
-        stage.tip = "Filesystem write-call latency (peak " + Number(s.disk.peak_write_ms, 1) + " ms)";
+        stage.tip = QCoreApplication::translate("Diagnostics", "Filesystem write-call latency (peak ").toStdString() +
+                    Number(s.disk.peak_write_ms, 1) + " ms)";
         stages.push_back(std::move(stage));
     }
 

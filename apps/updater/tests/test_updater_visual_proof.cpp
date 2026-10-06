@@ -47,7 +47,8 @@ struct ShotResult {
     QString path;
 };
 
-ShotResult Capture(const QString& state, const QString& appearance, const QString& directory) {
+ShotResult Capture(const QString& state, const QString& appearance, const QString& directory,
+                   const QString& language = QStringLiteral("en"), const QString& scale = QStringLiteral("1")) {
     ShotResult result;
     result.path = QDir(directory).filePath(QStringLiteral("%1-%2.png").arg(state, appearance));
 
@@ -55,10 +56,11 @@ ShotResult Capture(const QString& state, const QString& appearance, const QStrin
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     env.insert(QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("offscreen"));
     env.insert(QStringLiteral("QT_QUICK_BACKEND"), QStringLiteral("software"));
+    env.insert(QStringLiteral("QT_SCALE_FACTOR"), scale);
     process.setProcessEnvironment(env);
     process.start(QString::fromUtf8(EXOSNAP_UPDATER_EXE),
                   {QStringLiteral("--preview-state"), state, QStringLiteral("--appearance"), appearance,
-                   QStringLiteral("--screenshot"), result.path});
+                   QStringLiteral("--screenshot"), result.path, QStringLiteral("--ui-language"), language});
     result.started = process.waitForStarted(10000);
     if (!result.started)
         return result;
@@ -98,4 +100,24 @@ TEST(UpdaterVisualProofTest, EveryPreviewStateRendersDarkAndLightEvidence) {
         }
     }
     EXPECT_EQ(captured, states.size() * 2);
+}
+
+TEST(UpdaterVisualProofTest, GermanPreviewStatesRenderAtAllSupportedScales) {
+    const QStringList states = PreviewStateNames();
+    ASSERT_FALSE(states.isEmpty());
+    for (const QString& scale :
+         {QStringLiteral("1"), QStringLiteral("1.25"), QStringLiteral("1.5"), QStringLiteral("2")}) {
+        const QString directory = QDir(EvidenceDirectory()).filePath(QStringLiteral("de-%1").arg(scale));
+        ASSERT_TRUE(QDir().mkpath(directory));
+        for (const QString& state : states) {
+            const ShotResult shot = Capture(state, QStringLiteral("dark"), directory, QStringLiteral("de"), scale);
+            ASSERT_TRUE(shot.started) << state.toStdString();
+            ASSERT_TRUE(shot.finished) << state.toStdString();
+            EXPECT_EQ(shot.exit_code, 0) << state.toStdString() << " scale " << scale.toStdString();
+            const QImage image(shot.path);
+            EXPECT_FALSE(image.isNull()) << shot.path.toStdString();
+            EXPECT_GE(image.width(), 520);
+            EXPECT_GE(image.height(), 680);
+        }
+    }
 }

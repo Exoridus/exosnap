@@ -1,4 +1,5 @@
 #include "LogsAdapter.h"
+#include <QCoreApplication>
 
 #include "diagnostics/LogViewPolicy.h"
 #include "diagnostics/StartupTrace.h"
@@ -161,7 +162,7 @@ void LogsAdapter::copyVisible() {
     if (text.isEmpty())
         return;
     QGuiApplication::clipboard()->setText(text);
-    updateStatus(QStringLiteral("Copied %1 visible entries.").arg(proxy_model_.rowCount()));
+    updateStatus(QCoreApplication::translate("LogsAdapter", "Copied %1 visible entries.").arg(proxy_model_.rowCount()));
 }
 
 void LogsAdapter::copySequenceRange(qint64 first_sequence, qint64 last_sequence) {
@@ -173,7 +174,7 @@ void LogsAdapter::copySequenceRange(qint64 first_sequence, qint64 last_sequence)
         // Everything the selection named has been filtered away or evicted.
         // Reported rather than silently doing nothing, because the user pressed
         // Ctrl+C and the clipboard still holds whatever it held before.
-        updateStatus(QStringLiteral("The selected entries are no longer in the log."));
+        updateStatus(QCoreApplication::translate("LogsAdapter", "The selected entries are no longer in the log."));
         return;
     }
 
@@ -181,7 +182,7 @@ void LogsAdapter::copySequenceRange(qint64 first_sequence, qint64 last_sequence)
     if (text.isEmpty())
         return;
     QGuiApplication::clipboard()->setText(text);
-    updateStatus(QStringLiteral("Copied %1 selected entries.").arg(selected.size()));
+    updateStatus(QCoreApplication::translate("LogsAdapter", "Copied %1 selected entries.").arg(selected.size()));
 }
 
 void LogsAdapter::exportToUrl(const QUrl& destination) {
@@ -192,10 +193,10 @@ void LogsAdapter::exportToUrl(const QUrl& destination) {
     if (!synthetic_) {
         QString error;
         if (!AppLog::exportHistoryToFile(path, &error)) {
-            updateStatus(QStringLiteral("Export failed: %1").arg(error));
+            updateStatus(QCoreApplication::translate("LogsAdapter", "Export failed: %1").arg(error));
             return;
         }
-        updateStatus(QStringLiteral("Exported complete history to %1.").arg(path));
+        updateStatus(QCoreApplication::translate("LogsAdapter", "Exported complete history to %1.").arg(path));
         return;
     }
 
@@ -203,7 +204,7 @@ void LogsAdapter::exportToUrl(const QUrl& destination) {
     // straight from the model rather than through the log file.
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-        updateStatus(QStringLiteral("Export failed: %1").arg(file.errorString()));
+        updateStatus(QCoreApplication::translate("LogsAdapter", "Export failed: %1").arg(file.errorString()));
         return;
     }
     QTextStream stream(&file);
@@ -211,14 +212,15 @@ void LogsAdapter::exportToUrl(const QUrl& destination) {
     for (const LogEntry& entry : source_model_.entries())
         stream << AppLog::formatEntry(entry) << '\n';
     stream.flush();
-    updateStatus(stream.status() == QTextStream::Ok ? QStringLiteral("Exported complete history to %1.").arg(path)
-                                                    : QStringLiteral("Export failed."));
+    updateStatus(stream.status() == QTextStream::Ok
+                     ? QCoreApplication::translate("LogsAdapter", "Exported complete history to %1.").arg(path)
+                     : QCoreApplication::translate("LogsAdapter", "Export failed."));
 }
 
 void LogsAdapter::openLogFolder() {
     const QString path = AppLog::logFilePath();
     if (path.isEmpty()) {
-        updateStatus(QStringLiteral("No log folder is available yet."));
+        updateStatus(QCoreApplication::translate("LogsAdapter", "No log folder is available yet."));
         return;
     }
     QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
@@ -226,7 +228,7 @@ void LogsAdapter::openLogFolder() {
 
 void LogsAdapter::clear() {
     source_model_.clear();
-    updateStatus(QStringLiteral("Log history cleared."));
+    updateStatus(QCoreApplication::translate("LogsAdapter", "Log history cleared."));
 }
 
 void LogsAdapter::refreshStartupTrace() {

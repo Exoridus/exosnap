@@ -40,6 +40,8 @@ An unresolved saved display can be restored when it returns, unless the user del
 
 Hotkey storage distinguishes never-configured from deliberately cleared. A sentinel preserves an unset binding across launches instead of reintroducing the default. Startup conflicts can clear a binding; user-chosen losses are reported, while an unavailable shipped default can be logged without a first-run alarm.
 
+The UI-language preference uses stable tokens system, en and de. Translation is installed before product UI construction in both executables. The compiled German QM catalogue is embedded in each executable, including the separately staged updater. English source strings are the fallback. Changing the persisted preference does not replace the running translator. The app passes its effective language to the updater through the presentation-only --ui-language argument; language is not part of the signed handoff or update authorization.
+
 Appearance is a pair of appearance/accent preferences, migrated by defined mappings. Unknown input has a deterministic default. Session-only state, including in-depth diagnostics and verification reinstall, is not saved as a setting. Update-check results also belong to a channel/request generation and are invalidated when the channel changes.
 
 Tooling can isolate configuration and recording output through explicit environment overrides. These overrides are not written back into user settings and are not evidence that ordinary launches use temporary storage.

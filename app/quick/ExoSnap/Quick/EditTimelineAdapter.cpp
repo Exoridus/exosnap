@@ -1,4 +1,5 @@
 #include "EditTimelineAdapter.h"
+#include <QCoreApplication>
 
 #include "EditSessionAdapter.h"
 
@@ -251,7 +252,8 @@ void EditTimelineAdapter::setAudioTrackLabels(const QStringList& labels) {
     for (int i = 0; i < labels.size(); ++i) {
         // An empty entry is labelled positionally rather than guessed from track
         // order, which the container does not define.
-        named.append(labels.at(i).isEmpty() ? QStringLiteral("Audio %1").arg(i + 1) : labels.at(i));
+        named.append(labels.at(i).isEmpty() ? QCoreApplication::translate("EditTimelineAdapter", "Audio %1").arg(i + 1)
+                                            : labels.at(i));
     }
     if (named == audio_track_labels_)
         return;

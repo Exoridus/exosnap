@@ -1,4 +1,5 @@
 #include "GlobalHotkeyService.h"
+#include <QCoreApplication>
 
 #include <QThread>
 
@@ -103,7 +104,7 @@ bool IsBlockedCombo(Qt::KeyboardModifiers mods, Qt::Key key) {
 }
 
 QString BuildConflictMessage(HotkeyAction conflicting, QKeySequence seq) {
-    return QStringLiteral("%1 is already assigned to %2.")
+    return QCoreApplication::translate("Hotkeys", "%1 is already assigned to %2.")
         .arg(seq.toString(QKeySequence::NativeText), GlobalHotkeyService::ActionDisplayName(conflicting));
 }
 
@@ -162,7 +163,7 @@ RebindResult GlobalHotkeyService::TrySetBinding(HotkeyAction action, QKeySequenc
     AssertOwnerThread();
     const int idx = static_cast<int>(action);
     if (idx < 0 || idx >= kHotkeyActionCount)
-        return {false, RebindError::ExternalConflict, action, QStringLiteral("Unknown action")};
+        return {false, RebindError::ExternalConflict, action, QCoreApplication::translate("Hotkeys", "Unknown action")};
 
     // 1. Validate
     if (!seq.isEmpty()) {
@@ -170,11 +171,12 @@ RebindResult GlobalHotkeyService::TrySetBinding(HotkeyAction action, QKeySequenc
         if (err != RebindError::None) {
             QString msg;
             if (err == RebindError::ModifierOnly)
-                msg = QStringLiteral("Press a key combination with at least one non-modifier key.");
+                msg = QCoreApplication::translate("Hotkeys",
+                                                  "Press a key combination with at least one non-modifier key.");
             else if (err == RebindError::BlockedCombo)
-                msg = QStringLiteral("This key combination is reserved and cannot be used.");
+                msg = QCoreApplication::translate("Hotkeys", "This key combination is reserved and cannot be used.");
             else if (err == RebindError::UnsupportedKey)
-                msg = QStringLiteral("This key is not supported for global shortcuts.");
+                msg = QCoreApplication::translate("Hotkeys", "This key is not supported for global shortcuts.");
             return {false, err, action, msg};
         }
     }
@@ -332,17 +334,17 @@ QKeySequence GlobalHotkeyService::DefaultBinding(HotkeyAction action) {
 QString GlobalHotkeyService::ActionDisplayName(HotkeyAction action) {
     switch (action) {
     case HotkeyAction::ToggleRecording:
-        return QStringLiteral("Start / Stop recording");
+        return QCoreApplication::translate("Hotkeys", "Start / Stop recording");
     case HotkeyAction::TogglePause:
-        return QStringLiteral("Pause / Resume");
+        return QCoreApplication::translate("Hotkeys", "Pause / Resume");
     case HotkeyAction::CaptureFrame:
-        return QStringLiteral("Capture frame");
+        return QCoreApplication::translate("Hotkeys", "Capture frame");
     case HotkeyAction::AddMarker:
-        return QStringLiteral("Add marker");
+        return QCoreApplication::translate("Hotkeys", "Add marker");
     case HotkeyAction::SplitRecording:
-        return QStringLiteral("Split recording");
+        return QCoreApplication::translate("Hotkeys", "Split recording");
     }
-    return QStringLiteral("Unknown");
+    return QCoreApplication::translate("Hotkeys", "Unknown");
 }
 
 int GlobalHotkeyService::Win32IdForAction(HotkeyAction action) {
@@ -402,7 +404,7 @@ RebindResult GlobalHotkeyService::AttemptRegistration(HotkeyAction action, QKeyS
                 registrar_->Register(win32_id, QtModifiersToWin32(old_combo.keyboardModifiers()), old_vk);
         }
         return {false, RebindError::UnsupportedKey, action,
-                QStringLiteral("This key is not supported for global shortcuts.")};
+                QCoreApplication::translate("Hotkeys", "This key is not supported for global shortcuts.")};
     }
 
     if (!registrar_->Register(win32_id, QtModifiersToWin32(combo.keyboardModifiers()), vk)) {
@@ -413,8 +415,9 @@ RebindResult GlobalHotkeyService::AttemptRegistration(HotkeyAction action, QKeyS
             if (old_vk != 0)
                 registrar_->Register(win32_id, QtModifiersToWin32(old_combo.keyboardModifiers()), old_vk);
         }
-        return {false, RebindError::ExternalConflict, action,
-                QStringLiteral("This shortcut is already used by Windows or another application.")};
+        return {
+            false, RebindError::ExternalConflict, action,
+            QCoreApplication::translate("Hotkeys", "This shortcut is already used by Windows or another application.")};
     }
     return {true, RebindError::None, action, {}};
 #else

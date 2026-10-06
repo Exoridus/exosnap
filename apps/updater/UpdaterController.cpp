@@ -31,22 +31,24 @@ QString WorkingStatusLine(UpStep s, const QString& to_version, bool verification
     switch (s) {
     case UpStep::Download:
         if (verification_reinstall)
-            return named ? QStringLiteral("Downloading version %1 again…").arg(to_version)
-                         : QStringLiteral("Downloading this version again…");
-        return named ? QStringLiteral("Downloading update %1…").arg(to_version)
-                     : QStringLiteral("Downloading the update…");
+            return named ? QCoreApplication::translate("UpdaterController", "Downloading version %1 again…")
+                               .arg(to_version)
+                         : QCoreApplication::translate("UpdaterController", "Downloading this version again…");
+        return named ? QCoreApplication::translate("UpdaterController", "Downloading update %1…").arg(to_version)
+                     : QCoreApplication::translate("UpdaterController", "Downloading the update…");
     case UpStep::CloseApp:
-        return QStringLiteral("Waiting for ExoSnap to close…");
+        return QCoreApplication::translate("UpdaterController", "Waiting for ExoSnap to close…");
     case UpStep::Install:
         if (verification_reinstall)
-            return named ? QStringLiteral("Reinstalling version %1…").arg(to_version)
-                         : QStringLiteral("Reinstalling this version…");
-        return named ? QStringLiteral("Swapping in version %1…").arg(to_version)
-                     : QStringLiteral("Swapping in the new version…");
+            return named ? QCoreApplication::translate("UpdaterController", "Reinstalling version %1…").arg(to_version)
+                         : QCoreApplication::translate("UpdaterController", "Reinstalling this version…");
+        return named ? QCoreApplication::translate("UpdaterController", "Swapping in version %1…").arg(to_version)
+                     : QCoreApplication::translate("UpdaterController", "Swapping in the new version…");
     case UpStep::Verify:
-        return QStringLiteral("Checking signatures & file hashes…");
+        return QCoreApplication::translate("UpdaterController", "Checking signatures & file hashes…");
     case UpStep::Launch:
-        return named ? QStringLiteral("Starting version %1…").arg(to_version) : QStringLiteral("Starting ExoSnap…");
+        return named ? QCoreApplication::translate("UpdaterController", "Starting version %1…").arg(to_version)
+                     : QCoreApplication::translate("UpdaterController", "Starting ExoSnap…");
     case UpStep::Count:
         break;
     }
@@ -107,7 +109,7 @@ UpdaterController::UpdaterController(QString from_version, QString to_version) {
     // The pre-flight frame the window opens on, before the worker has reported
     // anything. It used to be the one state with no status line at all, which
     // left a bare spinner glyph under the ring with nothing to label it.
-    state_.status_line = QStringLiteral("Preparing update…");
+    state_.status_line = QCoreApplication::translate("UpdaterController", "Preparing update…");
     flow_.current_version = state_.from_version.toStdString();
     flow_.target_version = state_.to_version.toStdString();
 }
@@ -150,11 +152,12 @@ void UpdaterController::onIdle() {
     state_.from_version = QString::fromStdString(flow_.current_version);
     state_.manual = flow_.mode == exosnap::update::UpdaterMode::Manual;
     state_.prompt = PromptKind::Idle;
-    state_.headline = QStringLiteral("Ready to check for updates");
-    state_.detail_text = QStringLiteral("Nothing is downloaded or installed until you say so.");
-    state_.safety_text = QStringLiteral("Your installed version is unchanged.");
-    state_.primary_action = QStringLiteral("Check for updates");
-    state_.secondary_action = QStringLiteral("Close");
+    state_.headline = QCoreApplication::translate("UpdaterController", "Ready to check for updates");
+    state_.detail_text =
+        QCoreApplication::translate("UpdaterController", "Nothing is downloaded or installed until you say so.");
+    state_.safety_text = QCoreApplication::translate("UpdaterController", "Your installed version is unchanged.");
+    state_.primary_action = QCoreApplication::translate("UpdaterController", "Check for updates");
+    state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
 
     flow_.target_version.clear();
     flow_.downloaded_bytes = 0;
@@ -167,7 +170,7 @@ void UpdaterController::onCheckStarted() {
     state_.variant = TerminalVariant::None;
     state_.determinate = false;
     state_.ring = 0.0;
-    state_.status_line = QStringLiteral("Checking for updates…");
+    state_.status_line = QCoreApplication::translate("UpdaterController", "Checking for updates…");
     state_.headline.clear();
     state_.detail_text.clear();
     state_.safety_text.clear();
@@ -181,11 +184,14 @@ void UpdaterController::onUpToDate() {
     state_.variant = TerminalVariant::None;
     state_.status_line.clear();
     state_.to_version.clear();
-    state_.headline = QStringLiteral("ExoSnap is up to date");
-    state_.detail_text = QStringLiteral("Version %1 is the newest release on this channel.").arg(state_.from_version);
-    state_.safety_text = QStringLiteral("Nothing was downloaded and nothing was changed.");
-    state_.primary_action = QStringLiteral("Check again");
-    state_.secondary_action = QStringLiteral("Close");
+    state_.headline = QCoreApplication::translate("UpdaterController", "ExoSnap is up to date");
+    state_.detail_text =
+        QCoreApplication::translate("UpdaterController", "Version %1 is the newest release on this channel.")
+            .arg(state_.from_version);
+    state_.safety_text =
+        QCoreApplication::translate("UpdaterController", "Nothing was downloaded and nothing was changed.");
+    state_.primary_action = QCoreApplication::translate("UpdaterController", "Check again");
+    state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
     flow_.target_version.clear();
     setPhase(UpdatePhase::UpToDate);
 }
@@ -195,12 +201,14 @@ void UpdaterController::onUpdateAvailable(const QString& version) {
     state_.variant = TerminalVariant::None;
     state_.status_line.clear();
     state_.to_version = version;
-    state_.headline = QStringLiteral("Version %1 is available").arg(version);
-    state_.detail_text = QStringLiteral("The update is downloaded and verified before anything is replaced.");
+    state_.headline = QCoreApplication::translate("UpdaterController", "Version %1 is available").arg(version);
+    state_.detail_text = QCoreApplication::translate(
+        "UpdaterController", "The update is downloaded and verified before anything is replaced.");
     state_.safety_text =
-        QStringLiteral("Your installed version %1 stays in place until you apply it.").arg(state_.from_version);
-    state_.primary_action = QStringLiteral("Download update");
-    state_.secondary_action = QStringLiteral("Close");
+        QCoreApplication::translate("UpdaterController", "Your installed version %1 stays in place until you apply it.")
+            .arg(state_.from_version);
+    state_.primary_action = QCoreApplication::translate("UpdaterController", "Download update");
+    state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
     flow_.target_version = version.toStdString();
     setPhase(UpdatePhase::UpdateAvailable);
 }
@@ -210,10 +218,11 @@ void UpdaterController::onCheckBlocked(const QString& reason) {
     state_.variant = TerminalVariant::None;
     state_.status_line.clear();
     state_.to_version.clear();
-    state_.headline = QStringLiteral("Update checks are turned off in this build");
+    state_.headline = QCoreApplication::translate("UpdaterController", "Update checks are turned off in this build");
     state_.detail_text = reason;
-    state_.safety_text = QStringLiteral("Nothing was contacted, downloaded or changed.");
-    state_.primary_action = QStringLiteral("Close");
+    state_.safety_text =
+        QCoreApplication::translate("UpdaterController", "Nothing was contacted, downloaded or changed.");
+    state_.primary_action = QCoreApplication::translate("UpdaterController", "Close");
     state_.secondary_action.clear();
     flow_.target_version.clear();
     setPhase(UpdatePhase::Idle);
@@ -243,16 +252,20 @@ void UpdaterController::onCancelled() {
     state_.status_line.clear();
     state_.determinate = false;
     state_.ring = 0.0;
-    state_.headline = QStringLiteral("Update canceled");
-    state_.detail_text = QStringLiteral("The download was stopped and its partial files were discarded.");
-    state_.safety_text = state_.from_version.isEmpty()
-                             ? QStringLiteral("Nothing was installed and nothing was changed.")
-                             : QStringLiteral("Your current version %1 is unchanged.").arg(state_.from_version);
+    state_.headline = QCoreApplication::translate("UpdaterController", "Update canceled");
+    state_.detail_text = QCoreApplication::translate("UpdaterController",
+                                                     "The download was stopped and its partial files were discarded.");
+    state_.safety_text =
+        state_.from_version.isEmpty()
+            ? QCoreApplication::translate("UpdaterController", "Nothing was installed and nothing was changed.")
+            : QCoreApplication::translate("UpdaterController", "Your current version %1 is unchanged.")
+                  .arg(state_.from_version);
     // Manual runs can start over from here; a handoff run has nothing left to
     // offer, because the confirmation that started it was given in the app.
     const bool manual = flow_.mode == exosnap::update::UpdaterMode::Manual;
-    state_.primary_action = manual ? QStringLiteral("Check for updates") : QStringLiteral("Close");
-    state_.secondary_action = manual ? QStringLiteral("Close") : QString();
+    state_.primary_action = manual ? QCoreApplication::translate("UpdaterController", "Check for updates")
+                                   : QCoreApplication::translate("UpdaterController", "Close");
+    state_.secondary_action = manual ? QCoreApplication::translate("UpdaterController", "Close") : QString();
 
     // setPhase clears the failure detail, which is the point: a cancellation
     // carries no failureCase, no retry entry, and installState intact.
@@ -263,11 +276,14 @@ void UpdaterController::onReadyToApply() {
     state_.prompt = PromptKind::ReadyToApply;
     state_.variant = TerminalVariant::None;
     state_.status_line.clear();
-    state_.headline = QStringLiteral("Version %1 is ready to install").arg(state_.to_version);
-    state_.detail_text = QStringLiteral("The signed package was downloaded and its hash checked.");
-    state_.safety_text = QStringLiteral("ExoSnap will close while the files are replaced.");
-    state_.primary_action = QStringLiteral("Install now");
-    state_.secondary_action = QStringLiteral("Close");
+    state_.headline =
+        QCoreApplication::translate("UpdaterController", "Version %1 is ready to install").arg(state_.to_version);
+    state_.detail_text =
+        QCoreApplication::translate("UpdaterController", "The signed package was downloaded and its hash checked.");
+    state_.safety_text =
+        QCoreApplication::translate("UpdaterController", "ExoSnap will close while the files are replaced.");
+    state_.primary_action = QCoreApplication::translate("UpdaterController", "Install now");
+    state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
     setPhase(UpdatePhase::ReadyToApply);
 }
 
@@ -340,30 +356,33 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
     switch (c) {
     case FailureCase::DownloadFailed: // A1
         state_.variant = TerminalVariant::Amber;
-        state_.headline = QStringLiteral("Couldn't download the update");
-        state_.detail_text = QStringLiteral("Check your internet connection and try again.");
+        state_.headline = QCoreApplication::translate("UpdaterController", "Couldn't download the update");
+        state_.detail_text =
+            QCoreApplication::translate("UpdaterController", "Check your internet connection and try again.");
         state_.safety_text =
-            QStringLiteral("Your current version %1 is unchanged and still works.").arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Retry");
-        state_.secondary_action = QStringLiteral("Close");
+            QCoreApplication::translate("UpdaterController", "Your current version %1 is unchanged and still works.")
+                .arg(state_.from_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Retry");
+        state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
         break;
     case FailureCase::VerifyDownloadFailed: // A2 (security stop)
         state_.variant = TerminalVariant::Red;
-        state_.headline = QStringLiteral("Download verification failed");
-        state_.detail_text =
-            QStringLiteral("The downloaded files didn't match the signed release, so they were discarded.");
-        state_.safety_text =
-            QStringLiteral("Nothing was installed. Your current version %1 is unchanged.").arg(state_.from_version);
+        state_.headline = QCoreApplication::translate("UpdaterController", "Download verification failed");
+        state_.detail_text = QCoreApplication::translate(
+            "UpdaterController", "The downloaded files didn't match the signed release, so they were discarded.");
+        state_.safety_text = QCoreApplication::translate("UpdaterController",
+                                                         "Nothing was installed. Your current version %1 is unchanged.")
+                                 .arg(state_.from_version);
         // The footer offers exactly what the published state offers. In a handoff
         // run a retry would re-read the manifest ExoSnap handed over and be
         // refused identically, so the card says Close and the next attempt starts
         // in ExoSnap -- which is still running, because A2 aborts before the
         // parent is asked to close.
         if (flow_.retry_entry_step.has_value()) {
-            state_.primary_action = QStringLiteral("Re-download");
-            state_.secondary_action = QStringLiteral("Close");
+            state_.primary_action = QCoreApplication::translate("UpdaterController", "Re-download");
+            state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
         } else {
-            state_.primary_action = QStringLiteral("Close");
+            state_.primary_action = QCoreApplication::translate("UpdaterController", "Close");
             state_.secondary_action.clear();
         }
         break;
@@ -372,13 +391,16 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         // offered manifest simply is not the version this run demanded. Retry
         // would re-fetch the same manifest, so only Close is offered.
         state_.variant = TerminalVariant::Red;
-        state_.headline = QStringLiteral("Verification reinstall unavailable");
+        state_.headline = QCoreApplication::translate("UpdaterController", "Verification reinstall unavailable");
         state_.detail_text =
-            QStringLiteral("This check requires version %1, but the signed release offers %2.")
-                .arg(state_.from_version, detail.isEmpty() ? QStringLiteral("another version") : detail);
-        state_.safety_text =
-            QStringLiteral("Nothing was installed. Your current version %1 is unchanged.").arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Close");
+            QCoreApplication::translate("UpdaterController",
+                                        "This check requires version %1, but the signed release offers %2.")
+                .arg(state_.from_version,
+                     detail.isEmpty() ? QCoreApplication::translate("UpdaterController", "another version") : detail);
+        state_.safety_text = QCoreApplication::translate("UpdaterController",
+                                                         "Nothing was installed. Your current version %1 is unchanged.")
+                                 .arg(state_.from_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Close");
         state_.secondary_action.clear();
         break;
     case FailureCase::TargetVersionMismatch: // A4 (pinned target gate)
@@ -388,13 +410,17 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         // before a single package byte is fetched. Retry would re-fetch the same
         // manifest; a fresh check from the app is the way forward.
         state_.variant = TerminalVariant::Red;
-        state_.headline = QStringLiteral("The offered version is no longer what the channel serves");
-        state_.detail_text = QStringLiteral("ExoSnap offered version %1, but the signed release now names %2.")
-                                 .arg(QString::fromStdString(flow_.target_version),
-                                      detail.isEmpty() ? QStringLiteral("another version") : detail);
-        state_.safety_text =
-            QStringLiteral("Nothing was installed. Your current version %1 is unchanged.").arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Close");
+        state_.headline = QCoreApplication::translate("UpdaterController",
+                                                      "The offered version is no longer what the channel serves");
+        state_.detail_text =
+            QCoreApplication::translate("UpdaterController",
+                                        "ExoSnap offered version %1, but the signed release now names %2.")
+                .arg(QString::fromStdString(flow_.target_version),
+                     detail.isEmpty() ? QCoreApplication::translate("UpdaterController", "another version") : detail);
+        state_.safety_text = QCoreApplication::translate("UpdaterController",
+                                                         "Nothing was installed. Your current version %1 is unchanged.")
+                                 .arg(state_.from_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Close");
         state_.secondary_action.clear();
         break;
     case FailureCase::HandoffRejected: // A0 (the pipeline never started)
@@ -403,58 +429,68 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         // work. Retry would re-read the same file and refuse again, so only
         // Close is offered -- the way forward is a fresh update from the app.
         state_.variant = TerminalVariant::Red;
-        state_.headline = QStringLiteral("This update couldn't be started");
-        state_.detail_text =
-            QStringLiteral("ExoSnap handed over an update this updater can't accept. Start the update again "
-                           "from ExoSnap.");
-        state_.safety_text = state_.from_version.isEmpty()
-                                 ? QStringLiteral("Nothing was downloaded and nothing was changed.")
-                                 : QStringLiteral("Nothing was installed. Your current version %1 is unchanged.")
-                                       .arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Close");
+        state_.headline = QCoreApplication::translate("UpdaterController", "This update couldn't be started");
+        state_.detail_text = QCoreApplication::translate(
+            "UpdaterController", "ExoSnap handed over an update this updater can't accept. Start the update again "
+                                 "from ExoSnap.");
+        state_.safety_text =
+            state_.from_version.isEmpty()
+                ? QCoreApplication::translate("UpdaterController", "Nothing was downloaded and nothing was changed.")
+                : QCoreApplication::translate("UpdaterController",
+                                              "Nothing was installed. Your current version %1 is unchanged.")
+                      .arg(state_.from_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Close");
         state_.secondary_action.clear();
         break;
     case FailureCase::AppWontClose: // B1
         state_.variant = TerminalVariant::Amber;
-        state_.headline = QStringLiteral("Couldn't close ExoSnap");
+        state_.headline = QCoreApplication::translate("UpdaterController", "Couldn't close ExoSnap");
         // A hand-started run reaches this card too, and nothing was handed over
         // to it -- naming the handoff there would describe a step the reader
         // never took.
-        state_.detail_text = state_.manual ? QStringLiteral("Close ExoSnap, then try again.")
-                                           : QStringLiteral("Close the running app, then try the handoff again.");
+        state_.detail_text = state_.manual
+                                 ? QCoreApplication::translate("UpdaterController", "Close ExoSnap, then try again.")
+                                 : QCoreApplication::translate("UpdaterController",
+                                                               "Close the running app, then try the handoff again.");
         state_.safety_text =
-            QStringLiteral("Your current version %1 is unchanged and still works.").arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Retry");
-        state_.secondary_action = QStringLiteral("Close");
+            QCoreApplication::translate("UpdaterController", "Your current version %1 is unchanged and still works.")
+                .arg(state_.from_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Retry");
+        state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
         break;
     case FailureCase::InstallFailed: // B2
         state_.variant = TerminalVariant::Amber;
-        state_.headline = QStringLiteral("Couldn't install the update");
-        state_.detail_text = QStringLiteral("The new files couldn't be put in place. You can try again.");
+        state_.headline = QCoreApplication::translate("UpdaterController", "Couldn't install the update");
+        state_.detail_text = QCoreApplication::translate("UpdaterController",
+                                                         "The new files couldn't be put in place. You can try again.");
         state_.safety_text =
-            QStringLiteral("Your current version %1 is unchanged and still works.").arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Retry");
-        state_.secondary_action = QStringLiteral("Close");
+            QCoreApplication::translate("UpdaterController", "Your current version %1 is unchanged and still works.")
+                .arg(state_.from_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Retry");
+        state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
         break;
     case FailureCase::VerifyInstallFailed: // B3 (portable: staged-rename backup restored)
         state_.variant = TerminalVariant::Red;
-        state_.headline = QStringLiteral("Update verification failed");
-        state_.detail_text =
-            QStringLiteral("The installed files didn't match the signed release, so the swap was undone.");
-        state_.safety_text =
-            QStringLiteral("Your previous version %1 was restored and is ready to run.").arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Retry");
-        state_.secondary_action = QStringLiteral("Close");
+        state_.headline = QCoreApplication::translate("UpdaterController", "Update verification failed");
+        state_.detail_text = QCoreApplication::translate(
+            "UpdaterController", "The installed files didn't match the signed release, so the swap was undone.");
+        state_.safety_text = QCoreApplication::translate("UpdaterController",
+                                                         "Your previous version %1 was restored and is ready to run.")
+                                 .arg(state_.from_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Retry");
+        state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
         break;
     case FailureCase::RestoreFailed: // B3-R (portable backup is preserved but not live)
         state_.variant = TerminalVariant::Red;
-        state_.headline = QStringLiteral("Couldn't restore the previous version");
-        state_.detail_text =
-            QStringLiteral("The update failed and the automatic restore couldn't put the backup back in place.");
-        state_.safety_text = QStringLiteral("Version %1 is preserved in the backup folder but isn't ready to run.")
-                                 .arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Retry");
-        state_.secondary_action = QStringLiteral("Close");
+        state_.headline = QCoreApplication::translate("UpdaterController", "Couldn't restore the previous version");
+        state_.detail_text = QCoreApplication::translate(
+            "UpdaterController", "The update failed and the automatic restore couldn't put the backup back in place.");
+        state_.safety_text =
+            QCoreApplication::translate("UpdaterController",
+                                        "Version %1 is preserved in the backup folder but isn't ready to run.")
+                .arg(state_.from_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Retry");
+        state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
         break;
     case FailureCase::VerifyInstallFailedMsi: // B3-MSI (post-install state could not be confirmed)
         state_.variant = TerminalVariant::Red;
@@ -464,49 +500,62 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         // returned 0 (success), so asserting "rolled back" here would be a guess this
         // code cannot back up; only "could not confirm" is truthful. The published
         // installState says the same thing: `unknown`, not `intact`.
-        state_.headline = QStringLiteral("Couldn't confirm the installed version");
-        state_.detail_text =
-            QStringLiteral("Windows Installer finished, but ExoSnap couldn't verify the installed files.");
+        state_.headline = QCoreApplication::translate("UpdaterController", "Couldn't confirm the installed version");
+        state_.detail_text = QCoreApplication::translate(
+            "UpdaterController", "Windows Installer finished, but ExoSnap couldn't verify the installed files.");
         state_.safety_text =
-            QStringLiteral("Version %1 may still be installed; no rollback is being claimed.").arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Retry");
-        state_.secondary_action = QStringLiteral("Close");
+            QCoreApplication::translate("UpdaterController",
+                                        "Version %1 may still be installed; no rollback is being claimed.")
+                .arg(state_.from_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Retry");
+        state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
         break;
     case FailureCase::LaunchFailed: // B4 (soft success)
         state_.variant = TerminalVariant::Green;
-        state_.headline = QStringLiteral("Update complete — version %1 is ready").arg(state_.to_version);
-        state_.detail_text =
-            QStringLiteral("The update was installed and verified, but the automatic restart didn't open.");
+        state_.headline = QCoreApplication::translate("UpdaterController", "Update complete — version %1 is ready")
+                              .arg(state_.to_version);
+        state_.detail_text = QCoreApplication::translate(
+            "UpdaterController", "The update was installed and verified, but the automatic restart didn't open.");
         state_.safety_text =
-            QStringLiteral("Version %1 is installed and can be started manually.").arg(state_.to_version);
-        state_.primary_action = QStringLiteral("Open ExoSnap");
-        state_.secondary_action = QStringLiteral("Close");
+            QCoreApplication::translate("UpdaterController", "Version %1 is installed and can be started manually.")
+                .arg(state_.to_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Open ExoSnap");
+        state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
         break;
     case FailureCase::UacDeclined: // C1
         state_.variant = TerminalVariant::Amber;
-        state_.headline = QStringLiteral("Administrator approval was canceled");
-        state_.detail_text = QStringLiteral("Approve the Windows prompt when you retry the installation.");
+        state_.headline = QCoreApplication::translate("UpdaterController", "Administrator approval was canceled");
+        state_.detail_text = QCoreApplication::translate("UpdaterController",
+                                                         "Approve the Windows prompt when you retry the installation.");
         state_.safety_text =
-            QStringLiteral("Your current version %1 is unchanged and still works.").arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Retry");
-        state_.secondary_action = QStringLiteral("Close");
+            QCoreApplication::translate("UpdaterController", "Your current version %1 is unchanged and still works.")
+                .arg(state_.from_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Retry");
+        state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
         break;
     case FailureCase::MsiFailed: // C2
         state_.variant = TerminalVariant::Red;
-        state_.headline = QStringLiteral("Windows Installer couldn't apply the update");
-        state_.detail_text = QStringLiteral("Windows Installer stopped with code %1. Try again later.")
-                                 .arg(detail.isEmpty() ? QStringLiteral("unknown") : detail);
-        state_.safety_text = QStringLiteral("Your previous version %1 is still usable.").arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Close");
+        state_.headline =
+            QCoreApplication::translate("UpdaterController", "Windows Installer couldn't apply the update");
+        state_.detail_text =
+            QCoreApplication::translate("UpdaterController", "Windows Installer stopped with code %1. Try again later.")
+                .arg(detail.isEmpty() ? QCoreApplication::translate("UpdaterController", "unknown") : detail);
+        state_.safety_text =
+            QCoreApplication::translate("UpdaterController", "Your previous version %1 is still usable.")
+                .arg(state_.from_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Close");
         state_.secondary_action.clear();
         break;
     case FailureCase::MsiRebootRequired: // C3 (terminal success; restart pending)
         state_.variant = TerminalVariant::RebootRequired;
-        state_.headline = QStringLiteral("Update installed — restart Windows to finish");
-        state_.detail_text = QStringLiteral("Windows Installer needs a system restart to complete the update.");
+        state_.headline =
+            QCoreApplication::translate("UpdaterController", "Update installed — restart Windows to finish");
+        state_.detail_text = QCoreApplication::translate(
+            "UpdaterController", "Windows Installer needs a system restart to complete the update.");
         state_.safety_text =
-            QStringLiteral("Version %1 keeps working until you restart Windows.").arg(state_.from_version);
-        state_.primary_action = QStringLiteral("Close");
+            QCoreApplication::translate("UpdaterController", "Version %1 keeps working until you restart Windows.")
+                .arg(state_.from_version);
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Close");
         state_.secondary_action.clear();
         break;
     }

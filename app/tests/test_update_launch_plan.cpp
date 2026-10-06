@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -18,6 +19,7 @@
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QVariant>
 #include <QtGlobal>
 
 #include "../apps/updater/UpdaterArgs.h"
@@ -77,11 +79,13 @@ TEST(UpdaterStagingFileList, IncludesPlatformPluginAndQmlImportTrees) {
 // name it -- and, when this process is itself under automation, to arm the
 // child's endpoint.
 
-TEST(BuildUpdaterArgs, NamesTheHandoffAndNothingElse) {
+TEST(BuildUpdaterArgs, NamesTheHandoffAndPresentationLanguage) {
     const QStringList flags = exosnap::BuildUpdaterArgs(QStringLiteral("C:/scratch/u-1/update-handoff.json"));
-    ASSERT_EQ(flags.size(), 2);
+    ASSERT_EQ(flags.size(), 4);
     EXPECT_EQ(flags.at(0), QStringLiteral("--apply-handoff"));
     EXPECT_EQ(flags.at(1), QStringLiteral("C:/scratch/u-1/update-handoff.json"));
+    EXPECT_EQ(flags.at(2), QStringLiteral("--ui-language"));
+    EXPECT_TRUE(flags.at(3) == QLatin1String("en") || flags.at(3) == QLatin1String("de"));
 }
 
 // Every removed search argument, named. Their absence is the point of the cut:
@@ -745,4 +749,20 @@ TEST(StageUpdaterRuntime, ProducesASelfContainedQuickRuntimeThatLaunches) {
     ASSERT_TRUE(process.waitForStarted(10000));
     ASSERT_TRUE(process.waitForFinished(30000)) << process.readAllStandardError().toStdString();
     EXPECT_EQ(process.exitCode(), 0) << process.readAllStandardError().toStdString();
+}
+
+TEST(BuildUpdaterArgs, PreservesTheRunningEffectiveLanguage) {
+    static int argc = 1;
+    static char name[] = "update_launch_plan_tests";
+    static char* argv[] = {name, nullptr};
+    static QCoreApplication application(argc, argv);
+    QCoreApplication* current = QCoreApplication::instance();
+    ASSERT_NE(current, nullptr);
+    const QVariant previous = current->property("exosnapEffectiveLanguage");
+    current->setProperty("exosnapEffectiveLanguage", QStringLiteral("de"));
+    const QStringList flags = exosnap::BuildUpdaterArgs(QStringLiteral("handoff.json"));
+    const int flag = flags.indexOf(QStringLiteral("--ui-language"));
+    ASSERT_GE(flag, 0);
+    EXPECT_EQ(flags.value(flag + 1), QStringLiteral("de"));
+    current->setProperty("exosnapEffectiveLanguage", previous);
 }

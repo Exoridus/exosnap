@@ -1,4 +1,5 @@
 #include "EditExportAdapter.h"
+#include <QCoreApplication>
 
 #include "EditSessionAdapter.h"
 
@@ -142,8 +143,9 @@ QVariantList EditExportAdapter::containerOptions() {
 }
 
 QVariantList EditExportAdapter::saveModeOptions() {
-    return {option(QStringLiteral("new"), QStringLiteral("New file")),
-            option(QStringLiteral("overwrite"), QStringLiteral("Overwrite original"))};
+    return {
+        option(QStringLiteral("new"), QCoreApplication::translate("EditExportAdapter", "New file")),
+        option(QStringLiteral("overwrite"), QCoreApplication::translate("EditExportAdapter", "Overwrite original"))};
 }
 
 bool EditExportAdapter::overwriteSelected() const {
@@ -152,9 +154,12 @@ bool EditExportAdapter::overwriteSelected() const {
 
 QString EditExportAdapter::destinationText() const {
     if (overwriteSelected())
-        return QStringLiteral("Lossless stream copy\nReplaces the original recording");
+        return QCoreApplication::translate("EditExportAdapter",
+                                           "Lossless stream copy\nReplaces the original recording");
     const QString extension = container_key_ == QStringLiteral("mp4") ? QStringLiteral("mp4") : QStringLiteral("mkv");
-    return QStringLiteral("Lossless stream copy\nNew file beside the original (\xe2\x80\xa6_edit.%1)").arg(extension);
+    return QCoreApplication::translate("EditExportAdapter",
+                                       "Lossless stream copy\nNew file beside the original (\xe2\x80\xa6_edit.%1)")
+        .arg(extension);
 }
 
 // "Overwrite original" finishes with an atomic replace, so once it succeeds no
@@ -163,10 +168,12 @@ QString EditExportAdapter::destinationText() const {
 QString EditExportAdapter::overwritePrompt() const {
     const QString name = session_ != nullptr ? QFileInfo(session_->clipPath()).fileName() : QString();
     if (name.isEmpty())
-        return QStringLiteral("The original recording will be replaced by the exported result.\n"
-                              "The original cannot be recovered afterwards.");
-    return QStringLiteral("\xe2\x80\x9c%1\xe2\x80\x9d will be replaced by the exported result.\n"
-                          "The original cannot be recovered afterwards.")
+        return QCoreApplication::translate("EditExportAdapter",
+                                           "The original recording will be replaced by the exported result.\n"
+                                           "The original cannot be recovered afterwards.");
+    return QCoreApplication::translate("EditExportAdapter",
+                                       "\xe2\x80\x9c%1\xe2\x80\x9d will be replaced by the exported result.\n"
+                                       "The original cannot be recovered afterwards.")
         .arg(name);
 }
 
@@ -232,7 +239,7 @@ void EditExportAdapter::startExport() {
     emit resultChanged();
 
     if (context.mkv_master_path.isEmpty()) {
-        error_text_ = QStringLiteral("No edit master available for export.");
+        error_text_ = QCoreApplication::translate("EditExportAdapter", "No edit master available for export.");
         emit resultChanged();
         setState(State::Failed);
         return;
@@ -349,7 +356,7 @@ void EditExportAdapter::finishRun(bool ok, const QString& error, const QString& 
         return;
     }
 
-    error_text_ = error.isEmpty() ? QStringLiteral("Unknown error") : error;
+    error_text_ = error.isEmpty() ? QCoreApplication::translate("EditExportAdapter", "Unknown error") : error;
     const QString lower_error = error_text_.toLower();
     destination_failure_ =
         lower_error.contains(QStringLiteral("save output")) || lower_error.contains(QStringLiteral("permission")) ||

@@ -1,4 +1,5 @@
 #include "OutputSettingsModel.h"
+#include <capability/translatable.h>
 
 #include <shlobj.h>
 #include <windows.h>
@@ -64,7 +65,7 @@ std::optional<exosnap::engine::FrameSize> PresetOutputSize(OutputResolutionMode 
 const wchar_t* OutputResolutionModeName(OutputResolutionMode mode) noexcept {
     switch (mode) {
     case OutputResolutionMode::Native:
-        return L"Native";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Native");
     case OutputResolutionMode::UHD2160:
         return L"4K";
     case OutputResolutionMode::QHD1440:
@@ -74,17 +75,17 @@ const wchar_t* OutputResolutionModeName(OutputResolutionMode mode) noexcept {
     case OutputResolutionMode::HD720:
         return L"720p";
     case OutputResolutionMode::Custom:
-        return L"Custom";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Custom");
     }
-    return L"Native";
+    return EXOSNAP_TRANSLATABLE("OutputSettings", L"Native");
 }
 
 const wchar_t* OutputFitModeName(exosnap::engine::OutputFitMode mode) noexcept {
     switch (mode) {
     case exosnap::engine::OutputFitMode::Contain:
-        return L"Fit";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Fit");
     }
-    return L"Fit";
+    return EXOSNAP_TRANSLATABLE("OutputSettings", L"Fit");
 }
 
 std::optional<exosnap::engine::FrameSize> ResolveRequestedOutputSize(const OutputResolutionSettings& settings,
@@ -185,27 +186,27 @@ void SanitizeSplitSettings(SplitRecordingSettings& s) noexcept {
 const wchar_t* SplitRecordingModeName(SplitRecordingMode mode) noexcept {
     switch (mode) {
     case SplitRecordingMode::Off:
-        return L"Off";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Off");
     case SplitRecordingMode::Every15Min:
-        return L"Every 15 min";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Every 15 min");
     case SplitRecordingMode::Every30Min:
-        return L"Every 30 min";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Every 30 min");
     case SplitRecordingMode::Every60Min:
-        return L"Every 60 min";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Every 60 min");
     case SplitRecordingMode::Custom:
-        return L"Custom";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Custom");
     }
-    return L"Off";
+    return EXOSNAP_TRANSLATABLE("OutputSettings", L"Off");
 }
 
 const wchar_t* SplitSizeModeName(SplitSizeMode mode) noexcept {
     switch (mode) {
     case SplitSizeMode::Off:
-        return L"Off";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Off");
     case SplitSizeMode::Custom:
-        return L"Custom";
+        return EXOSNAP_TRANSLATABLE("OutputSettings", L"Custom");
     }
-    return L"Off";
+    return EXOSNAP_TRANSLATABLE("OutputSettings", L"Off");
 }
 
 void MergeFormatSelection(OutputSettingsModel& live, const OutputSettingsModel& incoming) {

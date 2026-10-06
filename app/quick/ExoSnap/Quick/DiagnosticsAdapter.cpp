@@ -27,7 +27,7 @@ namespace exosnap::quick {
 namespace {
 
 QString Text(const std::string& value) {
-    return QString::fromStdString(value);
+    return QCoreApplication::translate("Diagnostics", value.c_str());
 }
 
 QString Key(std::string_view value) {
@@ -157,7 +157,8 @@ SessionLedgerRow LedgerRow(const diagnostics::LedgerEntry& entry, double now_s, 
     row.lastSeenText =
         live ? DurationText(now_s - entry.last_seen_s) + QStringLiteral(" ago") : clock(entry.last_seen_s);
     row.worstText = entry.worst.has_value() ? Measured(*entry.worst, entry.unit) : Text(entry.worst_text);
-    row.budgetText = entry.budget.has_value() ? Measured(*entry.budget, entry.unit) : QStringLiteral("no budget");
+    row.budgetText = entry.budget.has_value() ? Measured(*entry.budget, entry.unit)
+                                              : QCoreApplication::translate("DiagnosticsAdapter", "no budget");
     // An open occurrence has no length yet, so a live entry is timed from the
     // start of the stretch it is still in rather than from a total that excludes it.
     double active_s = entry.total_active_s;
@@ -199,7 +200,7 @@ DiagnosticsAdapter::DiagnosticsAdapter(QObject* parent)
     : QObject(parent), bundle_service_(std::make_unique<SupportBundleService>()) {
     controller_.SetDisplayFacts(PrimaryDisplayFacts());
 
-    self_test_status_ = QStringLiteral("Status: Not run");
+    self_test_status_ = QCoreApplication::translate("DiagnosticsAdapter", "Status: Not run");
 
     live_probe_timer_.setInterval(kLiveProbeIntervalMs);
     connect(&live_probe_timer_, &QTimer::timeout, this, [this]() {
@@ -216,9 +217,10 @@ DiagnosticsAdapter::DiagnosticsAdapter(QObject* parent)
     });
     connect(bundle_service_.get(), &SupportBundleService::finished, this, [this](bool ok, const QString& message) {
         emit bundleFinished(ok, message);
-        diagnostics::AppLog::info(QStringLiteral("diagnostics"),
-                                  ok ? QStringLiteral("Support bundle written")
-                                     : QStringLiteral("Support bundle failed: %1").arg(message));
+        diagnostics::AppLog::info(
+            QStringLiteral("diagnostics"),
+            ok ? QCoreApplication::translate("DiagnosticsAdapter", "Support bundle written")
+               : QCoreApplication::translate("DiagnosticsAdapter", "Support bundle failed: %1").arg(message));
     });
 
     // One probe at a time: probeInFlight already rejects overlapping requests,
@@ -254,7 +256,7 @@ QString DiagnosticsAdapter::verdictHeadline() const {
 QString DiagnosticsAdapter::verdictSubline() const {
     if (paused() && verdict_state_ == diagnostics::VerdictState::Ready)
         return tr("No recording-impacting problems observed up to pause.");
-    return checking_ ? QStringLiteral("Check in progress.") : verdict_subline_;
+    return checking_ ? QCoreApplication::translate("DiagnosticsAdapter", "Check in progress.") : verdict_subline_;
 }
 
 int DiagnosticsAdapter::blockerCount() const noexcept {
@@ -271,17 +273,19 @@ QString DiagnosticsAdapter::lastCheckText() const {
     // While recording the band reports the session, so its stamp says since when
     // and at what rate rather than when the readiness probe last ran.
     if (recording_) {
-        return session_start_.isValid() ? QStringLiteral("Recording since %1 \xc2\xb7 live 5x/s")
-                                              .arg(session_start_.toString(QStringLiteral("hh:mm")))
-                                        : QStringLiteral("Recording \xc2\xb7 live 5x/s");
+        return session_start_.isValid()
+                   ? QCoreApplication::translate("DiagnosticsAdapter", "Recording since %1 \xc2\xb7 live 5x/s")
+                         .arg(session_start_.toString(QStringLiteral("hh:mm")))
+                   : QCoreApplication::translate("DiagnosticsAdapter", "Recording \xc2\xb7 live 5x/s");
     }
     if (probe_in_flight_)
         return QStringLiteral("Checking\xe2\x80\xa6");
     if (!last_check_at_.isValid())
-        return QStringLiteral("Not checked yet");
+        return QCoreApplication::translate("DiagnosticsAdapter", "Not checked yet");
     // The page has no Run check button any more, so the stamp is where the
     // recheck policy is stated: nobody has to ask whether this is stale.
-    return QStringLiteral("Checked %1 \xc2\xb7 rechecks every 10 s and on every settings change")
+    return QCoreApplication::translate("DiagnosticsAdapter",
+                                       "Checked %1 \xc2\xb7 rechecks every 10 s and on every settings change")
         .arg(last_check_at_.toString(QStringLiteral("hh:mm")));
 }
 

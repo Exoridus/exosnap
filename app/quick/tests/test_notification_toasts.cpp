@@ -58,9 +58,9 @@ TEST(SavedRecordingBodyTest, ACleanRecordingIsJustItsName) {
 
 TEST(SavedRecordingBodyTest, ObservedProblemsAreCountedAndPluralized) {
     EXPECT_EQ(notifications::SavedRecordingBody(QStringLiteral("clip.mkv"), 1),
-              QString::fromUtf8("clip.mkv \xc2\xb7 1 problem observed"));
+              QString::fromUtf8("clip.mkv \xc2\xb7 Problems observed: 1"));
     EXPECT_EQ(notifications::SavedRecordingBody(QStringLiteral("clip.mkv"), 2),
-              QString::fromUtf8("clip.mkv \xc2\xb7 2 problems observed"));
+              QString::fromUtf8("clip.mkv \xc2\xb7 Problems observed: 2"));
 }
 
 TEST_F(ToastStackTest, StartsEmpty) {

@@ -175,6 +175,7 @@ struct PersistedAppSettings {
     // migrated to the closest pair on load and then never written again, so an
     // existing install keeps the colour it had rather than snapping to the
     // default. See ui/theme/ExoSnapThemes.h for the mapping.
+    QString ui_language = QStringLiteral("system");
     QString appearance_id = QStringLiteral("dark");
     QString accent_id = QStringLiteral("aqua");
 

@@ -1,4 +1,5 @@
 #include "RecordViewModel.h"
+#include <QCoreApplication>
 
 #include "../diagnostics/error_message.h"
 #include "../models/CaptureTargetPresentation.h"
@@ -167,43 +168,43 @@ void RecordViewModel::SetState(UiRecordingState new_state) {
 
     switch (new_state) {
     case UiRecordingState::LoadingCapabilities:
-        state_text = L"Checking capabilities...";
+        state_text = QCoreApplication::translate("RecordingState", "Checking capabilities...").toStdWString();
         break;
     case UiRecordingState::Ready:
-        state_text = L"Ready";
+        state_text = QCoreApplication::translate("RecordingState", "Ready").toStdWString();
         break;
     case UiRecordingState::Blocked:
-        state_text = L"Blocked";
+        state_text = QCoreApplication::translate("RecordingState", "Blocked").toStdWString();
         break;
     case UiRecordingState::Countdown:
-        state_text = L"Countdown";
+        state_text = QCoreApplication::translate("RecordingState", "Countdown").toStdWString();
         break;
     case UiRecordingState::Preparing:
-        state_text = L"Preparing...";
+        state_text = QCoreApplication::translate("RecordingState", "Preparing...").toStdWString();
         break;
     case UiRecordingState::RegionSelecting:
-        state_text = L"Select Region...";
+        state_text = QCoreApplication::translate("RecordingState", "Select Region...").toStdWString();
         break;
     case UiRecordingState::Recording:
-        state_text = L"Recording";
+        state_text = QCoreApplication::translate("RecordingState", "Recording").toStdWString();
         break;
     case UiRecordingState::Paused:
-        state_text = L"Paused";
+        state_text = QCoreApplication::translate("RecordingState", "Paused").toStdWString();
         break;
     case UiRecordingState::ArmedFromRecovery:
-        state_text = L"Paused — recovery ready";
+        state_text = QCoreApplication::translate("RecordingState", "Paused — recovery ready").toStdWString();
         break;
     case UiRecordingState::Stopping:
-        state_text = L"Stopping...";
+        state_text = QCoreApplication::translate("RecordingState", "Stopping...").toStdWString();
         break;
     case UiRecordingState::Saving:
-        state_text = L"Saving...";
+        state_text = QCoreApplication::translate("RecordingState", "Saving...").toStdWString();
         break;
     case UiRecordingState::Completed:
-        state_text = L"Completed";
+        state_text = QCoreApplication::translate("RecordingState", "Completed").toStdWString();
         break;
     case UiRecordingState::Failed:
-        state_text = L"Failed";
+        state_text = QCoreApplication::translate("RecordingState", "Failed").toStdWString();
         break;
     }
 }

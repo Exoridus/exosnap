@@ -1,4 +1,5 @@
 #include <capability/encoder_device_resolver.h>
+#include <capability/translatable.h>
 
 #include <capability/adapter_capability.h>
 #include <capability/adapter_enum.h>
@@ -105,11 +106,13 @@ exosnap::engine::PipelineAssignmentValidation PopulateAssignment(EncoderDeviceRe
 
 std::string UnavailableReason(const EncoderDeviceCandidate& candidate, const EncoderDeviceRequest& request) {
     if (candidate.backend == exosnap::engine::EncoderBackend::None) {
-        return "No encoder backend is implemented for this adapter in this build.";
+        return EXOSNAP_TRANSLATABLE("Capabilities",
+                                    "No encoder backend is implemented for this adapter in this build.");
     }
     if (!candidate.capability.probed) {
         return candidate.capability.provenance.empty()
-                   ? "The encoder capability probe did not complete on this adapter."
+                   ? EXOSNAP_TRANSLATABLE("Capabilities",
+                                          "The encoder capability probe did not complete on this adapter.")
                    : candidate.capability.provenance;
     }
     if (!CodecSupported(candidate.capability, request.video_codec)) {
@@ -121,7 +124,7 @@ std::string UnavailableReason(const EncoderDeviceCandidate& candidate, const Enc
     if (request.chroma == ChromaSubsampling::Cs422) {
         return "4:2:2 chroma is not implemented.";
     }
-    return "This adapter cannot execute the requested format.";
+    return EXOSNAP_TRANSLATABLE("Capabilities", "This adapter cannot execute the requested format.");
 }
 
 } // namespace
@@ -163,14 +166,16 @@ EncoderDeviceResolution ResolveEncoderDevice(std::span<const EncoderDeviceCandid
             }
         }
         if (matches.empty()) {
-            result.reason = "The selected encoder device is not present on this system.";
+            result.reason =
+                EXOSNAP_TRANSLATABLE("Capabilities", "The selected encoder device is not present on this system.");
             return result;
         }
         if (matches.size() > 1) {
             // Two identical cards share every PCI fact; nothing here can tell
             // them apart, and binding to one would be a guess.
-            result.reason = "Multiple adapters match the selected encoder device and cannot be told apart. "
-                            "Choose Auto or select the device again.";
+            result.reason = EXOSNAP_TRANSLATABLE(
+                "Capabilities", "Multiple adapters match the selected encoder device and cannot be told apart. "
+                                "Choose Auto or select the device again.");
             return result;
         }
         const EncoderDeviceCandidate& device = candidates[matches.front()];
@@ -195,7 +200,8 @@ EncoderDeviceResolution ResolveEncoderDevice(std::span<const EncoderDeviceCandid
     // so Auto selects it or fails honestly -- it never picks a different GPU.
     if (!capture_adapter_known) {
         result.deferred_to_capture = true;
-        result.reason = "Auto uses the capture adapter; it is resolved when recording starts.";
+        result.reason = EXOSNAP_TRANSLATABLE("Capabilities",
+                                             "Auto uses the capture adapter; it is resolved when recording starts.");
         return result;
     }
     for (size_t i = 0; i < candidates.size(); ++i) {
@@ -211,7 +217,7 @@ EncoderDeviceResolution ResolveEncoderDevice(std::span<const EncoderDeviceCandid
         result.resolved = true;
         return result;
     }
-    result.reason = "No encoder-capable device matches the capture source.";
+    result.reason = EXOSNAP_TRANSLATABLE("Capabilities", "No encoder-capable device matches the capture source.");
     return result;
 }
 
@@ -223,7 +229,8 @@ CapabilitySet CapabilitySetForAdapter(const CapabilitySet& base, const AdapterIn
     result.runtime.adapter.vendor_id = adapter.vendor_id;
 
     if (adapter.vendor != AdapterVendor::Nvidia) {
-        const std::string reason = "No encoder backend is implemented for this adapter in this build.";
+        const std::string reason =
+            EXOSNAP_TRANSLATABLE("Capabilities", "No encoder backend is implemented for this adapter in this build.");
         for (const VideoCodec codec : AllVideoCodecs()) {
             result.video_codecs[codec] = {SupportLevel::NotImplemented, reason};
             result.chroma444[codec] = {SupportLevel::NotImplemented, reason};
