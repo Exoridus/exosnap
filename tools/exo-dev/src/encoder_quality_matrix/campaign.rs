@@ -1078,19 +1078,22 @@ pub fn run(args: &CampaignArgs) -> anyhow::Result<ExitCode> {
         now()
     };
     let available = host::free(&root)?;
+    let confirmation_points_per_rc = 3 * 2 * 4;
+    let cq_points = variants("cq").len() * 3 * 4 + confirmation_points_per_rc;
+    let vbr_points = variants("vbr").len() * 3 * 4 + confirmation_points_per_rc;
+    let vbr_peak_bps = points("vbr").iter().sum::<i64>() as f64 / 4.0 * 1500.0;
     let estimated = references
         .iter()
         .map(|r| r["duration"].as_f64().unwrap_or(0.0))
         .sum::<f64>()
-        * 180.0
-        * 100_000_000.0
+        * (cq_points as f64 * 100_000_000.0 + vbr_points as f64 * vbr_peak_bps)
         / 8.0;
     ensure!(
         available as f64 > (manifest.reserve_gib * 1024 * 1024 * 1024) as f64 + estimated,
         "insufficient campaign space above reserve"
     );
     let mut campaign = json!({"schema": SCHEMA, "environment": environment, "manifest": manifest, "started": started, "expected_main": manifest.clips.len() * 180,
-        "available_before": available, "estimated_media_bytes": estimated, "reserve_gib": manifest.reserve_gib, "run_order": "clip, codec, RC, point, variant; baseline first at each point"});
+        "available_before": available, "estimated_media_bytes": estimated, "storage_estimate": {"cq_assumed_bps": 100_000_000, "vbr_average_peak_bps": vbr_peak_bps, "cq_points_per_clip": cq_points, "vbr_points_per_clip": vbr_points, "includes_confirmation": true}, "reserve_gib": manifest.reserve_gib, "run_order": "clip, codec, RC, point, variant; baseline first at each point"});
     write_json(&campaign_path, &campaign)?;
     let sanity_dir = root.join("metric-sanity");
     if !root.join("metric-sanity-passed.json").exists() {
