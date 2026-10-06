@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 using exosnap::engine::EncodedAudioPacket;

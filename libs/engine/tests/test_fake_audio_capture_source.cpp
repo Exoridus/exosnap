@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <string>
 
 namespace exosnap::engine::testing {
 namespace {

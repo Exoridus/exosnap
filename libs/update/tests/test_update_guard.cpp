@@ -4,6 +4,7 @@
 // actually making a network request (EXOSNAP_OFFICIAL_BUILD is off in tests).
 
 #include <gtest/gtest.h>
+#include <string>
 #include <update/update_checker.h>
 #include <update/update_types.h>
 
