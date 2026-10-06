@@ -41,7 +41,7 @@ bool ContainsAny(std::wstring_view haystack, const std::array<std::wstring_view,
     return false;
 }
 
-UiErrorMessage MakeMessage(std::wstring title, std::wstring message, std::wstring action_hint) {
+UiErrorMessage MakeMessage(const std::wstring& title, const std::wstring& message, const std::wstring& action_hint) {
     return UiErrorMessage{
         QCoreApplication::translate("RecordingErrors", QString::fromStdWString(title).toUtf8().constData())
             .toStdWString(),
