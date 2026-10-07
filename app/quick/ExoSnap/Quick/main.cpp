@@ -570,10 +570,7 @@ QObject* navTabAt(QObject* repeater, int index) {
     return item;
 }
 
-// The clip the QCR-001 assertions below run against. No master path, so nothing
-// is decoded, no keyframe scan starts and no export can run -- exactly the
-// fixture shape the visual harness uses. A duration is all `editOverlayOpen`
-// needs.
+// Missing media exercises resident workspace navigation without opening a decoder.
 exosnap::EditContext navigationTestEditContext() {
     exosnap::EditContext context;
     context.output_path = QStringLiteral("qcr001-navigation-lifecycle.mkv");
@@ -642,9 +639,9 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
         return failNavigationLifecycle("no quickAppShell");
 
     const std::array<NavigationDestination, 3> destinations{{
-        {1, 1, "quickSettingsPage", "settings", application.settingsAdapter()},
-        {2, 2, "quickDiagnosticsPage", "diagnostics", application.diagnosticsAdapter()},
-        {4, 3, "quickAboutPage", "aboutViewModel", application.aboutViewModel()},
+        {1, 2, "quickSettingsPage", "settings", application.settingsAdapter()},
+        {2, 3, "quickDiagnosticsPage", "diagnostics", application.diagnosticsAdapter()},
+        {4, 4, "quickAboutPage", "aboutViewModel", application.aboutViewModel()},
     }};
 
     // Startup built the page the user is looking at, and nothing else.
@@ -773,77 +770,37 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     if (!waitForCurrentPage(shell, 1, 20000))
         return failNavigationLifecycle("navigateToSettingsRequested did not navigate");
 
-    // An edit session is an ephemeral workspace on Record, not a navigation
-    // destination or a modal blocker.
-    shell->setProperty("currentPage", 0);
-    exosnap::quick::EditSessionAdapter* session = application.editSessionAdapter();
-    exosnap::quick::EditExportAdapter* exporter = application.editExportAdapter();
-    if (session == nullptr || exporter == nullptr)
+    auto* session = application.editSessionAdapter();
+    auto* exporter = application.editExportAdapter();
+    if (!session || !exporter)
         return failNavigationLifecycle("no edit adapters");
-
     session->setEditContext(navigationTestEditContext());
-    if (!shell->property("editOverlayOpen").toBool())
-        return failNavigationLifecycle("a clip did not open the edit workspace");
-    QObject* workspace = findShellPage(window, "quickEditOverlay");
-    if (workspace == nullptr)
-        return failNavigationLifecycle("no quickEditOverlay after a clip opened");
-    // `visible` on a QQuickItem is EFFECTIVE visibility, so this is read off the
-    // workspace itself rather than off the shell's derived property: the point of
-    // the contract is what reaches the screen, not what the shell believes.
-    if (!shell->property("editOverlayVisible").toBool() || !workspace->property("visible").toBool())
-        return failNavigationLifecycle("the edit workspace is not visible on Record");
-
-    // The affordance itself, not only the edge behind it: this exact `enabled`
-    // binding is where the Quick port lost the Widgets shell's contract.
+    emit session->editPageRequested();
+    if (!waitForCurrentPage(shell, 5, 20000) || !waitForDestinationReady(shell, 5, 20000))
+        return failNavigationLifecycle("opening a recording did not land in Edit");
+    QObject* workspace = findShellPage(window, "quickEditPage");
+    if (!workspace || !workspace->property("visible").toBool())
+        return failNavigationLifecycle("Edit destination is not visible");
     QObject* nav_tabs = findShellPage(window, "quickNavTabs");
-    if (nav_tabs == nullptr)
-        return failNavigationLifecycle("no quickNavTabs repeater");
-    for (int tab = 0; tab <= 3; ++tab) {
-        QObject* delegate = navTabAt(nav_tabs, tab);
-        if (delegate == nullptr)
-            return failNavigationLifecycle("a navigation tab is missing");
-        if (!delegate->property("enabled").toBool())
-            return failNavigationLifecycle("a navigation tab is disabled during an edit session");
+    if (!nav_tabs)
+        return failNavigationLifecycle("no navigation tabs");
+    for (int tab = 0; tab < 5; ++tab) {
+        auto* delegate = navTabAt(nav_tabs, tab);
+        if (!delegate || !delegate->property("enabled").toBool())
+            return failNavigationLifecycle("Edit blocked navigation");
     }
-
-    // State the user would notice losing, set before leaving and compared after
-    // returning. Product state, not QML internals.
-    session->requestTrim(22000, 118000);
     session->requestSeek(41000);
-    const qint64 trim_start = session->trimStartMs();
-    const qint64 trim_end = session->trimEndMs();
-    const qint64 position = session->positionMs();
-    if (trim_start != 22000 || trim_end != 118000 || position != 41000)
-        return failNavigationLifecycle("the fixture clip did not take the trim and the position");
-
-    // Every destination stays reachable. The Edit workspace is ephemeral:
-    // leaving Record closes it without a discard prompt and returning does not
-    // resurrect the clip. Page 3 is the legacy logs request: it must land on
-    // Diagnostics with the logs section, not on a fifth destination.
-    for (int page = 1; page <= 4; ++page) {
-        if (!invokeNavigateTo(shell, page))
-            return failNavigationLifecycle("navigateTo is not invokable");
-        const int expected_page = page == static_cast<int>(exosnap::quick::ShellAdapter::LogsPage)
-                                      ? static_cast<int>(exosnap::quick::ShellAdapter::DiagnosticsPage)
-                                      : page;
-        if (shell->property("currentPage").toInt() != expected_page)
-            return failNavigationLifecycle("a destination was refused during an edit session");
-        if (page == static_cast<int>(exosnap::quick::ShellAdapter::LogsPage) &&
-            shell->property("diagnosticsSection").toInt() != exosnap::quick::ShellAdapter::DiagnosticsLogs)
-            return failNavigationLifecycle("the legacy logs destination did not open the logs view");
-        if (shell->property("editOverlayOpen").toBool())
-            return failNavigationLifecycle("navigation kept the edit session open");
-        if (shell->property("editOverlayVisible").toBool() || workspace->property("visible").toBool())
-            return failNavigationLifecycle("the edit workspace stayed visible off Record");
+    const auto clips_before = session->workspace().clips();
+    for (int page = 0; page <= 4; ++page) {
+        if (!invokeNavigateTo(shell, page) || !waitForDestinationReady(shell, page, 20000))
+            return failNavigationLifecycle("navigation away from Edit failed");
+        if (session->workspace().clips() != clips_before || session->positionMs() != 41000)
+            return failNavigationLifecycle("navigation discarded workspace state");
     }
-
-    // Back on Record: no stale workspace or edit state is restored.
-    if (!invokeNavigateTo(shell, 0))
-        return failNavigationLifecycle("navigateTo is not invokable");
-    if (shell->property("editOverlayOpen").toBool() || shell->property("editOverlayVisible").toBool() ||
-        workspace->property("visible").toBool() || !session->clipPath().isEmpty())
-        return failNavigationLifecycle("returning to Record restored an ephemeral edit session");
-
+    if (!invokeNavigateTo(shell, 5) || !waitForDestinationReady(shell, 5, 20000))
+        return failNavigationLifecycle("returning to Edit failed");
+    if (workspace != findShellPage(window, "quickEditPage") || session->workspace().clips() != clips_before)
+        return failNavigationLifecycle("Edit page did not remain resident");
     // Export: a page change is not a cancel. The run lives on a thread the
     // adapter owns, so it is unaffected by which QML item is on screen -- this
     // pins that, using the harness state seam rather than a fake export.
@@ -870,8 +827,7 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
         shell->property("diagnosticsSection").toInt() !=
             static_cast<int>(exosnap::quick::ShellAdapter::DiagnosticsLogs))
         return failNavigationLifecycle("the adapter navigation path did not reach the shell");
-    if (shell->property("editOverlayOpen").toBool() || shell->property("editOverlayVisible").toBool() ||
-        workspace->property("visible").toBool())
+    if (shell->property("editPageVisible").toBool() || workspace->property("visible").toBool())
         return failNavigationLifecycle("the adapter navigation path used a different edit contract");
 
     // A blocking surface still blocks — QCR-415 must not regress. Edit is not
@@ -890,18 +846,20 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     // value has no tab of its own; its normalized destination does.
     const auto tab_for_page = [](int page) {
         switch (page) {
-        case 1:
+        case 5:
             return 1;
+        case 1:
+            return 2;
         case 2:
         case 3:
-            return 2;
-        case 4:
             return 3;
+        case 4:
+            return 4;
         default:
             return 0;
         }
     };
-    for (int tab = 0; tab <= 3; ++tab) {
+    for (int tab = 0; tab < 5; ++tab) {
         QObject* delegate = navTabAt(nav_tabs, tab);
         if (delegate == nullptr)
             return failNavigationLifecycle("a navigation tab is missing");
@@ -924,8 +882,8 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
         return failNavigationLifecycle("dismissing the blocking surface did not restore navigation");
 
     session->close();
-    if (shell->property("editOverlayOpen").toBool())
-        return failNavigationLifecycle("closing the session left the edit workspace open");
+    if (!session->workspace().clips().empty())
+        return failNavigationLifecycle("clearing the workspace retained clips");
 
     shell->setProperty("currentPage", 0);
     return 0;
@@ -1980,9 +1938,9 @@ int main(int argc, char* argv[]) {
             // Every navigation destination, because the pages are built on first
             // use: an audit that only ever sees Record reports on a fifth of the
             // product's controls and calls that clean.
-            const QStringList page_names{QStringLiteral("record"), QStringLiteral("settings"),
+            const QStringList page_names{QStringLiteral("record"),      QStringLiteral("settings"),
                                          QStringLiteral("diagnostics"), QStringLiteral("logs"),
-                                         QStringLiteral("about")};
+                                         QStringLiteral("about"),       QStringLiteral("edit")};
             for (int page = 0; page < page_names.size(); ++page) {
                 if (shell != nullptr)
                     shell->setProperty("currentPage", page);

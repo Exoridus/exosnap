@@ -7,6 +7,7 @@
 #include <QString>
 #include <QVector>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -178,11 +179,12 @@ struct CompletedRecording {
     }
 };
 
-// EDIT-OVERLAY-R1 (review): editability gate shared by the post-stop result Edit
-// button and the Recent-recordings Edit action. Split (multi-segment) recordings
-// have no single MKV edit master, so they cannot be opened in the edit surface.
+// Any surviving segment makes a logical recording available to the workspace.
 [[nodiscard]] inline bool CanOpenInEditor(const CompletedRecording& rec) {
-    return rec.fileExists() && !rec.isMultiSegment();
+    if (rec.fileExists())
+        return true;
+    return std::any_of(rec.segments.begin(), rec.segments.end(),
+                       [](const auto& segment) { return segment.succeeded && QFileInfo::exists(segment.file_path); });
 }
 
 // Resolves a completed recording by its output path — the notification-toast Edit

@@ -28,13 +28,13 @@ Both custom items use public scene-graph nodes, rounded clipping and Qt's extern
 
 Render resources live on the render thread. Generation counters invalidate late callbacks after source replacement. Scene-graph teardown releases consumers before application services and producers. Preview publication callbacks are lightweight and never invoke GUI work directly from the capture thread. See [capture and preview](capture-and-preview.md) and [edit and export](edit-and-export.md).
 
-The editor timeline uses ordinary QML items and bounded models. Thumbnail count follows visible width, not clip duration. Markers are thinned in C++ to a bounded per-pixel representation rather than instantiating up to the recording's entire marker limit. Actual trim is stored once, in microseconds, on the adapter. QML can hold only the transient pointer position during a drag.
+The editor timeline uses ordinary QML items and bounded models. Thumbnail count follows visible width, not clip duration. Markers are thinned in C++ to a bounded per-pixel representation rather than instantiating up to the recording's entire marker limit. Assets, tracks, linked clips, selection and playhead live in the QML-independent C++ workspace. Clip times use microseconds; the adapter exposes viewport-filtered clip rows. QML can hold only the transient pointer position during a drag.
 
 ## Asynchronous and temporary state
 
 The shell distinguishes requested and displayed page while asynchronous loading completes. A destination is not treated as visible until it can render. Adapters publish the actual state a control can act on; availability must not be guessed from a pending navigation request.
 
-Edit is temporary. Closing it or navigating away drops the recipe and releases media decoders. An export already started owns an immutable snapshot independently. Cancellation remains a running/cancelling operation until its worker reports completion, so immediate retry cannot block the GUI on the preceding thread's join.
+Edit is a top-level destination alongside Record, Settings, Diagnostics and About. Pages load lazily and remain resident after first use. Leaving Edit pauses playback but retains the application-owned workspace, selection and undo history until application exit. The workspace has no persistent project format. An export already started owns an immutable snapshot independently. Cancellation remains a running/cancelling operation until its worker reports completion, so immediate retry cannot block the GUI on the preceding thread's join.
 
 Modal recovery/crash/error requests are queued rather than replacing one another mid-read. The current surface retains precedence. Recording start is guarded while a blocking surface exists, but stop/pause/resume remain reachable for an existing session.
 

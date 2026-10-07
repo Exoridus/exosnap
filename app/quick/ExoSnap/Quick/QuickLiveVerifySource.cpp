@@ -102,6 +102,8 @@ QString RecordingStateName(UiRecordingState state) {
 
 QString PageName(ShellAdapter::Page page) {
     switch (page) {
+    case ShellAdapter::EditPage:
+        return QString::fromLatin1(live_verify::page_name::kEdit);
     case ShellAdapter::RecordPage:
         return QString::fromLatin1(live_verify::page_name::kRecord);
     case ShellAdapter::SettingsPage:
@@ -120,6 +122,8 @@ QString PageName(ShellAdapter::Page page) {
 }
 
 std::optional<ShellAdapter::Page> PageFromName(const QString& name) {
+    if (name == QLatin1String(live_verify::page_name::kEdit))
+        return ShellAdapter::EditPage;
     if (name == QLatin1String(live_verify::page_name::kRecord))
         return ShellAdapter::RecordPage;
     if (name == QLatin1String(live_verify::page_name::kSettings))

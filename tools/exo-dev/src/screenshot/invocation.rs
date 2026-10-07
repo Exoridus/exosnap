@@ -6,7 +6,7 @@
 
 use clap::{Args, ValueEnum};
 
-/// Navigation destinations, in the product's navigation order. The index is
+/// Navigation destinations with stable control-channel indices. The index is
 /// what `--visual-page` takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Page {
@@ -15,6 +15,7 @@ pub enum Page {
     Diagnostics,
     Logs,
     About,
+    Edit,
 }
 
 impl Page {
@@ -25,6 +26,7 @@ impl Page {
             Page::Diagnostics => 2,
             Page::Logs => 3,
             Page::About => 4,
+            Page::Edit => 5,
         }
     }
 
@@ -35,6 +37,7 @@ impl Page {
             Page::Diagnostics => "diagnostics",
             Page::Logs => "logs",
             Page::About => "about",
+            Page::Edit => "edit",
         }
     }
 }
@@ -89,7 +92,7 @@ pub struct ShotSpec {
     #[arg(long)]
     pub overlay_state: Option<String>,
     /// Edit workspace fixture (`EXOSNAP_VISUAL_EDIT_SCENARIO`), for example
-    /// `edit-trimmed`. Needs the Record page.
+    /// `edit-trimmed`. Defaults to the Edit page.
     #[arg(long)]
     pub edit: Option<String>,
     /// Diagnostics fixture (`EXOSNAP_VISUAL_DIAG_SCENARIO`), for example `issues`.
@@ -277,10 +280,14 @@ impl ShotSpec {
     /// none. The state joins everything else the spec selects (lifecycle
     /// state, fixture, dialog, popup, arrangement) and is `default` when
     /// nothing is selected.
-    /// The page part of a file name. The app lands on Record, and every
-    /// selection without its own page flag belongs to Record too.
+    /// The page part of a file name. Edit fixtures default to Edit; other
+    /// selections without a page flag use the app's Record landing page.
     pub fn page_id(&self) -> &'static str {
-        self.page.unwrap_or(Page::Record).id()
+        self.effective_page().unwrap_or(Page::Record).id()
+    }
+
+    fn effective_page(&self) -> Option<Page> {
+        self.page.or_else(|| self.edit.as_ref().map(|_| Page::Edit))
     }
 
     pub fn derived_name(&self) -> String {
@@ -350,7 +357,7 @@ impl ShotSpec {
             args.push(flag.to_string());
             args.push(value);
         };
-        if let Some(page) = self.page {
+        if let Some(page) = self.effective_page() {
             value("--visual-page", page.index().to_string());
         }
         if let Some(state) = &self.record_state {
@@ -440,19 +447,39 @@ mod tests {
 
     #[test]
     fn a_page_is_passed_as_its_navigation_index() {
+        for (page, index) in [
+            (Page::Record, "0"),
+            (Page::Settings, "1"),
+            (Page::Diagnostics, "2"),
+            (Page::Logs, "3"),
+            (Page::About, "4"),
+            (Page::Edit, "5"),
+        ] {
+            let spec = ShotSpec {
+                page: Some(page),
+                ..ShotSpec::default()
+            };
+            let (args, _) = spec.invocation(&variant(), "out.png");
+            let at = args.iter().position(|a| a == "--visual-page").unwrap();
+            assert_eq!(args[at + 1], index);
+        }
+    }
+
+    #[test]
+    fn edit_fixture_routes_to_edit_without_a_page_flag() {
         let spec = ShotSpec {
-            page: Some(Page::Diagnostics),
+            edit: Some("edit-trimmed".to_string()),
             ..ShotSpec::default()
         };
         let (args, _) = spec.invocation(&variant(), "out.png");
-        let at = args.iter().position(|a| a == "--visual-page").unwrap();
-        assert_eq!(args[at + 1], "2");
+        assert!(args.windows(2).any(|w| w == ["--visual-page", "5"]));
+        assert_eq!(spec.page_id(), "edit");
     }
 
     #[test]
     fn fixtures_become_environment_seeds_not_arguments() {
         let spec = ShotSpec {
-            page: Some(Page::Record),
+            page: Some(Page::Edit),
             edit: Some("edit-trimmed".to_string()),
             ..ShotSpec::default()
         };
@@ -510,7 +537,7 @@ mod tests {
             edit: Some("edit-trimmed".to_string()),
             ..ShotSpec::default()
         };
-        assert_eq!(edit.derived_name(), "record_edit-trimmed");
+        assert_eq!(edit.derived_name(), "edit_edit-trimmed");
     }
 
     #[test]

@@ -1,12 +1,12 @@
 # Edit playback and lossless export
 
-This document owns the temporary edit recipe, decoder/render ownership, playback pacing and export transaction. The [product specification](../product-spec.md#8-recording-lifecycle) owns the workspace and interaction contract.
+This document owns the application-lifetime edit workspace, decoder/render ownership, playback pacing and export transaction. The [product specification](../product-spec.md#8-recording-lifecycle) owns the workspace and interaction contract.
 
 ## Separate playback from export
 
-Edit opens a completed recording or its retained Matroska master. The recipe contains trim and marker context in memory. Back, Escape, navigation or another clip closes that temporary session without a project save, draft or recovery entry. Playback decoders and thumbnail decoders release their file handles so the recording can be moved or deleted afterward.
+Edit is a resident top-level page. Its C++ workspace owns assets, typed video/audio tracks, linked clips, selection and playhead independently of QML. Imported files remain in place. Navigation pauses playback and retains the workspace; application exit discards it because project persistence is not implemented. Completed recordings reuse retained masters where available. Split recordings add ordered segment assets. Unavailable segments with known duration retain their intervals. Segments whose duration cannot be probed remain in Media with an explicit warning and are not placed on the timeline.
 
-Pressing Export commits an immutable snapshot to an independent operation. Closing the workspace does not cancel that operation. Its completion/failure reaches notifications. Export is stream copy and does not depend on successful preview decoding, GPU presentation or audio playback.
+Pressing Export commits an immutable snapshot to an independent operation. Leaving Edit does not cancel that operation. Its completion/failure reaches notifications. Export is stream copy and does not depend on successful preview decoding, GPU presentation or audio playback.
 
 A decode failure therefore leaves an honest Preview unavailable/Timeline previews unavailable state while preserving any valid trim/export operations. It must not be reported as corruption of the source merely because one preview decoder could not open it.
 
@@ -44,9 +44,17 @@ P010 hardware readback is left-justified. Internal ten-bit planar samples are no
 
 ## Timeline and export transaction
 
-`EditSessionAdapter` owns trim in microseconds and applies ordering, clamping and keyframe snapping. A cut begins at the valid keyframe at or before the requested time; this is lossless keyframe accuracy, not arbitrary frame accuracy. QML retains only a temporary pointer preview while dragging.
+`EditSessionAdapter` exposes the typed workspace to QML. Insert, move, trim, split, delete and ripple delete validate source bounds and reject overlaps on a track. Recording video/audio clips share linked-group identities and mutate together. Undo/redo stores clip deltas rather than duplicating media assets. The model supports additional tracks; the initial page presents linked video/audio rows.
 
-The timeline has a real video-thumbnail row and label-only audio rows. It does not render a fabricated waveform. Thumbnails are indexed by actual decoded positions, and generation IDs prevent tiles from a previous clip/width arriving into the current model. Marker delegates are bounded/thinned; stored markers are not deleted merely to reduce draw cost.
+Timeline edits are not keyframe-limited. Snapping aligns moves to neighboring boundaries and the playhead. QML creates clip delegates for the visible time interval and provides horizontal zoom and two-axis scrolling. Audio rows do not claim decoded waveforms. Existing thumbnail, keyframe and marker infrastructure remains available to the adapters.
+
+The playback worker evaluates the active workspace clip and maps timeline time to its source interval. Hard cuts reopen the existing engine session with generation-safe presentation; gaps and unavailable assets clear the frame. This reuses the decoder, hardware fallback and clock contracts below the adapter rather than introducing a second decoder stack. It does not composite concurrent video tracks or provide independent audio-track mixing controls.
+
+The toolbar offers Match source and a native save dialog rooted in the configured recording output folder. Filename, folder and MKV/MP4 container are user choices; no sibling `_edit` location is imposed. YouTube and Archive profiles expose a typed resolution seam but remain unavailable with a render-required reason.
+
+Lossless export accepts an eligible single-source trim or compatible full-clip concatenation. Contiguous pieces of the same source can coalesce, so a split alone need not require rendering. Compatibility is checked before packet copying. Concatenation of independently primed AAC sources requires render export. Generic Matroska B-frame sources without usable DTS are refused; native ExoSnap private exact timestamps and valid-DTS B-frame MP4 sources are supported. Gaps, unsupported partial concatenations and incompatible media require a render path and are rejected explicitly. Stream copy is keyframe-accurate, not arbitrary frame-accurate: cuts can retain dependency pictures to the next random-access boundary.
+
+Transitions are typed relationships between neighboring clip edges. The Transitions tab offers no effect until preview and export both implement it. Crossfade is not implemented. The next render task is a two-source overlap evaluator and D3D11 blend feeding the existing `IVideoEncoder` and mux path, with matching preview and export timing. This preserves the encoder abstraction for NVENC and future AMF/QSV implementations.
 
 Export remuxes into a sibling temporary and publishes atomically on success. Overwrite needs explicit confirmation. Cancel enters Cancelling and remains running until the worker actually stops; a second Export/Retry cannot join an active worker on the GUI thread. Progress is throttled before crossing threads.
 

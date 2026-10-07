@@ -20,6 +20,12 @@
 namespace exosnap {
 
 struct EditContext {
+    struct Segment {
+        QString path;
+        double duration_seconds = 0;
+        bool succeeded = true;
+    };
+    std::vector<Segment> segments;
     // File metadata (from the completed recording result)
     QString output_path;     // final output (MP4 or MKV)
     QString mkv_master_path; // edit master (MKV); same as output for MKV recordings

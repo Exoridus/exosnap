@@ -1,10 +1,12 @@
 #pragma once
 
 #include "models/EditContext.h"
+#include "models/EditWorkspace.h"
 
 #include <QObject>
 #include <QString>
 #include <QThreadPool>
+#include <QUrl>
 #include <QVariantList>
 #include <QtQmlIntegration/qqmlintegration.h>
 
@@ -26,19 +28,8 @@ inline constexpr int64_t kMarkerSnapWindowUs = 50000;
 [[nodiscard]] int64_t SnapTrimBoundaryUs(int64_t requested_us, const std::vector<int64_t>& keyframes_us,
                                          const std::vector<RecordingMarker>& markers);
 
-// The single source of truth for one open clip on the Edit surface.
-//
-// Everything the surface can edit lives here exactly once. In particular the
-// trim range: the Widgets surface kept it twice — authoritative microseconds on
-// the page and a transient, unsnapped millisecond copy inside the timeline
-// widget, with the page overwriting the widget after every handle release. Here
-// the range is stored once, in microseconds, always snapped, and QML reads it
-// through millisecond accessors. `exportRunning` is likewise mirrored from
-// EditExportAdapter rather than owned twice.
-//
-// Opening a clip must not block the GUI thread, so the container index read
-// (ExtractKeyframeTimestamps) runs on a worker; until it lands, `trimSnapReady`
-// is false and a trim snaps to markers only.
+// Owns the app-lifetime C++ workspace and exposes presentation projections.
+// Container probing and keyframe indexing run on a serialized worker pool.
 class EditSessionAdapter : public QObject {
     Q_OBJECT
     QML_ELEMENT
@@ -63,6 +54,12 @@ class EditSessionAdapter : public QObject {
 
     Q_PROPERTY(bool exportRunning READ exportRunning NOTIFY exportRunningChanged FINAL)
     Q_PROPERTY(bool hasUnsavedEdits READ hasUnsavedEdits NOTIFY unsavedEditsChanged FINAL)
+    Q_PROPERTY(QVariantList media READ media NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(QVariantList tracks READ tracks NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(bool canUndo READ canUndo NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(bool canRedo READ canRedo NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(qulonglong selectedClip READ selectedClip NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(QString workspaceError READ workspaceError NOTIFY workspaceChanged FINAL)
 
   public:
     // Severity of the post-flight report, as carried by the header badge.
@@ -76,9 +73,41 @@ class EditSessionAdapter : public QObject {
     explicit EditSessionAdapter(QObject* parent = nullptr);
     ~EditSessionAdapter() override;
 
+    [[nodiscard]] const edit::Workspace& workspace() const {
+        return workspace_;
+    }
+    [[nodiscard]] QVariantList media() const;
+    [[nodiscard]] QVariantList tracks() const;
+    [[nodiscard]] bool canUndo() const {
+        return workspace_.canUndo();
+    }
+    [[nodiscard]] bool canRedo() const {
+        return workspace_.canRedo();
+    }
+    [[nodiscard]] qulonglong selectedClip() const {
+        return workspace_.selection();
+    }
+    [[nodiscard]] const QString& workspaceError() const {
+        return workspace_error_;
+    }
+    Q_INVOKABLE QVariantList visibleClips(qint64 from_ms, qint64 to_ms) const;
+    Q_INVOKABLE void selectClip(qulonglong id);
+    Q_INVOKABLE void appendAsset(qulonglong id, qint64 at_ms = -1);
+    Q_INVOKABLE void importMedia(const QUrl& url, bool append = false, qint64 at_ms = -1);
+    Q_INVOKABLE void importMediaBatch(const QList<QUrl>& urls, bool append = false, qint64 at_ms = -1);
+    Q_INVOKABLE void addHistory(const QString& path, qint64 at_ms = -1);
+    Q_INVOKABLE void moveClip(qulonglong id, qint64 at_ms, bool snap = true);
+    Q_INVOKABLE void trimClip(qulonglong id, qint64 in_ms, qint64 out_ms);
+    Q_INVOKABLE void splitSelected();
+    Q_INVOKABLE void deleteSelected(bool ripple = false);
+    Q_INVOKABLE void undo();
+    Q_INVOKABLE void redo();
+    Q_INVOKABLE void selectAdjacentClip(int direction);
+    Q_INVOKABLE void nudgeSelected(qint64 delta_ms, int edge = 0);
+
     // Primary entry point. Resets trim, markers, report and position, and starts
     // the asynchronous keyframe index read.
-    void setEditContext(const EditContext& context);
+    void setEditContext(const EditContext& context, qint64 timeline_start_ms = -1);
     [[nodiscard]] const EditContext& editContext() const noexcept;
 
     [[nodiscard]] bool open() const noexcept;
@@ -132,6 +161,9 @@ class EditSessionAdapter : public QObject {
     void setKeyframeTimestampsForTest(std::vector<int64_t> keyframes_us);
 
   signals:
+    void workspaceChanged();
+    void historyRequested(const QString& path, qint64 at_ms);
+    void editPageRequested();
     void openChanged();
     void clipChanged();
     void durationChanged();
@@ -151,6 +183,7 @@ class EditSessionAdapter : public QObject {
     void closeRequested();
 
   private:
+    void publishWorkspace(bool changed);
     void applyReport(const EditContext& context);
     void rebuildFacts();
     void loadMarkers();
@@ -158,6 +191,8 @@ class EditSessionAdapter : public QObject {
     void setTrimUs(int64_t start_us, int64_t end_us);
 
     EditContext context_;
+    edit::Workspace workspace_;
+    QString workspace_error_;
     QVariantList facts_;
     QString report_drops_text_;
     QString report_drift_text_;

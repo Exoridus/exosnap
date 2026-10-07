@@ -30,22 +30,11 @@ class ShellAdapter : public QObject {
     QML_ELEMENT
     QML_UNCREATABLE("ShellAdapter is provided by the application")
 
-    // Canonical navigation order (product decision):
-    // Record, Settings, Diagnostics, About — four direct destinations in the
-    // title band, in this order. Named here so a navigation request never has
-    // to spell a bare integer.
-    //
-    // LogsPage is retained as the LEGACY request spelling for the Logs view.
-    // The shell normalizes it to DiagnosticsPage plus DiagnosticsLogs, so the
-    // control channel and old callers keep working while the visible band has
-    // no fifth destination. AboutPage keeps its own identity (4); the legacy 3
-    // is never reinterpreted as About.
-    //
-    // Device is deliberately absent: it owned no user-selectable configuration,
-    // and its read-only adapter/encoder capability content now lives in
-    // Diagnostics, which is where what ExoSnap OBSERVES belongs.
+    // Navigation order is Record, Edit, Settings, Diagnostics, About.
+    // Numeric identities remain stable for automation and relaunch requests.
+    // LogsPage is the legacy alias for Diagnostics with its logs section.
   public:
-    enum Page { RecordPage = 0, SettingsPage = 1, DiagnosticsPage = 2, LogsPage = 3, AboutPage = 4 };
+    enum Page { RecordPage = 0, SettingsPage = 1, DiagnosticsPage = 2, LogsPage = 3, AboutPage = 4, EditPage = 5 };
     Q_ENUM(Page)
 
     // The Diagnostics destination's internal views: the overview and the full
@@ -75,9 +64,7 @@ class ShellAdapter : public QObject {
     // instead of a phantom fifth page.
     Q_PROPERTY(int diagnosticsSection READ diagnosticsSection WRITE setDiagnosticsSection NOTIFY
                    diagnosticsSectionChanged FINAL)
-    // QCR-001 again: an open edit session is state of the Record destination, so
-    // "the session is loaded" and "the workspace is on screen" are two different
-    // facts. This is the second one.
+    // Effective visibility of the resident Edit destination.
     Q_PROPERTY(bool editSurfaceVisible READ editSurfaceVisible WRITE setEditSurfaceVisible NOTIFY
                    editSurfaceVisibleChanged FINAL)
     Q_PROPERTY(

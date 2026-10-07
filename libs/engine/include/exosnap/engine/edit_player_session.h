@@ -84,6 +84,7 @@ class EditPlayerSession {
 
     // Pauses continuous playback. No-op if not open or not playing.
     void Pause();
+    void SetVolume(float volume);
 
     // Requests a single frame at target_us (scrub / trim-handle-drag path).
     // If currently playing, this pauses playback first (matching the

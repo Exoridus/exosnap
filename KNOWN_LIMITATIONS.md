@@ -74,11 +74,13 @@ Low-disk protection depends on a usable free-space reading. A reachable/writable
 
 ## Editor
 
-Editing is temporary, keyframe-accurate lossless trim and stream-copy export, not arbitrary frame-accurate cutting, a multitrack editing project or a re-encoder. Closing the workspace discards an unexported recipe without a draft. A running export continues from its snapshot.
+Edit supports an application-lifetime multi-clip workspace with linked video/audio, trim, split, move, delete, ripple delete and undo/redo. Navigation retains it; application exit does not save a project. Preview supports hard cuts, not video compositing or transitions. A running export continues independently from its snapshot.
 
-Hardware decode uses D3D11VA where it negotiates, with software fallback at open. Hardware frames are read back to CPU planes before GPU presentation conversion; this is not zero-copy decode-to-display. A failed preview can leave stream-copy export usable. Audio tracks are mixed for playback, not presented as independent edit channels. Timeline audio rows have no decoded waveform.
+Hardware decode uses D3D11VA where it negotiates, with software fallback at open. Hardware frames are read back to CPU planes before GPU presentation conversion; this is not zero-copy decode-to-display. A failed preview can leave stream-copy export usable. Source audio tracks are mixed for playback; independent audio editing and unlinking are not exposed. Timeline audio rows have no decoded waveform.
 
-Markers are not container chapters. Export writes a `<stem>.markers.json` only for surviving markers and removes a stale destination sidecar when none remain. Same-stem MKV/MP4 exports share that sidecar name. Split sessions and missing/failed files do not necessarily offer the same one-clip Edit action as a normal completed recording.
+Markers are not container chapters. Export writes a `<stem>.markers.json` only for surviving markers and removes a stale destination sidecar when none remain. Same-stem MKV/MP4 exports share that sidecar name. Split recordings import ordered segments. Unavailable segments with known duration remain visible and block export. Unknown-duration segments remain in Media with a warning, outside the timeline; a timeline export cannot include them. Only the current source reuses a decoded poster, not every history asset.
+
+Export currently uses stream copy for eligible single-source trims and compatible full-clip concatenations, including coalesced contiguous splits. It does not promise arbitrary frame-accurate cuts. Gaps, incompatible sources and unsupported partial concatenations require the unimplemented render path. Independently primed AAC sources cannot be concatenated without render export. Generic Matroska B-frame sources without usable DTS are refused; native ExoSnap private exact timestamps and valid-DTS B-frame MP4 sources are supported. Match source is available; resolution-changing profiles are unavailable. Crossfade has only a typed edge-relationship seam and no selectable effect.
 
 ## Overlays, diagnostics and support
 

@@ -30,7 +30,7 @@ The standalone updater has its own deterministic render path, used by its tests 
 |---|---|
 | `--visual-test-size WxH` | Explicit logical window size |
 | `--visual-delay-ms N` | Bounded capture delay for construction |
-| `--visual-page N` | Index 0-2 Record/Settings/Diagnostics, 3 the internal logs view (legacy alias normalized to Diagnostics + logs), 4 About |
+| `--visual-page N` | Index 0-2 Record/Settings/Diagnostics, 3 the internal logs view (legacy alias normalized to Diagnostics + logs), 4 About, 5 Edit |
 | `--visual-appearance dark\|light`, `--visual-accent <id>` | Explicit appearance/accent |
 | `--visual-shell-appearance dark\|light` | Shell-owned toast appearance, separate from app preference |
 | `--visual-expert` | Settings Expert rows |
@@ -50,7 +50,7 @@ Use the registered scenario names from `app/visual_tests` rather than inventing 
 
 Page capture waits for the requested asynchronous loader to be ready, with a bounded failure log. Some overlay construction still depends on the capture delay; a missing/not-instantiated overlay is not a passed visual check. Diagnostics fixtures use a declared canonical capability set and apply the scenario's deviations. They are not observations of the host GPU.
 
-The Edit visual fixture does not open real media. Use `--auto-edit` with real media for decoder/export behavior. A correct placeholder screenshot does not establish playable video, synchronized audio or successful output.
+The Edit visual fixture does not open real media. Use `--auto-edit --auto-edit-media <path>` with real media for decoder/export behavior. Add `--auto-edit-add-media <path>` to append a second source for the hard-cut and concatenation export checks. A correct placeholder screenshot does not establish playable video, synchronized audio or successful output.
 
 `cargo exo-dev screenshot` drives this harness. Without a subcommand it takes every named set in the appearance and accent of the developer's own ExoSnap settings. Only those two values are read from there, and every shot still runs in a throwaway configuration. `sweep --set <names>` takes named sets (`list` shows them) in both appearances, and `shot` takes one screenshot from options that mirror the flags and seeds above. All three multiply every shot by `--appearance`, `--accent`, `--size` and `--scale` when those are given. Record states and accents are checked against the product sources, because the app renders an unknown value as a plausible default and still exits 0.
 

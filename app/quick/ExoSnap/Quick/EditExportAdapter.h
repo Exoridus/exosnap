@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <thread>
 
@@ -15,13 +16,8 @@ namespace exosnap::quick {
 
 class EditSessionAdapter;
 
-// Where a stream-copy export writes. Overwrite replaces the recording the
-// surface was opened for; otherwise the result is a sibling with an `_edit`
-// suffix and the selected container's extension. Pure, so the suffix rule is
-// testable without a clip or a thread.
-[[nodiscard]] std::filesystem::path DeriveExportOutputPath(const std::filesystem::path& original_output, bool overwrite,
-                                                           bool to_mp4);
-
+// The save dialog starts in the configured recording output folder.
+[[nodiscard]] std::filesystem::path DefaultEditExportPath(const std::filesystem::path& output_directory, bool to_mp4);
 // Whether a progress fraction is worth publishing given what was last shown.
 // The remuxer reports once per video packet -- thousands of times for a short
 // clip -- and the Widgets surface posted a queued UI event for every one of
@@ -66,6 +62,8 @@ class EditExportAdapter : public QObject {
     Q_PROPERTY(bool overwriteSelected READ overwriteSelected NOTIFY optionsChanged FINAL)
     Q_PROPERTY(QString overwritePrompt READ overwritePrompt NOTIFY optionsChanged FINAL)
     Q_PROPERTY(bool canExport READ canExport NOTIFY stateChanged FINAL)
+    Q_PROPERTY(QVariantList profileOptions READ profileOptions CONSTANT FINAL)
+    Q_PROPERTY(QString profileKey READ profileKey WRITE setProfileKey NOTIFY optionsChanged FINAL)
 
   public:
     enum State {
@@ -83,6 +81,15 @@ class EditExportAdapter : public QObject {
     // The session supplies the master path, the authoritative trim range and the
     // markers. It is never written to from here.
     void setSession(EditSessionAdapter* session);
+    void setOutputDirectoryProvider(std::function<QString()> provider) {
+        output_directory_ = std::move(provider);
+    }
+    [[nodiscard]] static QVariantList profileOptions();
+    [[nodiscard]] const QString& profileKey() const {
+        return profile_key_;
+    }
+    void setProfileKey(const QString& key);
+    Q_INVOKABLE void chooseDestination();
 
     [[nodiscard]] int stateValue() const noexcept;
     [[nodiscard]] State state() const noexcept;
@@ -141,6 +148,10 @@ class EditExportAdapter : public QObject {
     bool destination_failure_ = false;
     std::filesystem::path output_path_;
     std::optional<std::filesystem::path> retry_output_path_;
+    std::function<QString()> output_directory_;
+    QString profile_key_ = QStringLiteral("match");
+    std::optional<std::filesystem::path> chosen_output_;
+    bool overwrite_confirmed_ = false;
 
     std::thread export_thread_;
     std::atomic<bool> export_cancel_{false};

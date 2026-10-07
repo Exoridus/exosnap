@@ -3545,6 +3545,17 @@ void QuickApplication::initializeEditArea() {
     edit_timeline_adapter_.setSession(&edit_session_adapter_);
     edit_player_adapter_.setSession(&edit_session_adapter_);
     edit_export_adapter_.setSession(&edit_session_adapter_);
+    edit_export_adapter_.setOutputDirectoryProvider(
+        [this]() { return QString::fromStdWString(live_config_.output.output_folder.wstring()); });
+    QObject::connect(&edit_session_adapter_, &EditSessionAdapter::historyRequested, &edit_session_adapter_,
+                     [this](const QString& path, qint64 at_ms) {
+                         const auto* recording = FindRecordingByPath(
+                             path, record_view_model_.current_completed_recording, record_view_model_.last_succeeded,
+                             record_view_model_.recent_recordings);
+                         if (recording) {
+                             edit_session_adapter_.setEditContext(MakeEditContext(*recording), at_ms);
+                         }
+                     });
 }
 
 // ---------------------------------------------------------------------------
@@ -3929,8 +3940,9 @@ namespace {
 // The nav labels the elevated relaunch hands across, in both
 // directions. One table, so the page a relaunch is asked for and the page it
 // lands on cannot drift apart.
-constexpr std::array<std::pair<const char*, ShellAdapter::Page>, 5> kRelaunchNavLabels{{
+constexpr std::array<std::pair<const char*, ShellAdapter::Page>, 6> kRelaunchNavLabels{{
     {"Record", ShellAdapter::RecordPage},
+    {"Edit", ShellAdapter::EditPage},
     {"Settings", ShellAdapter::SettingsPage},
     {"Diagnostics", ShellAdapter::DiagnosticsPage},
     {"Logs", ShellAdapter::LogsPage},
@@ -4706,7 +4718,11 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
         if (record_view_model_.last_succeeded && record_view_model_.current_completed_recording.file_path == path) {
             openEditorForCurrentRecording();
         } else if (!path.isEmpty()) {
-            edit_session_adapter_.setEditContext(MakeMinimalEditContext(path));
+            const auto* recording =
+                FindRecordingByPath(path, record_view_model_.current_completed_recording,
+                                    record_view_model_.last_succeeded, record_view_model_.recent_recordings);
+            edit_session_adapter_.setEditContext(recording ? MakeEditContext(*recording)
+                                                           : MakeMinimalEditContext(path));
         }
         break;
     case NotificationAction::OpenFolder: {
@@ -5237,8 +5253,6 @@ void QuickApplication::wireTaskbarProgress() {
     });
     QObject::connect(&edit_export_adapter_, &EditExportAdapter::exportCompleted, &edit_export_adapter_,
                      [this](const QString& output_path) {
-                         if (shell_adapter_.editSurfaceVisible())
-                             return;
                          notifications::NotificationEvent event;
                          event.type = notifications::NotificationType::Saved;
                          event.title = QCoreApplication::translate("QuickApplication", "Export complete");
@@ -5249,8 +5263,6 @@ void QuickApplication::wireTaskbarProgress() {
                      });
     QObject::connect(&edit_export_adapter_, &EditExportAdapter::exportFailed, &edit_export_adapter_,
                      [this](const QString& error) {
-                         if (shell_adapter_.editSurfaceVisible())
-                             return;
                          notifications::NotificationEvent event;
                          event.type = notifications::NotificationType::UnexpectedStop;
                          event.title = QCoreApplication::translate("QuickApplication", "Export failed");
@@ -5361,14 +5373,7 @@ void QuickApplication::flushPendingPersists() {
         window_geometry_->flush();
 }
 
-// The single production entry point from Record into the Edit surface. Both
-// triggers -- the user pressing Edit on the result row, and the automatic open
-// when "Open editor when finished" is on -- route through here, so the gates
-// below are stated once instead of at each call site.
-//
-// Handing the session adapter a context IS the request to show the overlay
-// (AppShell binds editOverlayOpen to it), so every reason NOT to show it has to
-// be decided before setEditContext, not after.
+// Record and automatic completion share this workspace import entry point.
 void QuickApplication::openEditorForCurrentRecording() {
     if (!canOpenEditorForCurrentRecording())
         return;
@@ -5386,12 +5391,7 @@ bool QuickApplication::canOpenEditorForCurrentRecording() const {
     // otherwise fire on a segment boundary of a still-running split session.
     if (!AllowsEditorEntry(record_view_model_.state))
         return false;
-    // A running export must never be clobbered by a new clip: the panel state,
-    // the trim range and the remux thread all belong to the clip currently open.
-    if (edit_export_adapter_.running())
-        return false;
-    // Split recordings have no single MKV edit master (CanOpenInEditor), and a
-    // file that no longer exists would open an empty player.
+    // A recording needs at least one surviving segment.
     return CanOpenInEditor(record_view_model_.current_completed_recording);
 }
 

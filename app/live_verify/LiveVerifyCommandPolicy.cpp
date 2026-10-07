@@ -386,8 +386,9 @@ PreconditionVerdict CanSendRecordingErrorReport(const AutomationState& state) {
 }
 
 const QStringList& PageValues() {
-    static const QStringList values = {Text(page_name::kRecord), Text(page_name::kSettings),
-                                       Text(page_name::kDiagnostics), Text(page_name::kLogs), Text(page_name::kAbout)};
+    static const QStringList values = {Text(page_name::kRecord),   Text(page_name::kEdit),
+                                       Text(page_name::kSettings), Text(page_name::kDiagnostics),
+                                       Text(page_name::kLogs),     Text(page_name::kAbout)};
     return values;
 }
 

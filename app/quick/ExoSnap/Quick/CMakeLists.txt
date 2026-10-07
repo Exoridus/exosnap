@@ -59,9 +59,8 @@ qt_add_qml_module(exosnap
         DiagnosticsWorkspace.qml
         DiagnosticsSectionHeader.qml
         DiagnosticsSelfTestRow.qml
-        EditDetailsRail.qml
-        EditExportPanel.qml
-        EditOverlay.qml
+        EditPage.qml
+        EditSourceBrowser.qml
         EditPlayer.qml
         EditTimeline.qml
         ExoBadge.qml
@@ -181,6 +180,7 @@ qt_add_qml_module(exosnap
         EditPlayerAdapter.h
         EditPlayerWorker.cpp
         EditPlayerWorker.h
+        EditWorkspaceSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
         EditTimelineAdapter.cpp
@@ -1147,6 +1147,7 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditPlayerAdapter.h
         EditPlayerWorker.cpp
         EditPlayerWorker.h
+        EditWorkspaceSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
         EditTimelineAdapter.cpp
@@ -1941,6 +1942,7 @@ exosnap_add_gtest(
         ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_adapters.cpp
         EditExportAdapter.cpp
         EditExportAdapter.h
+        EditWorkspaceSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
         EditTimelineAdapter.cpp
@@ -1957,6 +1959,7 @@ exosnap_add_gtest(
     # parser had to skip (QCR-207) through AppLog, same as DeviceAdapter does
     # for its rescan milestones.
     LIBRARIES
+        Qt6::Widgets
         Qt6::Core
         Qt6::Gui
         Qt6::Qml

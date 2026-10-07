@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditPlayerAdapter.h"
+#include "models/EditWorkspace.h"
 
 #include <QElapsedTimer>
 #include <QObject>
@@ -28,6 +29,7 @@ class EditPlayerWorker : public QObject {
   public:
     explicit EditPlayerWorker(std::shared_ptr<EditPlayerFrameSink> sink);
     ~EditPlayerWorker() override;
+    void setTimeline(edit::Workspace workspace);
 
   public slots:
     void open(const QString& master_path, qint64 duration_ms, double screen_hz);
@@ -36,6 +38,7 @@ class EditPlayerWorker : public QObject {
     void pause();
     void seek(qint64 position_ms);
     void setScreenRefreshHz(double screen_hz);
+    void setVolume(double volume);
 
   signals:
     void openFinished(bool opened, const QString& error);
@@ -51,6 +54,7 @@ class EditPlayerWorker : public QObject {
     // the gate and the picture stays frozen.
     void syncClock();
     void onTick();
+    void seekTimeline(qint64 position_ms, bool resume);
 
     std::shared_ptr<EditPlayerFrameSink> sink_;
     std::unique_ptr<exosnap::engine::EditPlayerSession> session_;
@@ -59,6 +63,11 @@ class EditPlayerWorker : public QObject {
     qint64 duration_ms_ = 0;
     qint64 position_ms_ = 0;
     double screen_hz_ = 0.0;
+    edit::Workspace workspace_;
+    edit::Id active_clip_ = 0;
+    bool timeline_mode_ = false;
+    bool timeline_playing_ = false;
+    double volume_ = 1.0;
 };
 
 } // namespace exosnap::quick

@@ -37,6 +37,7 @@ void EditPlayerWorker::open(const QString& master_path, qint64 duration_ms, doub
     // per-frame hop would undo the point of the GPU path.
     auto sink = sink_;
     session_->SetOnFrameReady([sink](exosnap::engine::RawDecodedVideoFrame frame) { sink->deliver(std::move(frame)); });
+    session_->SetVolume(static_cast<float>(volume_));
     ensureTimer();
     tick_timer_->setInterval(EditPreviewTickMsFor(session_->VideoFrameRate(), screen_hz_));
     // Poster frame: show the clip's first frame instead of the placeholder while
@@ -61,6 +62,10 @@ void EditPlayerWorker::close() {
 }
 
 void EditPlayerWorker::play(qint64 from_ms) {
+    if (timeline_mode_) {
+        seekTimeline(from_ms >= workspace_.duration() / 1000 ? 0 : from_ms, true);
+        return;
+    }
     if (!session_)
         return;
     position_ms_ = from_ms;
@@ -78,6 +83,7 @@ void EditPlayerWorker::play(qint64 from_ms) {
 }
 
 void EditPlayerWorker::pause() {
+    timeline_playing_ = false;
     if (tick_timer_ != nullptr)
         tick_timer_->stop();
     if (!session_)
@@ -87,6 +93,10 @@ void EditPlayerWorker::pause() {
 }
 
 void EditPlayerWorker::seek(qint64 position_ms) {
+    if (timeline_mode_) {
+        seekTimeline(position_ms, false);
+        return;
+    }
     position_ms_ = position_ms;
     if (!session_)
         return;
@@ -117,6 +127,31 @@ void EditPlayerWorker::syncClock() {
 }
 
 void EditPlayerWorker::onTick() {
+    if (timeline_mode_) {
+        if (!timeline_playing_)
+            return;
+        const auto* clip = workspace_.clip(active_clip_);
+        if (clip && session_ && session_->HasAudioStream()) {
+            position_ms_ = (clip->start - clip->source_in) / 1000 + session_->CurrentPositionMs();
+            syncClock();
+        } else {
+            position_ms_ += elapsed_.restart();
+            if (clip && session_) {
+                session_->SeekTo(position_ms_ * 1000 - clip->start + clip->source_in);
+                syncClock();
+            }
+        }
+        const auto* next = workspace_.active(position_ms_ * 1000);
+        if ((next ? next->id : 0) != active_clip_)
+            seekTimeline(position_ms_, true);
+        position_ms_ = std::min<qint64>(position_ms_, workspace_.duration() / 1000);
+        emit positionAdvanced(position_ms_);
+        if (position_ms_ >= workspace_.duration() / 1000) {
+            pause();
+            emit reachedEnd();
+        }
+        return;
+    }
     if (!session_)
         return;
     const qint64 total = std::max<qint64>(duration_ms_, 0);
@@ -136,6 +171,56 @@ void EditPlayerWorker::onTick() {
         syncClock();
         emit reachedEnd();
     }
+}
+
+void EditPlayerWorker::setTimeline(edit::Workspace workspace) {
+    if (timeline_mode_ && workspace.clips() == workspace_.clips())
+        return;
+    pause();
+    close();
+    sink_->clear();
+    workspace_ = std::move(workspace);
+    timeline_mode_ = true;
+    active_clip_ = 0;
+    seekTimeline(workspace_.playhead() / 1000, false);
+    if (!workspace_.active(workspace_.playhead()))
+        emit openFinished(workspace_.duration() > 0, {});
+}
+
+void EditPlayerWorker::setVolume(double volume) {
+    volume_ = volume;
+    if (session_)
+        session_->SetVolume(static_cast<float>(volume));
+}
+
+void EditPlayerWorker::seekTimeline(qint64 position_ms, bool resume) {
+    const auto* clip = workspace_.active(position_ms * 1000);
+    const auto* asset = clip ? workspace_.asset(clip->asset) : nullptr;
+    const auto id = clip ? clip->id : 0;
+    if (id != active_clip_ || (clip && !session_)) {
+        close();
+        sink_->clear();
+        if (asset && asset->state == edit::AssetState::Available)
+            open(QString::fromStdWString(asset->path), asset->duration / 1000, screen_hz_);
+        else
+            emit openFinished(workspace_.duration() > 0, asset ? tr("Media unavailable") : QString());
+        active_clip_ = id;
+    }
+    position_ms_ = position_ms;
+    if (session_ && clip) {
+        const auto source_us = position_ms * 1000 - clip->start + clip->source_in;
+        session_->SeekTo(source_us);
+        if (resume && session_->HasAudioStream())
+            session_->Play(source_us);
+        syncClock();
+    }
+    timeline_playing_ = resume;
+    ensureTimer();
+    elapsed_.restart();
+    if (resume)
+        tick_timer_->start();
+    else
+        tick_timer_->stop();
 }
 
 } // namespace exosnap::quick

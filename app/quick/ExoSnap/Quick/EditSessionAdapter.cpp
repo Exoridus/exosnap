@@ -4,6 +4,7 @@
 #include "diagnostics/AppLog.h"
 #include "models/EditTimelineModel.h"
 #include "models/MarkerSidecar.h"
+#include <exosnap/engine/edit_timeline_export.h>
 
 #include <QFileInfo>
 #include <QPointer>
@@ -55,12 +56,75 @@ EditSessionAdapter::EditSessionAdapter(QObject* parent) : QObject(parent) {
 
 EditSessionAdapter::~EditSessionAdapter() = default;
 
-void EditSessionAdapter::setEditContext(const EditContext& context) {
+void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timeline_start_ms) {
+    auto pending = context;
+    if (pending.segments.empty())
+        pending.segments.push_back({context.mkv_master_path.isEmpty() ? context.output_path : context.mkv_master_path,
+                                    context.duration_seconds, true});
+    const auto needs_probe = [](const auto& segment) {
+        return segment.succeeded && segment.duration_seconds <= 0 && QFileInfo::exists(segment.path);
+    };
+    if (std::any_of(pending.segments.begin(), pending.segments.end(), needs_probe)) {
+        QPointer<EditSessionAdapter> self(this);
+        keyframe_pool_.start([self, pending = std::move(pending), timeline_start_ms, needs_probe]() mutable {
+            for (auto& segment : pending.segments) {
+                if (!needs_probe(segment))
+                    continue;
+                const auto metadata = engine::ProbeEditMedia(std::filesystem::path(segment.path.toStdWString()));
+                segment.duration_seconds = static_cast<double>(metadata.duration_us) / 1000000.0;
+                segment.succeeded = metadata.error.empty() && metadata.duration_us > 0;
+            }
+            if (self)
+                QMetaObject::invokeMethod(
+                    self,
+                    [self, pending = std::move(pending), timeline_start_ms]() {
+                        if (self)
+                            self->setEditContext(pending, timeline_start_ms);
+                    },
+                    Qt::QueuedConnection);
+        });
+        emit editPageRequested();
+        return;
+    }
     context_ = context;
+    const qint64 append_start = timeline_start_ms < 0 ? workspace_.duration() : timeline_start_ms * 1000;
+    std::vector<edit::Id> assets;
+    auto segments = context.segments;
+    if (segments.empty())
+        segments.push_back({context.mkv_master_path.isEmpty() ? context.output_path : context.mkv_master_path,
+                            context.duration_seconds, true});
+    uint64_t segment_start_ms = 0;
+    for (const auto& segment : segments) {
+        edit::Asset asset;
+        asset.path = segment.path.toStdWString();
+        asset.name = QFileInfo(segment.path).fileName().toStdString();
+        asset.duration = static_cast<int64_t>(std::llround(segment.duration_seconds * 1000000.0));
+        asset.width = context.resolution.section(QLatin1Char('x'), 0, 0).toInt();
+        asset.height = context.resolution.section(QLatin1Char('x'), 1, 1).toInt();
+        asset.fps = context.fps.section(QLatin1Char(' '), 0, 0).toDouble();
+        asset.state = !segment.succeeded                ? edit::AssetState::Failed
+                      : QFileInfo::exists(segment.path) ? edit::AssetState::Available
+                                                        : edit::AssetState::Missing;
+        asset.markers =
+            PartitionSegmentMarkers(context.markers, segment_start_ms, static_cast<uint64_t>(asset.duration / 1000));
+        segment_start_ms += static_cast<uint64_t>(asset.duration / 1000);
+        const auto id = workspace_.addAsset(std::move(asset));
+        if (segment.duration_seconds > 0)
+            assets.push_back(id);
+    }
+    if (!assets.empty()) {
+        if (!workspace_.insertAssets(assets, append_start))
+            workspace_error_ = tr("The recording overlaps existing clips.");
+        else
+            workspace_error_.clear();
+    }
+    if (std::any_of(segments.begin(), segments.end(),
+                    [](const auto& segment) { return segment.duration_seconds <= 0; }))
+        workspace_error_ = tr("Some segments have unknown duration. They remain in Media and cannot be placed yet.");
+    workspace_.seek(append_start);
     ++clip_generation_;
 
-    const qint64 duration =
-        context_.duration_seconds > 0.0 ? static_cast<qint64>(std::llround(context_.duration_seconds * 1000.0)) : 0;
+    const qint64 duration = workspace_.duration() / 1000;
     const bool duration_changed = duration != duration_ms_;
     duration_ms_ = duration;
 
@@ -68,7 +132,7 @@ void EditSessionAdapter::setEditContext(const EditContext& context) {
     trim_snap_ready_ = false;
     trim_start_us_ = exosnap::engine::TrimRange::kNoTimestamp;
     trim_end_us_ = exosnap::engine::TrimRange::kNoTimestamp;
-    position_ms_ = 0;
+    position_ms_ = workspace_.playhead() / 1000;
 
     applyReport(context_);
     rebuildFacts();
@@ -88,11 +152,13 @@ void EditSessionAdapter::setEditContext(const EditContext& context) {
         emit openChanged();
 
     if (open_) {
-        emit clipOpened(context_.mkv_master_path, duration_ms_);
+        emit clipOpened(context_.mkv_master_path, static_cast<qint64>(context_.duration_seconds * 1000.0));
         startKeyframeScan();
     } else {
         emit clipClosed();
     }
+    emit workspaceChanged();
+    emit editPageRequested();
 }
 
 const EditContext& EditSessionAdapter::editContext() const noexcept {
@@ -219,6 +285,16 @@ void EditSessionAdapter::requestTrim(qint64 start_ms, qint64 end_ms) {
     const bool end_moved = end_us != trim_end_us_;
 
     setTrimUs(start_us, end_us);
+    if (const auto* selected = workspace_.clip(workspace_.selection())) {
+        const auto id = selected->id;
+        const auto* asset = workspace_.asset(selected->asset);
+        const auto in = start_us == engine::TrimRange::kNoTimestamp ? 0 : start_us;
+        const auto out = end_us == engine::TrimRange::kNoTimestamp ? asset->duration : end_us;
+        if (workspace_.trim(id, in, out)) {
+            workspace_.move(id, 0);
+            emit workspaceChanged();
+        }
+    }
 
     // Show the frame at the boundary that actually moved. When both moved (a
     // clamp pushed the neighbour, or the range was set at once) the in-point is
@@ -234,6 +310,7 @@ void EditSessionAdapter::requestTrim(qint64 start_ms, qint64 end_ms) {
 
 void EditSessionAdapter::requestSeek(qint64 position_ms) {
     const qint64 clamped = ClampPlayheadMs(position_ms, duration_ms_);
+    workspace_.seek(clamped * 1000);
     if (clamped != position_ms_) {
         position_ms_ = clamped;
         emit positionChanged();
@@ -243,27 +320,14 @@ void EditSessionAdapter::requestSeek(qint64 position_ms) {
 
 void EditSessionAdapter::setPositionMs(qint64 position_ms) {
     const qint64 clamped = ClampPlayheadMs(position_ms, duration_ms_);
+    workspace_.seek(clamped * 1000);
     if (clamped == position_ms_)
         return;
     position_ms_ = clamped;
     emit positionChanged();
 }
 
-// Closing the Edit surface is a session close, not a view change.
-//
-// The surface is a QML Loader over adapters that live for the life of the
-// process, so unloading it destroys items and nothing else: before this, close()
-// emitted closeRequested() alone, the overlay disappeared, and the clip stayed
-// open behind it -- the player kept its decoder session (and its WASAPI
-// renderer), the timeline's thumbnail worker kept the container open, and the
-// recording could not be moved or deleted until ExoSnap exited. A second Edit
-// session then started on top of the first one's leftovers.
-//
-// clipClosed() is what the player and the timeline hang their teardown off, so
-// it is emitted here as well as from setEditContext(), and always before
-// closeRequested(): the resources are released first, the surface goes second.
-// Idempotent -- a second close on an already-empty session only repeats the
-// request to dismiss the surface.
+// Explicitly clear the workspace and release decoder resources. Navigation never calls this.
 void EditSessionAdapter::close() {
     // A fixture context carries a duration but no master path, and must close
     // just as completely as a real clip -- hence not `open_` alone.
@@ -278,6 +342,8 @@ void EditSessionAdapter::close() {
     // is showing any more; advancing the counter drops its result on arrival.
     ++clip_generation_;
     context_ = EditContext{};
+    workspace_ = edit::Workspace{};
+    emit workspaceChanged();
     keyframe_timestamps_.clear();
     trim_snap_ready_ = false;
     trim_start_us_ = exosnap::engine::TrimRange::kNoTimestamp;

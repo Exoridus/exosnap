@@ -105,7 +105,20 @@ void EditPlayerAdapter::setSession(EditSessionAdapter* session) {
     session_ = session;
     if (session_ == nullptr)
         return;
-    connect(session_, &EditSessionAdapter::clipOpened, this, &EditPlayerAdapter::openClip);
+    connect(session_, &EditSessionAdapter::workspaceChanged, this, [this]() {
+        duration_ms_ = session_->durationMs();
+        auto workspace = session_->workspace();
+        if (timeline_clips_ == workspace.clips())
+            return;
+        timeline_clips_ = workspace.clips();
+        setPlaying(false);
+        QMetaObject::invokeMethod(
+            worker_,
+            [worker = worker_, workspace = std::move(workspace)]() mutable {
+                worker->setTimeline(std::move(workspace));
+            },
+            Qt::QueuedConnection);
+    });
     connect(session_, &EditSessionAdapter::clipClosed, this, &EditPlayerAdapter::closeClip);
     connect(session_, &EditSessionAdapter::seekRequested, this, &EditPlayerAdapter::seek);
 }
@@ -113,6 +126,8 @@ void EditPlayerAdapter::setSession(EditSessionAdapter* session) {
 void EditPlayerAdapter::attachPlayerItem(ExoEditPlayerItem* item) {
     item_ = item;
     sink_->attach(item);
+    if (session_ && !playing_)
+        seek(session_->positionMs());
 }
 
 void EditPlayerAdapter::detachPlayerItem(ExoEditPlayerItem* item) {
@@ -235,7 +250,17 @@ void EditPlayerAdapter::closeClip() {
 }
 
 void EditPlayerAdapter::seek(qint64 position_ms) {
+    setPlaying(false);
     QMetaObject::invokeMethod(worker_, "seek", Qt::QueuedConnection, Q_ARG(qint64, position_ms));
+}
+
+void EditPlayerAdapter::setVolume(double volume) {
+    volume = std::clamp(volume, 0.0, 1.0);
+    if (volume_ == volume)
+        return;
+    volume_ = volume;
+    QMetaObject::invokeMethod(worker_, "setVolume", Qt::QueuedConnection, Q_ARG(double, volume));
+    emit volumeChanged();
 }
 
 // The screen the window actually sits on, not the primary one -- dragging

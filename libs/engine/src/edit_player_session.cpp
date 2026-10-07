@@ -4,6 +4,7 @@
 #include "exosnap/engine/wasapi_audio_render.h"
 #include "playback_clock.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -21,6 +22,7 @@ struct EditPlayerSession::Impl {
     WasapiAudioRenderer audio;
     bool has_audio = false;
     bool playing = false;
+    std::atomic<float> volume{1.0f};
 
     // WasapiAudioRenderer::FramesPlayed() (and therefore AudioClockMs())
     // resets to 0 on every Start() -- it measures time-since-resume, not
@@ -74,6 +76,10 @@ EditPlayerSession::EditPlayerSession() : impl_(std::make_unique<Impl>()) {
 
 EditPlayerSession::~EditPlayerSession() {
     Close();
+}
+
+void EditPlayerSession::SetVolume(float volume) {
+    impl_->volume.store(std::clamp(volume, 0.0f, 1.0f));
 }
 
 bool EditPlayerSession::Open(const std::filesystem::path& path, std::string& out_error) {
@@ -158,8 +164,17 @@ void EditPlayerSession::Play(int64_t start_us) {
     impl_->engine.StartPlaybackDecode(
         start_us, [this](RawDecodedVideoFrame frame) { impl_->DeliverFrame(std::move(frame)); },
         [this](DecodedAudioBlock block) {
-            if (impl_->has_audio && block.interleaved_stereo)
-                impl_->audio.PushSamples(block.interleaved_stereo->data(), block.frame_count);
+            if (impl_->has_audio && block.interleaved_stereo) {
+                const float volume = impl_->volume.load();
+                if (volume == 1.0f) {
+                    impl_->audio.PushSamples(block.interleaved_stereo->data(), block.frame_count);
+                } else {
+                    auto samples = *block.interleaved_stereo;
+                    for (auto& sample : samples)
+                        sample *= volume;
+                    impl_->audio.PushSamples(samples.data(), block.frame_count);
+                }
+            }
         },
         [this]() -> int64_t { return impl_->media_clock_us.load(); });
 

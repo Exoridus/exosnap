@@ -188,6 +188,7 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
     let shots = match name {
         "pages" => [
             Page::Record,
+            Page::Edit,
             Page::Settings,
             Page::Diagnostics,
             Page::Logs,
@@ -243,7 +244,7 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
             .map(|scenario| {
                 named(ShotSpec {
                     edit: Some(scenario.to_string()),
-                    ..page(Page::Record)
+                    ..page(Page::Edit)
                 })
             })
             .collect(),
@@ -403,6 +404,20 @@ mod tests {
                 .check(&ShotSpec::default(), &["violet".to_string()])
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn edit_is_a_page_and_its_fixtures_select_it() {
+        let pages = set("pages", &values()).unwrap();
+        assert!(
+            pages
+                .iter()
+                .any(|(name, spec)| { name == "edit_default" && spec.page == Some(Page::Edit) })
+        );
+        for (name, spec) in set("edit", &values()).unwrap() {
+            assert_eq!(spec.page, Some(Page::Edit));
+            assert!(name.starts_with("edit_"));
+        }
     }
 
     #[test]

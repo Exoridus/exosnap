@@ -12,9 +12,9 @@ Configuration and compatibility have one C++ owner. Presentation consumes resolv
 
 ## 2. Navigation and information architecture
 
-The title band provides four direct destinations in this order: **Record, Settings, Diagnostics, About**. Logs is not a top-level destination: it is the full log view inside Diagnostics, reached from the Reference section, Ctrl+4, a failed recording's View log action or a Show in log action, and it keeps Diagnostics selected. Hotkeys is a Settings card. Hardware inspection is a collapsed Diagnostics reference, not a Device destination or an encoder selector.
+The title band provides five direct destinations in this order: **Record, Edit, Settings, Diagnostics, About**. Logs is not a top-level destination: it is the full log view inside Diagnostics, reached from the Reference section, a failed recording's View log action or a Show in log action, and it keeps Diagnostics selected. Hotkeys is a Settings card. Hardware inspection is a collapsed Diagnostics reference, not a Device destination or an encoder selector.
 
-Settings owns user choices. Diagnostics owns observations and hosts both its overview and the internal Logs view. Record owns capture setup, preview and transport. About owns application identity and project links.
+Settings owns user choices. Diagnostics owns observations and hosts both its overview and the internal Logs view. Record owns capture setup, preview and transport. Edit owns the in-memory recording-edit workspace. About owns application identity and project links.
 
 ### Shell and window
 
@@ -26,9 +26,9 @@ The operating system's supported corner/border treatment is used where available
 
 ### Edit and modal surfaces
 
-Edit / Output / Save is a workspace over Record, below the real title band, not another top-level destination and not a saved project. Back, Escape, another clip or navigation closes it and discards the unexported recipe without a dirty badge, confirmation or draft. Returning to Record shows the normal Completed state. Opening Edit again starts clean.
+Edit is a top-level destination. Like other pages, it loads lazily and remains resident after first use. Leaving pauses playback and retains assets, clips, selection, playhead and undo history for the application lifetime. There are no persistent project files, drafts or recovery entries for edit workspaces.
 
-An export already started continues from its immutable snapshot after the workspace closes and reports through notifications. Navigation does not cancel it. Recovery, crash-report and recording-error surfaces are different: they are blocking questions, shown one at a time with queued requests retaining their order. They prevent starting a recording and navigating behind them, but do not disable stop/pause/resume for an existing session. A close confirmation participates in the same navigation guard.
+An export already started continues from its immutable snapshot after leaving Edit and reports through notifications. Navigation does not cancel it. Recovery, crash-report and recording-error surfaces are different: they are blocking questions, shown one at a time with queued requests retaining their order. They prevent starting a recording and navigating behind them, but do not disable stop/pause/resume for an existing session. A close confirmation participates in the same navigation guard.
 
 Modal scrims cover the shell, including its title band; the content card remains below that band. The card has no imitation title bar. Headings and decision controls stay fixed while long explanatory content scrolls. Consent/remember controls remain visible with the actions, including at minimum size.
 
@@ -261,7 +261,7 @@ The Record layout has a full preview canvas with persistent context chrome and a
 | Completed | Edit when eligible, folder action and a back-to-idle control; no redundant Record beside Edit |
 | Failed | Modal failure explanation and report action; no success result |
 
-A split/missing/failed recording does not display a permanently dead Edit action. Completed state is not a dead end even when Edit is ineligible. Capture frame is not shown as an action on a finished session. Icon-only controls have descriptive tooltips, and unavailable reasons remain hover-readable.
+A split recording can open in Edit as ordered segment clips. Missing/failed media is represented honestly rather than silently omitted. Completed state remains usable when no media is eligible for playback. Capture frame is not shown as an action on a finished session. Icon-only controls have descriptive tooltips, and unavailable reasons remain hover-readable.
 
 ### Runtime health and duration
 
@@ -294,23 +294,27 @@ Only one continuation is armed at a time. Missing/empty artifacts are removed fr
 
 Manifest failure does not abort a good recording. It raises Recovery protection unavailable and marks that session unprotected instead of pretending an entry exists. Local recording recovery is independent of crash-upload consent.
 
-### Edit / Output / Save
+### Edit workspace and export
 
-Completed recordings normally remain on Record with Edit as the next action. Open editor when finished is off by default. The workspace has player/timeline on the left, persistent Details and Export cards on the right, and one primary Export action bottom-right. It fills the regular content region without a modal scrim or covering the window controls.
+Completed recordings normally remain on Record with Edit as the next action. Open editor when finished is off by default. Record, history and notification Edit actions navigate to the Edit destination and add the relevant recording to its resident workspace.
 
-The header contains Back, title, middle-elided filename and a labeled report status. A report badge is status, not a mislabeled action. The right rail remains available and scrollable at minimum size. Starting/finishing/failing export does not move its scroll position or card anchors. Output choices remain visible, disabled while running.
+History, Media and Transitions tabs occupy the upper-left source browser. The preview fills the upper-right with compact playback controls, timecode and volume. A toolbar above the lower timeline exposes Undo, Redo, Split, Delete, Ripple, Snap and zoom, with the export preset selector and Export at the right. There are no redundant Library, Preview or Timeline headings and no permanent export rail.
 
-The video timeline shows real decoded thumbnails at their timestamps, sized by clip aspect ratio and available width. Audio tracks are labeled/fill rows, **not waveforms**. Unknown track names use Audio 1, Audio 2 rather than guessing sources. A silent video-only file has no audio row. Loading and terminal unavailable thumbnail states are distinct; thumbnail failure does not automatically disable export.
+History reads the existing completed-recording history, including names, duration, resolution/FPS and unavailable-media state. Double-click or Enter appends a source; dragging places it on the timeline. Media holds imported assets in the current workspace, with native file selection and local-file drops. Source files are referenced rather than copied. The current source can reuse its decoded poster; there is no thumbnail cache covering all history assets. Transitions truthfully reports that no transition is available.
 
-Trim handles cannot cross and snap to a keyframe at or before the requested point, with marker snapping within 50 ms. Handles/markers/playhead span all rows because the trim applies to the clip. Changes are applied only on Export. Scrubbing pauses playback and resumes only when it was playing before the drag. Drag labels expose precise time. Player controls remain keyboard operable while their visual transport overlay fades during playback/scrubbing.
+The C++ timeline supports multiple typed video/audio tracks. The initial UI uses linked recording video/audio clips. Add, horizontal move, source-in/out trim, split at the playhead, delete and ripple delete operate on linked groups. Overlaps on a track and trims outside the source are rejected. Ordinary delete retains the gap; ripple delete closes it. Undo/redo covers these mutations without duplicating media assets. Snapping aligns moves to neighboring clip boundaries and the playhead; timeline edits are not restricted to keyframes.
 
-Export offers MKV or MP4 lossless stream copy, either beside the source as `<name>_edit.<ext>` or explicit confirmed replacement. It does not re-encode for arbitrary frame-accurate cuts. For reordered video, export keeps the complete dependency GOP until the next random-access boundary instead of dropping B-frames behind a future reference picture. An end between keyframes can therefore extend to that boundary. Non-reordered video retains its existing presentation-time cutoff. Overwrite is not the destructive default button. Normal destination follows save mode; an output failure can offer Choose another folder for a one-time recovery destination rather than a meaningless repeat of the same failing write.
+The timeline scrolls horizontally and vertically and zooms horizontally. Clip delegates follow the visible time interval. Audio rows are labeled clips, not decoded waveforms. Split recordings add consecutive segment assets in continuous order. Missing or failed segments with known duration remain unavailable intervals and block export. Segments with unknown duration remain in Media with an explicit warning and cannot be placed yet; exporting the remaining timeline does not recover those segments.
 
-The Export card reports running/progress/cancel, success/file/folder or failure/remedy. There is one actionable retry route, not competing Retry and Export operations. Successful output names file and folder on separate elided lines and offers Show in folder. Cancel stays running until the worker actually completes cancellation. Closing the workspace releases decoders and its temporary recipe while an already-running export continues independently.
+Preview evaluates timeline positions against source intervals and switches sources at hard cuts through the production decoder. Gaps and unavailable sources do not display a stale preceding frame. Source audio streams mix for playback; independent track mixing and video compositing are not implemented. Hardware decode can fall back to software at open. Supported 8/10-bit 4:2:0 and 8-bit 4:4:4 playback and SDR approximation of tagged HDR10 retain their existing decoder behavior. A preview failure does not itself disable an otherwise eligible lossless export.
 
-Exported markers use a JSON sidecar only when markers survive the trim; timestamps are rebased and removed markers are dropped. With none surviving, an old destination sidecar is removed. The filename replaces the media extension: `clip_edit.mp4` produces `clip_edit.markers.json`, not `clip_edit.mp4.markers.json`. Media with the same stem shares this convention. No container chapters are written.
+Export defaults to Match source. The native save dialog starts in the configured ExoSnap output folder and allows filename, folder and MKV/MP4 container selection. Existing destinations require confirmation; originals are not overwritten implicitly. There is no forced sibling `_edit` destination. Resolution-changing YouTube and Archive profiles remain visibly unavailable until render export exists.
 
-Playback supports the implemented 8/10-bit 4:2:0 and 8-bit 4:4:4 formats, including an SDR tone-map of properly tagged HDR10. Hardware decode can fall back to software at open. Multi-track audio is mixed for playback; it is not a multitrack editing timeline. Preview failure does not change the lossless export mechanism.
+Lossless export supports eligible single-source trims and compatible full-clip concatenations. Contiguous splits of the same source can coalesce. Incompatible sources, gaps and unsupported partial concatenations produce a render-required error rather than a misleading export. Stream copy does not promise frame accuracy: reordered video retains dependency pictures through the next random-access boundary where required. Export snapshots are independent of navigation, and completion/failure continues through notifications.
+
+Marker sidecars use `<stem>.markers.json`, not a suffix appended to the media extension. Export filters and rebases surviving markers, removes stale sidecars when no markers remain and writes no container chapters.
+
+The transition model represents neighboring clip edges. No selectable Crossfade ships before both preview and render export support it. Persistent projects, transitions, video compositing and arbitrary frame-accurate render export remain future work.
 
 ## 9. Presence and notifications
 
@@ -354,11 +358,11 @@ Starting by hotkey activates Record if the app is visible but does not restore a
 
 ### In-window keyboard operation
 
-`Ctrl+1` through `Ctrl+5` select the five destinations and share the same modal/navigation guard as tabs. These are not global rebindable hotkeys. Surface-local keys apply only to the focused surface; text editing must not be consumed by unrelated shortcuts.
+`Ctrl+1` through `Ctrl+5` select Record, Edit, Settings, Diagnostics and About respectively and share the same modal/navigation guard as tabs. These are not global rebindable hotkeys. Surface-local keys apply only to the focused surface; text editing must not be consumed by unrelated shortcuts.
 
 Controls have keyboard focus indication and accessible names; buttons/toggles use Space activation, with dialog-default Enter behavior. Segmented groups use one tab stop and arrow/Home/End navigation. Unavailable controls show the real reason and no pointing-hand affordance. Clickable, text-editable and draggable surfaces use their appropriate cursors.
 
-The Edit timeline is one tab stop: Left/Right moves one second, Shift ten seconds, Ctrl a tenth; Home/End reaches bounds; `[`/`]` chooses playhead/in/out manipulation; I/O sets trim at the playhead; Space toggles playback. Focus and accessibility tests establish specific contracts, not blanket proof of every assistive-technology combination.
+The focused Edit timeline supports Left/Right seeking, Home/End bounds, Up/Down clip selection, Alt+Left/Right move, Ctrl+Alt+Left/Right trim start, Shift+Alt+Left/Right trim end, Space playback, Ctrl+B split, Delete, Shift+Delete ripple delete, Ctrl+Z undo and Ctrl+Y or Ctrl+Shift+Z redo. Shortcuts remain local to the timeline so text input is not intercepted. Focus and accessibility tests establish specific contracts, not blanket proof of every assistive-technology combination.
 
 The top bar retains three noninteractive source-health indicators across every page: application/system audio together, microphone and webcam. Active included sources use success ink; intentionally muted/off or unconfigured sources remain dim/neutral. Recovering expected sources are amber; actual failures are coral. Recording lock is not a health condition. Accessible descriptions include individual APP/SYS states and any silence substituted during device recovery.
 
@@ -463,7 +467,7 @@ The dynamic Visual C++ x64 runtime is required. No application artifact bundles 
 
 Windows installation is per-machine under `C:\Program Files\ExoSnap`, with the product marker at `HKLM\Software\ExoSnap` and an all-users Start Menu entry. The desktop shortcut is an unchecked Setup option and is absent for MSI and package-manager installs. Uninstalling preserves the current user's `%LOCALAPPDATA%\ExoSnap` unless the operator explicitly asks Setup to remove that local data; recordings and other output files are never removed by an uninstall.
 
-Replay buffer, arbitrary frame-accurate re-encode cuts, project/multitrack editing, embedded chapters, surround output, HLG, 4:2:2, 10-bit 4:4:4 and cross-vendor encoding are not current features. See [known limitations](../KNOWN_LIMITATIONS.md) for narrower behavioral and verification boundaries, and [roadmap](roadmap.md) for explicitly future work.
+Replay buffer, arbitrary frame-accurate re-encode cuts, persistent edit projects, transitions, video compositing, embedded chapters, surround output, HLG, 4:2:2, 10-bit 4:4:4 and cross-vendor encoding are not current features. See [known limitations](../KNOWN_LIMITATIONS.md) for narrower behavioral and verification boundaries, and [roadmap](roadmap.md) for explicitly future work.
 
 ExoSnap is GPL-3.0-or-later. Bundled components retain their own notices and license terms in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
