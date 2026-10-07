@@ -538,7 +538,7 @@ jobs:
           TIDY_CACHE: ${{ runner.temp }}/clang-tidy-cache
         run: >-
           cargo exo-dev verify --profile ci-build-debug --event $env:EVENT
-          --tidy-cache-dir $env:TIDY_CACHE
+          --tidy-cache-dir $env:TIDY_CACHE --jobs $([Environment]::ProcessorCount)
 
       - name: sccache stats
         if: always()
@@ -641,7 +641,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           PACKAGING: ${{ needs.changes.outputs.packaging }}
         run: |
-          $arguments = @('verify', '--profile', 'ci-build-release', '--event', $env:EVENT)
+          $arguments = @('verify', '--profile', 'ci-build-release', '--event', $env:EVENT, '--jobs', [string][Environment]::ProcessorCount)
           if ($env:PACKAGING -eq 'true') { $arguments += '--packaging-changed' }
           cargo exo-dev @arguments
 
