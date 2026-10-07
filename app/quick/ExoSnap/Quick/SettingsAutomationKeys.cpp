@@ -108,6 +108,11 @@ const std::array<EnumEntry, 3> kNvencBRefModes{{
     {"each", static_cast<int>(exosnap::engine::NvencBRefMode::Each)},
     {"middle", static_cast<int>(exosnap::engine::NvencBRefMode::Middle)},
 }};
+const std::array<EnumEntry, 3> kNvencLookaheadModes{{
+    {"auto", 0},
+    {"off", 1},
+    {"on", 2},
+}};
 const std::array<EnumEntry, 3> kNvencMultipass{{
     {"single", static_cast<int>(exosnap::engine::NvencMultipass::SinglePass)},
     {"quarter", static_cast<int>(exosnap::engine::NvencMultipass::QuarterResolution)},
@@ -279,6 +284,8 @@ QVector<KeyDescriptor> BuildKeys() {
                        &SettingsAdapter::setNvencBframes));
     keys.append(EnumKey("video.nvencBRef", "NVENC B-frame reference mode", kNvencBRefModes, &SettingsAdapter::nvencBRef,
                         &SettingsAdapter::setNvencBRef));
+    keys.append(EnumKey("video.nvencLookaheadMode", "NVENC Lookahead mode", kNvencLookaheadModes,
+                        &SettingsAdapter::nvencLookaheadMode, &SettingsAdapter::setNvencLookaheadMode));
     keys.append(BoolKey("video.nvencLookahead", "NVENC Lookahead", &SettingsAdapter::nvencLookahead,
                         &SettingsAdapter::setNvencLookahead));
     keys.append(IntKey("video.nvencLookaheadDepth", "NVENC Lookahead depth", &SettingsAdapter::nvencLookaheadDepth,

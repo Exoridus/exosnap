@@ -1,6 +1,7 @@
 #pragma once
 
 #include <capability/config_types.h>
+#include <capability/nvenc_tuning_policy.h>
 #include <exosnap/engine/backend_tuning.h>
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/output_geometry.h>
@@ -11,6 +12,8 @@
 #include <string>
 
 namespace exosnap {
+
+struct VideoSettingsModel;
 
 enum class OutputResolutionMode {
     Native,
@@ -99,6 +102,7 @@ struct OutputSettingsModel {
     // Recording admission resolves it against the selected adapter's facts and
     // takes the preset from nvenc_preset, the app's existing preference owner.
     exosnap::engine::NvencTuning nvenc_tuning;
+    capability::NvencLookaheadPolicy nvenc_lookahead_policy = capability::NvencLookaheadPolicy::Explicit;
     // Tone-map to SDR by default. Native HDR10 requires a compatible source,
     // codec and 10-bit path, enforced by the capability resolver.
     exosnap::engine::HdrMode hdr_mode = exosnap::engine::HdrMode::TonemapSdr;
@@ -120,6 +124,11 @@ struct OutputSettingsModel {
 // start (RecordingCoordinator::SetOutputSettings) — "a split change applies from the next
 // recording" remains the correct, intentional semantics; only the live-mirror gap is fixed.
 void MergeFormatSelection(OutputSettingsModel& live, const OutputSettingsModel& incoming);
+
+// Native output dimensions remain unknown until capture initialization, so the
+// Auto qualification context does not infer a size from the current desktop.
+[[nodiscard]] capability::NvencLookaheadPolicyContext
+NvencLookaheadContextFromSettings(const OutputSettingsModel& output, const VideoSettingsModel& video);
 
 [[nodiscard]] std::optional<exosnap::engine::FrameSize> PresetOutputSize(OutputResolutionMode mode) noexcept;
 [[nodiscard]] const wchar_t* OutputResolutionModeName(OutputResolutionMode mode) noexcept;

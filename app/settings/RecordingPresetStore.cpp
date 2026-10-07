@@ -617,6 +617,8 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
                                 : tuning.b_ref_mode == exosnap::engine::NvencBRefMode::Middle ? "middle"
                                                                                               : "off");
     nvenc.emplace("lookahead", tuning.lookahead);
+    nvenc.emplace("lookahead_policy",
+                  out.nvenc_lookahead_policy == capability::NvencLookaheadPolicy::Auto ? "auto" : "explicit");
     nvenc.emplace("lookahead_depth", static_cast<int64_t>(tuning.lookahead_depth));
     nvenc.emplace("spatial_aq", tuning.spatial_aq);
     nvenc.emplace("temporal_aq", tuning.temporal_aq);
@@ -834,6 +836,9 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
             tuning.b_ref_mode = exosnap::engine::NvencBRefMode::Each;
         else if (b_ref == "middle")
             tuning.b_ref_mode = exosnap::engine::NvencBRefMode::Middle;
+        out.nvenc_lookahead_policy = TomlStr(nvenc["lookahead_policy"]) == "auto"
+                                         ? capability::NvencLookaheadPolicy::Auto
+                                         : capability::NvencLookaheadPolicy::Explicit;
         tuning.lookahead = TomlBool(nvenc["lookahead"]);
         const int64_t depth = TomlInt(nvenc["lookahead_depth"], 16);
         if (depth >= 1 && depth <= 31)

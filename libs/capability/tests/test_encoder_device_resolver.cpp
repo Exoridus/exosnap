@@ -343,3 +343,14 @@ TEST(EncoderDeviceResolver, AdvancedCapabilitiesNeverLeakFromAnotherAdapter) {
     EXPECT_EQ(intel.QueryBFrames(VideoCodec::H264).max_bframes, 0);
     EXPECT_FALSE(exosnap::capability::IsSelectable(intel.QueryLookahead(VideoCodec::H264)));
 }
+TEST(EncoderDeviceCapabilityView, DriverQualificationDoesNotLeakAcrossAdapters) {
+    auto base = exosnap::capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    base.runtime.adapter.adapter_luid = 1;
+    base.runtime.adapter.driver_version = "32.0.16.1714";
+    const auto same =
+        CapabilitySetForAdapter(base, MakeAdapter("RTX 5070 Ti", AdapterVendor::Nvidia, 1), NvencCapability());
+    EXPECT_EQ(same.runtime.adapter.driver_version, "32.0.16.1714");
+    const auto other =
+        CapabilitySetForAdapter(base, MakeAdapter("RTX 5070 Ti", AdapterVendor::Nvidia, 2), NvencCapability());
+    EXPECT_TRUE(other.runtime.adapter.driver_version.empty());
+}

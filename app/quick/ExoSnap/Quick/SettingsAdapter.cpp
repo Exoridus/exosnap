@@ -905,8 +905,9 @@ void SettingsAdapter::rebuildOptions() {
     nvenc_preset_options_.clear();
     auto requested_tuning = out.nvenc_tuning;
     requested_tuning.preset = out.nvenc_preset;
-    nvenc_tuning_resolution_ =
-        capability::ResolveNvencTuning(requested_tuning, caps_, out.video_codec, config_.video.rate_control);
+    nvenc_tuning_resolution_ = capability::ResolveNvencTuning(requested_tuning, caps_, out.video_codec,
+                                                              config_.video.rate_control, out.nvenc_lookahead_policy,
+                                                              NvencLookaheadContextFromSettings(out, config_.video));
     nvenc_bframes_options_.clear();
     nvenc_b_ref_options_.clear();
     nvenc_multipass_options_.clear();
@@ -1378,6 +1379,24 @@ QString SettingsAdapter::nvencBRefHint() const {
                ? tr("No B-frame reference mode is supported for this count, codec and GPU.")
                : QString();
 }
+QVariantList SettingsAdapter::nvencLookaheadOptions() const {
+    return {makeOption(0, tr("Auto")), makeOption(1, tr("Off")), makeOption(2, tr("On"), nvencLookaheadSupported())};
+}
+int SettingsAdapter::nvencLookaheadMode() const noexcept {
+    if (config_.output.nvenc_lookahead_policy == capability::NvencLookaheadPolicy::Auto)
+        return 0;
+    return config_.output.nvenc_tuning.lookahead ? 2 : 1;
+}
+void SettingsAdapter::setNvencLookaheadMode(int value) {
+    if (controls_locked_ || !nvencAdvancedRelevant() || value < 0 || value > 2 ||
+        (value == 2 && !nvencLookaheadSupported()) || nvencLookaheadMode() == value)
+        return;
+    config_.output.nvenc_lookahead_policy =
+        value == 0 ? capability::NvencLookaheadPolicy::Auto : capability::NvencLookaheadPolicy::Explicit;
+    if (value != 0)
+        config_.output.nvenc_tuning.lookahead = value == 2;
+    applyConfigEdit();
+}
 bool SettingsAdapter::nvencLookahead() const noexcept {
     return nvencAdvancedRelevant() && nvenc_tuning_resolution_.tuning.lookahead;
 }
@@ -1385,6 +1404,11 @@ bool SettingsAdapter::nvencLookaheadSupported() const noexcept {
     return nvencAdvancedRelevant() && nvenc_tuning_resolution_.lookahead_supported;
 }
 QString SettingsAdapter::nvencLookaheadHint() const {
+    if (config_.output.nvenc_lookahead_policy == capability::NvencLookaheadPolicy::Auto) {
+        return nvencLookahead()
+                   ? tr("Auto: Lookahead 16 is enabled for the qualified AV1/VBR configuration.")
+                   : tr("Auto: Off. This hardware/output configuration has no qualified Lookahead policy.");
+    }
     if (nvencAdvancedRelevant() && nvenc_tuning_resolution_.lookahead_max_depth == 0 &&
         capability::IsSelectable(caps_.QueryLookahead(config_.output.video_codec)))
         return tr("Reduce the B-frame count to enable Lookahead.");
@@ -2226,14 +2250,13 @@ void SettingsAdapter::setNvencBRef(int value) {
     applyConfigEdit();
 }
 void SettingsAdapter::setNvencLookahead(bool value) {
-    if (controls_locked_ || !nvencLookaheadSupported() || config_.output.nvenc_tuning.lookahead == value)
+    if (controls_locked_ || !nvencLookaheadSupported())
         return;
-    config_.output.nvenc_tuning.lookahead = value;
-    applyConfigEdit();
+    setNvencLookaheadMode(value ? 2 : 1);
 }
 void SettingsAdapter::setNvencLookaheadDepth(int value) {
-    if (controls_locked_ || !nvencLookahead() || value < nvencLookaheadMinDepth() || value > nvencLookaheadMaxDepth() ||
-        config_.output.nvenc_tuning.lookahead_depth == static_cast<uint32_t>(value))
+    if (controls_locked_ || nvencLookaheadMode() != 2 || !nvencLookahead() || value < nvencLookaheadMinDepth() ||
+        value > nvencLookaheadMaxDepth() || config_.output.nvenc_tuning.lookahead_depth == static_cast<uint32_t>(value))
         return;
     config_.output.nvenc_tuning.lookahead_depth = static_cast<uint32_t>(value);
     applyConfigEdit();

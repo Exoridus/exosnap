@@ -174,3 +174,132 @@ TEST(NvencTuningPolicy, Av1RawHierarchicalMaximumDoesNotEnableUnimplementedModes
     EXPECT_FALSE(result.bframes_reason.empty());
     EXPECT_EQ(requested.bframes, 31u);
 }
+namespace {
+CapabilitySet QualifiedLookaheadCaps() {
+    auto caps = SupportedCaps();
+    caps.gpu_adapter_name = "NVIDIA GeForce RTX 5070 Ti";
+    caps.runtime.adapter.driver_version = "32.0.16.1714";
+    caps.runtime.nvidia.nvenc_av1 = true;
+    caps.runtime.nvidia.nvenc_adv_av1 = {7, 2, true, true};
+    ApplyNvencCodecSupport(caps, caps.runtime.nvidia);
+    ApplyNvencAdvancedEncodeSupport(caps, caps.runtime.nvidia);
+    return caps;
+}
+NvencLookaheadPolicyContext QualifiedLookaheadOutput() {
+    NvencLookaheadPolicyContext context;
+    context.output.output_width = 1920;
+    context.output.output_height = 1080;
+    context.cfr = true;
+    context.two_second_gop = true;
+    return context;
+}
+} // namespace
+
+TEST(NvencTuningPolicy, AutoQualifiesOnlyTheMeasuredAv1VbrPath) {
+    NvencTuning requested;
+    requested.lookahead_depth = 5;
+    const auto resolved =
+        ResolveNvencTuning(requested, QualifiedLookaheadCaps(), exosnap::capability::VideoCodec::Av1,
+                           RateControlMode::VariableBitrate, NvencLookaheadPolicy::Auto, QualifiedLookaheadOutput());
+    EXPECT_TRUE(resolved.tuning.lookahead);
+    EXPECT_EQ(resolved.tuning.lookahead_depth, 16u);
+    EXPECT_TRUE(resolved.lookahead_auto_qualified);
+    EXPECT_FALSE(requested.lookahead);
+    EXPECT_EQ(requested.lookahead_depth, 5u);
+}
+
+TEST(NvencTuningPolicy, ExplicitLookaheadOverridesAutoQualification) {
+    NvencTuning requested;
+    const auto caps = QualifiedLookaheadCaps();
+    const auto context = QualifiedLookaheadOutput();
+    EXPECT_FALSE(ResolveNvencTuning(requested, caps, exosnap::capability::VideoCodec::Av1,
+                                    RateControlMode::VariableBitrate, NvencLookaheadPolicy::Explicit, context)
+                     .tuning.lookahead);
+    requested.lookahead = true;
+    requested.lookahead_depth = 5;
+    const auto on = ResolveNvencTuning(requested, caps, exosnap::capability::VideoCodec::Av1,
+                                       RateControlMode::ConstantQuality, NvencLookaheadPolicy::Explicit, context);
+    EXPECT_TRUE(on.tuning.lookahead);
+    EXPECT_EQ(on.tuning.lookahead_depth, 5u);
+    EXPECT_FALSE(on.lookahead_auto_qualified);
+}
+
+TEST(NvencTuningPolicy, AutoDoesNotGeneralizeAcrossCodecsOrRateControl) {
+    const auto caps = QualifiedLookaheadCaps();
+    const auto context = QualifiedLookaheadOutput();
+    NvencTuning requested;
+    requested.lookahead = true;
+    for (const auto codec : AllVideoCodecs()) {
+        for (const auto rc : {RateControlMode::ConstantQuality, RateControlMode::ConstantBitrate}) {
+            EXPECT_FALSE(
+                ResolveNvencTuning(requested, caps, codec, rc, NvencLookaheadPolicy::Auto, context).tuning.lookahead);
+        }
+        if (codec != exosnap::capability::VideoCodec::Av1) {
+            EXPECT_FALSE(ResolveNvencTuning(requested, caps, codec, RateControlMode::VariableBitrate,
+                                            NvencLookaheadPolicy::Auto, context)
+                             .tuning.lookahead);
+        }
+    }
+}
+
+TEST(NvencTuningPolicy, AutoRejectsUnknownOrUnqualifiedOutputAndHardware) {
+    auto caps = QualifiedLookaheadCaps();
+    auto context = QualifiedLookaheadOutput();
+    NvencTuning requested;
+    const auto resolve = [&] {
+        return ResolveNvencTuning(requested, caps, exosnap::capability::VideoCodec::Av1,
+                                  RateControlMode::VariableBitrate, NvencLookaheadPolicy::Auto, context);
+    };
+    context = {};
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    context = QualifiedLookaheadOutput();
+    context.cfr = false;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    context = QualifiedLookaheadOutput();
+    context.two_second_gop = false;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    context = QualifiedLookaheadOutput();
+    context.output.output_width = 3840;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    context = QualifiedLookaheadOutput();
+    context.output.frame_rate_num = 120;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    context = QualifiedLookaheadOutput();
+    context.output.bit_depth = exosnap::capability::BitDepth::Bit10;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    context = QualifiedLookaheadOutput();
+    context.output.chroma = exosnap::capability::ChromaSubsampling::Cs444;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    context = QualifiedLookaheadOutput();
+    context.output.hdr_mode = HdrMode::Hdr10;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    context.output.hdr_mode = static_cast<HdrMode>(999);
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    context = QualifiedLookaheadOutput();
+    context.output.color_range = ColorRange::Full;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    context = QualifiedLookaheadOutput();
+    caps.gpu_adapter_name = "NVIDIA GeForce RTX 4090";
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    caps = QualifiedLookaheadCaps();
+    caps.runtime.adapter.driver_version.clear();
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    caps = QualifiedLookaheadCaps();
+    caps.lookahead[exosnap::capability::VideoCodec::Av1] = {SupportLevel::NotImplemented, "unsupported"};
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    caps = QualifiedLookaheadCaps();
+    requested.preset = NvencPreset::P7;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    requested = {};
+    requested.bframes = 2;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    requested = {};
+    requested.spatial_aq = true;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    requested = {};
+    requested.temporal_aq = true;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    requested = {};
+    requested.multipass = NvencMultipass::FullResolution;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+}

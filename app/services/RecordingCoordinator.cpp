@@ -1128,12 +1128,27 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     config.resolved_encoder_device = ctx.resolved_encoder_device;
     ApplyOutputSettingsToRecorderConfig(config, ctx.output_settings);
     if (const auto* requested = exosnap::engine::GetNvencTuning(config.backend_tuning)) {
-        const auto resolved =
-            capability::ResolveNvencTuning(*requested, ctx.encoder_caps ? *ctx.encoder_caps : ctx.caps,
-                                           ctx.resolved_user_config.video_codec, config.rate_control_mode);
+        const auto resolved = capability::ResolveNvencTuning(
+            *requested, ctx.encoder_caps ? *ctx.encoder_caps : ctx.caps, ctx.resolved_user_config.video_codec,
+            config.rate_control_mode, ctx.output_settings.nvenc_lookahead_policy,
+            {ctx.resolved_user_config, config.cfr, config.keyframe_interval_secs == 2.0f});
+        diagnostics::AppLog::info(
+            QStringLiteral("record.nvenc"),
+            QStringLiteral("field=lookahead requested=%1 resolved=%2 depth=%3 reason=\"%4\"")
+                .arg(ctx.output_settings.nvenc_lookahead_policy == capability::NvencLookaheadPolicy::Auto
+                         ? QStringLiteral("auto")
+                     : requested->lookahead ? QStringLiteral("on")
+                                            : QStringLiteral("off"))
+                .arg(resolved.tuning.lookahead ? QStringLiteral("on") : QStringLiteral("off"))
+                .arg(resolved.tuning.lookahead_depth)
+                .arg(QString::fromStdString(resolved.lookahead_reason)));
         auto compared_request = *requested;
         if (!compared_request.lookahead)
             compared_request.lookahead_depth = resolved.tuning.lookahead_depth;
+        if (ctx.output_settings.nvenc_lookahead_policy == capability::NvencLookaheadPolicy::Auto) {
+            compared_request.lookahead = resolved.tuning.lookahead;
+            compared_request.lookahead_depth = resolved.tuning.lookahead_depth;
+        }
         if (compared_request != resolved.tuning) {
             diagnostics::AppLog::warning(QStringLiteral("record.reconcile"),
                                          QStringLiteral("field=nvenc_tuning requested tuning was reconciled: %1")

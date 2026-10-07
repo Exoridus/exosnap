@@ -225,6 +225,9 @@ CapabilitySet CapabilitySetForAdapter(const CapabilitySet& base, const AdapterIn
                                       const AdapterEncoderCapability& capability) {
     CapabilitySet result = base;
     result.gpu_adapter_name = adapter.name;
+    if (base.runtime.adapter.adapter_luid != adapter.luid) {
+        result.runtime.adapter.driver_version.clear();
+    }
     result.runtime.adapter.adapter_luid = adapter.luid;
     result.runtime.adapter.vendor_id = adapter.vendor_id;
 

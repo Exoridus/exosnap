@@ -204,15 +204,15 @@ ExoCard {
         info: qsTr("Analyzes upcoming frames before encoding. It increases latency, GPU work and memory use.")
         warning: root.settings.nvencLookaheadHint
         stacked: root.stacked
-        controlWidth: ExoTheme.controlSlotSwitch
         visible: root.settings.expertMode && root.settings.nvencAdvancedRelevant
         Layout.fillWidth: true
-        ExoSwitch {
-            checked: root.settings.nvencLookahead
-            enabled: !root.settings.controlsLocked && root.settings.nvencLookaheadSupported
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+        ExoSelect {
+            options: root.settings.nvencLookaheadOptions
+            value: root.settings.nvencLookaheadMode
+            enabled: !root.settings.controlsLocked
+            Layout.fillWidth: true
             Accessible.name: qsTr("Lookahead")
-            onToggledByUser: value => root.settings.nvencLookahead = value
+            onValueActivated: value => root.settings.nvencLookaheadMode = value
         }
     }
 
@@ -220,7 +220,7 @@ ExoCard {
         label: qsTr("Lookahead depth")
         hint: qsTr("Frames buffered for analysis")
         stacked: root.stacked
-        visible: root.settings.expertMode && root.settings.nvencLookahead
+        visible: root.settings.expertMode && root.settings.nvencLookaheadMode === 2 && root.settings.nvencLookahead
         Layout.fillWidth: true
         ExoNumberField {
             from: root.settings.nvencLookaheadMinDepth

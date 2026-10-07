@@ -270,6 +270,9 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     SanitizeSplitSettings(config.output.split);
     auto& tuning = config.output.nvenc_tuning;
     tuning.preset = exosnap::engine::NvencPreset::P4;
+    if (config.output.nvenc_lookahead_policy != capability::NvencLookaheadPolicy::Auto) {
+        config.output.nvenc_lookahead_policy = capability::NvencLookaheadPolicy::Explicit;
+    }
     tuning.lookahead_depth = std::clamp(tuning.lookahead_depth, 1u, 31u);
     if (tuning.b_ref_mode != exosnap::engine::NvencBRefMode::Off &&
         tuning.b_ref_mode != exosnap::engine::NvencBRefMode::Each &&
@@ -586,7 +589,8 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.output.nvenc_preset != b.output.nvenc_preset) {
         return false;
     }
-    if (a.output.nvenc_tuning != b.output.nvenc_tuning) {
+    if (a.output.nvenc_tuning != b.output.nvenc_tuning ||
+        a.output.nvenc_lookahead_policy != b.output.nvenc_lookahead_policy) {
         return false;
     }
     if (a.output.hdr_mode != b.output.hdr_mode) {
@@ -876,6 +880,9 @@ std::string_view ConfigDirtyDifference(const RecordingPresetConfig& a, const Rec
     }
     if (a.output.nvenc_tuning != b.output.nvenc_tuning) {
         return "output.nvenc_tuning";
+    }
+    if (a.output.nvenc_lookahead_policy != b.output.nvenc_lookahead_policy) {
+        return "output.nvenc_lookahead_policy";
     }
     if (a.output.audio_codec != b.output.audio_codec) {
         return "output.audio_codec";

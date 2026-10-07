@@ -1208,6 +1208,70 @@ TEST_F(SettingsAdapterTest, EncoderDeviceOptionsStartWithAuto) {
     EXPECT_EQ(adapter.encoderDevice(), 0);
 }
 
+TEST_F(SettingsAdapterTest, LookaheadAutoSelectionPreservesManualWishAndAllowsExplicitOff) {
+    auto probe = MakeNvencProbe();
+    probe.lookahead_h264 = true;
+    adapter.setEncoderDevices({MakeDevice("NVENC device", capability::AdapterVendor::Nvidia, 1)}, {probe});
+    adapter.setVideoCodec(static_cast<int>(VideoCodec::H264));
+    adapter.setNvencLookahead(true);
+    adapter.setNvencLookaheadDepth(5);
+    ASSERT_TRUE(adapter.nvencLookahead());
+    adapter.setNvencLookaheadMode(0);
+    EXPECT_EQ(adapter.nvencLookaheadMode(), 0);
+    EXPECT_FALSE(adapter.nvencLookahead());
+    EXPECT_TRUE(adapter.config().output.nvenc_tuning.lookahead);
+    EXPECT_EQ(adapter.config().output.nvenc_tuning.lookahead_depth, 5u);
+    adapter.setNvencLookaheadMode(1);
+    EXPECT_EQ(adapter.nvencLookaheadMode(), 1);
+    EXPECT_FALSE(adapter.nvencLookahead());
+    adapter.setNvencLookaheadMode(2);
+    EXPECT_TRUE(adapter.nvencLookahead());
+    EXPECT_EQ(adapter.nvencLookaheadDepth(), 5);
+    adapter.setNvencLookaheadMode(0);
+    adapter.setNvencLookahead(false);
+    EXPECT_EQ(adapter.nvencLookaheadMode(), 1);
+}
+
+TEST_F(SettingsAdapterTest, QualifiedAutoLookaheadUsesTheSameResolvedOutputContext) {
+    auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.runtime.adapter.adapter_luid = 1;
+    caps.runtime.adapter.vendor_id = 0x10DE;
+    caps.runtime.adapter.driver_version = "32.0.16.1714";
+    adapter.setCapabilities(caps);
+    auto probe = MakeNvencProbe();
+    probe.lookahead_av1 = true;
+    adapter.setEncoderDevices({MakeDevice("NVIDIA GeForce RTX 5070 Ti", capability::AdapterVendor::Nvidia, 1)},
+                              {probe});
+    auto config = MakeDefaultPreset().config;
+    config.output.video_codec = VideoCodec::Av1;
+    config.output.container = Container::Matroska;
+    config.output.resolution.mode = OutputResolutionMode::FHD1080;
+    config.video.rate_control = exosnap::engine::RateControlMode::VariableBitrate;
+    config.output.nvenc_tuning.lookahead_depth = 5;
+    adapter.setConfig(config);
+    ASSERT_EQ(adapter.nvencLookaheadMode(), 0);
+    ASSERT_TRUE(adapter.nvencLookahead());
+    EXPECT_EQ(adapter.nvencLookaheadDepth(), 16);
+    adapter.setNvencLookaheadDepth(3);
+    EXPECT_EQ(adapter.config().output.nvenc_tuning.lookahead_depth, 5u);
+    adapter.setCfr(false);
+    EXPECT_FALSE(adapter.nvencLookahead());
+    adapter.setCfr(true);
+    EXPECT_TRUE(adapter.nvencLookahead());
+    adapter.setNvencLookahead(false);
+    EXPECT_EQ(adapter.nvencLookaheadMode(), 1);
+    EXPECT_FALSE(adapter.nvencLookahead());
+    adapter.setNvencLookaheadMode(0);
+    EXPECT_TRUE(adapter.nvencLookahead());
+    adapter.setNvencLookaheadMode(2);
+    EXPECT_EQ(adapter.nvencLookaheadDepth(), 5);
+}
+
+TEST_F(SettingsAdapterTest, NewDefaultSelectsLookaheadAuto) {
+    EXPECT_EQ(adapter.nvencLookaheadMode(), 0);
+    EXPECT_FALSE(adapter.nvencLookahead());
+}
+
 TEST_F(SettingsAdapterTest, AdvancedNvencWishesSurviveCodecAndRateControlRestrictions) {
     auto probe = MakeNvencProbe();
     probe.max_bframes_h264 = 4;
@@ -1317,6 +1381,7 @@ TEST_F(SettingsAdapterTest, Av1BframesUseKnownSdkLimitAndRetainLargerSavedWish) 
     adapter.setEncoderDevices({MakeDevice("NVENC device", capability::AdapterVendor::Nvidia, 1)}, {probe});
     auto config = adapter.config();
     config.output.video_codec = VideoCodec::Av1;
+    config.output.nvenc_lookahead_policy = capability::NvencLookaheadPolicy::Explicit;
     config.output.nvenc_tuning.bframes = 31;
     config.output.nvenc_tuning.lookahead = true;
     config.output.nvenc_tuning.lookahead_depth = 16;
