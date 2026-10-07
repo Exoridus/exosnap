@@ -3,6 +3,22 @@
 use super::*;
 use sha2::{Digest, Sha256};
 
+fn retain_cell(cells: &mut Vec<Value>, cell: Value) {
+    if let Some(saved) = cells.iter_mut().find(|saved| saved["key"] == cell["key"]) {
+        *saved = cell;
+    } else {
+        cells.push(cell);
+    }
+}
+
+fn legacy_identity(root: &Path) -> anyhow::Result<Value> {
+    let path = root.join("legacy-analysis/qualification.json");
+    if !path.try_exists()? {
+        return Ok(Value::Null);
+    }
+    Ok(json!({"method": "global-cubic-log10-rate", "path": path, "sha256": file_sha256(&path)?}))
+}
+
 fn validate_cell(cell: &Value, environment: &Value, manifest: &Manifest) -> anyhow::Result<()> {
     let id = &cell["identity"];
     ensure!(
@@ -273,7 +289,7 @@ pub(super) fn run(args: &CampaignArgs, manifest: &Manifest) -> anyhow::Result<Ex
                             ("confirmation", codec, rc, point, tuning),
                             &root,
                         )?;
-                        if !cells.iter().any(|c| c["key"] == cell["key"]) {
+                        if cell["resumed"] != true {
                             cell["confirmation_execution"] = json!({"runner_sha256": file_sha256(&std::env::current_exe()?)?, "analysis_head": capture(Path::new("git"), &["rev-parse", "HEAD"])?.trim(), "method": super::super::bd_rate::METHOD, "frozen_encoder_source_head": environment["head"]});
                             write_json(
                                 &root
@@ -282,9 +298,9 @@ pub(super) fn run(args: &CampaignArgs, manifest: &Manifest) -> anyhow::Result<Ex
                                     .join("result.json"),
                                 &cell,
                             )?;
-                            cells.push(cell);
                             additional += 1;
                         }
+                        retain_cell(&mut cells, cell);
                     }
                 }
             }
@@ -361,7 +377,7 @@ pub(super) fn run(args: &CampaignArgs, manifest: &Manifest) -> anyhow::Result<Ex
     }
     let (_, hashes) = raw_cells(&root, &environment, manifest)?;
     let runner = std::env::current_exe()?;
-    let analysis_identity = json!({"schema": 2, "method": super::super::bd_rate::METHOD, "analysis_head": capture(Path::new("git"), &["rev-parse", "HEAD"])?.trim(), "analysis_dirty": !capture(Path::new("git"), &["status", "--porcelain"])?.trim().is_empty(), "runner": runner, "runner_sha256": file_sha256(&runner)?, "raw_measurement_identity": environment, "input_cells": hashes, "legacy_analysis": {"method": "global-cubic-log10-rate", "path": root.join("legacy-analysis/qualification.json"), "sha256": file_sha256(&root.join("legacy-analysis/qualification.json"))?}});
+    let analysis_identity = json!({"schema": 2, "method": super::super::bd_rate::METHOD, "analysis_head": capture(Path::new("git"), &["rev-parse", "HEAD"])?.trim(), "analysis_dirty": !capture(Path::new("git"), &["status", "--porcelain"])?.trim().is_empty(), "runner": runner, "runner_sha256": file_sha256(&runner)?, "raw_measurement_identity": environment, "input_cells": hashes, "legacy_analysis": legacy_identity(&root)?});
     let identity_hash = format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&analysis_identity)?)
@@ -404,6 +420,47 @@ pub(super) fn run(args: &CampaignArgs, manifest: &Manifest) -> anyhow::Result<Ex
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_replaces_failed_cell_before_comparisons() {
+        let mut cells = vec![json!({"key":"confirmation-clip-av1-vbr-3000-L", "status":"FAILED"})];
+        let completed = json!({"key":"confirmation-clip-av1-vbr-3000-L", "status":"COMPLETED", "metrics":{"bitrate":3000}});
+        retain_cell(&mut cells, completed.clone());
+        assert_eq!(cells, vec![completed]);
+        retain_cell(&mut cells, json!({"key":"second", "status":"COMPLETED"}));
+        assert_eq!(cells.len(), 2);
+    }
+
+    #[test]
+    fn fresh_analysis_does_not_require_legacy_provenance() {
+        let root =
+            std::env::temp_dir().join(format!("exo-reanalysis-{}-{}", std::process::id(), now()));
+        std::fs::create_dir_all(&root).unwrap();
+        let result = legacy_identity(&root);
+        std::fs::remove_dir(&root).unwrap();
+        assert_eq!(result.unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn historical_analysis_keeps_its_exact_hash() {
+        let root = std::env::temp_dir().join(format!(
+            "exo-reanalysis-legacy-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        let directory = root.join("legacy-analysis");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("qualification.json");
+        std::fs::write(&path, b"{\"historical\":true}").unwrap();
+        let expected = file_sha256(&path).unwrap();
+        let identity = legacy_identity(&root).unwrap();
+        assert_eq!(identity["sha256"], expected);
+        assert_eq!(Path::new(identity["path"].as_str().unwrap()), path);
+        assert_eq!(std::fs::read(&path).unwrap(), b"{\"historical\":true}");
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
 
     #[test]
     fn analysis_does_not_relabel_frozen_cells_as_current_source() {
