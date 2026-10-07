@@ -3717,7 +3717,8 @@ QuickApplication::EffectiveRecordingConfig QuickApplication::resolveEffectiveCon
     tuning.preset = effective.config.output.nvenc_preset;
     effective.config.output.nvenc_tuning =
         capability::ResolveNvencTuning(tuning, encoder_caps, effective.config.output.video_codec,
-                                       effective.config.video.rate_control)
+                                       effective.config.video.rate_control,
+                                       effective.config.output.nvenc_lookahead_policy)
             .tuning;
     return effective;
 }

@@ -2044,5 +2044,61 @@ TEST(RecordingPresetStore, UnparseableFile_ReturnsDefaults_Repaired) {
     CleanupFile(path);
 }
 
+TEST(RecordingPresetStore, AutoLookaheadPreservesTheExplicitWishAndDepth) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("presets.toml"));
+    exosnap::PersistedPresetState state;
+    state.live = exosnap::MakeDefaultPreset().config;
+    state.live->output.nvenc_lookahead_policy = exosnap::capability::NvencLookaheadPolicy::Auto;
+    state.live->output.nvenc_tuning.lookahead = true;
+    state.live->output.nvenc_tuning.lookahead_depth = 5;
+    exosnap::RecordingPresetStore store(path);
+    ASSERT_TRUE(store.Save({}, "", *state.live));
+    const auto loaded = store.Load();
+    ASSERT_TRUE(loaded.live.has_value());
+    EXPECT_EQ(loaded.live->output.nvenc_lookahead_policy, exosnap::capability::NvencLookaheadPolicy::Auto);
+    EXPECT_TRUE(loaded.live->output.nvenc_tuning.lookahead);
+    EXPECT_EQ(loaded.live->output.nvenc_tuning.lookahead_depth, 5u);
+}
+
+TEST(RecordingPresetStore, MissingOrInvalidLookaheadPolicyKeepsLegacyBooleanExplicit) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+    for (const bool on : {false, true}) {
+        for (const QString& replacement : {QString(), QStringLiteral("lookahead_policy = \"invalid\"")}) {
+            auto config = MakeDefaultPreset().config;
+            config.output.nvenc_tuning.lookahead = on;
+            config.output.nvenc_tuning.lookahead_depth = 5;
+            ASSERT_TRUE(store.Save({}, "", config));
+            QFile file(path);
+            ASSERT_TRUE(file.open(QIODevice::ReadOnly | QIODevice::Text));
+            QString text = QString::fromUtf8(file.readAll());
+            file.close();
+            const QRegularExpression policy_line(QStringLiteral("lookahead_policy = [^\\r\\n]+"));
+            ASSERT_TRUE(text.contains(policy_line));
+            text.replace(policy_line, replacement);
+            ASSERT_TRUE(WriteTomlString(path, text));
+            const auto loaded = store.Load();
+            ASSERT_TRUE(loaded.live.has_value());
+            EXPECT_EQ(loaded.live->output.nvenc_lookahead_policy, capability::NvencLookaheadPolicy::Explicit);
+            EXPECT_EQ(loaded.live->output.nvenc_tuning.lookahead, on);
+            EXPECT_EQ(loaded.live->output.nvenc_tuning.lookahead_depth, 5u);
+        }
+    }
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, LookaheadPolicyParticipatesInPresetDirtyStateAndFormatMerge) {
+    const auto automatic = MakeDefaultPreset().config;
+    auto explicit_off = automatic;
+    explicit_off.output.nvenc_lookahead_policy = capability::NvencLookaheadPolicy::Explicit;
+    EXPECT_FALSE(ConfigDirtyEquivalent(automatic, explicit_off));
+    EXPECT_EQ(ConfigDirtyDifference(automatic, explicit_off), "output.nvenc_lookahead_policy");
+    auto merged = automatic.output;
+    MergeFormatSelection(merged, explicit_off.output);
+    EXPECT_EQ(merged.nvenc_lookahead_policy, capability::NvencLookaheadPolicy::Explicit);
+}
+
 } // namespace
 } // namespace exosnap

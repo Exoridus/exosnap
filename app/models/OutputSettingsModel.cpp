@@ -22,6 +22,7 @@ constexpr uint32_t kMaxCustomDimension = 7680;
 
 OutputSettingsModel OutputSettingsModel::Defaults() {
     OutputSettingsModel defaults;
+    defaults.nvenc_lookahead_policy = capability::NvencLookaheadPolicy::Auto;
 
     PWSTR videos_path = nullptr;
     const HRESULT hr = SHGetKnownFolderPath(FOLDERID_Videos, KF_FLAG_DEFAULT, nullptr, &videos_path);
@@ -218,6 +219,7 @@ void MergeFormatSelection(OutputSettingsModel& live, const OutputSettingsModel& 
     live.color_range = incoming.color_range;
     live.nvenc_preset = incoming.nvenc_preset;
     live.nvenc_tuning = incoming.nvenc_tuning;
+    live.nvenc_lookahead_policy = incoming.nvenc_lookahead_policy;
     live.hdr_mode = incoming.hdr_mode;
     live.output_folder = incoming.output_folder;
     live.naming_pattern = incoming.naming_pattern;

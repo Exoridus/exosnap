@@ -8334,6 +8334,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::SettingsAdapter</name>
     <message>
+        <source>On</source>
+        <translation>Ein</translation>
+    </message>
+    <message>
+        <source>Auto: Lookahead 16 is enabled for AV1/VBR.</source>
+        <translation>Auto: Lookahead 16 ist für AV1/VBR aktiviert.</translation>
+    </message>
+    <message>
+        <source>Auto: Off. Lookahead is enabled only for supported AV1/VBR.</source>
+        <translation>Auto: Aus. Lookahead wird nur für unterstütztes AV1/VBR aktiviert.</translation>
+    </message>
+    <message>
         <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+310"/>
         <source>Unsaved changes</source>
         <translation>Ungespeicherte Änderungen</translation>

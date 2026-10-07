@@ -4,6 +4,7 @@
 #include <capability/capability_set.h>
 #include <capability/config_types.h>
 #include <capability/nvenc_tuning_policy.h>
+#include <capability/support_level.h>
 #include <exosnap/engine/backend_tuning.h>
 #include <exosnap/engine/codec_types.h>
 #include <vector>
@@ -173,4 +174,89 @@ TEST(NvencTuningPolicy, Av1RawHierarchicalMaximumDoesNotEnableUnimplementedModes
     EXPECT_EQ(result.tuning.lookahead_depth, 16u);
     EXPECT_FALSE(result.bframes_reason.empty());
     EXPECT_EQ(requested.bframes, 31u);
+}
+namespace {
+CapabilitySet QualifiedLookaheadCaps() {
+    auto caps = SupportedCaps();
+    caps.runtime.nvidia.nvenc_av1 = true;
+    caps.runtime.nvidia.nvenc_adv_av1 = {7, 2, true, true};
+    ApplyNvencCodecSupport(caps, caps.runtime.nvidia);
+    ApplyNvencAdvancedEncodeSupport(caps, caps.runtime.nvidia);
+    return caps;
+}
+} // namespace
+
+TEST(NvencTuningPolicy, AutoAv1VbrEnablesDepth16WithoutChangingExplicitWish) {
+    NvencTuning requested;
+    requested.lookahead_depth = 5;
+    const auto resolved = ResolveNvencTuning(requested, QualifiedLookaheadCaps(), exosnap::capability::VideoCodec::Av1,
+                                             RateControlMode::VariableBitrate, NvencLookaheadPolicy::Auto);
+    EXPECT_TRUE(resolved.tuning.lookahead);
+    EXPECT_EQ(resolved.tuning.lookahead_depth, 16u);
+    EXPECT_TRUE(resolved.lookahead_auto_enabled);
+    EXPECT_FALSE(requested.lookahead);
+    EXPECT_EQ(requested.lookahead_depth, 5u);
+}
+
+TEST(NvencTuningPolicy, AutoAv1VbrDoesNotRequireLaboratoryIdentityOrOutputContext) {
+    auto caps = QualifiedLookaheadCaps();
+    caps.gpu_adapter_name = "NVIDIA GeForce RTX 4090";
+    caps.runtime.adapter.driver_version.clear();
+    NvencTuning requested;
+    requested.preset = NvencPreset::P7;
+    requested.bframes = 2;
+    requested.spatial_aq = true;
+    const auto resolved = ResolveNvencTuning(requested, caps, exosnap::capability::VideoCodec::Av1,
+                                             RateControlMode::VariableBitrate, NvencLookaheadPolicy::Auto);
+    EXPECT_TRUE(resolved.tuning.lookahead);
+    EXPECT_EQ(resolved.tuning.lookahead_depth, 16u);
+}
+
+TEST(NvencTuningPolicy, ExplicitLookaheadOverridesAutoPolicy) {
+    NvencTuning requested;
+    const auto caps = QualifiedLookaheadCaps();
+    EXPECT_FALSE(ResolveNvencTuning(requested, caps, exosnap::capability::VideoCodec::Av1,
+                                    RateControlMode::VariableBitrate, NvencLookaheadPolicy::Explicit)
+                     .tuning.lookahead);
+    requested.lookahead = true;
+    requested.lookahead_depth = 5;
+    const auto on = ResolveNvencTuning(requested, caps, exosnap::capability::VideoCodec::Av1,
+                                       RateControlMode::ConstantQuality, NvencLookaheadPolicy::Explicit);
+    EXPECT_TRUE(on.tuning.lookahead);
+    EXPECT_EQ(on.tuning.lookahead_depth, 5u);
+    EXPECT_FALSE(on.lookahead_auto_enabled);
+}
+
+TEST(NvencTuningPolicy, AutoRemainsOffOutsideAv1Vbr) {
+    const auto caps = QualifiedLookaheadCaps();
+    NvencTuning requested;
+    requested.lookahead = true;
+    for (const auto codec : AllVideoCodecs()) {
+        for (const auto rc : {RateControlMode::ConstantQuality, RateControlMode::ConstantBitrate}) {
+            EXPECT_FALSE(ResolveNvencTuning(requested, caps, codec, rc, NvencLookaheadPolicy::Auto).tuning.lookahead);
+        }
+        if (codec != exosnap::capability::VideoCodec::Av1) {
+            EXPECT_FALSE(
+                ResolveNvencTuning(requested, caps, codec, RateControlMode::VariableBitrate, NvencLookaheadPolicy::Auto)
+                    .tuning.lookahead);
+        }
+    }
+}
+
+TEST(NvencTuningPolicy, AutoRequiresConfirmedNvencAndLookaheadSupport) {
+    auto caps = QualifiedLookaheadCaps();
+    NvencTuning requested;
+    const auto resolve = [&] {
+        return ResolveNvencTuning(requested, caps, exosnap::capability::VideoCodec::Av1,
+                                  RateControlMode::VariableBitrate, NvencLookaheadPolicy::Auto);
+    };
+    caps.lookahead[exosnap::capability::VideoCodec::Av1] = {SupportLevel::NotImplemented, "unsupported"};
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    EXPECT_EQ(resolve().tuning.lookahead_depth, 0u);
+    caps = QualifiedLookaheadCaps();
+    caps.runtime.nvidia.nvenc_codec_probed = false;
+    EXPECT_FALSE(resolve().tuning.lookahead);
+    caps = QualifiedLookaheadCaps();
+    caps.runtime.adapter.vendor_id = 0x8086;
+    EXPECT_FALSE(resolve().tuning.lookahead);
 }

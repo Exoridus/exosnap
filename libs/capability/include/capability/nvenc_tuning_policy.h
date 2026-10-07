@@ -10,12 +10,15 @@
 
 namespace exosnap::capability {
 
+enum class NvencLookaheadPolicy { Explicit, Auto };
+
 struct NvencTuningResolution {
     engine::NvencTuning tuning;
     bool available = false;
     int max_bframes = 0;
     std::vector<engine::NvencBRefMode> b_ref_modes{engine::NvencBRefMode::Off};
     bool lookahead_supported = false;
+    bool lookahead_auto_enabled = false;
     uint32_t lookahead_min_depth = 1;
     uint32_t lookahead_max_depth = 0;
     bool spatial_aq_supported = false;
@@ -32,7 +35,10 @@ struct NvencTuningResolution {
 
 // Resolves stored NVENC preferences for the probed adapter without changing
 // those preferences. Unavailable features are pinned to conservative values.
+// Auto enables Lookahead 16 for supported NVENC AV1/VBR. Other combinations
+// resolve Off without changing the explicit wish or depth.
 NvencTuningResolution ResolveNvencTuning(const engine::NvencTuning& requested, const CapabilitySet& caps,
-                                         VideoCodec codec, engine::RateControlMode rate_control);
+                                         VideoCodec codec, engine::RateControlMode rate_control,
+                                         NvencLookaheadPolicy policy = NvencLookaheadPolicy::Explicit);
 
 } // namespace exosnap::capability

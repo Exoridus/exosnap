@@ -12,7 +12,8 @@
 namespace exosnap::capability {
 
 NvencTuningResolution ResolveNvencTuning(const engine::NvencTuning& requested, const CapabilitySet& caps,
-                                         VideoCodec codec, engine::RateControlMode rate_control) {
+                                         VideoCodec codec, engine::RateControlMode rate_control,
+                                         NvencLookaheadPolicy policy) {
     NvencTuningResolution result;
     result.tuning = requested;
     const auto& facts = caps.runtime.nvidia;
@@ -54,15 +55,22 @@ NvencTuningResolution ResolveNvencTuning(const engine::NvencTuning& requested, c
     const bool hardware_lookahead = result.available && IsSelectable(lookahead);
     result.lookahead_max_depth = hardware_lookahead ? engine::MaxNvencLookaheadDepth(result.tuning.bframes) : 0;
     result.lookahead_supported = hardware_lookahead && result.lookahead_max_depth > 0;
-    result.tuning.lookahead = requested.lookahead && result.lookahead_supported && result.lookahead_max_depth > 0;
+    result.lookahead_auto_enabled = result.lookahead_supported && codec == VideoCodec::Av1 &&
+                                    rate_control == engine::RateControlMode::VariableBitrate &&
+                                    policy == NvencLookaheadPolicy::Auto;
+    result.tuning.lookahead = policy == NvencLookaheadPolicy::Auto ? result.lookahead_auto_enabled
+                                                                   : requested.lookahead && result.lookahead_supported;
+    const uint32_t depth = policy == NvencLookaheadPolicy::Auto ? 16u : requested.lookahead_depth;
     result.tuning.lookahead_depth =
-        result.tuning.lookahead
-            ? std::clamp(requested.lookahead_depth, result.lookahead_min_depth, result.lookahead_max_depth)
-            : 0;
+        result.tuning.lookahead ? std::clamp(depth, result.lookahead_min_depth, result.lookahead_max_depth) : 0;
     result.lookahead_reason = !result.available ? result.reason
                               : hardware_lookahead && !result.lookahead_supported
                                   ? "Reduce the B-frame count to enable Lookahead."
                                   : lookahead.reason;
+    if (policy == NvencLookaheadPolicy::Auto && result.lookahead_supported) {
+        result.lookahead_reason = result.lookahead_auto_enabled ? "AV1/VBR Auto policy enables Lookahead at depth 16."
+                                                                : "Auto Lookahead is Off outside AV1/VBR.";
+    }
     result.spatial_aq_supported = result.available;
     result.tuning.spatial_aq = requested.spatial_aq && result.spatial_aq_supported;
     result.spatial_aq_reason = result.available ? "" : result.reason;

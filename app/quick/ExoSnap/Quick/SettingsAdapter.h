@@ -118,6 +118,8 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(int nvencBRef READ nvencBRef WRITE setNvencBRef NOTIFY optionsChanged FINAL)
     Q_PROPERTY(bool nvencBRefRelevant READ nvencBRefRelevant NOTIFY optionsChanged FINAL)
     Q_PROPERTY(QString nvencBRefHint READ nvencBRefHint NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(QVariantList nvencLookaheadOptions READ nvencLookaheadOptions NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(int nvencLookaheadMode READ nvencLookaheadMode WRITE setNvencLookaheadMode NOTIFY optionsChanged FINAL)
     Q_PROPERTY(bool nvencLookahead READ nvencLookahead WRITE setNvencLookahead NOTIFY optionsChanged FINAL)
     Q_PROPERTY(bool nvencLookaheadSupported READ nvencLookaheadSupported NOTIFY optionsChanged FINAL)
     Q_PROPERTY(QString nvencLookaheadHint READ nvencLookaheadHint NOTIFY optionsChanged FINAL)
@@ -457,6 +459,8 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] int nvencBRef() const noexcept;
     [[nodiscard]] bool nvencBRefRelevant() const noexcept;
     [[nodiscard]] QString nvencBRefHint() const;
+    [[nodiscard]] QVariantList nvencLookaheadOptions() const;
+    [[nodiscard]] int nvencLookaheadMode() const noexcept;
     [[nodiscard]] bool nvencLookahead() const noexcept;
     [[nodiscard]] bool nvencLookaheadSupported() const noexcept;
     [[nodiscard]] QString nvencLookaheadHint() const;
@@ -684,6 +688,7 @@ class SettingsAdapter : public QObject {
     void setNvencPreset(int value);
     void setNvencBframes(int value);
     void setNvencBRef(int value);
+    void setNvencLookaheadMode(int value);
     void setNvencLookahead(bool value);
     void setNvencLookaheadDepth(int value);
     void setNvencSpatialAq(bool value);
