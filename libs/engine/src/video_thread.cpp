@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstdint>
 #include <exosnap/engine/gpu_surface_inventory.h>
+#include <exosnap/engine/video_processor_color.h>
 
 #include "annexb_to_avcc.h"
 #include "annexb_to_hvcc.h"
@@ -1059,11 +1060,7 @@ void VideoThread::Run() {
             // Drivers honour the quantization range here, so the encoded NV12/P010
             // genuinely carries the chosen range and matches the container tag
             // — no full-vs-limited mismatch, no crushed/washed levels.
-            videoContext1->VideoProcessorSetStreamColorSpace1(videoProcessor.get(), 0,
-                                                              DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
-            videoContext1->VideoProcessorSetOutputColorSpace1(videoProcessor.get(),
-                                                              fullRange ? DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709
-                                                                        : DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+            ConfigureSdrVideoProcessorColor(videoContext1.get(), videoProcessor.get(), fullRange);
         } else {
             // Legacy fallback (pre-Win10 / no ID3D11VideoContext1). The output
             // Nominal_Range is widely ignored here, so the result may not honour

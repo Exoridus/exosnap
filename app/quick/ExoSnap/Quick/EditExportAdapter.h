@@ -5,12 +5,15 @@
 #include <QUrl>
 #include <QVariantList>
 #include <QtQmlIntegration/qqmlintegration.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include <atomic>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
-#include <thread>
+
+class QThread;
 
 namespace exosnap::quick {
 
@@ -25,16 +28,8 @@ class EditSessionAdapter;
 // crosses the thread boundary.
 [[nodiscard]] bool ShouldPublishExportProgress(float fraction, int last_published_percent);
 
-// The export half of the Edit surface: options, path derivation, the background
-// stream copy, and the run's own lifecycle.
-//
-// `exportRunning` is owned HERE and nowhere else. The Widgets surface kept a
-// second copy on the page and cleared it the moment Cancel was pressed, while
-// the remux thread was still winding down and its join() had been deferred to
-// the next run -- so a Retry immediately after a Cancel blocked the GUI thread
-// inside that join. Here Cancel moves the run to `Cancelling` and the run stays
-// "running" (Export/Retry stay out of reach) until the thread has actually
-// reported back and been joined.
+// Owns export options and lifecycle independently of page visibility. Cancellation
+// remains pending until the worker exits. Worker state outlives a destroyed UI.
 class EditExportAdapter : public QObject {
     Q_OBJECT
     QML_ELEMENT
@@ -83,6 +78,9 @@ class EditExportAdapter : public QObject {
     void setSession(EditSessionAdapter* session);
     void setOutputDirectoryProvider(std::function<QString()> provider) {
         output_directory_ = std::move(provider);
+    }
+    void setRenderConfigProvider(std::function<engine::RecorderConfig()> provider) {
+        render_config_ = std::move(provider);
     }
     [[nodiscard]] static QVariantList profileOptions();
     [[nodiscard]] const QString& profileKey() const {
@@ -149,14 +147,19 @@ class EditExportAdapter : public QObject {
     std::filesystem::path output_path_;
     std::optional<std::filesystem::path> retry_output_path_;
     std::function<QString()> output_directory_;
+    std::function<engine::RecorderConfig()> render_config_;
     QString profile_key_ = QStringLiteral("match");
     std::optional<std::filesystem::path> chosen_output_;
     bool overwrite_confirmed_ = false;
 
-    std::thread export_thread_;
-    std::atomic<bool> export_cancel_{false};
-    // Render-thread-free progress throttle: written only by the export thread.
-    int last_published_percent_ = -1;
+    struct RunState {
+        std::atomic<bool> cancel{false};
+        std::atomic<int> percent{-1};
+        bool ok = false;
+        std::string error;
+    };
+    QThread* export_thread_ = nullptr;
+    std::shared_ptr<RunState> run_;
 };
 
 } // namespace exosnap::quick

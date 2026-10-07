@@ -1,4 +1,4 @@
-# Edit playback and lossless export
+# Edit timeline rendering and export
 
 This document owns the application-lifetime edit workspace, decoder/render ownership, playback pacing and export transaction. The [product specification](../product-spec.md#8-recording-lifecycle) owns the workspace and interaction contract.
 
@@ -6,7 +6,7 @@ This document owns the application-lifetime edit workspace, decoder/render owner
 
 Edit is a resident top-level page. Its C++ workspace owns assets, typed video/audio tracks, linked clips, selection and playhead independently of QML. Imported files remain in place. Navigation pauses playback and retains the workspace; application exit discards it because project persistence is not implemented. Completed recordings reuse retained masters where available. Split recordings add ordered segment assets. Unavailable segments with known duration retain their intervals. Segments whose duration cannot be probed remain in Media with an explicit warning and are not placed on the timeline.
 
-Pressing Export commits an immutable snapshot to an independent operation. Leaving Edit does not cancel that operation. Its completion/failure reaches notifications. Export is stream copy and does not depend on successful preview decoding, GPU presentation or audio playback.
+Pressing Export commits an immutable snapshot to an independent operation. Leaving Edit does not cancel that operation. Its completion/failure reaches notifications. Eligible stream copy does not depend on successful preview decoding, GPU presentation or audio playback. Crossfade rendering uses the same timeline evaluator, source reader and GPU compositor as preview.
 
 A decode failure therefore leaves an honest Preview unavailable/Timeline previews unavailable state while preserving any valid trim/export operations. It must not be reported as corruption of the source merely because one preview decoder could not open it.
 
@@ -28,7 +28,7 @@ A file with no delivering audio uses the supported wall-clock fallback rather th
 
 ## Decoded frame representation
 
-The video worker passes a refcounted `AVFrame` through `RawDecodedVideoFrame`: planar pointers and strides, `Yuv420P8`, `Yuv420P10` or `Yuv444P8`, range/matrix and a PQ-source flag. The backing shared pointer with the `av_frame_free` deleter is the cross-thread lifetime owner. A borrowed plane pointer must not outlive it.
+The video worker passes a refcounted `AVFrame` through `RawDecodedVideoFrame`: planar pointers and strides, `Yuv420P8`, `Yuv420P10` or `Yuv444P8`, range, matrix, primaries, transfer and a PQ-source flag. The backing shared pointer with the `av_frame_free` deleter is the cross-thread lifetime owner. A borrowed plane pointer must not outlive it. Explicit transfer metadata is required for linear-light rendering; a BT.709 matrix does not establish a BT.709 transfer function.
 
 Interactive color conversion runs on the GPU using the caller's D3D11 device/context. CPU reference conversions remain test oracles, not a second interactive conversion policy. Qt imports the converted texture into a scene-graph image node; no child player HWND exists.
 
@@ -44,19 +44,39 @@ P010 hardware readback is left-justified. Internal ten-bit planar samples are no
 
 ## Timeline and export transaction
 
-`EditSessionAdapter` exposes the typed workspace to QML. Insert, move, trim, split, delete and ripple delete validate source bounds and reject overlaps on a track. Recording video/audio clips share linked-group identities and mutate together. Undo/redo stores clip deltas rather than duplicating media assets. The model supports additional tracks; the initial page presents linked video/audio rows.
+`EditSessionAdapter` exposes the typed workspace to QML. Insert, move, trim, split, delete and ripple delete validate source bounds and reject unrelated overlaps on a track. Only the exact overlap owned by a valid Crossfade relationship is allowed. Recording video/audio clips share linked-group identities and mutate together. Undo/redo stores clip deltas and transition relationships rather than duplicating media assets. The model supports additional tracks; the initial page presents linked video/audio rows.
 
 Timeline edits are not keyframe-limited. Snapping aligns moves to neighboring boundaries and the playhead. QML creates clip delegates and adaptive ruler ticks only for the visible time interval. One timeline coordinate mapping drives clips, ruler scrubbing, drops and the foreground playhead. Horizontal zoom preserves a visible playhead anchor; two-axis scrolling retains the ruler and track-label gutter. The adapter projects linked-group selection so both rows share selection and drag feedback. Audio rows do not claim decoded waveforms. Existing thumbnail, keyframe and marker infrastructure remains available to the adapters.
 
-The playback worker evaluates the active workspace clip and maps timeline time to its source interval. Hard cuts reopen the existing engine session with generation-safe presentation; gaps and unavailable assets clear the frame. This reuses the decoder, hardware fallback and clock contracts below the adapter rather than introducing a second decoder stack. It does not composite concurrent video tracks or provide independent audio-track mixing controls.
+The pure `EvaluateTimeline` function owns half-open intervals, source timestamp mapping, transition progress and complementary video/audio weights. Both preview and export consume it. Hard cuts reopen the existing engine session; Crossfade preview keeps at most two single-owner source engines through `EditTimelineReader`. The item holds one newest-wins frame payload, and request generations reject results from superseded seeks. Linked Float32 audio is mixed on the same timeline, resampled to 48 kHz stereo and limited by the existing brickwall limiter. A missing audio side is silence. WASAPI's played-frame cursor drives preview with audio; silent timelines use elapsed time.
 
-The toolbar offers Match source and a native save dialog rooted in the configured recording output folder. Filename, folder and MKV/MP4 container are user choices; no sibling `_edit` location is imposed. YouTube and Archive profiles expose a typed resolution seam but remain unavailable with a render-required reason.
+Decoder slots are keyed by video clip, including two clips referencing the same asset. Linked audio uses that clip's slot. Audio decode preserves sample continuity across coarse container timestamp ticks and flushes the resampler tail. Preview prebuffers before starting its clock. Timestamped writes discard samples already replaced by endpoint underrun silence, preventing a decode stall from becoming a permanent A/V delay. This does not promise glitch-free audio under overload.
 
-Lossless export accepts an eligible single-source trim or compatible full-clip concatenation. Contiguous pieces of the same source can coalesce, so a split alone need not require rendering. Compatibility is checked before packet copying. Concatenation of independently primed AAC sources requires render export. Generic Matroska B-frame sources without usable DTS are refused; native ExoSnap private exact timestamps and valid-DTS B-frame MP4 sources are supported. Gaps, unsupported partial concatenations and incompatible media require a render path and are rejected explicitly. Stream copy is keyframe-accurate, not arbitrary frame-accurate: cuts can retain dependency pictures to the next random-access boundary.
+The toolbar offers Match source and a native save dialog rooted in the configured recording output folder. Filename, folder and MKV/MP4 container are user choices; no sibling `_edit` location is imposed. YouTube and Archive profiles remain unavailable. Render output fixes geometry and exact rational frame rate from the first video source before decoding frames. Other dimensions use aspect-preserving Contain into that output.
 
-Transitions are typed relationships between neighboring clip edges. The Transitions tab offers no effect until preview and export both implement it. Crossfade is not implemented. The next render task is a two-source overlap evaluator and D3D11 blend feeding the existing `IVideoEncoder` and mux path, with matching preview and export timing. This preserves the encoder abstraction for NVENC and future AMF/QSV implementations.
+`ClassifyEditExport` resolves StreamCopy, Render or Unsupported. Eligible single-source trims and compatible full-source concatenations retain the existing stream-copy implementation, including coalesced contiguous splits. Color restrictions on rendering do not restrict that path. Stream copy is keyframe-accurate, not arbitrary frame-accurate: cuts can retain dependency pictures to the next random-access boundary. Native exact PTS/DTS and existing generic-container restrictions remain authoritative.
 
-Export remuxes into a sibling temporary and publishes atomically on success. Overwrite needs explicit confirmation. Cancel enters Cancelling and remains running until the worker actually stops; a second Export/Retry cannot join an active worker on the GUI thread. Progress is throttled before crossing threads.
+Crossfade defaults to 500 ms. Adding it shifts the incoming linked group and following suffix earlier by its duration. The outgoing group and source-in/out stay unchanged. Removing it restores the hard cut; changing its duration applies the corresponding suffix delta. Duration is clamped to real clip intervals and neighboring transitions so no three-way overlap exists. Deleting an endpoint first removes/restores its incident transitions, then applies ordinary or ripple deletion. These changes are atomic undo commands. Markers map through the resulting clip positions.
+
+`EditTimelineCompositor` reuses the existing plane uploader/YUV converter. Two persistent FP16 working textures hold BT.709-linearized sources; one D3D11 fullscreen pass applies Contain, complementary weights and the shared BT.709 output transfer. A persistent BGRA output feeds presentation or the shared SDR VideoProcessor color setup. Blend/raster/depth/shader state is explicitly established. There is no CPU BGRA blend or readback between layers. Texture sizes are stable until geometry changes, and failed initialization/device removal returns an error.
+
+Render export resolves generic `RecorderConfig` intent and calls `VideoEncoderFactory`/`IVideoEncoder`. One NV12 surface per encoder slot is created and registered once. Acquire/reap/flush and pending-frame completion preserve the encoder's reordered PTS/DTS contract. `IAudioEncoder` uses the shipping PCM24 encoder, and `MatroskaStreamWriter` receives video/audio packets and codec private data. Audio is rounded to the final CFR frame boundary, with an explicit mux duration. MP4 rendering is refused because the initial supported render profile uses PCM in Matroska; existing lossless MP4 delivery is unchanged.
+
+| Render contract | Support |
+| --- | --- |
+| Source color | Explicit BT.709 primaries, transfer and matrix; 8-bit planar 4:2:0; known limited/full range |
+| Output color | Limited-range BT.709 SDR, 8-bit 4:2:0 |
+| Video backend | Selected/Auto same-adapter shipping encoder through the generic factory; currently NVENC |
+| Audio/container | 48 kHz stereo PCM24 in Matroska |
+| Unsupported | HDR/PQ/HLG, 10-bit, 4:4:4, unknown/non-BT.709 color, independent audio edits, resolution profiles, render MP4 |
+
+Unsupported rendering fails closed with a reason. It does not silently tone-map or relabel sources, and does not affect eligible lossless exports.
+
+The render workflow is enabled for timelines containing Crossfade. Other non-copy recipes without a transition remain explicitly unsupported; they do not silently take a render path whose preview still uses the legacy hard-cut presentation.
+
+Export writes a sibling temporary and publishes atomically after successful flush/finalization. Overwrite needs explicit confirmation. Cancel enters Cancelling until `QThread::finished`; there is no GUI-thread join. The worker captures shared run state and immutable media/configuration values, never the page or adapter. The GUI polls atomic progress every 100 ms, so export cannot flood its event queue.
+
+The page uses nested native SplitViews. Normalized source-width and timeline-height fractions live in QSettings UI preferences, independently of workspace contents. Restoration clamps against minimum pane sizes and current geometry; handles support native pointer resizing and keyboard arrows.
 
 Only after media publication succeeds does the sidecar operation reflect the exported recipe. Marker times are filtered to the trim range, rebased to zero, and serialized with the shared model. An empty surviving set removes a stale destination sidecar instead of writing an empty artifact. Sidecar paths replace the media extension: `clip.mkv` and `clip.mp4` each derive `clip.markers.json`. No chapters are written into the container. A sidecar failure must not be confused with failure to create the already-published media.
 

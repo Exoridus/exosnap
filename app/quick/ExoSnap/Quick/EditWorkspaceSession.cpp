@@ -99,8 +99,74 @@ void EditSessionAdapter::publishWorkspace(bool changed) {
 }
 
 void EditSessionAdapter::selectClip(qulonglong id) {
+    selected_transition_ = 0;
     workspace_.select(id);
     emit workspaceChanged();
+}
+
+QVariantList EditSessionAdapter::transitions() const {
+    QVariantList result;
+    for (const auto& t : workspace_.transitions()) {
+        const auto* incoming = workspace_.clip(t.incoming);
+        result.push_back(QVariantMap{{QStringLiteral("outgoing"), QVariant::fromValue<qulonglong>(t.outgoing)},
+                                     {QStringLiteral("incoming"), QVariant::fromValue<qulonglong>(t.incoming)},
+                                     {QStringLiteral("startMs"), incoming->start / 1000},
+                                     {QStringLiteral("durationMs"), t.duration / 1000},
+                                     {QStringLiteral("selected"), selected_transition_ == t.outgoing}});
+    }
+    return result;
+}
+
+void EditSessionAdapter::selectTransition(qulonglong outgoing) {
+    const auto found = std::find_if(workspace_.transitions().begin(), workspace_.transitions().end(),
+                                    [outgoing](const auto& t) { return t.outgoing == outgoing; });
+    selected_transition_ = found == workspace_.transitions().end() ? 0 : outgoing;
+    workspace_.select(0);
+    emit workspaceChanged();
+}
+
+bool EditSessionAdapter::canCrossfade(qulonglong outgoing) const {
+    auto copy = workspace_;
+    const auto* a = copy.clip(outgoing ? outgoing : copy.selection());
+    if (!a)
+        return false;
+    for (const auto& b : copy.clips())
+        if (b.track == a->track && b.start > a->start)
+            return copy.crossfade(a->id, b.id);
+    return false;
+}
+
+bool EditSessionAdapter::applyCrossfade(qulonglong outgoing, qint64 duration_ms) {
+    const auto* a = workspace_.clip(outgoing ? outgoing : workspace_.selection());
+    bool changed = false;
+    if (a) {
+        const auto id = a->id;
+        for (const auto& b : workspace_.clips())
+            if (b.track == a->track && b.start > a->start) {
+                changed = workspace_.crossfade(id, b.id, duration_ms * 1000);
+                break;
+            }
+        if (changed)
+            selected_transition_ = id;
+    }
+    publishWorkspace(changed);
+    return changed;
+}
+
+bool EditSessionAdapter::dropCrossfade(qint64 at_ms, qint64 tolerance_ms) {
+    for (const auto& clip : workspace_.clips())
+        if (std::abs(clip.end() / 1000 - at_ms) <= tolerance_ms && canCrossfade(clip.id))
+            return applyCrossfade(clip.id);
+    workspace_error_ = tr("Crossfade needs a valid cut between adjacent video clips.");
+    emit workspaceChanged();
+    return false;
+}
+
+void EditSessionAdapter::removeTransition() {
+    const bool changed = workspace_.removeCrossfade(selected_transition_);
+    if (changed)
+        selected_transition_ = 0;
+    publishWorkspace(changed);
 }
 
 void EditSessionAdapter::appendAsset(qulonglong id, qint64 at_ms) {
@@ -136,6 +202,8 @@ void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, 
             asset.width = metadata.width;
             asset.height = metadata.height;
             asset.fps = metadata.fps;
+            asset.fps_num = metadata.fps_num;
+            asset.fps_den = metadata.fps_den;
             asset.audio = metadata.has_audio;
             assets.push_back(std::move(asset));
         }

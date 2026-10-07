@@ -1,4 +1,5 @@
 #include "exosnap/engine/edit_timeline_export.h"
+#include <capability/translatable.h>
 
 #include "exosnap/engine/mp4_remuxer.h"
 #include "matroska_packet_timestamps.h"
@@ -18,6 +19,8 @@
 #include <system_error>
 
 extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavcodec/codec.h>
 #include <libavcodec/codec_par.h>
 #include <libavcodec/defs.h>
 #include <libavcodec/packet.h>
@@ -27,7 +30,9 @@ extern "C" {
 #include <libavutil/channel_layout.h>
 #include <libavutil/dict.h>
 #include <libavutil/error.h>
+#include <libavutil/frame.h>
 #include <libavutil/mathematics.h>
+#include <libavutil/pixfmt.h>
 #include <libavutil/rational.h>
 }
 
@@ -82,6 +87,37 @@ struct StagingFile {
         }
     }
 };
+
+void ResolveDecodedColor(AVFormatContext* input, AVStream* stream) {
+    auto* parameters = stream->codecpar;
+    if (parameters->color_primaries != AVCOL_PRI_UNSPECIFIED && parameters->color_trc != AVCOL_TRC_UNSPECIFIED)
+        return;
+    const AVCodec* decoder = avcodec_find_decoder(parameters->codec_id);
+    if (!decoder)
+        return;
+    AVCodecContext* context = avcodec_alloc_context3(decoder);
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    if (context && packet && frame && avcodec_parameters_to_context(context, parameters) >= 0 &&
+        avcodec_open2(context, decoder, nullptr) >= 0) {
+        // Container tags may omit values that the bitstream explicitly carries.
+        // A bounded first-frame probe resolves those facts without guessing.
+        for (int count = 0; count < 512 && av_read_frame(input, packet) >= 0; ++count) {
+            if (packet->stream_index == stream->index && avcodec_send_packet(context, packet) >= 0 &&
+                avcodec_receive_frame(context, frame) >= 0) {
+                if (parameters->color_primaries == AVCOL_PRI_UNSPECIFIED)
+                    parameters->color_primaries = frame->color_primaries;
+                if (parameters->color_trc == AVCOL_TRC_UNSPECIFIED)
+                    parameters->color_trc = frame->color_trc;
+                break;
+            }
+            av_packet_unref(packet);
+        }
+    }
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    avcodec_free_context(&context);
+}
 
 std::vector<TimelineExportClip> Coalesce(const std::vector<TimelineExportClip>& clips) {
     std::vector<TimelineExportClip> result;
@@ -163,12 +199,29 @@ EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source) {
     }
     result.duration_us = std::max<int64_t>(0, input.context->duration);
     for (unsigned i = 0; i < input.context->nb_streams; ++i) {
-        const auto* stream = input.context->streams[i];
+        auto* stream = input.context->streams[i];
         if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && result.width == 0) {
+            ResolveDecodedColor(input.context, stream);
             result.width = stream->codecpar->width;
             result.height = stream->codecpar->height;
             const auto fps = stream->avg_frame_rate.num > 0 ? stream->avg_frame_rate : stream->r_frame_rate;
             result.fps = fps.den > 0 ? av_q2d(fps) : 0;
+            result.fps_num = fps.num;
+            result.fps_den = fps.den;
+            const auto& color = *stream->codecpar;
+            result.render_color_supported =
+                color.format == AV_PIX_FMT_YUV420P && color.color_primaries == AVCOL_PRI_BT709 &&
+                color.color_trc == AVCOL_TRC_BT709 && color.color_space == AVCOL_SPC_BT709 &&
+                (color.color_range == AVCOL_RANGE_MPEG || color.color_range == AVCOL_RANGE_JPEG);
+            if (!result.render_color_supported)
+                result.render_color_reason =
+                    std::string(EXOSNAP_TRANSLATABLE(
+                        "EditRender", "Render export requires explicitly tagged 8-bit BT.709 4:2:0 SDR with known "
+                                      "range. HDR and unsupported color paths remain lossless-only.")) +
+                    " (pixel format=" + std::to_string(color.format) +
+                    ", primaries=" + std::to_string(color.color_primaries) +
+                    ", transfer=" + std::to_string(color.color_trc) + ", matrix=" + std::to_string(color.color_space) +
+                    ", range=" + std::to_string(color.color_range) + ")";
         }
         result.has_audio |= stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO;
     }

@@ -1,4 +1,5 @@
 #include "EditPlayerWorker.h"
+#include <exosnap/engine/timeline_audio_queue.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -11,6 +12,12 @@ namespace {
 // Fallback tick, used only until a clip is open (or when its container declares
 // no usable frame rate).
 constexpr int kWorkerFallbackTickMs = 16;
+
+const edit::Clip* EvaluatedClip(const edit::Workspace& workspace, int64_t time_us) {
+    const auto evaluation = engine::EvaluateTimeline(workspace.timeline(), time_us);
+    return evaluation.error.empty() && !evaluation.video.empty() ? workspace.clip(evaluation.video.front().clip)
+                                                                 : nullptr;
+}
 
 } // namespace
 
@@ -50,6 +57,10 @@ void EditPlayerWorker::open(const QString& master_path, qint64 duration_ms, doub
 }
 
 void EditPlayerWorker::close() {
+    if (render_audio_)
+        render_audio_->Shutdown();
+    render_audio_.reset();
+    render_reader_.reset();
     if (tick_timer_ != nullptr)
         tick_timer_->stop();
     if (session_) {
@@ -86,6 +97,8 @@ void EditPlayerWorker::pause() {
     timeline_playing_ = false;
     if (tick_timer_ != nullptr)
         tick_timer_->stop();
+    if (render_audio_)
+        render_audio_->Stop();
     if (!session_)
         return;
     session_->Pause();
@@ -127,6 +140,10 @@ void EditPlayerWorker::syncClock() {
 }
 
 void EditPlayerWorker::onTick() {
+    if (render_mode_) {
+        tickRenderTimeline();
+        return;
+    }
     if (timeline_mode_) {
         if (!timeline_playing_)
             return;
@@ -141,7 +158,7 @@ void EditPlayerWorker::onTick() {
                 syncClock();
             }
         }
-        const auto* next = workspace_.active(position_ms_ * 1000);
+        const auto* next = EvaluatedClip(workspace_, position_ms_ * 1000);
         if ((next ? next->id : 0) != active_clip_)
             seekTimeline(position_ms_, true);
         position_ms_ = std::min<qint64>(position_ms_, workspace_.duration() / 1000);
@@ -182,8 +199,27 @@ void EditPlayerWorker::setTimeline(edit::Workspace workspace) {
     workspace_ = std::move(workspace);
     timeline_mode_ = true;
     active_clip_ = 0;
+    render_mode_ = !workspace_.transitions().empty();
+    if (render_mode_) {
+        engine::TimelineRenderSnapshot snapshot;
+        snapshot.timeline = workspace_.timeline();
+        for (const auto& asset : workspace_.assets()) {
+            const std::filesystem::path path(asset.path);
+            snapshot.sources.push_back({asset.id, path, engine::ProbeEditMedia(path)});
+        }
+        render_plan_ =
+            engine::ClassifyEditExport(snapshot, {engine::TimelineExportEligibility::RenderRequired, {}}, false);
+        std::string error;
+        render_reader_ = std::make_unique<engine::EditTimelineReader>();
+        if (!render_reader_->Open(std::move(snapshot), render_plan_, error)) {
+            render_reader_.reset();
+            emit openFinished(false, QString::fromStdString(error));
+            return;
+        }
+        emit openFinished(true, {});
+    }
     seekTimeline(workspace_.playhead() / 1000, false);
-    if (!workspace_.active(workspace_.playhead()))
+    if (!EvaluatedClip(workspace_, workspace_.playhead()))
         emit openFinished(workspace_.duration() > 0, {});
 }
 
@@ -194,7 +230,65 @@ void EditPlayerWorker::setVolume(double volume) {
 }
 
 void EditPlayerWorker::seekTimeline(qint64 position_ms, bool resume) {
-    const auto* clip = workspace_.active(position_ms * 1000);
+    if (render_mode_) {
+        if (!render_reader_)
+            return;
+        if (render_audio_)
+            render_audio_->Stop();
+        render_reader_->ResetAudio();
+        position_ms_ = std::clamp<qint64>(position_ms, 0, workspace_.duration() / 1000);
+        render_origin_ms_ = position_ms_;
+        audio_sample_ = position_ms_ * 48;
+        timeline_playing_ = resume;
+        if (!renderTimeline(position_ms_))
+            return;
+        ensureTimer();
+        tick_timer_->setInterval(
+            EditPreviewTickMsFor(static_cast<double>(render_plan_.fps_num) / render_plan_.fps_den, screen_hz_));
+        elapsed_.restart();
+        if (resume) {
+            const bool has_audio =
+                std::any_of(workspace_.clips().begin(), workspace_.clips().end(), [this](const auto& c) {
+                    const auto* asset = workspace_.asset(c.asset);
+                    return asset && asset->audio;
+                });
+            if (has_audio && !render_audio_) {
+                render_audio_ = std::make_unique<engine::WasapiAudioRenderer>();
+                std::string error;
+                if (!render_audio_->Init(error)) {
+                    render_audio_.reset();
+                    timeline_playing_ = false;
+                    emit openFinished(false, QString::fromStdString(error));
+                    return;
+                }
+            }
+            if (render_audio_) {
+                std::vector<float> initial;
+                std::string error;
+                const auto count =
+                    static_cast<uint32_t>(std::min<int64_t>(9600, workspace_.duration() * 48 / 1000 - audio_sample_));
+                if (!render_reader_->AudioAt(audio_sample_, count, initial, error)) {
+                    pause();
+                    emit openFinished(false, QString::fromStdString(error));
+                    return;
+                }
+                for (auto& sample : initial)
+                    sample *= static_cast<float>(volume_);
+                render_audio_->Start(initial, true);
+                if (!render_audio_->Running()) {
+                    pause();
+                    emit openFinished(false, tr("The audio output could not start."));
+                    return;
+                }
+                audio_sample_ += count;
+            }
+            tickRenderTimeline();
+            tick_timer_->start();
+        } else
+            tick_timer_->stop();
+        return;
+    }
+    const auto* clip = EvaluatedClip(workspace_, position_ms * 1000);
     const auto* asset = clip ? workspace_.asset(clip->asset) : nullptr;
     const auto id = clip ? clip->id : 0;
     if (id != active_clip_ || (clip && !session_)) {
@@ -221,6 +315,66 @@ void EditPlayerWorker::seekTimeline(qint64 position_ms, bool resume) {
         tick_timer_->start();
     else
         tick_timer_->stop();
+}
+
+bool EditPlayerWorker::renderTimeline(qint64 position_ms) {
+    if (!render_reader_)
+        return false;
+    engine::TimelineVideoFrame frame;
+    std::string error;
+    if (!render_reader_->VideoAt(position_ms * 1000, frame, error)) {
+        sink_->clear();
+        emit openFinished(false, QString::fromStdString(error));
+        pause();
+        return false;
+    }
+    sink_->publishClock(-1);
+    sink_->deliverTimeline(std::move(frame), request_generation_);
+    return true;
+}
+
+void EditPlayerWorker::tickRenderTimeline() {
+    if (!timeline_playing_ || !render_reader_)
+        return;
+    position_ms_ =
+        render_origin_ms_ +
+        (render_audio_ ? static_cast<qint64>(render_audio_->FramesPlayed() * 1000 / render_audio_->SampleRate())
+                       : elapsed_.elapsed());
+    position_ms_ = std::min<qint64>(position_ms_, workspace_.duration() / 1000);
+    if (render_audio_) {
+        if (!render_audio_->Running()) {
+            pause();
+            emit openFinished(false, tr("The audio output stopped unexpectedly."));
+            return;
+        }
+        const auto consumed = render_audio_->TimelineConsumedFrames();
+        const int64_t origin = render_origin_ms_ * 48;
+        audio_sample_ = std::max(audio_sample_, origin + static_cast<int64_t>(consumed));
+        const int64_t through =
+            origin + static_cast<int64_t>(engine::TimelineAudioRenderThrough(
+                         static_cast<uint64_t>(workspace_.duration() * 48 / 1000 - origin), consumed));
+        std::vector<float> samples;
+        std::string error;
+        while (audio_sample_ < through) {
+            const auto count = static_cast<uint32_t>(std::min<int64_t>(9600, through - audio_sample_));
+            if (!render_reader_->AudioAt(audio_sample_, count, samples, error)) {
+                pause();
+                emit openFinished(false, QString::fromStdString(error));
+                return;
+            }
+            for (auto& sample : samples)
+                sample *= static_cast<float>(volume_);
+            render_audio_->PushTimelineSamples(static_cast<uint64_t>(audio_sample_ - render_origin_ms_ * 48), samples);
+            audio_sample_ += count;
+        }
+    }
+    if (!renderTimeline(position_ms_))
+        return;
+    emit positionAdvanced(position_ms_);
+    if (position_ms_ >= workspace_.duration() / 1000) {
+        pause();
+        emit reachedEnd();
+    }
 }
 
 } // namespace exosnap::quick

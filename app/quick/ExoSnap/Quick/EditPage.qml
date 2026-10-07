@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtCore
 
 FocusScope {
     id: root
@@ -12,28 +13,103 @@ FocusScope {
     required property RecordViewModelAdapter recordings
     objectName: "quickEditPage"
     Keys.forwardTo: [clips]
-    Binding { target: root.timeline; property: "trackWidth"; value: Math.min(1000, root.width) }
+    Binding {
+        target: root.timeline
+        property: "trackWidth"
+        value: Math.min(1000, root.width)
+    }
 
-    ColumnLayout {
+    Settings {
+        id: layoutPreferences
+        objectName: "editLayoutPreferences"
+        category: "EditLayout"
+        property real sourceFraction: 0.29
+        property real timelineFraction: 0.37
+    }
+    function fraction(value: real, fallback: real): real {
+        return Number.isFinite(value) && value > 0 && value < 1 ? value : fallback;
+    }
+    function restoreHorizontal(): void {
+        if (!upperSplit.resizing)
+            sourceBrowser.SplitView.preferredWidth = Math.max(220, Math.min(upperSplit.width - 246, Math.max(0, upperSplit.width - 6) * root.fraction(layoutPreferences.sourceFraction, 0.29)));
+    }
+    function restoreVertical(): void {
+        if (!zones.resizing)
+            lowerZone.SplitView.preferredHeight = Math.max(200, Math.min(zones.height - 166, Math.max(0, zones.height - 6) * root.fraction(layoutPreferences.timelineFraction, 0.37)));
+    }
+    Component.onCompleted: {
+        restoreHorizontal();
+        restoreVertical();
+    }
+
+    SplitView {
+        id: zones
+        objectName: "editVerticalSplit"
+        orientation: Qt.Vertical
         anchors.fill: parent
         anchors.margins: ExoTheme.spacingMd
-        spacing: ExoTheme.spacingSm
+        onHeightChanged: root.restoreVertical()
+        onResizingChanged: if (!resizing && height > 6)
+            layoutPreferences.timelineFraction = lowerZone.height / (height - 6)
+        handle: Rectangle {
+            objectName: "editVerticalSplitHandle"
+            implicitHeight: 6
+            color: SplitHandle.pressed || SplitHandle.hovered || activeFocus ? ExoTheme.line : "transparent"
+            activeFocusOnTab: true
+            Accessible.role: Accessible.Separator
+            Accessible.name: qsTr("Resize preview and timeline. Use Up and Down.")
+            HoverHandler {
+                cursorShape: Qt.SplitVCursor
+            }
+            Keys.onUpPressed: {
+                layoutPreferences.timelineFraction = Math.min(0.8, layoutPreferences.timelineFraction + 0.03);
+                root.restoreVertical();
+            }
+            Keys.onDownPressed: {
+                layoutPreferences.timelineFraction = Math.max(0.2, layoutPreferences.timelineFraction - 0.03);
+                root.restoreVertical();
+            }
+        }
 
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: ExoTheme.spacingMd
+        SplitView {
+            id: upperSplit
+            objectName: "editHorizontalSplit"
+            orientation: Qt.Horizontal
+            SplitView.fillHeight: true
+            SplitView.minimumHeight: 160
+            onWidthChanged: root.restoreHorizontal()
+            onResizingChanged: if (!resizing && width > 6)
+                layoutPreferences.sourceFraction = sourceBrowser.width / (width - 6)
+            handle: Rectangle {
+                objectName: "editHorizontalSplitHandle"
+                implicitWidth: 6
+                color: SplitHandle.pressed || SplitHandle.hovered || activeFocus ? ExoTheme.line : "transparent"
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Separator
+                Accessible.name: qsTr("Resize source browser and preview. Use Left and Right.")
+                HoverHandler {
+                    cursorShape: Qt.SplitHCursor
+                }
+                Keys.onLeftPressed: {
+                    layoutPreferences.sourceFraction = Math.max(0.1, layoutPreferences.sourceFraction - 0.03);
+                    root.restoreHorizontal();
+                }
+                Keys.onRightPressed: {
+                    layoutPreferences.sourceFraction = Math.min(0.8, layoutPreferences.sourceFraction + 0.03);
+                    root.restoreHorizontal();
+                }
+            }
             EditSourceBrowser {
+                id: sourceBrowser
                 session: root.session
                 recordings: root.recordings
                 timeline: root.timeline
-                Layout.preferredWidth: Math.max(220, root.width * 0.28)
-                Layout.maximumWidth: 380
-                Layout.fillHeight: true
+                SplitView.minimumWidth: 220
+                SplitView.preferredWidth: 280
             }
             ColumnLayout {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
+                SplitView.fillWidth: true
+                SplitView.minimumWidth: 240
                 EditPlayer {
                     session: root.session
                     player: root.player
@@ -93,117 +169,163 @@ FocusScope {
             }
         }
 
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 4
-            EditActionButton {
-                objectName: "editUndo"
-                text: qsTr("Undo")
-                shortcutText: qsTr("Ctrl+Z")
-                glyph: ExoGlyph.Undo
-                enabled: root.session.canUndo
-                onClicked: root.session.undo()
-            }
-            EditActionButton {
-                objectName: "editRedo"
-                text: qsTr("Redo")
-                shortcutText: qsTr("Ctrl+Y")
-                glyph: ExoGlyph.Redo
-                enabled: root.session.canRedo
-                onClicked: root.session.redo()
-            }
-            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 18; color: ExoTheme.line }
-            EditActionButton {
-                objectName: "editSplit"
-                text: qsTr("Split")
-                shortcutText: qsTr("Ctrl+B")
-                glyph: ExoGlyph.Scissors
-                enabled: root.session.durationMs > 0
-                onClicked: root.session.splitSelected()
-            }
-            EditActionButton {
-                objectName: "editDelete"
-                text: qsTr("Delete")
-                shortcutText: qsTr("Delete")
-                glyph: ExoGlyph.Trash
-                enabled: root.session.selectedClip !== 0
-                onClicked: root.session.deleteSelected(false)
-            }
-            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 18; color: ExoTheme.line }
-            EditActionButton {
-                objectName: "editSnapping"
-                text: qsTr("Snapping")
-                glyph: ExoGlyph.Magnet
-                checkable: true
-                checked: clips.snapping
-                onClicked: clips.snapping = checked
-            }
-            Item { Layout.fillWidth: true }
-            Label {
-                text: qsTr("%1%").arg(root.exporter.progressPercent)
-                visible: root.exporter.running
-                color: ExoTheme.textSecondary
-                Accessible.name: qsTr("Exporting %1%").arg(root.exporter.progressPercent)
-            }
-            Row {
-                spacing: 0
+        ColumnLayout {
+            id: lowerZone
+            objectName: "editTimelineZone"
+            SplitView.minimumHeight: 200
+            SplitView.preferredHeight: 240
+            spacing: ExoTheme.spacingSm
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 4
                 EditActionButton {
-                    id: exportAction
-                    objectName: "editExport"
-                    text: qsTr("Export — %1").arg(root.exporter.profileOptions.find(option => option.value === root.exporter.profileKey)?.label || "")
-                    glyph: ExoGlyph.Send
-                    tone: "primary"
-                    enabled: root.session.durationMs > 0 && !root.exporter.running
-                    onClicked: root.exporter.chooseDestination()
-                    Binding { target: exportAction.background; property: "topRightRadius"; value: 0 }
-                    Binding { target: exportAction.background; property: "bottomRightRadius"; value: 0 }
+                    objectName: "editUndo"
+                    text: qsTr("Undo")
+                    shortcutText: qsTr("Ctrl+Z")
+                    glyph: ExoGlyph.Undo
+                    enabled: root.session.canUndo
+                    onClicked: root.session.undo()
                 }
                 EditActionButton {
-                    id: exportProfiles
-                    objectName: "editExportProfiles"
-                    text: qsTr("Export profile")
-                    glyph: ExoGlyph.Send
-                    tone: "primary"
-                    implicitWidth: 26
-                    contentItem: Item {
-                        ExoChevron { anchors.centerIn: parent; tone: exportProfiles._ink }
+                    objectName: "editRedo"
+                    text: qsTr("Redo")
+                    shortcutText: qsTr("Ctrl+Y")
+                    glyph: ExoGlyph.Redo
+                    enabled: root.session.canRedo
+                    onClicked: root.session.redo()
+                }
+                Rectangle {
+                    Layout.preferredWidth: 1
+                    Layout.preferredHeight: 18
+                    color: ExoTheme.line
+                }
+                EditActionButton {
+                    objectName: "editSplit"
+                    text: qsTr("Split")
+                    shortcutText: qsTr("Ctrl+B")
+                    glyph: ExoGlyph.Scissors
+                    enabled: root.session.durationMs > 0
+                    onClicked: root.session.splitSelected()
+                }
+                EditActionButton {
+                    objectName: "editDelete"
+                    text: qsTr("Delete")
+                    shortcutText: qsTr("Delete")
+                    glyph: ExoGlyph.Trash
+                    enabled: root.session.selectedClip !== 0
+                    onClicked: root.session.deleteSelected(false)
+                }
+                Rectangle {
+                    Layout.preferredWidth: 1
+                    Layout.preferredHeight: 18
+                    color: ExoTheme.line
+                }
+                EditActionButton {
+                    objectName: "editSnapping"
+                    text: qsTr("Snapping")
+                    glyph: ExoGlyph.Magnet
+                    checkable: true
+                    checked: clips.snapping
+                    onClicked: clips.snapping = checked
+                }
+                Item {
+                    Layout.fillWidth: true
+                }
+                Label {
+                    objectName: "editExportProgress"
+                    text: root.exporter.state === EditExportAdapter.Cancelling ? qsTr("Cancelling…") : qsTr("%1%").arg(root.exporter.progressPercent)
+                    visible: root.exporter.running
+                    color: ExoTheme.textSecondary
+                    Accessible.name: qsTr("Exporting %1%").arg(root.exporter.progressPercent)
+                }
+                EditActionButton {
+                    objectName: "editCancelExport"
+                    text: qsTr("Cancel export")
+                    glyph: ExoGlyph.Close
+                    visible: root.exporter.running
+                    enabled: root.exporter.state === EditExportAdapter.Running
+                    onClicked: root.exporter.cancel()
+                }
+                Row {
+                    spacing: 0
+                    EditActionButton {
+                        id: exportAction
+                        objectName: "editExport"
+                        text: qsTr("Export — %1").arg(root.exporter.profileOptions.find(option => option.value === root.exporter.profileKey)?.label || "")
+                        glyph: ExoGlyph.Send
+                        tone: "primary"
+                        enabled: root.session.durationMs > 0 && !root.exporter.running
+                        onClicked: root.exporter.chooseDestination()
+                        Binding {
+                            target: exportAction.background
+                            property: "topRightRadius"
+                            value: 0
+                        }
+                        Binding {
+                            target: exportAction.background
+                            property: "bottomRightRadius"
+                            value: 0
+                        }
                     }
-                    Binding { target: exportProfiles.background; property: "topLeftRadius"; value: 0 }
-                    Binding { target: exportProfiles.background; property: "bottomLeftRadius"; value: 0 }
-                    onClicked: profileMenu.open()
-                    Menu {
-                        id: profileMenu
-                        objectName: "editExportProfileMenu"
-                        x: exportProfiles.width - width
-                        y: exportProfiles.height
-                        Repeater {
-                            model: root.exporter.profileOptions.filter(option => option.selectable)
-                            MenuItem {
-                                required property var modelData
-                                text: modelData.label
-                                checkable: true
-                                checked: root.exporter.profileKey === modelData.value
-                                onTriggered: root.exporter.profileKey = modelData.value
+                    EditActionButton {
+                        id: exportProfiles
+                        objectName: "editExportProfiles"
+                        text: qsTr("Export profile")
+                        glyph: ExoGlyph.Send
+                        tone: "primary"
+                        implicitWidth: 26
+                        contentItem: Item {
+                            ExoChevron {
+                                anchors.centerIn: parent
+                                tone: exportProfiles._ink
+                            }
+                        }
+                        Binding {
+                            target: exportProfiles.background
+                            property: "topLeftRadius"
+                            value: 0
+                        }
+                        Binding {
+                            target: exportProfiles.background
+                            property: "bottomLeftRadius"
+                            value: 0
+                        }
+                        onClicked: profileMenu.open()
+                        Menu {
+                            id: profileMenu
+                            objectName: "editExportProfileMenu"
+                            x: exportProfiles.width - width
+                            y: exportProfiles.height
+                            Repeater {
+                                model: root.exporter.profileOptions.filter(option => option.selectable)
+                                MenuItem {
+                                    required property var modelData
+                                    text: modelData.label
+                                    checkable: true
+                                    checked: root.exporter.profileKey === modelData.value
+                                    onTriggered: root.exporter.profileKey = modelData.value
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        Label {
-            text: root.session.workspaceError || root.exporter.errorText
-            visible: text.length > 0
-            color: ExoTheme.textSecondary
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-        }
-        EditTimeline {
-            id: clips
-            session: root.session
-            player: root.player
-            thumbnails: root.timeline
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(180, root.height * 0.37)
+            Label {
+                text: root.session.workspaceError || root.exporter.errorText
+                visible: text.length > 0
+                color: ExoTheme.textSecondary
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            EditTimeline {
+                id: clips
+                session: root.session
+                player: root.player
+                thumbnails: root.timeline
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: 140
+            }
         }
     }
 }

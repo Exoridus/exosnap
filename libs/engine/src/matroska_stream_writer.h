@@ -156,6 +156,8 @@ struct MatroskaStreamConfig {
     uint32_t encode_height = 0;
     uint32_t frame_rate_num = 0;
     uint32_t frame_rate_den = 0;
+    // Offline timelines know the exact final sample boundary, unlike capture.
+    std::optional<uint64_t> timeline_duration_ns;
 
     // Color description written into the video track's Colour element.
     // Defaults to SDR BT.709 limited-range 8-bit.

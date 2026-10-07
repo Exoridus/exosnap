@@ -178,3 +178,136 @@ TEST(EditExportProfile, ArchiveKeepsSourceResolutionButStillRequiresRendering) {
     EXPECT_EQ(profile.height, 1600);
     EXPECT_TRUE(profile.requires_render);
 }
+
+TEST(EditWorkspace, CrossfadeMovesLinkedSuffixAndRemovalRestoresHardCuts) {
+    Workspace w;
+    ASSERT_TRUE(w.insert(source(w, L"a.mkv")));
+    const auto a = w.selection();
+    ASSERT_TRUE(w.insert(source(w, L"b.mkv")));
+    const auto b = w.selection();
+    ASSERT_TRUE(w.insert(source(w, L"c.mkv")));
+    const auto original = w.clips();
+    ASSERT_TRUE(w.crossfade(a, b));
+    EXPECT_EQ(w.clip(a)->start, 0);
+    EXPECT_EQ(w.clip(b)->start, 9'500'000);
+    EXPECT_EQ(w.duration(), 29'500'000);
+    for (const auto& c : w.clips())
+        if (c.group == w.clip(b)->group)
+            EXPECT_EQ(c.start, 9'500'000);
+    EXPECT_FALSE(w.insert(source(w, L"unrelated.mkv"), 9'600'000));
+    EXPECT_FALSE(w.move(b, 9'000'000));
+    ASSERT_TRUE(w.removeCrossfade(a));
+    EXPECT_EQ(w.clips(), original);
+    ASSERT_TRUE(w.undo());
+    EXPECT_EQ(w.transitions().size(), 1u);
+    ASSERT_TRUE(w.redo());
+    EXPECT_TRUE(w.transitions().empty());
+}
+
+TEST(EditWorkspace, CrossfadeClampAndDurationEditAreUndoableTransactions) {
+    Workspace w;
+    ASSERT_TRUE(w.insert(source(w)));
+    const auto a = w.selection();
+    ASSERT_TRUE(w.insert(source(w)));
+    const auto b = w.selection();
+    ASSERT_TRUE(w.crossfade(a, b, 50'000'000));
+    EXPECT_EQ(w.transitions()[0].duration, 9'999'999);
+    EXPECT_EQ(w.clip(a)->source_out, 10'000'000);
+    EXPECT_EQ(w.clip(b)->source_in, 0);
+    ASSERT_TRUE(w.crossfade(a, b, 1'000'000));
+    EXPECT_EQ(w.clip(b)->start, 9'000'000);
+    ASSERT_TRUE(w.undo());
+    EXPECT_EQ(w.clip(b)->start, 1);
+    ASSERT_TRUE(w.undo());
+    EXPECT_TRUE(w.transitions().empty());
+    EXPECT_EQ(w.clip(b)->start, 10'000'000);
+    ASSERT_TRUE(w.redo());
+    ASSERT_TRUE(w.redo());
+    EXPECT_EQ(w.clip(b)->start, 9'000'000);
+}
+
+TEST(EditTimelineEvaluation, CrossfadeUsesContinuousSourcesAndComplementaryLinkedWeights) {
+    Workspace w;
+    ASSERT_TRUE(w.insert(source(w, L"a.mkv")));
+    const auto a = w.selection();
+    ASSERT_TRUE(w.insert(source(w, L"b.mkv")));
+    const auto b = w.selection();
+    ASSERT_TRUE(w.crossfade(a, b, 1'000'000));
+    const auto timeline = w.timeline();
+    for (const Time at : {8'999'999LL, 9'000'000LL, 9'250'000LL, 9'500'000LL, 9'750'000LL, 9'999'999LL, 10'000'000LL}) {
+        const auto value = exosnap::engine::EvaluateTimeline(timeline, at);
+        EXPECT_TRUE(value.error.empty());
+        EXPECT_FALSE(value.gap);
+        if (at < 9'000'000 || at >= 10'000'000) {
+            ASSERT_EQ(value.video.size(), 1u);
+            EXPECT_EQ(value.video[0].clip, at < 9'000'000 ? a : b);
+            EXPECT_EQ(value.video[0].source_us, at < 9'000'000 ? at : at - 9'000'000);
+            EXPECT_EQ(value.video[0].weight, 1);
+        } else {
+            ASSERT_EQ(value.video.size(), 2u);
+            ASSERT_EQ(value.audio.size(), 2u);
+            EXPECT_EQ(value.video[0].clip, a);
+            EXPECT_EQ(value.video[1].clip, b);
+            EXPECT_EQ(value.video[0].source_us, at);
+            EXPECT_EQ(value.video[1].source_us, at - 9'000'000);
+            EXPECT_DOUBLE_EQ(value.video[1].weight, static_cast<double>(at - 9'000'000) / 1'000'000);
+            EXPECT_DOUBLE_EQ(value.video[0].weight + value.video[1].weight, 1);
+            EXPECT_EQ(value.audio[0].weight, value.video[0].weight);
+            EXPECT_EQ(value.audio[1].weight, value.video[1].weight);
+        }
+    }
+}
+
+TEST(EditWorkspace, DeleteRestoresIncidentCrossfadesAndUndoRestoresEntireRelationship) {
+    for (bool ripple : {false, true}) {
+        Workspace w;
+        ASSERT_TRUE(w.insert(source(w)));
+        const auto a = w.selection();
+        ASSERT_TRUE(w.insert(source(w)));
+        const auto b = w.selection();
+        ASSERT_TRUE(w.insert(source(w)));
+        const auto c = w.selection();
+        ASSERT_TRUE(w.crossfade(a, b));
+        ASSERT_TRUE(w.crossfade(b, c));
+        const auto before = w.clips();
+        ASSERT_TRUE(w.remove(b, ripple));
+        EXPECT_TRUE(w.transitions().empty());
+        EXPECT_EQ(w.clip(c)->start, ripple ? 10'000'000 : 20'000'000);
+        ASSERT_TRUE(w.undo());
+        EXPECT_EQ(w.clips(), before);
+        EXPECT_EQ(w.transitions().size(), 2u);
+    }
+}
+
+TEST(EditTimelineEvaluation, RejectsInvalidRelationshipsEvenOutsideActiveClipsAndIgnoresStorageOrder) {
+    using namespace exosnap::engine;
+    TimelineSnapshot snapshot{{{1, 1, 1, false, 0, 0, 10}, {2, 2, 2, false, 5, 0, 10}}, {{1, 2, 5}}, 15};
+    EXPECT_TRUE(EvaluateTimeline(snapshot, 7).error.empty());
+    std::reverse(snapshot.clips.begin(), snapshot.clips.end());
+    EXPECT_TRUE(EvaluateTimeline(snapshot, 7).error.empty());
+    snapshot.crossfades = {{1, 1, 10}};
+    EXPECT_FALSE(EvaluateTimeline(snapshot, 7).error.empty());
+    snapshot.crossfades = {{1, 99, 5}};
+    EXPECT_FALSE(EvaluateTimeline(snapshot, 99).error.empty());
+}
+
+TEST(EditTimelineEvaluation, TrimmedIncomingSourceAndMissingAudioUseSameOverlap) {
+    Workspace w;
+    ASSERT_TRUE(w.insert(source(w)));
+    const auto a = w.selection();
+    Asset silent;
+    silent.path = L"silent.mkv";
+    silent.duration = 10'000'000;
+    silent.audio = false;
+    ASSERT_TRUE(w.insert(w.addAsset(silent)));
+    const auto b = w.selection();
+    ASSERT_TRUE(w.trim(b, 1'000'000, 10'000'000));
+    ASSERT_TRUE(w.move(b, 10'000'000));
+    ASSERT_TRUE(w.crossfade(a, b, 1'000'000));
+    const auto evaluation = exosnap::engine::EvaluateTimeline(w.timeline(), 9'500'000);
+    ASSERT_EQ(evaluation.video.size(), 2u);
+    EXPECT_EQ(evaluation.video[1].source_us, 1'500'000);
+    ASSERT_EQ(evaluation.audio.size(), 1u);
+    EXPECT_EQ(evaluation.audio[0].weight, 0.5);
+    EXPECT_TRUE(exosnap::engine::EvaluateTimeline(w.timeline(), w.duration()).gap);
+}

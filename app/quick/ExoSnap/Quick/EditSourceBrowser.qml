@@ -31,15 +31,14 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
             flickableDirection: Flickable.HorizontalFlick
             function reveal(tab: Item): void {
-                if (!tab) return;
-                contentX = Math.max(0, Math.min(Math.max(0, contentWidth - width),
-                    tab.x < contentX ? tab.x : Math.max(contentX, tab.x + tab.width - width)));
+                if (!tab)
+                    return;
+                contentX = Math.max(0, Math.min(Math.max(0, contentWidth - width), tab.x < contentX ? tab.x : Math.max(contentX, tab.x + tab.width - width)));
             }
             onWidthChanged: reveal([historyTab, mediaTab, transitionsTab][root.currentTab])
             WheelHandler {
                 onWheel: event => {
-                    tabsScroll.contentX = Math.max(0, Math.min(Math.max(0, tabsScroll.contentWidth - tabsScroll.width),
-                        tabsScroll.contentX - (event.pixelDelta.x || event.pixelDelta.y || event.angleDelta.x || event.angleDelta.y)));
+                    tabsScroll.contentX = Math.max(0, Math.min(Math.max(0, tabsScroll.contentWidth - tabsScroll.width), tabsScroll.contentX - (event.pixelDelta.x || event.pixelDelta.y || event.angleDelta.x || event.angleDelta.y)));
                     event.accepted = true;
                 }
             }
@@ -57,8 +56,10 @@ Item {
                     leftPadding: 4
                     rightPadding: 4
                     implicitHeight: 30
-                    onActiveFocusChanged: if (activeFocus) tabsScroll.reveal(this)
-                    onSelectedChanged: if (selected) tabsScroll.reveal(this)
+                    onActiveFocusChanged: if (activeFocus)
+                        tabsScroll.reveal(this)
+                    onSelectedChanged: if (selected)
+                        tabsScroll.reveal(this)
                     Accessible.role: Accessible.PageTab
                     onClicked: root.currentTab = 0
                 }
@@ -71,8 +72,10 @@ Item {
                     leftPadding: 4
                     rightPadding: 4
                     implicitHeight: 30
-                    onActiveFocusChanged: if (activeFocus) tabsScroll.reveal(this)
-                    onSelectedChanged: if (selected) tabsScroll.reveal(this)
+                    onActiveFocusChanged: if (activeFocus)
+                        tabsScroll.reveal(this)
+                    onSelectedChanged: if (selected)
+                        tabsScroll.reveal(this)
                     Accessible.role: Accessible.PageTab
                     onClicked: root.currentTab = 1
                 }
@@ -85,8 +88,10 @@ Item {
                     leftPadding: 4
                     rightPadding: 4
                     implicitHeight: 30
-                    onActiveFocusChanged: if (activeFocus) tabsScroll.reveal(this)
-                    onSelectedChanged: if (selected) tabsScroll.reveal(this)
+                    onActiveFocusChanged: if (activeFocus)
+                        tabsScroll.reveal(this)
+                    onSelectedChanged: if (selected)
+                        tabsScroll.reveal(this)
                     Accessible.role: Accessible.PageTab
                     onClicked: root.currentTab = 2
                 }
@@ -99,12 +104,39 @@ Item {
             visible: root.currentTab === 1
             onClicked: picker.open()
         }
+        Button {
+            id: crossfade
+            objectName: "editCrossfadeItem"
+            visible: root.currentTab === 2
+            Layout.fillWidth: true
+            text: qsTr("Crossfade")
+            Accessible.description: qsTr("Apply to the cut after the selected video clip, or drag onto a cut.")
+            onClicked: root.session.applyCrossfade()
+            Drag.active: crossfadeDrag.active
+            Drag.supportedActions: Qt.CopyAction
+            Drag.dragType: Drag.Automatic
+            Drag.mimeData: ({
+                    "application/x-exosnap-crossfade": "crossfade"
+                })
+            DragHandler {
+                id: crossfadeDrag
+                target: null
+            }
+            ToolTip.visible: hovered || activeFocus
+            ToolTip.text: root.session.canCrossfade() ? qsTr("Apply after selected clip (500 ms)") : qsTr("Select a video clip with an adjacent cut, or drag onto a cut.")
+        }
+        Label {
+            visible: root.currentTab === 2
+            text: qsTr("Overlaps linked video and audio. Render export: SDR BT.709, MKV with PCM audio.")
+            wrapMode: Text.Wrap
+            color: ExoTheme.textMuted
+            font.pixelSize: ExoTheme.fontCaption
+            Layout.fillWidth: true
+        }
         Label {
             objectName: "editSourceEmptyTitle"
-            text: root.currentTab === 0 ? qsTr("No recordings yet")
-                  : root.currentTab === 1 ? qsTr("Drop media here")
-                  : qsTr("Transitions will appear here when available.")
-            visible: sourceItems.count === 0
+            text: root.currentTab === 0 ? qsTr("No recordings yet") : root.currentTab === 1 ? qsTr("Drop media here") : qsTr("Transitions will appear here when available.")
+            visible: sourceItems.count === 0 && root.currentTab !== 2
             color: ExoTheme.textSecondary
             wrapMode: Text.Wrap
             Layout.fillWidth: true
@@ -114,8 +146,7 @@ Item {
         }
         Label {
             objectName: "editSourceEmptyHelp"
-            text: root.currentTab === 0 ? qsTr("Recent recordings appear here automatically.")
-                                       : qsTr("Or use the Add Media button.")
+            text: root.currentTab === 0 ? qsTr("Recent recordings appear here automatically.") : qsTr("Or use the Add Media button.")
             visible: sourceItems.count === 0 && root.currentTab !== 2
             color: ExoTheme.textMuted
             font.pixelSize: ExoTheme.fontCaption
@@ -131,17 +162,17 @@ Item {
             Layout.fillHeight: true
             clip: true
             reuseItems: true
-            model: root.currentTab === 0 ? root.recordings.recentRecordingOptions
-                   : root.currentTab === 1 ? root.session.media : []
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            model: root.currentTab === 0 ? root.recordings.recentRecordingOptions : root.currentTab === 1 ? root.session.media : []
+            ScrollBar.vertical: ScrollBar {
+                policy: ScrollBar.AsNeeded
+            }
             delegate: ItemDelegate {
                 id: sourceItem
                 required property var modelData
                 width: sourceItems.width
                 height: 66
                 leftPadding: thumbnail.visible ? 80 : 12
-                text: (modelData.name || modelData.label) + "\n"
-                      + (modelData.available ? (modelData.metadata || "") + " " + root.session.formatClock(modelData.durationMs || 0) : qsTr("Media unavailable"))
+                text: (modelData.name || modelData.label) + "\n" + (modelData.available ? (modelData.metadata || "") + " " + root.session.formatClock(modelData.durationMs || 0) : qsTr("Media unavailable"))
                 Accessible.name: text
                 Image {
                     id: thumbnail
@@ -157,15 +188,23 @@ Item {
                 onDoubleClicked: add()
                 Keys.onReturnPressed: add()
                 function add(): void {
-                    if (root.currentTab === 0) root.session.addHistory(modelData.path);
-                    else root.session.appendAsset(modelData.id);
+                    if (root.currentTab === 0)
+                        root.session.addHistory(modelData.path);
+                    else
+                        root.session.appendAsset(modelData.id);
                 }
                 Drag.active: drag.active
                 Drag.supportedActions: Qt.CopyAction
                 Drag.dragType: Drag.Automatic
-                Drag.mimeData: root.currentTab === 0 ? { "application/x-exosnap-history": modelData.path }
-                                                      : { "application/x-exosnap-asset": String(modelData.id) }
-                DragHandler { id: drag; target: null }
+                Drag.mimeData: root.currentTab === 0 ? {
+                    "application/x-exosnap-history": modelData.path
+                } : {
+                    "application/x-exosnap-asset": String(modelData.id)
+                }
+                DragHandler {
+                    id: drag
+                    target: null
+                }
                 ToolTip.visible: hovered || activeFocus
                 ToolTip.text: qsTr("Double-click or press Enter to add")
             }

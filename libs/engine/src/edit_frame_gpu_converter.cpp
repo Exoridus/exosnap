@@ -1,7 +1,11 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <cstdint>
 #include <exosnap/engine/edit_frame_gpu_converter.h>
 #include <exosnap/engine/gpu_surface_inventory.h>
 #include <exosnap/engine/performance_measurements.h>
+#include <exosnap/engine/sdr_transfer.h>
 
 #include "exosnap/engine/color_metadata.h"
 #include "exosnap/engine/edit_player_engine.h"
@@ -50,7 +54,7 @@ Texture2D<uint> VPlane : register(t2);
 cbuffer YuvToBgraConstants : register(b0) {
     float c_rv, c_gu, c_gv, c_bu;
     float y_scale;
-    float y_off, c_off, pad0;
+    float y_off, c_off, linear_output;
 };
 
 float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
@@ -73,6 +77,8 @@ float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TAR
     float r = yn + c_rv * vn;
     float g = yn - c_gu * un - c_gv * vn;
     float b = yn + c_bu * un;
+    if (linear_output > 0.5f)
+        return float4(Bt709ToLinear(r), Bt709ToLinear(g), Bt709ToLinear(b), 1.0f);
     return float4(saturate(r), saturate(g), saturate(b), 1.0f);
 }
 )";
@@ -306,7 +312,8 @@ bool EditFrameGpuConverter::Init(ID3D11Device* device, ID3D11DeviceContext* cont
     // Both pixel shaders are compiled up front: which one a clip needs is known
     // only per frame, and a first-frame compile hitch is exactly the stutter
     // this render path exists to remove.
-    if (!CompilePixelShader(device_, kYuvPixelShaderSrc, "D3DCompile(edit frame yuv pixel shader)", yuv_shader_, err)) {
+    const std::string yuv_source = std::string(kBt709TransferHlsl) + kYuvPixelShaderSrc;
+    if (!CompilePixelShader(device_, yuv_source.c_str(), "D3DCompile(edit frame yuv pixel shader)", yuv_shader_, err)) {
         return false;
     }
     if (!CompilePixelShader(device_, kPqPixelShaderSrc, "D3DCompile(edit frame pq pixel shader)", pq_shader_, err)) {
@@ -388,7 +395,7 @@ bool EditFrameGpuConverter::UploadPlane(int index, const uint8_t* src, UINT src_
 }
 
 bool EditFrameGpuConverter::Convert(const RawDecodedVideoFrame& frame, ID3D11Texture2D* dst, float hdr_peak_scale,
-                                    std::string& err) {
+                                    std::string& err, bool linear_bt709, ID3D11RenderTargetView* destination_view) {
     if (context_ == nullptr || device_ == nullptr || vertex_shader_ == nullptr || dst == nullptr || frame.width == 0 ||
         frame.height == 0 || frame.y_plane == nullptr || frame.u_plane == nullptr || frame.v_plane == nullptr) {
         err = "EditFrameGpuConverter::Convert called before Init or with invalid arguments";
@@ -396,6 +403,12 @@ bool EditFrameGpuConverter::Convert(const RawDecodedVideoFrame& frame, ID3D11Tex
     }
 
     const bool ten_bit = frame.format == DecodedPixelFormat::Yuv420P10;
+    if (linear_bt709 && (frame.is_pq_source || frame.format != DecodedPixelFormat::Yuv420P8 ||
+                         frame.matrix != MatrixCoefficients::Bt709 || frame.primaries != ColorPrimaries::Bt709 ||
+                         frame.transfer != TransferCharacteristics::Bt709 || frame.range == ColorRange::Unspecified)) {
+        err = "Timeline rendering supports only SDR 8-bit BT.709 sources.";
+        return false;
+    }
     // is_pq_source is only meaningful for the 10-bit 4:2:0 layout HDR10 clips
     // decode to (see RawDecodedVideoFrame); anything else takes the SDR path
     // rather than reading its planes as codes they are not.
@@ -413,8 +426,9 @@ bool EditFrameGpuConverter::Convert(const RawDecodedVideoFrame& frame, ID3D11Tex
     }
 
     if (!constants_valid_ || frame.matrix != last_matrix_ || frame.range != last_range_ ||
-        frame.format != last_format_ || hdr_peak_scale != last_peak_scale_) {
-        const GpuYuvConstants yc = YuvConstantsFor(frame.matrix, frame.range, frame.format);
+        frame.format != last_format_ || hdr_peak_scale != last_peak_scale_ || linear_bt709 != last_linear_) {
+        GpuYuvConstants yc = YuvConstantsFor(frame.matrix, frame.range, frame.format);
+        yc.pad0 = linear_bt709 ? 1.0f : 0.0f;
         context_->UpdateSubresource(yuv_constants_.get(), 0, nullptr, &yc, 0, 0);
         GpuPqConstants pc{};
         pc.peak_scale = hdr_peak_scale;
@@ -423,6 +437,7 @@ bool EditFrameGpuConverter::Convert(const RawDecodedVideoFrame& frame, ID3D11Tex
         last_range_ = frame.range;
         last_format_ = frame.format;
         last_peak_scale_ = hdr_peak_scale;
+        last_linear_ = linear_bt709;
         constants_valid_ = true;
     }
 
@@ -432,7 +447,7 @@ bool EditFrameGpuConverter::Convert(const RawDecodedVideoFrame& frame, ID3D11Tex
     // invalidation hook, and one CreateRenderTargetView per frame is noise next
     // to the draw it sets up.
     winrt::com_ptr<ID3D11RenderTargetView> rtv;
-    const HRESULT hr = device_->CreateRenderTargetView(dst, nullptr, rtv.put());
+    const HRESULT hr = destination_view ? S_OK : device_->CreateRenderTargetView(dst, nullptr, rtv.put());
     if (FAILED(hr)) {
         SetHResultError(err, "CreateRenderTargetView(edit frame dst)", hr);
         return false;
@@ -444,7 +459,7 @@ bool EditFrameGpuConverter::Convert(const RawDecodedVideoFrame& frame, ID3D11Tex
     viewport.MinDepth = 0.0f;
     viewport.MaxDepth = 1.0f;
 
-    ID3D11RenderTargetView* rtv_raw = rtv.get();
+    ID3D11RenderTargetView* rtv_raw = destination_view ? destination_view : rtv.get();
     ID3D11Buffer* constants = pq ? pq_constants_.get() : yuv_constants_.get();
     ID3D11ShaderResourceView* srvs[3] = {planes_[0].srv.get(), planes_[1].srv.get(), planes_[2].srv.get()};
 

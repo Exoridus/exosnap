@@ -18,6 +18,7 @@ Item {
             player: testPagePlayer
             exporter: testPageExporter
             recordings: testPageRecordings
+            Rectangle { anchors.fill: parent; z: -1; color: ExoTheme.background }
         }
     }
 
@@ -35,6 +36,175 @@ Item {
             const item = findChild(page, name);
             verify(!!item, "Object exists");
             return item;
+        }
+
+        function test_splitters_restore_clamp_resize_and_keyboard() {
+            const page = make();
+            const preferences = child(page, "editLayoutPreferences");
+            const source = child(page, "editSourceBrowser");
+            const timeline = child(page, "editTimelineZone");
+            const upper = child(page, "editHorizontalSplit");
+            preferences.sourceFraction = 0.4;
+            preferences.timelineFraction = 0.55;
+            page.restoreHorizontal();
+            page.restoreVertical();
+            tryVerify(() => Math.abs(source.width / (upper.width - 6) - 0.4) < 0.01);
+            verify(timeline.height > 250);
+            page.width = 1500;
+            page.height = 1000;
+            tryVerify(() => Math.abs(source.width / (upper.width - 6) - 0.4) < 0.01);
+            page.width = 760;
+            page.height = 520;
+            preferences.sourceFraction = 0.99;
+            preferences.timelineFraction = 0.99;
+            page.restoreHorizontal();
+            page.restoreVertical();
+            tryVerify(() => source.width >= 220 && upper.width - source.width - 6 >= 239);
+            verify(timeline.height >= 200);
+            verify(upper.height >= 160);
+            const horizontal = child(page, "editHorizontalSplitHandle");
+            preferences.sourceFraction = 0.4;
+            page.restoreHorizontal();
+            horizontal.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Right);
+            compare(preferences.sourceFraction, 0.43);
+            const vertical = child(page, "editVerticalSplitHandle");
+            preferences.timelineFraction = 0.4;
+            vertical.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Up);
+            compare(preferences.timelineFraction, 0.43);
+            preferences.sourceFraction = NaN;
+            preferences.timelineFraction = -1;
+            page.restoreHorizontal();
+            page.restoreVertical();
+            verify(source.width >= 220);
+            preferences.sourceFraction = 0.29;
+            preferences.timelineFraction = 0.37;
+        }
+
+        function test_splitters_persist_across_processes() {
+            if (testPersistenceStage.length === 0) return;
+            const page = make();
+            const preferences = child(page, "editLayoutPreferences");
+            if (testPersistenceStage === "write") {
+                preferences.sourceFraction = 0.41;
+                preferences.timelineFraction = 0.53;
+                preferences.sync();
+            } else {
+                compare(preferences.sourceFraction, 0.41);
+                compare(preferences.timelineFraction, 0.53);
+                page.width = 1500;
+                page.height = 1000;
+                const source = child(page, "editSourceBrowser");
+                const upper = child(page, "editHorizontalSplit");
+                tryVerify(() => Math.abs(source.width / (upper.width - 6) - 0.41) < 0.01);
+                page.width = 760;
+                page.height = 520;
+                tryVerify(() => source.width >= 220 && upper.width - source.width - 6 >= 239);
+            }
+        }
+
+        function test_real_media_worker_seeks_generation_and_playback() {
+            if (!testMediaPreview.available)
+                skip("Set EXOSNAP_EDIT_RENDER_FIXTURES for real media.");
+            testMediaPreview.open();
+            let frame = {};
+            tryVerify(() => { frame = testMediaPreview.takeFrame(); return frame.time === 0 || testMediaPreview.error.length > 0; }, 5000);
+            compare(testMediaPreview.error, "");
+            const seeks = [1499, 1500, 1750, 1999, 2000, 3000, 1750, 0];
+            for (const position of seeks) {
+                testMediaPreview.seek(position);
+                tryVerify(() => { frame = testMediaPreview.takeFrame(); return frame.time === position; }, 5000);
+                compare(frame.layers, position >= 1500 && position < 2000 ? 2 : 1);
+                if (position === 1750) compare(frame.weight, 0.5);
+                compare(testMediaPreview.error, "");
+            }
+            verify(testMediaPreview.rejectsStaleFrame());
+            testMediaPreview.seek(0);
+            tryVerify(() => { frame = testMediaPreview.takeFrame(); return frame.time === 0; }, 5000);
+            testMediaPreview.play();
+            let delivered = 0;
+            let overlap = false;
+            let incoming = false;
+            let lastTime = -1;
+            let firstGeneration = 0;
+            let lastGeneration = 0;
+            const started = Date.now();
+            tryVerify(() => {
+                frame = testMediaPreview.takeFrame();
+                if (frame.time !== undefined && frame.time !== lastTime) {
+                    lastTime = frame.time;
+                    if (!firstGeneration) firstGeneration = frame.generation;
+                    lastGeneration = frame.generation;
+                    ++delivered;
+                    overlap = overlap || frame.layers === 2;
+                    incoming = incoming || frame.time >= 2000;
+                }
+                return testMediaPreview.ended || testMediaPreview.error.length > 0;
+            }, 12000);
+            compare(testMediaPreview.error, "");
+            verify(overlap && incoming);
+            verify(delivered > 20);
+            console.log("Crossfade worker delivery:", lastGeneration - firstGeneration + 1,
+                "mailbox frames,", delivered, "polled frames in", Date.now() - started, "ms");
+        }
+
+        function test_crossfade_overlay_duration_keyboard_and_visual() {
+            while (testSession.canUndo) testSession.undo();
+            const asset = testSession.media[0].id;
+            testSession.appendAsset(asset);
+            testSession.appendAsset(asset);
+            const videos = testSession.visibleClips(0, 200000).filter(row => row.video);
+            verify(testSession.canCrossfade(videos[0].id));
+            verify(!testSession.canCrossfade(videos[1].id));
+            testSession.applyCrossfade(videos[0].id, 500);
+            compare(testSession.durationMs, 199500);
+            const page = make({ session: testSession, timeline: testTimeline, player: testPlayer });
+            const strip = child(page, "editClipTimeline");
+            strip.zoomTo(200);
+            child(page, "editTimelineScroll").contentX = strip.positionAt(98500);
+            const overlay = child(page, "editCrossfadeOverlay");
+            overlay.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Return);
+            const popup = child(page, "editCrossfadeDurationPopup");
+            tryCompare(popup, "opened", true);
+            const duration = child(page, "editCrossfadeDuration");
+            duration.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Up);
+            compare(testSession.transitions[0].durationMs, 501);
+            keyClick(Qt.Key_Escape);
+            tryCompare(popup, "visible", false);
+            child(page, "editSourceBrowser").currentTab = 2;
+            if (testVisualDirectory.length > 0) {
+                let saved = false;
+                verify(page.grabToImage(result => {
+                    saved = result.saveToFile(testVisualDirectory + "/edit-crossfade-" + testScale + ".png");
+                }, Qt.size(Math.round(page.width * Number(testScale)), Math.round(page.height * Number(testScale)))));
+                tryVerify(() => saved);
+            }
+            child(page, "editCrossfadeOverlay").forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Delete);
+            compare(testSession.transitions.length, 0);
+            compare(testSession.durationMs, 200000);
+            while (testSession.canUndo) testSession.undo();
+        }
+
+        function test_export_cancel_is_accessible_and_navigation_independent() {
+            const page = make();
+            testEditHarness.exportVisualState(EditExportAdapter.Running);
+            const cancel = child(page, "editCancelExport");
+            verify(cancel.visible && cancel.enabled);
+            compare(cancel.Accessible.name, qsTr("Cancel export"));
+            page.visible = false;
+            compare(testPageExporter.state, EditExportAdapter.Running);
+            page.visible = true;
+            cancel.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Space);
+            compare(testPageExporter.state, EditExportAdapter.Cancelling);
+            verify(testPageExporter.running);
+            verify(!cancel.enabled);
+            compare(child(page, "editExportProgress").text, qsTr("Cancelling…"));
+            testEditHarness.exportVisualState(EditExportAdapter.Options);
         }
 
         function test_icon_actions_data() {
@@ -91,6 +261,8 @@ Item {
             tryCompare(transitions, "activeFocus", true);
             keyClick(Qt.Key_Space);
             tryCompare(title, "text", qsTr("Transitions will appear here when available."));
+            verify(!title.visible);
+            verify(child(page, "editCrossfadeItem").visible);
             compare(add.visible, false);
             compare(child(page, "editSourceItems").count, 0);
             keyClick(Qt.Key_Right);

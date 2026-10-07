@@ -383,6 +383,9 @@ add_library(exosnap_engine STATIC
     src/edit_player_hw_decode.cpp
     include/exosnap/engine/edit_frame_gpu_converter.h
     src/edit_frame_gpu_converter.cpp
+    src/edit_timeline_compositor.cpp
+    src/edit_timeline_reader.cpp
+    src/edit_timeline_render.cpp
     src/edit_audio_mix.h
     src/edit_audio_mix.cpp
     src/edit_playback_pacing.h
@@ -1500,12 +1503,24 @@ exosnap_add_gtest(
     TEST_PREFIX engine.
     SOURCES tests/test_edit_frame_gpu_converter.cpp
             src/edit_frame_gpu_converter.cpp
+            src/edit_timeline_compositor.cpp
             src/yuv_to_bgra.cpp
             src/hdr_preview.cpp
     LIBRARIES d3d11.lib dxgi.lib d3dcompiler.lib
 )
 target_include_directories(test_edit_frame_gpu_converter PRIVATE src include)
 target_compile_definitions(test_edit_frame_gpu_converter PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME test_edit_timeline_render
+    TEST_PREFIX engine.
+    PHASE gpu
+    LABELS live
+    SOURCES tests/test_edit_timeline_render.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_edit_timeline_render PRIVATE include)
+target_compile_definitions(test_edit_timeline_render PRIVATE NOMINMAX)
 
 # Producer-side shared GPU texture for the WYSIWYG preview tap: create the
 # NT-handle keyed-mutex texture, publish a synthetic frame, open the handle on

@@ -28,7 +28,8 @@ class EditFrameGpuConverter {
     // target of exactly frame.width x frame.height. hdr_peak_scale is the
     // display peak in reference-white multiples (HdrPeakScale()); ignored
     // unless frame.is_pq_source.
-    bool Convert(const RawDecodedVideoFrame& frame, ID3D11Texture2D* dst, float hdr_peak_scale, std::string& err);
+    bool Convert(const RawDecodedVideoFrame& frame, ID3D11Texture2D* dst, float hdr_peak_scale, std::string& err,
+                 bool linear_bt709 = false, ID3D11RenderTargetView* destination_view = nullptr);
 
   private:
     // One uploaded source plane (Y, U or V). The textures are owned by this
@@ -68,6 +69,7 @@ class EditFrameGpuConverter {
     ColorRange last_range_ = ColorRange::Limited;
     DecodedPixelFormat last_format_ = DecodedPixelFormat::Yuv420P8;
     float last_peak_scale_ = 0.0f;
+    bool last_linear_ = false;
 };
 
 } // namespace exosnap::engine

@@ -2,14 +2,55 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
 #include <thread>
 #include <vector>
 
+#include "exosnap/engine/timeline_audio_queue.h"
 #include "exosnap/engine/wasapi_audio_render.h"
 
 namespace {
 
 using exosnap::engine::WasapiAudioRenderer;
+
+TEST(TimelineAudioQueue, UnderrunDiscardsLateSamplesWithoutPermanentDelay) {
+    std::deque<float> queue;
+    const std::vector<float> stale(9600, 0.25f);
+    exosnap::engine::AppendTimelineAudio(queue, 24000, 9600, stale, 19200);
+    EXPECT_TRUE(queue.empty());
+    std::vector<float> current(9600);
+    for (size_t frame = 0; frame < current.size() / 2; ++frame)
+        current[frame * 2] = current[frame * 2 + 1] = static_cast<float>(22000 + frame);
+    exosnap::engine::AppendTimelineAudio(queue, 24000, 22000, current, 19200);
+    ASSERT_EQ(queue.size(), 5600u);
+    EXPECT_EQ(queue.front(), 24000);
+    EXPECT_EQ(queue.back(), 26799);
+    const std::vector<float> later(40000, 0.5f);
+    exosnap::engine::AppendTimelineAudio(queue, 24000, 26800, later, 19200);
+    EXPECT_EQ(queue.size(), 19200u);
+}
+
+TEST(TimelineAudioQueue, EndpointPaddingAndSlowerProducerKeepContinuousSamples) {
+    std::deque<float> queue(19200, 0.25f);
+    uint64_t consumed = 0;
+    for (int tick = 0; tick < 300; ++tick) {
+        ASSERT_GE(queue.size(), 960u) << "Unexpected silence at endpoint tick " << tick;
+        for (int sample = 0; sample < 960; ++sample) {
+            ASSERT_EQ(queue.front(), 0.25f);
+            queue.pop_front();
+        }
+        consumed += 480;
+        if (tick % 3 == 2) {
+            const auto first = consumed + queue.size() / 2;
+            const auto through = exosnap::engine::TimelineAudioRenderThrough(480000, consumed);
+            std::vector<float> samples(static_cast<size_t>(through - first) * 2, 0.25f);
+            exosnap::engine::AppendTimelineAudio(queue, consumed, first, samples, 19200);
+            EXPECT_LE(queue.size(), 19200u);
+        }
+    }
+}
 
 // Construction/destruction without Init() must be safe -- no COM object was
 // ever created, Shutdown() (called from the destructor) must handle that.

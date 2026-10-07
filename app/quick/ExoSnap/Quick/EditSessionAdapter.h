@@ -60,6 +60,8 @@ class EditSessionAdapter : public QObject {
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY workspaceChanged FINAL)
     Q_PROPERTY(qulonglong selectedClip READ selectedClip NOTIFY workspaceChanged FINAL)
     Q_PROPERTY(QString workspaceError READ workspaceError NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(QVariantList transitions READ transitions NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(qulonglong selectedTransition READ selectedTransition NOTIFY workspaceChanged FINAL)
 
   public:
     // Severity of the post-flight report, as carried by the header badge.
@@ -91,6 +93,15 @@ class EditSessionAdapter : public QObject {
         return workspace_error_;
     }
     Q_INVOKABLE QVariantList visibleClips(qint64 from_ms, qint64 to_ms) const;
+    QVariantList transitions() const;
+    qulonglong selectedTransition() const {
+        return selected_transition_;
+    }
+    Q_INVOKABLE void selectTransition(qulonglong outgoing);
+    Q_INVOKABLE bool applyCrossfade(qulonglong outgoing = 0, qint64 duration_ms = 500);
+    Q_INVOKABLE bool canCrossfade(qulonglong outgoing = 0) const;
+    Q_INVOKABLE bool dropCrossfade(qint64 at_ms, qint64 tolerance_ms);
+    Q_INVOKABLE void removeTransition();
     Q_INVOKABLE void selectClip(qulonglong id);
     Q_INVOKABLE void appendAsset(qulonglong id, qint64 at_ms = -1);
     Q_INVOKABLE void importMedia(const QUrl& url, bool append = false, qint64 at_ms = -1);
@@ -183,6 +194,7 @@ class EditSessionAdapter : public QObject {
     void closeRequested();
 
   private:
+    edit::Id selected_transition_ = 0;
     void publishWorkspace(bool changed);
     void applyReport(const EditContext& context);
     void rebuildFacts();

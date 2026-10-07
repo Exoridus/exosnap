@@ -1,10 +1,12 @@
 #include "EditExportAdapter.h"
+#include "EditRenderText.h"
 #include "EditSessionAdapter.h"
 #include "EditTimelineAdapter.h"
 #include "EditTimelineModels.h"
 
 #include "models/EditTimelineModel.h"
 
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QDir>
 #include <QEventLoop>
@@ -14,6 +16,7 @@
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QTranslator>
 #include <QVariantMap>
 
 #include <gtest/gtest.h>
@@ -41,6 +44,25 @@ RecordingMarker MakeMarker(uint64_t time_ms, const char* label = "m") {
     marker.time_ms = time_ms;
     marker.label = label;
     return marker;
+}
+
+TEST(EditRenderPresentation, LocalizesPolicyAndPreservesTechnicalDetail) {
+    EnsureApplication();
+    class Translator final : public QTranslator {
+      public:
+        bool isEmpty() const override {
+            return false;
+        }
+        QString translate(const char* context, const char* source, const char*, int) const override {
+            return QByteArray(context) == "EditRender" && QByteArray(source) == "The timeline is empty."
+                       ? QStringLiteral("Die Zeitleiste ist leer.")
+                       : QString();
+        }
+    } translator;
+    ASSERT_TRUE(QCoreApplication::installTranslator(&translator));
+    EXPECT_EQ(TranslateEditRenderReason(QStringLiteral("The timeline is empty. (code=7)")),
+              QStringLiteral("Die Zeitleiste ist leer. (code=7)"));
+    QCoreApplication::removeTranslator(&translator);
 }
 
 // A fixture clip: no master path, so nothing is opened, decoded or remuxed.

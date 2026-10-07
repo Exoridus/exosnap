@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <span>
 #include <string>
 #include <thread>
 
@@ -73,7 +74,14 @@ class WasapiAudioRenderer {
 
     // Starts/stops the render callback thread. Init() must have succeeded.
     // No-op (not an error) if not initialized or already in the requested state.
-    void Start();
+    void Start(std::span<const float> initial_samples = {}, bool timeline = false);
+    // Timeline writes are nonblocking and discard samples already replaced by
+    // endpoint silence. The sample origin is the most recent Start().
+    void PushTimelineSamples(uint64_t first_frame, std::span<const float> samples);
+    [[nodiscard]] uint64_t TimelineConsumedFrames();
+    [[nodiscard]] bool Running() const noexcept {
+        return running_.load();
+    }
     void Stop();
 
     // Appends `frame_count` stereo frames (frame_count * 2 floats,
@@ -133,6 +141,8 @@ class WasapiAudioRenderer {
                                       // or a Stop() is in progress
     bool stop_requested_ = false;     // guarded by ring_mutex_; wakes+drops any blocked PushSamples
     uint32_t ring_capacity_floats_;   // ring_ capacity in interleaved floats (frames * channels)
+    bool timeline_mode_ = false;
+    uint64_t timeline_consumed_frames_ = 0; // guarded by ring_mutex_, includes underrun silence
 
     // Units of the IAudioClock stream position per second (IAudioClock::
     // GetFrequency). 0 == no usable clock service.

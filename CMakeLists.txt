@@ -305,6 +305,8 @@ if(TARGET exosnap_updater)
             libs/capability/src/capability_builder.cpp
             libs/capability/src/container_compat_registry.cpp
             libs/capability/src/encoder_device_resolver.cpp
+            libs/engine/src/edit_timeline_reader.cpp
+            libs/engine/src/edit_timeline_export.cpp
             app/diagnostics/RecommendationEngine.cpp
             app/diagnostics/DiagnosticsController.cpp
             app/models/OutputSettingsModel.cpp
