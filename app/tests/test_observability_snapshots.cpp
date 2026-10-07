@@ -404,6 +404,12 @@ TEST(DiagnosticsResultsJson, OptimisationBundlesIntoTheTipChipAndIsNotAlwaysVisi
 // settings.snapshot
 // ---------------------------------------------------------------------------
 
+TEST(SettingsSnapshotJson, ObsoleteEditorPreferenceIsNotReported) {
+    const QJsonObject app = SettingsSnapshotToJson({}).value(QStringLiteral("app")).toObject();
+    EXPECT_TRUE(app.contains(QStringLiteral("showNotifications")));
+    EXPECT_FALSE(app.contains(QStringLiteral("openEditorWhenFinished")));
+}
+
 TEST(SettingsSnapshotJson, RequestedAndEffectiveDifferencesAreReportedFieldByField) {
     SettingsSnapshotInputs inputs;
     inputs.requested = MakeDefaultPreset().config;

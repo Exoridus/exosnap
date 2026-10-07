@@ -1,13 +1,7 @@
 import QtQuick
-import QtQuick.Controls
-import QtQuick.Shapes
+import QtQuick.Controls.Basic
 
-// Player frame of the Edit surface: the decoded picture, a floating play/pause
-// toggle, and the clip's own meta line in the corner.
-//
-// The picture is ExoEditPlayerItem, a scene-graph item — there is no native
-// child window anywhere in this component, so the toggle and the meta line are
-// ordinary QML items composited over it rather than siblings fighting a HWND.
+// Scene-graph video keeps playback controls composited over the decoded frame.
 Rectangle {
     id: root
 
@@ -58,11 +52,6 @@ Rectangle {
         }
     }
 
-    // QCR-504. This was a Rectangle with a MouseArea that CLAIMED
-    // Accessible.Button: the editor's central transport control was mouse-only,
-    // not in the tab order, and inert to Enter/Space. An AbstractButton keeps
-    // the drawing exactly as it was and makes the claim true; the timeline
-    // below adds the rest of the keyboard contract.
     AbstractButton {
         id: playToggle
 
@@ -70,21 +59,8 @@ Rectangle {
         anchors.centerIn: parent
         implicitWidth: 60
         implicitHeight: 60
-        // Nothing to transport without a decodable clip — and the toggle would
-        // otherwise sit on top of the placeholder that says so.
-        //
-        // Deliberately still bound to clipOpen alone, NOT to the fade below.
-        // QCR-504 made this a real control in the tab order, reachable by
-        // Enter/Space; `visible: false` would take it back out of both. The
-        // opacity does the hiding, and hover brings it back before any pointer
-        // can reach it, so a faded toggle is never an unmarked hit target.
         visible: root.player.clipOpen
-        // The picture is the subject of this surface; the transport is not. It
-        // stands while the preview is paused (the surface has to say how to
-        // start it), while the pointer or the keyboard is on it, and for a
-        // moment after a transport change so the new state is legible before it
-        // clears. A scrub hides it outright: the drag is aimed at the frame
-        // under the playhead, which is exactly what an overlay would cover.
+        // Keep the faded control focusable; keyboard focus restores its visible affordance.
         opacity: root.player.scrubbing ? 0.0
                  : (!root.player.playing || playToggle.hovered || playToggle.visualFocus
                     || transportHold.running) ? 1.0 : 0.0
@@ -92,6 +68,8 @@ Rectangle {
         focusPolicy: Qt.StrongFocus
         Accessible.role: Accessible.Button
         Accessible.name: root.player.playing ? qsTr("Pause preview") : qsTr("Play preview")
+        ToolTip.text: root.player.playing ? qsTr("Pause preview (Space)") : qsTr("Play preview (Space)")
+        ToolTip.visible: hovered || visualFocus
         onClicked: root.player.togglePlay()
 
         Behavior on opacity {
@@ -137,56 +115,12 @@ Rectangle {
             border.color: playToggle.visualFocus ? ExoTheme.text : ExoTheme.lineStrong
         }
 
-        contentItem: Item {
-            Shape {
-                anchors.centerIn: parent
-                width: 20
-                height: 22
-                visible: !root.player.playing
-                preferredRendererType: Shape.CurveRenderer
-
-                ShapePath {
-                    fillColor: ExoTheme.text
-                    strokeWidth: -1
-                    startX: 3
-                    startY: 0
-
-                    PathLine {
-                        x: 20
-                        y: 11
-                    }
-
-                    PathLine {
-                        x: 3
-                        y: 22
-                    }
-
-                    PathLine {
-                        x: 3
-                        y: 0
-                    }
-                }
-            }
-
-            Row {
-                anchors.centerIn: parent
-                spacing: 6
-                visible: root.player.playing
-
-                Rectangle {
-                    width: 5
-                    height: 22
-                    radius: 1
-                    color: ExoTheme.text
-                }
-
-                Rectangle {
-                    width: 5
-                    height: 22
-                    radius: 1
-                    color: ExoTheme.text
-                }
-            }
+        contentItem: ExoGlyph {
+            kind: root.player.playing ? ExoGlyph.Pause : ExoGlyph.Run
+            color: ExoTheme.text
+            width: 24
+            height: 24
+            scale: 0.5
         }
     }
 

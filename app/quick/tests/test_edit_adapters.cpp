@@ -60,6 +60,24 @@ EditContext MakeContext(double duration_seconds = 100.0) {
 
 // ── Trim snapping (pure) ────────────────────────────────────────────────────
 
+TEST(EditWorkspacePresentation, SelectingEitherLinkedRowHighlightsTheWholeGroup) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    auto rows = session.visibleClips(0, 100000);
+    ASSERT_EQ(rows.size(), 2);
+    const auto video = rows[0].toMap();
+    const auto audio = rows[1].toMap();
+    EXPECT_TRUE(video.value(QStringLiteral("video")).toBool());
+    EXPECT_FALSE(audio.value(QStringLiteral("video")).toBool());
+    EXPECT_EQ(video.value(QStringLiteral("group")), audio.value(QStringLiteral("group")));
+    EXPECT_EQ(video.value(QStringLiteral("path")), audio.value(QStringLiteral("path")));
+    session.selectClip(audio.value(QStringLiteral("id")).toULongLong());
+    rows = session.visibleClips(0, 100000);
+    EXPECT_TRUE(rows[0].toMap().value(QStringLiteral("selected")).toBool());
+    EXPECT_TRUE(rows[1].toMap().value(QStringLiteral("selected")).toBool());
+}
+
 TEST(EditTrimSnap, SnapsBackToTheKeyframeAtOrBeforeTheRequest) {
     const std::vector<int64_t> keyframes{0, 2'000'000, 4'000'000, 6'000'000};
     EXPECT_EQ(SnapTrimBoundaryUs(5'900'000, keyframes, {}), 4'000'000);

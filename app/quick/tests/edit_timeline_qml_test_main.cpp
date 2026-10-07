@@ -8,9 +8,13 @@
 // no-master-path fixture context `test_edit_adapters.cpp` uses (nothing is
 // opened, decoded or remuxed), and handed to QML as context properties.
 
+#include "EditExportAdapter.h"
 #include "EditPlayerAdapter.h"
 #include "EditSessionAdapter.h"
 #include "EditTimelineAdapter.h"
+#include "RecordViewModelAdapter.h"
+
+#include "viewmodels/RecordViewModel.h"
 
 #include <QCoreApplication>
 #include <QObject>
@@ -72,9 +76,22 @@ class Setup final : public QObject {
         engine->rootContext()->setContextProperty(QStringLiteral("testTimeline"), timeline_);
         engine->rootContext()->setContextProperty(QStringLiteral("testPlayer"), player_);
         engine->rootContext()->setContextProperty(QStringLiteral("testTransportPlayer"), transport_player_);
+
+        auto* page_session = new EditSessionAdapter(this);
+        auto* page_timeline = new EditTimelineAdapter(this);
+        auto* page_player = new EditPlayerAdapter(this);
+        auto* page_exporter = new exosnap::quick::EditExportAdapter(this);
+        auto* page_recordings = new exosnap::quick::RecordViewModelAdapter(&record_view_model_, this);
+        page_exporter->setSession(page_session);
+        engine->rootContext()->setContextProperty(QStringLiteral("testPageSession"), page_session);
+        engine->rootContext()->setContextProperty(QStringLiteral("testPageTimeline"), page_timeline);
+        engine->rootContext()->setContextProperty(QStringLiteral("testPagePlayer"), page_player);
+        engine->rootContext()->setContextProperty(QStringLiteral("testPageExporter"), page_exporter);
+        engine->rootContext()->setContextProperty(QStringLiteral("testPageRecordings"), page_recordings);
     }
 
   private:
+    exosnap::RecordViewModel record_view_model_;
     EditSessionAdapter* session_ = nullptr;
     EditTimelineAdapter* timeline_ = nullptr;
     EditPlayerAdapter* player_ = nullptr;

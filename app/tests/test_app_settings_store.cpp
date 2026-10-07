@@ -358,59 +358,32 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingShowNotifications_DefaultsToT
     EXPECT_TRUE(loaded.show_notifications);
 }
 
-// open_editor_when_finished round-trip tests. Was a debug-only
-// roadmap-dummy toggle (no engine setting backed it, no Release row existed);
-// now a real, persisted preference: default ON (recording completion opens
-// the Edit overlay directly), OFF falls back to a notification toast
-// offering Edit/Show-in-folder instead.
-TEST(AppSettingsStoreTest, AppSettingsStore_DefaultOpenEditorWhenFinishedIsTrue) {
-    PersistedAppSettings settings;
-    EXPECT_TRUE(settings.open_editor_when_finished);
+TEST(AppSettingsStoreTest, ObsoleteEditorPreferenceIsIgnored) {
+    for (bool old_value : {false, true}) {
+        QTemporaryDir temp_dir;
+        ASSERT_TRUE(temp_dir.isValid());
+        const QString settings_path = TempSettingsPath(temp_dir);
+        {
+            QSettings settings(settings_path, QSettings::IniFormat);
+            settings.setValue(QStringLiteral("editor/open_editor_when_finished"), old_value);
+            settings.sync();
+        }
+        AppSettingsStore store(settings_path);
+        const PersistedAppSettings loaded = store.Load();
+        EXPECT_TRUE(loaded.show_notifications);
+        EXPECT_FALSE(loaded.minimize_to_tray);
+        ASSERT_TRUE(store.Save(loaded));
+    }
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_OpenEditorWhenFinished_True) {
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-
-    AppSettingsStore store(TempSettingsPath(temp_dir));
-    PersistedAppSettings settings;
-    settings.open_editor_when_finished = true;
-    ASSERT_TRUE(store.Save(settings));
-
-    const PersistedAppSettings loaded = store.Load();
-    EXPECT_TRUE(loaded.open_editor_when_finished);
-}
-
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_OpenEditorWhenFinished_False) {
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-
-    AppSettingsStore store(TempSettingsPath(temp_dir));
-    PersistedAppSettings settings;
-    settings.open_editor_when_finished = false;
-    ASSERT_TRUE(store.Save(settings));
-
-    const PersistedAppSettings loaded = store.Load();
-    EXPECT_FALSE(loaded.open_editor_when_finished);
-}
-
-TEST(AppSettingsStoreTest, AppSettingsStore_MissingOpenEditorWhenFinished_DefaultsToTrue) {
+TEST(AppSettingsStoreTest, FreshSettingsDoNotPersistEditorPreference) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
-
-    // Write a file without the open_editor_when_finished key in [editor].
-    {
-        QSettings s(settings_path, QSettings::IniFormat);
-        s.beginGroup(QStringLiteral("overlay"));
-        s.setValue(QStringLiteral("show_recording_overlay"), true);
-        s.endGroup();
-        s.sync();
-    }
-
     AppSettingsStore store(settings_path);
-    const PersistedAppSettings loaded = store.Load();
-    EXPECT_TRUE(loaded.open_editor_when_finished);
+    ASSERT_TRUE(store.Save({}));
+    QSettings settings(settings_path, QSettings::IniFormat);
+    EXPECT_FALSE(settings.contains(QStringLiteral("editor/open_editor_when_finished")));
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_Save_RemovesLegacyGroups) {

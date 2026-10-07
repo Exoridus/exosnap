@@ -2836,6 +2836,14 @@ Wahrscheinliche Ursache: </translation>
     </message>
 </context>
 <context>
+    <name>EditActionButton</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditActionButton.qml" line="+9"/>
+        <source>%1 (%2)</source>
+        <translation>%1 (%2)</translation>
+    </message>
+</context>
+<context>
     <name>EditExportAdapter</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="+187"/>
@@ -2882,12 +2890,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+47"/>
-        <source>Previous</source>
-        <translation>Zurück</translation>
-    </message>
-    <message>
-        <location line="+5"/>
+        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+65"/>
         <source>Pause</source>
         <translation>Pause</translation>
     </message>
@@ -2897,69 +2900,113 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Wiedergabe</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+1"/>
+        <source>Space</source>
+        <translation>Leertaste</translation>
+    </message>
+    <message>
+        <location line="+11"/>
         <source>Playback position</source>
         <translation>Wiedergabeposition</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+15"/>
         <source>Preview volume</source>
         <translation>Vorschaulautstärke</translation>
     </message>
     <message>
-        <location line="+11"/>
-        <location line="+0"/>
+        <location line="+12"/>
         <source>Undo</source>
         <translation>Rückgängig</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <location line="+0"/>
+        <location line="+1"/>
+        <source>Ctrl+Z</source>
+        <translation>Strg+Z</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Redo</source>
         <translation>Wiederholen</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="+1"/>
+        <source>Ctrl+Y</source>
+        <translation>Strg+Y</translation>
+    </message>
+    <message>
+        <location line="+8"/>
         <source>Split</source>
         <translation>Teilen</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="+1"/>
+        <source>Ctrl+B</source>
+        <translation>Strg+B</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <location line="+1"/>
         <source>Delete</source>
         <translation>Löschen</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Ripple</source>
-        <translation>Lücke schließen</translation>
-    </message>
-    <message>
-        <location line="+0"/>
+        <location line="+7"/>
         <source>Ripple delete</source>
         <translation>Löschen und Lücke schließen</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Snap</source>
-        <translation>Einrasten</translation>
+        <location line="+1"/>
+        <source>Shift+Delete</source>
+        <translation>Umschalt+Entf</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+22"/>
         <source>Timeline zoom</source>
         <translation>Zeitleistenzoom</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+14"/>
         <source>Export preset</source>
         <translation>Exportvorlage</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="-6"/>
         <source>Exporting %1%</source>
         <translation>Export läuft: %1 %</translation>
     </message>
     <message>
-        <location line="+0"/>
+        <location line="-119"/>
+        <source>Jump to start</source>
+        <translation>Zum Anfang springen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Home</source>
+        <translation>Pos1</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Back one second</source>
+        <translation>Eine Sekunde zurück</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Shift+Left</source>
+        <translation>Umschalt+Links</translation>
+    </message>
+    <message>
+        <location line="+88"/>
+        <source>Snapping</source>
+        <translation>Einrasten</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>%1%</source>
+        <translation>%1 %</translation>
+    </message>
+    <message>
+        <location line="+14"/>
         <source>Export</source>
         <translation>Exportieren</translation>
     </message>
@@ -2967,7 +3014,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditPlayer</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPlayer.qml" line="+94"/>
+        <location filename="../quick/ExoSnap/Quick/EditPlayer.qml" line="+70"/>
         <source>Pause preview</source>
         <translation>Vorschau pausieren</translation>
     </message>
@@ -2975,6 +3022,16 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <location line="+0"/>
         <source>Play preview</source>
         <translation>Vorschau abspielen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Pause preview (Space)</source>
+        <translation>Vorschau pausieren (Leertaste)</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Play preview (Space)</source>
+        <translation>Vorschau abspielen (Leertaste)</translation>
     </message>
 </context>
 <context>
@@ -3088,33 +3145,53 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditSourceBrowser</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSourceBrowser.qml" line="+18"/>
+        <location filename="../quick/ExoSnap/Quick/EditSourceBrowser.qml" line="+32"/>
         <source>History</source>
         <translation>Verlauf</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+10"/>
         <source>Media</source>
         <translation>Medien</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+10"/>
         <source>Transitions</source>
         <translation>Übergänge</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <location line="+60"/>
+        <location line="+10"/>
+        <location line="+79"/>
         <source>Import media</source>
         <translation>Medien importieren</translation>
     </message>
     <message>
-        <location line="-54"/>
-        <source>Transitions are not available yet.</source>
-        <translation>Übergänge sind noch nicht verfügbar.</translation>
+        <location line="-72"/>
+        <source>No recordings yet</source>
+        <translation>Noch keine Aufnahmen</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+1"/>
+        <source>Drop media here</source>
+        <translation>Medien hier ablegen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Transitions will appear here when available.</source>
+        <translation>Übergänge erscheinen hier, sobald sie verfügbar sind.</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Recent recordings appear here automatically.</source>
+        <translation>Letzte Aufnahmen erscheinen hier automatisch.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Or use the Add Media button.</source>
+        <translation>Oder Medien über die Plus-Schaltfläche hinzufügen.</translation>
+    </message>
+    <message>
+        <location line="+26"/>
         <source>Media unavailable</source>
         <translation>Medium nicht verfügbar</translation>
     </message>
@@ -3137,12 +3214,13 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditTimeline</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditTimeline.qml" line="+22"/>
+        <location filename="../quick/ExoSnap/Quick/EditTimeline.qml" line="+40"/>
         <source>Edit timeline. Left and Right seek; Up and Down select clips. Alt+Left/Right moves; add Control to trim the start or Shift to trim the end. Control+B splits; Delete removes; Shift+Delete closes the gap.</source>
         <translation>Zeitleiste bearbeiten. Links und Rechts ändern die Position; Auf und Ab wählen Clips. Alt+Links/Rechts verschiebt; zusätzlich Strg kürzt den Anfang, Umschalt das Ende. Strg+B teilt; Entf löscht; Umschalt+Entf schließt die Lücke.</translation>
     </message>
     <message>
-        <location line="+94"/>
+        <location line="+101"/>
+        <location line="+40"/>
         <source>Media unavailable</source>
         <translation>Medium nicht verfügbar</translation>
     </message>
@@ -4276,7 +4354,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Aufnahme blockiert</translation>
     </message>
     <message>
-        <location line="+182"/>
+        <location line="+176"/>
         <source>Frame saved</source>
         <translation>Einzelbild gespeichert</translation>
     </message>
@@ -4468,12 +4546,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     <message>
         <location line="-959"/>
         <location line="+1104"/>
-        <location line="+471"/>
+        <location line="+466"/>
         <source>Recording saved</source>
         <translation>Aufnahme gespeichert</translation>
     </message>
     <message>
-        <location line="-469"/>
+        <location line="-464"/>
         <source>2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB</source>
         <translation>2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB</translation>
     </message>
@@ -4491,12 +4569,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+4"/>
-        <location line="+499"/>
+        <location line="+494"/>
         <source>Recording stopped unexpectedly</source>
         <translation>Aufnahme unerwartet beendet</translation>
     </message>
     <message>
-        <location line="-498"/>
+        <location line="-493"/>
         <source>The encoder reported an error. The partial file was kept.</source>
         <translation>Der Encoder meldete einen Fehler. Die Teildatei wurde erhalten.</translation>
     </message>
@@ -4507,17 +4585,17 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="-1142"/>
-        <location line="+1616"/>
+        <location line="+1611"/>
         <source>Storage running low</source>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-4119"/>
+        <location line="-4108"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+3482"/>
+        <location line="+3476"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -4530,7 +4608,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Seit 10 Sekunden ist kein neuer Frame angekommen. Die Aufnahme läuft weiter.</translation>
     </message>
     <message>
-        <location line="+379"/>
+        <location line="+374"/>
         <source>Recording stopped — output drive is critically low on disk space.</source>
         <translation>Aufnahme gestoppt: Speicherplatz auf dem Ausgabelaufwerk kritisch niedrig.</translation>
     </message>
@@ -4545,7 +4623,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Export fehlgeschlagen</translation>
     </message>
     <message>
-        <location line="+379"/>
+        <location line="+376"/>
         <source>Hotkey unavailable</source>
         <translation>Tastenkürzel nicht verfügbar</translation>
     </message>
@@ -6628,7 +6706,7 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
 <context>
     <name>SettingsPresenceSection</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsPresenceSection.qml" line="+16"/>
+        <location filename="../quick/ExoSnap/Quick/SettingsPresenceSection.qml" line="+10"/>
         <source>App behaviour</source>
         <translation>App-Verhalten</translation>
     </message>
@@ -6664,12 +6742,6 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
         <location line="-7"/>
         <source>Applies to all capture software — calls, screen sharing, screenshots</source>
         <translation>Gilt für jede Capture-Software: Anrufe, Bildschirmfreigabe, Screenshots</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <location line="+7"/>
-        <source>Open editor when finished</source>
-        <translation>Editor nach Abschluss öffnen</translation>
     </message>
 </context>
 <context>
@@ -8260,7 +8332,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::EditSessionAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditWorkspaceSession.cpp" line="+64"/>
+        <location filename="../quick/ExoSnap/Quick/EditWorkspaceSession.cpp" line="+87"/>
         <source>The edit would overlap another clip or exceed the source.</source>
         <translation>Die Bearbeitung würde einen anderen Clip überlappen oder die Quelle überschreiten.</translation>
     </message>
@@ -8631,18 +8703,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <location line="+15"/>
         <location line="+101"/>
-        <location line="+1664"/>
+        <location line="+1660"/>
         <source>%1 fps</source>
         <translation>%1 fps</translation>
     </message>
     <message>
-        <location line="-1764"/>
-        <location line="+1765"/>
+        <location line="-1760"/>
+        <location line="+1761"/>
         <source>Faster than the fastest attached display (%1 Hz)</source>
         <translation>Schneller als der schnellste angeschlossene Bildschirm (%1 Hz)</translation>
     </message>
     <message>
-        <location line="-1748"/>
+        <location line="-1744"/>
         <source>%1 fps (Custom)</source>
         <translation>%1 fps (Benutzerdefiniert)</translation>
     </message>
@@ -8849,12 +8921,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+250"/>
         <location line="+211"/>
         <location line="+482"/>
-        <location line="+881"/>
+        <location line="+877"/>
         <source>Off</source>
         <translation>Aus</translation>
     </message>
     <message>
-        <location line="-1566"/>
+        <location line="-1562"/>
         <location line="+641"/>
         <source>Application audio</source>
         <translation>Anwendungsaudio</translation>
@@ -9041,7 +9113,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>keine Verarbeitung</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="+34"/>
         <source>Minimal</source>
         <translation>Minimal</translation>
     </message>

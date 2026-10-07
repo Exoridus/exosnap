@@ -6,12 +6,30 @@ FocusScope {
     id: root
     required property EditSessionAdapter session
     required property EditPlayerAdapter player
+    property EditTimelineAdapter thumbnails: null
     property real pixelsPerSecond: 40
     property bool snapping: true
     property var visibleClips: []
+    property real draggedGroup: 0
+    property real dragDeltaMs: 0
+    readonly property real labelWidth: 50
+    readonly property real rulerHeight: 32
+    readonly property real rowHeight: 64
+    function timeAt(contentPosition: real): real {
+        return Math.max(0, (contentPosition - root.labelWidth) / root.pixelsPerMs);
+    }
+    function positionAt(milliseconds: real): real {
+        return root.labelWidth + milliseconds * root.pixelsPerMs;
+    }
+    function zoomTo(value: real): void {
+        const playheadX = root.positionAt(root.session.positionMs) - scroll.contentX;
+        const anchorX = playheadX >= root.labelWidth && playheadX <= scroll.width ? playheadX : root.labelWidth;
+        const anchorTime = root.timeAt(scroll.contentX + anchorX);
+        root.pixelsPerSecond = value;
+        scroll.contentX = Math.max(0, Math.min(scroll.contentWidth - scroll.width, root.positionAt(anchorTime) - anchorX));
+    }
     function refreshClips(): void {
-        root.visibleClips = root.session.visibleClips(Math.max(0, (scroll.contentX - 50) / root.pixelsPerMs),
-                                                     (scroll.contentX + scroll.width) / root.pixelsPerMs);
+        root.visibleClips = root.session.visibleClips(root.timeAt(scroll.contentX), root.timeAt(scroll.contentX + scroll.width));
     }
     onPixelsPerSecondChanged: refreshClips()
     Component.onCompleted: refreshClips()
@@ -58,39 +76,50 @@ FocusScope {
     }
     Flickable {
         id: scroll
+        objectName: "editTimelineScroll"
         anchors.fill: parent
         anchors.margins: 2
         onContentXChanged: root.refreshClips()
         onWidthChanged: root.refreshClips()
-        contentWidth: Math.max(width, 60 + (root.session.durationMs + 10000) * root.pixelsPerMs)
-        contentHeight: Math.max(height, 30 + root.session.tracks.length * 64)
+        contentWidth: Math.max(width, root.positionAt(root.session.durationMs + 10000) + 10)
+        contentHeight: Math.max(height, root.rulerHeight + root.session.tracks.length * root.rowHeight)
         clip: true
-        ScrollBar.horizontal: ScrollBar {}
-        ScrollBar.vertical: ScrollBar {}
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.horizontal: ScrollBar { objectName: "editHorizontalScrollBar"; policy: ScrollBar.AsNeeded }
+        ScrollBar.vertical: ScrollBar { objectName: "editVerticalScrollBar"; policy: ScrollBar.AsNeeded }
         MouseArea {
+            preventStealing: true
             width: scroll.contentWidth
             height: scroll.contentHeight
             onPressed: mouse => {
                 root.forceActiveFocus();
                 root.player.beginScrub();
-                root.session.requestSeek(Math.max(0, (mouse.x - 50) / root.pixelsPerMs));
+                root.session.requestSeek(root.timeAt(mouse.x));
             }
             onPositionChanged: mouse => {
-                if (pressed) root.session.requestSeek(Math.max(0, (mouse.x - 50) / root.pixelsPerMs));
+                if (pressed) root.session.requestSeek(root.timeAt(mouse.x));
             }
             onReleased: root.player.endScrub()
             onCanceled: root.player.endScrub()
         }
         Repeater {
             model: root.session.tracks
-            delegate: Label {
+            delegate: Rectangle {
                 required property var modelData
                 required property int index
-                x: scroll.contentX + 4
-                y: 36 + index * 64
+                objectName: "editTrackLabel" + index
+                x: scroll.contentX
+                y: root.rulerHeight + index * root.rowHeight
+                width: root.labelWidth
+                height: root.rowHeight
                 z: 3
-                text: modelData.name
-                color: ExoTheme.textSecondary
+                color: ExoTheme.surface
+                Label {
+                    anchors.centerIn: parent
+                    text: parent.modelData.name
+                    color: ExoTheme.textSecondary
+                    font.pixelSize: ExoTheme.fontCaption
+                }
             }
         }
         Repeater {
@@ -98,44 +127,88 @@ FocusScope {
             delegate: Rectangle {
                 id: clipItem
                 required property var modelData
-                property real dragMs: 0
-                x: 50 + (modelData.startMs + dragMs) * root.pixelsPerMs
-                y: 30 + modelData.trackIndex * 64
+                readonly property real visibleLeft: Math.max(10, scroll.contentX + root.labelWidth - x + 6)
+                x: root.positionAt(modelData.startMs + (root.draggedGroup === modelData.group ? root.dragDeltaMs : 0))
+                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 3
                 width: Math.max(4, modelData.durationMs * root.pixelsPerMs)
                 height: 56
                 radius: ExoTheme.radiusSm
                 color: modelData.selected ? ExoTheme.surfaceHover : ExoTheme.surfaceRaised
-                border.color: modelData.selected ? ExoTheme.text : ExoTheme.lineStrong
+                border.color: modelData.selected ? ExoTheme.accent : ExoTheme.lineStrong
+                border.width: modelData.selected ? 2 : 1
                 clip: true
                 Accessible.role: Accessible.Button
-                Accessible.name: modelData.name
+                Accessible.name: modelData.name + (modelData.available ? "" : ". " + qsTr("Media unavailable"))
                 Accessible.onPressAction: root.session.selectClip(modelData.id)
+                Image {
+                    id: poster
+                    x: clipItem.visibleLeft
+                    y: 6
+                    width: 64
+                    height: 44
+                    source: clipItem.modelData.video && root.thumbnails && clipItem.modelData.path === root.thumbnails.sourcePath
+                            ? root.thumbnails.posterSource : ""
+                    visible: status === Image.Ready && clipItem.modelData.available
+                    fillMode: Image.PreserveAspectFit
+                    Accessible.ignored: true
+                }
+                ExoGlyph {
+                    id: mediaIcon
+                    x: clipItem.visibleLeft
+                    y: 19
+                    width: 16
+                    height: 16
+                    kind: !clipItem.modelData.available ? ExoGlyph.Warning
+                          : clipItem.modelData.video ? ExoGlyph.AppWindow : ExoGlyph.Speaker
+                    color: clipItem.modelData.available ? ExoTheme.textMuted : ExoTheme.warning
+                    visible: !poster.visible
+                    Accessible.ignored: true
+                }
                 Label {
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    text: clipItem.modelData.name + (clipItem.modelData.available ? "" : "\n" + qsTr("Media unavailable"))
-                    color: ExoTheme.text
+                    x: clipItem.visibleLeft + (poster.visible ? 70 : 22)
+                    y: !clipItem.modelData.available && clipItem.modelData.video ? 9 : 19
+                    width: Math.max(0, clipItem.width - x - 10)
+                    text: clipItem.modelData.name
+                    color: clipItem.modelData.available ? ExoTheme.text : ExoTheme.textSecondary
+                    font.pixelSize: ExoTheme.fontCaption
+                    elide: Text.ElideRight
+                }
+                Label {
+                    objectName: "editMissingMediaWarning"
+                    x: clipItem.visibleLeft + 22
+                    y: 29
+                    width: Math.max(0, clipItem.width - x - 10)
+                    text: qsTr("Media unavailable")
+                    visible: !clipItem.modelData.available && clipItem.modelData.video
+                    color: ExoTheme.textMuted
+                    font.pixelSize: ExoTheme.fontCaption
                     elide: Text.ElideRight
                 }
                 MouseArea {
+                    id: clipMouse
                     preventStealing: true
                     anchors.fill: parent
+                    hoverEnabled: true
                     property real startX: 0
                     onPressed: mouse => {
                         startX = mapToItem(scroll.contentItem, mouse.x, 0).x;
+                        root.draggedGroup = clipItem.modelData.group;
                         root.forceActiveFocus();
                     }
                     onPositionChanged: mouse => {
-                        if (pressed) clipItem.dragMs = (mapToItem(scroll.contentItem, mouse.x, 0).x - startX) / root.pixelsPerMs;
+                        if (pressed) root.dragDeltaMs = (mapToItem(scroll.contentItem, mouse.x, 0).x - startX) / root.pixelsPerMs;
                     }
-                    onCanceled: clipItem.dragMs = 0
+                    onCanceled: { root.dragDeltaMs = 0; root.draggedGroup = 0; }
                     onReleased: mouse => {
-                        const delta = clipItem.dragMs;
-                        clipItem.dragMs = 0;
+                        const delta = root.dragDeltaMs;
+                        root.dragDeltaMs = 0;
+                        root.draggedGroup = 0;
                         if (Math.abs(delta) > 20) root.session.moveClip(clipItem.modelData.id, clipItem.modelData.startMs + delta, root.snapping);
                         else root.session.selectClip(clipItem.modelData.id);
                     }
                 }
+                ToolTip.visible: clipMouse.containsMouse
+                ToolTip.text: clipItem.Accessible.name + "\n" + clipItem.modelData.path
                 Repeater {
                     model: 2
                     delegate: MouseArea {
@@ -146,6 +219,14 @@ FocusScope {
                         width: 8
                         height: clipItem.height
                         cursorShape: Qt.SizeHorCursor
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 2
+                            height: 20
+                            radius: 1
+                            color: clipItem.modelData.selected ? ExoTheme.accent : ExoTheme.textMuted
+                            visible: clipItem.modelData.selected || clipMouse.containsMouse
+                        }
                         onPressed: mouse => { startX = mapToItem(scroll.contentItem, mouse.x, 0).x; }
                         onReleased: mouse => {
                             const delta = (mapToItem(scroll.contentItem, mouse.x, 0).x - startX) / root.pixelsPerMs;
@@ -156,17 +237,65 @@ FocusScope {
                 }
             }
         }
+        EditTimelineRuler {
+            objectName: "editTimelineRuler"
+            x: root.labelWidth
+            y: scroll.contentY
+            z: 4
+            width: scroll.contentWidth - root.labelWidth
+            height: root.rulerHeight
+            pixelsPerMs: root.pixelsPerMs
+            viewportX: Math.max(0, scroll.contentX - root.labelWidth)
+            viewportWidth: scroll.width
+        }
+        MouseArea {
+            x: root.labelWidth
+            preventStealing: true
+            y: scroll.contentY
+            z: 4
+            width: scroll.contentWidth - root.labelWidth
+            height: root.rulerHeight
+            onPressed: mouse => {
+                root.forceActiveFocus();
+                root.player.beginScrub();
+                root.session.requestSeek(root.timeAt(mouse.x + root.labelWidth));
+            }
+            onPositionChanged: mouse => {
+                if (pressed) root.session.requestSeek(root.timeAt(mouse.x + root.labelWidth));
+            }
+            onReleased: root.player.endScrub()
+            onCanceled: root.player.endScrub()
+        }
         Rectangle {
-            x: 50 + root.session.positionMs * root.pixelsPerMs
+            x: scroll.contentX
+            y: scroll.contentY
+            width: root.labelWidth
+            height: root.rulerHeight
+            z: 6
+            color: ExoTheme.surface
+        }
+        Rectangle {
+            objectName: "editPlayhead"
+            x: root.positionAt(root.session.positionMs)
+            visible: x >= scroll.contentX + root.labelWidth
+            y: scroll.contentY
+            z: 5
             width: 2
-            height: scroll.contentHeight
-            color: ExoTheme.text
+            height: scroll.height
+            color: ExoTheme.accent
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 8
+                height: 6
+                radius: 1
+                color: ExoTheme.accent
+            }
         }
         DropArea {
             width: scroll.contentWidth
             height: scroll.contentHeight
             onDropped: drop => {
-                const at = Math.max(0, (drop.x - 50) / root.pixelsPerMs);
+                const at = root.timeAt(drop.x);
                 if (drop.formats.indexOf("application/x-exosnap-history") >= 0)
                     root.session.addHistory(drop.getDataAsString("application/x-exosnap-history"), at);
                 else if (drop.formats.indexOf("application/x-exosnap-asset") >= 0)

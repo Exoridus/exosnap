@@ -247,7 +247,6 @@ QJsonObject AppSettingsJson(const PersistedAppSettings& app) {
     json.insert(QStringLiteral("minimizeToTray"), app.minimize_to_tray);
     json.insert(QStringLiteral("hideWindowFromCapture"), app.hide_window_from_capture);
     json.insert(QStringLiteral("showNotifications"), app.show_notifications);
-    json.insert(QStringLiteral("openEditorWhenFinished"), app.open_editor_when_finished);
     json.insert(QStringLiteral("checkUpdatesOnStart"), app.check_updates_on_start);
     json.insert(QStringLiteral("updateChannel"), app.update_channel);
     json.insert(QStringLiteral("developerLogLevel"), app.developer_log_level);

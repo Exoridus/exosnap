@@ -7,12 +7,6 @@ ExoCard {
     required property SettingsAdapter settings
     required property bool stacked
 
-    // The three capture-excluded overlays moved to SettingsOverlaysSection when
-    // they gained content configuration, and the PresentMon opt-in to Developer:
-    // an elevation-gated measurement probe is not presence. What stays is how the
-    // app announces itself while it runs -- a toast, what happens when a recording
-    // finishes, and the pair below: where the window goes when it is put away, and
-    // whether it is in anyone's capture while it stays.
     title: qsTr("App behaviour")
 
     ExoSettingRow {
@@ -60,20 +54,6 @@ ExoCard {
             Accessible.name: qsTr("Hide the ExoSnap window from screen capture")
             Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.hideWindowFromCapture = value
-        }
-    }
-
-    ExoSettingRow {
-        label: qsTr("Open editor when finished")
-        stacked: root.stacked
-        controlWidth: ExoTheme.controlSlotSwitch
-        Layout.fillWidth: true
-
-        ExoSwitch {
-            checked: root.settings.openEditorWhenFinished
-            Accessible.name: qsTr("Open editor when finished")
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-            onToggledByUser: value => root.settings.openEditorWhenFinished = value
         }
     }
 }

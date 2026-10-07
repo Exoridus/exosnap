@@ -2,7 +2,6 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Dialogs
 
 FocusScope {
     id: root
@@ -43,26 +42,50 @@ FocusScope {
                     Layout.minimumHeight: 100
                 }
                 RowLayout {
-                    ExoButton {
-                        text: qsTr("Previous")
-                        compact: true
+                    Layout.fillWidth: true
+                    spacing: 4
+                    EditActionButton {
+                        objectName: "editJumpStart"
+                        text: qsTr("Jump to start")
+                        shortcutText: qsTr("Home")
+                        glyph: ExoGlyph.JumpStart
+                        enabled: root.session.positionMs > 0
+                        onClicked: root.session.requestSeek(0)
+                    }
+                    EditActionButton {
+                        objectName: "editSeekBackward"
+                        text: qsTr("Back one second")
+                        shortcutText: qsTr("Shift+Left")
+                        glyph: ExoGlyph.StepBack
+                        enabled: root.session.positionMs > 0
                         onClicked: root.session.requestSeek(Math.max(0, root.session.positionMs - 1000))
                     }
-                    ExoButton {
+                    EditActionButton {
+                        objectName: "editTransportPlay"
                         text: root.player.playing ? qsTr("Pause") : qsTr("Play")
-                        compact: true
-                        enabled: root.session.durationMs > 0
+                        shortcutText: qsTr("Space")
+                        glyph: root.player.playing ? ExoGlyph.Pause : ExoGlyph.Run
+                        enabled: root.session.durationMs > 0 && root.player.clipOpen
                         onClicked: root.player.togglePlay()
                     }
                     Label {
                         text: root.session.formatTimestamp(root.session.positionMs) + " / " + root.session.formatTimestamp(root.session.durationMs)
                         color: ExoTheme.textSecondary
                         font.family: ExoTheme.monoFamily
+                        font.pixelSize: ExoTheme.fontCaption
                         Layout.fillWidth: true
                         Accessible.name: qsTr("Playback position")
                     }
+                    ExoGlyph {
+                        kind: ExoGlyph.Speaker
+                        color: ExoTheme.textSecondary
+                        Layout.preferredWidth: 16
+                        Layout.preferredHeight: 16
+                        Accessible.ignored: true
+                    }
                     Slider {
-                        Layout.preferredWidth: 90
+                        Layout.preferredWidth: 70
+                        Layout.minimumWidth: 50
                         from: 0
                         to: 1
                         value: root.player.volume
@@ -76,39 +99,85 @@ FocusScope {
         RowLayout {
             Layout.fillWidth: true
             spacing: 4
-            ExoButton {
-                leftPadding: 6; rightPadding: 6; text: "↶"; Accessible.name: qsTr("Undo"); ToolTip.text: qsTr("Undo"); ToolTip.visible: hovered; compact: true; enabled: root.session.canUndo; onClicked: root.session.undo() }
-            ExoButton {
-                leftPadding: 6; rightPadding: 6; text: "↷"; Accessible.name: qsTr("Redo"); ToolTip.text: qsTr("Redo"); ToolTip.visible: hovered; compact: true; enabled: root.session.canRedo; onClicked: root.session.redo() }
-            ExoButton {
-                leftPadding: 6; rightPadding: 6; text: qsTr("Split"); compact: true; onClicked: root.session.splitSelected() }
-            ExoButton {
-                leftPadding: 6; rightPadding: 6; text: qsTr("Delete"); compact: true; onClicked: root.session.deleteSelected(false) }
-            ExoButton {
-                leftPadding: 6; rightPadding: 6; text: qsTr("Ripple"); Accessible.name: qsTr("Ripple delete"); compact: true; onClicked: root.session.deleteSelected(true) }
-            ExoButton {
-                leftPadding: 6; rightPadding: 6; text: qsTr("Snap"); compact: true; checkable: true; checked: true; onToggled: clips.snapping = checked }
+            EditActionButton {
+                objectName: "editUndo"
+                text: qsTr("Undo")
+                shortcutText: qsTr("Ctrl+Z")
+                glyph: ExoGlyph.Undo
+                enabled: root.session.canUndo
+                onClicked: root.session.undo()
+            }
+            EditActionButton {
+                objectName: "editRedo"
+                text: qsTr("Redo")
+                shortcutText: qsTr("Ctrl+Y")
+                glyph: ExoGlyph.Redo
+                enabled: root.session.canRedo
+                onClicked: root.session.redo()
+            }
+            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 18; color: ExoTheme.line }
+            EditActionButton {
+                objectName: "editSplit"
+                text: qsTr("Split")
+                shortcutText: qsTr("Ctrl+B")
+                glyph: ExoGlyph.Scissors
+                enabled: root.session.durationMs > 0
+                onClicked: root.session.splitSelected()
+            }
+            EditActionButton {
+                objectName: "editDelete"
+                text: qsTr("Delete")
+                shortcutText: qsTr("Delete")
+                glyph: ExoGlyph.Trash
+                enabled: root.session.selectedClip !== 0
+                onClicked: root.session.deleteSelected(false)
+            }
+            EditActionButton {
+                objectName: "editRippleDelete"
+                text: qsTr("Ripple delete")
+                shortcutText: qsTr("Shift+Delete")
+                glyph: ExoGlyph.CloseGap
+                enabled: root.session.selectedClip !== 0
+                onClicked: root.session.deleteSelected(true)
+            }
+            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 18; color: ExoTheme.line }
+            EditActionButton {
+                objectName: "editSnapping"
+                text: qsTr("Snapping")
+                glyph: ExoGlyph.Magnet
+                checkable: true
+                checked: clips.snapping
+                onClicked: clips.snapping = checked
+            }
             Slider {
-                Layout.minimumWidth: 55
+                objectName: "editZoom"
+                Layout.minimumWidth: 65
                 Layout.preferredWidth: 100
-                Layout.fillWidth: true
+                Layout.maximumWidth: 120
                 from: 10
                 to: 250
-                value: 40
+                value: clips.pixelsPerSecond
                 Accessible.name: qsTr("Timeline zoom")
-                onMoved: clips.pixelsPerSecond = value
+                onMoved: clips.zoomTo(value)
+            }
+            Item { Layout.fillWidth: true }
+            Label {
+                text: qsTr("%1%").arg(root.exporter.progressPercent)
+                visible: root.exporter.running
+                color: ExoTheme.textSecondary
+                Accessible.name: qsTr("Exporting %1%").arg(root.exporter.progressPercent)
             }
             ExoSelect {
                 options: root.exporter.profileOptions
                 value: root.exporter.profileKey
-                Layout.preferredWidth: 150
+                Layout.preferredWidth: 160
                 Accessible.name: qsTr("Export preset")
                 onValueActivated: value => root.exporter.profileKey = value
             }
-            ExoButton {
-                leftPadding: 6; rightPadding: 6
-                text: root.exporter.running ? qsTr("Exporting %1%").arg(root.exporter.progressPercent) : qsTr("Export")
-                compact: true
+            EditActionButton {
+                objectName: "editExport"
+                text: qsTr("Export")
+                glyph: ExoGlyph.Send
                 tone: "primary"
                 enabled: root.session.durationMs > 0 && !root.exporter.running
                 onClicked: root.exporter.chooseDestination()
@@ -125,6 +194,7 @@ FocusScope {
             id: clips
             session: root.session
             player: root.player
+            thumbnails: root.timeline
             Layout.fillWidth: true
             Layout.preferredHeight: Math.max(180, root.height * 0.37)
         }

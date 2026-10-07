@@ -58,7 +58,14 @@ Item {
         "Refresh": ExoGlyph.Refresh,
         "Run": ExoGlyph.Run,
         "Send": ExoGlyph.Send,
-        "ArrowRight": ExoGlyph.ArrowRight
+        "ArrowRight": ExoGlyph.ArrowRight,
+        "Undo": ExoGlyph.Undo,
+        "Redo": ExoGlyph.Redo,
+        "Trash": ExoGlyph.Trash,
+        "CloseGap": ExoGlyph.CloseGap,
+        "Magnet": ExoGlyph.Magnet,
+        "JumpStart": ExoGlyph.JumpStart,
+        "StepBack": ExoGlyph.StepBack
     })
 
     Component {

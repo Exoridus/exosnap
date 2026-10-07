@@ -909,12 +909,6 @@ void QuickApplication::initializeRecordWorkflow() {
             // capture can send anything, so only there is the action offered.
             presentRecordingFailure(*failure, crash_capture::IsActive());
         }
-        // "Open editor when finished" (PersistedAppSettings): the overlay opening
-        // by itself IS the post-recording feedback. The Widgets shell drove this
-        // off its SAVED chrome transition; here the result callback is the same
-        // edge, and openEditorForCurrentRecording() re-checks every gate.
-        if (result.succeeded && settings_.open_editor_when_finished)
-            openEditorForCurrentRecording();
     });
     // A toast, not the page notice. The banner above the Preview Surface is for
     // UNRESOLVED conditions; a frame that has been written is a confirmation, and
@@ -4829,11 +4823,6 @@ void QuickApplication::requestElevatedRelaunch() {
 void QuickApplication::publishRecordingResultNotification(const UiRecordingResult& result) {
     notifications::NotificationEvent event;
     if (result.succeeded) {
-        // "Open editor when finished" makes the editor opening itself the
-        // post-recording feedback; a toast whose Edit action leads to the very
-        // surface already on screen would be a redundant second path there.
-        if (settings_.open_editor_when_finished)
-            return;
         event.type = notifications::NotificationType::Saved;
         event.title = QCoreApplication::translate("QuickApplication", "Recording saved");
         // The name, not the path. A full path is a single unbreakable token --
@@ -5373,7 +5362,6 @@ void QuickApplication::flushPendingPersists() {
         window_geometry_->flush();
 }
 
-// Record and automatic completion share this workspace import entry point.
 void QuickApplication::openEditorForCurrentRecording() {
     if (!canOpenEditorForCurrentRecording())
         return;
@@ -5386,9 +5374,7 @@ void QuickApplication::openEditorForCurrentRecording() {
 bool QuickApplication::canOpenEditorForCurrentRecording() const {
     if (!record_view_model_.last_succeeded)
         return false;
-    // A live capture owns the Record surface; opening the editor over a running
-    // recording or a countdown makes no sense, and the automatic open would
-    // otherwise fire on a segment boundary of a still-running split session.
+    // A live capture owns the Record surface until the entire session ends.
     if (!AllowsEditorEntry(record_view_model_.state))
         return false;
     // A recording needs at least one surviving segment.

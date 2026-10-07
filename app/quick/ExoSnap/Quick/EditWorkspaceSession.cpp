@@ -58,6 +58,7 @@ QVariantList EditSessionAdapter::tracks() const {
 
 QVariantList EditSessionAdapter::visibleClips(qint64 from_ms, qint64 to_ms) const {
     QVariantList rows;
+    const auto* selected = workspace_.clip(workspace_.selection());
     for (const auto& clip : workspace_.clips()) {
         if (clip.end() < from_ms * 1000 || clip.start > to_ms * 1000)
             continue;
@@ -68,12 +69,16 @@ QVariantList EditSessionAdapter::visibleClips(qint64 from_ms, qint64 to_ms) cons
             QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(clip.id)},
                         {QStringLiteral("name"), QString::fromStdString(asset->name)},
                         {QStringLiteral("trackIndex"), static_cast<int>(track - workspace_.tracks().begin())},
+                        {QStringLiteral("video"), track->type == edit::TrackType::Video},
+                        {QStringLiteral("path"), QString::fromStdWString(asset->path)},
+                        {QStringLiteral("group"), QVariant::fromValue<qulonglong>(clip.group)},
                         {QStringLiteral("startMs"), QVariant::fromValue<qint64>(clip.start / 1000)},
                         {QStringLiteral("durationMs"), QVariant::fromValue<qint64>(clip.duration() / 1000)},
                         {QStringLiteral("inMs"), QVariant::fromValue<qint64>(clip.source_in / 1000)},
                         {QStringLiteral("outMs"), QVariant::fromValue<qint64>(clip.source_out / 1000)},
                         {QStringLiteral("available"), asset->state == edit::AssetState::Available},
-                        {QStringLiteral("selected"), clip.id == workspace_.selection()}});
+                        {QStringLiteral("selected"),
+                         selected && (clip.id == selected->id || (clip.group != 0 && clip.group == selected->group))}});
     }
     return rows;
 }
