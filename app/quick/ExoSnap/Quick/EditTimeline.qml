@@ -25,7 +25,7 @@ FocusScope {
         const playheadX = root.positionAt(root.session.positionMs) - scroll.contentX;
         const anchorX = playheadX >= root.labelWidth && playheadX <= scroll.width ? playheadX : root.labelWidth;
         const anchorTime = root.timeAt(scroll.contentX + anchorX);
-        root.pixelsPerSecond = value;
+        root.pixelsPerSecond = Math.max(10, Math.min(250, value));
         scroll.contentX = Math.max(0, Math.min(scroll.contentWidth - scroll.width, root.positionAt(anchorTime) - anchorX));
     }
     function refreshClips(): void {
@@ -37,7 +37,7 @@ FocusScope {
     objectName: "editClipTimeline"
     activeFocusOnTab: true
     Accessible.role: Accessible.Pane
-    Accessible.name: qsTr("Edit timeline. Left and Right seek; Up and Down select clips. Alt+Left/Right moves; add Control to trim the start or Shift to trim the end. Control+B splits; Delete removes; Shift+Delete closes the gap.")
+    Accessible.name: qsTr("Edit timeline. Left and Right seek; Up and Down select clips. Alt+Left/Right moves; add Control to trim the start or Shift to trim the end. Control+B splits; Delete removes; Shift+Delete closes the gap. Control+wheel or Control+Plus/Minus zooms. Menu opens clip actions.")
     Keys.onPressed: event => {
         const control = (event.modifiers & Qt.ControlModifier) !== 0;
         const shift = (event.modifiers & Qt.ShiftModifier) !== 0;
@@ -53,7 +53,12 @@ FocusScope {
             event.accepted = true;
             return;
         }
-        if (control && event.key === Qt.Key_B) root.session.splitSelected();
+        if (event.key === Qt.Key_Menu || (shift && event.key === Qt.Key_F10)) {
+            if (root.session.selectedClip !== 0) clipMenu.popup();
+        }
+        else if (control && (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal)) root.zoomTo(root.pixelsPerSecond * 1.25);
+        else if (control && event.key === Qt.Key_Minus) root.zoomTo(root.pixelsPerSecond / 1.25);
+        else if (control && event.key === Qt.Key_B) root.session.splitSelected();
         else if (control && event.key === Qt.Key_Z) { if (shift) root.session.redo(); else root.session.undo(); }
         else if (control && event.key === Qt.Key_Y) root.session.redo();
         else if (event.key === Qt.Key_Home) root.session.requestSeek(0);
@@ -65,6 +70,20 @@ FocusScope {
         else return;
         event.accepted = true;
     }
+    Menu {
+        id: clipMenu
+        objectName: "editClipMenu"
+        MenuItem {
+            objectName: "editRippleDelete"
+            text: qsTr("Ripple delete (Shift+Delete)")
+            enabled: root.session.selectedClip !== 0
+            onTriggered: root.session.deleteSelected(true)
+        }
+    }
+    ToolTip.visible: activeFocus
+    ToolTip.text: qsTr("Ctrl+wheel to zoom. Menu or Shift+F10 for clip actions.")
+    ToolTip.delay: 1000
+    ToolTip.timeout: 4000
     Connections {
         target: root.session
         function onWorkspaceChanged(): void { root.refreshClips(); }
@@ -87,6 +106,13 @@ FocusScope {
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.horizontal: ScrollBar { objectName: "editHorizontalScrollBar"; policy: ScrollBar.AsNeeded }
         ScrollBar.vertical: ScrollBar { objectName: "editVerticalScrollBar"; policy: ScrollBar.AsNeeded }
+        WheelHandler {
+            acceptedModifiers: Qt.ControlModifier
+            onWheel: event => {
+                root.zoomTo(root.pixelsPerSecond * Math.pow(1.25, event.angleDelta.y / 120));
+                event.accepted = true;
+            }
+        }
         MouseArea {
             preventStealing: true
             width: scroll.contentWidth
@@ -134,7 +160,7 @@ FocusScope {
                 height: 56
                 radius: ExoTheme.radiusSm
                 color: modelData.selected ? ExoTheme.surfaceHover : ExoTheme.surfaceRaised
-                border.color: modelData.selected ? ExoTheme.accent : ExoTheme.lineStrong
+                border.color: modelData.selected ? ExoTheme.accent : ExoTheme.line
                 border.width: modelData.selected ? 2 : 1
                 clip: true
                 Accessible.role: Accessible.Button
@@ -154,6 +180,7 @@ FocusScope {
                 }
                 ExoGlyph {
                     id: mediaIcon
+                    objectName: "editClipMediaIcon"
                     x: clipItem.visibleLeft
                     y: 19
                     width: 16
@@ -166,21 +193,10 @@ FocusScope {
                 }
                 Label {
                     x: clipItem.visibleLeft + (poster.visible ? 70 : 22)
-                    y: !clipItem.modelData.available && clipItem.modelData.video ? 9 : 19
+                    y: 19
                     width: Math.max(0, clipItem.width - x - 10)
                     text: clipItem.modelData.name
                     color: clipItem.modelData.available ? ExoTheme.text : ExoTheme.textSecondary
-                    font.pixelSize: ExoTheme.fontCaption
-                    elide: Text.ElideRight
-                }
-                Label {
-                    objectName: "editMissingMediaWarning"
-                    x: clipItem.visibleLeft + 22
-                    y: 29
-                    width: Math.max(0, clipItem.width - x - 10)
-                    text: qsTr("Media unavailable")
-                    visible: !clipItem.modelData.available && clipItem.modelData.video
-                    color: ExoTheme.textMuted
                     font.pixelSize: ExoTheme.fontCaption
                     elide: Text.ElideRight
                 }
@@ -189,17 +205,25 @@ FocusScope {
                     preventStealing: true
                     anchors.fill: parent
                     hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                     property real startX: 0
                     onPressed: mouse => {
+                        if (mouse.button === Qt.RightButton) {
+                            root.session.selectClip(clipItem.modelData.id);
+                            root.forceActiveFocus();
+                            clipMenu.popup();
+                            return;
+                        }
                         startX = mapToItem(scroll.contentItem, mouse.x, 0).x;
                         root.draggedGroup = clipItem.modelData.group;
                         root.forceActiveFocus();
                     }
                     onPositionChanged: mouse => {
-                        if (pressed) root.dragDeltaMs = (mapToItem(scroll.contentItem, mouse.x, 0).x - startX) / root.pixelsPerMs;
+                        if (pressed && (pressedButtons & Qt.LeftButton)) root.dragDeltaMs = (mapToItem(scroll.contentItem, mouse.x, 0).x - startX) / root.pixelsPerMs;
                     }
                     onCanceled: { root.dragDeltaMs = 0; root.draggedGroup = 0; }
                     onReleased: mouse => {
+                        if (mouse.button === Qt.RightButton) return;
                         const delta = root.dragDeltaMs;
                         root.dragDeltaMs = 0;
                         root.draggedGroup = 0;
@@ -280,13 +304,13 @@ FocusScope {
             visible: x >= scroll.contentX + root.labelWidth
             y: scroll.contentY
             z: 5
-            width: 2
+            width: 1
             height: scroll.height
             color: ExoTheme.accent
             Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
-                width: 8
-                height: 6
+                width: 5
+                height: 4
                 radius: 1
                 color: ExoTheme.accent
             }

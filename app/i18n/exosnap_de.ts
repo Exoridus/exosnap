@@ -115,7 +115,7 @@
         <translation>Bearbeiten</translation>
     </message>
     <message>
-        <location line="+328"/>
+        <location line="+356"/>
         <source>Minimize</source>
         <translation>Minimieren</translation>
     </message>
@@ -130,7 +130,7 @@
         <translation>Maximieren</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+19"/>
         <source>Close</source>
         <translation>Schließen</translation>
     </message>
@@ -2890,7 +2890,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+65"/>
+        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+49"/>
         <source>Pause</source>
         <translation>Pause</translation>
     </message>
@@ -2910,12 +2910,18 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Wiedergabeposition</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+5"/>
+        <location line="+21"/>
         <source>Preview volume</source>
         <translation>Vorschaulautstärke</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="-21"/>
+        <source>Preview volume (muted)</source>
+        <translation>Vorschaulautstärke (stumm)</translation>
+    </message>
+    <message>
+        <location line="+35"/>
         <source>Undo</source>
         <translation>Rückgängig</translation>
     </message>
@@ -2951,64 +2957,29 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Löschen</translation>
     </message>
     <message>
-        <location line="+7"/>
-        <source>Ripple delete</source>
-        <translation>Löschen und Lücke schließen</translation>
+        <location line="+26"/>
+        <source>Export — %1</source>
+        <translation>Exportieren — %1</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Shift+Delete</source>
-        <translation>Umschalt+Entf</translation>
+        <location line="+11"/>
+        <source>Export profile</source>
+        <translation>Exportprofil</translation>
     </message>
     <message>
-        <location line="+22"/>
-        <source>Timeline zoom</source>
-        <translation>Zeitleistenzoom</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Export preset</source>
-        <translation>Exportvorlage</translation>
-    </message>
-    <message>
-        <location line="-6"/>
+        <location line="-18"/>
         <source>Exporting %1%</source>
         <translation>Export läuft: %1 %</translation>
     </message>
     <message>
-        <location line="-119"/>
-        <source>Jump to start</source>
-        <translation>Zum Anfang springen</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Home</source>
-        <translation>Pos1</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Back one second</source>
-        <translation>Eine Sekunde zurück</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Shift+Left</source>
-        <translation>Umschalt+Links</translation>
-    </message>
-    <message>
-        <location line="+88"/>
+        <location line="-11"/>
         <source>Snapping</source>
         <translation>Einrasten</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="+8"/>
         <source>%1%</source>
         <translation>%1 %</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Export</source>
-        <translation>Exportieren</translation>
     </message>
 </context>
 <context>
@@ -3145,22 +3116,22 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditSourceBrowser</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSourceBrowser.qml" line="+32"/>
+        <location filename="../quick/ExoSnap/Quick/EditSourceBrowser.qml" line="+54"/>
         <source>History</source>
         <translation>Verlauf</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+14"/>
         <source>Media</source>
         <translation>Medien</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+14"/>
         <source>Transitions</source>
         <translation>Übergänge</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+15"/>
         <location line="+79"/>
         <source>Import media</source>
         <translation>Medien importieren</translation>
@@ -3215,12 +3186,21 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     <name>EditTimeline</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/EditTimeline.qml" line="+40"/>
-        <source>Edit timeline. Left and Right seek; Up and Down select clips. Alt+Left/Right moves; add Control to trim the start or Shift to trim the end. Control+B splits; Delete removes; Shift+Delete closes the gap.</source>
-        <translation>Zeitleiste bearbeiten. Links und Rechts ändern die Position; Auf und Ab wählen Clips. Alt+Links/Rechts verschiebt; zusätzlich Strg kürzt den Anfang, Umschalt das Ende. Strg+B teilt; Entf löscht; Umschalt+Entf schließt die Lücke.</translation>
+        <source>Edit timeline. Left and Right seek; Up and Down select clips. Alt+Left/Right moves; add Control to trim the start or Shift to trim the end. Control+B splits; Delete removes; Shift+Delete closes the gap. Control+wheel or Control+Plus/Minus zooms. Menu opens clip actions.</source>
+        <translation>Zeitleiste bearbeiten. Links und Rechts ändern die Position; Auf und Ab wählen Clips. Alt+Links/Rechts verschiebt; zusätzlich Strg kürzt den Anfang, Umschalt das Ende. Strg+B teilt; Entf löscht; Umschalt+Entf schließt die Lücke. Strg+Mausrad oder Strg+Plus/Minus zoomt. Die Menütaste öffnet Clip-Aktionen.</translation>
     </message>
     <message>
-        <location line="+101"/>
-        <location line="+40"/>
+        <location line="+38"/>
+        <source>Ripple delete (Shift+Delete)</source>
+        <translation>Mit Lückenschluss löschen (Umschalt+Entf)</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Ctrl+wheel to zoom. Menu or Shift+F10 for clip actions.</source>
+        <translation>Strg+Mausrad zum Zoomen. Menütaste oder Umschalt+F10 für Clip-Aktionen.</translation>
+    </message>
+    <message>
+        <location line="+83"/>
         <source>Media unavailable</source>
         <translation>Medium nicht verfügbar</translation>
     </message>

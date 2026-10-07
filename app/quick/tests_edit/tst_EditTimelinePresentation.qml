@@ -94,7 +94,39 @@ TestCase {
         strip.height = 220;
         tryCompare(vertical, "size", 1);
     }
-    function test_linked_selection_and_missing_warning() {
+    function test_ctrl_wheel_and_keyboard_zoom_preserve_position() {
+        const strip = createTemporaryObject(timelineComponent, tests);
+        const scroll = findChild(strip, "editTimelineScroll");
+        const playhead = findChild(strip, "editPlayhead");
+        scroll.contentX = 900;
+        testSession.requestSeek(30000);
+        const before = playhead.mapToItem(strip, 0, 0).x;
+        mouseWheel(strip, 200, 100, 0, 120, Qt.NoButton, Qt.ControlModifier);
+        verify(strip.pixelsPerSecond > 40);
+        compare(playhead.mapToItem(strip, 0, 0).x, before);
+        strip.forceActiveFocus();
+        keyClick(Qt.Key_Minus, Qt.ControlModifier);
+        compare(strip.pixelsPerSecond, 40);
+        compare(playhead.mapToItem(strip, 0, 0).x, before);
+        strip.zoomTo(1000);
+        compare(strip.pixelsPerSecond, 250);
+        strip.zoomTo(0);
+        compare(strip.pixelsPerSecond, 10);
+    }
+    function test_context_ripple_is_keyboard_accessible() {
+        const strip = createTemporaryObject(timelineComponent, tests);
+        testSession.requestSeek(50000);
+        testSession.splitSelected();
+        strip.forceActiveFocus();
+        keyClick(Qt.Key_F10, Qt.ShiftModifier);
+        const menu = findChild(strip, "editClipMenu");
+        tryCompare(menu, "opened", true);
+        menu.itemAt(0).forceActiveFocus();
+        keyClick(Qt.Key_Return);
+        tryCompare(menu, "visible", false);
+        compare(testSession.durationMs, 50000);
+        compare(testSession.visibleClips(0, 100000)[0].startMs, 0);
+    }    function test_linked_selection_and_missing_warning() {
         const strip = createTemporaryObject(timelineComponent, tests);
         const clips = testSession.visibleClips(0, 100000);
         compare(clips.length, 2);
@@ -105,10 +137,10 @@ TestCase {
         verify(testSession.visibleClips(0, 100000)[1].selected);
         let warnings = 0;
         function countWarnings(item) {
-            if (item.objectName === "editMissingMediaWarning" && item.visible) ++warnings;
+            if (item.objectName === "editClipMediaIcon" && item.visible && item.kind === ExoGlyph.Warning) ++warnings;
             for (const child of item.children) countWarnings(child);
         }
         countWarnings(strip);
-        compare(warnings, 1);
+        compare(warnings, 2);
     }
 }

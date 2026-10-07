@@ -39,16 +39,14 @@ Item {
 
         function test_icon_actions_data() {
             return [
-                { tag: "jump", objectName: "editJumpStart", label: qsTr("Jump to start"), shortcut: "Home", enabled: false },
-                { tag: "back", objectName: "editSeekBackward", label: qsTr("Back one second"), shortcut: "Shift+Left", enabled: false },
                 { tag: "play", objectName: "editTransportPlay", label: qsTr("Play"), shortcut: "Space", enabled: false },
                 { tag: "undo", objectName: "editUndo", label: qsTr("Undo"), shortcut: "Ctrl+Z", enabled: false },
                 { tag: "redo", objectName: "editRedo", label: qsTr("Redo"), shortcut: "Ctrl+Y", enabled: false },
                 { tag: "split", objectName: "editSplit", label: qsTr("Split"), shortcut: "Ctrl+B", enabled: false },
                 { tag: "delete", objectName: "editDelete", label: qsTr("Delete"), shortcut: "Delete", enabled: false },
-                { tag: "ripple", objectName: "editRippleDelete", label: qsTr("Ripple delete"), shortcut: "Shift+Delete", enabled: false },
+                { tag: "volume", objectName: "editVolume", label: qsTr("Preview volume"), shortcut: "", enabled: true },
                 { tag: "snap", objectName: "editSnapping", label: qsTr("Snapping"), shortcut: "", enabled: true },
-                { tag: "export", objectName: "editExport", label: qsTr("Export"), shortcut: "", enabled: false }
+                { tag: "export", objectName: "editExport", label: qsTr("Export — %1").arg(testPageExporter.profileOptions[0].label), shortcut: "", enabled: false }
             ];
         }
 
@@ -123,12 +121,11 @@ Item {
         function test_hidden_resident_page_retains_source_and_zoom() {
             const page = make();
             const media = child(page, "editMediaTab");
-            const zoom = child(page, "editZoom");
             const timeline = child(page, "editClipTimeline");
             media.forceActiveFocus(Qt.TabFocusReason);
             keyClick(Qt.Key_Space);
-            zoom.forceActiveFocus(Qt.TabFocusReason);
-            keyClick(Qt.Key_Right);
+            timeline.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Plus, Qt.ControlModifier);
             verify(timeline.pixelsPerSecond > 40);
             const zoomBefore = timeline.pixelsPerSecond;
             page.visible = false;
@@ -137,6 +134,59 @@ Item {
             compare(child(page, "editSourceEmptyTitle").text, qsTr("Drop media here"));
         }
 
+        function test_volume_popup_keyboard_and_escape() {
+            const page = make();
+            const button = child(page, "editVolume");
+            const popup = child(page, "editVolumePopup");
+            const slider = child(page, "editVolumeSlider");
+            compare(popup.visible, false);
+            button.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Space);
+            tryCompare(popup, "opened", true);
+            tryCompare(slider, "activeFocus", true);
+            for (let i = 0; i < 11; ++i) keyClick(Qt.Key_Left);
+            compare(testPagePlayer.volume, 0);
+            verify(button.Accessible.name.indexOf(qsTr("muted")) >= 0);
+            for (let i = 0; i < 11; ++i) keyClick(Qt.Key_Right);
+            compare(testPagePlayer.volume, 1);
+            keyClick(Qt.Key_Escape);
+            tryCompare(popup, "visible", false);
+            tryCompare(button, "activeFocus", true);
+        }
+
+        function test_export_profile_menu_contains_only_supported_profiles() {
+            const page = make();
+            const button = child(page, "editExportProfiles");
+            const menu = child(page, "editExportProfileMenu");
+            verify(button.Accessible.name.length > 0);
+            button.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Space);
+            tryCompare(menu, "opened", true);
+            compare(menu.count, testPageExporter.profileOptions.filter(option => option.selectable).length);
+            compare(menu.itemAt(0).text, testPageExporter.profileOptions[0].label);
+            verify(menu.itemAt(0).checked);
+            keyClick(Qt.Key_Escape);
+            tryCompare(menu, "visible", false);
+        }
+
+        function test_source_tabs_scroll_without_truncating_labels() {
+            const page = make();
+            const browser = child(page, "editSourceBrowser");
+            const scroll = child(page, "editSourceTabs");
+            const history = child(page, "editHistoryTab");
+            const transitions = child(page, "editTransitionsTab");
+            transitions.text = "Transitions mit langem Namen";
+            tryVerify(() => scroll.contentWidth > scroll.width);
+            browser.focusTab(2);
+            tryVerify(() => transitions.x >= scroll.contentX
+                && transitions.x + transitions.width <= scroll.contentX + scroll.width + 1);
+            compare(transitions.contentItem.truncated, false);
+            verify(transitions.visualFocus);
+            browser.focusTab(0);
+            tryCompare(scroll, "contentX", 0);
+            verify(history.visualFocus);
+            compare(history.contentItem.truncated, false);
+        }
         function test_transport_and_undo_actions() {
             while (testSession.canUndo)
                 testSession.undo();
@@ -149,17 +199,13 @@ Item {
             compare(testTransportPlayer.clipOpen, true);
             compare(child(page, "editTransportPlay").enabled, true);
             page.player = testPlayer;
-            const backward = child(page, "editSeekBackward");
-            const jump = child(page, "editJumpStart");
+            const timeline = child(page, "editClipTimeline");
             testSession.requestSeek(5000);
-            backward.forceActiveFocus(Qt.TabFocusReason);
-            keyClick(Qt.Key_Space);
+            timeline.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Left, Qt.ShiftModifier);
             compare(testSession.positionMs, 4000);
-            jump.forceActiveFocus(Qt.TabFocusReason);
-            keyClick(Qt.Key_Space);
+            keyClick(Qt.Key_Home);
             compare(testSession.positionMs, 0);
-            compare(jump.enabled, false);
-            compare(backward.enabled, false);
 
             child(page, "editUndo").forceActiveFocus(Qt.TabFocusReason);
             keyClick(Qt.Key_Space);

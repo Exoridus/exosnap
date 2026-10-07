@@ -45,22 +45,6 @@ FocusScope {
                     Layout.fillWidth: true
                     spacing: 4
                     EditActionButton {
-                        objectName: "editJumpStart"
-                        text: qsTr("Jump to start")
-                        shortcutText: qsTr("Home")
-                        glyph: ExoGlyph.JumpStart
-                        enabled: root.session.positionMs > 0
-                        onClicked: root.session.requestSeek(0)
-                    }
-                    EditActionButton {
-                        objectName: "editSeekBackward"
-                        text: qsTr("Back one second")
-                        shortcutText: qsTr("Shift+Left")
-                        glyph: ExoGlyph.StepBack
-                        enabled: root.session.positionMs > 0
-                        onClicked: root.session.requestSeek(Math.max(0, root.session.positionMs - 1000))
-                    }
-                    EditActionButton {
                         objectName: "editTransportPlay"
                         text: root.player.playing ? qsTr("Pause") : qsTr("Play")
                         shortcutText: qsTr("Space")
@@ -76,21 +60,34 @@ FocusScope {
                         Layout.fillWidth: true
                         Accessible.name: qsTr("Playback position")
                     }
-                    ExoGlyph {
-                        kind: ExoGlyph.Speaker
-                        color: ExoTheme.textSecondary
-                        Layout.preferredWidth: 16
-                        Layout.preferredHeight: 16
-                        Accessible.ignored: true
-                    }
-                    Slider {
-                        Layout.preferredWidth: 70
-                        Layout.minimumWidth: 50
-                        from: 0
-                        to: 1
-                        value: root.player.volume
-                        Accessible.name: qsTr("Preview volume")
-                        onMoved: root.player.volume = value
+                    EditActionButton {
+                        id: volumeButton
+                        objectName: "editVolume"
+                        text: root.player.volume === 0 ? qsTr("Preview volume (muted)") : qsTr("Preview volume")
+                        glyph: ExoGlyph.Speaker
+                        checked: root.player.volume === 0
+                        onClicked: volumePopup.open()
+                        Popup {
+                            id: volumePopup
+                            objectName: "editVolumePopup"
+                            y: -height - 4
+                            x: volumeButton.width - width
+                            width: 160
+                            padding: 12
+                            focus: true
+                            onOpened: volumeSlider.forceActiveFocus(Qt.PopupFocusReason)
+                            onClosed: volumeButton.forceActiveFocus(Qt.PopupFocusReason)
+                            Slider {
+                                id: volumeSlider
+                                objectName: "editVolumeSlider"
+                                width: parent.width
+                                from: 0
+                                to: 1
+                                value: root.player.volume
+                                Accessible.name: qsTr("Preview volume")
+                                onMoved: root.player.volume = value
+                            }
+                        }
                     }
                 }
             }
@@ -132,14 +129,6 @@ FocusScope {
                 enabled: root.session.selectedClip !== 0
                 onClicked: root.session.deleteSelected(false)
             }
-            EditActionButton {
-                objectName: "editRippleDelete"
-                text: qsTr("Ripple delete")
-                shortcutText: qsTr("Shift+Delete")
-                glyph: ExoGlyph.CloseGap
-                enabled: root.session.selectedClip !== 0
-                onClicked: root.session.deleteSelected(true)
-            }
             Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 18; color: ExoTheme.line }
             EditActionButton {
                 objectName: "editSnapping"
@@ -149,17 +138,6 @@ FocusScope {
                 checked: clips.snapping
                 onClicked: clips.snapping = checked
             }
-            Slider {
-                objectName: "editZoom"
-                Layout.minimumWidth: 65
-                Layout.preferredWidth: 100
-                Layout.maximumWidth: 120
-                from: 10
-                to: 250
-                value: clips.pixelsPerSecond
-                Accessible.name: qsTr("Timeline zoom")
-                onMoved: clips.zoomTo(value)
-            }
             Item { Layout.fillWidth: true }
             Label {
                 text: qsTr("%1%").arg(root.exporter.progressPercent)
@@ -167,20 +145,49 @@ FocusScope {
                 color: ExoTheme.textSecondary
                 Accessible.name: qsTr("Exporting %1%").arg(root.exporter.progressPercent)
             }
-            ExoSelect {
-                options: root.exporter.profileOptions
-                value: root.exporter.profileKey
-                Layout.preferredWidth: 160
-                Accessible.name: qsTr("Export preset")
-                onValueActivated: value => root.exporter.profileKey = value
-            }
-            EditActionButton {
-                objectName: "editExport"
-                text: qsTr("Export")
-                glyph: ExoGlyph.Send
-                tone: "primary"
-                enabled: root.session.durationMs > 0 && !root.exporter.running
-                onClicked: root.exporter.chooseDestination()
+            Row {
+                spacing: 0
+                EditActionButton {
+                    id: exportAction
+                    objectName: "editExport"
+                    text: qsTr("Export — %1").arg(root.exporter.profileOptions.find(option => option.value === root.exporter.profileKey)?.label || "")
+                    glyph: ExoGlyph.Send
+                    tone: "primary"
+                    enabled: root.session.durationMs > 0 && !root.exporter.running
+                    onClicked: root.exporter.chooseDestination()
+                    Binding { target: exportAction.background; property: "topRightRadius"; value: 0 }
+                    Binding { target: exportAction.background; property: "bottomRightRadius"; value: 0 }
+                }
+                EditActionButton {
+                    id: exportProfiles
+                    objectName: "editExportProfiles"
+                    text: qsTr("Export profile")
+                    glyph: ExoGlyph.Send
+                    tone: "primary"
+                    implicitWidth: 26
+                    contentItem: Item {
+                        ExoChevron { anchors.centerIn: parent; tone: exportProfiles._ink }
+                    }
+                    Binding { target: exportProfiles.background; property: "topLeftRadius"; value: 0 }
+                    Binding { target: exportProfiles.background; property: "bottomLeftRadius"; value: 0 }
+                    onClicked: profileMenu.open()
+                    Menu {
+                        id: profileMenu
+                        objectName: "editExportProfileMenu"
+                        x: exportProfiles.width - width
+                        y: exportProfiles.height
+                        Repeater {
+                            model: root.exporter.profileOptions.filter(option => option.selectable)
+                            MenuItem {
+                                required property var modelData
+                                text: modelData.label
+                                checkable: true
+                                checked: root.exporter.profileKey === modelData.value
+                                onTriggered: root.exporter.profileKey = modelData.value
+                            }
+                        }
+                    }
+                }
             }
         }
         Label {

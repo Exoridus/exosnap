@@ -352,11 +352,7 @@ Item {
                     return;
 
                 root.chrome.clearInteractiveRects();
-                for (let i = 0; i < navRepeater.count; ++i) {
-                    const tab = navRepeater.itemAt(i);
-                    if (tab)
-                        root.chrome.addInteractiveRect(rectInShell(tab));
-                }
+                root.chrome.addInteractiveRect(rectInShell(navStrip));
                 root.chrome.addInteractiveRect(rectInShell(notificationBell));
                 root.chrome.addInteractiveRect(rectInShell(minimizeButton));
                 root.chrome.addInteractiveRect(rectInShell(maximizeButton));
@@ -430,6 +426,7 @@ Item {
                 // text-expansion harness -- which used to put 80 px of pressure
                 // on the navigation that no real translation will ever apply.
                 ExoBrandWordmark {
+                    objectName: "quickBrandWordmark"
                     typePixelSize: ExoTheme.fontBrand
                     Layout.preferredWidth: implicitWidth
                     Layout.preferredHeight: implicitHeight
@@ -443,59 +440,99 @@ Item {
                     Accessible.name: "exosnap"
                 }
 
-                Repeater {
-                    id: navRepeater
+                Flickable {
+                    id: navStrip
 
-                    // Named so the navigation-lifecycle test can reach the five
-                    // delegates through itemAt() and assert the AFFORDANCE, not
-                    // only the edge behind it: QCR-001 was a regression in the
-                    // delegate's `enabled` binding, and an assertion that only
-                    // calls navigateTo() would not have seen it. The delegates
-                    // themselves are not QObject children of the window, so the
-                    // repeater is the way in.
-                    objectName: "quickNavTabs"
+                    objectName: "quickNavStrip"
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: navRow.width
+                    Layout.preferredWidth: navRow.width
+                    Layout.minimumWidth: 0
+                    Layout.preferredHeight: root.titleBarHeight
+                    contentWidth: navRow.width
+                    contentHeight: height
+                    flickableDirection: Flickable.HorizontalFlick
+                    boundsBehavior: Flickable.StopAtBounds
+                    clip: true
 
-                    // Nav order is a product decision. Kept as a list rather than
-                    // copies of the same button so the hit-test rects can be
-                    // collected by index.
-                    model: root.navPages
+                    function ensureVisible(tab: Item): void {
+                        if (!tab)
+                            return;
+                        contentX = Math.max(0, Math.min(Math.max(0, contentWidth - width),
+                            tab.x < contentX ? tab.x : Math.max(contentX, tab.x + tab.width - width)));
+                    }
 
-                    delegate: ExoNavTab {
-                        required property int index
-                        required property string modelData
+                    function revealCurrent(): void {
+                        for (let i = 0; i < navRepeater.count; ++i) {
+                            const tab = navRepeater.itemAt(i);
+                            if (tab && (tab.activeFocus || root.currentPage === root.pageForTab(i))) {
+                                ensureVisible(tab);
+                                if (tab.activeFocus)
+                                    return;
+                            }
+                        }
+                    }
 
-                        text: modelData
-                        selected: root.currentPage === root.pageForTab(index)
-                        compact: root.compactNav
-                        enabled: root.navigationAllowed || selected
-                        Layout.alignment: Qt.AlignVCenter
-                        // Shrinkable to nothing on purpose. Everything to the
-                        // right of the drag handle is fixed-size, so when the
-                        // band runs out of room the tabs are the only things
-                        // that may give — never the close button.
-                        //
-                        // QCR-511. `minimumWidth: 0` alone did NOT achieve that:
-                        // a layout item with `fillWidth` false is FIXED at its
-                        // preferred size (Qt Quick Layouts, Layout attached
-                        // properties), so the minimum was never consulted. Once
-                        // the drag handle — the band's only fillWidth item —
-                        // reached zero, the row simply laid the rest out past
-                        // its own right edge, and what fell off the end was the
-                        // status pill, the bell and all three window buttons.
-                        // Measured at the 860 px minimum window with a +40 %
-                        // text expansion: the window had no visible way to be
-                        // closed, minimised or moved. `fillWidth` with the
-                        // implicit width as a CEILING makes the tab shrinkable
-                        // without letting it grow past its label, so nothing
-                        // changes at any width where the band already fits.
-                        Layout.fillWidth: true
-                        Layout.maximumWidth: implicitWidth
-                        Layout.minimumWidth: 0
-                        onClicked: root.navigateTo(root.pageForTab(index))
-                        onWidthChanged: Qt.callLater(titleBar.refreshChromeGeometry)
+                    onWidthChanged: {
+                        Qt.callLater(navStrip.revealCurrent);
+                        Qt.callLater(titleBar.refreshChromeGeometry);
+                    }
+                    onContentWidthChanged: Qt.callLater(navStrip.revealCurrent)
+                    onXChanged: Qt.callLater(titleBar.refreshChromeGeometry)
+
+                    WheelHandler {
+                        target: null
+                        onWheel: event => {
+                            const delta = event.pixelDelta.x || event.pixelDelta.y
+                                          || event.angleDelta.x / 2 || event.angleDelta.y / 2;
+                            navStrip.contentX = Math.max(0, Math.min(Math.max(0, navStrip.contentWidth - navStrip.width),
+                                                                   navStrip.contentX - delta));
+                            event.accepted = true;
+                        }
+                    }
+
+                    Row {
+                        id: navRow
+                        height: navStrip.height
+                        spacing: ExoTheme.spacingXs
+
+                        Repeater {
+                            id: navRepeater
+                            objectName: "quickNavTabs"
+                            model: root.navPages
+
+                            delegate: ExoNavTab {
+                                id: navTab
+                                required property int index
+                                required property string modelData
+
+                                text: modelData
+                                selected: root.currentPage === root.pageForTab(index)
+                                compact: root.compactNav
+                                enabled: root.navigationAllowed || selected
+                                onClicked: root.navigateTo(root.pageForTab(index))
+                                onSelectedChanged: {
+                                    if (selected)
+                                        Qt.callLater(navStrip.ensureVisible, navTab);
+                                }
+                                onActiveFocusChanged: {
+                                    if (activeFocus)
+                                        navStrip.ensureVisible(navTab);
+                                }
+                                Keys.onLeftPressed: {
+                                    const previous = navRepeater.itemAt((index + navRepeater.count - 1) % navRepeater.count);
+                                    if (previous)
+                                        previous.forceActiveFocus(Qt.TabFocusReason);
+                                }
+                                Keys.onRightPressed: {
+                                    const next = navRepeater.itemAt((index + 1) % navRepeater.count);
+                                    if (next)
+                                        next.forceActiveFocus(Qt.TabFocusReason);
+                                }
+                            }
+                        }
                     }
                 }
-
                 // The drag handle. It has no visual and no input handler at all:
                 // the band is dragged by Windows, because everything not listed
                 // as interactive resolves to HTCAPTION.
@@ -518,15 +555,7 @@ Item {
                     tone: root.recordViewModel.stateTone
                     Layout.rightMargin: ExoTheme.spacingSm
                     Layout.alignment: Qt.AlignVCenter
-                    // Never wider than its own text, and allowed to be narrower.
-                    // It used to declare its implicit width as a MINIMUM, which
-                    // made a long state string incompressible and left the
-                    // navigation tabs — the only other shrinkable thing in the
-                    // band — to pay for it. A readout may elide; a destination
-                    // may not disappear.
-                    //
-                    // `fillWidth` for the same reason the tabs now carry it: the
-                    // maximum and minimum above were inert without it.
+                    // The readout can compress before destination labels lose space.
                     Layout.fillWidth: true
                     Layout.maximumWidth: implicitWidth
                     Layout.minimumWidth: 0
@@ -583,6 +612,7 @@ Item {
 
                 WindowChromeButton {
                     id: closeButton
+                    objectName: "quickCloseButton"
 
                     kind: "close"
                     danger: true

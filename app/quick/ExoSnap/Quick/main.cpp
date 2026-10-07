@@ -789,6 +789,65 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
         if (!delegate || !delegate->property("enabled").toBool())
             return failNavigationLifecycle("Edit blocked navigation");
     }
+    auto* nav_strip = window->findChild<QQuickItem*>(QStringLiteral("quickNavStrip"));
+    if (!nav_strip)
+        return failNavigationLifecycle("no scrollable navigation strip");
+    auto* navigation_brand = window->findChild<QQuickItem*>(QStringLiteral("quickBrandWordmark"));
+    auto* navigation_close = window->findChild<QQuickItem*>(QStringLiteral("quickCloseButton"));
+    if (!navigation_brand || !navigation_close)
+        return failNavigationLifecycle("fixed navigation chrome missing");
+    const QSize navigation_original_size = window->size();
+    const std::array<QString, 5> german_labels{QStringLiteral("Aufnehmen"), QStringLiteral("Bearbeiten"),
+                                               QStringLiteral("Einstellungen"), QStringLiteral("Diagnose"),
+                                               QString::fromUtf8("Über")};
+    std::array<QString, 5> original_labels;
+    for (int tab = 0; tab < 5; ++tab) {
+        auto* delegate = navTabAt(nav_tabs, tab);
+        original_labels[tab] = delegate->property("text").toString();
+        delegate->setProperty("text", german_labels[tab]);
+    }
+    const auto restore_navigation = qScopeGuard([&]() {
+        for (int tab = 0; tab < 5; ++tab)
+            navTabAt(nav_tabs, tab)->setProperty("text", original_labels[tab]);
+        window->resize(navigation_original_size);
+    });
+    for (const QSize size : {QSize(window->minimumWidth(), window->minimumHeight()), QSize(1280, 820)}) {
+        window->resize(size);
+        QPointF brand_position;
+        QPointF close_position;
+        for (int tab = 4; tab >= 0; --tab) {
+            auto* delegate = qobject_cast<QQuickItem*>(navTabAt(nav_tabs, tab));
+            if (!delegate)
+                return failNavigationLifecycle("missing navigation item");
+            delegate->forceActiveFocus(Qt::TabFocusReason);
+            QElapsedTimer navigation_timer;
+            navigation_timer.start();
+            bool fully_visible = false;
+            while (!fully_visible && !navigation_timer.hasExpired(3000)) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                const QPointF origin = delegate->mapToItem(nav_strip, QPointF());
+                fully_visible = delegate->hasActiveFocus() && origin.x() >= -0.5 &&
+                                origin.x() + delegate->width() <= nav_strip->width() + 0.5;
+            }
+            auto* label = delegate->property("contentItem").value<QQuickItem*>();
+            if (!fully_visible || !label || label->property("truncated").toBool() ||
+                label->width() + 0.5 < label->implicitWidth())
+                return failNavigationLifecycle("focused navigation destination is clipped or truncated");
+            if (size.width() == 1280 && nav_strip->property("contentWidth").toReal() > nav_strip->width() + 0.5)
+                return failNavigationLifecycle("wide navigation unexpectedly overflows");
+            if (tab == 4) {
+                brand_position = navigation_brand->mapToScene(QPointF());
+                close_position = navigation_close->mapToScene(QPointF());
+            } else if (navigation_brand->mapToScene(QPointF()) != brand_position ||
+                       navigation_close->mapToScene(QPointF()) != close_position) {
+                return failNavigationLifecycle("scrolling destinations moved fixed window chrome");
+            }
+            if (!QMetaObject::invokeMethod(delegate, "clicked"))
+                return failNavigationLifecycle("navigation action not invokable");
+            if (!delegate->property("selected").toBool())
+                return failNavigationLifecycle("navigation destination was not selected");
+        }
+    }
     session->requestSeek(41000);
     const auto clips_before = session->workspace().clips();
     for (int page = 0; page <= 4; ++page) {

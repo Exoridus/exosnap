@@ -39,12 +39,6 @@ Item {
         anchors.fill: parent
         color: ExoTheme.surface
     }
-    Rectangle {
-        anchors.bottom: parent.bottom
-        width: parent.width
-        height: 1
-        color: ExoTheme.line
-    }
     Repeater {
         model: root.tickCount
         delegate: Item {
@@ -56,8 +50,8 @@ Item {
             Rectangle {
                 anchors.bottom: parent.bottom
                 width: 1
-                height: parent.major ? 9 : 4
-                color: parent.major ? ExoTheme.textMuted : ExoTheme.lineStrong
+                height: parent.major ? 8 : 3
+                color: parent.major ? ExoTheme.textMuted : ExoTheme.line
             }
             Label {
                 x: 4

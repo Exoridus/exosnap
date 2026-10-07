@@ -19,42 +19,77 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: ExoTheme.spacingSm
-        RowLayout {
+        spacing: 4
+        Flickable {
+            id: tabsScroll
             objectName: "editSourceTabs"
             Layout.fillWidth: true
-            spacing: 0
-            Keys.onLeftPressed: root.focusTab(root.currentTab - 1)
-            Keys.onRightPressed: root.focusTab(root.currentTab + 1)
-            ExoNavTab {
-                id: historyTab
-                objectName: "editHistoryTab"
-                text: qsTr("History")
-                compact: true
-                selected: root.currentTab === 0
-                Layout.fillWidth: true
-                Accessible.role: Accessible.PageTab
-                onClicked: root.currentTab = 0
+            Layout.preferredHeight: 30
+            contentWidth: tabsRow.width
+            contentHeight: height
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.HorizontalFlick
+            function reveal(tab: Item): void {
+                if (!tab) return;
+                contentX = Math.max(0, Math.min(Math.max(0, contentWidth - width),
+                    tab.x < contentX ? tab.x : Math.max(contentX, tab.x + tab.width - width)));
             }
-            ExoNavTab {
-                id: mediaTab
-                objectName: "editMediaTab"
-                text: qsTr("Media")
-                compact: true
-                selected: root.currentTab === 1
-                Layout.fillWidth: true
-                Accessible.role: Accessible.PageTab
-                onClicked: root.currentTab = 1
+            onWidthChanged: reveal([historyTab, mediaTab, transitionsTab][root.currentTab])
+            WheelHandler {
+                onWheel: event => {
+                    tabsScroll.contentX = Math.max(0, Math.min(Math.max(0, tabsScroll.contentWidth - tabsScroll.width),
+                        tabsScroll.contentX - (event.pixelDelta.x || event.pixelDelta.y || event.angleDelta.x || event.angleDelta.y)));
+                    event.accepted = true;
+                }
             }
-            ExoNavTab {
-                id: transitionsTab
-                objectName: "editTransitionsTab"
-                text: qsTr("Transitions")
-                compact: true
-                selected: root.currentTab === 2
-                Layout.fillWidth: true
-                Accessible.role: Accessible.PageTab
-                onClicked: root.currentTab = 2
+            Row {
+                id: tabsRow
+                spacing: 0
+                Keys.onLeftPressed: root.focusTab(root.currentTab - 1)
+                Keys.onRightPressed: root.focusTab(root.currentTab + 1)
+                ExoNavTab {
+                    id: historyTab
+                    objectName: "editHistoryTab"
+                    text: qsTr("History")
+                    compact: true
+                    selected: root.currentTab === 0
+                    leftPadding: 4
+                    rightPadding: 4
+                    implicitHeight: 30
+                    onActiveFocusChanged: if (activeFocus) tabsScroll.reveal(this)
+                    onSelectedChanged: if (selected) tabsScroll.reveal(this)
+                    Accessible.role: Accessible.PageTab
+                    onClicked: root.currentTab = 0
+                }
+                ExoNavTab {
+                    id: mediaTab
+                    objectName: "editMediaTab"
+                    text: qsTr("Media")
+                    compact: true
+                    selected: root.currentTab === 1
+                    leftPadding: 4
+                    rightPadding: 4
+                    implicitHeight: 30
+                    onActiveFocusChanged: if (activeFocus) tabsScroll.reveal(this)
+                    onSelectedChanged: if (selected) tabsScroll.reveal(this)
+                    Accessible.role: Accessible.PageTab
+                    onClicked: root.currentTab = 1
+                }
+                ExoNavTab {
+                    id: transitionsTab
+                    objectName: "editTransitionsTab"
+                    text: qsTr("Transitions")
+                    compact: true
+                    selected: root.currentTab === 2
+                    leftPadding: 4
+                    rightPadding: 4
+                    implicitHeight: 30
+                    onActiveFocusChanged: if (activeFocus) tabsScroll.reveal(this)
+                    onSelectedChanged: if (selected) tabsScroll.reveal(this)
+                    Accessible.role: Accessible.PageTab
+                    onClicked: root.currentTab = 2
+                }
             }
         }
         EditActionButton {
@@ -73,7 +108,7 @@ Item {
             color: ExoTheme.textSecondary
             wrapMode: Text.Wrap
             Layout.fillWidth: true
-            Layout.topMargin: ExoTheme.spacingMd
+            Layout.topMargin: ExoTheme.spacingSm
             Layout.leftMargin: ExoTheme.spacingSm
             Layout.rightMargin: ExoTheme.spacingSm
         }
