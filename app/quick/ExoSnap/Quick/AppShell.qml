@@ -399,6 +399,14 @@ Item {
             }
 
             RowLayout {
+                id: titleRow
+                objectName: "quickTitleRow"
+                readonly property real fullBrandRequiredWidth: brandMark.implicitWidth + brandWordmark.implicitWidth
+                    + navRow.width + confidence.implicitWidth + statusPill.implicitWidth + notificationBell.implicitWidth
+                    + minimizeButton.implicitWidth + maximizeButton.implicitWidth + closeButton.implicitWidth
+                    + 9 * spacing + ExoTheme.spacingSm - ExoTheme.spacingXs + ExoTheme.spacingXl
+                    + 2 * ExoTheme.spacingSm
+                readonly property bool compactBrand: width < fullBrandRequiredWidth
                 spacing: ExoTheme.spacingXs
                 anchors {
                     fill: parent
@@ -413,12 +421,19 @@ Item {
                 // taskbar button do and from the same projection: one recording,
                 // one state, three surfaces that cannot disagree.
                 ExoBrandMark {
+                    id: brandMark
+                    objectName: "quickBrandMark"
                     markState: root.shellPresence.iconState
                     markFrame: root.shellPresence.markFrame
                     Layout.preferredWidth: 18
                     Layout.preferredHeight: 18
                     Layout.alignment: Qt.AlignVCenter
-                    Accessible.ignored: true
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: "ExoSnap"
+                    ToolTip.visible: brandHover.hovered
+                    ToolTip.text: "ExoSnap"
+                    ToolTip.delay: 500
+                    HoverHandler { id: brandHover }
                 }
 
                 // Artwork rather than text, so the product name cannot be
@@ -426,15 +441,14 @@ Item {
                 // text-expansion harness -- which used to put 80 px of pressure
                 // on the navigation that no real translation will ever apply.
                 ExoBrandWordmark {
+                    id: brandWordmark
+                    visible: !titleRow.compactBrand
                     objectName: "quickBrandWordmark"
                     typePixelSize: ExoTheme.fontBrand
                     Layout.preferredWidth: implicitWidth
                     Layout.preferredHeight: implicitHeight
                     Layout.leftMargin: ExoTheme.spacingSm - ExoTheme.spacingXs
-                    // The one gap in the band that separates identity from
-                    // navigation, so it is the first thing to give when five
-                    // destinations have to fit beside three window buttons.
-                    Layout.rightMargin: root.compactNav ? ExoTheme.spacingMd : ExoTheme.spacingXl
+                    Layout.rightMargin: ExoTheme.spacingXl
                     Layout.alignment: Qt.AlignVCenter
                     Accessible.role: Accessible.StaticText
                     Accessible.name: "exosnap"
@@ -459,7 +473,7 @@ Item {
                         if (!tab)
                             return;
                         contentX = Math.max(0, Math.min(Math.max(0, contentWidth - width),
-                            tab.x < contentX ? tab.x : Math.max(contentX, tab.x + tab.width - width)));
+                            tab.x - 12 < contentX ? tab.x - 12 : Math.max(contentX, tab.x + tab.width + 12 - width)));
                     }
 
                     function revealCurrent(): void {
@@ -479,6 +493,37 @@ Item {
                     }
                     onContentWidthChanged: Qt.callLater(navStrip.revealCurrent)
                     onXChanged: Qt.callLater(titleBar.refreshChromeGeometry)
+
+                    Rectangle {
+                        parent: navStrip
+                        objectName: "quickNavLeftFade"
+                        anchors.left: parent.left
+                        height: parent.height
+                        width: 12
+                        z: 1
+                        visible: navStrip.contentX > 0.5
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0; color: ExoTheme.surface }
+                            GradientStop { position: 1; color: "transparent" }
+                        }
+                        Accessible.ignored: true
+                    }
+                    Rectangle {
+                        parent: navStrip
+                        objectName: "quickNavRightFade"
+                        anchors.right: parent.right
+                        height: parent.height
+                        width: 12
+                        z: 1
+                        visible: navStrip.contentX + navStrip.width < navStrip.contentWidth - 0.5
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0; color: "transparent" }
+                            GradientStop { position: 1; color: ExoTheme.surface }
+                        }
+                        Accessible.ignored: true
+                    }
 
                     WheelHandler {
                         target: null
@@ -546,11 +591,13 @@ Item {
                 // interactive rect: it is a readout, so the band stays draggable
                 // across it.
                 SourceConfidence {
+                    id: confidence
                     indicators: root.recordViewModel.confidenceIndicators
                     Layout.alignment: Qt.AlignVCenter
                 }
 
                 ExoStatusPill {
+                    id: statusPill
                     text: root.recordViewModel.stateText
                     tone: root.recordViewModel.stateTone
                     Layout.rightMargin: ExoTheme.spacingSm

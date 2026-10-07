@@ -126,7 +126,32 @@ TestCase {
         tryCompare(menu, "visible", false);
         compare(testSession.durationMs, 50000);
         compare(testSession.visibleClips(0, 100000)[0].startMs, 0);
-    }    function test_linked_selection_and_missing_warning() {
+    }
+    function test_linked_idle_hover_selected() {
+        const strip = createTemporaryObject(timelineComponent, tests);
+        const clips = testSession.visibleClips(0, 100000);
+        testSession.selectClip(0);
+        mouseMove(tests, 620, 220);
+        const video = findChild(strip, "editClip" + clips[0].id);
+        const audio = findChild(strip, "editClip" + clips[1].id);
+        verify(video && audio);
+        compare(video.border.color, ExoTheme.line);
+        compare(audio.border.color, ExoTheme.line);
+        compare(video.color, ExoTheme.surfaceRaised);
+        compare(audio.color, ExoTheme.surfaceRaised);
+        mouseMove(video, 100, 25);
+        tryCompare(video, "color", ExoTheme.surfaceHover);
+        compare(audio.color, ExoTheme.surfaceHover);
+        compare(video.border.color, ExoTheme.line);
+        compare(audio.border.color, ExoTheme.line);
+        mouseMove(tests, 620, 220);
+        tryCompare(video, "color", ExoTheme.surfaceRaised);
+        compare(audio.color, ExoTheme.surfaceRaised);
+        testSession.selectClip(clips[1].id);
+        compare(findChild(strip, "editClip" + clips[0].id).border.color, ExoTheme.accent);
+        compare(findChild(strip, "editClip" + clips[1].id).border.color, ExoTheme.accent);
+    }
+    function test_linked_selection_and_missing_warning() {
         const strip = createTemporaryObject(timelineComponent, tests);
         const clips = testSession.visibleClips(0, 100000);
         compare(clips.length, 2);

@@ -792,7 +792,7 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     auto* nav_strip = window->findChild<QQuickItem*>(QStringLiteral("quickNavStrip"));
     if (!nav_strip)
         return failNavigationLifecycle("no scrollable navigation strip");
-    auto* navigation_brand = window->findChild<QQuickItem*>(QStringLiteral("quickBrandWordmark"));
+    auto* navigation_brand = window->findChild<QQuickItem*>(QStringLiteral("quickBrandMark"));
     auto* navigation_close = window->findChild<QQuickItem*>(QStringLiteral("quickCloseButton"));
     if (!navigation_brand || !navigation_close)
         return failNavigationLifecycle("fixed navigation chrome missing");
@@ -811,7 +811,7 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
             navTabAt(nav_tabs, tab)->setProperty("text", original_labels[tab]);
         window->resize(navigation_original_size);
     });
-    for (const QSize size : {QSize(window->minimumWidth(), window->minimumHeight()), QSize(1280, 820)}) {
+    const auto verify_navigation = [&](const QSize& size) -> int {
         window->resize(size);
         QPointF brand_position;
         QPointF close_position;
@@ -833,8 +833,6 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
             if (!fully_visible || !label || label->property("truncated").toBool() ||
                 label->width() + 0.5 < label->implicitWidth())
                 return failNavigationLifecycle("focused navigation destination is clipped or truncated");
-            if (size.width() == 1280 && nav_strip->property("contentWidth").toReal() > nav_strip->width() + 0.5)
-                return failNavigationLifecycle("wide navigation unexpectedly overflows");
             if (tab == 4) {
                 brand_position = navigation_brand->mapToScene(QPointF());
                 close_position = navigation_close->mapToScene(QPointF());
@@ -847,6 +845,76 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
             if (!delegate->property("selected").toBool())
                 return failNavigationLifecycle("navigation destination was not selected");
         }
+        return 0;
+    };
+    auto* navigation_title = window->findChild<QQuickItem*>(QStringLiteral("quickTitleRow"));
+    auto* navigation_wordmark = window->findChild<QQuickItem*>(QStringLiteral("quickBrandWordmark"));
+    auto* navigation_left_fade = window->findChild<QQuickItem*>(QStringLiteral("quickNavLeftFade"));
+    auto* navigation_right_fade = window->findChild<QQuickItem*>(QStringLiteral("quickNavRightFade"));
+    if (!navigation_title || !navigation_wordmark || !navigation_left_fade || !navigation_right_fade)
+        return failNavigationLifecycle("responsive navigation surfaces missing");
+    const auto settle_navigation = [&]() {
+        const auto frame = nav_strip->grabToImage();
+        if (!frame)
+            return false;
+        QElapsedTimer timer;
+        timer.start();
+        while (frame->image().isNull() && !timer.hasExpired(3000))
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        return !frame->image().isNull();
+    };
+    const auto navigation_overflows = [&]() {
+        return nav_strip->property("contentWidth").toReal() > nav_strip->width() + 0.5;
+    };
+    for (const QSize size : {QSize(window->minimumWidth(), window->minimumHeight()), QSize(1280, 820)}) {
+        window->resize(size);
+        if (!settle_navigation() || verify_navigation(size) != 0)
+            return failNavigationLifecycle("German navigation reachability failed");
+        if (!navigation_brand->isVisible())
+            return failNavigationLifecycle("brand logo disappeared");
+        if (size.width() == 1280 && (!navigation_wordmark->isVisible() || navigation_overflows() ||
+                                     navigation_left_fade->isVisible() || navigation_right_fade->isVisible()))
+            return failNavigationLifecycle("wide navigation lost full brand or shows overflow affordances");
+    }
+    window->resize(window->minimumWidth(), window->minimumHeight());
+    if (!settle_navigation())
+        return failNavigationLifecycle("minimum navigation frame did not settle");
+    // Text expansion exercises overflow without violating the supported window minimum.
+    for (int expansion = 1; expansion <= 3 && !navigation_overflows(); ++expansion) {
+        for (int tab = 0; tab < 5; ++tab)
+            navTabAt(nav_tabs, tab)->setProperty("text", german_labels[tab].repeated(expansion + 1));
+        if (!settle_navigation())
+            return failNavigationLifecycle("expanded navigation frame did not settle");
+    }
+    if (!navigation_overflows() || navigation_wordmark->isVisible() || !navigation_brand->isVisible() ||
+        !navigation_title->property("compactBrand").toBool())
+        return failNavigationLifecycle("narrow navigation did not compact brand before scrolling");
+    if (verify_navigation(window->size()) != 0)
+        return failNavigationLifecycle("overflowed navigation reachability failed");
+    for (const bool at_end : {false, true}) {
+        nav_strip->setProperty("contentX",
+                               at_end ? nav_strip->property("contentWidth").toReal() - nav_strip->width() : 0);
+        if (!settle_navigation() || navigation_left_fade->isVisible() != at_end ||
+            navigation_right_fade->isVisible() == at_end)
+            return failNavigationLifecycle("navigation fades do not indicate the scroll direction");
+    }
+    for (int attempt = 0; attempt < 4 && navigation_overflows(); ++attempt) {
+        const int extra_width = static_cast<int>(nav_strip->property("contentWidth").toReal() - nav_strip->width()) + 8;
+        window->resize(window->width() + extra_width, window->height());
+        if (!settle_navigation())
+            return failNavigationLifecycle("intermediate navigation frame did not settle");
+    }
+    if (navigation_overflows() || navigation_wordmark->isVisible() || !navigation_brand->isVisible() ||
+        !navigation_title->property("compactBrand").toBool() || navigation_left_fade->isVisible() ||
+        navigation_right_fade->isVisible())
+        return failNavigationLifecycle("compact brand did not free width for complete navigation");
+    if (verify_navigation(window->size()) != 0)
+        return failNavigationLifecycle("compact navigation reachability failed");
+    const qreal settled_navigation_width = nav_strip->width();
+    for (int frame = 0; frame < 3; ++frame) {
+        if (!settle_navigation() || navigation_wordmark->isVisible() ||
+            !navigation_title->property("compactBrand").toBool() || nav_strip->width() != settled_navigation_width)
+            return failNavigationLifecycle("responsive brand layout oscillates");
     }
     session->requestSeek(41000);
     const auto clips_before = session->workspace().clips();

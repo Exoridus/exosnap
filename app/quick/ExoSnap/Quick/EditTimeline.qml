@@ -10,6 +10,7 @@ FocusScope {
     property real pixelsPerSecond: 40
     property bool snapping: true
     property var visibleClips: []
+    property real hoveredGroup: 0
     property real draggedGroup: 0
     property real dragDeltaMs: 0
     readonly property real labelWidth: 50
@@ -153,13 +154,14 @@ FocusScope {
             delegate: Rectangle {
                 id: clipItem
                 required property var modelData
+                objectName: "editClip" + modelData.id
                 readonly property real visibleLeft: Math.max(10, scroll.contentX + root.labelWidth - x + 6)
                 x: root.positionAt(modelData.startMs + (root.draggedGroup === modelData.group ? root.dragDeltaMs : 0))
                 y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 3
                 width: Math.max(4, modelData.durationMs * root.pixelsPerMs)
                 height: 56
                 radius: ExoTheme.radiusSm
-                color: modelData.selected ? ExoTheme.surfaceHover : ExoTheme.surfaceRaised
+                color: modelData.selected || root.hoveredGroup === modelData.group ? ExoTheme.surfaceHover : ExoTheme.surfaceRaised
                 border.color: modelData.selected ? ExoTheme.accent : ExoTheme.line
                 border.width: modelData.selected ? 2 : 1
                 clip: true
@@ -205,6 +207,8 @@ FocusScope {
                     preventStealing: true
                     anchors.fill: parent
                     hoverEnabled: true
+                    onEntered: root.hoveredGroup = clipItem.modelData.group
+                    onExited: { if (root.hoveredGroup === clipItem.modelData.group) root.hoveredGroup = 0; }
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     property real startX: 0
                     onPressed: mouse => {
