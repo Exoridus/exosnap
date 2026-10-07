@@ -536,6 +536,14 @@ fn comparisons(manifest: &Manifest, cells: &[Value], phase: &str) -> Vec<Value> 
                         }
                         Err(error) => {
                             per_clip.insert(clip.name.clone(), Value::Null);
+                            interpolation.insert(
+                                clip.name.clone(),
+                                json!({
+                                    "interpolation_sanity": false,
+                                    "overlap": null,
+                                    "error": format!("{error:#}")
+                                }),
+                            );
                             errors.push(format!("{}: {error:#}", clip.name));
                         }
                     }
