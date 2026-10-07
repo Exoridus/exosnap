@@ -4,6 +4,7 @@
 #include <capability/capability_set.h>
 #include <capability/config_types.h>
 #include <capability/nvenc_tuning_policy.h>
+#include <capability/support_level.h>
 #include <exosnap/engine/backend_tuning.h>
 #include <exosnap/engine/codec_types.h>
 #include <vector>
