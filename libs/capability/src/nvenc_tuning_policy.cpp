@@ -13,7 +13,7 @@ namespace exosnap::capability {
 
 NvencTuningResolution ResolveNvencTuning(const engine::NvencTuning& requested, const CapabilitySet& caps,
                                          VideoCodec codec, engine::RateControlMode rate_control,
-                                         NvencLookaheadPolicy policy, const NvencLookaheadPolicyContext& context) {
+                                         NvencLookaheadPolicy policy) {
     NvencTuningResolution result;
     result.tuning = requested;
     const auto& facts = caps.runtime.nvidia;
@@ -55,21 +55,10 @@ NvencTuningResolution ResolveNvencTuning(const engine::NvencTuning& requested, c
     const bool hardware_lookahead = result.available && IsSelectable(lookahead);
     result.lookahead_max_depth = hardware_lookahead ? engine::MaxNvencLookaheadDepth(result.tuning.bframes) : 0;
     result.lookahead_supported = hardware_lookahead && result.lookahead_max_depth > 0;
-    // Capability support alone does not qualify an Auto default. Keep the
-    // measured hardware/output path narrow until broader evidence is available.
-    const auto& output = context.output;
-    result.lookahead_auto_qualified =
-        result.lookahead_supported && caps.gpu_adapter_name == "NVIDIA GeForce RTX 5070 Ti" &&
-        caps.runtime.adapter.driver_version == "32.0.16.1714" && codec == VideoCodec::Av1 &&
-        rate_control == engine::RateControlMode::VariableBitrate && requested.preset == engine::NvencPreset::P4 &&
-        output.output_width == 1920 && output.output_height == 1080 && output.frame_rate_num == 60 &&
-        output.frame_rate_den == 1 && output.bit_depth == BitDepth::Bit8 && output.chroma == ChromaSubsampling::Cs420 &&
-        output.color_range == ColorRange::Limited &&
-        (output.hdr_mode == engine::HdrMode::Off || output.hdr_mode == engine::HdrMode::TonemapSdr) && context.cfr &&
-        context.two_second_gop && requested.bframes == 0 && requested.b_ref_mode == engine::NvencBRefMode::Off &&
-        !requested.spatial_aq && !requested.temporal_aq && requested.multipass == engine::NvencMultipass::SinglePass &&
-        policy == NvencLookaheadPolicy::Auto;
-    result.tuning.lookahead = policy == NvencLookaheadPolicy::Auto ? result.lookahead_auto_qualified
+    result.lookahead_auto_enabled = result.lookahead_supported && codec == VideoCodec::Av1 &&
+                                    rate_control == engine::RateControlMode::VariableBitrate &&
+                                    policy == NvencLookaheadPolicy::Auto;
+    result.tuning.lookahead = policy == NvencLookaheadPolicy::Auto ? result.lookahead_auto_enabled
                                                                    : requested.lookahead && result.lookahead_supported;
     const uint32_t depth = policy == NvencLookaheadPolicy::Auto ? 16u : requested.lookahead_depth;
     result.tuning.lookahead_depth =
@@ -79,9 +68,8 @@ NvencTuningResolution ResolveNvencTuning(const engine::NvencTuning& requested, c
                                   ? "Reduce the B-frame count to enable Lookahead."
                                   : lookahead.reason;
     if (policy == NvencLookaheadPolicy::Auto && result.lookahead_supported) {
-        result.lookahead_reason = result.lookahead_auto_qualified
-                                      ? "Qualified AV1/VBR policy enables Lookahead at depth 16."
-                                      : "No qualified Auto Lookahead policy applies to this configuration.";
+        result.lookahead_reason = result.lookahead_auto_enabled ? "AV1/VBR Auto policy enables Lookahead at depth 16."
+                                                                : "Auto Lookahead is Off outside AV1/VBR.";
     }
     result.spatial_aq_supported = result.available;
     result.tuning.spatial_aq = requested.spatial_aq && result.spatial_aq_supported;

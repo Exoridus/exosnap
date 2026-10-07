@@ -13,8 +13,6 @@
 
 namespace exosnap {
 
-struct VideoSettingsModel;
-
 enum class OutputResolutionMode {
     Native,
     UHD2160,
@@ -124,11 +122,6 @@ struct OutputSettingsModel {
 // start (RecordingCoordinator::SetOutputSettings) — "a split change applies from the next
 // recording" remains the correct, intentional semantics; only the live-mirror gap is fixed.
 void MergeFormatSelection(OutputSettingsModel& live, const OutputSettingsModel& incoming);
-
-// Native output dimensions remain unknown until capture initialization, so the
-// Auto qualification context does not infer a size from the current desktop.
-[[nodiscard]] capability::NvencLookaheadPolicyContext
-NvencLookaheadContextFromSettings(const OutputSettingsModel& output, const VideoSettingsModel& video);
 
 [[nodiscard]] std::optional<exosnap::engine::FrameSize> PresetOutputSize(OutputResolutionMode mode) noexcept;
 [[nodiscard]] const wchar_t* OutputResolutionModeName(OutputResolutionMode mode) noexcept;

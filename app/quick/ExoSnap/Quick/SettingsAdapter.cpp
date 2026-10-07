@@ -906,8 +906,7 @@ void SettingsAdapter::rebuildOptions() {
     auto requested_tuning = out.nvenc_tuning;
     requested_tuning.preset = out.nvenc_preset;
     nvenc_tuning_resolution_ = capability::ResolveNvencTuning(requested_tuning, caps_, out.video_codec,
-                                                              config_.video.rate_control, out.nvenc_lookahead_policy,
-                                                              NvencLookaheadContextFromSettings(out, config_.video));
+                                                              config_.video.rate_control, out.nvenc_lookahead_policy);
     nvenc_bframes_options_.clear();
     nvenc_b_ref_options_.clear();
     nvenc_multipass_options_.clear();
@@ -1405,9 +1404,8 @@ bool SettingsAdapter::nvencLookaheadSupported() const noexcept {
 }
 QString SettingsAdapter::nvencLookaheadHint() const {
     if (config_.output.nvenc_lookahead_policy == capability::NvencLookaheadPolicy::Auto) {
-        return nvencLookahead()
-                   ? tr("Auto: Lookahead 16 is enabled for the qualified AV1/VBR configuration.")
-                   : tr("Auto: Off. This hardware/output configuration has no qualified Lookahead policy.");
+        return nvencLookahead() ? tr("Auto: Lookahead 16 is enabled for AV1/VBR.")
+                                : tr("Auto: Off. Lookahead is enabled only for supported AV1/VBR.");
     }
     if (nvencAdvancedRelevant() && nvenc_tuning_resolution_.lookahead_max_depth == 0 &&
         capability::IsSelectable(caps_.QueryLookahead(config_.output.video_codec)))

@@ -1130,8 +1130,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     if (const auto* requested = exosnap::engine::GetNvencTuning(config.backend_tuning)) {
         const auto resolved = capability::ResolveNvencTuning(
             *requested, ctx.encoder_caps ? *ctx.encoder_caps : ctx.caps, ctx.resolved_user_config.video_codec,
-            config.rate_control_mode, ctx.output_settings.nvenc_lookahead_policy,
-            {ctx.resolved_user_config, config.cfr, config.keyframe_interval_secs == 2.0f});
+            config.rate_control_mode, ctx.output_settings.nvenc_lookahead_policy);
         diagnostics::AppLog::info(
             QStringLiteral("record.nvenc"),
             QStringLiteral("field=lookahead requested=%1 resolved=%2 depth=%3 reason=\"%4\"")

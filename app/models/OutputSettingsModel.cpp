@@ -1,6 +1,4 @@
 #include "OutputSettingsModel.h"
-#include "VideoSettingsModel.h"
-#include <capability/resolver.h>
 #include <capability/translatable.h>
 
 #include <shlobj.h>
@@ -210,26 +208,6 @@ const wchar_t* SplitSizeModeName(SplitSizeMode mode) noexcept {
         return EXOSNAP_TRANSLATABLE("OutputSettings", L"Custom");
     }
     return EXOSNAP_TRANSLATABLE("OutputSettings", L"Off");
-}
-
-capability::NvencLookaheadPolicyContext NvencLookaheadContextFromSettings(const OutputSettingsModel& output,
-                                                                          const VideoSettingsModel& video) {
-    capability::NvencLookaheadPolicyContext context;
-    if (const auto size = ResolveRequestedOutputSize(output.resolution, {})) {
-        context.output.output_width = size->width;
-        context.output.output_height = size->height;
-    }
-    context.output.frame_rate_num = video.frame_rate_num;
-    context.output.frame_rate_den = video.frame_rate_den;
-    context.output.bit_depth = output.bit_depth;
-    context.output.chroma = output.chroma_subsampling;
-    context.output.color_range = output.color_range;
-    context.output.hdr_mode = output.hdr_mode;
-    context.cfr = capability::ReconcileOutputFormat({output.container, output.video_codec, output.audio_codec,
-                                                     output.bit_depth, output.chroma_subsampling, video.cfr})
-                      .resolved.cfr;
-    context.two_second_gop = video.keyframe_interval == KeyframeIntervalMode::Seconds2;
-    return context;
 }
 
 void MergeFormatSelection(OutputSettingsModel& live, const OutputSettingsModel& incoming) {

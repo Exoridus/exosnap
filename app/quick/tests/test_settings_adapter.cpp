@@ -1232,20 +1232,18 @@ TEST_F(SettingsAdapterTest, LookaheadAutoSelectionPreservesManualWishAndAllowsEx
     EXPECT_EQ(adapter.nvencLookaheadMode(), 1);
 }
 
-TEST_F(SettingsAdapterTest, QualifiedAutoLookaheadUsesTheSameResolvedOutputContext) {
+TEST_F(SettingsAdapterTest, AutoLookaheadFollowsCodecAndRateControlWithoutOutputRestrictions) {
     auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     caps.runtime.adapter.adapter_luid = 1;
     caps.runtime.adapter.vendor_id = 0x10DE;
-    caps.runtime.adapter.driver_version = "32.0.16.1714";
     adapter.setCapabilities(caps);
     auto probe = MakeNvencProbe();
     probe.lookahead_av1 = true;
-    adapter.setEncoderDevices({MakeDevice("NVIDIA GeForce RTX 5070 Ti", capability::AdapterVendor::Nvidia, 1)},
-                              {probe});
+    adapter.setEncoderDevices({MakeDevice("NVIDIA GeForce RTX 4090", capability::AdapterVendor::Nvidia, 1)}, {probe});
     auto config = MakeDefaultPreset().config;
     config.output.video_codec = VideoCodec::Av1;
     config.output.container = Container::Matroska;
-    config.output.resolution.mode = OutputResolutionMode::FHD1080;
+    config.output.resolution.mode = OutputResolutionMode::Native;
     config.video.rate_control = exosnap::engine::RateControlMode::VariableBitrate;
     config.output.nvenc_tuning.lookahead_depth = 5;
     adapter.setConfig(config);
@@ -1255,7 +1253,10 @@ TEST_F(SettingsAdapterTest, QualifiedAutoLookaheadUsesTheSameResolvedOutputConte
     adapter.setNvencLookaheadDepth(3);
     EXPECT_EQ(adapter.config().output.nvenc_tuning.lookahead_depth, 5u);
     adapter.setCfr(false);
+    EXPECT_TRUE(adapter.nvencLookahead());
+    adapter.setRateControl(static_cast<int>(exosnap::engine::RateControlMode::ConstantQuality));
     EXPECT_FALSE(adapter.nvencLookahead());
+    adapter.setRateControl(static_cast<int>(exosnap::engine::RateControlMode::VariableBitrate));
     adapter.setCfr(true);
     EXPECT_TRUE(adapter.nvencLookahead());
     adapter.setNvencLookahead(false);

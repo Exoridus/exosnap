@@ -8338,12 +8338,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Ein</translation>
     </message>
     <message>
-        <source>Auto: Lookahead 16 is enabled for the qualified AV1/VBR configuration.</source>
-        <translation>Auto: Lookahead 16 ist für die qualifizierte AV1/VBR-Konfiguration aktiviert.</translation>
+        <source>Auto: Lookahead 16 is enabled for AV1/VBR.</source>
+        <translation>Auto: Lookahead 16 ist für AV1/VBR aktiviert.</translation>
     </message>
     <message>
-        <source>Auto: Off. This hardware/output configuration has no qualified Lookahead policy.</source>
-        <translation>Auto: Aus. Für diese Hardware-/Ausgabekonfiguration gibt es keine qualifizierte Lookahead-Regel.</translation>
+        <source>Auto: Off. Lookahead is enabled only for supported AV1/VBR.</source>
+        <translation>Auto: Aus. Lookahead wird nur für unterstütztes AV1/VBR aktiviert.</translation>
     </message>
     <message>
         <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+310"/>
