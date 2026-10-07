@@ -455,6 +455,31 @@ TEST(RecordingPreset, NormalizedEquals_NvencPresetDifference_NotEqual) {
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 
+TEST(RecordingPreset, AdvancedNvencPreferencesAreDirtyAndPreservedAcrossCodecRestrictions) {
+    RecordingPresetConfig before = MakeDefaultPreset().config;
+    auto after = before;
+    after.output.nvenc_tuning.bframes = 3;
+    after.output.nvenc_tuning.lookahead = true;
+    after.output.nvenc_tuning.multipass = exosnap::engine::NvencMultipass::FullResolution;
+    const auto sanitized = SanitizePresetConfig(after);
+    EXPECT_EQ(sanitized.output.nvenc_tuning, after.output.nvenc_tuning);
+    EXPECT_FALSE(NormalizedConfigEquals(before, sanitized));
+    EXPECT_FALSE(ConfigDirtyEquivalent(before, sanitized));
+    EXPECT_EQ(ConfigDirtyDifference(before, sanitized), "output.nvenc_tuning");
+}
+
+TEST(RecordingPreset, BuiltInsKeepAdvancedNvencDefaultsConservative) {
+    for (const auto& preset : MakeBuiltInPresets()) {
+        const auto& tuning = preset.config.output.nvenc_tuning;
+        EXPECT_EQ(tuning.bframes, 0u);
+        EXPECT_EQ(tuning.b_ref_mode, exosnap::engine::NvencBRefMode::Off);
+        EXPECT_FALSE(tuning.lookahead);
+        EXPECT_FALSE(tuning.spatial_aq);
+        EXPECT_FALSE(tuning.temporal_aq);
+        EXPECT_EQ(tuning.multipass, exosnap::engine::NvencMultipass::SinglePass);
+    }
+}
+
 // ===========================================================================
 // SanitizePresetConfig — countdown
 // ===========================================================================

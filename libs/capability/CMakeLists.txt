@@ -8,6 +8,7 @@ add_library(exosnap_capability STATIC
   src/runtime_query.cpp
   src/resolver.cpp
   src/option_query.cpp
+  src/nvenc_tuning_policy.cpp
   src/translation.cpp
   src/audio_ui_state.cpp
   src/adapter_enum.cpp
@@ -138,5 +139,12 @@ exosnap_add_gtest(
   NAME capability_encoder_device_resolver_tests
   TEST_PREFIX capability.
   SOURCES tests/test_encoder_device_resolver.cpp
+  LIBRARIES exosnap_capability
+)
+
+exosnap_add_gtest(
+  NAME capability_nvenc_tuning_policy_tests
+  TEST_PREFIX capability.
+  SOURCES tests/test_nvenc_tuning_policy.cpp
   LIBRARIES exosnap_capability
 )

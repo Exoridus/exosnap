@@ -41,6 +41,7 @@ QJsonObject CaptureJson(const exosnap::engine::CaptureDiagnostics& c) {
     json.insert(QStringLiteral("processingFailures"), Count(c.frames_dropped_processing_failure));
 
     json.insert(QStringLiteral("duplicates"), Count(c.frames_duplicated));
+    json.insert(QStringLiteral("vfrEncoderHeartbeats"), Count(c.vfr_encoder_heartbeats));
 
     // Both derived from frames_captured, and the only fields here that answer
     // "is the capture producing anything right now". `actualFps` cannot: it is
@@ -163,6 +164,7 @@ QJsonObject EncoderInitJson(const exosnap::engine::EncoderInitInfo& init) {
     if (!init.valid)
         return json;
     json.insert(QStringLiteral("codec"), ui::videoCodecLabel(init.codec));
+    json.insert(QStringLiteral("backendId"), QString::fromUtf8(init.backend_id));
     json.insert(QStringLiteral("preset"),
                 QString::fromUtf8(init.backend_preset.data(), static_cast<qsizetype>(init.backend_preset.size())));
     json.insert(QStringLiteral("rateControl"), RateControlName(init.rc_mode));
@@ -171,6 +173,10 @@ QJsonObject EncoderInitJson(const exosnap::engine::EncoderInitInfo& init) {
     json.insert(QStringLiteral("cq"), static_cast<double>(init.cq));
     json.insert(QStringLiteral("gopLength"), static_cast<double>(init.gop_length));
     json.insert(QStringLiteral("bframes"), static_cast<double>(init.bframes));
+    json.insert(QStringLiteral("backendBRefMode"), QString::fromUtf8(init.backend_b_ref_mode));
+    json.insert(QStringLiteral("backendMultipass"), QString::fromUtf8(init.backend_multipass));
+    json.insert(QStringLiteral("inputSlots"), static_cast<double>(init.input_slots));
+    json.insert(QStringLiteral("outputDepth"), static_cast<double>(init.output_depth));
     json.insert(QStringLiteral("lookaheadFrames"), static_cast<double>(init.lookahead_frames));
     json.insert(QStringLiteral("temporalAQ"), init.temporal_aq);
     json.insert(QStringLiteral("spatialAQ"), init.spatial_aq);

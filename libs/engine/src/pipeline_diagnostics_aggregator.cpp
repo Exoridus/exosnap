@@ -146,6 +146,7 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     forced_keyframes_ = 0;
     slot_stalls_ = 0;
     frames_duplicated_ = 0;
+    vfr_encoder_heartbeats_ = 0;
     output_ts_mismatches_ = 0;
     keyframe_prediction_mismatches_ = 0;
 
@@ -509,6 +510,11 @@ void PipelineDiagnosticsAggregator::OnFrameDuplicated() noexcept {
     ++frames_duplicated_;
 }
 
+void PipelineDiagnosticsAggregator::OnVfrEncoderHeartbeat() noexcept {
+    std::lock_guard lk(mutex_);
+    ++vfr_encoder_heartbeats_;
+}
+
 void PipelineDiagnosticsAggregator::OnScreenGenerationChanged() noexcept {
     std::lock_guard lk(mutex_);
     ++screen_generation_changes_;
@@ -827,6 +833,7 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     cap.frames_dropped_processing_failure = dropped_processing_failure_;
     cap.frames_dropped_ring_eviction = dropped_ring_eviction_;
     cap.frames_duplicated = stats.duplicated_video_frames;
+    cap.vfr_encoder_heartbeats = vfr_encoder_heartbeats_;
     cap.source_type = cfg_.source_type;
     cap.source_loss = stats.source_loss;
     // Progress watch: a frame count that has not moved since the last publish
@@ -1214,6 +1221,7 @@ PerfWindowSample PipelineDiagnosticsAggregator::SamplePerfWindow(time_point now)
     p.dropped_processing_failure = dropped_processing_failure_;
     p.dropped_ring_eviction = dropped_ring_eviction_;
     p.duplicated_frames = frames_duplicated_;
+    p.vfr_encoder_heartbeats = vfr_encoder_heartbeats_;
     p.slot_stalls = slot_stalls_;
     p.queue_saturation_events = queue_saturation_events_;
     return p;
@@ -1244,6 +1252,7 @@ PerfSessionSummary PipelineDiagnosticsAggregator::BuildPerfSummary() const {
     s.dropped_processing_failure = dropped_processing_failure_;
     s.dropped_ring_eviction = dropped_ring_eviction_;
     s.duplicated_frames = frames_duplicated_;
+    s.vfr_encoder_heartbeats = vfr_encoder_heartbeats_;
     s.slot_stalls = slot_stalls_;
     s.queue_saturation_events = queue_saturation_events_;
     s.encoder_init = encoder_init_;

@@ -1182,6 +1182,24 @@ TEST(OutputSettingsTest, ApplyOutputSettingsToRecorderConfig_CarriesNvencPreset)
     EXPECT_EQ(tuning->preset, exosnap::engine::NvencPreset::P1);
 }
 
+TEST(OutputSettingsTest, AdvancedNvencTuningSurvivesLiveMergeAndRecorderPlumbing) {
+    auto live = OutputSettingsModel::Defaults();
+    auto incoming = live;
+    incoming.nvenc_tuning.bframes = 3;
+    incoming.nvenc_tuning.b_ref_mode = exosnap::engine::NvencBRefMode::Middle;
+    incoming.nvenc_tuning.lookahead = true;
+    incoming.nvenc_tuning.lookahead_depth = 28;
+    incoming.nvenc_tuning.spatial_aq = true;
+    incoming.nvenc_tuning.temporal_aq = true;
+    incoming.nvenc_tuning.multipass = exosnap::engine::NvencMultipass::QuarterResolution;
+    MergeFormatSelection(live, incoming);
+    exosnap::engine::RecorderConfig config;
+    ApplyOutputSettingsToRecorderConfig(config, live);
+    const auto* tuning = exosnap::engine::GetNvencTuning(config.backend_tuning);
+    ASSERT_NE(tuning, nullptr);
+    EXPECT_EQ(*tuning, incoming.nvenc_tuning);
+}
+
 // ── EXOSNAP_OUTPUT_DIR override (DF-HISTORY) ─────────────────────────────────
 //
 // When EXOSNAP_OUTPUT_DIR is set to a non-empty path, EffectiveOutputFolder()

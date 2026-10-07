@@ -1,0 +1,86 @@
+#include <capability/nvenc_tuning_policy.h>
+
+#include <capability/capability_set.h>
+#include <capability/config_types.h>
+#include <capability/support_level.h>
+#include <cstdint>
+#include <exosnap/engine/backend_tuning.h>
+#include <exosnap/engine/codec_types.h>
+
+#include <algorithm>
+
+namespace exosnap::capability {
+
+NvencTuningResolution ResolveNvencTuning(const engine::NvencTuning& requested, const CapabilitySet& caps,
+                                         VideoCodec codec, engine::RateControlMode rate_control) {
+    NvencTuningResolution result;
+    result.tuning = requested;
+    const auto& facts = caps.runtime.nvidia;
+    const bool codec_probed = codec == VideoCodec::H264   ? facts.nvenc_h264
+                              : codec == VideoCodec::Hevc ? facts.nvenc_hevc
+                                                          : facts.nvenc_av1;
+    result.available = caps.runtime.adapter.vendor_id == 0x10DE && facts.nvenc_codec_probed && codec_probed &&
+                       IsSelectable(caps.QueryVideoCodec(codec));
+    result.reason = result.available ? "" : "NVENC support for this adapter and codec has not been confirmed.";
+    const auto bframes = caps.QueryBFrames(codec);
+    if (result.available && IsSelectable(bframes.annotation)) {
+        result.max_bframes = std::clamp(bframes.max_bframes, 0, 31);
+    }
+    result.bframes_reason = result.available ? bframes.annotation.reason : result.reason;
+    if (codec == VideoCodec::Av1 && result.max_bframes > 7) {
+        result.max_bframes = static_cast<int>(engine::MaxNvencBframes(engine::VideoCodec::Av1, requested.b_ref_mode,
+                                                                      static_cast<uint32_t>(result.max_bframes)));
+        result.bframes_reason =
+            "AV1 B-frame counts above 7 require hierarchical reference mode, which this SDK does not implement.";
+    }
+    result.tuning.bframes = std::min(requested.bframes, static_cast<uint32_t>(result.max_bframes));
+    if (result.tuning.bframes > 0) {
+        if ((bframes.bframe_ref_mode & 1) != 0) {
+            result.b_ref_modes.push_back(engine::NvencBRefMode::Each);
+        }
+        if ((bframes.bframe_ref_mode & 2) != 0 && result.tuning.bframes >= 2) {
+            result.b_ref_modes.push_back(engine::NvencBRefMode::Middle);
+        }
+    }
+    if (std::find(result.b_ref_modes.begin(), result.b_ref_modes.end(), requested.b_ref_mode) ==
+        result.b_ref_modes.end()) {
+        result.tuning.b_ref_mode = engine::NvencBRefMode::Off;
+    }
+    result.b_ref_reason = !result.available                ? result.reason
+                          : result.tuning.bframes == 0     ? "B-frame references require B-frames."
+                          : result.b_ref_modes.size() == 1 ? "This codec and GPU do not support B-frame references."
+                                                           : "";
+    const auto lookahead = caps.QueryLookahead(codec);
+    const bool hardware_lookahead = result.available && IsSelectable(lookahead);
+    result.lookahead_max_depth = hardware_lookahead ? engine::MaxNvencLookaheadDepth(result.tuning.bframes) : 0;
+    result.lookahead_supported = hardware_lookahead && result.lookahead_max_depth > 0;
+    result.tuning.lookahead = requested.lookahead && result.lookahead_supported && result.lookahead_max_depth > 0;
+    result.tuning.lookahead_depth =
+        result.tuning.lookahead
+            ? std::clamp(requested.lookahead_depth, result.lookahead_min_depth, result.lookahead_max_depth)
+            : 0;
+    result.lookahead_reason = !result.available ? result.reason
+                              : hardware_lookahead && !result.lookahead_supported
+                                  ? "Reduce the B-frame count to enable Lookahead."
+                                  : lookahead.reason;
+    result.spatial_aq_supported = result.available;
+    result.tuning.spatial_aq = requested.spatial_aq && result.spatial_aq_supported;
+    result.spatial_aq_reason = result.available ? "" : result.reason;
+    const auto temporal_aq = caps.QueryTemporalAq(codec);
+    result.temporal_aq_supported = result.available && IsSelectable(temporal_aq);
+    result.tuning.temporal_aq = requested.temporal_aq && result.temporal_aq_supported;
+    result.temporal_aq_reason = result.available ? temporal_aq.reason : result.reason;
+    result.multipass_supported = result.available && (rate_control == engine::RateControlMode::VariableBitrate ||
+                                                      rate_control == engine::RateControlMode::ConstantBitrate);
+    if (!result.multipass_supported || (requested.multipass != engine::NvencMultipass::SinglePass &&
+                                        requested.multipass != engine::NvencMultipass::QuarterResolution &&
+                                        requested.multipass != engine::NvencMultipass::FullResolution)) {
+        result.tuning.multipass = engine::NvencMultipass::SinglePass;
+    }
+    result.multipass_reason = !result.available             ? result.reason
+                              : !result.multipass_supported ? "Multipass rate control is available with VBR or CBR."
+                                                            : "";
+    return result;
+}
+
+} // namespace exosnap::capability

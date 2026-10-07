@@ -32,7 +32,7 @@ std::unique_ptr<IVideoEncoder> VideoEncoderFactory::Create(exosnap::capability::
         // P1-P7 is read only from the NVENC alternative; another backend's
         // tuning (or none) must never leak into the NVENC encoder.
         if (const NvencTuning* tuning = GetNvencTuning(config.backend_tuning)) {
-            encoder->SetPreset(tuning->preset);
+            encoder->SetTuning(*tuning);
         }
         return encoder;
     }

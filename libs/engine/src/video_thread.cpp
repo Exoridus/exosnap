@@ -36,6 +36,7 @@
 #include "preview_publish_gate.h"
 #include "session_internal.h"
 #include "split_sentinel_policy.h"
+#include "vfr_encode_policy.h"
 #include "video_epoch_log.h"
 #include "yuv_to_bgra.h"
 #include <exosnap/engine/cursor_sprite.h>
@@ -765,6 +766,7 @@ void VideoThread::Run() {
         m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, encoderError);
         return;
     }
+    bool sequenceHeaderPublished = false;
     {
         encoder->SetCodec(m_state.config.video_codec);
         encoder->SetBitDepth(m_state.config.bit_depth);
@@ -802,6 +804,26 @@ void VideoThread::Run() {
             return;
         }
 
+        const auto header = encoder->SequenceHeader();
+        if (!header.empty()) {
+            std::vector<uint8_t> cp;
+            if (m_state.config.video_codec == VideoCodec::H264) {
+                sequenceHeaderPublished = annexb::ExtractH264SpsAndPps(header.data(), header.size(), cp);
+            } else if (m_state.config.video_codec == VideoCodec::Hevc) {
+                sequenceHeaderPublished = annexb::ExtractHevcVpsSpsPps(header.data(), header.size(), cp);
+            } else {
+                char reason[256]{};
+                sequenceHeaderPublished =
+                    codec_private::DeriveAv1CodecPrivate(header.data(), header.size(), cp, reason, sizeof(reason));
+            }
+            if (!sequenceHeaderPublished) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                      "Video encoder sequence header could not produce codec private data");
+                return;
+            }
+            m_state.premux.PublishVideo(m_state.config.video_codec, std::move(cp));
+        }
+
         // Capture the resolved encoder init parameters for the live diagnostics
         // snapshot and the on-disk session report, and emit them once as a
         // structured event so they reach the JSONL even if a later failure means no
@@ -824,6 +846,10 @@ void VideoThread::Run() {
             {"gop", std::to_string(enc_init.gop_length)},
             {"bit_depth", enc_init.bit_depth == BitDepth::Bit10 ? "10" : "8"},
             {"spatial_aq", enc_init.spatial_aq ? "1" : "0"},
+            {"backend_b_ref_mode", std::string(enc_init.backend_b_ref_mode)},
+            {"backend_multipass", std::string(enc_init.backend_multipass)},
+            {"input_slots", std::to_string(enc_init.input_slots)},
+            {"output_depth", std::to_string(enc_init.output_depth)},
         };
         exosnap::engine::logging::log(
             exosnap::engine::logging::LogLevel::Info, "encoder", "encoder.init",
@@ -2801,9 +2827,10 @@ void VideoThread::Run() {
     }
 
     // --- Capture + encode loop ---
-    bool av1CodecPrivateReady = false;
-    bool h264CodecPrivateReady = false;
-    bool hevcCodecPrivateReady = false;
+    bool av1CodecPrivateReady = sequenceHeaderPublished;
+    bool h264CodecPrivateReady = sequenceHeaderPublished;
+    bool hevcCodecPrivateReady = sequenceHeaderPublished;
+    bool videoPacketProduced = false;
     uint64_t lastVideoPts = 0;
     uint64_t videoFramesCaptured = 0;
     uint64_t droppedFrames = 0;
@@ -3062,6 +3089,7 @@ void VideoThread::Run() {
             }
         }
 
+        videoPacketProduced = true;
         {
             std::lock_guard slk(m_state.stats_mutex);
             m_state.stats.video_frames_captured = videoFramesCaptured;
@@ -4364,6 +4392,21 @@ void VideoThread::Run() {
 
         // Present-cadence tap state (DXGI OD only): previous frame's LastPresentTime (QPC).
         uint64_t vfrLastPresentQpc = 0;
+        uint64_t vfrLastSubmissionNs = 0;
+        uint64_t vfrMuxProgressFloorNs = 0;
+        winrt::com_ptr<ID3D11Texture2D> vfrCachedPicture;
+        bool vfrCachedPictureValid = false;
+        {
+            D3D11_TEXTURE2D_DESC cacheDesc{};
+            nv12Textures.front()->GetDesc(&cacheDesc);
+            cacheDesc.BindFlags = 0;
+            const HRESULT cacheHr = CreateTrackedTexture2D(d3dDevice.get(), &cacheDesc, nullptr, vfrCachedPicture.put(),
+                                                           GpuSurfaceOwner::EncoderInputs);
+            if (FAILED(cacheHr)) {
+                m_state.RecordFailure(cacheHr, ErrorPhase::Prepare, "VFR encoder heartbeat picture allocation failed");
+                goto end_encode_loop;
+            }
+        }
 
         while (!m_state.stop_requested.load()) {
             if (!useOdCapture) {
@@ -4681,9 +4724,8 @@ void VideoThread::Run() {
                 if (deltaTicks < 0)
                     deltaTicks = 0;
                 uint64_t framePts_ns = static_cast<uint64_t>(deltaTicks) * 100ULL;
-                if (videoFramesCaptured > 0 && framePts_ns <= lastVideoPts) {
-                    framePts_ns = lastVideoPts + 1;
-                }
+                if (videoFramesCaptured > 0)
+                    framePts_ns = VfrPicturePts(framePts_ns, lastVideoPts, vfrMuxProgressFloorNs);
                 lastVideoPts = framePts_ns;
 
                 // Whole-tick frame-time bracket (VFR): from slot acquire to after
@@ -4734,6 +4776,8 @@ void VideoThread::Run() {
                         conv_t1, std::chrono::duration<double, std::milli>(conv_t1 - conv_t0).count());
                     latestTex = nullptr;
 
+                    d3dContext->CopyResource(vfrCachedPicture.get(), nv12Textures[slot].get());
+                    vfrCachedPictureValid = true;
                     lastRealFrameSlot = slot;
                     performSnapshotIfRequested(nv12Textures[static_cast<size_t>(slot)].get());
                     maybeArmSplit(framePts_ns);
@@ -4753,6 +4797,7 @@ void VideoThread::Run() {
                         break;
                     }
                     ++videoFramesCaptured;
+                    vfrLastSubmissionNs = framePts_ns;
                     for (EncodedVideoPacket& pkt : pkts) {
                         if (!routePacket(std::move(pkt)))
                             goto end_encode_loop;
@@ -4817,6 +4862,8 @@ void VideoThread::Run() {
                             goto end_encode_loop;
                         }
                         if (SUCCEEDED(hr)) {
+                            d3dContext->CopyResource(vfrCachedPicture.get(), nv12Textures[slot].get());
+                            vfrCachedPictureValid = true;
                             // Capture frame snapshot on real frames (VFR path).
                             lastRealFrameSlot = slot;
                             performSnapshotIfRequested(nv12Textures[static_cast<size_t>(slot)].get());
@@ -4843,6 +4890,7 @@ void VideoThread::Run() {
                             }
 
                             ++videoFramesCaptured;
+                            vfrLastSubmissionNs = framePts_ns;
 
                             for (EncodedVideoPacket& pkt : pkts) {
                                 if (!routePacket(std::move(pkt)))
@@ -4878,6 +4926,60 @@ void VideoThread::Run() {
                 anyWork = true;
             }
 
+            if (videoEpochSet && !anyWork) {
+                const uint64_t now100ns = Qpc100ns(qpcFreq);
+                const uint64_t nowNs = now100ns > static_cast<uint64_t>(videoEpochTicks100ns)
+                                           ? (now100ns - static_cast<uint64_t>(videoEpochTicks100ns)) * 100
+                                           : 0;
+                if (NeedsVfrEncoderHeartbeat(encoder->PendingFrames(), vfrCachedPictureValid, nowNs,
+                                             vfrLastSubmissionNs)) {
+                    const int32_t slot = encoder->AcquireFreeSlot();
+                    if (slot >= 0) {
+                        const auto tickStarted = std::chrono::steady_clock::now();
+                        // Read from an independent cache, never an input surface
+                        // whose ownership is still held by the encoder.
+                        d3dContext->CopyResource(nv12Textures[slot].get(), vfrCachedPicture.get());
+                        const uint64_t ptsNs = VfrPicturePts(nowNs, lastVideoPts, vfrMuxProgressFloorNs);
+                        maybeArmSplit(ptsNs);
+                        std::vector<EncodedVideoPacket> packets;
+                        std::string error;
+                        m_state.diagnostics.OnEncodeSubmitted();
+                        const auto started = std::chrono::steady_clock::now();
+                        const bool ok = encoder->EncodeFrame(slot, ptsNs, encodeWidth, encodeHeight, packets, error);
+                        const auto finished = std::chrono::steady_clock::now();
+                        m_state.diagnostics.OnEncodeSubmitCost(
+                            finished, std::chrono::duration<double, std::milli>(finished - started).count());
+                        for (const auto& packet : packets)
+                            reportPacketDiagnostics(packet, finished);
+                        if (!ok) {
+                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "VFR encoder heartbeat: " + error);
+                            goto end_encode_loop;
+                        }
+                        ++videoFramesCaptured;
+                        m_state.diagnostics.OnVfrEncoderHeartbeat();
+                        lastVideoPts = vfrLastSubmissionNs = ptsNs;
+                        for (auto& packet : packets) {
+                            if (!routePacket(std::move(packet)))
+                                goto end_encode_loop;
+                        }
+                        m_state.diagnostics.OnVideoTickTime(
+                            finished, std::chrono::duration<double, std::milli>(finished - tickStarted).count());
+                        anyWork = true;
+                    }
+                } else if (videoPacketProduced && encoder->PendingFrames() == 0 && !split_armed &&
+                           nowNs >= vfrMuxProgressFloorNs + 250000000ULL) {
+                    // With no delayed picture, authorize idle audio progress.
+                    // Later capture PTS cannot precede this committed floor.
+                    const auto room = m_state.PushMuxItem(MuxItem{VideoProgressSentinel{nowNs}});
+                    if (room != MuxQueueWait::Ready) {
+                        if (room == MuxQueueWait::TimedOut)
+                            m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                                  "Mux queue limit exceeded while publishing idle video progress");
+                        goto end_encode_loop;
+                    }
+                    vfrMuxProgressFloorNs = nowNs;
+                }
+            }
             if (!anyWork)
                 Sleep(1);
         }

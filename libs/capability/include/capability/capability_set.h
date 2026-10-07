@@ -26,11 +26,8 @@ struct ComboKeyHash {
     size_t operator()(const ComboKey& key) const noexcept;
 };
 
-// Per-codec NVENC B-frame capability: whether/how many B-frames the GPU and
-// driver support for this codec, plus the B-frame-reference-mode capability
-// bit (0/1/2, SDK semantics). Fail-closed: NotImplemented/0 baseline, upgraded
-// only when a real per-GPU probe confirms support — see D1 of
-// encoder-quality-features-spec.md (never an architecture/name heuristic).
+// Per-codec probed B-frame limit and SDK reference-mode enumeration.
+// Unknown hardware or failed queries remain unavailable.
 struct BFrameCapability {
     SupportAnnotation annotation;
     int max_bframes = 0;

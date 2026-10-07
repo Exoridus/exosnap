@@ -8,12 +8,14 @@
 //! `docs/dev/encoder-quality-matrix.md` for the full workflow.
 
 mod bd_rate;
+pub mod campaign;
 mod matrix;
 mod process_args;
 mod quality;
 mod report;
 mod sanity;
 mod self_test;
+mod tuning;
 mod y4m;
 
 use std::path::{Path, PathBuf};
@@ -70,6 +72,9 @@ pub struct MatrixArgs {
     /// empty value to skip VBR.
     #[arg(long)]
     pub vbr_values: Option<String>,
+    /// Advanced NVENC tuning, applied identically to every cell in this run.
+    #[command(flatten)]
+    pub tuning: tuning::TuningArgs,
 }
 
 /// One row of the matrix sweep's result: everything `write_report` needs
@@ -175,7 +180,11 @@ pub fn run_matrix(args: &MatrixArgs) -> anyhow::Result<Vec<MatrixRow>> {
     for cell in &cells {
         let out_path = work_dir.join(format!("{clip_name}-{}.{ext}", cell.label()));
         println!("encoding {} ...", cell.label());
-        probe_encode(&probe, &clip, &out_path, vcodec, cell)?;
+        let probe_log = probe_encode(&probe, &clip, &out_path, vcodec, cell, &args.tuning)?;
+        std::fs::write(
+            work_dir.join(format!("{}.probe.log", cell.label())),
+            probe_log,
+        )?;
         let bitrate_kbps = std::fs::metadata(&out_path)
             .with_context(|| format!("could not read {}", out_path.display()))?
             .len() as f64
@@ -205,7 +214,40 @@ pub fn run_matrix(args: &MatrixArgs) -> anyhow::Result<Vec<MatrixRow>> {
             psnr: quality.psnr,
         });
     }
+    let metadata = serde_json::json!({
+        "codec": vcodec,
+        "tuning": args.tuning,
+        "reference": clip,
+        "reference_sha256": file_sha256(&clip)?,
+        "probe": probe,
+        "probe_sha256": file_sha256(&probe)?,
+        "artifacts": work_dir,
+        "encodes": cells.iter().map(|cell| {
+            let path = work_dir.join(format!("{clip_name}-{}.{ext}", cell.label()));
+            Ok(serde_json::json!({"cell": cell.label(), "path": path, "sha256": file_sha256(&path)?}))
+        }).collect::<anyhow::Result<Vec<_>>>()?,
+    });
+    std::fs::write(
+        format!("{}.evidence.json", args.output),
+        serde_json::to_vec_pretty(&metadata)?,
+    )?;
     Ok(rows)
+}
+
+fn file_sha256(path: &Path) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hash = Sha256::new();
+    let mut bytes = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut bytes)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&bytes[..count]);
+    }
+    Ok(hex::encode(hash.finalize()))
 }
 
 fn probe_encode(
@@ -214,14 +256,16 @@ fn probe_encode(
     out: &Path,
     vcodec: &str,
     cell: &MatrixCell,
-) -> anyhow::Result<()> {
-    let argv = process_args::probe_encode_argv(
+    tuning: &tuning::TuningArgs,
+) -> anyhow::Result<String> {
+    let mut argv = process_args::probe_encode_argv(
         &probe.to_string_lossy(),
         &y4m_path.to_string_lossy(),
         &out.to_string_lossy(),
         vcodec,
         cell,
     );
+    tuning.append_argv(&mut argv);
     let output = std::process::Command::new(&argv[0])
         .args(&argv[1..])
         .output()
@@ -233,7 +277,11 @@ fn probe_encode(
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    Ok(())
+    Ok(format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ))
 }
 
 /// Sweep selection. When --presets/--cq-values/--vbr-values are all
@@ -316,6 +364,7 @@ mod tests {
     #[test]
     fn resolve_matrix_defaults_to_the_baseline_when_nothing_is_given() {
         let args = MatrixArgs {
+            tuning: tuning::TuningArgs::default(),
             self_test: false,
             metric_sanity: false,
             out_dir: None,
@@ -337,6 +386,7 @@ mod tests {
     #[test]
     fn resolve_matrix_uses_explicit_values_when_any_flag_is_given() {
         let args = MatrixArgs {
+            tuning: tuning::TuningArgs::default(),
             self_test: false,
             metric_sanity: false,
             out_dir: None,
@@ -357,6 +407,7 @@ mod tests {
     #[test]
     fn resolve_matrix_rejects_an_entirely_empty_explicit_sweep() {
         let args = MatrixArgs {
+            tuning: tuning::TuningArgs::default(),
             self_test: false,
             metric_sanity: false,
             out_dir: None,
@@ -402,6 +453,7 @@ mod tests {
     #[test]
     fn run_matrix_requires_both_clip_and_vcodec() {
         let args = MatrixArgs {
+            tuning: tuning::TuningArgs::default(),
             self_test: false,
             metric_sanity: false,
             out_dir: None,

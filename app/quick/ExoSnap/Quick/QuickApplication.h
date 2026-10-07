@@ -615,6 +615,7 @@ class QuickApplication {
     // is verified again by the engine against the actual capture device.
     exosnap::engine::ResolvedEncoderDevice
     resolveEncoderDeviceFor(const std::optional<exosnap::engine::CaptureTarget>& target) const;
+    capability::CapabilitySet encoderCapabilitiesFor(const exosnap::engine::ResolvedEncoderDevice& device) const;
     // The deferred half of updateMeterServices(): opens the endpoints the current
     // state wants. Re-checks the stop condition, because it runs one debounce
     // interval after the decision that scheduled it.

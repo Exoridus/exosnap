@@ -268,6 +268,19 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     }
     SanitizeOutputResolution(config.output.resolution);
     SanitizeSplitSettings(config.output.split);
+    auto& tuning = config.output.nvenc_tuning;
+    tuning.preset = exosnap::engine::NvencPreset::P4;
+    tuning.lookahead_depth = std::clamp(tuning.lookahead_depth, 1u, 31u);
+    if (tuning.b_ref_mode != exosnap::engine::NvencBRefMode::Off &&
+        tuning.b_ref_mode != exosnap::engine::NvencBRefMode::Each &&
+        tuning.b_ref_mode != exosnap::engine::NvencBRefMode::Middle) {
+        tuning.b_ref_mode = exosnap::engine::NvencBRefMode::Off;
+    }
+    if (tuning.multipass != exosnap::engine::NvencMultipass::SinglePass &&
+        tuning.multipass != exosnap::engine::NvencMultipass::QuarterResolution &&
+        tuning.multipass != exosnap::engine::NvencMultipass::FullResolution) {
+        tuning.multipass = exosnap::engine::NvencMultipass::SinglePass;
+    }
 
     // Video: reset frame rate if degenerate (either numerator or denominator is zero).
     if (config.video.frame_rate_num == 0 || config.video.frame_rate_den == 0) {
@@ -573,6 +586,9 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.output.nvenc_preset != b.output.nvenc_preset) {
         return false;
     }
+    if (a.output.nvenc_tuning != b.output.nvenc_tuning) {
+        return false;
+    }
     if (a.output.hdr_mode != b.output.hdr_mode) {
         return false;
     }
@@ -857,6 +873,9 @@ std::string_view ConfigDirtyDifference(const RecordingPresetConfig& a, const Rec
     }
     if (a.output.nvenc_preset != b.output.nvenc_preset) {
         return "output.nvenc_preset";
+    }
+    if (a.output.nvenc_tuning != b.output.nvenc_tuning) {
+        return "output.nvenc_tuning";
     }
     if (a.output.audio_codec != b.output.audio_codec) {
         return "output.audio_codec";

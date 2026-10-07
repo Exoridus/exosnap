@@ -127,6 +127,8 @@ enum Command {
     /// BD-rate across the sweep. Dev-only: needs real NVENC hardware and a
     /// local ffmpeg build with libvmaf, never run in CI.
     EncoderQualityMatrix(exo_dev::encoder_quality_matrix::MatrixArgs),
+    /// Resumable P4 advanced NVENC qualification with frozen inputs.
+    EncoderQualityCampaign(exo_dev::encoder_quality_matrix::campaign::CampaignArgs),
     /// Reads a crash minidump and resolves the faulting instruction, the
     /// crashed thread's stack scan and every module's PDB identity.
     ReadCrashDump(CrashDumpArgs),
@@ -1162,6 +1164,9 @@ fn run_cli() -> anyhow::Result<ExitCode> {
         },
         Command::PerfAnalyze(args) => perf_analyze(args),
         Command::EncoderQualityMatrix(args) => exo_dev::encoder_quality_matrix::run(&args),
+        Command::EncoderQualityCampaign(args) => {
+            exo_dev::encoder_quality_matrix::campaign::run(&args)
+        }
         Command::Hook { name } => match name.as_str() {
             "pre-commit" => {
                 let git = Git::new(&repo_root);

@@ -2,15 +2,40 @@
 
 #include "codec_types.h"
 
+#include <cstdint>
 #include <variant>
 
 namespace exosnap::engine {
+
+enum class NvencBRefMode { Off, Each, Middle };
+enum class NvencMultipass { SinglePass, QuarterResolution, FullResolution };
+
+// AV1 counts above seven require the hierarchical B-frame mode introduced after
+// the pinned SDK. A driver capability alone does not make that mode executable.
+[[nodiscard]] constexpr uint32_t MaxNvencBframes(VideoCodec codec, NvencBRefMode, uint32_t reported_max) noexcept {
+    const uint32_t sdk_max = codec == VideoCodec::Av1 ? 7 : 31;
+    return reported_max < sdk_max ? reported_max : sdk_max;
+}
+
+// The SDK bounds lookahead jointly with B-frames. The product also caps depth at 16 to bound surface memory before
+// resolution-aware budgeting is available.
+[[nodiscard]] constexpr uint32_t MaxNvencLookaheadDepth(uint32_t bframes) noexcept {
+    const uint32_t sdk_max = bframes < 31 ? 31 - bframes : 0;
+    return sdk_max < 16 ? sdk_max : 16;
+}
 
 // NVENC-specific tuning. P1-P7 is a speed/quality trade-off that only NVENC
 // defines; it is not a universal encoder preset and must never be mapped onto
 // another backend's nominally similar control.
 struct NvencTuning {
     NvencPreset preset = NvencPreset::P4;
+    uint32_t bframes = 0;
+    NvencBRefMode b_ref_mode = NvencBRefMode::Off;
+    bool lookahead = false;
+    uint32_t lookahead_depth = 16;
+    bool spatial_aq = false;
+    bool temporal_aq = false;
+    NvencMultipass multipass = NvencMultipass::SinglePass;
 
     bool operator==(const NvencTuning&) const noexcept = default;
 };

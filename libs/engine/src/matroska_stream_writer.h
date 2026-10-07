@@ -10,10 +10,9 @@
 //                   SeekHead placeholder, Segment Info (Duration placeholder),
 //                   and the Tracks element. The file is open and streaming.
 //   2. Push()     — enqueues a packet into a small bounded reorder window kept
-//                   sorted by PTS. As the window advances, packets that have
-//                   fallen behind the window horizon are emitted into Matroska
-//                   clusters and their backing bytes are freed immediately.
-//                   Peak RAM is O(window seconds), NOT O(session).
+//                   sorted by decode time (PTS for streams without reordering). As the window advances, packets that
+//                   have fallen behind the window horizon are emitted into Matroska clusters and their backing bytes
+//                   are freed immediately. Peak RAM is O(window seconds), NOT O(session).
 //   3. Finalize() — drains the remaining window, writes the Cues element (one
 //                   entry per video keyframe — accumulated incrementally, tiny),
 //                   back-patches the real Duration, replaces the SeekHead
@@ -34,6 +33,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -99,6 +99,7 @@ struct MuxPacket {
     uint64_t track_num = 0;
     bool is_key = false;
     std::vector<uint8_t> bytes;
+    std::optional<int64_t> dts_ns;
 };
 
 // Audio codec discriminator for the Matroska track header. Replaces the old
@@ -176,7 +177,8 @@ struct MatroskaStreamConfig {
     // WebM is Matroska with a different DocType and a codec allow-list; the
     // EBML header must say which, or a WebM-only reader rejects the file.
     bool webm = false;
-    // Opus frame size in samples at 48 kHz, for DefaultDuration.
+    // Opus frame size in samples at 48 kHz, for DefaultDuration. Zero omits
+    // the duration when a rewriting caller cannot recover the original size.
     uint32_t opus_frame_samples = 960;
 
     // Audio
@@ -312,15 +314,17 @@ class MatroskaStreamWriter {
     }
 
   private:
-    // Sorted-by-PTS reorder window entry.
+    // Decode-time interleave window entry.
     struct WindowEntry {
         uint64_t pts_ns = 0;
+        std::optional<int64_t> dts_ns;
+        int64_t ordering_ns = 0;
         uint64_t track_num = 0;
         bool is_key = false;
         std::vector<uint8_t> bytes;
     };
 
-    // Emit window entries whose PTS is behind the horizon (force=true drains all).
+    // Emit window entries whose decode time is behind the horizon (force=true drains all).
     bool DrainWindow(bool force);
     // Write a single resolved packet into the current/next cluster.
     bool EmitPacket(const WindowEntry& e);
@@ -352,10 +356,10 @@ class MatroskaStreamWriter {
 
     uint64_t m_segment_data_start = 0;
 
-    // Reorder window, kept sorted ascending by PTS (insertion sort on push — the
-    // window is small so this is cheap and keeps emission strictly monotone).
+    // Reorder window, kept sorted ascending by decode time (insertion sort on push — the
+    // window is small so this is cheap and keeps per-track decode order).
     std::deque<WindowEntry> m_window;
-    uint64_t m_max_pushed_pts_ns = 0; // newest PTS seen across all tracks
+    int64_t m_max_pushed_ordering_ns = 0;
 
     // Active cluster state.
     libmatroska::KaxCluster* m_cluster = nullptr;

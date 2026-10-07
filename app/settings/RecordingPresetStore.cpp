@@ -610,6 +610,20 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     out_tbl.emplace("chroma_subsampling", ChromaSubsamplingToString(out.chroma_subsampling).toStdString());
     out_tbl.emplace("color_range", ColorRangeToString(out.color_range).toStdString());
     out_tbl.emplace("nvenc_preset", NvencPresetToString(out.nvenc_preset).toStdString());
+    const auto& tuning = out.nvenc_tuning;
+    toml::table nvenc;
+    nvenc.emplace("bframes", static_cast<int64_t>(tuning.bframes));
+    nvenc.emplace("b_ref_mode", tuning.b_ref_mode == exosnap::engine::NvencBRefMode::Each     ? "each"
+                                : tuning.b_ref_mode == exosnap::engine::NvencBRefMode::Middle ? "middle"
+                                                                                              : "off");
+    nvenc.emplace("lookahead", tuning.lookahead);
+    nvenc.emplace("lookahead_depth", static_cast<int64_t>(tuning.lookahead_depth));
+    nvenc.emplace("spatial_aq", tuning.spatial_aq);
+    nvenc.emplace("temporal_aq", tuning.temporal_aq);
+    nvenc.emplace("multipass", tuning.multipass == exosnap::engine::NvencMultipass::QuarterResolution ? "quarter"
+                               : tuning.multipass == exosnap::engine::NvencMultipass::FullResolution  ? "full"
+                                                                                                      : "single");
+    out_tbl.emplace("nvenc", std::move(nvenc));
     out_tbl.emplace("hdr_mode", HdrModeToString(out.hdr_mode).toStdString());
     out_tbl.emplace("audio_codec", AudioCodecToString(out.audio_codec).toStdString());
     out_tbl.emplace("resolution_mode", OutputResolutionModeToString(out.resolution.mode).toStdString());
@@ -808,6 +822,29 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
         const auto np = NvencPresetFromString(QString::fromStdString(TomlStr(tbl["output"]["nvenc_preset"])));
         if (np.has_value())
             out.nvenc_preset = *np;
+    }
+    {
+        auto& tuning = out.nvenc_tuning;
+        const auto nvenc = tbl["output"]["nvenc"];
+        const int64_t bframes = TomlInt(nvenc["bframes"], 0);
+        if (bframes >= 0 && bframes <= UINT32_MAX)
+            tuning.bframes = static_cast<uint32_t>(bframes);
+        const std::string b_ref = TomlStr(nvenc["b_ref_mode"]);
+        if (b_ref == "each")
+            tuning.b_ref_mode = exosnap::engine::NvencBRefMode::Each;
+        else if (b_ref == "middle")
+            tuning.b_ref_mode = exosnap::engine::NvencBRefMode::Middle;
+        tuning.lookahead = TomlBool(nvenc["lookahead"]);
+        const int64_t depth = TomlInt(nvenc["lookahead_depth"], 16);
+        if (depth >= 1 && depth <= 31)
+            tuning.lookahead_depth = static_cast<uint32_t>(depth);
+        tuning.spatial_aq = TomlBool(nvenc["spatial_aq"]);
+        tuning.temporal_aq = TomlBool(nvenc["temporal_aq"]);
+        const std::string multipass = TomlStr(nvenc["multipass"]);
+        if (multipass == "quarter")
+            tuning.multipass = exosnap::engine::NvencMultipass::QuarterResolution;
+        else if (multipass == "full")
+            tuning.multipass = exosnap::engine::NvencMultipass::FullResolution;
     }
     {
         // A missing/invalid key (schema-20-and-older files, which reset before

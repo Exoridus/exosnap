@@ -239,6 +239,17 @@ EffectiveRecordingConfig DescribeEffectiveConfig(const exosnap::engine::Recorder
     builder.Add("bitrate_kbps", static_cast<qint64>(config.target_bitrate_kbps));
     if (const NvencTuning* nvenc = GetNvencTuning(config.backend_tuning)) {
         builder.Add("nvenc_preset", Name(nvenc->preset));
+        builder.Add("nvenc_bframes", static_cast<qint64>(nvenc->bframes));
+        builder.Add("nvenc_b_ref_mode", nvenc->b_ref_mode == NvencBRefMode::Each     ? QStringLiteral("each")
+                                        : nvenc->b_ref_mode == NvencBRefMode::Middle ? QStringLiteral("middle")
+                                                                                     : QStringLiteral("off"));
+        builder.Add("nvenc_lookahead", nvenc->lookahead);
+        builder.Add("nvenc_lookahead_depth", static_cast<qint64>(nvenc->lookahead_depth));
+        builder.Add("nvenc_spatial_aq", nvenc->spatial_aq);
+        builder.Add("nvenc_temporal_aq", nvenc->temporal_aq);
+        builder.Add("nvenc_multipass", nvenc->multipass == NvencMultipass::QuarterResolution ? QStringLiteral("quarter")
+                                       : nvenc->multipass == NvencMultipass::FullResolution  ? QStringLiteral("full")
+                                                                                            : QStringLiteral("single"));
     } else {
         builder.Add("nvenc_preset", QStringLiteral("none"));
     }

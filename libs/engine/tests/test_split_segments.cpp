@@ -1,8 +1,18 @@
 #include <gtest/gtest.h>
 
+#include "annexb_to_avcc.h"
 #include "matroska_stream_writer.h"
+#include "mux_audio_hold.h"
+#include "mux_queue.h"
+#include "mux_thread.h"
+#include "premux_state.h"
+#include "session_internal.h"
+#include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/packet_types.h>
 #include <exosnap/engine/recorder_session.h>
+#include <exosnap/engine/split_trigger_source.h>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -10,6 +20,8 @@
 #include <filesystem>
 #include <fstream>
 #include <ios>
+#include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -17,17 +29,8 @@
 
 #include "test_unique_temp.h"
 
-// These tests exercise the SPLIT-RECORDING-R1 engine primitives that are
-// testable without a live GPU session:
-//   - DeriveSegmentPath: naming + collision policy (pure function)
-//   - The segment-transition pattern the mux thread uses: finalize the current
-//     MatroskaStreamWriter, then open the next from a fresh segment-local zero
-//     timeline. Each segment must be an independently valid container, and a
-//     failure opening segment N must not touch segments 1..N-1.
-//
-// The full per-thread coordination (VideoThread arming, SplitSentinel routing)
-// runs only under a real capture/encode session and is covered by the practical
-// media-validation pass, not by these host-only unit tests.
+// Host tests cover naming, writer isolation, and queued mux transitions without
+// a GPU. Real encoder output still requires hardware and decoder validation.
 
 namespace {
 
@@ -37,6 +40,52 @@ using exosnap::engine::MatroskaStreamWriter;
 using exosnap::engine::MuxPacket;
 using exosnap::engine::SegmentPathExistsProbe;
 using exosnap::engine::SegmentPathResult;
+
+exosnap::engine::EncodedAudioPacket AudioPacket(uint64_t pts_ns, uint8_t marker, uint32_t track = 0) {
+    return {{marker}, pts_ns, track};
+}
+
+TEST(MuxAudioHoldTest, ReorderedVideoProgressRetainsBoundaryAudio) {
+    exosnap::engine::MuxAudioHold hold;
+    ASSERT_TRUE(hold.Push(AudioPacket(200, 2)));
+    ASSERT_TRUE(hold.Push(AudioPacket(100, 1)));
+    hold.AdvanceVideo(100);
+    EXPECT_FALSE(hold.PopEligible());
+    hold.AdvanceVideo(80);
+    EXPECT_FALSE(hold.PopEligible());
+    hold.AdvanceVideo(200);
+    hold.AdvanceVideo(80);
+    ASSERT_TRUE(hold.PopEligible());
+    EXPECT_FALSE(hold.PopEligible());
+    EXPECT_FALSE(hold.PopBefore(200));
+    auto next_segment = hold.Pop();
+    ASSERT_TRUE(next_segment);
+    EXPECT_EQ(next_segment->pts_ns, 200u);
+    EXPECT_EQ(hold.bytes(), 0u);
+}
+
+TEST(MuxAudioHoldTest, BytesAndMediaTimeFailClosedWithoutLosingHeldPackets) {
+    const size_t one_packet = sizeof(exosnap::engine::EncodedAudioPacket) + 1;
+    exosnap::engine::MuxAudioHold hold({one_packet, 60});
+    hold.AdvanceVideo(100);
+    EXPECT_FALSE(hold.Push(AudioPacket(161, 3)));
+    ASSERT_TRUE(hold.Push(AudioPacket(150, 1)));
+    EXPECT_FALSE(hold.Push(AudioPacket(151, 2)));
+    EXPECT_EQ(hold.bytes(), one_packet);
+    auto kept = hold.Pop();
+    ASSERT_TRUE(kept);
+    EXPECT_EQ(kept->bytes.front(), 1);
+    EXPECT_EQ(hold.bytes(), 0u);
+}
+
+TEST(MuxAudioHoldTest, BudgetCoversMaximumSupportedPcmAudioForOneMinute) {
+    const exosnap::engine::MuxAudioHold::Limits limits;
+    const uint64_t pcm_bytes = 96000ull * 2 * 4 * exosnap::engine::CodecPrivateData::kMaxAudioTracks * 60;
+    const uint64_t packet_overhead =
+        100ull * exosnap::engine::CodecPrivateData::kMaxAudioTracks * 60 * sizeof(exosnap::engine::EncodedAudioPacket);
+    EXPECT_GT(limits.bytes, pcm_bytes + packet_overhead);
+    EXPECT_EQ(limits.duration_ns, 60000000000ull);
+}
 
 // Convenience: most call sites in these tests only care about the derived
 // path in the success case (naming/collision-policy assertions). Fails loudly
@@ -177,6 +226,171 @@ bool SegmentSizeIsFinite(const std::vector<uint8_t>& d) {
         off += static_cast<size_t>(size);
     }
     return false;
+}
+
+using AudioMarkers = std::array<std::vector<std::pair<uint8_t, int64_t>>, 2>;
+
+AudioMarkers ReadAudioMarkers(const std::filesystem::path& path) {
+    const auto bytes = ReadFile(path.string());
+    AudioMarkers markers;
+    for (const auto& cluster : SegmentChildren(bytes)) {
+        if (cluster.id != kIdCluster)
+            continue;
+        const auto blocks = ParseChildren(bytes, cluster.data_off, cluster.data_off + cluster.data_size);
+        int64_t cluster_ms = 0;
+        for (const auto& block : blocks) {
+            if (block.id == 0xE7) {
+                for (size_t i = 0; i < block.data_size; ++i)
+                    cluster_ms = (cluster_ms << 8) | bytes[block.data_off + i];
+            }
+        }
+        for (const auto& block : blocks) {
+            if (block.id != 0xA3 || block.data_size < 5)
+                continue;
+            const uint8_t track = bytes[block.data_off] & 0x7F;
+            if (track < 2 || track > 3)
+                continue;
+            const auto relative_ms = static_cast<int16_t>((bytes[block.data_off + 1] << 8) | bytes[block.data_off + 2]);
+            markers[track - 2].emplace_back(bytes[block.data_off + 4], cluster_ms + relative_ms);
+        }
+    }
+    return markers;
+}
+
+std::vector<uint8_t> SplitAccessUnit() {
+    return {0, 0, 0, 1, 0x67, 0x42, 0xC0, 0x28, 0, 0, 0, 1, 0x68, 0xCE, 0x3C, 0x80, 0, 0, 0, 1, 0x65, 0x11, 0x22, 0x33};
+}
+
+std::shared_ptr<exosnap::engine::SessionState>
+MakeSplitState(const std::filesystem::path& output, std::vector<exosnap::engine::CompletedSegment>& segments) {
+    using namespace exosnap::engine;
+    auto state = std::make_shared<SessionState>();
+    state->config.output_path = output;
+    state->config.container = Container::Matroska;
+    state->config.video_codec = VideoCodec::H264;
+    state->config.audio_codec = AudioCodec::Aac;
+    state->audio_track_count = 2;
+    state->encode_width = 640;
+    state->encode_height = 360;
+    state->session_start_qpc_100ns = 1000000;
+    state->video_epoch_qpc_100ns.store(1000000);
+    const auto access_unit = SplitAccessUnit();
+    std::vector<uint8_t> sps_pps;
+    EXPECT_TRUE(annexb::ExtractH264SpsAndPps(access_unit.data(), access_unit.size(), sps_pps));
+    state->premux.PublishVideo(VideoCodec::H264, std::move(sps_pps));
+    state->segment_callback = [&](const auto& segment) { segments.push_back(segment); };
+    for (uint32_t track = 0; track < 2; ++track) {
+        state->premux.PublishAudio(track, {{0x11, 0x90}, 0});
+        state->audio_epoch_qpc_100ns[track].store(1000000 + 200000 * (track + 1));
+    }
+    return state;
+}
+
+TEST(MuxSplitAudioTest, DelayedKeyframePartitionsAlignedAudioAndEosDrainsBothTracks) {
+    using namespace exosnap::engine;
+    const auto output = exosnap_test::UniqueTempPath("mux_split_delayed_audio.mkv");
+    std::vector<CompletedSegment> segments;
+    auto state = MakeSplitState(output, segments);
+    const auto access_unit = SplitAccessUnit();
+    int64_t decode_ns = -40000000;
+    const auto video = [&](uint64_t pts_ms, bool key, std::optional<SplitSentinel> split = std::nullopt) {
+        EncodedVideoPacket packet;
+        packet.bytes = access_unit;
+        packet.pts_ns = pts_ms * 1000000;
+        packet.dts_ns = decode_ns;
+        decode_ns += 40000000;
+        packet.keyframe = key;
+        ASSERT_EQ(state->PushMuxItem(MuxItem{std::move(packet)}, split), MuxQueueWait::Ready);
+    };
+    video(0, true);
+    for (uint32_t track = 0; track < 2; ++track) {
+        uint8_t marker = 0;
+        for (const uint64_t aligned_ms : {50u, 150u, 199u, 200u, 250u, 450u}) {
+            const uint64_t raw_ms = aligned_ms - 20 * (track + 1);
+            ASSERT_EQ(state->PushMuxItem(MuxItem{AudioPacket(raw_ms * 1000000, ++marker, track)}), MuxQueueWait::Ready);
+        }
+    }
+    video(100, false);
+    video(80, false);
+    video(200, true, SplitSentinel{1, SplitTriggerSource::ManualButton});
+    video(300, false);
+    state->mux_queue.PushSentinel(VideoEosSentinel{});
+    for (uint32_t track = 0; track < 2; ++track) {
+        const uint64_t raw_ms = 500 - 20 * (track + 1);
+        ASSERT_EQ(state->PushMuxItem(MuxItem{AudioPacket(raw_ms * 1000000, 7, track)}), MuxQueueWait::Ready);
+        state->mux_queue.PushSentinel(AudioEosSentinel{track});
+    }
+    auto mux = std::make_shared<MuxThread>(state);
+    mux->Start();
+    ASSERT_TRUE(mux->Join(10000));
+    ASSERT_FALSE(state->HasFailure());
+    ASSERT_EQ(segments.size(), 2u);
+    ASSERT_TRUE(segments[0].succeeded);
+    ASSERT_TRUE(segments[1].succeeded);
+    const auto old_audio = ReadAudioMarkers(segments[0].path);
+    const auto new_audio = ReadAudioMarkers(segments[1].path);
+    const std::vector<std::pair<uint8_t, int64_t>> expected_old = {{1, 50}, {2, 150}, {3, 199}};
+    const std::vector<std::pair<uint8_t, int64_t>> expected_new = {{4, 0}, {5, 50}, {6, 250}, {7, 300}};
+    for (size_t track = 0; track < 2; ++track) {
+        EXPECT_EQ(old_audio[track], expected_old);
+        EXPECT_EQ(new_audio[track], expected_new);
+    }
+    for (const auto& segment : segments) {
+        std::error_code ignored;
+        std::filesystem::remove(segment.path, ignored);
+    }
+}
+
+TEST(MuxSplitAudioTest, StaticVfrProgressKeepsAudioBoundedBeyondOneMinuteUntilDelayedSplit) {
+    using namespace exosnap::engine;
+    const auto output = exosnap_test::UniqueTempPath("mux_split_static_vfr_audio.mkv");
+    std::vector<CompletedSegment> segments;
+    auto state = MakeSplitState(output, segments);
+    state->config.cfr = false;
+    const auto video = [&](uint64_t pts_ns, std::optional<SplitSentinel> split = std::nullopt) {
+        EncodedVideoPacket packet;
+        packet.bytes = SplitAccessUnit();
+        packet.pts_ns = pts_ns;
+        packet.keyframe = true;
+        ASSERT_EQ(state->PushMuxItem(MuxItem{std::move(packet)}, split), MuxQueueWait::Ready);
+    };
+    const auto audio = [&](uint64_t aligned_ns, uint8_t marker) {
+        for (uint32_t track = 0; track < 2; ++track) {
+            const uint64_t raw_ns = aligned_ns - 20000000 * (track + 1);
+            ASSERT_EQ(state->PushMuxItem(MuxItem{AudioPacket(raw_ns, marker, track)}), MuxQueueWait::Ready);
+        }
+    };
+    video(0);
+    std::vector<std::pair<uint8_t, int64_t>> expected_old;
+    for (uint8_t second = 1; second <= 70; ++second) {
+        const uint64_t progress_ns = second * 1000000000ull;
+        state->mux_queue.PushSentinel(VideoProgressSentinel{progress_ns});
+        audio(progress_ns + 500000000, second);
+        expected_old.emplace_back(second, second * 1000 + 500);
+    }
+    audio(70999000000ull, 71);
+    expected_old.emplace_back(71, 70999);
+    audio(71000000000ull, 72);
+    video(71000000000ull, SplitSentinel{1, SplitTriggerSource::ManualButton});
+    state->mux_queue.PushSentinel(VideoEosSentinel{});
+    for (uint32_t track = 0; track < 2; ++track)
+        state->mux_queue.PushSentinel(AudioEosSentinel{track});
+    auto mux = std::make_shared<MuxThread>(state);
+    mux->Start();
+    ASSERT_TRUE(mux->Join(10000));
+    ASSERT_FALSE(state->HasFailure());
+    ASSERT_EQ(segments.size(), 2u);
+    const auto old_audio = ReadAudioMarkers(segments[0].path);
+    const auto new_audio = ReadAudioMarkers(segments[1].path);
+    const std::vector<std::pair<uint8_t, int64_t>> expected_new = {{72, 0}};
+    for (size_t track = 0; track < 2; ++track) {
+        EXPECT_EQ(old_audio[track], expected_old);
+        EXPECT_EQ(new_audio[track], expected_new);
+    }
+    for (const auto& segment : segments) {
+        std::error_code ignored;
+        std::filesystem::remove(segment.path, ignored);
+    }
 }
 
 std::vector<uint8_t> FakeH264Cp() {

@@ -321,7 +321,8 @@ struct PerfWindowSample {
     uint64_t dropped_backpressure = 0;
     uint64_t dropped_processing_failure = 0;
     uint64_t dropped_ring_eviction = 0;
-    uint64_t duplicated_frames = 0;       // CFR duplicate output frames
+    uint64_t duplicated_frames = 0; // CFR duplicate output frames
+    uint64_t vfr_encoder_heartbeats = 0;
     uint64_t slot_stalls = 0;             // subset of backpressure
     uint64_t queue_saturation_events = 0; // rising-edge crossings of a queue's critical threshold
 };
@@ -352,6 +353,7 @@ struct PerfSessionSummary {
     uint64_t dropped_processing_failure = 0;
     uint64_t dropped_ring_eviction = 0;
     uint64_t duplicated_frames = 0;
+    uint64_t vfr_encoder_heartbeats = 0;
     uint64_t slot_stalls = 0;
     uint64_t queue_saturation_events = 0;
     EncoderInitInfo encoder_init;
@@ -428,6 +430,7 @@ class PipelineDiagnosticsAggregator {
     // A CFR duplicate output frame was emitted (the last real frame re-submitted
     // to fill a scheduled output slot that produced no new source frame).
     void OnFrameDuplicated() noexcept;
+    void OnVfrEncoderHeartbeat() noexcept;
     // Adapter roles are recorded separately: capture-side, processing-side and
     // encoder-side facts must stay attributable to the role they describe.
     void SetCaptureAdapter(int64_t luid, uint32_t vendor_id) noexcept;
@@ -615,6 +618,7 @@ class PipelineDiagnosticsAggregator {
     uint64_t forced_keyframes_ = 0;
     uint64_t slot_stalls_ = 0;
     uint64_t frames_duplicated_ = 0;
+    uint64_t vfr_encoder_heartbeats_ = 0;
     uint64_t output_ts_mismatches_ = 0;
     uint64_t keyframe_prediction_mismatches_ = 0;
 

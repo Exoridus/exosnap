@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace exosnap::engine {
@@ -9,6 +10,12 @@ struct EncodedVideoPacket {
     std::vector<uint8_t> bytes;
     uint64_t pts_ns = 0;
     bool keyframe = false;
+
+    // Decode time orders compressed access units independently of presentation
+    // time. Negative timestamps permit decoder preroll. Absent means decode
+    // order equals presentation order. Producers emit access units in decode
+    // order, including across calls and during flush.
+    std::optional<int64_t> dts_ns;
 
     // Submit -> bitstream-available latency for this frame, in milliseconds.
     // Filled by the encoder when the bitstream is consumed (from the pending
@@ -20,17 +27,9 @@ struct EncodedVideoPacket {
     // non-NVENC producer); such packets are not reported to the aggregator.
     double encode_latency_ms = -1.0;
 
-    // Order/keyframe validation results for this packet: true when the
-    // driver's actual outputTimeStamp / pictureType disagreed with the
-    // submission-side FIFO assignment / GOP-phase prediction for this frame.
-    // A keyframe-prediction mismatch is warn-only. An outputTimeStamp
-    // mismatch is fatal and aborts the encode before a packet is built, so
-    // output_ts_mismatch is never true on any packet that actually reaches
-    // this struct — it stays here for API symmetry with
-    // keyframe_prediction_mismatch. Filled by the encoder at consume time;
-    // the video thread reports these to the diagnostics aggregator (same
-    // per-packet transport as encode_latency_ms — the encoder itself has no
-    // aggregator reference).
+    // An output timestamp must identify a submitted picture. An unknown one is
+    // fatal before packet creation. Keyframe prediction mismatches are warnings
+    // only, because the encoded picture type owns random-access semantics.
     bool output_ts_mismatch = false;
     bool keyframe_prediction_mismatch = false;
 };

@@ -194,6 +194,7 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         counters[QStringLiteral("frames_dropped")] = drops;
         counters[QStringLiteral("real_frame_loss")] = static_cast<double>(s.real_frame_loss());
         counters[QStringLiteral("frames_duplicated")] = static_cast<double>(s.capture.frames_duplicated);
+        counters[QStringLiteral("vfr_encoder_heartbeats")] = static_cast<double>(s.capture.vfr_encoder_heartbeats);
         counters[QStringLiteral("frames_captured")] = static_cast<double>(s.capture.frames_captured);
         counters[QStringLiteral("frames_emitted")] = static_cast<double>(s.capture.frames_emitted);
 

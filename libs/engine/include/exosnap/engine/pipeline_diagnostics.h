@@ -146,6 +146,7 @@ struct CaptureDiagnostics {
     uint64_t frames_dropped_processing_failure = 0; // a frame was available and its conversion failed
     uint64_t frames_dropped_ring_eviction = 0;      // a captured, never-emitted frame was overwritten in the ring
     uint64_t frames_duplicated = 0;                 // CFR hold of the last real frame
+    uint64_t vfr_encoder_heartbeats = 0;            // cached pictures submitted to drain a buffered VFR encoder
     double frame_interval_ms = 0.0;
     MetricAvailability interval_observed = MetricAvailability::Unavailable; // true only on VFR
     CaptureSourceType source_type = CaptureSourceType::Unknown;
@@ -295,10 +296,14 @@ struct EncoderInitInfo {
     uint32_t max_bitrate_kbps = 0;    // maxBitRate
     uint32_t cq = 0;                  // constant-quality target (CQ mode)
     uint32_t gop_length = 0;          // frames between IDRs
-    uint32_t bframes = 0;             // B-frames per GOP (this pipeline: 0)
-    uint32_t lookahead_frames = 0;    // rate-control lookahead depth (this pipeline: 0)
+    uint32_t bframes = 0;             // maximum consecutive B-frames
+    uint32_t lookahead_frames = 0;    // resolved rate-control lookahead depth
     bool temporal_aq = false;
     bool spatial_aq = false;
+    std::string_view backend_b_ref_mode;
+    std::string_view backend_multipass;
+    uint32_t input_slots = 0;
+    uint32_t output_depth = 0;
     BitDepth bit_depth = BitDepth::Bit8;
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;
     bool color_full_range = false;

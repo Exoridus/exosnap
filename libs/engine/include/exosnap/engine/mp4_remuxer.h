@@ -79,8 +79,9 @@ inline RemuxProgressCallback RemuxNoopCallback() {
 //
 // Trim is keyframe-accurate:
 //   - start snaps backward to the nearest keyframe at or before start_us.
-//   - all video packets with pts_us < end_us are copied (packets past end_us stop
-//     the copy loop); other streams follow the video boundary.
+//   - non-reordered video stops at end_us. Reordered video retains the complete
+//     dependency GOP through the next random-access boundary, which can extend
+//     the requested end. Other streams follow the video boundary.
 // ---------------------------------------------------------------------------
 struct TrimRange {
     static constexpr int64_t kNoTimestamp = std::numeric_limits<int64_t>::min();

@@ -38,6 +38,10 @@ class NvencVideoEncoder : public IVideoEncoder {
         m_nvenc.SetPreset(preset);
     }
 
+    void SetTuning(const NvencTuning& tuning) noexcept {
+        m_nvenc.SetTuning(tuning);
+    }
+
     // Set canonical rate-control mode and target bitrate before Configure().
     void SetRateControl(RateControlMode mode, uint32_t bitrate_kbps) noexcept override {
         m_nvenc.SetRateControl(mode, bitrate_kbps);
@@ -72,12 +76,16 @@ class NvencVideoEncoder : public IVideoEncoder {
         return m_nvenc.GetInitInfo();
     }
 
+    [[nodiscard]] std::vector<uint8_t> SequenceHeader() const override {
+        return m_nvenc.SequenceHeader();
+    }
+
     bool Open(void* gpu_context, std::string& out_error) override;
     bool Configure(uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den,
                    std::string& out_error) override;
     bool RegisterSlotTexture(int32_t slot_idx, GpuTextureHandle texture, std::string& out_error) override;
     int32_t SlotCount() const override {
-        return 8;
+        return m_nvenc.SlotCount();
     }
     int32_t AcquireFreeSlot() override {
         return m_nvenc.AcquireFreeSlot();

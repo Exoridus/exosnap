@@ -252,6 +252,7 @@ void SessionStatsCollector::Run() {
                 fields.push_back({"dropped_backpressure", U64(p.dropped_backpressure)});
                 fields.push_back({"dropped_processing_failure", U64(p.dropped_processing_failure)});
                 fields.push_back({"duplicated_frames", U64(p.duplicated_frames)});
+                fields.push_back({"vfr_encoder_heartbeats", U64(p.vfr_encoder_heartbeats)});
                 fields.push_back({"slot_stalls", U64(p.slot_stalls)});
                 fields.push_back({"queue_saturation_events", U64(p.queue_saturation_events)});
                 fields.push_back({"preset", std::string(init.backend_preset)});
@@ -341,6 +342,7 @@ void SessionStatsCollector::EmitSessionPerfSummary() {
     fields.push_back({"frames_emitted", U64(stats_copy.video_frames_captured)});
     fields.push_back({"frames_encoded", U64(stats_copy.encoded_video_packets)});
     fields.push_back({"frames_duplicated", U64(sum.duplicated_frames)});
+    fields.push_back({"vfr_encoder_heartbeats", U64(sum.vfr_encoder_heartbeats)});
     fields.push_back({"frames_dropped_or_skipped", U64(stats_copy.dropped_or_skipped_video_frames)});
     fields.push_back({"dropped_coalesced", U64(sum.dropped_coalesced)});
     fields.push_back({"dropped_cfr", U64(sum.dropped_cfr)});
@@ -352,6 +354,14 @@ void SessionStatsCollector::EmitSessionPerfSummary() {
     fields.push_back({"preset", std::string(sum.encoder_init.backend_preset)});
     fields.push_back({"rc_mode", RateControlToken(sum.encoder_init.rc_mode)});
     fields.push_back({"gop_length", U64(sum.encoder_init.gop_length)});
+    fields.push_back({"bframes", U64(sum.encoder_init.bframes)});
+    fields.push_back({"lookahead_frames", U64(sum.encoder_init.lookahead_frames)});
+    fields.push_back({"temporal_aq", sum.encoder_init.temporal_aq ? "1" : "0"});
+    fields.push_back({"spatial_aq", sum.encoder_init.spatial_aq ? "1" : "0"});
+    fields.push_back({"backend_b_ref_mode", std::string(sum.encoder_init.backend_b_ref_mode)});
+    fields.push_back({"backend_multipass", std::string(sum.encoder_init.backend_multipass)});
+    fields.push_back({"input_slots", U64(sum.encoder_init.input_slots)});
+    fields.push_back({"output_depth", U64(sum.encoder_init.output_depth)});
     fields.push_back({"codec", CodecToken(stats_copy.video_codec)});
     fields.push_back({"resolution", res});
     logging::log(logging::LogLevel::Info, "perf", "session-perf-summary",

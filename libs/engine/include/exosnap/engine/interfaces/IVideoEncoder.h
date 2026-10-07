@@ -37,6 +37,13 @@ class IVideoEncoder {
     // Resolved encoder init parameters, valid after Configure().
     [[nodiscard]] virtual EncoderInitInfo GetInitInfo() const noexcept = 0;
 
+    // Codec-native sequence headers available after Configure(), before any
+    // input frame. Empty means the backend supplies headers in its first
+    // random-access packet instead. Bytes have the same format as packet data.
+    [[nodiscard]] virtual std::vector<uint8_t> SequenceHeader() const {
+        return {};
+    }
+
     // Open an encode session.
     // gpu_context: on Windows, an ID3D11Device* cast to void*. Null for CPU-only encoders.
     virtual bool Open(void* gpu_context, std::string& out_error) = 0;
@@ -59,8 +66,9 @@ class IVideoEncoder {
     virtual void ReleaseSlot(int32_t slot_idx) noexcept = 0;
 
     // Submit one frame for encoding. Appends 0..k completed packets to
-    // out_packets (0 -> buffered, need more input; today's sync encoders never
-    // append more than 1). Returns false -> fatal error (out_error set).
+    // out_packets in decode order, including across successive calls. PTS is
+    // presentation time. Reordered packets carry an explicit decode timestamp.
+    // Zero output means buffered. Returns false on fatal error (out_error set).
     virtual bool EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height,
                              std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) = 0;
 

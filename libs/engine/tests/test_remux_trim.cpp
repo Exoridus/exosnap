@@ -7,11 +7,28 @@
 // ExtractKeyframeTimestamps is tested for non-empty sorted output and graceful
 // failure on bad input.
 
+#include <algorithm>
+#include <array>
+#include <cerrno>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <memory>
+#include <system_error>
 #include <utility>
 
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavcodec/codec.h>
+#include <libavcodec/packet.h>
+#include <libavformat/avformat.h>
+#include <libavutil/avutil.h>
+#include <libavutil/error.h>
+#include <libavutil/frame.h>
+#include <libavutil/mathematics.h>
+}
+
 #include "exosnap/engine/mp4_remuxer.h"
+#include "matroska_packet_timestamps.h"
 #include "matroska_stream_writer.h"
 #include "test_unique_temp.h"
 
@@ -133,12 +150,306 @@ class TrimTest : public ::testing::Test {
     void TearDown() override {
         std::remove(src_.c_str());
         std::remove(dst_.c_str());
+        for (const auto& path : extra_paths_) {
+            std::error_code error;
+            std::filesystem::remove(path, error);
+        }
     }
     std::string src_;
     std::string dst_;
+    std::vector<std::filesystem::path> extra_paths_;
 };
 
 } // namespace
+
+TEST_F(TrimTest, ReorderedEndTrimDrainsEveryAudioTrackToPresentationBoundary) {
+    // The real H.264 fixture has closed GOPs, two B-frames and two-second IDRs.
+    // Test execution only needs the production decoder/demux libraries.
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    AVFormatContext* source = nullptr;
+    ASSERT_GE(avformat_open_input(&source, fixture.string().c_str(), nullptr, nullptr), 0);
+    auto close_input = [](AVFormatContext* p) { avformat_close_input(&p); };
+    std::unique_ptr<AVFormatContext, decltype(close_input)> source_guard(source, close_input);
+    ASSERT_GE(avformat_find_stream_info(source, nullptr), 0);
+    ASSERT_EQ(source->nb_streams, 1u);
+    const auto* video = source->streams[0];
+    auto free_packet = [](AVPacket* p) { av_packet_free(&p); };
+    std::unique_ptr<AVPacket, decltype(free_packet)> packet(av_packet_alloc(), free_packet);
+    ASSERT_TRUE(packet);
+    std::vector<MuxPacket> packets;
+    uint64_t boundary_ns = 0;
+    bool reordered = false;
+    while (av_read_frame(source, packet.get()) >= 0) {
+        MuxPacket p;
+        p.track_num = 1;
+        p.pts_ns = static_cast<uint64_t>(av_rescale_q(packet->pts, video->time_base, {1, 1000000000}));
+        p.dts_ns = av_rescale_q(packet->dts, video->time_base, {1, 1000000000});
+        p.is_key = (packet->flags & AV_PKT_FLAG_KEY) != 0;
+        p.bytes.assign(packet->data, packet->data + packet->size);
+        reordered |= *p.dts_ns < static_cast<int64_t>(p.pts_ns);
+        if (p.is_key && p.pts_ns >= 1500000000ULL && boundary_ns == 0)
+            boundary_ns = p.pts_ns;
+        packets.push_back(std::move(p));
+        av_packet_unref(packet.get());
+    }
+    ASSERT_TRUE(reordered);
+    ASSERT_EQ(boundary_ns, 2000000000ULL);
+    for (uint64_t pts = 0; pts < 4000000000ULL; pts += 10000000ULL) {
+        for (uint32_t track = 2; track <= 3; ++track) {
+            MuxPacket p;
+            p.pts_ns = pts;
+            p.track_num = track;
+            p.is_key = true;
+            p.bytes.assign(480 * 2 * 2, 0);
+            packets.push_back(std::move(p));
+        }
+    }
+    std::stable_sort(packets.begin(), packets.end(), [](const MuxPacket& a, const MuxPacket& b) {
+        return a.dts_ns.value_or(static_cast<int64_t>(a.pts_ns)) < b.dts_ns.value_or(static_cast<int64_t>(b.pts_ns));
+    });
+    MatroskaStreamConfig cfg;
+    cfg.output_path = src_;
+    cfg.video_codec_id = "V_MPEG4/ISO/AVC";
+    cfg.video_codec_private.assign(video->codecpar->extradata,
+                                   video->codecpar->extradata + video->codecpar->extradata_size);
+    cfg.encode_width = cfg.encode_height = 64;
+    cfg.frame_rate_num = 30;
+    cfg.frame_rate_den = 1;
+    cfg.audio_codec = exosnap::engine::StreamAudioCodec::Pcm;
+    cfg.audio_track_count = 2;
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(cfg));
+    for (auto& p : packets)
+        ASSERT_TRUE(writer.Push(std::move(p)));
+    ASSERT_TRUE(writer.Finalize());
+
+    TrimRange trim;
+    trim.end_us = 1500000;
+    const auto result = RemuxToMkv(src_, dst_, RemuxNoopCallback(), trim);
+    ASSERT_TRUE(result.success) << result.message;
+    AVFormatContext* input = nullptr;
+    ASSERT_GE(avformat_open_input(&input, dst_.c_str(), nullptr, nullptr), 0);
+    std::unique_ptr<AVFormatContext, decltype(close_input)> guard(input, close_input);
+    ASSERT_GE(avformat_find_stream_info(input, nullptr), 0);
+    std::array<int64_t, 2> audio_ends{};
+    int video_frames = 0;
+    while (av_read_frame(input, packet.get()) >= 0) {
+        const int stream = packet->stream_index;
+        if (stream == 0) {
+            size_t size = 0;
+            const auto* additional = av_packet_get_side_data(packet.get(), AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL, &size);
+            ASSERT_NE(additional, nullptr);
+            ASSERT_EQ(size, 32u);
+            const auto timestamps = exosnap::engine::DecodeMatroskaPacketTimestamps({additional + 8, size - 8});
+            ASSERT_TRUE(timestamps);
+            EXPECT_EQ(av_rescale_q(timestamps->dts_ns, {1, 1000000000}, {1, 30}), video_frames - 2);
+            ++video_frames;
+        }
+        if (stream == 1 || stream == 2) {
+            audio_ends[stream - 1] =
+                av_rescale_q(packet->pts + packet->duration, input->streams[stream]->time_base, {1, 1000000000});
+        }
+        av_packet_unref(packet.get());
+    }
+    for (const auto end : audio_ends)
+        EXPECT_NEAR(static_cast<double>(end), static_cast<double>(boundary_ns), 10000000.0);
+    EXPECT_EQ(video_frames, 60);
+}
+
+TEST_F(TrimTest, ReorderedWriterStreamCopiesToMp4AndDecodesEveryFrame) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    auto close_input = [](AVFormatContext* p) { avformat_close_input(&p); };
+    AVFormatContext* source = nullptr;
+    ASSERT_GE(avformat_open_input(&source, fixture.string().c_str(), nullptr, nullptr), 0);
+    std::unique_ptr<AVFormatContext, decltype(close_input)> source_guard(source, close_input);
+    ASSERT_GE(avformat_find_stream_info(source, nullptr), 0);
+    const auto* video = source->streams[0];
+    MatroskaStreamConfig cfg;
+    cfg.output_path = src_;
+    cfg.video_codec_id = "V_MPEG4/ISO/AVC";
+    cfg.video_codec_private.assign(video->codecpar->extradata,
+                                   video->codecpar->extradata + video->codecpar->extradata_size);
+    cfg.encode_width = cfg.encode_height = 64;
+    cfg.frame_rate_num = 30;
+    cfg.frame_rate_den = 1;
+    cfg.audio_track_count = 0;
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(cfg));
+    auto free_packet = [](AVPacket* p) { av_packet_free(&p); };
+    std::unique_ptr<AVPacket, decltype(free_packet)> packet(av_packet_alloc(), free_packet);
+    ASSERT_TRUE(packet);
+    int submitted = 0;
+    std::vector<exosnap::engine::MatroskaPacketTimestamps> expected_timestamps;
+    while (av_read_frame(source, packet.get()) >= 0) {
+        MuxPacket p;
+        p.track_num = 1;
+        p.pts_ns = static_cast<uint64_t>(av_rescale_q(packet->pts, video->time_base, {1, 1000000000}));
+        p.dts_ns = av_rescale_q(packet->dts, video->time_base, {1, 1000000000});
+        expected_timestamps.push_back({p.pts_ns, *p.dts_ns});
+        p.is_key = (packet->flags & AV_PKT_FLAG_KEY) != 0;
+        p.bytes.assign(packet->data, packet->data + packet->size);
+        ASSERT_TRUE(writer.Push(std::move(p)));
+        ++submitted;
+        av_packet_unref(packet.get());
+    }
+    ASSERT_EQ(submitted, 120);
+    ASSERT_TRUE(writer.Finalize());
+    const auto rewritten_path = UniqueTrimTempPath("exact_rewrite.mkv");
+    const auto partial_path = UniqueTrimTempPath("exact_partial.mkv");
+    std::filesystem::copy_file(src_, partial_path);
+    std::filesystem::resize_file(partial_path, std::filesystem::file_size(partial_path) - 32);
+    const auto recovered = RemuxToMkv(partial_path, rewritten_path);
+    ASSERT_TRUE(recovered.success) << recovered.message;
+    std::filesystem::remove(src_);
+    std::filesystem::rename(rewritten_path, src_);
+    std::filesystem::remove(partial_path);
+    const auto result = RemuxToProgressiveMp4(src_, dst_, RemuxNoopCallback());
+    ASSERT_TRUE(result.success) << result.message;
+
+    AVFormatContext* output = nullptr;
+    ASSERT_GE(avformat_open_input(&output, dst_.c_str(), nullptr, nullptr), 0);
+    std::unique_ptr<AVFormatContext, decltype(close_input)> output_guard(output, close_input);
+    ASSERT_GE(avformat_find_stream_info(output, nullptr), 0);
+    const AVCodec* codec = avcodec_find_decoder(output->streams[0]->codecpar->codec_id);
+    ASSERT_NE(codec, nullptr);
+    auto free_context = [](AVCodecContext* p) { avcodec_free_context(&p); };
+    std::unique_ptr<AVCodecContext, decltype(free_context)> decoder(avcodec_alloc_context3(codec), free_context);
+    ASSERT_TRUE(decoder);
+    ASSERT_GE(avcodec_parameters_to_context(decoder.get(), output->streams[0]->codecpar), 0);
+    ASSERT_GE(avcodec_open2(decoder.get(), codec, nullptr), 0);
+    auto free_frame = [](AVFrame* p) { av_frame_free(&p); };
+    std::unique_ptr<AVFrame, decltype(free_frame)> frame(av_frame_alloc(), free_frame);
+    ASSERT_TRUE(frame);
+    int decoded = 0;
+    int delivered = 0;
+    int64_t previous_dts = AV_NOPTS_VALUE;
+    auto receive = [&] {
+        int ret;
+        while ((ret = avcodec_receive_frame(decoder.get(), frame.get())) == 0) {
+            ++decoded;
+            av_frame_unref(frame.get());
+        }
+        EXPECT_TRUE(ret == AVERROR(EAGAIN) || ret == AVERROR_EOF);
+    };
+    while (av_read_frame(output, packet.get()) >= 0) {
+        ASSERT_NE(packet->dts, AV_NOPTS_VALUE);
+        ASSERT_NE(packet->pts, AV_NOPTS_VALUE);
+        ASSERT_LT(static_cast<size_t>(delivered), expected_timestamps.size());
+        const auto& expected = expected_timestamps[static_cast<size_t>(delivered)];
+        EXPECT_EQ(packet->pts,
+                  av_rescale_q(static_cast<int64_t>(expected.pts_ns), {1, 1000000000}, output->streams[0]->time_base));
+        EXPECT_EQ(packet->dts, av_rescale_q(expected.dts_ns, {1, 1000000000}, output->streams[0]->time_base));
+        if (previous_dts != AV_NOPTS_VALUE)
+            EXPECT_GT(packet->dts, previous_dts);
+        previous_dts = packet->dts;
+        ASSERT_GE(avcodec_send_packet(decoder.get(), packet.get()), 0);
+        receive();
+        ++delivered;
+        av_packet_unref(packet.get());
+    }
+    ASSERT_GE(avcodec_send_packet(decoder.get(), nullptr), 0);
+    receive();
+    EXPECT_EQ(delivered, submitted);
+    EXPECT_EQ(decoded, submitted);
+}
+
+TEST_F(TrimTest, SecondReorderedGopRewritesToLocalClockAndDecodesEveryFrame) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    auto close_input = [](AVFormatContext* p) { avformat_close_input(&p); };
+    AVFormatContext* source = nullptr;
+    ASSERT_GE(avformat_open_input(&source, fixture.string().c_str(), nullptr, nullptr), 0);
+    std::unique_ptr<AVFormatContext, decltype(close_input)> source_guard(source, close_input);
+    ASSERT_GE(avformat_find_stream_info(source, nullptr), 0);
+    const auto* video = source->streams[0];
+    MatroskaStreamConfig config;
+    config.output_path = src_;
+    config.video_codec_id = "V_MPEG4/ISO/AVC";
+    config.video_codec_private.assign(video->codecpar->extradata,
+                                      video->codecpar->extradata + video->codecpar->extradata_size);
+    config.encode_width = config.encode_height = 64;
+    config.frame_rate_num = 30;
+    config.frame_rate_den = 1;
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config));
+    auto free_packet = [](AVPacket* p) { av_packet_free(&p); };
+    std::unique_ptr<AVPacket, decltype(free_packet)> packet(av_packet_alloc(), free_packet);
+    ASSERT_TRUE(packet);
+    std::vector<exosnap::engine::MatroskaPacketTimestamps> expected;
+    while (av_read_frame(source, packet.get()) >= 0) {
+        MuxPacket p;
+        p.track_num = 1;
+        p.pts_ns = static_cast<uint64_t>(av_rescale_q(packet->pts, video->time_base, {1, 1000000000}));
+        p.dts_ns = av_rescale_q(packet->dts, video->time_base, {1, 1000000000});
+        if (p.pts_ns >= 2000000000)
+            expected.push_back({p.pts_ns - 2000000000, *p.dts_ns - 2000000000});
+        p.is_key = (packet->flags & AV_PKT_FLAG_KEY) != 0;
+        p.bytes.assign(packet->data, packet->data + packet->size);
+        ASSERT_TRUE(writer.Push(std::move(p)));
+        av_packet_unref(packet.get());
+    }
+    ASSERT_EQ(expected.size(), 60u);
+    ASSERT_TRUE(writer.Finalize());
+    const auto local_mkv = UniqueTrimTempPath("second_gop.mkv");
+    extra_paths_.push_back(local_mkv);
+    TrimRange trim;
+    trim.start_us = 2000000;
+    trim.end_us = 4000000;
+    const auto rewritten = RemuxToMkv(src_, local_mkv, RemuxNoopCallback(), trim);
+    ASSERT_TRUE(rewritten.success) << rewritten.message;
+    AVFormatContext* local = nullptr;
+    ASSERT_GE(avformat_open_input(&local, local_mkv.c_str(), nullptr, nullptr), 0);
+    std::unique_ptr<AVFormatContext, decltype(close_input)> local_guard(local, close_input);
+    ASSERT_GE(av_read_frame(local, packet.get()), 0);
+    size_t size = 0;
+    const auto* additional = av_packet_get_side_data(packet.get(), AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL, &size);
+    ASSERT_NE(additional, nullptr);
+    ASSERT_EQ(size, 32u);
+    const auto first = exosnap::engine::DecodeMatroskaPacketTimestamps({additional + 8, size - 8});
+    ASSERT_TRUE(first);
+    EXPECT_EQ(first->pts_ns, 0u);
+    EXPECT_LT(first->dts_ns, 0);
+    av_packet_unref(packet.get());
+    const auto delivered = RemuxToProgressiveMp4(local_mkv, dst_);
+    ASSERT_TRUE(delivered.success) << delivered.message;
+    AVFormatContext* output = nullptr;
+    ASSERT_GE(avformat_open_input(&output, dst_.c_str(), nullptr, nullptr), 0);
+    std::unique_ptr<AVFormatContext, decltype(close_input)> output_guard(output, close_input);
+    ASSERT_GE(avformat_find_stream_info(output, nullptr), 0);
+    const auto* codec = avcodec_find_decoder(output->streams[0]->codecpar->codec_id);
+    ASSERT_NE(codec, nullptr);
+    auto free_decoder = [](AVCodecContext* p) { avcodec_free_context(&p); };
+    std::unique_ptr<AVCodecContext, decltype(free_decoder)> decoder(avcodec_alloc_context3(codec), free_decoder);
+    ASSERT_TRUE(decoder);
+    ASSERT_GE(avcodec_parameters_to_context(decoder.get(), output->streams[0]->codecpar), 0);
+    ASSERT_GE(avcodec_open2(decoder.get(), codec, nullptr), 0);
+    auto free_frame = [](AVFrame* p) { av_frame_free(&p); };
+    std::unique_ptr<AVFrame, decltype(free_frame)> frame(av_frame_alloc(), free_frame);
+    ASSERT_TRUE(frame);
+    size_t packets = 0;
+    int frames = 0;
+    auto receive = [&] {
+        int result;
+        while ((result = avcodec_receive_frame(decoder.get(), frame.get())) == 0) {
+            ++frames;
+            av_frame_unref(frame.get());
+        }
+        EXPECT_TRUE(result == AVERROR(EAGAIN) || result == AVERROR_EOF);
+    };
+    while (av_read_frame(output, packet.get()) >= 0) {
+        ASSERT_LT(packets, expected.size());
+        EXPECT_EQ(packet->pts, av_rescale_q(static_cast<int64_t>(expected[packets].pts_ns), {1, 1000000000},
+                                            output->streams[0]->time_base));
+        EXPECT_EQ(packet->dts, av_rescale_q(expected[packets].dts_ns, {1, 1000000000}, output->streams[0]->time_base));
+        ASSERT_GE(avcodec_send_packet(decoder.get(), packet.get()), 0);
+        receive();
+        ++packets;
+        av_packet_unref(packet.get());
+    }
+    ASSERT_GE(avcodec_send_packet(decoder.get(), nullptr), 0);
+    receive();
+    EXPECT_EQ(packets, 60u);
+    EXPECT_EQ(frames, 60);
+}
 
 // ---------------------------------------------------------------------------
 // Tests
