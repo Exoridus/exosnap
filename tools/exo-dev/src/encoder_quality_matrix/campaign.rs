@@ -12,6 +12,9 @@ use super::{
     MatrixCell, RateControl, file_sha256, probe_encode, quality, sanity, tuning::TuningArgs, y4m,
 };
 
+#[path = "reanalysis.rs"]
+mod reanalysis;
+
 const SCHEMA: u32 = 1;
 
 #[derive(Args, Debug)]
@@ -22,6 +25,12 @@ pub struct CampaignArgs {
     /// Local evidence root. Reuse it to resume the exact same campaign.
     #[arg(long)]
     pub output: PathBuf,
+    /// Recompute analysis from saved cells without running the main matrix.
+    #[arg(long)]
+    pub reanalyze: bool,
+    /// Confirm only newly qualifying candidates using the original frozen probe.
+    #[arg(long, requires = "reanalyze")]
+    pub confirm_qualified: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -479,6 +488,8 @@ fn comparisons(manifest: &Manifest, cells: &[Value], phase: &str) -> Vec<Value> 
         for rc in ["cq", "vbr"] {
             for (variant, _) in variants(rc).into_iter().filter(|(name, _)| *name != "BASE") {
                 let mut per_clip = serde_json::Map::new();
+                let mut interpolation = serde_json::Map::new();
+                let mut tail_flags = Vec::new();
                 let mut rates = Vec::new();
                 let mut errors = Vec::new();
                 let mut service = true;
@@ -502,7 +513,14 @@ fn comparisons(manifest: &Manifest, cells: &[Value], phase: &str) -> Vec<Value> 
                                     })
                                     .collect()
                             };
-                            super::bd_rate(
+                            for (base_point, candidate_point) in base.iter().zip(&candidate) {
+                                for metric in ["vmaf_p1", "vmaf_worst1_mean", "vmaf_min"] {
+                                    if let (Some(a), Some(b)) = (base_point["metrics"][metric].as_f64(), candidate_point["metrics"][metric].as_f64()) {
+                                        if b - a < -1.0 { tail_flags.push(json!({"clip": clip.name, "value": candidate_point["identity"]["value"], "metric": metric, "delta": b - a})); }
+                                    }
+                                }
+                            }
+                            super::bd_rate::compare(
                                 &values(&base, "bitrate_kbps")?,
                                 &values(&base, "vmaf")?,
                                 &values(&candidate, "bitrate_kbps")?,
@@ -510,7 +528,9 @@ fn comparisons(manifest: &Manifest, cells: &[Value], phase: &str) -> Vec<Value> 
                             )
                         });
                     match result {
-                        Ok(rate) => {
+                        Ok(detail) => {
+                            let rate = detail.percent;
+                            interpolation.insert(clip.name.clone(), json!(detail));
                             rates.push(rate);
                             per_clip.insert(clip.name.clone(), json!(rate));
                         }
@@ -539,6 +559,7 @@ fn comparisons(manifest: &Manifest, cells: &[Value], phase: &str) -> Vec<Value> 
                     "FAIL"
                 };
                 results.push(json!({"phase": phase, "codec": codec, "rc": rc, "variant": variant, "per_clip": per_clip,
+                    "method": super::bd_rate::METHOD, "interpolation": interpolation, "tail_flags": tail_flags,
                     "median": if complete && rates.len() == 3 { Some(median(&rates)) } else { None }, "best": rates.iter().copied().reduce(f64::min), "worst": rates.iter().copied().reduce(f64::max), "valid_clip_count": rates.len(),
                     "quality_pass": quality, "service_pass": service && complete, "references_qualified": references, "verdict": verdict, "errors": errors,
                     "service_screen_ms": 8.0, "default_changed": false, "compatibility_complete": false}));
@@ -761,7 +782,7 @@ fn reports(
     }
     std::fs::write(root.join("cells.csv"), raw)?;
     let mut bd =
-        "phase,codec,rc,variant,clip,bd_rate_percent,median,best,worst,verdict\n".to_owned();
+        "phase,codec,rc,variant,clip,bd_rate_percent,median,best,worst,verdict,overlap_low,overlap_high,overlap_fraction,interpolation_sanity,baseline_monotone,candidate_monotone\n".to_owned();
     let mut summary = "# P4 NVENC campaign\n\nNo product defaults changed. Negative BD-rate means bitrate saving at equal mean VMAF. Per-frame tails remain in cells.csv and score.vmaf.json.\n\nThe documented probe TIMING is service cost including waits. ENCODER_LATENCY is output residency, including intentional reordering/lookahead. The 8 ms service screen reserves over half of a 60 fps frame interval; it is a conservative campaign screen, not a newly approved project threshold. Live capture timing, physical A/V sync, visual inspection and editor decode are not established by this campaign.\n\n".to_owned();
     let mut curves = "phase,clip,codec,rc,variant,complete,points,measurements\n".to_owned();
     for phase in ["main", "confirmation"] {
@@ -813,6 +834,12 @@ fn reports(
                 &result["best"],
                 &result["worst"],
                 &result["verdict"],
+                &result["interpolation"][&clip.name]["overlap"][0],
+                &result["interpolation"][&clip.name]["overlap"][1],
+                &result["interpolation"][&clip.name]["overlap_fraction"],
+                &result["interpolation"][&clip.name]["interpolation_sanity"],
+                &result["interpolation"][&clip.name]["baseline_monotone"],
+                &result["interpolation"][&clip.name]["candidate_monotone"],
             ];
             bd.push_str(
                 &columns
@@ -830,11 +857,11 @@ fn reports(
             for clip in &manifest.clips {
                 summary.push_str(&format!(" {} |", clip.name));
             }
-            summary.push_str(" Median | Gate |\n|---|");
+            summary.push_str(" Median | Worst | Gate |\n|---|");
             for _ in &manifest.clips {
                 summary.push_str("---:|");
             }
-            summary.push_str("---:|---|\n");
+            summary.push_str("---:|---:|---|\n");
             for result in initial
                 .iter()
                 .filter(|r| r["codec"] == codec && r["rc"] == rc)
@@ -847,8 +874,9 @@ fn reports(
                     summary.push_str(&format!(" {} |", result["per_clip"][&clip.name]));
                 }
                 summary.push_str(&format!(
-                    " {} | {} |\n",
+                    " {} | {} | {} |\n",
                     result["median"],
+                    result["worst"],
                     result["verdict"].as_str().unwrap_or("?")
                 ));
             }
@@ -948,6 +976,9 @@ fn archive_cells(source: &Path, destination: &Path, hashes: &mut Vec<Value>) -> 
 
 pub fn run(args: &CampaignArgs) -> anyhow::Result<ExitCode> {
     let manifest: Manifest = serde_json::from_slice(&std::fs::read(&args.manifest)?)?;
+    if args.reanalyze {
+        return reanalysis::run(args, &manifest);
+    }
     ensure!(!manifest.clips.is_empty(), "no reference clips");
     ensure!(
         manifest
