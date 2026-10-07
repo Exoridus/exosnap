@@ -90,7 +90,7 @@
 <context>
     <name>AppShell</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/AppShell.qml" line="+296"/>
+        <location filename="../quick/ExoSnap/Quick/AppShell.qml" line="+233"/>
         <source>Record</source>
         <translation>Aufnehmen</translation>
     </message>
@@ -110,7 +110,12 @@
         <translation>Über</translation>
     </message>
     <message>
-        <location line="+348"/>
+        <location line="+0"/>
+        <source>Edit</source>
+        <translation>Bearbeiten</translation>
+    </message>
+    <message>
+        <location line="+356"/>
         <source>Minimize</source>
         <translation>Minimieren</translation>
     </message>
@@ -125,7 +130,7 @@
         <translation>Maximieren</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+19"/>
         <source>Close</source>
         <translation>Schließen</translation>
     </message>
@@ -2831,17 +2836,17 @@ Wahrscheinliche Ursache: </translation>
     </message>
 </context>
 <context>
-    <name>EditDetailsRail</name>
+    <name>EditActionButton</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditDetailsRail.qml" line="+33"/>
-        <source>Details</source>
-        <translation>Details</translation>
+        <location filename="../quick/ExoSnap/Quick/EditActionButton.qml" line="+9"/>
+        <source>%1 (%2)</source>
+        <translation>%1 (%2)</translation>
     </message>
 </context>
 <context>
     <name>EditExportAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="+147"/>
+        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="+187"/>
         <source>New file</source>
         <translation>Neue Datei</translation>
     </message>
@@ -2858,14 +2863,7 @@ Replaces the original recording</source>
 Ersetzt die Originalaufnahme</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Lossless stream copy
-New file beside the original (…_edit.%1)</source>
-        <translation>Verlustfreie Stream-Kopie
-Neue Datei neben dem Original (…_edit.%1)</translation>
-    </message>
-    <message>
-        <location line="+11"/>
+        <location line="+12"/>
         <source>The original recording will be replaced by the exported result.
 The original cannot be recovered afterwards.</source>
         <translation>Die Originalaufnahme wird durch den Export ersetzt.
@@ -2879,136 +2877,115 @@ The original cannot be recovered afterwards.</source>
 Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
-        <location line="+68"/>
+        <location line="+67"/>
         <source>No edit master available for export.</source>
         <translation>Keine Edit-Master-Datei für den Export verfügbar.</translation>
     </message>
     <message>
-        <location line="+117"/>
+        <location line="+143"/>
         <source>Unknown error</source>
         <translation>Unbekannter Fehler</translation>
     </message>
 </context>
 <context>
-    <name>EditExportPanel</name>
+    <name>EditPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditExportPanel.qml" line="+40"/>
-        <source>Export</source>
-        <translation>Exportieren</translation>
-    </message>
-    <message>
-        <location line="+18"/>
-        <source>Cancelling…</source>
-        <translation>Wird abgebrochen…</translation>
+        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+49"/>
+        <source>Pause</source>
+        <translation>Pause</translation>
     </message>
     <message>
         <location line="+0"/>
-        <source>Exporting…</source>
-        <translation>Wird exportiert…</translation>
+        <source>Play</source>
+        <translation>Wiedergabe</translation>
     </message>
     <message>
-        <location line="+17"/>
-        <source>Cancel</source>
-        <translation>Abbrechen</translation>
+        <location line="+1"/>
+        <source>Space</source>
+        <translation>Leertaste</translation>
     </message>
     <message>
-        <location line="+19"/>
-        <source>OK</source>
-        <translation>OK</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>ERR</source>
-        <translation>ERR</translation>
+        <location line="+11"/>
+        <source>Playback position</source>
+        <translation>Wiedergabeposition</translation>
     </message>
     <message>
         <location line="+5"/>
-        <source>Export complete</source>
-        <translation>Export abgeschlossen</translation>
+        <location line="+21"/>
+        <source>Preview volume</source>
+        <translation>Vorschaulautstärke</translation>
     </message>
     <message>
-        <location line="+0"/>
-        <source>Export failed</source>
-        <translation>Export fehlgeschlagen</translation>
+        <location line="-21"/>
+        <source>Preview volume (muted)</source>
+        <translation>Vorschaulautstärke (stumm)</translation>
     </message>
     <message>
-        <location line="+75"/>
-        <source>Show in folder</source>
-        <translation>Im Ordner anzeigen</translation>
+        <location line="+35"/>
+        <source>Undo</source>
+        <translation>Rückgängig</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Ctrl+Z</source>
+        <translation>Strg+Z</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Redo</source>
+        <translation>Wiederholen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Ctrl+Y</source>
+        <translation>Strg+Y</translation>
     </message>
     <message>
         <location line="+8"/>
-        <source>Choose another folder</source>
-        <translation>Anderen Ordner wählen</translation>
+        <source>Split</source>
+        <translation>Teilen</translation>
     </message>
     <message>
-        <location line="+0"/>
-        <source>Try again</source>
-        <translation>Erneut versuchen</translation>
+        <location line="+1"/>
+        <source>Ctrl+B</source>
+        <translation>Strg+B</translation>
     </message>
     <message>
-        <location line="+30"/>
-        <source>Container</source>
-        <translation>Container</translation>
-    </message>
-    <message>
-        <location line="+18"/>
-        <source>Save</source>
-        <translation>Speichern</translation>
-    </message>
-    <message>
-        <location line="+19"/>
-        <source>Changes are applied only when exported.</source>
-        <translation>Änderungen werden erst beim Export übernommen.</translation>
-    </message>
-</context>
-<context>
-    <name>EditOverlay</name>
-    <message>
-        <location filename="../quick/ExoSnap/Quick/EditOverlay.qml" line="+86"/>
-        <source>Back</source>
-        <translation>Zurück</translation>
-    </message>
-    <message>
-        <location line="+24"/>
-        <source>Edit &amp; export</source>
-        <translation>Bearbeiten &amp; exportieren</translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Editing %1</source>
-        <translation>%1 wird bearbeitet</translation>
+        <location line="+7"/>
+        <location line="+1"/>
+        <source>Delete</source>
+        <translation>Löschen</translation>
     </message>
     <message>
         <location line="+26"/>
-        <source>Report</source>
-        <translation>Bericht</translation>
+        <source>Export — %1</source>
+        <translation>Exportieren — %1</translation>
     </message>
     <message>
-        <location line="+16"/>
-        <source>Recording report: %1</source>
-        <translation>Aufnahmebericht: %1</translation>
+        <location line="+11"/>
+        <source>Export profile</source>
+        <translation>Exportprofil</translation>
     </message>
     <message>
-        <location line="+168"/>
-        <source>Export</source>
-        <translation>Exportieren</translation>
+        <location line="-18"/>
+        <source>Exporting %1%</source>
+        <translation>Export läuft: %1 %</translation>
     </message>
     <message>
-        <location line="+23"/>
-        <source>Overwrite original recording</source>
-        <translation>Originalaufnahme überschreiben</translation>
+        <location line="-11"/>
+        <source>Snapping</source>
+        <translation>Einrasten</translation>
     </message>
     <message>
         <location line="+8"/>
-        <source>Choose another export folder</source>
-        <translation>Anderen Exportordner wählen</translation>
+        <source>%1%</source>
+        <translation>%1 %</translation>
     </message>
 </context>
 <context>
     <name>EditPlayer</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPlayer.qml" line="+94"/>
+        <location filename="../quick/ExoSnap/Quick/EditPlayer.qml" line="+70"/>
         <source>Pause preview</source>
         <translation>Vorschau pausieren</translation>
     </message>
@@ -3017,12 +2994,22 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <source>Play preview</source>
         <translation>Vorschau abspielen</translation>
     </message>
+    <message>
+        <location line="+1"/>
+        <source>Pause preview (Space)</source>
+        <translation>Vorschau pausieren (Leertaste)</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Play preview (Space)</source>
+        <translation>Vorschau abspielen (Leertaste)</translation>
+    </message>
 </context>
 <context>
     <name>EditPlayerAdapter</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/EditPlayerAdapter.cpp" line="+78"/>
-        <location line="+155"/>
+        <location line="+170"/>
         <source>Preview unavailable</source>
         <translation>Vorschau nicht verfügbar</translation>
     </message>
@@ -3035,7 +3022,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditSessionAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+354"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+420"/>
         <source>Frame drops: %1%</source>
         <translation>Verworfene Frames: %1%</translation>
     </message>
@@ -3127,62 +3114,101 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
 </context>
 <context>
+    <name>EditSourceBrowser</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditSourceBrowser.qml" line="+54"/>
+        <source>History</source>
+        <translation>Verlauf</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Media</source>
+        <translation>Medien</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Transitions</source>
+        <translation>Übergänge</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <location line="+79"/>
+        <source>Import media</source>
+        <translation>Medien importieren</translation>
+    </message>
+    <message>
+        <location line="-72"/>
+        <source>No recordings yet</source>
+        <translation>Noch keine Aufnahmen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Drop media here</source>
+        <translation>Medien hier ablegen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Transitions will appear here when available.</source>
+        <translation>Übergänge erscheinen hier, sobald sie verfügbar sind.</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Recent recordings appear here automatically.</source>
+        <translation>Letzte Aufnahmen erscheinen hier automatisch.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Or use the Add Media button.</source>
+        <translation>Oder Medien über die Plus-Schaltfläche hinzufügen.</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Media unavailable</source>
+        <translation>Medium nicht verfügbar</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Double-click or press Enter to add</source>
+        <translation>Zum Hinzufügen doppelklicken oder Eingabetaste drücken</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Video files (*.mkv *.mp4 *.mov *.webm *.avi)</source>
+        <translation>Videodateien (*.mkv *.mp4 *.mov *.webm *.avi)</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>All files (*)</source>
+        <translation>Alle Dateien (*)</translation>
+    </message>
+</context>
+<context>
     <name>EditTimeline</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditTimeline.qml" line="+93"/>
-        <source>Trim timeline</source>
-        <translation>Schnitt-Timeline</translation>
+        <location filename="../quick/ExoSnap/Quick/EditTimeline.qml" line="+40"/>
+        <source>Edit timeline. Left and Right seek; Up and Down select clips. Alt+Left/Right moves; add Control to trim the start or Shift to trim the end. Control+B splits; Delete removes; Shift+Delete closes the gap. Control+wheel or Control+Plus/Minus zooms. Menu opens clip actions.</source>
+        <translation>Zeitleiste bearbeiten. Links und Rechts ändern die Position; Auf und Ab wählen Clips. Alt+Links/Rechts verschiebt; zusätzlich Strg kürzt den Anfang, Umschalt das Ende. Strg+B teilt; Entf löscht; Umschalt+Entf schließt die Lücke. Strg+Mausrad oder Strg+Plus/Minus zoomt. Die Menütaste öffnet Clip-Aktionen.</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Left and right arrows move the %1. Shift for ten seconds, Control for a tenth. Home and End jump to the clip ends. I sets the in point, O the out point. Bracket keys change what the arrows move. Space plays and pauses.</source>
-        <translation>Pfeil links und rechts verschieben %1. Umschalt für zehn Sekunden, Strg für eine Zehntelsekunde. Pos1 und Ende springen zu den Clip-Enden. I setzt den In-Punkt, O den Out-Punkt. Eckige Klammern ändern das Ziel der Pfeiltasten. Leertaste startet und pausiert die Wiedergabe.</translation>
+        <location line="+38"/>
+        <source>Ripple delete (Shift+Delete)</source>
+        <translation>Mit Lückenschluss löschen (Umschalt+Entf)</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>trim in point</source>
-        <translation>In-Punkt</translation>
+        <location line="+6"/>
+        <source>Ctrl+wheel to zoom. Menu or Shift+F10 for clip actions.</source>
+        <translation>Strg+Mausrad zum Zoomen. Menütaste oder Umschalt+F10 für Clip-Aktionen.</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>trim out point</source>
-        <translation>Out-Punkt</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>playhead</source>
-        <translation>Abspielposition</translation>
-    </message>
-    <message>
-        <location line="+278"/>
-        <source>Trim in point</source>
-        <translation>In-Punkt</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Trim out point</source>
-        <translation>Out-Punkt</translation>
-    </message>
-    <message>
-        <location line="+143"/>
-        <source>Timeline previews unavailable</source>
-        <translation>Timeline-Vorschauen nicht verfügbar</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Generating timeline previews…</source>
-        <translation>Timeline-Vorschauen werden erstellt…</translation>
-    </message>
-    <message>
-        <location line="+30"/>
-        <source>in %1 · out %2</source>
-        <translation>In %1 · Out %2</translation>
+        <location line="+83"/>
+        <source>Media unavailable</source>
+        <translation>Medium nicht verfügbar</translation>
     </message>
 </context>
 <context>
     <name>EditTimelineAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditTimelineAdapter.cpp" line="+255"/>
+        <location filename="../quick/ExoSnap/Quick/EditTimelineAdapter.cpp" line="+261"/>
         <source>Audio %1</source>
         <translation>Audio %1</translation>
     </message>
@@ -4091,7 +4117,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Prüfung des Ausgabeordners fehlgeschlagen.</translation>
     </message>
     <message>
-        <location filename="../models/OutputSettingsModel.cpp" line="+68"/>
+        <location filename="../models/OutputSettingsModel.cpp" line="+69"/>
         <location line="+12"/>
         <source>Native</source>
         <translation>Nativ</translation>
@@ -4264,6 +4290,14 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
 </context>
 <context>
+    <name>QCoreApplication::EditExportAdapter</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="+1"/>
+        <source>Export could not complete: %1</source>
+        <translation>Export konnte nicht abgeschlossen werden: %1</translation>
+    </message>
+</context>
+<context>
     <name>QObject</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+96"/>
@@ -4300,7 +4334,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Aufnahme blockiert</translation>
     </message>
     <message>
-        <location line="+182"/>
+        <location line="+176"/>
         <source>Frame saved</source>
         <translation>Einzelbild gespeichert</translation>
     </message>
@@ -4414,12 +4448,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+4"/>
-        <location line="+1219"/>
+        <location line="+1232"/>
         <source>Window capture appears to have stalled</source>
         <translation>Die Fensteraufnahme scheint stillzustehen</translation>
     </message>
     <message>
-        <location line="-1218"/>
+        <location line="-1231"/>
         <source>No new frame has arrived from the captured window for 12 seconds. The recording is still running, but the captured window may be frozen.</source>
         <translation>Seit 12 Sekunden ist kein neuer Frame vom aufgenommenen Fenster angekommen. Die Aufnahme läuft weiter, das Fenster könnte jedoch eingefroren sein.</translation>
     </message>
@@ -4439,7 +4473,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>2026-08-10 21-14-08.mkv - 2:34, 412 MB</translation>
     </message>
     <message>
-        <location line="+487"/>
+        <location line="+499"/>
         <source>Update checks are paused while a recording is in progress.</source>
         <translation>Während einer Aufnahme wird nicht nach Updates gesucht.</translation>
     </message>
@@ -4450,12 +4484,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+43"/>
-        <location line="+553"/>
+        <location line="+554"/>
         <source>Update available</source>
         <translation>Update verfügbar</translation>
     </message>
     <message>
-        <location line="-551"/>
+        <location line="-552"/>
         <source>Version %1 is ready to install.</source>
         <translation>Version %1 ist zur Installation bereit.</translation>
     </message>
@@ -4465,7 +4499,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Version %1 ist verfügbar. %2</translation>
     </message>
     <message>
-        <location line="+243"/>
+        <location line="+244"/>
         <source>Settings could not be read</source>
         <translation>Einstellungen konnten nicht gelesen werden</translation>
     </message>
@@ -4490,37 +4524,37 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Letzte Session wiederherstellen?</translation>
     </message>
     <message>
-        <location line="-946"/>
-        <location line="+1091"/>
-        <location line="+467"/>
+        <location line="-959"/>
+        <location line="+1104"/>
+        <location line="+466"/>
         <source>Recording saved</source>
         <translation>Aufnahme gespeichert</translation>
     </message>
     <message>
-        <location line="-465"/>
+        <location line="-464"/>
         <source>2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB</source>
         <translation>2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB</translation>
     </message>
     <message>
-        <location line="-1135"/>
-        <location line="+1140"/>
+        <location line="-1148"/>
+        <location line="+1153"/>
         <source>Frames were dropped</source>
         <translation>Frames wurden verworfen</translation>
     </message>
     <message>
-        <location line="-1139"/>
-        <location line="+1140"/>
+        <location line="-1152"/>
+        <location line="+1153"/>
         <source>122 frames did not reach the encoder during the last recording.</source>
         <translation>122 Frames haben den Encoder während der letzten Aufnahme nicht erreicht.</translation>
     </message>
     <message>
         <location line="+4"/>
-        <location line="+495"/>
+        <location line="+494"/>
         <source>Recording stopped unexpectedly</source>
         <translation>Aufnahme unerwartet beendet</translation>
     </message>
     <message>
-        <location line="-494"/>
+        <location line="-493"/>
         <source>The encoder reported an error. The partial file was kept.</source>
         <translation>Der Encoder meldete einen Fehler. Die Teildatei wurde erhalten.</translation>
     </message>
@@ -4530,18 +4564,18 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>ExoSnap 0.9.1 ist zur Installation bereit.</translation>
     </message>
     <message>
-        <location line="-1129"/>
-        <location line="+1599"/>
+        <location line="-1142"/>
+        <location line="+1611"/>
         <source>Storage running low</source>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-4102"/>
+        <location line="-4108"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+3469"/>
+        <location line="+3476"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -4554,22 +4588,22 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Seit 10 Sekunden ist kein neuer Frame angekommen. Die Aufnahme läuft weiter.</translation>
     </message>
     <message>
-        <location line="+375"/>
+        <location line="+374"/>
         <source>Recording stopped — output drive is critically low on disk space.</source>
         <translation>Aufnahme gestoppt: Speicherplatz auf dem Ausgabelaufwerk kritisch niedrig.</translation>
     </message>
     <message>
-        <location line="+399"/>
+        <location line="+397"/>
         <source>Export complete</source>
         <translation>Export abgeschlossen</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+10"/>
         <source>Export failed</source>
         <translation>Export fehlgeschlagen</translation>
     </message>
     <message>
-        <location line="+391"/>
+        <location line="+376"/>
         <source>Hotkey unavailable</source>
         <translation>Tastenkürzel nicht verfügbar</translation>
     </message>
@@ -5216,7 +5250,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>RecordingActions</name>
     <message>
-        <location filename="../services/RecordingCoordinator.cpp" line="+1673"/>
+        <location filename="../services/RecordingCoordinator.cpp" line="+1687"/>
         <source>Split is only available while recording.</source>
         <translation>Aufteilen ist nur während einer Aufnahme möglich.</translation>
     </message>
@@ -6652,7 +6686,7 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
 <context>
     <name>SettingsPresenceSection</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsPresenceSection.qml" line="+16"/>
+        <location filename="../quick/ExoSnap/Quick/SettingsPresenceSection.qml" line="+10"/>
         <source>App behaviour</source>
         <translation>App-Verhalten</translation>
     </message>
@@ -6688,12 +6722,6 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
         <location line="-7"/>
         <source>Applies to all capture software — calls, screen sharing, screenshots</source>
         <translation>Gilt für jede Capture-Software: Anrufe, Bildschirmfreigabe, Screenshots</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <location line="+7"/>
-        <source>Open editor when finished</source>
-        <translation>Editor nach Abschluss öffnen</translation>
     </message>
 </context>
 <context>
@@ -8206,6 +8234,105 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
 </context>
 <context>
+    <name>exosnap::quick::EditExportAdapter</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="-367"/>
+        <source>Match source</source>
+        <translation>Wie Quelle</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>YouTube 1080p</source>
+        <translation>YouTube 1080p</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>YouTube 1440p</source>
+        <translation>YouTube 1440p</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>YouTube 4K</source>
+        <translation>YouTube 4K</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Archive / High quality</source>
+        <translation>Archiv / Hohe Qualität</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Requires render export, which is not available yet.</source>
+        <translation>Erfordert einen Export mit Neuberechnung, der noch nicht verfügbar ist.</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>MP4 video (*.mp4)</source>
+        <translation>MP4-Video (*.mp4)</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Matroska video (*.mkv)</source>
+        <translation>Matroska-Video (*.mkv)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Export video</source>
+        <translation>Video exportieren</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Matroska video (*.mkv);;MP4 video (*.mp4)</source>
+        <translation>Matroska-Video (*.mkv);;MP4-Video (*.mp4)</translation>
+    </message>
+    <message>
+        <location line="+115"/>
+        <source>Lossless stream copy. Choose a filename and folder (%1).</source>
+        <translation>Verlustfreie Stream-Kopie. Dateinamen und Ordner wählen (%1).</translation>
+    </message>
+    <message>
+        <location line="+102"/>
+        <source>The timeline contains unavailable media.</source>
+        <translation>Die Zeitleiste enthält nicht verfügbare Medien.</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Choose a destination and confirm before replacing an existing file.</source>
+        <translation>Ziel wählen und das Ersetzen einer vorhandenen Datei bestätigen.</translation>
+    </message>
+</context>
+<context>
+    <name>exosnap::quick::EditPlayerWorker</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditPlayerWorker.cpp" line="+206"/>
+        <source>Media unavailable</source>
+        <translation>Medium nicht verfügbar</translation>
+    </message>
+</context>
+<context>
+    <name>exosnap::quick::EditSessionAdapter</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditWorkspaceSession.cpp" line="+87"/>
+        <source>The edit would overlap another clip or exceed the source.</source>
+        <translation>Die Bearbeitung würde einen anderen Clip überlappen oder die Quelle überschreiten.</translation>
+    </message>
+    <message>
+        <location line="+63"/>
+        <source>Cannot import media: %1</source>
+        <translation>Medium kann nicht importiert werden: %1</translation>
+    </message>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-381"/>
+        <source>The recording overlaps existing clips.</source>
+        <translation>Die Aufnahme überlappt vorhandene Clips.</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Some segments have unknown duration. They remain in Media and cannot be placed yet.</source>
+        <translation>Die Dauer einiger Segmente ist unbekannt. Sie bleiben unter Medien und können noch nicht platziert werden.</translation>
+    </message>
+</context>
+<context>
     <name>exosnap::quick::OverlayTelemetryAdapter</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/OverlayTelemetryAdapter.cpp" line="+14"/>
@@ -8334,19 +8461,22 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::SettingsAdapter</name>
     <message>
+        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+1278"/>
         <source>On</source>
         <translation>Ein</translation>
     </message>
     <message>
+        <location line="+25"/>
         <source>Auto: Lookahead 16 is enabled for AV1/VBR.</source>
         <translation>Auto: Lookahead 16 ist für AV1/VBR aktiviert.</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Auto: Off. Lookahead is enabled only for supported AV1/VBR.</source>
         <translation>Auto: Aus. Lookahead wird nur für unterstütztes AV1/VBR aktiviert.</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+310"/>
+        <location line="-994"/>
         <source>Unsaved changes</source>
         <translation>Ungespeicherte Änderungen</translation>
     </message>
@@ -8489,11 +8619,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <location line="+7"/>
         <location line="+169"/>
+        <location line="+343"/>
         <source>Auto</source>
         <translation>Auto</translation>
     </message>
     <message>
-        <location line="-165"/>
+        <location line="-508"/>
         <source>Auto (%1)</source>
         <translation>Auto (%1)</translation>
     </message>
@@ -8552,18 +8683,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <location line="+15"/>
         <location line="+101"/>
-        <location line="+1643"/>
+        <location line="+1660"/>
         <source>%1 fps</source>
         <translation>%1 fps</translation>
     </message>
     <message>
-        <location line="-1743"/>
-        <location line="+1744"/>
+        <location line="-1760"/>
+        <location line="+1761"/>
         <source>Faster than the fastest attached display (%1 Hz)</source>
         <translation>Schneller als der schnellste angeschlossene Bildschirm (%1 Hz)</translation>
     </message>
     <message>
-        <location line="-1727"/>
+        <location line="-1744"/>
         <source>%1 fps (Custom)</source>
         <translation>%1 fps (Benutzerdefiniert)</translation>
     </message>
@@ -8768,31 +8899,32 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="-255"/>
         <location line="+7"/>
         <location line="+250"/>
-        <location line="+671"/>
-        <location line="+882"/>
+        <location line="+211"/>
+        <location line="+482"/>
+        <location line="+877"/>
         <source>Off</source>
         <translation>Aus</translation>
     </message>
     <message>
-        <location line="-1545"/>
-        <location line="+619"/>
+        <location line="-1562"/>
+        <location line="+641"/>
         <source>Application audio</source>
         <translation>Anwendungsaudio</translation>
     </message>
     <message>
-        <location line="-616"/>
-        <location line="+620"/>
+        <location line="-638"/>
+        <location line="+642"/>
         <source>System audio</source>
         <translation>Systemaudio</translation>
     </message>
     <message>
-        <location line="-617"/>
-        <location line="+620"/>
+        <location line="-639"/>
+        <location line="+642"/>
         <source>Microphone</source>
         <translation>Mikrofon</translation>
     </message>
     <message>
-        <location line="-618"/>
+        <location line="-640"/>
         <source>No audio</source>
         <translation>Kein Audio</translation>
     </message>
@@ -8813,12 +8945,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+2"/>
-        <location line="+53"/>
+        <location line="+75"/>
         <source>NVENC support for this adapter and codec has not been confirmed.</source>
         <translation>Die NVENC-Unterstützung für diesen Adapter und Codec wurde nicht bestätigt.</translation>
     </message>
     <message>
-        <location line="-52"/>
+        <location line="-74"/>
         <source>The GPU/driver reports no B-frame support for this codec.</source>
         <translation>GPU/Treiber melden für diesen Codec keine Unterstützung für B-Frames.</translation>
     </message>
@@ -8833,7 +8965,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Für diese Anzahl, diesen Codec und diese GPU wird kein B-Frame-Referenzmodus unterstützt.</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+34"/>
         <source>Reduce the B-frame count to enable Lookahead.</source>
         <translation>Reduzieren Sie die Anzahl der B-Frames, um Lookahead zu aktivieren.</translation>
     </message>
@@ -8961,7 +9093,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>keine Verarbeitung</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="+34"/>
         <source>Minimal</source>
         <translation>Minimal</translation>
     </message>

@@ -1,653 +1,337 @@
 pragma ComponentBehavior: Bound
-
 import QtQuick
+import QtQuick.Controls
 
-// Trim timeline of the Edit surface: a decoded thumbnail strip, one label-only
-// row per audio track, marker verticals, two trim handles and a playhead.
-//
-// Plain declarative QML on purpose. The measured data scale is ~8-20 tiles
-// (width-driven, not duration-driven), 0-3 audio rows, and markers already
-// thinned to one per pixel column in C++ — a custom QQuickItem or a Canvas would
-// cost more than it saves at that size. No Qt Quick Controls anywhere in the
-// handles: a Control brings focus, hover and background machinery to something
-// that is a rectangle with a drag.
-//
-// Audio rows carry a label and a fill and nothing else. A peak envelope over a
-// multi-hour recording means decoding the entire soundtrack, and an approximated
-// one is the invented shape the product spec forbids.
-Item {
+FocusScope {
     id: root
-
     required property EditSessionAdapter session
-    required property EditTimelineAdapter timeline
     required property EditPlayerAdapter player
-
-    readonly property int sideInset: 5 // keeps the centred handles/knob unclipped at 0%/100%
-    readonly property int labelZoneHeight: 22
-    readonly property int timeRowGap: 6
-    readonly property int timeRowHeight: 14
-    readonly property int stackHeight: root.timeline.videoRowHeight + root.timeline.audioStackHeight
-    readonly property int trackX: root.sideInset
-    readonly property int trackWidth: Math.max(root.width - 2 * root.sideInset, 0)
-    readonly property bool interactive: root.session.durationMs > 0
-
-    // View-only drag feedback. The authoritative trim range lives once, snapped
-    // and in microseconds, on the session adapter; these two only exist between
-    // press and release so the handle can follow the pointer before the snap.
-    property string dragTarget: ""
-    property real dragStartMs: 0
-    property real dragEndMs: 0
-
-    readonly property real shownTrimStartMs: root.dragTarget === "" ? root.session.trimStartMs : root.dragStartMs
-    readonly property real shownTrimEndMs: root.dragTarget === "" ? root.session.trimEndMs : root.dragEndMs
-    readonly property bool trimmed: root.interactive && (root.shownTrimStartMs > 0 || root.shownTrimEndMs < root.session.durationMs)
-
-    function xForMs(ms: real): real {
-        if (root.session.durationMs <= 0) {
-            return root.trackX;
-        }
-        return root.trackX + ms * root.trackWidth / root.session.durationMs;
+    property EditTimelineAdapter thumbnails: null
+    property real pixelsPerSecond: 40
+    property bool snapping: true
+    property var visibleClips: []
+    property real hoveredGroup: 0
+    property real draggedGroup: 0
+    property real dragDeltaMs: 0
+    readonly property real labelWidth: 50
+    readonly property real rulerHeight: 32
+    readonly property real rowHeight: 64
+    function timeAt(contentPosition: real): real {
+        return Math.max(0, (contentPosition - root.labelWidth) / root.pixelsPerMs);
     }
-
-    function msForX(x: real): real {
-        if (root.trackWidth <= 0 || root.session.durationMs <= 0) {
-            return 0;
-        }
-        return Math.round((x - root.trackX) * root.session.durationMs / root.trackWidth);
+    function positionAt(milliseconds: real): real {
+        return root.labelWidth + milliseconds * root.pixelsPerMs;
     }
-
-    implicitHeight: root.labelZoneHeight + root.stackHeight + root.timeRowGap + root.timeRowHeight
-    onTrackWidthChanged: root.timeline.trackWidth = root.trackWidth
-    Component.onCompleted: root.timeline.trackWidth = root.trackWidth
-
-    // ---- Keyboard (QCR-504) ----
-    //
-    // The trim timeline was pointer-only: no focus, no key handling, and the
-    // only way to set a trim point or move the playhead was to drag. This is
-    // the whole editor's central interaction, so "reachable with a mouse only"
-    // made the surface unusable without one.
-    //
-    // ONE tab stop for the whole strip rather than a focusable playhead plus
-    // two focusable handles: the three are positions on one axis, and three tab
-    // stops would make reaching the out-point a matter of counting. Which one
-    // the arrows drive is stated by `keyTarget`, cycled with Tab's neighbour on
-    // this surface — the bracket keys — and shown by the same enlarged handle
-    // the drag already uses.
-    //
-    // The keys themselves are the established ones and nothing more: arrows
-    // step, Shift/Ctrl change the step, Home/End go to the ends, I and O set
-    // the in and out points (the NLE convention, and the same letters the
-    // export panel's own labels use), Space plays. No new vocabulary was
-    // invented for anything that already had one.
-    readonly property int keyStepMs: 1000
-    readonly property int keyStepFineMs: 100
-    readonly property int keyStepCoarseMs: 10000
-
-    // "playhead" | "start" | "end" — what the arrow keys move. Deliberately
-    // separate from `dragTarget`, which means "a pointer is holding this right
-    // now" and drives the drag pill.
-    property string keyTarget: "playhead"
-
-    activeFocusOnTab: root.interactive
-    Accessible.role: Accessible.Slider
-    Accessible.name: qsTr("Trim timeline")
-    Accessible.description: qsTr("Left and right arrows move the %1. Shift for ten seconds, Control for a tenth. Home and End jump to the clip ends. I sets the in point, O the out point. Bracket keys change what the arrows move. Space plays and pauses.")
-                            .arg(root.keyTarget === "start" ? qsTr("trim in point")
-                                 : root.keyTarget === "end" ? qsTr("trim out point") : qsTr("playhead"))
-
-    function keyStepFor(modifiers: int): int {
-        if (Boolean(modifiers & Qt.ShiftModifier))
-            return root.keyStepCoarseMs;
-        if (Boolean(modifiers & Qt.ControlModifier))
-            return root.keyStepFineMs;
-        return root.keyStepMs;
+    function zoomTo(value: real): void {
+        const playheadX = root.positionAt(root.session.positionMs) - scroll.contentX;
+        const anchorX = playheadX >= root.labelWidth && playheadX <= scroll.width ? playheadX : root.labelWidth;
+        const anchorTime = root.timeAt(scroll.contentX + anchorX);
+        root.pixelsPerSecond = Math.max(10, Math.min(250, value));
+        scroll.contentX = Math.max(0, Math.min(scroll.contentWidth - scroll.width, root.positionAt(anchorTime) - anchorX));
     }
-
-    // One writer for every keyboard move, so the clamp/snap contract is the
-    // same one the drag release goes through: trim edits land on
-    // requestTrim (which snaps), positions land on requestSeek.
-    function moveTargetBy(deltaMs: real): void {
-        if (!root.interactive)
-            return;
-        if (root.keyTarget === "start") {
-            root.session.requestTrim(root.session.clampTrimStartMs(root.session.trimStartMs + deltaMs,
-                                                                  root.session.trimEndMs),
-                                     root.session.trimEndMs);
-        } else if (root.keyTarget === "end") {
-            root.session.requestTrim(root.session.trimStartMs,
-                                     root.session.clampTrimEndMs(root.session.trimEndMs + deltaMs,
-                                                                 root.session.trimStartMs));
-        } else {
-            root.session.requestSeek(Math.max(0, Math.min(root.session.durationMs,
-                                                          root.session.positionMs + deltaMs)));
-        }
+    function refreshClips(): void {
+        root.visibleClips = root.session.visibleClips(root.timeAt(scroll.contentX), root.timeAt(scroll.contentX + scroll.width));
     }
-
-    function moveTargetTo(ms: real): void {
-        if (!root.interactive)
-            return;
-        if (root.keyTarget === "start") {
-            root.session.requestTrim(root.session.clampTrimStartMs(ms, root.session.trimEndMs),
-                                     root.session.trimEndMs);
-        } else if (root.keyTarget === "end") {
-            root.session.requestTrim(root.session.trimStartMs,
-                                     root.session.clampTrimEndMs(ms, root.session.trimStartMs));
-        } else {
-            root.session.requestSeek(Math.max(0, Math.min(root.session.durationMs, ms)));
-        }
-    }
-
-    // I/O set a trim point AT the playhead, which is what makes the keyboard
-    // workflow the same one the mouse has: park the playhead, mark the point.
-    function markIn(): void {
-        root.session.requestTrim(root.session.clampTrimStartMs(root.session.positionMs, root.session.trimEndMs),
-                                 root.session.trimEndMs);
-    }
-
-    function markOut(): void {
-        root.session.requestTrim(root.session.trimStartMs,
-                                 root.session.clampTrimEndMs(root.session.positionMs, root.session.trimStartMs));
-    }
-
-    function cycleTarget(delta: int): void {
-        const order = ["playhead", "start", "end"];
-        const next = (order.indexOf(root.keyTarget) + delta + order.length) % order.length;
-        root.keyTarget = order[next];
-    }
-
+    onPixelsPerSecondChanged: refreshClips()
+    Component.onCompleted: refreshClips()
+    readonly property real pixelsPerMs: pixelsPerSecond / 1000
+    objectName: "editClipTimeline"
+    activeFocusOnTab: true
+    Accessible.role: Accessible.Pane
+    Accessible.name: qsTr("Edit timeline. Left and Right seek; Up and Down select clips. Alt+Left/Right moves; add Control to trim the start or Shift to trim the end. Control+B splits; Delete removes; Shift+Delete closes the gap. Control+wheel or Control+Plus/Minus zooms. Menu opens clip actions.")
     Keys.onPressed: event => {
-        if (!root.interactive)
-            return;
-        switch (event.key) {
-        case Qt.Key_Left:
-            root.moveTargetBy(-root.keyStepFor(event.modifiers));
-            break;
-        case Qt.Key_Right:
-            root.moveTargetBy(root.keyStepFor(event.modifiers));
-            break;
-        case Qt.Key_Home:
-            root.moveTargetTo(0);
-            break;
-        case Qt.Key_End:
-            root.moveTargetTo(root.session.durationMs);
-            break;
-        case Qt.Key_I:
-            root.markIn();
-            break;
-        case Qt.Key_O:
-            root.markOut();
-            break;
-        case Qt.Key_BracketLeft:
-            root.cycleTarget(-1);
-            break;
-        case Qt.Key_BracketRight:
-            root.cycleTarget(1);
-            break;
-        case Qt.Key_Space:
-            root.player.togglePlay();
-            break;
-        default:
+        const control = (event.modifiers & Qt.ControlModifier) !== 0;
+        const shift = (event.modifiers & Qt.ShiftModifier) !== 0;
+        const alt = (event.modifiers & Qt.AltModifier) !== 0;
+        const direction = event.key === Qt.Key_Left ? -1 : 1;
+        if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+            root.session.selectAdjacentClip(event.key === Qt.Key_Up ? -1 : 1);
+            event.accepted = true;
             return;
         }
+        if (alt && (event.key === Qt.Key_Left || event.key === Qt.Key_Right)) {
+            root.session.nudgeSelected(direction * 100, control ? 1 : shift ? 2 : 0);
+            event.accepted = true;
+            return;
+        }
+        if (event.key === Qt.Key_Menu || (shift && event.key === Qt.Key_F10)) {
+            if (root.session.selectedClip !== 0) clipMenu.popup();
+        }
+        else if (control && (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal)) root.zoomTo(root.pixelsPerSecond * 1.25);
+        else if (control && event.key === Qt.Key_Minus) root.zoomTo(root.pixelsPerSecond / 1.25);
+        else if (control && event.key === Qt.Key_B) root.session.splitSelected();
+        else if (control && event.key === Qt.Key_Z) { if (shift) root.session.redo(); else root.session.undo(); }
+        else if (control && event.key === Qt.Key_Y) root.session.redo();
+        else if (event.key === Qt.Key_Home) root.session.requestSeek(0);
+        else if (event.key === Qt.Key_End) root.session.requestSeek(root.session.durationMs);
+        else if (event.key === Qt.Key_Delete) root.session.deleteSelected(shift);
+        else if (event.key === Qt.Key_Space) root.player.togglePlay();
+        else if (event.key === Qt.Key_Left || event.key === Qt.Key_Right)
+            root.session.requestSeek(root.session.positionMs + (event.key === Qt.Key_Left ? -1 : 1) * (shift ? 1000 : 33));
+        else return;
         event.accepted = true;
     }
-
-    // ---- Row stack ----
+    Menu {
+        id: clipMenu
+        objectName: "editClipMenu"
+        MenuItem {
+            objectName: "editRippleDelete"
+            text: qsTr("Ripple delete (Shift+Delete)")
+            enabled: root.session.selectedClip !== 0
+            onTriggered: root.session.deleteSelected(true)
+        }
+    }
+    ToolTip.visible: activeFocus
+    ToolTip.text: qsTr("Ctrl+wheel to zoom. Menu or Shift+F10 for clip actions.")
+    ToolTip.delay: 1000
+    ToolTip.timeout: 4000
+    Connections {
+        target: root.session
+        function onWorkspaceChanged(): void { root.refreshClips(); }
+    }
     Rectangle {
-        id: track
-
-        x: root.trackX
-        y: root.labelZoneHeight
-        width: root.trackWidth
-        height: root.stackHeight
-        color: ExoTheme.surfaceRaised
-        border.width: 1
-        // The panel around this component now carries the workspace boundary, so
-        // the track keeps only the hairline that separates it from the panel's
-        // own fill — `lineStrong` here made two competing edges 8 px apart.
-        // While the strip holds the keyboard focus that same hairline becomes
-        // the shared `text` focus ring, so the frontend keeps one focus
-        // language rather than growing a second outline around the track.
+        anchors.fill: parent
+        color: ExoTheme.surface
         border.color: root.activeFocus ? ExoTheme.text : ExoTheme.line
-        radius: ExoTheme.radiusMd
-        // The rows, the dim bands and the markers all have to stop at the
-        // rounded shape; the handles and the playhead deliberately do not.
+    }
+    Flickable {
+        id: scroll
+        objectName: "editTimelineScroll"
+        anchors.fill: parent
+        anchors.margins: 2
+        onContentXChanged: root.refreshClips()
+        onWidthChanged: root.refreshClips()
+        contentWidth: Math.max(width, root.positionAt(root.session.durationMs + 10000) + 10)
+        contentHeight: Math.max(height, root.rulerHeight + root.session.tracks.length * root.rowHeight)
         clip: true
-
-        // Video row: decoded tiles, each drawn left-aligned at its own timestamp.
-        // A position without a tile stays empty — a placeholder pattern would be
-        // information the clip never gave.
-        Repeater {
-            model: root.timeline.tileModel
-
-            Image {
-                id: tile
-
-                required property string tileSource
-                required property real timeMs
-
-                x: root.xForMs(tile.timeMs) - root.trackX
-                y: 0
-                width: root.timeline.tileWidth
-                height: root.timeline.videoRowHeight
-                source: tile.tileSource
-                sourceSize.width: root.timeline.tileWidth
-                sourceSize.height: root.timeline.videoRowHeight
-                asynchronous: true
-                cache: false
-                fillMode: Image.PreserveAspectCrop
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.horizontal: ScrollBar { objectName: "editHorizontalScrollBar"; policy: ScrollBar.AsNeeded }
+        ScrollBar.vertical: ScrollBar { objectName: "editVerticalScrollBar"; policy: ScrollBar.AsNeeded }
+        WheelHandler {
+            acceptedModifiers: Qt.ControlModifier
+            onWheel: event => {
+                root.zoomTo(root.pixelsPerSecond * Math.pow(1.25, event.angleDelta.y / 120));
+                event.accepted = true;
             }
         }
-
-        // Audio rows: a label over a fill.
-        Repeater {
-            model: root.timeline.audioTrackLabels
-
-            Item {
-                id: audioRow
-
-                required property int index
-                required property string modelData
-
-                x: 0
-                y: root.timeline.videoRowHeight + audioRow.index * (2 + root.timeline.audioRowHeight) + 2
-                width: track.width
-                height: root.timeline.audioRowHeight
-
-                Rectangle {
-                    anchors.fill: parent
-                    color: Qt.alpha(ExoTheme.accent, 0.14)
-                }
-
-                // Hairline against the row above, so the lanes read as separate
-                // tracks rather than as one tinted block.
-                Rectangle {
-                    height: 1
-                    color: ExoTheme.lineStrong
-                    anchors {
-                        left: parent.left
-                        right: parent.right
-                        bottom: parent.top
-                    }
-                }
-
-                Rectangle {
-                    x: audioLabel.x - 3
-                    y: audioLabel.y - 1
-                    width: audioLabel.width + 6
-                    height: audioLabel.height + 2
-                    radius: 3
-                    // Markers cross every row, so a marker near the start would
-                    // otherwise strike through the track name.
-                    color: Qt.alpha(ExoTheme.background, 0.6)
-                }
-
-                Text {
-                    id: audioLabel
-
-                    x: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: audioRow.modelData
-                    textFormat: Text.PlainText
-                    color: ExoTheme.textMuted
-                    font {
-                        family: ExoTheme.monoFamily
-                        pixelSize: ExoTheme.fontEyebrow
-                    }
-                }
-            }
-        }
-
-        // Trimmed-away ranges are dimmed across every row: a trim applies to the
-        // whole clip, not to one of its tracks.
-        Rectangle {
-            x: 0
-            y: 0
-            width: Math.max(root.xForMs(root.shownTrimStartMs) - root.trackX, 0)
-            height: track.height
-            visible: root.trimmed
-            color: Qt.alpha(ExoTheme.background, 0.66)
-        }
-
-        Rectangle {
-            id: trimTailDim
-
-            x: root.xForMs(root.shownTrimEndMs) - root.trackX
-            y: 0
-            width: Math.max(track.width - trimTailDim.x, 0)
-            height: track.height
-            visible: root.trimmed
-            color: Qt.alpha(ExoTheme.background, 0.66)
-        }
-
-        // Markers: thin verticals across the full stack. Studio Mint stays
-        // reserved for the active trim handles and the caution colour for a real
-        // diagnostic warning — a cut marker is neither. The Quick palette carries
-        // no secondary accent, so a quiet neutral stands in.
-        Repeater {
-            model: root.timeline.markerModel
-
-            Rectangle {
-                id: markerLine
-
-                required property real timeMs
-                required property string label
-
-                x: root.xForMs(markerLine.timeMs) - root.trackX - 1
-                y: 0
-                width: 2
-                height: track.height
-                visible: root.interactive
-                color: Qt.alpha(ExoTheme.textSecondary, 0.85)
-
-                Accessible.role: Accessible.Indicator
-                Accessible.name: markerLine.label
-            }
-        }
-    }
-
-    // ---- Trim handles ----
-    Repeater {
-        model: root.interactive ? ["start", "end"] : []
-
-        Rectangle {
-            id: handle
-
-            required property string modelData
-
-            // Enlarged while a pointer holds it OR while it is what the arrow
-            // keys will move: the same cue, for the two ways of moving it.
-            readonly property bool active: root.dragTarget === handle.modelData
-                                           || (root.activeFocus && root.keyTarget === handle.modelData)
-            readonly property real handleMs: handle.modelData === "start" ? root.shownTrimStartMs : root.shownTrimEndMs
-
-            x: root.xForMs(handle.handleMs) - width / 2
-            y: track.y - 2
-            width: handle.active ? 10 : 8
-            height: track.height + 4
-            radius: 4
-            color: ExoTheme.accent
-            border.width: 2
-            border.color: ExoTheme.background
-
-            Accessible.role: Accessible.Slider
-            Accessible.name: handle.modelData === "start" ? qsTr("Trim in point") : qsTr("Trim out point")
-        }
-    }
-
-    // ---- Playhead ----
-    Item {
-        visible: root.interactive
-        x: root.xForMs(root.session.positionMs)
-        y: track.y - 3
-
-        Rectangle {
-            x: -1
-            y: 0
-            width: 2
-            height: track.height + 6
-            color: ExoTheme.text
-        }
-
-        Rectangle {
-            id: playheadKnob
-
-            readonly property int knob: root.dragTarget === "playhead"
-                                       || (root.activeFocus && root.keyTarget === "playhead") ? 12 : 10
-
-            x: -playheadKnob.knob / 2
-            y: -playheadKnob.knob / 2
-            width: playheadKnob.knob
-            height: playheadKnob.knob
-            radius: playheadKnob.knob / 2
-            color: ExoTheme.text
-        }
-    }
-
-    // ---- Drag feedback: a centred mono time label above the active element ----
-    Rectangle {
-        id: dragPill
-
-        // Bound to the playhead only while the playhead is what is being dragged.
-        // The pill is hidden the rest of the time, but a binding on an invisible
-        // item is still a live binding: reading `positionMs` unconditionally made
-        // every decoded frame during playback re-run the C++ timestamp formatter
-        // and re-lay out the label below, for a pill nobody could see. The
-        // fallback is a constant, so no dependency is registered while idle.
-        readonly property real labelMs: root.dragTarget === "start" ? root.shownTrimStartMs
-                                      : root.dragTarget === "end" ? root.shownTrimEndMs
-                                      : root.dragTarget === "playhead" ? root.session.positionMs : 0
-
-        x: Math.max(0, Math.min(root.width - width, root.xForMs(dragPill.labelMs) - width / 2))
-        y: 2
-        width: dragLabel.implicitWidth + 12
-        height: 16
-        radius: 6
-        visible: root.dragTarget !== ""
-        color: ExoTheme.background
-        border.width: 1
-        border.color: ExoTheme.lineStrong
-
-        Text {
-            id: dragLabel
-
-            anchors.centerIn: parent
-            text: root.session.formatTimestamp(dragPill.labelMs)
-            textFormat: Text.PlainText
-            color: ExoTheme.text
-            font {
-                family: ExoTheme.monoFamily
-                pixelSize: ExoTheme.fontEyebrow
-            }
-        }
-    }
-
-    // ---- Strip lifecycle hint ----
-    // While the video row has fewer tiles than the current width can hold, say
-    // so — a strip that is merely mid-decode otherwise reads as broken. No
-    // spinner and no skeleton tiles: a missing tile stays empty, deliberately.
-    //
-    // QCR-307: and when the clip carries nothing decodable, say THAT instead.
-    // "Generating previews…" used to stay up for the rest of the session for a
-    // clip whose first tile was never going to arrive. The wording is the same
-    // "Preview unavailable" the player's own placeholder uses for the same
-    // condition, in the same dim rung — a strip without thumbnails is a missing
-    // convenience, not an error surface, and trim, playback and export are
-    // unaffected.
-    //
-    // The two conditions are told apart by their mark, not only by their words:
-    // work in flight carries a moving indeterminate bar, while a terminal
-    // failure carries a static glyph. A sentence alone left the two states
-    // looking identical at a glance, which is how "generating" managed to read
-    // as a hang.
-    Row {
-        id: previewStateHint
-
-        x: root.trackX
-        height: root.labelZoneHeight
-        spacing: ExoTheme.spacingXs
-        visible: root.interactive && root.dragTarget === ""
-                 && (root.timeline.generatingPreviews || root.timeline.previewsUnavailable)
-
-        readonly property bool unavailable: root.timeline.previewState === "unavailable"
-
-        // Indeterminate by construction: nothing upstream counts tiles toward a
-        // total, so a fraction here would be invented. The sweep says "still
-        // working" and claims nothing about how far along it is.
-        Item {
-            width: 48
-            height: 3
-            anchors.verticalCenter: parent.verticalCenter
-            visible: !previewStateHint.unavailable
-            clip: true
-
-            Rectangle {
-                id: sweep
-
-                width: 18
-                height: parent.height
-                radius: height / 2
-                color: ExoTheme.textDim
-
-                SequentialAnimation on x {
-                    running: previewStateHint.visible && !previewStateHint.unavailable
-                    loops: Animation.Infinite
-
-                    NumberAnimation {
-                        from: -sweep.width
-                        to: 48
-                        duration: 1100
-                        easing.type: Easing.InOutQuad
-                    }
-                }
-            }
-        }
-
-        ExoGlyph {
-            kind: ExoGlyph.PreviewBroken
-            color: ExoTheme.textDim
-            width: 12
-            height: 12
-            anchors.verticalCenter: parent.verticalCenter
-            visible: previewStateHint.unavailable
-        }
-
-        Text {
-            anchors.verticalCenter: parent.verticalCenter
-            text: previewStateHint.unavailable ? qsTr("Timeline previews unavailable")
-                                               : qsTr("Generating timeline previews…")
-            textFormat: Text.PlainText
-            color: ExoTheme.textDim
-            font {
-                family: ExoTheme.monoFamily
-                pixelSize: ExoTheme.fontEyebrow
-            }
-        }
-    }
-
-    // ---- Static time row: clip start · in/out readout while trimmed · duration ----
-    Item {
-        x: root.trackX
-        y: track.y + track.height + root.timeRowGap
-        width: root.trackWidth
-        height: root.timeRowHeight
-
-        Text {
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.session.formatClock(0)
-            textFormat: Text.PlainText
-            color: ExoTheme.textDim
-            font {
-                family: ExoTheme.monoFamily
-                pixelSize: ExoTheme.fontEyebrow
-            }
-        }
-
-        Text {
-            anchors.centerIn: parent
-            text: qsTr("in %1 · out %2").arg(root.session.formatClock(root.shownTrimStartMs)).arg(root.session.formatClock(root.shownTrimEndMs))
-            textFormat: Text.PlainText
-            visible: root.trimmed
-            color: ExoTheme.textDim
-            font {
-                family: ExoTheme.monoFamily
-                pixelSize: ExoTheme.fontEyebrow
-            }
-        }
-
-        Text {
-            anchors {
-                right: parent.right
-                verticalCenter: parent.verticalCenter
-            }
-            text: root.session.formatClock(root.session.durationMs)
-            textFormat: Text.PlainText
-            color: ExoTheme.textDim
-            font {
-                family: ExoTheme.monoFamily
-                pixelSize: ExoTheme.fontEyebrow
-            }
-        }
-    }
-
-    // ---- Interaction ----
-    // One area over the whole stack plus the knob's overhang above it. The
-    // handles beat the playhead on a tie: a handle is the harder target and the
-    // playhead can be moved anywhere on the track.
-    MouseArea {
-        id: scrubArea
-
-        readonly property int hitSlop: 4
-
-        function hitTest(x: real): string {
-            if (!root.interactive) {
-                return "";
-            }
-            const halfWidth = (root.dragTarget === "" ? 8 : 10) / 2 + scrubArea.hitSlop;
-            if (Math.abs(x - root.xForMs(root.shownTrimStartMs)) <= halfWidth) {
-                return "start";
-            }
-            if (Math.abs(x - root.xForMs(root.shownTrimEndMs)) <= halfWidth) {
-                return "end";
-            }
-            return "playhead";
-        }
-
-        // An enclosing Flickable would otherwise steal the drag mid-trim.
-        preventStealing: true
-        hoverEnabled: true
-        cursorShape: root.interactive ? (scrubArea.hitTest(mouseX) === "playhead" ? Qt.PointingHandCursor : Qt.SizeHorCursor) : Qt.ArrowCursor
-        x: 0
-        y: track.y - 10
-        width: root.width
-        height: track.height + 10
-
-        onPressed: mouse => {
-            if (!root.interactive) {
-                return;
-            }
-            root.dragStartMs = root.session.trimStartMs;
-            root.dragEndMs = root.session.trimEndMs;
-            root.dragTarget = scrubArea.hitTest(mouse.x);
-            if (root.dragTarget === "playhead") {
-                // Press on the track jumps the playhead AND begins the scrub in
-                // one event, rather than requiring a second drag.
+        MouseArea {
+            preventStealing: true
+            width: scroll.contentWidth
+            height: scroll.contentHeight
+            onPressed: mouse => {
+                root.forceActiveFocus();
                 root.player.beginScrub();
-                root.session.requestSeek(root.msForX(mouse.x));
+                root.session.requestSeek(root.timeAt(mouse.x));
+            }
+            onPositionChanged: mouse => {
+                if (pressed) root.session.requestSeek(root.timeAt(mouse.x));
+            }
+            onReleased: root.player.endScrub()
+            onCanceled: root.player.endScrub()
+        }
+        Repeater {
+            model: root.session.tracks
+            delegate: Rectangle {
+                required property var modelData
+                required property int index
+                objectName: "editTrackLabel" + index
+                x: scroll.contentX
+                y: root.rulerHeight + index * root.rowHeight
+                width: root.labelWidth
+                height: root.rowHeight
+                z: 3
+                color: ExoTheme.surface
+                Label {
+                    anchors.centerIn: parent
+                    text: parent.modelData.name
+                    color: ExoTheme.textSecondary
+                    font.pixelSize: ExoTheme.fontCaption
+                }
             }
         }
-
-        onPositionChanged: mouse => {
-            if (root.dragTarget === "") {
-                return;
-            }
-            const ms = root.msForX(mouse.x);
-            if (root.dragTarget === "start") {
-                root.dragStartMs = root.session.clampTrimStartMs(ms, root.dragEndMs);
-            } else if (root.dragTarget === "end") {
-                root.dragEndMs = root.session.clampTrimEndMs(ms, root.dragStartMs);
-            } else {
-                root.session.requestSeek(ms);
+        Repeater {
+            model: root.visibleClips
+            delegate: Rectangle {
+                id: clipItem
+                required property var modelData
+                objectName: "editClip" + modelData.id
+                readonly property real visibleLeft: Math.max(10, scroll.contentX + root.labelWidth - x + 6)
+                x: root.positionAt(modelData.startMs + (root.draggedGroup === modelData.group ? root.dragDeltaMs : 0))
+                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 3
+                width: Math.max(4, modelData.durationMs * root.pixelsPerMs)
+                height: 56
+                radius: ExoTheme.radiusSm
+                color: modelData.selected || root.hoveredGroup === modelData.group ? ExoTheme.surfaceHover : ExoTheme.surfaceRaised
+                border.color: modelData.selected ? ExoTheme.accent : ExoTheme.line
+                border.width: modelData.selected ? 2 : 1
+                clip: true
+                Accessible.role: Accessible.Button
+                Accessible.name: modelData.name + (modelData.available ? "" : ". " + qsTr("Media unavailable"))
+                Accessible.onPressAction: root.session.selectClip(modelData.id)
+                Image {
+                    id: poster
+                    x: clipItem.visibleLeft
+                    y: 6
+                    width: 64
+                    height: 44
+                    source: clipItem.modelData.video && root.thumbnails && clipItem.modelData.path === root.thumbnails.sourcePath
+                            ? root.thumbnails.posterSource : ""
+                    visible: status === Image.Ready && clipItem.modelData.available
+                    fillMode: Image.PreserveAspectFit
+                    Accessible.ignored: true
+                }
+                ExoGlyph {
+                    id: mediaIcon
+                    objectName: "editClipMediaIcon"
+                    x: clipItem.visibleLeft
+                    y: 19
+                    width: 16
+                    height: 16
+                    kind: !clipItem.modelData.available ? ExoGlyph.Warning
+                          : clipItem.modelData.video ? ExoGlyph.AppWindow : ExoGlyph.Speaker
+                    color: clipItem.modelData.available ? ExoTheme.textMuted : ExoTheme.warning
+                    visible: !poster.visible
+                    Accessible.ignored: true
+                }
+                Label {
+                    x: clipItem.visibleLeft + (poster.visible ? 70 : 22)
+                    y: 19
+                    width: Math.max(0, clipItem.width - x - 10)
+                    text: clipItem.modelData.name
+                    color: clipItem.modelData.available ? ExoTheme.text : ExoTheme.textSecondary
+                    font.pixelSize: ExoTheme.fontCaption
+                    elide: Text.ElideRight
+                }
+                MouseArea {
+                    id: clipMouse
+                    preventStealing: true
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onEntered: root.hoveredGroup = clipItem.modelData.group
+                    onExited: { if (root.hoveredGroup === clipItem.modelData.group) root.hoveredGroup = 0; }
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    property real startX: 0
+                    onPressed: mouse => {
+                        if (mouse.button === Qt.RightButton) {
+                            root.session.selectClip(clipItem.modelData.id);
+                            root.forceActiveFocus();
+                            clipMenu.popup();
+                            return;
+                        }
+                        startX = mapToItem(scroll.contentItem, mouse.x, 0).x;
+                        root.draggedGroup = clipItem.modelData.group;
+                        root.forceActiveFocus();
+                    }
+                    onPositionChanged: mouse => {
+                        if (pressed && (pressedButtons & Qt.LeftButton)) root.dragDeltaMs = (mapToItem(scroll.contentItem, mouse.x, 0).x - startX) / root.pixelsPerMs;
+                    }
+                    onCanceled: { root.dragDeltaMs = 0; root.draggedGroup = 0; }
+                    onReleased: mouse => {
+                        if (mouse.button === Qt.RightButton) return;
+                        const delta = root.dragDeltaMs;
+                        root.dragDeltaMs = 0;
+                        root.draggedGroup = 0;
+                        if (Math.abs(delta) > 20) root.session.moveClip(clipItem.modelData.id, clipItem.modelData.startMs + delta, root.snapping);
+                        else root.session.selectClip(clipItem.modelData.id);
+                    }
+                }
+                ToolTip.visible: clipMouse.containsMouse
+                ToolTip.text: clipItem.Accessible.name + "\n" + clipItem.modelData.path
+                Repeater {
+                    model: 2
+                    delegate: MouseArea {
+                        preventStealing: true
+                        required property int index
+                        property real startX: 0
+                        x: index === 0 ? 0 : clipItem.width - width
+                        width: 8
+                        height: clipItem.height
+                        cursorShape: Qt.SizeHorCursor
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 2
+                            height: 20
+                            radius: 1
+                            color: clipItem.modelData.selected ? ExoTheme.accent : ExoTheme.textMuted
+                            visible: clipItem.modelData.selected || clipMouse.containsMouse
+                        }
+                        onPressed: mouse => { startX = mapToItem(scroll.contentItem, mouse.x, 0).x; }
+                        onReleased: mouse => {
+                            const delta = (mapToItem(scroll.contentItem, mouse.x, 0).x - startX) / root.pixelsPerMs;
+                            root.session.trimClip(clipItem.modelData.id, clipItem.modelData.inMs + (index === 0 ? delta : 0),
+                                                  clipItem.modelData.outMs + (index === 1 ? delta : 0));
+                        }
+                    }
+                }
             }
         }
-
-        onReleased: {
-            if (root.dragTarget === "playhead") {
-                root.player.endScrub();
-            } else if (root.dragTarget !== "") {
-                // Snapping happens once, here, on the session adapter: nearest
-                // keyframe at or before the release point, then a marker within
-                // the snap window.
-                root.session.requestTrim(root.dragStartMs, root.dragEndMs);
-            }
-            root.dragTarget = "";
+        EditTimelineRuler {
+            objectName: "editTimelineRuler"
+            x: root.labelWidth
+            y: scroll.contentY
+            z: 4
+            width: scroll.contentWidth - root.labelWidth
+            height: root.rulerHeight
+            pixelsPerMs: root.pixelsPerMs
+            viewportX: Math.max(0, scroll.contentX - root.labelWidth)
+            viewportWidth: scroll.width
         }
-
-        onCanceled: {
-            if (root.dragTarget === "playhead") {
-                root.player.endScrub();
+        MouseArea {
+            x: root.labelWidth
+            preventStealing: true
+            y: scroll.contentY
+            z: 4
+            width: scroll.contentWidth - root.labelWidth
+            height: root.rulerHeight
+            onPressed: mouse => {
+                root.forceActiveFocus();
+                root.player.beginScrub();
+                root.session.requestSeek(root.timeAt(mouse.x + root.labelWidth));
             }
-            root.dragTarget = "";
+            onPositionChanged: mouse => {
+                if (pressed) root.session.requestSeek(root.timeAt(mouse.x + root.labelWidth));
+            }
+            onReleased: root.player.endScrub()
+            onCanceled: root.player.endScrub()
+        }
+        Rectangle {
+            x: scroll.contentX
+            y: scroll.contentY
+            width: root.labelWidth
+            height: root.rulerHeight
+            z: 6
+            color: ExoTheme.surface
+        }
+        Rectangle {
+            objectName: "editPlayhead"
+            x: root.positionAt(root.session.positionMs)
+            visible: x >= scroll.contentX + root.labelWidth
+            y: scroll.contentY
+            z: 5
+            width: 1
+            height: scroll.height
+            color: ExoTheme.accent
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 5
+                height: 4
+                radius: 1
+                color: ExoTheme.accent
+            }
+        }
+        DropArea {
+            width: scroll.contentWidth
+            height: scroll.contentHeight
+            onDropped: drop => {
+                const at = root.timeAt(drop.x);
+                if (drop.formats.indexOf("application/x-exosnap-history") >= 0)
+                    root.session.addHistory(drop.getDataAsString("application/x-exosnap-history"), at);
+                else if (drop.formats.indexOf("application/x-exosnap-asset") >= 0)
+                    root.session.appendAsset(Number(drop.getDataAsString("application/x-exosnap-asset")), at);
+                else if (drop.hasUrls)
+                    root.session.importMediaBatch(drop.urls, true, at);
+                drop.acceptProposedAction();
+            }
         }
     }
 }

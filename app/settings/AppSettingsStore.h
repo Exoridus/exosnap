@@ -113,14 +113,6 @@ struct PersistedAppSettings {
     // Covers: LowStorage, Saved, UnexpectedStop, RecoveryAvailable.
     bool show_notifications = true;
 
-    // "Open editor when finished" (Output card): when a recording completes
-    // successfully, open the Edit overlay directly instead of showing the
-    // "Recording saved" toast with Edit/Show-in-folder actions. Default ON
-    // (the product's post-record path is editing, not the toast). Was
-    // previously a debug-only roadmap-dummy toggle with no engine
-    // setting behind it at all.
-    bool open_editor_when_finished = true;
-
     // Whether MINIMIZING hides the window to the tray instead of sending it to
     // the taskbar. Default OFF. Closing is not affected by any preference: the
     // close button always closes.

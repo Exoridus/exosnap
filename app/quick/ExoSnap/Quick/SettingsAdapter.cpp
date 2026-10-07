@@ -1886,10 +1886,6 @@ bool SettingsAdapter::minimizeToTray() const noexcept {
 bool SettingsAdapter::hideWindowFromCapture() const noexcept {
     return app_settings_.hide_window_from_capture;
 }
-bool SettingsAdapter::openEditorWhenFinished() const noexcept {
-    return app_settings_.open_editor_when_finished;
-}
-
 // ---- Overlay content ------------------------------------------------------
 //
 // Every accessor below resolves through models::OverlayContentPolicy rather than
@@ -2825,14 +2821,6 @@ void SettingsAdapter::setHideWindowFromCapture(bool value) {
         return;
     }
     app_settings_.hide_window_from_capture = value;
-    commitAppSettingsEdit();
-}
-
-void SettingsAdapter::setOpenEditorWhenFinished(bool value) {
-    if (app_settings_.open_editor_when_finished == value) {
-        return;
-    }
-    app_settings_.open_editor_when_finished = value;
     commitAppSettingsEdit();
 }
 

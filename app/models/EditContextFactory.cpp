@@ -4,6 +4,7 @@
 #include "viewmodels/RecordViewModel.h"
 
 #include <QStringList>
+#include <algorithm>
 
 namespace exosnap {
 namespace {
@@ -37,6 +38,11 @@ EditContext MakeEditContext(const CompletedRecording& recording) {
     ctx.container = containerLabel(recording.container);
     ctx.markers = recording.markers;
     ctx.marker_sidecar_path = recording.marker_sidecar_path;
+    auto segments = recording.segments;
+    std::stable_sort(segments.begin(), segments.end(), [](const auto& a, const auto& b) { return a.index < b.index; });
+    if (segments.size() > 1)
+        for (const auto& segment : segments)
+            ctx.segments.push_back({segment.file_path, segment.duration_seconds, segment.succeeded});
     return ctx;
 }
 

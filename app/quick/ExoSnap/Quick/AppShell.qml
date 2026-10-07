@@ -47,45 +47,24 @@ Item {
     // own: Logs moved inside Diagnostics, and a request for the old LogsPage
     // value normalizes to DiagnosticsPage plus this section.
     property int diagnosticsSection: ShellAdapter.DiagnosticsOverview
-    // Edit/Output/Save is an overlay over the Record page, never a
-    // nav destination — so its visibility is shell state, not a stack index.
-    property bool editOverlayOpen: false
+    readonly property bool editPageVisible: root.displayedPage === ShellAdapter.EditPage
 
-    // QCR-001. An open edit session is STATE OF THE RECORD DESTINATION, not a
-    // modality of the application: it survives a page change untouched and is
-    // simply not on screen while another destination is. Loaded is the session;
-    // visible is where that session is shown.
-    readonly property bool editOverlayVisible: root.editOverlayOpen && root.currentPage === ShellAdapter.RecordPage
-
-    // Page -> stack index. The StackLayout holds the four VISIBLE destinations
-    // in their band order; the enum keeps its historical values so the legacy
-    // LogsPage request still normalizes, which is why this mapping cannot be
-    // the identity function any more. One function, so the tab selection, the
-    // stack cursor and the loader readiness checks cannot drift apart.
     function stackIndexForPage(page: int): int {
         switch (page) {
-        case ShellAdapter.SettingsPage:
+        case ShellAdapter.EditPage:
             return 1;
+        case ShellAdapter.SettingsPage:
+            return 2;
         case ShellAdapter.DiagnosticsPage:
         case ShellAdapter.LogsPage:
-            return 2;
-        case ShellAdapter.AboutPage:
             return 3;
+        case ShellAdapter.AboutPage:
+            return 4;
         default:
             return 0;
         }
     }
 
-    // Deliberately NOT root.currentPage. The four loaders below are
-    // asynchronous, so a page just requested may still be incubating; showing
-    // its empty Loader immediately would blank the window for however long
-    // that takes. `displayedPage` lags currentPage until the requested
-    // destination is actually ready, so the stack keeps showing whatever it
-    // last showed through the gap instead of nothing. Everything else that
-    // means "the selected page" -- the nav tab, the shortcuts' guard, the
-    // shell state Binding below -- reads root.currentPage directly and
-    // updates the instant the request is made; only the visible stack content
-    // is deferred.
     property int displayedPage: ShellAdapter.RecordPage
     readonly property int stackIndex: root.stackIndexForPage(root.displayedPage)
 
@@ -125,6 +104,14 @@ Item {
     // and does nothing, which is the resident-page contract QCR-602 established.
     function loadDestination(page: int): void {
         switch (page) {
+        case ShellAdapter.EditPage:
+            if (editLoader.status === Loader.Null)
+                editLoader.setSource(Qt.resolvedUrl("EditPage.qml"), {
+                    session: root.editSession, timeline: root.editTimeline,
+                    player: root.editPlayer, exporter: root.editExport,
+                    recordings: root.recordViewModel
+                });
+            break;
         case ShellAdapter.SettingsPage:
             if (settingsLoader.status === Loader.Null)
                 settingsLoader.setSource(Qt.resolvedUrl("SettingsPage.qml"), {
@@ -152,11 +139,6 @@ Item {
     }
 
     onCurrentPageChanged: {
-        // Direct assignments (the --visual-page harness, the relaunch landing
-        // page, tests) may still carry the legacy LogsPage value. Normalizing it
-        // HERE means every route that moves the visible destination agrees on
-        // the four-destination model, not just the ones that go through
-        // navigateTo().
         if (root.currentPage === ShellAdapter.LogsPage) {
             root.diagnosticsSection = ShellAdapter.DiagnosticsLogs;
             root.currentPage = ShellAdapter.DiagnosticsPage;
@@ -177,6 +159,8 @@ Item {
     // pre-warm below polls it for a page that is not even the current one.
     function destinationReady(page: int): bool {
         switch (page) {
+        case ShellAdapter.EditPage:
+            return editLoader.status === Loader.Ready;
         case ShellAdapter.SettingsPage:
             return settingsLoader.status === Loader.Ready;
         case ShellAdapter.DiagnosticsPage:
@@ -226,79 +210,29 @@ Item {
     Binding {
         target: root.shell
         property: "editSurfaceVisible"
-        value: root.editOverlayVisible
+        value: root.editPageVisible
     }
 
-    // ── The one navigation edge (QCR-001) ────────────────────────────────────
-    //
-    // Every navigation intent in the product writes the destination HERE, and
-    // nowhere else: the five tab delegates, Ctrl+1..5, the Diagnostics page's
-    // two jump signals, and ShellAdapter::navigateToPageRequested — which is
-    // itself emitted from six production paths (the OpenUpdate / ChangeFolder /
-    // OpenHotkeys / OpenDiagnostics notification actions, the Diagnostics
-    // blocker jump, the recovery Continue, the recording-error log jump).
-    //
-    // Before this the policy sat on two AFFORDANCES instead — `enabled` on the
-    // tab delegate and on the shortcuts — while the edge wrote `currentPage`
-    // unconditionally from Main.qml. So a notification toast could already swap
-    // the page underneath an open Edit workspace, which is precisely what those
-    // two disabled affordances claimed to prevent. One policy needs one edge.
     function navigateTo(page: int): void {
         if (!root.navigationAllowed)
             return;
-        if (root.editOverlayVisible && page !== ShellAdapter.RecordPage)
-            root.editSession.close();
-        // The legacy LogsPage request is the Logs view inside Diagnostics, not a
-        // destination of its own. Ctrl+4, DiagnosticsAdapter::openLogs(), the
-        // recording-error "View log" action and the control channel's
-        // `ui.navigate logs` all land here and all take the same route.
         if (page === ShellAdapter.LogsPage) {
             root.diagnosticsSection = ShellAdapter.DiagnosticsLogs;
             root.currentPage = ShellAdapter.DiagnosticsPage;
             return;
         }
-        // Ctrl+3 and the Diagnostics tab mean the overview, the everyday
-        // first content. The logs view is reached from the Reference row, from
-        // Ctrl+4 or from a "Show in log" action.
         if (page === ShellAdapter.DiagnosticsPage)
             root.diagnosticsSection = ShellAdapter.DiagnosticsOverview;
         root.currentPage = page;
     }
 
-    // The whole policy, in one expression.
-    //
-    // An open edit session is not a navigation guard. Leaving Record closes its
-    // ephemeral workspace without a prompt; an export already running owns a
-    // snapshot and continues independently. Three of the four
-    // surfaces that ARE in it are modal about a question the user has not
-    // answered yet, and a page swapped behind one of them is a page the user
-    // never asked for.
-    //
-    // "What's new" is the fourth for a different reason: it asks nothing, but its
-    // scrim covers the title band, so the POINTER route to the tabs is already
-    // refused. Leaving Ctrl+1..5 live would make the keyboard disagree with the
-    // affordance — exactly the split QCR-001 was about, in the other direction.
-    //
-    // The close guard is the fifth, and the only one whose surface is a Dialog
-    // rather than an in-shell overlay: its scrim does not cover the desktop
-    // toast, which is its own always-on-top window and reaches navigateTo()
-    // directly. Without this term a toast action swaps the page underneath an
-    // unanswered close prompt.
     readonly property bool navigationAllowed: !root.recovery.surfaceOpen && !root.recordingError.active
                                               && !root.crashReport.active && !root.whatsNew.active
                                               && !root.shell.closeGuardActive
 
-    // Every visible destination, directly. Four words fit the band at the 860 px
-    // minimum window, so hiding any of them behind a glyph bought nothing and
-    // cost a click plus a menu on the way to Diagnostics — the page a user goes
-    // to precisely when something is already wrong. Logs lives inside
-    // Diagnostics; About keeps its own top-level destination.
-    readonly property var navPages: [qsTr("Record"), qsTr("Settings"), qsTr("Diagnostics"), qsTr("About")]
+    readonly property var navPages: [qsTr("Record"), qsTr("Edit"), qsTr("Settings"), qsTr("Diagnostics"), qsTr("About")]
 
-    // Tab index -> ShellAdapter::Page. Separate from the labels because the
-    // enum keeps its historical values for the legacy logs spelling, so tab 3
-    // is AboutPage (4), not the legacy LogsPage (3).
-    readonly property var navPageValues: [ShellAdapter.RecordPage, ShellAdapter.SettingsPage,
+    readonly property var navPageValues: [ShellAdapter.RecordPage, ShellAdapter.EditPage, ShellAdapter.SettingsPage,
                                           ShellAdapter.DiagnosticsPage, ShellAdapter.AboutPage]
 
     function pageForTab(index: int): int {
@@ -359,21 +293,21 @@ Item {
         sequence: "Ctrl+2"
         context: Qt.WindowShortcut
         enabled: root.navigationAllowed
-        onActivated: root.navigateTo(ShellAdapter.SettingsPage)
+        onActivated: root.navigateTo(ShellAdapter.EditPage)
     }
 
     Shortcut {
         sequence: "Ctrl+3"
         context: Qt.WindowShortcut
         enabled: root.navigationAllowed
-        onActivated: root.navigateTo(ShellAdapter.DiagnosticsPage)
+        onActivated: root.navigateTo(ShellAdapter.SettingsPage)
     }
 
     Shortcut {
         sequence: "Ctrl+4"
         context: Qt.WindowShortcut
         enabled: root.navigationAllowed
-        onActivated: root.navigateTo(ShellAdapter.LogsPage)
+        onActivated: root.navigateTo(ShellAdapter.DiagnosticsPage)
     }
 
     Shortcut {
@@ -418,11 +352,7 @@ Item {
                     return;
 
                 root.chrome.clearInteractiveRects();
-                for (let i = 0; i < navRepeater.count; ++i) {
-                    const tab = navRepeater.itemAt(i);
-                    if (tab)
-                        root.chrome.addInteractiveRect(rectInShell(tab));
-                }
+                root.chrome.addInteractiveRect(rectInShell(navStrip));
                 root.chrome.addInteractiveRect(rectInShell(notificationBell));
                 root.chrome.addInteractiveRect(rectInShell(minimizeButton));
                 root.chrome.addInteractiveRect(rectInShell(maximizeButton));
@@ -469,6 +399,14 @@ Item {
             }
 
             RowLayout {
+                id: titleRow
+                objectName: "quickTitleRow"
+                readonly property real fullBrandRequiredWidth: brandMark.implicitWidth + brandWordmark.implicitWidth
+                    + navRow.width + confidence.implicitWidth + statusPill.implicitWidth + notificationBell.implicitWidth
+                    + minimizeButton.implicitWidth + maximizeButton.implicitWidth + closeButton.implicitWidth
+                    + 9 * spacing + ExoTheme.spacingSm - ExoTheme.spacingXs + ExoTheme.spacingXl
+                    + 2 * ExoTheme.spacingSm
+                readonly property bool compactBrand: width < fullBrandRequiredWidth
                 spacing: ExoTheme.spacingXs
                 anchors {
                     fill: parent
@@ -483,12 +421,19 @@ Item {
                 // taskbar button do and from the same projection: one recording,
                 // one state, three surfaces that cannot disagree.
                 ExoBrandMark {
+                    id: brandMark
+                    objectName: "quickBrandMark"
                     markState: root.shellPresence.iconState
                     markFrame: root.shellPresence.markFrame
                     Layout.preferredWidth: 18
                     Layout.preferredHeight: 18
                     Layout.alignment: Qt.AlignVCenter
-                    Accessible.ignored: true
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: "ExoSnap"
+                    ToolTip.visible: brandHover.hovered
+                    ToolTip.text: "ExoSnap"
+                    ToolTip.delay: 500
+                    HoverHandler { id: brandHover }
                 }
 
                 // Artwork rather than text, so the product name cannot be
@@ -496,89 +441,143 @@ Item {
                 // text-expansion harness -- which used to put 80 px of pressure
                 // on the navigation that no real translation will ever apply.
                 ExoBrandWordmark {
+                    id: brandWordmark
+                    visible: !titleRow.compactBrand
+                    objectName: "quickBrandWordmark"
                     typePixelSize: ExoTheme.fontBrand
                     Layout.preferredWidth: implicitWidth
                     Layout.preferredHeight: implicitHeight
                     Layout.leftMargin: ExoTheme.spacingSm - ExoTheme.spacingXs
-                    // The one gap in the band that separates identity from
-                    // navigation, so it is the first thing to give when five
-                    // destinations have to fit beside three window buttons.
-                    Layout.rightMargin: root.compactNav ? ExoTheme.spacingMd : ExoTheme.spacingXl
+                    Layout.rightMargin: ExoTheme.spacingXl
                     Layout.alignment: Qt.AlignVCenter
                     Accessible.role: Accessible.StaticText
                     Accessible.name: "exosnap"
                 }
 
-                Repeater {
-                    id: navRepeater
+                Flickable {
+                    id: navStrip
 
-                    // Named so the navigation-lifecycle test can reach the five
-                    // delegates through itemAt() and assert the AFFORDANCE, not
-                    // only the edge behind it: QCR-001 was a regression in the
-                    // delegate's `enabled` binding, and an assertion that only
-                    // calls navigateTo() would not have seen it. The delegates
-                    // themselves are not QObject children of the window, so the
-                    // repeater is the way in.
-                    objectName: "quickNavTabs"
+                    objectName: "quickNavStrip"
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: navRow.width
+                    Layout.preferredWidth: navRow.width
+                    Layout.minimumWidth: 0
+                    Layout.preferredHeight: root.titleBarHeight
+                    contentWidth: navRow.width
+                    contentHeight: height
+                    flickableDirection: Flickable.HorizontalFlick
+                    boundsBehavior: Flickable.StopAtBounds
+                    clip: true
 
-                    // Nav order is a product decision. Kept as a list rather than
-                    // copies of the same button so the hit-test rects can be
-                    // collected by index.
-                    model: root.navPages
+                    function ensureVisible(tab: Item): void {
+                        if (!tab)
+                            return;
+                        contentX = Math.max(0, Math.min(Math.max(0, contentWidth - width),
+                            tab.x - 12 < contentX ? tab.x - 12 : Math.max(contentX, tab.x + tab.width + 12 - width)));
+                    }
 
-                    delegate: ExoNavTab {
-                        required property int index
-                        required property string modelData
+                    function revealCurrent(): void {
+                        for (let i = 0; i < navRepeater.count; ++i) {
+                            const tab = navRepeater.itemAt(i);
+                            if (tab && (tab.activeFocus || root.currentPage === root.pageForTab(i))) {
+                                ensureVisible(tab);
+                                if (tab.activeFocus)
+                                    return;
+                            }
+                        }
+                    }
 
-                        text: modelData
-                        selected: root.currentPage === root.pageForTab(index)
-                        compact: root.compactNav
-                        // An open Edit workspace is deliberately absent from this
-                        // (QCR-001): it is state of the Record destination, so
-                        // leaving Record hides it and returning shows the same
-                        // session again. It never swaps a page UNDER a covering
-                        // workspace, because the workspace is only ever visible
-                        // on Record — see `editOverlayVisible`.
-                        //
-                        // The selected tab is exempt because it is not somewhere
-                        // the user could be sent: it is where they already are,
-                        // and the band marks it. Without the exemption a
-                        // blocking surface raised before the user has navigated
-                        // anywhere -- recovery at launch is the ordinary case --
-                        // greys out every destination including the one on
-                        // screen, leaving a band that names no current page. The
-                        // guard it would drop is redundant anyway: navigateTo()
-                        // refuses while a surface is up, and navigating to the
-                        // current page is a no-op either way.
-                        enabled: root.navigationAllowed || selected
-                        Layout.alignment: Qt.AlignVCenter
-                        // Shrinkable to nothing on purpose. Everything to the
-                        // right of the drag handle is fixed-size, so when the
-                        // band runs out of room the tabs are the only things
-                        // that may give — never the close button.
-                        //
-                        // QCR-511. `minimumWidth: 0` alone did NOT achieve that:
-                        // a layout item with `fillWidth` false is FIXED at its
-                        // preferred size (Qt Quick Layouts, Layout attached
-                        // properties), so the minimum was never consulted. Once
-                        // the drag handle — the band's only fillWidth item —
-                        // reached zero, the row simply laid the rest out past
-                        // its own right edge, and what fell off the end was the
-                        // status pill, the bell and all three window buttons.
-                        // Measured at the 860 px minimum window with a +40 %
-                        // text expansion: the window had no visible way to be
-                        // closed, minimised or moved. `fillWidth` with the
-                        // implicit width as a CEILING makes the tab shrinkable
-                        // without letting it grow past its label, so nothing
-                        // changes at any width where the band already fits.
-                        Layout.fillWidth: true
-                        Layout.maximumWidth: implicitWidth
-                        Layout.minimumWidth: 0
-                        onClicked: root.navigateTo(root.pageForTab(index))
-                        onWidthChanged: Qt.callLater(titleBar.refreshChromeGeometry)
+                    onWidthChanged: {
+                        Qt.callLater(navStrip.revealCurrent);
+                        Qt.callLater(titleBar.refreshChromeGeometry);
+                    }
+                    onContentWidthChanged: Qt.callLater(navStrip.revealCurrent)
+                    onXChanged: Qt.callLater(titleBar.refreshChromeGeometry)
+
+                    Rectangle {
+                        parent: navStrip
+                        objectName: "quickNavLeftFade"
+                        anchors.left: parent.left
+                        height: parent.height
+                        width: 12
+                        z: 1
+                        visible: navStrip.contentX > 0.5
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0; color: ExoTheme.surface }
+                            GradientStop { position: 1; color: "transparent" }
+                        }
+                        Accessible.ignored: true
+                    }
+                    Rectangle {
+                        parent: navStrip
+                        objectName: "quickNavRightFade"
+                        anchors.right: parent.right
+                        height: parent.height
+                        width: 12
+                        z: 1
+                        visible: navStrip.contentX + navStrip.width < navStrip.contentWidth - 0.5
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0; color: "transparent" }
+                            GradientStop { position: 1; color: ExoTheme.surface }
+                        }
+                        Accessible.ignored: true
+                    }
+
+                    WheelHandler {
+                        target: null
+                        onWheel: event => {
+                            const delta = event.pixelDelta.x || event.pixelDelta.y
+                                          || event.angleDelta.x / 2 || event.angleDelta.y / 2;
+                            navStrip.contentX = Math.max(0, Math.min(Math.max(0, navStrip.contentWidth - navStrip.width),
+                                                                   navStrip.contentX - delta));
+                            event.accepted = true;
+                        }
+                    }
+
+                    Row {
+                        id: navRow
+                        height: navStrip.height
+                        spacing: ExoTheme.spacingXs
+
+                        Repeater {
+                            id: navRepeater
+                            objectName: "quickNavTabs"
+                            model: root.navPages
+
+                            delegate: ExoNavTab {
+                                id: navTab
+                                required property int index
+                                required property string modelData
+
+                                text: modelData
+                                selected: root.currentPage === root.pageForTab(index)
+                                compact: root.compactNav
+                                enabled: root.navigationAllowed || selected
+                                onClicked: root.navigateTo(root.pageForTab(index))
+                                onSelectedChanged: {
+                                    if (selected)
+                                        Qt.callLater(navStrip.ensureVisible, navTab);
+                                }
+                                onActiveFocusChanged: {
+                                    if (activeFocus)
+                                        navStrip.ensureVisible(navTab);
+                                }
+                                Keys.onLeftPressed: {
+                                    const previous = navRepeater.itemAt((index + navRepeater.count - 1) % navRepeater.count);
+                                    if (previous)
+                                        previous.forceActiveFocus(Qt.TabFocusReason);
+                                }
+                                Keys.onRightPressed: {
+                                    const next = navRepeater.itemAt((index + 1) % navRepeater.count);
+                                    if (next)
+                                        next.forceActiveFocus(Qt.TabFocusReason);
+                                }
+                            }
+                        }
                     }
                 }
-
                 // The drag handle. It has no visual and no input handler at all:
                 // the band is dragged by Windows, because everything not listed
                 // as interactive resolves to HTCAPTION.
@@ -592,24 +591,18 @@ Item {
                 // interactive rect: it is a readout, so the band stays draggable
                 // across it.
                 SourceConfidence {
+                    id: confidence
                     indicators: root.recordViewModel.confidenceIndicators
                     Layout.alignment: Qt.AlignVCenter
                 }
 
                 ExoStatusPill {
+                    id: statusPill
                     text: root.recordViewModel.stateText
                     tone: root.recordViewModel.stateTone
                     Layout.rightMargin: ExoTheme.spacingSm
                     Layout.alignment: Qt.AlignVCenter
-                    // Never wider than its own text, and allowed to be narrower.
-                    // It used to declare its implicit width as a MINIMUM, which
-                    // made a long state string incompressible and left the
-                    // navigation tabs — the only other shrinkable thing in the
-                    // band — to pay for it. A readout may elide; a destination
-                    // may not disappear.
-                    //
-                    // `fillWidth` for the same reason the tabs now carry it: the
-                    // maximum and minimum above were inert without it.
+                    // The readout can compress before destination labels lose space.
                     Layout.fillWidth: true
                     Layout.maximumWidth: implicitWidth
                     Layout.minimumWidth: 0
@@ -666,6 +659,7 @@ Item {
 
                 WindowChromeButton {
                     id: closeButton
+                    objectName: "quickCloseButton"
 
                     kind: "close"
                     danger: true
@@ -686,24 +680,6 @@ Item {
             }
         }
 
-        // ── The four visible destinations ────────────────────────────────────
-        //
-        // Record is eager; the other three are compiled and built on their first
-        // visit and then stay resident. The Diagnostics slot hosts the
-        // overview/logs workspace, whose logs half is itself loaded on first
-        // request.
-        //
-        // Before this, all destinations were direct children of the StackLayout,
-        // so a launch that never left Record still compiled and instantiated
-        // Settings, Diagnostics, Logs and About: 8 700 `Creating` events and all
-        // 134 `Compiling` events happened before the first frame, among them 154
-        // ExoSettingRow and the 64 ComboBox popups of a page the user had not
-        // opened. The cost grew with every settings row added.
-        //
-        // Resident after the first visit rather than unloaded on leave: page
-        // state that is not in an adapter (scroll position, an open disclosure,
-        // a Settings draft) is the user's place in the page, and a stack whose
-        // pages forget where you were is worse than a slower first visit.
         StackLayout {
             currentIndex: root.stackIndex
             Layout.fillWidth: true
@@ -727,18 +703,13 @@ Item {
                 Layout.fillHeight: true
             }
 
-            // The three loaders carry no source of their own: loadDestination()
-            // sets it, with the page's required adapters as initial properties.
-            // They stay active so that the assignment loads immediately — an
-            // inactive Loader would defer the load to whenever it is activated,
-            // which is one more state for the same moment to be in.
-            //
-            // asynchronous: true incubates the instantiation across frames
-            // instead of blocking the one it starts on -- measured at ~3.2 s of
-            // GUI-thread work for Settings alone. `stackIndex` is what keeps
-            // this from photographing as an empty page mid-incubation: it lags
-            // `currentPage` until refreshDisplayedPage() sees Loader.Ready, so
-            // the stack keeps showing the previous destination through the gap.
+            Loader {
+                id: editLoader
+                asynchronous: true
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                onStatusChanged: root.refreshDisplayedPage()
+            }
             Loader {
                 id: settingsLoader
 
@@ -839,133 +810,23 @@ Item {
         }
     }
 
-    // Handing the surface a clip IS the request to show it: setEditContext is
-    // only ever called when a recording has finished and the user asked to edit
-    // it. Dismissal is the session's own closeRequested.
-    // A context handed over before the scene existed (the visual harness seeds one
-    // during load) has already fired its signal by the time the Connections below
-    // is live, so the initial state is read directly.
     Component.onCompleted: {
-        root.editOverlayOpen = root.editSession.durationMs > 0;
+        if (root.editSession.durationMs > 0)
+            root.currentPage = ShellAdapter.EditPage;
         root.loadDestination(root.currentPage);
         root.refreshDisplayedPage();
     }
 
     Connections {
         target: root.editSession
-
-        function onClipChanged(): void {
-            root.editOverlayOpen = root.editSession.durationMs > 0;
-        }
-
-        function onCloseRequested(): void {
-            root.editOverlayOpen = false;
-        }
+        function onEditPageRequested(): void { root.navigateTo(ShellAdapter.EditPage); }
     }
 
-    // Edit belongs to Record but occupies only the page content region.
-    // Keep the shell's title bar, navigation and native window controls usable.
-
-    //
-    // This and the three loaders after it keep an id no expression reads (QCR-706
-    // removed eleven such ids elsewhere). They are kept deliberately: the four are
-    // the shell's overlay LAYER STACK, their declaration order IS their z-order,
-    // and the comments above each one argue that order by name. An anonymous
-    // Loader would leave those arguments pointing at nothing.
-    //
-    // setSource(url, properties) rather than an inline sourceComponent, for the
-    // same reason loadDestination() above uses it for the four nav pages
-    // (QCR-615): an inline Component is part of THIS document, so the engine
-    // compiles EditOverlay's whole type -- and everything it pulls in -- before
-    // the first frame, even though the Loader stays inactive until a clip
-    // exists. Measured on this tree: EditOverlay.qml + EditExportPanel.qml alone
-    // cost ~385 ms of compile time on a launch that never opens the editor.
-    // sourceLoaded guards the one-time setSource call; `source` itself is
-    // sticky across active going false then true again, so a later reopen does
-    // not recompile or re-snapshot the initial properties.
-    Loader {
-        id: editOverlayLoader
-
-        property bool sourceLoaded: false
-
-        anchors {
-            fill: parent
-            topMargin: root.titleBarHeight
-        }
-        // Two separate facts, and QCR-001 turns on keeping them apart.
-        //
-        // ACTIVE follows the SESSION: the surface is built when a clip is handed
-        // over and unloaded when the session is closed — never merely because
-        // the user looked at Settings. Unloading on a page change would destroy
-        // the scene-graph video item and every piece of state that is not in an
-        // adapter (the rail's scroll position, the timeline zoom, the focus),
-        // which is the same argument QCR-602 used to keep the four destinations
-        // resident after their first visit.
-        //
-        // VISIBLE follows the DESTINATION: the workspace belongs to Record, so
-        // that is the only page it is on screen for. This is what makes an
-        // unlocked tab safe — the page never changes underneath a covering
-        // surface, because the surface goes with the page. An invisible item
-        // also takes no input and receives no key events, so the editor's
-        // surface-local keys cannot fire while Settings is on screen.
-        active: root.editOverlayOpen
-        visible: root.editOverlayVisible
-        z: 1
-
-        // Coming back to Record returns the keyboard to the workspace. Without
-        // it the editor is on screen but deaf: Escape, and every surface-local
-        // key below it, would go to whatever held the focus on the page the user
-        // just left. Called on load as well, so the first open is no different
-        // from a return.
-        onVisibleChanged: root.focusEditWorkspace()
-        onLoaded: root.focusEditWorkspace()
-        onActiveChanged: {
-            if (!editOverlayLoader.active || editOverlayLoader.sourceLoaded)
-                return;
-            editOverlayLoader.sourceLoaded = true;
-            editOverlayLoader.setSource(Qt.resolvedUrl("EditOverlay.qml"), {
-                session: root.editSession,
-                timeline: root.editTimeline,
-                player: root.editPlayer,
-                exporter: root.editExport,
-                focus: true
-            });
-        }
-    }
-
-    function focusEditWorkspace(): void {
-        if (!editOverlayLoader.visible)
-            return;
-        // `Loader.item` is typed QObject, so the cast is what tells qmllint (and
-        // the compiler) that this is the Item whose focus is being taken.
-        const workspace = editOverlayLoader.item as Item;
-        if (workspace !== null)
-            workspace.forceActiveFocus();
-    }
-
-    // Leaving Record pauses the preview; it does not end the session and does
-    // not seek. Playing video and audio out of a surface the user cannot see is
-    // both surprising on Settings and decoder work nobody asked for. Returning
-    // leaves it paused at the same position — starting playback again is the
-    // user's own action.
-    //
-    // Same shape as Main.qml's `previewAdapter.surfaceVisible` binding, and for
-    // the same reason: the decision is C++'s (EditPlayerAdapter), the fact is
-    // the shell's.
     Binding {
         target: root.editPlayer
         property: "surfaceVisible"
-        value: root.editOverlayVisible
+        value: root.editPageVisible
     }
-
-    // Release notes (product-spec, "What's new (shipped)"). Above the editor for
-    // the same reason recovery is, and FIRST among the equal-z surfaces below, so
-    // that if one of them were ever raised while this is up it draws over the
-    // changelog rather than under it. The composition root already keeps that
-    // from happening — the post-update auto-show waits for the blocking surfaces
-    // to clear — so this is the ordering as a fallback, not as the policy.
-    // setSource(url, properties) rather than an inline sourceComponent -- see
-    // editOverlayLoader above. Same trade for the other three overlays below.
     Loader {
         id: whatsNewLoader
 

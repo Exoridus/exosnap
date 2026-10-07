@@ -366,8 +366,6 @@ QVector<KeyDescriptor> BuildKeys() {
                         &SettingsAdapter::setMinimizeToTray));
     keys.append(BoolKey("app.hideWindowFromCapture", "Hide the window from screen capture",
                         &SettingsAdapter::hideWindowFromCapture, &SettingsAdapter::setHideWindowFromCapture));
-    keys.append(BoolKey("app.openEditorWhenFinished", "Open the editor after a recording",
-                        &SettingsAdapter::openEditorWhenFinished, &SettingsAdapter::setOpenEditorWhenFinished));
     keys.append(BoolKey("app.checkUpdatesOnStart", "Check for updates on startup", &SettingsAdapter::autoUpdateCheck,
                         &SettingsAdapter::setAutoUpdateCheck));
     keys.append(TextKey("app.updateChannel", "Update channel", &SettingsAdapter::updateChannel,

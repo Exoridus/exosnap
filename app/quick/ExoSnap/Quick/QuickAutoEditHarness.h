@@ -39,6 +39,7 @@ struct AutoEditOptions {
     // Media to open. Empty means "whatever the preceding --auto-record produced",
     // which is how the end-to-end flow chains without a path round-trip.
     QString media_path;
+    QString additional_media_path;
     // Clip length in seconds, for media_path runs only.
     //
     // This is not a shortcut around the decoder. The Editor takes its length from

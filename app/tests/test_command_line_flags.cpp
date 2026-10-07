@@ -55,10 +55,11 @@ TEST(CommandLineFlags, RealAutoRecordInvocationIsAccepted) {
 // skips the other's options, which is exactly why the check has to know both.
 TEST(CommandLineFlags, CombinedAutoRecordAndAutoEditIsAccepted) {
     QString error;
-    EXPECT_TRUE(ValidateCommandLine(
-        Cmd({"--auto-record", "--target", "monitor", "--duration", "8", "--audio-rows", "sys", "--auto-edit",
-             "--auto-edit-media", "clip.mkv", "--auto-edit-report", "report.json", "--auto-edit-trim", "0.1,0.9"}),
-        &error))
+    EXPECT_TRUE(
+        ValidateCommandLine(Cmd({"--auto-record", "--target", "monitor", "--duration", "8", "--audio-rows", "sys",
+                                 "--auto-edit", "--auto-edit-media", "clip.mkv", "--auto-edit-add-media", "second.mkv",
+                                 "--auto-edit-report", "report.json", "--auto-edit-trim", "0.1,0.9"}),
+                            &error))
         << error.toStdString();
 }
 

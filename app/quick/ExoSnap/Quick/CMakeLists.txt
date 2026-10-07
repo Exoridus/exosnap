@@ -59,9 +59,10 @@ qt_add_qml_module(exosnap
         DiagnosticsWorkspace.qml
         DiagnosticsSectionHeader.qml
         DiagnosticsSelfTestRow.qml
-        EditDetailsRail.qml
-        EditExportPanel.qml
-        EditOverlay.qml
+        EditPage.qml
+        EditActionButton.qml
+        EditTimelineRuler.qml
+        EditSourceBrowser.qml
         EditPlayer.qml
         EditTimeline.qml
         ExoBadge.qml
@@ -181,6 +182,7 @@ qt_add_qml_module(exosnap
         EditPlayerAdapter.h
         EditPlayerWorker.cpp
         EditPlayerWorker.h
+        EditWorkspaceSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
         EditTimelineAdapter.cpp
@@ -1143,10 +1145,15 @@ qt_add_qml_module(edit_timeline_qml_tests
     # Same reason QuickThemeTokens is here: every colour in the strip goes
     # through ExoTheme, which reads that singleton.
     SOURCES
+        EditExportAdapter.cpp
+        EditExportAdapter.h
+        RecordViewModelAdapter.cpp
+        RecordViewModelAdapter.h
         EditPlayerAdapter.cpp
         EditPlayerAdapter.h
         EditPlayerWorker.cpp
         EditPlayerWorker.h
+        EditWorkspaceSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
         EditTimelineAdapter.cpp
@@ -1168,6 +1175,14 @@ qt_add_qml_module(edit_timeline_qml_tests
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
     QML_FILES
+        EditPage.qml
+        EditSourceBrowser.qml
+        EditActionButton.qml
+        EditTimelineRuler.qml
+        ExoButton.qml
+        ExoNavTab.qml
+        ExoSelect.qml
+        ExoChevron.qml
         EditPlayer.qml
         EditTimeline.qml
         ExoGlyph.qml
@@ -1202,10 +1217,14 @@ target_link_libraries(edit_timeline_qml_tests
         Qt6::Quick
         Qt6::QuickControls2
         Qt6::QuickTest
+        Qt6::Widgets
+        exosnap_record_viewmodel_test_support
         exosnap_app_log_test_support
         exosnap_engine
         exosnap::warnings
 )
+
+target_sources(edit_timeline_qml_tests PRIVATE ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.cpp)
 
 add_test(NAME quick.qml.edit_timeline COMMAND edit_timeline_qml_tests)
 set_tests_properties(quick.qml.edit_timeline PROPERTIES
@@ -1941,6 +1960,7 @@ exosnap_add_gtest(
         ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_adapters.cpp
         EditExportAdapter.cpp
         EditExportAdapter.h
+        EditWorkspaceSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
         EditTimelineAdapter.cpp
@@ -1957,6 +1977,7 @@ exosnap_add_gtest(
     # parser had to skip (QCR-207) through AppLog, same as DeviceAdapter does
     # for its rescan milestones.
     LIBRARIES
+        Qt6::Widgets
         Qt6::Core
         Qt6::Gui
         Qt6::Qml

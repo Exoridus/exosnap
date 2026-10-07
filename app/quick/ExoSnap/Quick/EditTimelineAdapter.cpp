@@ -54,6 +54,12 @@ EditTimelineAdapter::EditTimelineAdapter(QObject* parent) : QObject(parent) {
 
 EditTimelineAdapter::~EditTimelineAdapter() = default;
 
+QString EditTimelineAdapter::posterSource() const {
+    if (tile_model_.rowCount() <= 0)
+        return {};
+    return tile_model_.data(tile_model_.index(0), EditTimelineTileModel::SourceRole).toString();
+}
+
 void EditTimelineAdapter::setTileProvider(EditTimelineTileProvider* provider) {
     provider_ = provider;
 }
@@ -69,7 +75,7 @@ void EditTimelineAdapter::setSession(EditSessionAdapter* session) {
     // master path, so it never reaches clipOpened -- the strip layout still
     // needs the length to place its tiles.
     connect(session_, &EditSessionAdapter::durationChanged, this, [this]() {
-        duration_ms_ = session_->durationMs();
+        duration_ms_ = static_cast<qint64>(session_->editContext().duration_seconds * 1000.0);
         refreshMarkers();
         scheduleTileRun();
     });

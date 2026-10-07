@@ -6,8 +6,14 @@
 #include "models/EditTimelineModel.h"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QEventLoop>
+#include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QStringList>
+#include <QTemporaryDir>
+#include <QTimer>
 #include <QVariantMap>
 
 #include <gtest/gtest.h>
@@ -53,6 +59,24 @@ EditContext MakeContext(double duration_seconds = 100.0) {
 }
 
 // ── Trim snapping (pure) ────────────────────────────────────────────────────
+
+TEST(EditWorkspacePresentation, SelectingEitherLinkedRowHighlightsTheWholeGroup) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    auto rows = session.visibleClips(0, 100000);
+    ASSERT_EQ(rows.size(), 2);
+    const auto video = rows[0].toMap();
+    const auto audio = rows[1].toMap();
+    EXPECT_TRUE(video.value(QStringLiteral("video")).toBool());
+    EXPECT_FALSE(audio.value(QStringLiteral("video")).toBool());
+    EXPECT_EQ(video.value(QStringLiteral("group")), audio.value(QStringLiteral("group")));
+    EXPECT_EQ(video.value(QStringLiteral("path")), audio.value(QStringLiteral("path")));
+    session.selectClip(audio.value(QStringLiteral("id")).toULongLong());
+    rows = session.visibleClips(0, 100000);
+    EXPECT_TRUE(rows[0].toMap().value(QStringLiteral("selected")).toBool());
+    EXPECT_TRUE(rows[1].toMap().value(QStringLiteral("selected")).toBool());
+}
 
 TEST(EditTrimSnap, SnapsBackToTheKeyframeAtOrBeforeTheRequest) {
     const std::vector<int64_t> keyframes{0, 2'000'000, 4'000'000, 6'000'000};
@@ -280,20 +304,294 @@ TEST(EditSessionAdapterFacts, RendersAnUnsetFactAsTheSharedEmptyGlyph) {
     EXPECT_EQ(audio_row.value(QStringLiteral("value")).toString(), QString::fromUtf8("\xe2\x80\x94"));
 }
 
-// ── Export ─────────────────────────────────────────────────────────────────
+TEST(EditWorkspaceAdapter, EqualLengthAppendNotifiesCumulativeDurationAndRetainsExistingClips) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    std::vector<qint64> durations;
+    int page_requests = 0;
+    QObject::connect(&session, &EditSessionAdapter::durationChanged, &session,
+                     [&]() { durations.push_back(session.durationMs()); });
+    QObject::connect(&session, &EditSessionAdapter::editPageRequested, &session, [&]() { ++page_requests; });
 
-TEST(EditExportPath, NewFileGetsTheEditSuffixAndTheSelectedExtension) {
-    const std::filesystem::path original(L"D:/Recordings/clip.mkv");
-    // Compared as paths, not strings: operator/ joins with the native separator.
-    EXPECT_EQ(DeriveExportOutputPath(original, /*overwrite=*/false, /*to_mp4=*/false),
-              std::filesystem::path(L"D:/Recordings/clip_edit.mkv"));
-    EXPECT_EQ(DeriveExportOutputPath(original, /*overwrite=*/false, /*to_mp4=*/true),
-              std::filesystem::path(L"D:/Recordings/clip_edit.mp4"));
+    session.setEditContext(MakeContext(10));
+    const auto original = session.workspace().clips();
+    ASSERT_EQ(original.size(), 2U);
+    session.setEditContext(MakeContext(10));
+
+    EXPECT_EQ(durations, (std::vector<qint64>{10000, 20000}));
+    EXPECT_EQ(page_requests, 2);
+    EXPECT_EQ(session.positionMs(), 10000);
+    ASSERT_EQ(session.workspace().clips().size(), 4U);
+    for (const auto& clip : original) {
+        const auto* retained = session.workspace().clip(clip.id);
+        ASSERT_NE(retained, nullptr);
+        EXPECT_EQ(*retained, clip);
+    }
+    EXPECT_EQ(session.workspace().assets().size(), 1U);
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), original);
+    EXPECT_EQ(session.durationMs(), 10000);
 }
 
-TEST(EditExportPath, OverwriteWritesBackToTheOriginal) {
-    const std::filesystem::path original(L"D:/Recordings/clip.mkv");
-    EXPECT_EQ(DeriveExportOutputPath(original, /*overwrite=*/true, /*to_mp4=*/true), original);
+TEST(EditWorkspaceAdapter, PositionedSegmentsAreConsecutiveAndUndoAsOneOperation) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    const auto original = session.workspace().clips();
+    EditContext split = MakeContext(5);
+    split.segments = {{QStringLiteral("D:/Recordings/segment-0.mkv"), 2, true},
+                      {QStringLiteral("D:/Recordings/segment-1.mkv"), 3, true}};
+    session.setEditContext(split, 20000);
+
+    EXPECT_TRUE(session.workspaceError().isEmpty());
+    EXPECT_EQ(session.durationMs(), 25000);
+    EXPECT_EQ(session.positionMs(), 20000);
+    const auto positioned = session.workspace().clips();
+    ASSERT_EQ(positioned.size(), 6U);
+    for (const auto type : {edit::TrackType::Video, edit::TrackType::Audio}) {
+        const auto* first = session.workspace().active(20000000, type);
+        const auto* second = session.workspace().active(22000000, type);
+        ASSERT_NE(first, nullptr);
+        ASSERT_NE(second, nullptr);
+        EXPECT_EQ(first->start, 20000000);
+        EXPECT_EQ(first->duration(), 2000000);
+        EXPECT_EQ(second->start, 22000000);
+        EXPECT_EQ(second->duration(), 3000000);
+        EXPECT_EQ(session.workspace().asset(first->asset)->name, "segment-0.mkv");
+        EXPECT_EQ(session.workspace().asset(second->asset)->name, "segment-1.mkv");
+    }
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), original);
+    EXPECT_EQ(session.durationMs(), 10000);
+    session.redo();
+    EXPECT_EQ(session.workspace().clips(), positioned);
+    EXPECT_EQ(session.durationMs(), 25000);
+}
+
+TEST(EditWorkspaceAdapter, OverlappingSegmentBatchChangesNoClipsAndAddsNoUndoCommand) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    const auto original = session.workspace().clips();
+    EditContext split = MakeContext(5);
+    split.segments = {{QStringLiteral("D:/Recordings/segment-0.mkv"), 2, true},
+                      {QStringLiteral("D:/Recordings/segment-1.mkv"), 3, true}};
+
+    session.setEditContext(split, 9000);
+
+    EXPECT_FALSE(session.workspaceError().isEmpty());
+    EXPECT_EQ(session.workspace().clips(), original);
+    EXPECT_EQ(session.durationMs(), 10000);
+    session.undo();
+    EXPECT_TRUE(session.workspace().clips().empty());
+    EXPECT_FALSE(session.canUndo());
+}
+
+TEST(EditWorkspaceAdapter, SplitMarkersUseHalfOpenSourceWindowsAndRetainTheirLabels) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditContext split = MakeContext(5);
+    split.segments = {{QStringLiteral("D:/Recordings/segment-0.mkv"), 2, true},
+                      {QStringLiteral("D:/Recordings/segment-1.mkv"), 3, true}};
+    split.markers = {MakeMarker(0, "start"), MakeMarker(1999, "before"), MakeMarker(2000, "cut"),
+                     MakeMarker(4999, "last"), MakeMarker(5000, "outside")};
+
+    session.setEditContext(split, 10000);
+
+    const auto& assets = session.workspace().assets();
+    ASSERT_EQ(assets.size(), 2U);
+    ASSERT_EQ(assets[0].markers.size(), 2U);
+    ASSERT_EQ(assets[1].markers.size(), 2U);
+    EXPECT_EQ(assets[0].markers[0].time_ms, 0U);
+    EXPECT_EQ(assets[0].markers[1].time_ms, 1999U);
+    EXPECT_EQ(assets[0].markers[1].label, "before");
+    EXPECT_EQ(assets[1].markers[0].time_ms, 0U);
+    EXPECT_EQ(assets[1].markers[0].label, "cut");
+    EXPECT_EQ(assets[1].markers[1].time_ms, 2999U);
+    EXPECT_EQ(assets[1].markers[1].label, "last");
+    EXPECT_EQ(session.workspace().snap(12030000, 0, 50000), 12000000);
+}
+
+TEST(EditWorkspaceAdapter, MissingAndFailedSegmentsRemainVisibleAtTheirOriginalDurations) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    EditSessionAdapter session;
+    EditContext split = MakeContext(5);
+    split.segments = {{directory.filePath(QStringLiteral("missing.mkv")), 2, true},
+                      {directory.filePath(QStringLiteral("failed.mkv")), 3, false}};
+
+    session.setEditContext(split);
+
+    ASSERT_EQ(session.workspace().assets().size(), 2U);
+    EXPECT_EQ(session.workspace().assets()[0].state, edit::AssetState::Missing);
+    EXPECT_EQ(session.workspace().assets()[1].state, edit::AssetState::Failed);
+    EXPECT_EQ(session.durationMs(), 5000);
+    const auto first = session.visibleClips(100, 1900);
+    const auto second = session.visibleClips(2100, 4900);
+    ASSERT_EQ(first.size(), 2);
+    ASSERT_EQ(second.size(), 2);
+    for (const auto& row : first) {
+        EXPECT_FALSE(row.toMap().value(QStringLiteral("available")).toBool());
+        EXPECT_EQ(row.toMap().value(QStringLiteral("durationMs")).toLongLong(), 2000);
+    }
+    for (const auto& row : second) {
+        EXPECT_FALSE(row.toMap().value(QStringLiteral("available")).toBool());
+        EXPECT_EQ(row.toMap().value(QStringLiteral("startMs")).toLongLong(), 2000);
+        EXPECT_EQ(row.toMap().value(QStringLiteral("durationMs")).toLongLong(), 3000);
+    }
+}
+
+TEST(EditWorkspaceAdapter, ViewportFollowsLinkedTrimMoveAndUndoWithoutDuplicatingMedia) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    const auto original = session.workspace().clips();
+    const auto selected = session.selectedClip();
+
+    session.trimClip(selected, 2000, 8000);
+    EXPECT_TRUE(session.visibleClips(0, 1000).isEmpty());
+    ASSERT_EQ(session.visibleClips(3000, 4000).size(), 2);
+    const auto trimmed = session.workspace().clips();
+    for (const auto& clip : trimmed) {
+        EXPECT_EQ(clip.start, 2000000);
+        EXPECT_EQ(clip.source_in, 2000000);
+        EXPECT_EQ(clip.source_out, 8000000);
+    }
+    session.moveClip(selected, 20000, false);
+    EXPECT_TRUE(session.visibleClips(3000, 4000).isEmpty());
+    EXPECT_EQ(session.visibleClips(21000, 22000).size(), 2);
+    EXPECT_EQ(session.durationMs(), 26000);
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), trimmed);
+    EXPECT_EQ(session.visibleClips(3000, 4000).size(), 2);
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), original);
+    session.redo();
+    EXPECT_EQ(session.workspace().clips(), trimmed);
+    EXPECT_EQ(session.media().size(), 1);
+}
+
+TEST(EditWorkspaceAdapter, SplitAndRippleDeleteRestoreBothLinkedTracksWithUndo) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    const auto original = session.workspace().clips();
+    session.requestSeek(4000);
+    session.splitSelected();
+    const auto split = session.workspace().clips();
+    ASSERT_EQ(split.size(), 4U);
+    session.deleteSelected(true);
+
+    ASSERT_EQ(session.workspace().clips().size(), 2U);
+    EXPECT_EQ(session.durationMs(), 6000);
+    for (const auto& clip : session.workspace().clips()) {
+        EXPECT_EQ(clip.start, 0);
+        EXPECT_EQ(clip.source_in, 4000000);
+        EXPECT_EQ(clip.source_out, 10000000);
+    }
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), split);
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), original);
+}
+
+TEST(EditWorkspaceAdapter, LocalMediaBatchPreservesInputOrderAndUndoesAsOneOperation) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString fixture =
+        QFileInfo(QString::fromUtf8(__FILE__))
+            .dir()
+            .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const QString first = directory.filePath(QStringLiteral("b.mp4"));
+    const QString second = directory.filePath(QStringLiteral("a.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture, first));
+    ASSERT_TRUE(QFile::copy(fixture, second));
+    EditSessionAdapter session;
+    QEventLoop loop;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &loop, &QEventLoop::quit);
+    QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+    session.importMediaBatch({QUrl::fromLocalFile(first), QUrl::fromLocalFile(second)}, true, 2000);
+    loop.exec();
+
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    ASSERT_EQ(session.workspace().assets().size(), 2U);
+    const auto& assets = session.workspace().assets();
+    EXPECT_EQ(assets[0].path, first.toStdWString());
+    EXPECT_EQ(assets[1].path, second.toStdWString());
+    ASSERT_GT(assets[0].duration, 0);
+    EXPECT_FALSE(assets[0].audio);
+    ASSERT_EQ(session.workspace().clips().size(), 2U);
+    EXPECT_EQ(session.workspace().clips()[0].start, 2000000);
+    EXPECT_EQ(session.workspace().clips()[1].start, 2000000 + assets[0].duration);
+    const auto imported = session.workspace().clips();
+    session.undo();
+    EXPECT_TRUE(session.workspace().clips().empty());
+    EXPECT_EQ(session.media().size(), 2);
+    session.redo();
+    EXPECT_EQ(session.workspace().clips(), imported);
+}
+
+TEST(EditWorkspaceAdapter, UnknownSegmentDurationIsResolvedBeforeOrderedPositionedInsertion) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString fixture =
+        QFileInfo(QString::fromUtf8(__FILE__))
+            .dir()
+            .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const QString unknown = directory.filePath(QStringLiteral("first.mp4"));
+    const QString known = directory.filePath(QStringLiteral("second.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture, unknown));
+    ASSERT_TRUE(QFile::copy(fixture, known));
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(1));
+    const auto original = session.workspace().clips();
+    EditContext split = MakeContext(0);
+    split.segments = {{unknown, 0, true}, {known, 2, true}};
+    QEventLoop loop;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &loop, [&]() {
+        if (session.workspace().clips().size() == 6)
+            loop.quit();
+    });
+    QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+
+    session.setEditContext(split, 3000);
+    loop.exec();
+
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    ASSERT_EQ(session.workspace().assets().size(), 3U);
+    ASSERT_EQ(session.workspace().clips().size(), 6U);
+    const auto& resolved = session.workspace().assets()[1];
+    ASSERT_GT(resolved.duration, 0);
+    EXPECT_EQ(resolved.path, unknown.toStdWString());
+    const auto* first = session.workspace().active(3000000);
+    const auto* second = session.workspace().active(3000000 + resolved.duration);
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+    EXPECT_EQ(first->asset, resolved.id);
+    EXPECT_EQ(first->start, 3000000);
+    EXPECT_EQ(session.workspace().asset(second->asset)->path, known.toStdWString());
+    EXPECT_EQ(second->start, 3000000 + resolved.duration);
+    EXPECT_EQ(second->duration(), 2000000);
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), original);
+}
+
+// ── Export ─────────────────────────────────────────────────────────────────
+
+TEST(EditExportPath, DefaultDestinationUsesConfiguredFolderAndSelectedContainer) {
+    const std::filesystem::path directory(L"D:/Configured output");
+    EXPECT_EQ(DefaultEditExportPath(directory, false), directory / L"ExoSnap-export.mkv");
+    EXPECT_EQ(DefaultEditExportPath(directory, true), directory / L"ExoSnap-export.mp4");
+}
+
+TEST(EditExportPath, DefaultDestinationDoesNotAddAnEditSubdirectory) {
+    const std::filesystem::path directory(L"D:/Configured output");
+    const auto destination = DefaultEditExportPath(directory, false);
+    EXPECT_EQ(destination.parent_path(), directory);
+    EXPECT_EQ(destination.filename(), L"ExoSnap-export.mkv");
 }
 
 TEST(EditExportProgress, OnlyAWholePercentChangeIsWorthCrossingTheThreadBoundary) {
@@ -350,7 +648,9 @@ TEST(EditExportAdapterOptions, DestinationLineFollowsTheSelectedSaveMode) {
 
     exporter.setSaveModeKey(QStringLiteral("new"));
     exporter.setContainerKey(QStringLiteral("mp4"));
-    EXPECT_TRUE(exporter.destinationText().contains(QStringLiteral("_edit.mp4")));
+    EXPECT_TRUE(exporter.destinationText().contains(QStringLiteral("Choose a filename and folder")));
+    EXPECT_TRUE(exporter.destinationText().contains(QStringLiteral("mp4")));
+    EXPECT_FALSE(exporter.destinationText().contains(QStringLiteral("_edit")));
     EXPECT_FALSE(exporter.overwriteSelected());
 
     exporter.setSaveModeKey(QStringLiteral("overwrite"));
@@ -367,12 +667,31 @@ TEST(EditExportAdapterOptions, AnUnknownKeyFallsBackToTheShippedDefault) {
     EXPECT_EQ(exporter.saveModeKey(), QStringLiteral("new"));
 }
 
-TEST(EditExportAdapterRun, AClipWithoutAnEditMasterFailsBeforeAnyThreadIsStarted) {
+TEST(EditExportAdapterOptions, MatchSourceIsTheDefaultAndRenderProfilesCannotBeSelected) {
+    EnsureApplication();
+    EditExportAdapter exporter;
+    EXPECT_EQ(exporter.profileKey(), QStringLiteral("match"));
+    const auto profiles = exporter.profileOptions();
+    ASSERT_EQ(profiles.size(), 5);
+    for (const auto& row : profiles) {
+        const auto profile = row.toMap();
+        const auto key = profile.value(QStringLiteral("value")).toString();
+        if (key == QStringLiteral("match")) {
+            EXPECT_TRUE(profile.value(QStringLiteral("selectable")).toBool());
+        } else {
+            EXPECT_FALSE(profile.value(QStringLiteral("selectable")).toBool());
+            EXPECT_FALSE(profile.value(QStringLiteral("reason")).toString().isEmpty());
+            exporter.setProfileKey(key);
+            EXPECT_EQ(exporter.profileKey(), QStringLiteral("match"));
+        }
+    }
+}
+
+TEST(EditExportAdapterRun, AnEmptyWorkspaceFailsBeforeAnyThreadIsStarted) {
     EnsureApplication();
     EditSessionAdapter session;
     EditExportAdapter exporter;
     exporter.setSession(&session);
-    session.setEditContext(MakeContext()); // fixture context: no mkv_master_path
 
     exporter.startExport();
 

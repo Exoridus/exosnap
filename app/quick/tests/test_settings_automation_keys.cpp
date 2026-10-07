@@ -63,6 +63,12 @@ QJsonValue Read(const SettingsAdapter& adapter, const char* key) {
     return json.value(QStringLiteral("values")).toObject().value(QString::fromLatin1(key));
 }
 
+TEST(SettingsAutomationKeys, ObsoleteEditorPreferenceIsNotExposed) {
+    const auto adapter = MakeAdapter();
+    EXPECT_EQ(FindKey(QStringLiteral("app.openEditorWhenFinished")), nullptr);
+    EXPECT_EQ(adapter->metaObject()->indexOfProperty("openEditorWhenFinished"), -1);
+}
+
 TEST(SettingsAutomationKeys, EveryKeyIsUniqueReadableAndDescribed) {
     const std::unique_ptr<SettingsAdapter> adapter = MakeAdapter();
 

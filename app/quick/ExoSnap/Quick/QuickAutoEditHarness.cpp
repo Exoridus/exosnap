@@ -7,6 +7,7 @@
 #include "QuickApplication.h"
 
 #include "models/EditContextFactory.h"
+#include <exosnap/engine/edit_timeline_export.h>
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -128,6 +129,7 @@ bool ParseAutoEditOptions(const QStringList& args, AutoEditOptions* options, QSt
     *options = AutoEditOptions{};
 
     options->media_path = optionValue(args, QStringLiteral("--auto-edit-media"));
+    options->additional_media_path = optionValue(args, QStringLiteral("--auto-edit-add-media"));
     options->report_path = optionValue(args, QStringLiteral("--auto-edit-report"));
 
     const QString duration = optionValue(args, QStringLiteral("--auto-edit-duration"));
@@ -188,6 +190,10 @@ int RunQuickAutoEdit(QCoreApplication& app, QuickApplication& application, QQuic
     }
 
     StageLog log;
+    if (!options.report_path.isEmpty()) {
+        const auto directory = QFileInfo(options.report_path).absolutePath();
+        exporter->setOutputDirectoryProvider([directory]() { return directory; });
+    }
     QJsonObject report;
 
     // ---- open ----------------------------------------------------------
@@ -239,6 +245,16 @@ int RunQuickAutoEdit(QCoreApplication& app, QuickApplication& application, QQuic
     log.record(QStringLiteral("decode.keyframeScan"), snap_ready,
                QStringLiteral("%1 keyframes").arg(session->keyframeTimestamps().size()));
 
+    const qint64 first_duration_ms = session->durationMs();
+    if (!options.additional_media_path.isEmpty()) {
+        auto context = MakeMinimalEditContext(options.additional_media_path);
+        const auto metadata =
+            engine::ProbeEditMedia(std::filesystem::path(options.additional_media_path.toStdWString()));
+        context.duration_seconds = static_cast<double>(metadata.duration_us) / 1000000.0;
+        session->setEditContext(context);
+        session->requestSeek(0);
+        pumpFor(500);
+    }
     const qint64 duration_ms = session->durationMs();
     report.insert(QStringLiteral("durationMs"), duration_ms);
     log.record(QStringLiteral("decode.duration"), duration_ms > 0, QStringLiteral("%1 ms").arg(duration_ms));
@@ -282,6 +298,17 @@ int RunQuickAutoEdit(QCoreApplication& app, QuickApplication& application, QQuic
     log.record(QStringLiteral("playback.pause"), stayed_put && !player->playing(),
                QStringLiteral("position held at %1 ms").arg(session->positionMs()));
 
+    if (!options.additional_media_path.isEmpty()) {
+        session->requestSeek(std::max<qint64>(0, first_duration_ms - 500));
+        pumpFor(250);
+        player->setPlaying(true);
+        const bool crossed = waitFor("hard cut", 5000, 25, [session, first_duration_ms]() {
+            return session->positionMs() >= first_duration_ms + 500;
+        });
+        player->setPlaying(false);
+        log.record(QStringLiteral("playback.hardCut"), crossed, QStringLiteral("crossed the source boundary"));
+    }
+
     // ---- seek ----------------------------------------------------------
     // Three targets across the clip, each verified against the position the
     // session reports back, so a seek that is accepted and then ignored fails.
@@ -311,16 +338,28 @@ int RunQuickAutoEdit(QCoreApplication& app, QuickApplication& application, QQuic
         static_cast<qint64>(std::llround(static_cast<double>(duration_ms) * options.trim_start_fraction));
     const qint64 trim_end =
         static_cast<qint64>(std::llround(static_cast<double>(duration_ms) * options.trim_end_fraction));
-    session->requestTrim(trim_start, trim_end);
-    const bool trimmed = session->trimmed() && session->trimEndMs() > session->trimStartMs();
+    if (options.additional_media_path.isEmpty())
+        session->requestTrim(trim_start, trim_end);
+    else {
+        session->requestSeek(first_duration_ms / 2);
+        session->selectAdjacentClip(-1000000);
+        session->splitSelected();
+    }
+    const bool trimmed = options.additional_media_path.isEmpty()
+                             ? session->trimmed() && session->trimEndMs() > session->trimStartMs()
+                             : session->workspace().clips().size() >= 6;
     report.insert(QStringLiteral("trimStartMs"), session->trimStartMs());
     report.insert(QStringLiteral("trimEndMs"), session->trimEndMs());
-    log.record(QStringLiteral("trim.apply"), trimmed,
-               QStringLiteral("requested %1-%2 ms, snapped to %3-%4 ms")
-                   .arg(trim_start)
-                   .arg(trim_end)
-                   .arg(session->trimStartMs())
-                   .arg(session->trimEndMs()));
+    log.record(options.additional_media_path.isEmpty() ? QStringLiteral("trim.apply") : QStringLiteral("split.apply"),
+               trimmed,
+               options.additional_media_path.isEmpty() ? QStringLiteral("requested %1-%2 ms, snapped to %3-%4 ms")
+                                                             .arg(trim_start)
+                                                             .arg(trim_end)
+                                                             .arg(session->trimStartMs())
+                                                             .arg(session->trimEndMs())
+                                                       : QStringLiteral("split first source at %1 ms; linked clips: %2")
+                                                             .arg(first_duration_ms / 2)
+                                                             .arg(session->workspace().clips().size()));
 
     // ---- layout evidence -----------------------------------------------
     // Captured here, with the clip loaded and the trim applied, and before the

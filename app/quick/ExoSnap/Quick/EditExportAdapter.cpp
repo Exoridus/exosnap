@@ -7,11 +7,16 @@
 #include "models/MarkerSidecar.h"
 #include "services/AtomicFileOps.h"
 
+#include <QDateTime>
 #include <QDir>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QMetaObject>
 #include <QProcess>
+#include <QStandardPaths>
 #include <QVariantMap>
+#include <exosnap/engine/edit_timeline_export.h>
+#include <windows.h>
 
 #include <exosnap/engine/mp4_remuxer.h>
 
@@ -36,20 +41,55 @@ QVariantMap option(const QString& value, const QString& label) {
 
 } // namespace
 
-std::filesystem::path DeriveExportOutputPath(const std::filesystem::path& original_output, bool overwrite,
-                                             bool to_mp4) {
-    if (overwrite)
-        return original_output;
-    const std::wstring extension = to_mp4 ? L".mp4" : L".mkv";
-    return original_output.parent_path() / (original_output.stem().wstring() + L"_edit" + extension);
+std::filesystem::path DefaultEditExportPath(const std::filesystem::path& output_directory, bool to_mp4) {
+    return output_directory / (to_mp4 ? L"ExoSnap-export.mp4" : L"ExoSnap-export.mkv");
 }
-
 bool ShouldPublishExportProgress(float fraction, int last_published_percent) {
     const int percent = fraction <= 0.0f ? 0 : fraction >= 1.0f ? 100 : static_cast<int>(fraction * 100.0f);
     return percent != last_published_percent;
 }
 
 EditExportAdapter::EditExportAdapter(QObject* parent) : QObject(parent) {
+}
+
+QVariantList EditExportAdapter::profileOptions() {
+    QVariantList profiles{option(QStringLiteral("match"), tr("Match source"))};
+    for (const auto& label :
+         {tr("YouTube 1080p"), tr("YouTube 1440p"), tr("YouTube 4K"), tr("Archive / High quality")}) {
+        auto profile = option(label, label);
+        profile[QStringLiteral("selectable")] = false;
+        profile[QStringLiteral("reason")] = tr("Requires render export, which is not available yet.");
+        profiles.push_back(profile);
+    }
+    return profiles;
+}
+
+void EditExportAdapter::setProfileKey(const QString& key) {
+    if (key != QStringLiteral("match") || profile_key_ == key)
+        return;
+    profile_key_ = key;
+    emit optionsChanged();
+}
+
+void EditExportAdapter::chooseDestination() {
+    if (running())
+        return;
+    const QString directory =
+        output_directory_ ? output_directory_() : QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+    QString filter = container_key_ == QStringLiteral("mp4") ? tr("MP4 video (*.mp4)") : tr("Matroska video (*.mkv)");
+    const QString path = QFileDialog::getSaveFileName(
+        nullptr, tr("Export video"),
+        QString::fromStdWString(DefaultEditExportPath(std::filesystem::path(directory.toStdWString()),
+                                                      container_key_ == QStringLiteral("mp4"))
+                                    .wstring()),
+        tr("Matroska video (*.mkv);;MP4 video (*.mp4)"), &filter);
+    if (path.isEmpty())
+        return;
+    setContainerKey(QFileInfo(path).suffix().toLower() == QStringLiteral("mp4") ? QStringLiteral("mp4")
+                                                                                : QStringLiteral("mkv"));
+    chosen_output_ = std::filesystem::path(path.toStdWString());
+    overwrite_confirmed_ = QFileInfo::exists(path);
+    startExport();
 }
 
 EditExportAdapter::~EditExportAdapter() {
@@ -157,9 +197,7 @@ QString EditExportAdapter::destinationText() const {
         return QCoreApplication::translate("EditExportAdapter",
                                            "Lossless stream copy\nReplaces the original recording");
     const QString extension = container_key_ == QStringLiteral("mp4") ? QStringLiteral("mp4") : QStringLiteral("mkv");
-    return QCoreApplication::translate("EditExportAdapter",
-                                       "Lossless stream copy\nNew file beside the original (\xe2\x80\xa6_edit.%1)")
-        .arg(extension);
+    return tr("Lossless stream copy. Choose a filename and folder (%1).").arg(extension);
 }
 
 // "Overwrite original" finishes with an atomic replace, so once it succeeds no
@@ -230,7 +268,6 @@ void EditExportAdapter::startExport() {
     if (running() || session_ == nullptr)
         return;
 
-    const EditContext& context = session_->editContext();
     error_text_.clear();
     destination_failure_ = false;
     progress_percent_ = 0;
@@ -238,7 +275,7 @@ void EditExportAdapter::startExport() {
     emit progressChanged();
     emit resultChanged();
 
-    if (context.mkv_master_path.isEmpty()) {
+    if (session_->workspace().clips().empty()) {
         error_text_ = QCoreApplication::translate("EditExportAdapter", "No edit master available for export.");
         emit resultChanged();
         setState(State::Failed);
@@ -246,25 +283,47 @@ void EditExportAdapter::startExport() {
     }
 
     const bool to_mp4 = container_key_ == QStringLiteral("mp4");
-    const std::filesystem::path master(context.mkv_master_path.toStdWString());
-    const std::filesystem::path output = retry_output_path_.value_or(
-        DeriveExportOutputPath(std::filesystem::path(context.output_path.toStdWString()), overwriteSelected(), to_mp4));
+    const QString directory =
+        output_directory_ ? output_directory_() : QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+    const auto suggested =
+        std::filesystem::path(directory.toStdWString()) /
+        (L"ExoSnap-" + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")).toStdWString() +
+         (to_mp4 ? L".mp4" : L".mkv"));
+    const std::filesystem::path output = retry_output_path_.value_or(chosen_output_.value_or(suggested));
+    std::vector<engine::TimelineExportClip> recipe;
+    std::vector<RecordingMarker> timeline_markers;
+    for (const auto& clip : session_->workspace().clips()) {
+        const auto track = std::find_if(session_->workspace().tracks().begin(), session_->workspace().tracks().end(),
+                                        [&clip](const auto& t) { return t.id == clip.track; });
+        if (track->type != edit::TrackType::Video)
+            continue;
+        const auto* asset = session_->workspace().asset(clip.asset);
+        if (asset->state != edit::AssetState::Available) {
+            error_text_ = tr("The timeline contains unavailable media.");
+            emit resultChanged();
+            setState(State::Failed);
+            return;
+        }
+        recipe.push_back({std::filesystem::path(asset->path), clip.source_in, clip.source_out, clip.start});
+        for (const auto& marker : asset->markers) {
+            const auto source_us = static_cast<int64_t>(marker.time_ms) * 1000;
+            if (source_us < clip.source_in || source_us >= clip.source_out)
+                continue;
+            auto retimed = marker;
+            retimed.time_ms = static_cast<uint64_t>((clip.start + source_us - clip.source_in) / 1000);
+            timeline_markers.push_back(std::move(retimed));
+        }
+    }
+    if (QFileInfo::exists(QString::fromStdWString(output.wstring())) && !overwrite_confirmed_) {
+        error_text_ = tr("Choose a destination and confirm before replacing an existing file.");
+        emit resultChanged();
+        setState(State::Failed);
+        return;
+    }
+    const bool replace_existing = overwrite_confirmed_;
+    overwrite_confirmed_ = false;
     retry_output_path_.reset();
-
-    exosnap::engine::TrimRange trim;
-    trim.start_us = session_->trimStartUs();
-    trim.end_us = session_->trimEndUs();
-
-    // Markers ride along as a retimed JSON sidecar -- never as container
-    // chapters. Planned here, on the GUI thread, so the export thread races
-    // nothing.
-    const qint64 window_start_ms = trim.start_us != exosnap::engine::TrimRange::kNoTimestamp ? trim.start_us / 1000 : 0;
-    const qint64 window_end_ms = trim.end_us != exosnap::engine::TrimRange::kNoTimestamp
-                                     ? trim.end_us / 1000
-                                     : std::numeric_limits<qint64>::max();
-    MarkerExportPlan marker_plan =
-        PlanMarkerSidecarForExport(output, RetimeMarkersForTrim(session_->markers(), window_start_ms, window_end_ms));
-
+    MarkerExportPlan marker_plan = PlanMarkerSidecarForExport(output, timeline_markers);
     output_path_ = output;
     emit resultChanged();
 
@@ -276,54 +335,58 @@ void EditExportAdapter::startExport() {
     export_cancel_.store(false);
     setState(State::Running);
 
-    export_thread_ = std::thread([this, master, output, to_mp4, trim, marker_plan = std::move(marker_plan)]() {
-        std::filesystem::path temp_output = output;
-        temp_output += L".tmp";
+    export_thread_ = std::thread(
+        [this, recipe = std::move(recipe), output, to_mp4, replace_existing, marker_plan = std::move(marker_plan)]() {
+            const auto temp_output = MakeDisposableSiblingStagingPath(output);
 
-        auto progress_cb = [this](float fraction) -> bool {
-            if (export_cancel_.load())
-                return false;
-            if (!ShouldPublishExportProgress(fraction, last_published_percent_))
+            auto progress_cb = [this](float fraction) -> bool {
+                if (export_cancel_.load())
+                    return false;
+                if (!ShouldPublishExportProgress(fraction, last_published_percent_))
+                    return true;
+                const int percent = fraction <= 0.0f ? 0 : fraction >= 1.0f ? 100 : static_cast<int>(fraction * 100.0f);
+                last_published_percent_ = percent;
+                QMetaObject::invokeMethod(this, [this, percent]() { publishProgress(percent); }, Qt::QueuedConnection);
                 return true;
-            const int percent = fraction <= 0.0f ? 0 : fraction >= 1.0f ? 100 : static_cast<int>(fraction * 100.0f);
-            last_published_percent_ = percent;
-            QMetaObject::invokeMethod(this, [this, percent]() { publishProgress(percent); }, Qt::QueuedConnection);
-            return true;
-        };
+            };
 
-        exosnap::engine::RemuxResult result =
-            to_mp4 ? exosnap::engine::RemuxToProgressiveMp4(master, temp_output, progress_cb, trim)
-                   : exosnap::engine::RemuxToMkv(master, temp_output, progress_cb, trim);
+            exosnap::engine::RemuxResult result =
+                engine::ExportTimelineStreamCopy(recipe, temp_output, to_mp4, progress_cb);
+            bool ok = result.success;
+            std::string error = result.message;
 
-        bool ok = result.success;
-        std::string error = result.message;
-
-        if (ok) {
-            // Atomic replace: rename temp -> final (same volume = atomic on NTFS).
-            std::error_code ec;
-            std::filesystem::rename(temp_output, output, ec);
-            if (ec) {
-                ok = false;
-                error = "Failed to save output file: " + ec.message();
+            if (ok) {
+                std::error_code ec;
+                if (replace_existing) {
+                    const auto error_code = AtomicReplaceInPlace(temp_output, output);
+                    if (error_code)
+                        ec = std::error_code(static_cast<int>(error_code), std::system_category());
+                } else {
+                    if (!MoveFileExW(temp_output.c_str(), output.c_str(), MOVEFILE_WRITE_THROUGH))
+                        ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+                }
+                if (ec) {
+                    ok = false;
+                    error = "Failed to save output file: " + ec.message();
+                    if (const std::string left = exosnap::DescribeFailedStagingRemoval(temp_output); !left.empty())
+                        error += " (" + left + ")";
+                }
+            } else {
                 if (const std::string left = exosnap::DescribeFailedStagingRemoval(temp_output); !left.empty())
                     error += " (" + left + ")";
             }
-        } else {
-            if (const std::string left = exosnap::DescribeFailedStagingRemoval(temp_output); !left.empty())
-                error += " (" + left + ")";
-        }
 
-        if (ok)
-            ApplyMarkerExportPlan(marker_plan);
+            if (ok)
+                ApplyMarkerExportPlan(marker_plan);
 
-        const bool cancelled = export_cancel_.load();
-        QMetaObject::invokeMethod(
-            this,
-            [this, ok, error, output, cancelled]() {
-                finishRun(ok, QString::fromStdString(error), QString::fromStdWString(output.wstring()), cancelled);
-            },
-            Qt::QueuedConnection);
-    });
+            const bool cancelled = export_cancel_.load();
+            QMetaObject::invokeMethod(
+                this,
+                [this, ok, error, output, cancelled]() {
+                    finishRun(ok, QString::fromStdString(error), QString::fromStdWString(output.wstring()), cancelled);
+                },
+                Qt::QueuedConnection);
+        });
 }
 
 // Runs on the GUI thread once the export thread has posted its result. The join
@@ -356,7 +419,8 @@ void EditExportAdapter::finishRun(bool ok, const QString& error, const QString& 
         return;
     }
 
-    error_text_ = error.isEmpty() ? QCoreApplication::translate("EditExportAdapter", "Unknown error") : error;
+    error_text_ = error.isEmpty() ? QCoreApplication::translate("EditExportAdapter", "Unknown error")
+                                  : EditExportAdapter::tr("Export could not complete: %1").arg(error);
     const QString lower_error = error_text_.toLower();
     destination_failure_ =
         lower_error.contains(QStringLiteral("save output")) || lower_error.contains(QStringLiteral("permission")) ||

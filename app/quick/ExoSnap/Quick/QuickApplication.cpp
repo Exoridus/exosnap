@@ -909,12 +909,6 @@ void QuickApplication::initializeRecordWorkflow() {
             // capture can send anything, so only there is the action offered.
             presentRecordingFailure(*failure, crash_capture::IsActive());
         }
-        // "Open editor when finished" (PersistedAppSettings): the overlay opening
-        // by itself IS the post-recording feedback. The Widgets shell drove this
-        // off its SAVED chrome transition; here the result callback is the same
-        // edge, and openEditorForCurrentRecording() re-checks every gate.
-        if (result.succeeded && settings_.open_editor_when_finished)
-            openEditorForCurrentRecording();
     });
     // A toast, not the page notice. The banner above the Preview Surface is for
     // UNRESOLVED conditions; a frame that has been written is a confirmation, and
@@ -3545,6 +3539,17 @@ void QuickApplication::initializeEditArea() {
     edit_timeline_adapter_.setSession(&edit_session_adapter_);
     edit_player_adapter_.setSession(&edit_session_adapter_);
     edit_export_adapter_.setSession(&edit_session_adapter_);
+    edit_export_adapter_.setOutputDirectoryProvider(
+        [this]() { return QString::fromStdWString(live_config_.output.output_folder.wstring()); });
+    QObject::connect(&edit_session_adapter_, &EditSessionAdapter::historyRequested, &edit_session_adapter_,
+                     [this](const QString& path, qint64 at_ms) {
+                         const auto* recording = FindRecordingByPath(
+                             path, record_view_model_.current_completed_recording, record_view_model_.last_succeeded,
+                             record_view_model_.recent_recordings);
+                         if (recording) {
+                             edit_session_adapter_.setEditContext(MakeEditContext(*recording), at_ms);
+                         }
+                     });
 }
 
 // ---------------------------------------------------------------------------
@@ -3929,8 +3934,9 @@ namespace {
 // The nav labels the elevated relaunch hands across, in both
 // directions. One table, so the page a relaunch is asked for and the page it
 // lands on cannot drift apart.
-constexpr std::array<std::pair<const char*, ShellAdapter::Page>, 5> kRelaunchNavLabels{{
+constexpr std::array<std::pair<const char*, ShellAdapter::Page>, 6> kRelaunchNavLabels{{
     {"Record", ShellAdapter::RecordPage},
+    {"Edit", ShellAdapter::EditPage},
     {"Settings", ShellAdapter::SettingsPage},
     {"Diagnostics", ShellAdapter::DiagnosticsPage},
     {"Logs", ShellAdapter::LogsPage},
@@ -4706,7 +4712,11 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
         if (record_view_model_.last_succeeded && record_view_model_.current_completed_recording.file_path == path) {
             openEditorForCurrentRecording();
         } else if (!path.isEmpty()) {
-            edit_session_adapter_.setEditContext(MakeMinimalEditContext(path));
+            const auto* recording =
+                FindRecordingByPath(path, record_view_model_.current_completed_recording,
+                                    record_view_model_.last_succeeded, record_view_model_.recent_recordings);
+            edit_session_adapter_.setEditContext(recording ? MakeEditContext(*recording)
+                                                           : MakeMinimalEditContext(path));
         }
         break;
     case NotificationAction::OpenFolder: {
@@ -4813,11 +4823,6 @@ void QuickApplication::requestElevatedRelaunch() {
 void QuickApplication::publishRecordingResultNotification(const UiRecordingResult& result) {
     notifications::NotificationEvent event;
     if (result.succeeded) {
-        // "Open editor when finished" makes the editor opening itself the
-        // post-recording feedback; a toast whose Edit action leads to the very
-        // surface already on screen would be a redundant second path there.
-        if (settings_.open_editor_when_finished)
-            return;
         event.type = notifications::NotificationType::Saved;
         event.title = QCoreApplication::translate("QuickApplication", "Recording saved");
         // The name, not the path. A full path is a single unbreakable token --
@@ -5237,8 +5242,6 @@ void QuickApplication::wireTaskbarProgress() {
     });
     QObject::connect(&edit_export_adapter_, &EditExportAdapter::exportCompleted, &edit_export_adapter_,
                      [this](const QString& output_path) {
-                         if (shell_adapter_.editSurfaceVisible())
-                             return;
                          notifications::NotificationEvent event;
                          event.type = notifications::NotificationType::Saved;
                          event.title = QCoreApplication::translate("QuickApplication", "Export complete");
@@ -5249,8 +5252,6 @@ void QuickApplication::wireTaskbarProgress() {
                      });
     QObject::connect(&edit_export_adapter_, &EditExportAdapter::exportFailed, &edit_export_adapter_,
                      [this](const QString& error) {
-                         if (shell_adapter_.editSurfaceVisible())
-                             return;
                          notifications::NotificationEvent event;
                          event.type = notifications::NotificationType::UnexpectedStop;
                          event.title = QCoreApplication::translate("QuickApplication", "Export failed");
@@ -5361,14 +5362,6 @@ void QuickApplication::flushPendingPersists() {
         window_geometry_->flush();
 }
 
-// The single production entry point from Record into the Edit surface. Both
-// triggers -- the user pressing Edit on the result row, and the automatic open
-// when "Open editor when finished" is on -- route through here, so the gates
-// below are stated once instead of at each call site.
-//
-// Handing the session adapter a context IS the request to show the overlay
-// (AppShell binds editOverlayOpen to it), so every reason NOT to show it has to
-// be decided before setEditContext, not after.
 void QuickApplication::openEditorForCurrentRecording() {
     if (!canOpenEditorForCurrentRecording())
         return;
@@ -5381,17 +5374,10 @@ void QuickApplication::openEditorForCurrentRecording() {
 bool QuickApplication::canOpenEditorForCurrentRecording() const {
     if (!record_view_model_.last_succeeded)
         return false;
-    // A live capture owns the Record surface; opening the editor over a running
-    // recording or a countdown makes no sense, and the automatic open would
-    // otherwise fire on a segment boundary of a still-running split session.
+    // A live capture owns the Record surface until the entire session ends.
     if (!AllowsEditorEntry(record_view_model_.state))
         return false;
-    // A running export must never be clobbered by a new clip: the panel state,
-    // the trim range and the remux thread all belong to the clip currently open.
-    if (edit_export_adapter_.running())
-        return false;
-    // Split recordings have no single MKV edit master (CanOpenInEditor), and a
-    // file that no longer exists would open an empty player.
+    // A recording needs at least one surviving segment.
     return CanOpenInEditor(record_view_model_.current_completed_recording);
 }
 

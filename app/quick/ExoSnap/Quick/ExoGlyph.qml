@@ -70,7 +70,14 @@ Item {
         Refresh,
         Run,
         Send,
-        ArrowRight
+        ArrowRight,
+        Undo,
+        Redo,
+        Trash,
+        CloseGap,
+        Magnet,
+        JumpStart,
+        StepBack
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -210,7 +217,14 @@ Item {
         // leads somewhere else. Back (above) is this same head shape, pointing
         // left, on a bent shaft; this one mirrors that head onto a straight
         // shaft, so the two read as one family.
-        "M4 9H14 M10 5L14 9L10 13"
+        "M4 9H14 M10 5L14 9L10 13",
+        "M6 3L2.5 6.5L6 10 M3 6.5H10.5A4 4 0 0 1 10.5 14.5H7",
+        "M12 3L15.5 6.5L12 10 M15 6.5H7.5A4 4 0 0 0 7.5 14.5H11",
+        "M3 5H15 M6 5V2.5H12V5 M4.5 5L5.5 15.5H12.5L13.5 5 M7.5 8V12.5 M10.5 8V12.5",
+        "M2 4H5V14H2 M16 4H13V14H16 M5 9H13 M7 7L9 9L7 11 M11 7L9 9L11 11",
+        "M3 3V10A6 6 0 0 0 15 10V3H11.5V10A2.5 2.5 0 0 1 6.5 10V3Z M3 6H6.5 M11.5 6H15",
+        "M3.5 3.5V14.5 M14 3.5L6 9L14 14.5Z",
+        "M11.5 3.5L4 9L11.5 14.5 M15 3.5V14.5"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.

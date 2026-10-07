@@ -143,7 +143,7 @@ TEST_F(CompletedResultTest, CanOpenInEditor_FalseForMissingFile) {
     EXPECT_FALSE(CanOpenInEditor(rec));
 }
 
-TEST_F(CompletedResultTest, CanOpenInEditor_FalseForMultiSegment_EvenWhenFileExists) {
+TEST_F(CompletedResultTest, CanOpenInEditor_TrueForMultiSegmentWithSurvivingMedia) {
     // Split recordings have no single MKV edit master — the Edit affordances
     // (result button AND Recent-menu action) must both be disabled.
     QString path = createDummyFile(QStringLiteral("split.mkv"));
@@ -159,7 +159,7 @@ TEST_F(CompletedResultTest, CanOpenInEditor_FalseForMultiSegment_EvenWhenFileExi
     rec.segments = {a, b};
     ASSERT_TRUE(rec.isMultiSegment());
     ASSERT_TRUE(rec.fileExists());
-    EXPECT_FALSE(CanOpenInEditor(rec));
+    EXPECT_TRUE(CanOpenInEditor(rec));
 }
 
 TEST_F(CompletedResultTest, CanOpenInEditor_TrueForSingleSegmentList) {

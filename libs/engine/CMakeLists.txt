@@ -24,6 +24,8 @@ if(NOT EXISTS "${_nvenc_header}")
         src/loopback_meter_service.cpp
         include/exosnap/engine/mp4_remuxer.h
         src/mp4_remuxer.cpp
+        include/exosnap/engine/edit_timeline_export.h
+        src/edit_timeline_export.cpp
     )
 
     target_include_directories(exosnap_engine PUBLIC include)
@@ -257,6 +259,13 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_remux_trim PRIVATE src)
 
+    exosnap_add_gtest(
+        NAME test_edit_timeline_export
+        TEST_PREFIX engine.
+        SOURCES tests/test_edit_timeline_export.cpp
+        LIBRARIES exosnap_engine FFmpeg::mux
+    )
+
     return()
 endif()
 
@@ -366,6 +375,8 @@ add_library(exosnap_engine STATIC
     src/loopback_meter_service.cpp
     include/exosnap/engine/mp4_remuxer.h
     src/mp4_remuxer.cpp
+    include/exosnap/engine/edit_timeline_export.h
+    src/edit_timeline_export.cpp
     include/exosnap/engine/edit_player_engine.h
     src/edit_player_engine.cpp
     src/edit_player_hw_decode.h
@@ -1790,3 +1801,10 @@ exosnap_add_gtest(
 )
 target_include_directories(test_fake_audio_capture_source
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+
+exosnap_add_gtest(
+    NAME test_edit_timeline_export
+    TEST_PREFIX engine.
+    SOURCES tests/test_edit_timeline_export.cpp
+    LIBRARIES exosnap_engine FFmpeg::mux
+)

@@ -63,6 +63,8 @@ class EditTimelineAdapter : public QObject {
     // spelling here is unresolvable for qmllint.
     Q_PROPERTY(QAbstractItemModel* tileModel READ tileModel CONSTANT FINAL)
     Q_PROPERTY(QAbstractItemModel* markerModel READ markerModel CONSTANT FINAL)
+    Q_PROPERTY(QString sourcePath READ sourcePath NOTIFY tileProgressChanged FINAL)
+    Q_PROPERTY(QString posterSource READ posterSource NOTIFY tileProgressChanged FINAL)
 
     Q_PROPERTY(int trackWidth READ trackWidth WRITE setTrackWidth NOTIFY trackWidthChanged FINAL)
     Q_PROPERTY(int tileWidth READ tileWidth NOTIFY layoutChanged FINAL)
@@ -101,6 +103,10 @@ class EditTimelineAdapter : public QObject {
     void setSession(EditSessionAdapter* session);
 
     [[nodiscard]] QAbstractItemModel* tileModel() noexcept;
+    [[nodiscard]] const QString& sourcePath() const {
+        return clip_path_;
+    }
+    [[nodiscard]] QString posterSource() const;
     [[nodiscard]] QAbstractItemModel* markerModel() noexcept;
 
     [[nodiscard]] int trackWidth() const noexcept;

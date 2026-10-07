@@ -93,7 +93,7 @@ TEST_F(TranslationTest, EmbeddedGermanCatalogueCoversProductSurfaces) {
     ASSERT_TRUE(translator.load(QStringLiteral(":/exosnap/i18n/exosnap_de.qm")));
     const char* contexts[] = {"RecordPage",       "SettingsAppearanceSection",
                               "DeviceAdapter",    "LogsPage",
-                              "AboutPage",        "EditOverlay",
+                              "AboutPage",        "EditPage",
                               "RecoveryOverlay",  "NotificationHub",
                               "OverlayRecording", "exosnap::quick::TrayAdapter",
                               "UpdaterController"};
@@ -105,6 +105,10 @@ TEST_F(TranslationTest, EmbeddedGermanCatalogueCoversProductSurfaces) {
     ASSERT_TRUE(QCoreApplication::installTranslator(&translator));
     EXPECT_EQ(QCoreApplication::translate("SettingsAppearanceSection", "Language"), QStringLiteral("Sprache"));
     EXPECT_EQ(QCoreApplication::translate("SettingsAppearanceSection", "Appearance"), QStringLiteral("Darstellung"));
+    EXPECT_EQ(QCoreApplication::translate("EditPage", "Snapping"), QStringLiteral("Einrasten"));
+    EXPECT_EQ(QCoreApplication::translate("EditPage", "Export profile"), QStringLiteral("Exportprofil"));
+    EXPECT_EQ(QCoreApplication::translate("EditPage", "Preview volume (muted)"),
+              QStringLiteral("Vorschaulautstärke (stumm)"));
     EXPECT_EQ(QCoreApplication::translate("UnknownDiagnostic", "nvenc_submit_failed"),
               QStringLiteral("nvenc_submit_failed"));
     QCoreApplication::removeTranslator(&translator);

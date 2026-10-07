@@ -95,12 +95,6 @@ PersistedAppSettings AppSettingsStore::Load() const {
             .toString();
     settings.endGroup();
 
-    settings.beginGroup(QStringLiteral("editor"));
-    // "Open editor when finished" toggle (default ON).
-    // Pre-1.0: no migration; missing key defaults to true.
-    persisted.open_editor_when_finished = settings.value(QStringLiteral("open_editor_when_finished"), true).toBool();
-    settings.endGroup();
-
     settings.beginGroup(QStringLiteral("presence"));
     // QUICK-PILL-R1: interactive quick-control pill toggle (default OFF).
     // Pre-1.0: no migration; missing key defaults to false.
@@ -258,10 +252,6 @@ bool AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.setValue(QStringLiteral("diagnostics_overlay_preset"), settings_snapshot.diagnostics_overlay_preset);
     settings.setValue(QStringLiteral("diagnostics_overlay_custom_elements"),
                       settings_snapshot.diagnostics_overlay_custom_elements);
-    settings.endGroup();
-
-    settings.beginGroup(QStringLiteral("editor"));
-    settings.setValue(QStringLiteral("open_editor_when_finished"), settings_snapshot.open_editor_when_finished);
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("presence"));

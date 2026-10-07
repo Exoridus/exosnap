@@ -10,6 +10,7 @@
 
 #include <exosnap/engine/edit_player_session.h>
 
+#include "models/EditWorkspace.h"
 #include <memory>
 #include <mutex>
 
@@ -66,6 +67,7 @@ class EditPlayerAdapter : public QObject {
     // RecordPreviewAdapter::surfaceVisible has, and for the same reason: the
     // FACT is the shell's, the POLICY is here.
     Q_PROPERTY(bool surfaceVisible READ surfaceVisible WRITE setSurfaceVisible NOTIFY surfaceVisibleChanged FINAL)
+    Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY volumeChanged FINAL)
 
   public:
     explicit EditPlayerAdapter(QObject* parent = nullptr);
@@ -89,6 +91,10 @@ class EditPlayerAdapter : public QObject {
     // coming back leaves the preview paused where it was. Resuming is the user's
     // own action, so there is deliberately nothing to do when this turns true.
     void setSurfaceVisible(bool visible);
+    double volume() const {
+        return volume_;
+    }
+    void setVolume(double volume);
 
     Q_INVOKABLE void togglePlay();
     Q_INVOKABLE void setPlaying(bool playing);
@@ -109,6 +115,7 @@ class EditPlayerAdapter : public QObject {
     void scrubbingChanged();
     void placeholderTextChanged();
     void surfaceVisibleChanged();
+    void volumeChanged();
 
   private:
     void openClip(const QString& master_path, qint64 duration_ms);
@@ -131,6 +138,8 @@ class EditPlayerAdapter : public QObject {
     // True until the shell says otherwise: a session that is handed a clip is
     // handed it on Record, which is the page the workspace is visible on.
     bool surface_visible_ = true;
+    double volume_ = 1.0;
+    std::vector<edit::Clip> timeline_clips_;
 };
 
 } // namespace exosnap::quick

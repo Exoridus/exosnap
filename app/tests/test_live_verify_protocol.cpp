@@ -1472,9 +1472,10 @@ TEST(LiveVerifyDispatcher, ParameterValidationRunsBeforeTheIntent) {
         ErrorCode(dispatcher.Dispatch(RequestV2(QStringLiteral("record.selectTarget"),
                                                 QJsonObject{{QStringLiteral("kind"), QStringLiteral("everything")}}))),
         QString::fromLatin1(error_code::kInvalidParams));
-    EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(QStringLiteral("ui.navigate"),
-                                                      QJsonObject{{QStringLiteral("page"), QStringLiteral("edit")}}))),
-              QString::fromLatin1(error_code::kInvalidParams));
+    EXPECT_EQ(
+        ErrorCode(dispatcher.Dispatch(RequestV2(
+            QStringLiteral("ui.navigate"), QJsonObject{{QStringLiteral("page"), QStringLiteral("unknown-page")}}))),
+        QString::fromLatin1(error_code::kInvalidParams));
     EXPECT_EQ(
         ErrorCode(dispatcher.Dispatch(RequestV2(
             QStringLiteral("edit.seek"), QJsonObject{{QStringLiteral("positionMs"), QStringLiteral("halfway")}}))),
@@ -1593,12 +1594,16 @@ TEST(LiveVerifyDispatcher, NavigationAnswersTheResultingPageAndSettlesInTheSameR
     LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
     ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
 
-    const QJsonObject response = dispatcher.Dispatch(
-        RequestV2(QStringLiteral("ui.navigate"), QJsonObject{{QStringLiteral("page"), QStringLiteral("settings")}}));
-    ASSERT_TRUE(Ok(response));
-    EXPECT_TRUE(response.value(QStringLiteral("settled")).toBool());
-    EXPECT_EQ(response.value(QStringLiteral("result")).toObject().value(QStringLiteral("page")).toString(),
-              QStringLiteral("settings"));
+    for (const char* destination : {page_name::kSettings, page_name::kEdit}) {
+        const QString page = QString::fromLatin1(destination);
+        SCOPED_TRACE(page.toStdString());
+        const QJsonObject response =
+            dispatcher.Dispatch(RequestV2(QStringLiteral("ui.navigate"), QJsonObject{{QStringLiteral("page"), page}}));
+        ASSERT_TRUE(Ok(response));
+        EXPECT_TRUE(response.value(QStringLiteral("settled")).toBool());
+        EXPECT_EQ(response.value(QStringLiteral("result")).toObject().value(QStringLiteral("page")).toString(), page);
+        EXPECT_EQ(source.calls.last(), QStringLiteral("navigate:%1").arg(page));
+    }
 }
 
 TEST(LiveVerifyDispatcher, LegacyLogsNavigationNormalizesToDiagnosticsLogs) {

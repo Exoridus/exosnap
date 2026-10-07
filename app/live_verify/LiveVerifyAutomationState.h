@@ -28,6 +28,7 @@ namespace exosnap::live_verify {
 // enumerator order of a C++ enum nobody thought of as public.
 namespace page_name {
 inline constexpr const char* kRecord = "record";
+inline constexpr const char* kEdit = "edit";
 inline constexpr const char* kSettings = "settings";
 inline constexpr const char* kDiagnostics = "diagnostics";
 // Legacy spelling. Accepted as an input alias for "diagnostics + logs"

@@ -300,8 +300,6 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(bool minimizeToTray READ minimizeToTray WRITE setMinimizeToTray NOTIFY appSettingsChanged FINAL)
     Q_PROPERTY(bool hideWindowFromCapture READ hideWindowFromCapture WRITE setHideWindowFromCapture NOTIFY
                    appSettingsChanged FINAL)
-    Q_PROPERTY(bool openEditorWhenFinished READ openEditorWhenFinished WRITE setOpenEditorWhenFinished NOTIFY
-                   appSettingsChanged FINAL)
 
     // ---- Appearance ---------------------------------------------------------
     Q_PROPERTY(QVariantList languageOptions READ languageOptions CONSTANT FINAL)
@@ -598,7 +596,6 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] bool showQuickControls() const noexcept;
     [[nodiscard]] bool minimizeToTray() const noexcept;
     [[nodiscard]] bool hideWindowFromCapture() const noexcept;
-    [[nodiscard]] bool openEditorWhenFinished() const noexcept;
 
     [[nodiscard]] QVariantList recordingOverlayPresetOptions() const;
     [[nodiscard]] QString recordingOverlayPreset() const;
@@ -765,7 +762,6 @@ class SettingsAdapter : public QObject {
     void setShowQuickControls(bool value);
     void setMinimizeToTray(bool value);
     void setHideWindowFromCapture(bool value);
-    void setOpenEditorWhenFinished(bool value);
     void setUiLanguage(const QString& value);
     void setAppearanceId(const QString& value);
     void setAccentId(const QString& value);

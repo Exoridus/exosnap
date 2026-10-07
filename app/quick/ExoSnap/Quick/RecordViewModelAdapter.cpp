@@ -935,7 +935,15 @@ void RecordViewModelAdapter::rebuildRecentRecordings() {
             rows.push_back(QVariantMap{
                 {QStringLiteral("path"), recording.file_path},
                 {QStringLiteral("label"), recording.fileName()},
-                {QStringLiteral("available"), recording.fileExists()},
+                {QStringLiteral("available"), CanOpenInEditor(recording)},
+                {QStringLiteral("durationMs"), static_cast<qint64>(recording.totalDurationSeconds() * 1000)},
+                {QStringLiteral("metadata"),
+                 QStringLiteral("%1 x %2 / %3 fps")
+                     .arg(recording.output_width)
+                     .arg(recording.output_height)
+                     .arg(recording.frame_rate_den
+                              ? static_cast<double>(recording.frame_rate_num) / recording.frame_rate_den
+                              : 0)},
                 {QStringLiteral("completedAt"), recording.completed_at.isValid()
                                                     ? recording.completed_at.toString(QStringLiteral("HH:mm"))
                                                     : QString{}},
