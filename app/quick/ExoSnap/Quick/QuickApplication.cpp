@@ -1388,20 +1388,6 @@ void QuickApplication::wireRecordCommands() {
                      &record_view_model_adapter_, [this]() { recording_coordinator_->CaptureFrame(); });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::addMarkerRequested,
                      &record_view_model_adapter_, [this]() { recording_coordinator_->AddMarker(); });
-    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::openEditorRequested,
-                     &record_view_model_adapter_, [this]() { openEditorForCurrentRecording(); });
-    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::revealRecordingRequested,
-                     &record_view_model_adapter_, [this]() {
-                         const QString path = record_view_model_.current_completed_recording.file_path;
-                         if (path.isEmpty())
-                             return;
-                         // "explorer /select,<path>" opens the containing folder AND
-                         // highlights the file, so it strictly contains what a plain
-                         // "open the output folder" would do. Same call the export
-                         // panel makes, for the same reason.
-                         QProcess::startDetached(QStringLiteral("explorer"),
-                                                 {QStringLiteral("/select,"), QDir::toNativeSeparators(path)});
-                     });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::openRecentRequested,
                      &record_view_model_adapter_, [](const QString& path) {
                          if (!path.isEmpty())

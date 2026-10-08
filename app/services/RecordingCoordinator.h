@@ -303,11 +303,11 @@ class RecordingCoordinator {
     void PauseRecording();
     void ResumeRecording();
 
-    // Leaves a finished or failed run behind and returns the transport to its
-    // idle arrangement. Nothing is undone: the recording stays exactly where it
-    // was written, and the manifest and the result are untouched. Until this
-    // existed, the only way out of Completed was to start the next recording,
-    // which made "I am done looking at this" and "record again" the same button.
+    // Leaves a finished or failed run behind and returns to Ready (or Blocked
+    // when the loaded capabilities are invalid). Nothing is undone: the
+    // recording stays exactly where it was written, and the manifest and the
+    // result are untouched. The Record transport only asks for it after a
+    // failure; a successful Completed run is already presented as idle.
     //
     // A no-op in every other state, so a stray call can never interrupt a run.
     void DismissResult();

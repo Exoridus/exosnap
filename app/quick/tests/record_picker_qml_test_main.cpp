@@ -75,8 +75,10 @@ class RecordPickerTestDriver final : public QObject {
         adapter_.setSource(&source_);
     }
 
-    // "ready", "recording", "paused", or anything else for the view model's initial
-    // LoadingCapabilities state.
+    // "ready", "recording", "paused", "completed" (a successful run), "failed",
+    // or anything else for the view model's initial LoadingCapabilities state.
+    // The finished states carry the run's duration, so a test can tell whether
+    // the transport still shows it.
     Q_INVOKABLE void setRecordingState(const QString& state) {
         if (state == QLatin1String("ready"))
             source_.state = exosnap::UiRecordingState::Ready;
@@ -84,9 +86,17 @@ class RecordPickerTestDriver final : public QObject {
             source_.state = exosnap::UiRecordingState::Recording;
         else if (state == QLatin1String("paused"))
             source_.state = exosnap::UiRecordingState::Paused;
+        else if (state == QLatin1String("completed"))
+            source_.state = exosnap::UiRecordingState::Completed;
+        else if (state == QLatin1String("failed"))
+            source_.state = exosnap::UiRecordingState::Failed;
         else
             source_.state = exosnap::UiRecordingState::LoadingCapabilities;
-        source_.elapsed_text = state == QLatin1String("paused") ? L"12:34" : L"";
+        source_.last_succeeded = state == QLatin1String("completed");
+        source_.elapsed_text = state == QLatin1String("paused")      ? L"12:34"
+                               : state == QLatin1String("completed") ? L"1:23"
+                               : state == QLatin1String("failed")    ? L"0:42"
+                                                                     : L"";
         adapter_.setSource(&source_);
     }
 

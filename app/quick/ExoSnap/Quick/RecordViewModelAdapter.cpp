@@ -34,6 +34,16 @@ QString clockText(const QString& value) {
     return QStringLiteral("00:00:00");
 }
 
+// Whether the transport presents itself as ready for the next recording. A
+// successful Completed result stays a distinct engine state (its recording
+// identity feeds History, the Saved notification and the shell's Saved dwell),
+// but the Record transport has nothing left to ask of the user about it. A
+// failed run is not idle: its failure stays on screen until it is dismissed.
+bool IsIdleTransport(const RecordViewModel& source) {
+    return source.state == UiRecordingState::Ready ||
+           (source.state == UiRecordingState::Completed && source.last_succeeded);
+}
+
 bool hasRow(const capability::AudioUiState& state, exosnap::engine::AudioSourceKind kind) {
     return std::any_of(state.source_rows.begin(), state.source_rows.end(), [kind](const auto& row) {
         return row.kind == kind || (kind == exosnap::engine::AudioSourceKind::Sys &&
@@ -156,8 +166,11 @@ QString RecordViewModelAdapter::stateTone() const {
     case UiRecordingState::Blocked:
     case UiRecordingState::Failed:
         return QStringLiteral("error");
+    // A successful recording is announced by the Saved notification and the
+    // shell's brief Saved dwell. The readout itself goes straight back to idle,
+    // because the transport beside it already offers the next recording.
     case UiRecordingState::Completed:
-        return source_->last_succeeded ? QStringLiteral("success") : QStringLiteral("error");
+        return source_->last_succeeded ? QStringLiteral("neutral") : QStringLiteral("error");
     default:
         return QStringLiteral("neutral");
     }
@@ -304,11 +317,6 @@ bool RecordViewModelAdapter::blocked() const noexcept {
 
 bool RecordViewModelAdapter::failed() const noexcept {
     return source_ != nullptr && source_->state == UiRecordingState::Failed;
-}
-
-bool RecordViewModelAdapter::resultPending() const noexcept {
-    return source_ != nullptr &&
-           (source_->state == UiRecordingState::Completed || source_->state == UiRecordingState::Failed);
 }
 
 const QVariantList& RecordViewModelAdapter::targetOptions() const noexcept {
@@ -607,8 +615,7 @@ double RecordViewModelAdapter::countdownProgress() const noexcept {
 }
 
 bool RecordViewModelAdapter::captureFrameEnabled() const noexcept {
-    return recording() || paused() ||
-           (source_ != nullptr && source_->state == UiRecordingState::Ready && preview_frame_ready_);
+    return recording() || paused() || (source_ != nullptr && IsIdleTransport(*source_) && preview_frame_ready_);
 }
 
 bool RecordViewModelAdapter::splitEnabled() const noexcept {
@@ -623,11 +630,6 @@ QString RecordViewModelAdapter::resultText() const {
                                                         : wide(source_->result_destination_text);
     return source_->result_user_message.empty() ? wide(source_->result_error_detail)
                                                 : wide(source_->result_user_message);
-}
-
-bool RecordViewModelAdapter::canOpenEditor() const noexcept {
-    return source_ != nullptr && source_->last_succeeded && AllowsEditorEntry(source_->state) &&
-           CanOpenInEditor(source_->current_completed_recording);
 }
 
 void RecordViewModelAdapter::setSource(const RecordViewModel* source) {
@@ -734,8 +736,13 @@ void RecordViewModelAdapter::setMeters(double system, double app, double microph
 
 void RecordViewModelAdapter::synchronize() {
     const QString previous_state_text = state_text_;
-    const QString state_text = source_ != nullptr ? wide(source_->state_text) : QString{};
-    const QString elapsed_text = source_ != nullptr ? wide(source_->elapsed_text) : QString{};
+    const bool idle_transport = source_ != nullptr && IsIdleTransport(*source_);
+    const QString state_text = source_ == nullptr ? QString{}
+                               : idle_transport   ? QCoreApplication::translate("RecordingState", "Ready")
+                                                  : wide(source_->state_text);
+    // The finished recording's duration belongs to its History entry. Left on the
+    // idle clock it reads as a session that is still running.
+    const QString elapsed_text = source_ != nullptr && !idle_transport ? wide(source_->elapsed_text) : QString{};
     const QString output_size_text = source_ != nullptr ? wide(source_->output_size_text) : QString{};
     const bool live_stats_available = source_ != nullptr && source_->live_stats_available;
     const bool elapsed_changed = elapsed_text_ != elapsed_text;
@@ -1031,14 +1038,8 @@ void RecordViewModelAdapter::requestWebcamOverlayRect(QRectF normalized_rect) {
 void RecordViewModelAdapter::requestCountdownSeconds(int seconds) {
     emit countdownSecondsRequested(seconds);
 }
-void RecordViewModelAdapter::requestOpenEditor() {
-    emit openEditorRequested();
-}
 void RecordViewModelAdapter::requestDismissResult() {
     emit dismissResultRequested();
-}
-void RecordViewModelAdapter::requestRevealRecording() {
-    emit revealRecordingRequested();
 }
 void RecordViewModelAdapter::requestOpenRecent(const QString& file_path) {
     if (file_path.isEmpty())

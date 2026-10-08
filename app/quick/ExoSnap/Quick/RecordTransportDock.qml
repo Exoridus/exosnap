@@ -226,12 +226,10 @@ Rectangle {
             // preview has produced a frame there is nothing to capture. Saying so
             // is the difference between "broken" and "not yet".
             unavailableReason: qsTr("Unavailable — the preview has not produced a frame yet.")
-            // Not beside a finished run. Capturing a still of the preview is an
-            // action ON a recording in progress; once the recording is over the
-            // control it points at is gone, and the button next to the result was
-            // offering to photograph nothing.
+            // Not beside a failed run: its preview is not what the user is being
+            // asked to look at, and the bar's one question is the failure.
             visible: !root.recordViewModel.preparing && !root.recordViewModel.finalizing &&
-                     !root.recordViewModel.resultPending
+                     !root.recordViewModel.failed
             onClicked: root.recordViewModel.requestCaptureFrame()
         }
 
@@ -303,41 +301,12 @@ Rectangle {
             onClicked: root.recordViewModel.requestStop()
         }
 
-        // The one recommended action of the Completed state. It takes
-        // the accent pill that Record otherwise holds — after a recording
-        // finishes, editing it is what the product is for, and starting the next
-        // one is not. Record is not removed, only stepped down to a plain pill
-        // beside it: hiding it would leave no way out of Completed except
-        // dismissing the result.
+        // The way out of a failed run. A failure stays on the bar until it is
+        // acknowledged, so the Record action is withheld until then. A successful
+        // run needs no such step: the Saved notification and Edit History carry
+        // the result, and the bar is immediately ready for the next recording.
         //
-        // Hidden rather than disabled when the recording cannot be edited at all
-        // (split recording, missing file, failed run) — a permanently dead button
-        // next to a successful result reads as a defect.
-        // What the round slot beside a result is FOR: the file. Reveals the
-        // recording in Explorer, which is the one thing a user reaches for
-        // between finishing a take and deciding what to do with it, and the one
-        // action the completed bar could not offer without leaving the page.
-        RecordActionButton {
-            id: revealButton
-
-            compact: root.compactControls
-            accessibleLabel: qsTr("Show the recording in Explorer")
-            text: qsTr("Folder")
-            glyph: ExoGlyph.Folder
-            round: true
-            available: root.recordViewModel.canOpenEditor
-            unavailableReason: qsTr("The recording is no longer on disk.")
-            visible: root.recordViewModel.resultPending
-            onClicked: root.recordViewModel.requestRevealRecording()
-        }
-
-        // The way OUT of a finished run, and the reason Record no longer has to be
-        // two things at once. Until this existed the only exit from Completed was
-        // to start the next recording, so "I am done looking at this" and "record
-        // again" were the same button -- and the bar carried two text pills where
-        // the rest of the transport carries round glyphs.
-        //
-        // Nothing is undone by it: the recording stays where it was written.
+        // Nothing is undone by it: whatever the run left on disk stays there.
         RecordActionButton {
             id: dismissButton
 
@@ -346,23 +315,8 @@ Rectangle {
             text: qsTr("Back")
             glyph: ExoGlyph.Back
             round: true
-            visible: root.recordViewModel.resultPending
+            visible: root.recordViewModel.failed
             onClicked: root.recordViewModel.requestDismissResult()
-        }
-
-        RecordActionButton {
-            id: editButton
-
-            compact: root.compactControls
-            accessibleLabel: qsTr("Edit recording")
-            text: qsTr("Edit")
-            round: false
-            emphasised: true
-            emphasisColor: ExoTheme.accent
-            emphasisTextColor: ExoTheme.accentInk
-            visible: root.recordViewModel.canOpenEditor
-            Layout.leftMargin: root.actionGap
-            onClicked: root.recordViewModel.requestOpenEditor()
         }
 
         RecordSplitButton {
@@ -370,12 +324,10 @@ Rectangle {
 
             recordViewModel: root.recordViewModel
             compact: root.compactControls
-            // Not shown beside a result. Record is the idle transport's action;
-            // reaching it is what the Back glyph is for, and keeping both on the
-            // bar is what made the gap between them read as two clusters that had
-            // drifted apart rather than as one.
+            // Not shown beside a failure, which Back acknowledges first. After a
+            // successful run this is the bar's action again straight away.
             visible: !root.recordViewModel.recording && !root.recordViewModel.paused &&
-                     !root.recordViewModel.resultPending
+                     !root.recordViewModel.failed
             Layout.leftMargin: root.actionGap
         }
     }

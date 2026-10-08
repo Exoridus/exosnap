@@ -527,12 +527,9 @@ Item {
             }
         }
 
-        // The entry into the Edit surface lives IN the transport dock,
-        // as that state's one recommended action — see RecordTransportDock. It
-        // used to be a detached button in a row of its own between the Preview
-        // Surface and the dock, which broke the page's composition (one Preview
-        // Surface → 16 px → transport dock) and left the primary action of the
-        // Completed state floating in the gap between the two.
+        // One Preview Surface, 16 px, the transport dock: nothing sits between
+        // them in any state. A finished recording is reached through its Saved
+        // notification and Edit History, not through a row on this page.
         RecordTransportDock {
             recordViewModel: root.recordViewModel
             Layout.fillWidth: true

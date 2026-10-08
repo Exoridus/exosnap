@@ -301,6 +301,71 @@ TEST(RecordViewModelAdapterTest, MapsBlockedAndFailedStatesTextually) {
     EXPECT_EQ(adapter.stateTone(), QStringLiteral("error"));
 }
 
+// A successful Completed result keeps its engine state and its recording, but
+// the transport projection is the idle one: Record is available, the readout
+// says Ready and the clock is not left showing the finished take.
+TEST(RecordViewModelAdapterTest, SuccessfulCompletedProjectsTheIdleTransport) {
+    RecordViewModel source;
+    source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    source.selected_target_index = 0;
+    RecordViewModelAdapter adapter(&source);
+
+    CompletedRecording recording;
+    recording.succeeded = true;
+    recording.file_path = QStringLiteral("C:/Videos/take.mkv");
+    recording.display_name = QStringLiteral("take.mkv");
+    recording.duration_seconds = 83.0;
+    source.current_completed_recording = recording;
+    source.AddToRecentRecordings(recording);
+    source.last_succeeded = true;
+    source.elapsed_text = L"1:23";
+    source.SetState(UiRecordingState::Completed);
+    adapter.setPreviewFrameReady(true);
+    adapter.synchronize();
+
+    EXPECT_EQ(adapter.state(), static_cast<int>(UiRecordingState::Completed));
+    EXPECT_TRUE(source.HasCompletedRecording());
+    EXPECT_FALSE(adapter.failed());
+    EXPECT_TRUE(adapter.canStart());
+    EXPECT_TRUE(adapter.canSelectSource());
+    EXPECT_TRUE(adapter.captureFrameEnabled());
+    EXPECT_TRUE(adapter.webcamOverlayEditable());
+    EXPECT_EQ(adapter.stateText(), QStringLiteral("Ready"));
+    EXPECT_EQ(adapter.stateTone(), QStringLiteral("neutral"));
+    EXPECT_EQ(adapter.elapsedText(), QStringLiteral("00:00:00"));
+    ASSERT_EQ(adapter.recentRecordingOptions().size(), 1);
+    EXPECT_EQ(adapter.recentRecordingOptions().constFirst().toMap().value(QStringLiteral("path")).toString(),
+              recording.file_path);
+
+    // The next recording starts from Completed without any dismissal step.
+    source.SetState(UiRecordingState::Recording);
+    adapter.synchronize();
+    EXPECT_TRUE(adapter.recording());
+    EXPECT_EQ(adapter.stateText(), QStringLiteral("Recording"));
+    EXPECT_EQ(adapter.elapsedText(), QStringLiteral("00:01:23"));
+}
+
+// A failure is not folded into the idle projection: it keeps its own readout,
+// the error tone and the run's clock until it is dismissed.
+TEST(RecordViewModelAdapterTest, FailedResultStaysDistinctFromTheIdleTransport) {
+    RecordViewModel source;
+    source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    source.selected_target_index = 0;
+    RecordViewModelAdapter adapter(&source);
+
+    source.last_succeeded = false;
+    source.elapsed_text = L"0:42";
+    source.SetState(UiRecordingState::Failed);
+    adapter.setPreviewFrameReady(true);
+    adapter.synchronize();
+
+    EXPECT_TRUE(adapter.failed());
+    EXPECT_FALSE(adapter.captureFrameEnabled());
+    EXPECT_EQ(adapter.stateText(), QStringLiteral("Failed"));
+    EXPECT_EQ(adapter.stateTone(), QStringLiteral("error"));
+    EXPECT_EQ(adapter.elapsedText(), QStringLiteral("00:00:42"));
+}
+
 TEST(RecordViewModelAdapterTest, BuildsTypedDisplayAndWindowTargetOptions) {
     RecordViewModel source;
     source.targets = {

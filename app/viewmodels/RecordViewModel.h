@@ -50,9 +50,9 @@ enum class UiRecordingState {
 };
 
 [[nodiscard]] inline bool IsWebcamOverlayEditable(UiRecordingState state) noexcept {
-    return state == UiRecordingState::Ready || state == UiRecordingState::Countdown ||
-           state == UiRecordingState::Recording || state == UiRecordingState::Paused ||
-           state == UiRecordingState::ArmedFromRecovery;
+    return state == UiRecordingState::Ready || state == UiRecordingState::Completed ||
+           state == UiRecordingState::Countdown || state == UiRecordingState::Recording ||
+           state == UiRecordingState::Paused || state == UiRecordingState::ArmedFromRecovery;
 }
 
 // After recording ends, the WYSIWYG preview must leave "pushed" mode (the engine

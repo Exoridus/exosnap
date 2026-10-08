@@ -258,10 +258,10 @@ The Record layout has a full preview canvas with persistent context chrome and a
 | Recording | Filled Stop, secondary pause/screenshot/marker/split where supported |
 | Paused | Filled Resume; Stop remains available without competing fill |
 | Saving/finalizing | Real progress/state, no false Saved claim |
-| Completed | Edit when eligible, folder action and a back-to-idle control; no redundant Record beside Edit |
-| Failed | Modal failure explanation and report action; no success result |
+| Completed | Same as Ready, available immediately: Record, sources and an idle clock; no result controls, no automatic navigation |
+| Failed | Modal failure explanation and report action; Back acknowledges the failure before Record returns; no success result |
 
-A split recording can open in Edit as ordered segment clips. Missing/failed media is represented honestly rather than silently omitted. Completed state remains usable when no media is eligible for playback. Capture frame is not shown as an action on a finished session. Icon-only controls have descriptive tooltips, and unavailable reasons remain hover-readable.
+A successful recording is confirmed by the Saved notification, whose Edit and folder actions open that recording, and by the shell's brief Saved indication. Record keeps no persistent success layout; the recording remains reachable from Edit History. A split recording can open in Edit as ordered segment clips. Missing/failed media is represented honestly rather than silently omitted. Capture frame is not shown beside a failed run. Icon-only controls have descriptive tooltips, and unavailable reasons remain hover-readable.
 
 ### Runtime health and duration
 
@@ -296,7 +296,7 @@ Manifest failure does not abort a good recording. It raises Recovery protection 
 
 ### Edit workspace and export
 
-Successful recordings remain on Record with Edit as the next action and appear in Edit history. Saved-recording notifications follow the notification preference. Editing starts only through an explicit user action. Record, history and notification Edit actions navigate to the Edit destination and add the relevant recording to its resident workspace.
+Successful recordings remain on Record, which is immediately ready for the next recording, and appear in Edit history. Saved-recording notifications follow the notification preference. Editing starts only through an explicit user action. History and notification Edit actions navigate to the Edit destination and add the relevant recording to its resident workspace.
 
 History, Media and Transitions tabs occupy the upper-left source browser. The preview fills the upper-right with Play/Pause, timecode and a volume icon opening a keyboard-accessible slider popup. Home/End and seek shortcuts retain secondary transport access. The transport and timeline toolbar use compact vector icon actions with localized tooltips, shortcuts and accessible names. The permanent toolbar exposes Undo, Redo, Split, Delete and Snapping, with a compact split Export control at the right. Its main action exports using the selected profile; the chevron opens only supported profiles. Ripple delete remains in the selected-clip context menu and on Shift+Delete. Ctrl+wheel and Ctrl+Plus/Minus zoom the timeline without a permanent slider. Source tabs use compact text-sized targets, the same quiet underline selection as shell navigation, and explanatory empty states. Both the source tabs and the destination region of the top navigation scroll horizontally when needed, keeping full labels and revealing the focused or selected tab. The brand and window controls remain outside the scrolling region. When the full navigation no longer fits beside the natural widths of the other title-band contents, the wordmark and its spacing collapse to the logo before the navigation scrolls. Subtle edge fades indicate remaining navigation content. There are no redundant Library, Preview or Timeline headings and no permanent export rail.
 
