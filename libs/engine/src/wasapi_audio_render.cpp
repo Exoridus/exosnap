@@ -1,4 +1,5 @@
 #include "exosnap/engine/wasapi_audio_render.h"
+#include "exosnap/engine/timeline_audio_queue.h"
 
 #include "exosnap/engine/logging/logging.h"
 #include "playback_clock.h"
@@ -10,6 +11,7 @@
 #include <cstdio>
 #include <mmdeviceapi.h>
 #include <mutex>
+#include <span>
 #include <string>
 #include <windows.h>
 
@@ -225,7 +227,7 @@ bool WasapiAudioRenderer::Init(std::string& out_error) {
     return true;
 }
 
-void WasapiAudioRenderer::Start() {
+void WasapiAudioRenderer::Start(std::span<const float> initial_samples, bool timeline) {
     if (!initialized_ || running_.load())
         return;
     frames_rendered_.store(0);
@@ -244,6 +246,11 @@ void WasapiAudioRenderer::Start() {
         std::lock_guard<std::mutex> lock(ring_mutex_);
         stop_requested_ = false;
         ring_.clear();
+        timeline_mode_ = timeline;
+        timeline_consumed_frames_ = 0;
+        const auto count = std::min<size_t>(initial_samples.size(), ring_capacity_floats_);
+        ring_.insert(ring_.end(), initial_samples.begin(),
+                     initial_samples.begin() + static_cast<std::ptrdiff_t>(count));
     }
     const HRESULT hr = audio_client_->Start();
     if (FAILED(hr)) {
@@ -325,6 +332,17 @@ void WasapiAudioRenderer::PushSamples(const float* interleaved_stereo, uint32_t 
         src += take;
         remaining -= take;
     }
+}
+
+void WasapiAudioRenderer::PushTimelineSamples(uint64_t first_frame, std::span<const float> samples) {
+    std::lock_guard<std::mutex> lock(ring_mutex_);
+    if (!stop_requested_)
+        AppendTimelineAudio(ring_, timeline_consumed_frames_, first_frame, samples, ring_capacity_floats_);
+}
+
+uint64_t WasapiAudioRenderer::TimelineConsumedFrames() {
+    std::lock_guard<std::mutex> lock(ring_mutex_);
+    return timeline_consumed_frames_;
 }
 
 uint64_t WasapiAudioRenderer::FramesPlayed() const noexcept {
@@ -421,6 +439,10 @@ void WasapiAudioRenderer::RenderThreadMain() {
             const size_t take = std::min<size_t>(want_floats, ring_.size());
             engine_buf.assign(ring_.begin(), ring_.begin() + static_cast<std::ptrdiff_t>(take));
             ring_.erase(ring_.begin(), ring_.begin() + static_cast<std::ptrdiff_t>(take));
+            if (timeline_mode_) {
+                timeline_consumed_frames_ += want_engine_frames;
+                engine_buf.resize(want_floats, 0);
+            }
         }
         ring_cv_.notify_all(); // wake any PushSamples() blocked waiting for room
         const uint32_t engine_frames = static_cast<uint32_t>(engine_buf.size() / kEngineChannels);

@@ -9,6 +9,7 @@
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <exosnap/engine/edit_player_session.h>
+#include <exosnap/engine/edit_timeline_compositor.h>
 
 #include "models/EditWorkspace.h"
 #include <memory>
@@ -33,12 +34,15 @@ class EditPlayerFrameSink {
     void attach(ExoEditPlayerItem* item);
     void detach(const ExoEditPlayerItem* item);
     void deliver(exosnap::engine::RawDecodedVideoFrame frame);
+    void deliverTimeline(exosnap::engine::TimelineVideoFrame frame, uint64_t generation);
+    uint64_t invalidate();
     void publishClock(int64_t media_time_us);
     void clear();
 
   private:
     std::mutex mutex_;
     ExoEditPlayerItem* item_ = nullptr;
+    uint64_t generation_ = 0;
 };
 
 // Owns the decoder session and its pacing, on a thread of its own.

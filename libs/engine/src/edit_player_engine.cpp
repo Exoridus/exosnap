@@ -924,6 +924,8 @@ std::optional<RawDecodedVideoFrame> WrapRawDecodedFrame(AVFrame* frame, int64_t 
     out.matrix = matrix;
     out.range = range;
     out.is_pq_source = is_pq_source;
+    out.primaries = static_cast<ColorPrimaries>(frame->color_primaries);
+    out.transfer = static_cast<TransferCharacteristics>(frame->color_trc);
     out.format = (frame->format == AV_PIX_FMT_YUV444P)       ? DecodedPixelFormat::Yuv444P8
                  : (frame->format == AV_PIX_FMT_YUV420P10LE) ? DecodedPixelFormat::Yuv420P10
                                                              : DecodedPixelFormat::Yuv420P8;
@@ -1251,6 +1253,142 @@ std::optional<RawDecodedVideoFrame> EditPlayerEngine::DecodeFrameAtRaw(int64_t t
 
 std::vector<AudioTrackDescription> EditPlayerEngine::AudioTracks() const {
     return impl_->audio_track_descriptions;
+}
+
+bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_count, std::vector<float>& output,
+                                        std::string& error) {
+    if (!impl_->IsOpen() || first_sample < 0 || frame_count > 48000) {
+        error = "Invalid timeline audio range.";
+        return false;
+    }
+    output.assign(static_cast<size_t>(frame_count) * 2, 0);
+    if (impl_->audio_tracks.size() != impl_->audio_track_descriptions.size()) {
+        error = "A source audio track has no usable decoder.";
+        return false;
+    }
+    if (impl_->audio_tracks.empty() || frame_count == 0)
+        return true;
+    auto* format = impl_->fmt.ctx;
+    const int64_t start_us = first_sample * 1'000'000 / 48000;
+    // Decode preroll through the normal resampler so range boundaries do not
+    // reset its filter at an audible sample.
+    const int64_t seek_us = std::max<int64_t>(0, start_us - 1'000'000);
+    if (av_seek_frame(format, -1, seek_us, AVSEEK_FLAG_BACKWARD) < 0) {
+        error = "Cannot seek source audio.";
+        return false;
+    }
+    for (auto& track : impl_->audio_tracks) {
+        avcodec_flush_buffers(track->codec.ctx);
+        if (track->resampler.ctx)
+            swr_free(&track->resampler.ctx);
+        track->resampler.ctx = BuildPlaybackResampler(track->codec.ctx);
+        if (!track->resampler.ctx) {
+            error = "Cannot resample source audio to stereo Float32.";
+            return false;
+        }
+    }
+    PacketGuard packet(av_packet_alloc());
+    FrameGuard frame(av_frame_alloc());
+    if (!packet.pkt || !frame.frame) {
+        error = "Cannot allocate audio decode buffers.";
+        return false;
+    }
+    const int64_t last_sample = first_sample + frame_count;
+    std::vector<int64_t> through(impl_->audio_tracks.size(), 0);
+    std::vector<std::optional<int64_t>> next_sample(impl_->audio_tracks.size());
+    std::vector<float> scratch;
+    const auto pump = [&](size_t index) {
+        auto& track = *impl_->audio_tracks[index];
+        for (;;) {
+            const int received = avcodec_receive_frame(track.codec.ctx, frame.frame);
+            if (received == AVERROR(EAGAIN) || received == AVERROR_EOF)
+                return true;
+            if (received < 0) {
+                error = "Source audio decode failed: " + std::string(av_err2str(received));
+                return false;
+            }
+            const int64_t timestamp = frame.frame->best_effort_timestamp;
+            if (timestamp == AV_NOPTS_VALUE && !next_sample[index]) {
+                error = "Source audio has no initial timestamp.";
+                return false;
+            }
+            int64_t at = timestamp == AV_NOPTS_VALUE ? *next_sample[index]
+                                                     : av_rescale_q(timestamp, track.time_base, AVRational{1, 48000}) -
+                                                           swr_get_delay(track.resampler.ctx, 48000);
+            // Container ticks can be coarser than one sample. Preserve contiguous
+            // decoded sample counts instead of duplicating/dropping their rounded edges.
+            const int64_t tolerance = av_rescale_q_rnd(1, track.time_base, AVRational{1, 48000}, AV_ROUND_UP);
+            if (next_sample[index] && std::abs(at - *next_sample[index]) <= tolerance)
+                at = *next_sample[index];
+            const int capacity = swr_get_out_samples(track.resampler.ctx, frame.frame->nb_samples);
+            if (capacity < 0 || capacity > 480000) {
+                error = "Source audio resampler exceeded its bounded block size.";
+                return false;
+            }
+            scratch.resize(static_cast<size_t>(capacity) * 2);
+            auto* destination = reinterpret_cast<uint8_t*>(scratch.data());
+            const int produced = swr_convert(track.resampler.ctx, &destination, capacity, frame.frame->extended_data,
+                                             frame.frame->nb_samples);
+            av_frame_unref(frame.frame);
+            if (produced < 0) {
+                error = "Source audio resampling failed.";
+                return false;
+            }
+            for (int64_t sample = std::max(first_sample, at); sample < std::min(last_sample, at + produced); ++sample)
+                for (size_t channel = 0; channel < 2; ++channel)
+                    output[static_cast<size_t>(sample - first_sample) * 2 + channel] +=
+                        scratch[static_cast<size_t>(sample - at) * 2 + channel];
+            through[index] = std::max(through[index], at + produced);
+            next_sample[index] = at + produced;
+        }
+    };
+    while (
+        !std::all_of(through.begin(), through.end(), [last_sample](int64_t value) { return value >= last_sample; })) {
+        const int read = av_read_frame(format, packet.pkt);
+        if (read < 0) {
+            if (read != AVERROR_EOF) {
+                error = "Source audio read failed: " + std::string(av_err2str(read));
+                return false;
+            }
+            for (size_t i = 0; i < impl_->audio_tracks.size(); ++i) {
+                avcodec_send_packet(impl_->audio_tracks[i]->codec.ctx, nullptr);
+                if (!pump(i))
+                    return false;
+                auto* resampler = impl_->audio_tracks[i]->resampler.ctx;
+                const int capacity = swr_get_out_samples(resampler, 0);
+                if (capacity < 0 || capacity > 480000) {
+                    error = "Source audio resampler flush exceeds its bounded block size.";
+                    return false;
+                }
+                scratch.resize(static_cast<size_t>(capacity) * 2);
+                auto* destination = reinterpret_cast<uint8_t*>(scratch.data());
+                const int produced = swr_convert(resampler, &destination, capacity, nullptr, 0);
+                if (produced < 0) {
+                    error = "Source audio resampler flush failed.";
+                    return false;
+                }
+                const int64_t at = next_sample[i].value_or(0);
+                for (int64_t sample = std::max(first_sample, at); sample < std::min(last_sample, at + produced);
+                     ++sample)
+                    for (size_t channel = 0; channel < 2; ++channel)
+                        output[static_cast<size_t>(sample - first_sample) * 2 + channel] +=
+                            scratch[static_cast<size_t>(sample - at) * 2 + channel];
+            }
+            break;
+        }
+        for (size_t i = 0; i < impl_->audio_tracks.size(); ++i)
+            if (impl_->audio_tracks[i]->stream_index == packet.pkt->stream_index) {
+                const int sent = avcodec_send_packet(impl_->audio_tracks[i]->codec.ctx, packet.pkt);
+                if (sent < 0 || !pump(i)) {
+                    if (error.empty())
+                        error = "Cannot submit source audio packet.";
+                    return false;
+                }
+                break;
+            }
+        av_packet_unref(packet.pkt);
+    }
+    return true;
 }
 
 void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,

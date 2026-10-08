@@ -13,6 +13,7 @@ FocusScope {
     property real hoveredGroup: 0
     property real draggedGroup: 0
     property real dragDeltaMs: 0
+    property bool draggingCrossfade: false
     readonly property real labelWidth: 50
     readonly property real rulerHeight: 32
     readonly property real rowHeight: 64
@@ -55,20 +56,36 @@ FocusScope {
             return;
         }
         if (event.key === Qt.Key_Menu || (shift && event.key === Qt.Key_F10)) {
-            if (root.session.selectedClip !== 0) clipMenu.popup();
-        }
-        else if (control && (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal)) root.zoomTo(root.pixelsPerSecond * 1.25);
-        else if (control && event.key === Qt.Key_Minus) root.zoomTo(root.pixelsPerSecond / 1.25);
-        else if (control && event.key === Qt.Key_B) root.session.splitSelected();
-        else if (control && event.key === Qt.Key_Z) { if (shift) root.session.redo(); else root.session.undo(); }
-        else if (control && event.key === Qt.Key_Y) root.session.redo();
-        else if (event.key === Qt.Key_Home) root.session.requestSeek(0);
-        else if (event.key === Qt.Key_End) root.session.requestSeek(root.session.durationMs);
-        else if (event.key === Qt.Key_Delete) root.session.deleteSelected(shift);
-        else if (event.key === Qt.Key_Space) root.player.togglePlay();
+            if (root.session.selectedClip !== 0)
+                clipMenu.popup();
+        } else if (control && (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal))
+            root.zoomTo(root.pixelsPerSecond * 1.25);
+        else if (control && event.key === Qt.Key_Minus)
+            root.zoomTo(root.pixelsPerSecond / 1.25);
+        else if (control && event.key === Qt.Key_B)
+            root.session.splitSelected();
+        else if (control && event.key === Qt.Key_Z) {
+            if (shift)
+                root.session.redo();
+            else
+                root.session.undo();
+        } else if (control && event.key === Qt.Key_Y)
+            root.session.redo();
+        else if (event.key === Qt.Key_Home)
+            root.session.requestSeek(0);
+        else if (event.key === Qt.Key_End)
+            root.session.requestSeek(root.session.durationMs);
+        else if (event.key === Qt.Key_Delete) {
+            if (root.session.selectedTransition)
+                root.session.removeTransition();
+            else
+                root.session.deleteSelected(shift);
+        } else if (event.key === Qt.Key_Space)
+            root.player.togglePlay();
         else if (event.key === Qt.Key_Left || event.key === Qt.Key_Right)
             root.session.requestSeek(root.session.positionMs + (event.key === Qt.Key_Left ? -1 : 1) * (shift ? 1000 : 33));
-        else return;
+        else
+            return;
         event.accepted = true;
     }
     Menu {
@@ -80,6 +97,43 @@ FocusScope {
             enabled: root.session.selectedClip !== 0
             onTriggered: root.session.deleteSelected(true)
         }
+        MenuItem {
+            text: qsTr("Add Crossfade after clip")
+            enabled: root.session.selectedClip !== 0 && root.session.canCrossfade()
+            onTriggered: root.session.applyCrossfade()
+        }
+    }
+    Popup {
+        id: transitionDuration
+        objectName: "editCrossfadeDurationPopup"
+        anchors.centerIn: parent
+        modal: true
+        focus: true
+        padding: 12
+        Column {
+            spacing: 8
+            Label {
+                text: qsTr("Crossfade duration (ms)")
+                color: ExoTheme.text
+            }
+            SpinBox {
+                id: durationInput
+                objectName: "editCrossfadeDuration"
+                from: 1
+                to: 600000
+                editable: true
+                Accessible.name: qsTr("Crossfade duration in milliseconds")
+                onValueModified: root.session.applyCrossfade(root.session.selectedTransition, value)
+            }
+            Button {
+                text: qsTr("Remove Crossfade")
+                onClicked: {
+                    root.session.removeTransition();
+                    transitionDuration.close();
+                }
+            }
+        }
+        onOpened: durationInput.forceActiveFocus(Qt.PopupFocusReason)
     }
     ToolTip.visible: activeFocus
     ToolTip.text: qsTr("Ctrl+wheel to zoom. Menu or Shift+F10 for clip actions.")
@@ -87,7 +141,9 @@ FocusScope {
     ToolTip.timeout: 4000
     Connections {
         target: root.session
-        function onWorkspaceChanged(): void { root.refreshClips(); }
+        function onWorkspaceChanged(): void {
+            root.refreshClips();
+        }
     }
     Rectangle {
         anchors.fill: parent
@@ -105,8 +161,14 @@ FocusScope {
         contentHeight: Math.max(height, root.rulerHeight + root.session.tracks.length * root.rowHeight)
         clip: true
         boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.horizontal: ScrollBar { objectName: "editHorizontalScrollBar"; policy: ScrollBar.AsNeeded }
-        ScrollBar.vertical: ScrollBar { objectName: "editVerticalScrollBar"; policy: ScrollBar.AsNeeded }
+        ScrollBar.horizontal: ScrollBar {
+            objectName: "editHorizontalScrollBar"
+            policy: ScrollBar.AsNeeded
+        }
+        ScrollBar.vertical: ScrollBar {
+            objectName: "editVerticalScrollBar"
+            policy: ScrollBar.AsNeeded
+        }
         WheelHandler {
             acceptedModifiers: Qt.ControlModifier
             onWheel: event => {
@@ -124,7 +186,8 @@ FocusScope {
                 root.session.requestSeek(root.timeAt(mouse.x));
             }
             onPositionChanged: mouse => {
-                if (pressed) root.session.requestSeek(root.timeAt(mouse.x));
+                if (pressed)
+                    root.session.requestSeek(root.timeAt(mouse.x));
             }
             onReleased: root.player.endScrub()
             onCanceled: root.player.endScrub()
@@ -165,6 +228,15 @@ FocusScope {
                 border.color: modelData.selected ? ExoTheme.accent : ExoTheme.line
                 border.width: modelData.selected ? 2 : 1
                 clip: true
+                Rectangle {
+                    anchors.right: parent.right
+                    width: 4
+                    height: parent.height
+                    visible: root.draggingCrossfade && clipItem.modelData.video
+                    color: root.session.canCrossfade(clipItem.modelData.id) ? ExoTheme.accent : ExoTheme.warning
+                    z: 10
+                    Accessible.ignored: true
+                }
                 Accessible.role: Accessible.Button
                 Accessible.name: modelData.name + (modelData.available ? "" : ". " + qsTr("Media unavailable"))
                 Accessible.onPressAction: root.session.selectClip(modelData.id)
@@ -174,8 +246,7 @@ FocusScope {
                     y: 6
                     width: 64
                     height: 44
-                    source: clipItem.modelData.video && root.thumbnails && clipItem.modelData.path === root.thumbnails.sourcePath
-                            ? root.thumbnails.posterSource : ""
+                    source: clipItem.modelData.video && root.thumbnails && clipItem.modelData.path === root.thumbnails.sourcePath ? root.thumbnails.posterSource : ""
                     visible: status === Image.Ready && clipItem.modelData.available
                     fillMode: Image.PreserveAspectFit
                     Accessible.ignored: true
@@ -187,8 +258,7 @@ FocusScope {
                     y: 19
                     width: 16
                     height: 16
-                    kind: !clipItem.modelData.available ? ExoGlyph.Warning
-                          : clipItem.modelData.video ? ExoGlyph.AppWindow : ExoGlyph.Speaker
+                    kind: !clipItem.modelData.available ? ExoGlyph.Warning : clipItem.modelData.video ? ExoGlyph.AppWindow : ExoGlyph.Speaker
                     color: clipItem.modelData.available ? ExoTheme.textMuted : ExoTheme.warning
                     visible: !poster.visible
                     Accessible.ignored: true
@@ -208,7 +278,10 @@ FocusScope {
                     anchors.fill: parent
                     hoverEnabled: true
                     onEntered: root.hoveredGroup = clipItem.modelData.group
-                    onExited: { if (root.hoveredGroup === clipItem.modelData.group) root.hoveredGroup = 0; }
+                    onExited: {
+                        if (root.hoveredGroup === clipItem.modelData.group)
+                            root.hoveredGroup = 0;
+                    }
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     property real startX: 0
                     onPressed: mouse => {
@@ -223,16 +296,23 @@ FocusScope {
                         root.forceActiveFocus();
                     }
                     onPositionChanged: mouse => {
-                        if (pressed && (pressedButtons & Qt.LeftButton)) root.dragDeltaMs = (mapToItem(scroll.contentItem, mouse.x, 0).x - startX) / root.pixelsPerMs;
+                        if (pressed && (pressedButtons & Qt.LeftButton))
+                            root.dragDeltaMs = (mapToItem(scroll.contentItem, mouse.x, 0).x - startX) / root.pixelsPerMs;
                     }
-                    onCanceled: { root.dragDeltaMs = 0; root.draggedGroup = 0; }
+                    onCanceled: {
+                        root.dragDeltaMs = 0;
+                        root.draggedGroup = 0;
+                    }
                     onReleased: mouse => {
-                        if (mouse.button === Qt.RightButton) return;
+                        if (mouse.button === Qt.RightButton)
+                            return;
                         const delta = root.dragDeltaMs;
                         root.dragDeltaMs = 0;
                         root.draggedGroup = 0;
-                        if (Math.abs(delta) > 20) root.session.moveClip(clipItem.modelData.id, clipItem.modelData.startMs + delta, root.snapping);
-                        else root.session.selectClip(clipItem.modelData.id);
+                        if (Math.abs(delta) > 20)
+                            root.session.moveClip(clipItem.modelData.id, clipItem.modelData.startMs + delta, root.snapping);
+                        else
+                            root.session.selectClip(clipItem.modelData.id);
                     }
                 }
                 ToolTip.visible: clipMouse.containsMouse
@@ -255,13 +335,59 @@ FocusScope {
                             color: clipItem.modelData.selected ? ExoTheme.accent : ExoTheme.textMuted
                             visible: clipItem.modelData.selected || clipMouse.containsMouse
                         }
-                        onPressed: mouse => { startX = mapToItem(scroll.contentItem, mouse.x, 0).x; }
+                        onPressed: mouse => {
+                            startX = mapToItem(scroll.contentItem, mouse.x, 0).x;
+                        }
                         onReleased: mouse => {
                             const delta = (mapToItem(scroll.contentItem, mouse.x, 0).x - startX) / root.pixelsPerMs;
-                            root.session.trimClip(clipItem.modelData.id, clipItem.modelData.inMs + (index === 0 ? delta : 0),
-                                                  clipItem.modelData.outMs + (index === 1 ? delta : 0));
+                            root.session.trimClip(clipItem.modelData.id, clipItem.modelData.inMs + (index === 0 ? delta : 0), clipItem.modelData.outMs + (index === 1 ? delta : 0));
                         }
                     }
+                }
+            }
+        }
+        Repeater {
+            model: root.session.transitions
+            delegate: Rectangle {
+                id: transitionOverlay
+                required property var modelData
+                objectName: "editCrossfadeOverlay"
+                x: root.positionAt(modelData.startMs)
+                y: root.rulerHeight + 20
+                width: Math.max(14, modelData.durationMs * root.pixelsPerMs)
+                height: 24
+                z: 3
+                radius: 3
+                color: modelData.selected ? ExoTheme.accent : ExoTheme.surface
+                border.color: ExoTheme.accent
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: qsTr("Crossfade, %1 ms. Enter to adjust duration.").arg(modelData.durationMs)
+                function adjust(): void {
+                    root.session.selectTransition(modelData.outgoing);
+                    durationInput.value = modelData.durationMs;
+                    transitionDuration.open();
+                }
+                Keys.onReturnPressed: adjust()
+                Keys.onSpacePressed: adjust()
+                Keys.onDeletePressed: {
+                    root.session.selectTransition(modelData.outgoing);
+                    root.session.removeTransition();
+                }
+                Label {
+                    anchors.centerIn: parent
+                    text: "╲══╱"
+                    color: ExoTheme.text
+                    font.pixelSize: ExoTheme.fontCaption
+                    Accessible.ignored: true
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        root.session.selectTransition(transitionOverlay.modelData.outgoing);
+                        transitionOverlay.forceActiveFocus();
+                    }
+                    onDoubleClicked: transitionOverlay.adjust()
                 }
             }
         }
@@ -289,7 +415,8 @@ FocusScope {
                 root.session.requestSeek(root.timeAt(mouse.x + root.labelWidth));
             }
             onPositionChanged: mouse => {
-                if (pressed) root.session.requestSeek(root.timeAt(mouse.x + root.labelWidth));
+                if (pressed)
+                    root.session.requestSeek(root.timeAt(mouse.x + root.labelWidth));
             }
             onReleased: root.player.endScrub()
             onCanceled: root.player.endScrub()
@@ -322,8 +449,18 @@ FocusScope {
         DropArea {
             width: scroll.contentWidth
             height: scroll.contentHeight
+            onEntered: drag => {
+                root.draggingCrossfade = drag.formats.indexOf("application/x-exosnap-crossfade") >= 0;
+            }
+            onExited: root.draggingCrossfade = false
             onDropped: drop => {
+                root.draggingCrossfade = false;
                 const at = root.timeAt(drop.x);
+                if (drop.formats.indexOf("application/x-exosnap-crossfade") >= 0) {
+                    if (root.session.dropCrossfade(at, 10 / root.pixelsPerMs))
+                        drop.acceptProposedAction();
+                    return;
+                }
                 if (drop.formats.indexOf("application/x-exosnap-history") >= 0)
                     root.session.addHistory(drop.getDataAsString("application/x-exosnap-history"), at);
                 else if (drop.formats.indexOf("application/x-exosnap-asset") >= 0)

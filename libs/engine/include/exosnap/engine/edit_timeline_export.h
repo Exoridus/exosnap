@@ -9,6 +9,10 @@ struct EditMediaMetadata {
     int width = 0;
     int height = 0;
     double fps = 0;
+    int fps_num = 0;
+    int fps_den = 1;
+    bool render_color_supported = false;
+    std::string render_color_reason;
     bool has_audio = false;
     std::string error;
 };

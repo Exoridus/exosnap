@@ -930,7 +930,7 @@ exosnap_add_gtest(
     SOURCES tests/test_edit_timeline_model.cpp tests/test_edit_workspace.cpp
     LIBRARIES Qt6::Core
 )
-target_include_directories(edit_timeline_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(edit_timeline_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/libs/engine/include)
 
 # Pure helpers behind UpdateService::LaunchUpdater: staging file list, updater
 # argv (round-tripped through the updater's own parser), distribution eligibility.

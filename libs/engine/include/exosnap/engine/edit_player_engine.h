@@ -115,6 +115,8 @@ struct RawDecodedVideoFrame {
     // YuvToBgraParams-driven BGRA path.
     MatrixCoefficients matrix = MatrixCoefficients::Bt709;
     ColorRange range = ColorRange::Limited;
+    ColorPrimaries primaries = ColorPrimaries::Unspecified;
+    TransferCharacteristics transfer = TransferCharacteristics::Unspecified;
     // Keeps the underlying decoder buffer (an FFmpeg AVFrame's ref-counted
     // data) alive for as long as any copy of this struct references the plane
     // pointers above. The pointee is meaningless to callers and MUST NOT be
@@ -199,6 +201,11 @@ class EditPlayerEngine {
     // thumbnail decoding is off the playback critical path, so there is
     // nothing for a GPU hop to save there.
     [[nodiscard]] std::optional<RawDecodedVideoFrame> DecodeFrameAtRaw(int64_t target_us);
+
+    // Synchronous, single-owner range decode for timeline rendering. The output
+    // is exactly frame_count stereo Float32 frames at 48 kHz, with source gaps
+    // filled by silence. Fails if any declared audio track cannot be decoded.
+    bool DecodeAudioRange(int64_t first_sample, uint32_t frame_count, std::vector<float>& output, std::string& error);
 
     // Every audio track the open file carries, in stream order. `name` comes
     // from the container's track name and is empty for recordings written

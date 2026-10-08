@@ -473,6 +473,7 @@ class QuickConsoleDisplayStateFilter final : public QAbstractNativeEventFilter {
 } // namespace
 
 QuickApplication::~QuickApplication() {
+    edit_export_adapter_.cancelAndWait();
     if (console_display_notify_ != nullptr) {
         UnregisterPowerSettingNotification(static_cast<HPOWERNOTIFY>(console_display_notify_));
         console_display_notify_ = nullptr;
@@ -3541,6 +3542,12 @@ void QuickApplication::initializeEditArea() {
     edit_export_adapter_.setSession(&edit_session_adapter_);
     edit_export_adapter_.setOutputDirectoryProvider(
         [this]() { return QString::fromStdWString(live_config_.output.output_folder.wstring()); });
+    edit_export_adapter_.setRenderConfigProvider([this]() {
+        const auto device =
+            ResolveEditEncoderDevice(device_adapter_.adapterInfos(), device_adapter_.adapterCapabilities(),
+                                     live_config_.output.video_codec, live_config_.video.encoder_device);
+        return BuildEditRenderConfig(live_config_.output, live_config_.video, encoderCapabilitiesFor(device), device);
+    });
     QObject::connect(&edit_session_adapter_, &EditSessionAdapter::historyRequested, &edit_session_adapter_,
                      [this](const QString& path, qint64 at_ms) {
                          const auto* recording = FindRecordingByPath(
@@ -3718,12 +3725,9 @@ QuickApplication::EffectiveRecordingConfig QuickApplication::resolveEffectiveCon
     effective.config.video.frame_rate_den = resolved.frame_rate_den;
     effective.config.video.frame_pacing = resolved.frame_pacing;
     const auto encoder_caps = encoderCapabilitiesFor(resolveEncoderDeviceFor(selectedCaptureTarget()));
-    auto tuning = effective.config.output.nvenc_tuning;
-    tuning.preset = effective.config.output.nvenc_preset;
     effective.config.output.nvenc_tuning =
-        capability::ResolveNvencTuning(tuning, encoder_caps, effective.config.output.video_codec,
-                                       effective.config.video.rate_control,
-                                       effective.config.output.nvenc_lookahead_policy)
+        ResolveOutputNvencTuning(effective.config.output, encoder_caps, effective.config.output.video_codec,
+                                 effective.config.video.rate_control)
             .tuning;
     return effective;
 }

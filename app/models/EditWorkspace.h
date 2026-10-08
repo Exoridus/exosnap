@@ -1,5 +1,6 @@
 #pragma once
 #include "RecordingMarker.h"
+#include <exosnap/engine/edit_timeline.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -24,6 +25,8 @@ struct Asset {
     int width = 0;
     int height = 0;
     double fps = 0;
+    int fps_num = 0;
+    int fps_den = 1;
     bool audio = true;
     AssetState state = AssetState::Available;
     std::vector<RecordingMarker> markers;
@@ -56,6 +59,7 @@ struct Transition {
     Id incoming = 0;
     TransitionKind kind = TransitionKind::Crossfade;
     Time duration = 0;
+    bool operator==(const Transition&) const = default;
 };
 
 // Values use microseconds. Assets are immutable media references; history stores only clip deltas.
@@ -75,6 +79,73 @@ class Workspace {
     }
     [[nodiscard]] const std::vector<Transition>& transitions() const {
         return transitions_;
+    }
+    [[nodiscard]] engine::TimelineSnapshot timeline() const {
+        engine::TimelineSnapshot result;
+        result.duration_us = duration();
+        for (const auto& c : clips_) {
+            const auto t =
+                std::find_if(tracks_.begin(), tracks_.end(), [&c](const auto& track) { return track.id == c.track; });
+            result.clips.push_back(
+                {c.id, c.asset, c.group, t->type == TrackType::Audio, c.start, c.source_in, c.source_out});
+        }
+        for (const auto& t : transitions_)
+            result.crossfades.push_back({t.outgoing, t.incoming, t.duration});
+        return result;
+    }
+    bool crossfade(Id outgoing, Id incoming, Time requested = 500'000) {
+        const auto* a = clip(outgoing);
+        const auto* b = clip(incoming);
+        if (!a || !b || a->track != b->track || requested <= 0 || a->start >= b->start)
+            return false;
+        const auto track =
+            std::find_if(tracks_.begin(), tracks_.end(), [a](const auto& t) { return t.id == a->track; });
+        if (track == tracks_.end() || track->type != TrackType::Video)
+            return false;
+        auto transitions = transitions_;
+        auto existing = std::find_if(transitions.begin(), transitions.end(), [outgoing, incoming](const auto& t) {
+            return t.outgoing == outgoing && t.incoming == incoming;
+        });
+        const Time old = existing == transitions.end() ? 0 : existing->duration;
+        if (a->end() - b->start != old)
+            return false;
+        Time available_a = a->duration();
+        Time available_b = b->duration();
+        for (const auto& t : transitions) {
+            if (t.incoming == outgoing)
+                available_a -= t.duration;
+            if (t.outgoing == incoming)
+                available_b -= t.duration;
+        }
+        const Time duration = std::min({requested, available_a - 1, available_b - 1});
+        if (duration <= 0)
+            return false;
+        if (existing == transitions.end())
+            transitions.push_back({outgoing, incoming, TransitionKind::Crossfade, duration});
+        else
+            existing->duration = duration;
+        auto after = clips_;
+        // Ripple the suffix as one transaction so later cuts do not acquire gaps.
+        for (auto& c : after)
+            if (c.start >= b->start)
+                c.start += old - duration;
+        return commit(std::move(after), outgoing, std::move(transitions));
+    }
+    bool removeCrossfade(Id outgoing) {
+        const auto found = std::find_if(transitions_.begin(), transitions_.end(),
+                                        [outgoing](const auto& t) { return t.outgoing == outgoing; });
+        if (found == transitions_.end())
+            return false;
+        const auto* incoming = clip(found->incoming);
+        if (!incoming)
+            return false;
+        auto after = clips_;
+        for (auto& c : after)
+            if (c.start >= incoming->start)
+                c.start += found->duration;
+        auto transitions = transitions_;
+        std::erase_if(transitions, [outgoing](const auto& t) { return t.outgoing == outgoing; });
+        return commit(std::move(after), outgoing, std::move(transitions));
     }
     [[nodiscard]] Id selection() const {
         return selection_;
@@ -211,8 +282,22 @@ class Workspace {
         const auto* selected = clip(id);
         if (!selected)
             return false;
-        const Clip removed = *selected;
         auto after = clips_;
+        auto transitions = transitions_;
+        for (const auto& transition : transitions_) {
+            const auto* a = clip(transition.outgoing);
+            const auto* b = clip(transition.incoming);
+            if (!a || !b || (!linked(*selected, *a) && !linked(*selected, *b)))
+                continue;
+            const auto incoming = std::find_if(after.begin(), after.end(),
+                                               [&transition](const auto& c) { return c.id == transition.incoming; });
+            const Time boundary = incoming->start;
+            for (auto& c : after)
+                if (c.start >= boundary)
+                    c.start += transition.duration;
+            std::erase_if(transitions, [&transition](const auto& t) { return t.outgoing == transition.outgoing; });
+        }
+        const Clip removed = *std::find_if(after.begin(), after.end(), [id](const auto& c) { return c.id == id; });
         std::erase_if(after, [&removed](const auto& c) { return linked(c, removed); });
         if (ripple) {
             // Close this interval globally so linked tracks retain their alignment.
@@ -223,7 +308,7 @@ class Workspace {
                     c.start -= removed.duration();
             }
         }
-        return commit(std::move(after), 0);
+        return commit(std::move(after), 0, std::move(transitions));
     }
     [[nodiscard]] Time snap(Time requested, Id moving, Time tolerance) const {
         Time best = requested;
@@ -263,6 +348,7 @@ class Workspace {
             return false;
         const auto& command = history_[--cursor_];
         apply(command.after, command.before);
+        transitions_ = command.transitions_before;
         selection_ = command.selection_before;
         seek(playhead_);
         return true;
@@ -272,6 +358,7 @@ class Workspace {
             return false;
         const auto& command = history_[cursor_++];
         apply(command.before, command.after);
+        transitions_ = command.transitions_after;
         selection_ = command.selection_after;
         seek(playhead_);
         return true;
@@ -281,6 +368,8 @@ class Workspace {
     struct Command {
         std::vector<Clip> before;
         std::vector<Clip> after;
+        std::vector<Transition> transitions_before;
+        std::vector<Transition> transitions_after;
         Id selection_before = 0;
         Id selection_after = 0;
     };
@@ -300,19 +389,47 @@ class Workspace {
         });
     }
     bool commit(std::vector<Clip> after, Id selection) {
+        return commit(std::move(after), selection, transitions_);
+    }
+    bool commit(std::vector<Clip> after, Id selection, std::vector<Transition> transitions) {
         order(after);
+        const auto find = [&after](Id id) -> const Clip* {
+            const auto it = std::find_if(after.begin(), after.end(), [id](const auto& c) { return c.id == id; });
+            return it == after.end() ? nullptr : &*it;
+        };
+        for (const auto& t : transitions) {
+            const auto* a = find(t.outgoing);
+            const auto* b = find(t.incoming);
+            if (!a || !b || a->track != b->track || a->start >= b->start || t.duration <= 0 ||
+                a->end() - b->start != t.duration || a->end() >= b->end())
+                return false;
+            for (const auto& c : after)
+                if (c.track == a->track && c.id != a->id && c.id != b->id && c.start < a->end() && c.end() > b->start)
+                    return false;
+        }
+        const auto permitted = [&](const Clip& a, const Clip& b) {
+            return std::any_of(transitions.begin(), transitions.end(), [&](const auto& t) {
+                const auto* outgoing = find(t.outgoing);
+                const auto* incoming = find(t.incoming);
+                return outgoing && incoming && linked(a, *outgoing) && linked(b, *incoming) &&
+                       a.start == outgoing->start && a.end() == outgoing->end() && b.start == incoming->start &&
+                       b.end() == incoming->end();
+            });
+        };
         const Clip* previous = nullptr;
         for (const auto& c : after) {
             const auto* source = asset(c.asset);
             if (!source || c.start < 0 || c.source_in < 0 || c.duration() <= 0 || c.source_out > source->duration)
                 return false;
-            if (previous && previous->track == c.track && previous->end() > c.start)
+            if (previous && previous->track == c.track && previous->end() > c.start && !permitted(*previous, c))
                 return false;
             previous = &c;
         }
-        if (after == clips_)
+        if (after == clips_ && transitions == transitions_)
             return false;
         Command command;
+        command.transitions_before = transitions_;
+        command.transitions_after = transitions;
         command.selection_before = selection_;
         command.selection_after = selection;
         for (const auto& c : clips_)
@@ -327,6 +444,7 @@ class Workspace {
         history_.push_back(std::move(command));
         ++cursor_;
         clips_ = std::move(after);
+        transitions_ = std::move(transitions);
         selection_ = selection;
         seek(playhead_);
         return true;

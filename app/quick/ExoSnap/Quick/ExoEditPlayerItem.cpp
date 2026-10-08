@@ -181,6 +181,30 @@ class EditPlayerTextureNode final : public QSGNode {
         return true;
     }
 
+    bool upload(const exosnap::engine::TimelineVideoFrame& frame, QString& error) {
+        if (!ensureTextures(frame.output.width, frame.output.height, error))
+            return false;
+        window_->beginExternalCommands();
+        context_->ClearState();
+        std::string message;
+        bool ok = true;
+        if (!timeline_compositor_) {
+            timeline_compositor_ = std::make_unique<exosnap::engine::EditTimelineCompositor>();
+            ok = timeline_compositor_->Init(device_, context_, frame.output, message);
+        }
+        if (ok)
+            ok = timeline_compositor_->Compose(frame.layers, message);
+        if (ok) {
+            context_->CopyResource(converted_texture_.Get(), timeline_compositor_->Result());
+            ok = rgba_converter_->convert(message);
+        }
+        window_->endExternalCommands();
+        if (!ok)
+            error = QString::fromStdString(message);
+        has_frame_ = ok;
+        return ok;
+    }
+
     // Contain-fit: the decoded frame keeps its aspect ratio inside the item, and
     // the letterbox bands stay the player frame's own background.
     void setGeometryForRect(const QRectF& bounds, qreal radius) {
@@ -208,6 +232,7 @@ class EditPlayerTextureNode final : public QSGNode {
         }
         rgba_converter_.reset();
         frame_converter_.reset();
+        timeline_compositor_.reset();
         display_texture_.Reset();
         converted_texture_.Reset();
         width_ = 0;
@@ -226,6 +251,7 @@ class EditPlayerTextureNode final : public QSGNode {
     }
 
   private:
+    std::unique_ptr<exosnap::engine::EditTimelineCompositor> timeline_compositor_;
     void updateClipGeometry(const QRectF& rect, qreal radius) {
         if (clip_node_ == nullptr)
             return;
@@ -324,6 +350,7 @@ void ExoEditPlayerItem::presentFrame(exosnap::engine::RawDecodedVideoFrame frame
         if (pending_.frame)
             exosnap::engine::RecordPerformanceEvent(exosnap::engine::PerformanceStage::MailboxReplaced);
         pending_.frame = std::move(frame);
+        pending_.timeline.reset();
         pending_.clear = false;
         pending_.generation = next_generation_++;
         active_generation_.store(pending_.generation, std::memory_order_release);
@@ -336,16 +363,31 @@ void ExoEditPlayerItem::setClockUs(int64_t media_time_us) noexcept {
     clock_us_.store(media_time_us, std::memory_order_relaxed);
 }
 
-void ExoEditPlayerItem::clearFrame() {
+void ExoEditPlayerItem::presentTimelineFrame(exosnap::engine::TimelineVideoFrame frame) {
     {
         QMutexLocker lock(&pending_mutex_);
         pending_.frame.reset();
-        pending_.clear = true;
+        pending_.timeline = std::move(frame);
+        pending_.clear = false;
         pending_.generation = next_generation_++;
         active_generation_.store(pending_.generation, std::memory_order_release);
     }
+    QMetaObject::invokeMethod(this, [this]() { update(); }, Qt::QueuedConnection);
+}
+
+void ExoEditPlayerItem::clearFrame() {
+    quint64 generation = 0;
+    {
+        QMutexLocker lock(&pending_mutex_);
+        pending_.frame.reset();
+        pending_.timeline.reset();
+        pending_.clear = true;
+        pending_.generation = next_generation_++;
+        active_generation_.store(pending_.generation, std::memory_order_release);
+        generation = pending_.generation;
+    }
     clock_us_.store(-1, std::memory_order_relaxed);
-    applyRenderState(false, {}, {});
+    postRenderState(generation, false, {}, {});
     QMetaObject::invokeMethod(this, [this]() { update(); }, Qt::QueuedConnection);
 }
 
@@ -353,6 +395,7 @@ ExoEditPlayerItem::PendingFrame ExoEditPlayerItem::takePendingFrame() {
     QMutexLocker lock(&pending_mutex_);
     PendingFrame result = std::move(pending_);
     pending_.frame.reset();
+    pending_.timeline.reset();
     pending_.clear = false;
     pending_.generation = 0;
     return result;
@@ -369,17 +412,17 @@ QSGNode* ExoEditPlayerItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeDa
     }
 
     if (node == nullptr) {
-        if (!pending.frame.has_value())
+        if (!pending.frame.has_value() && !pending.timeline.has_value())
             return nullptr;
         node = new EditPlayerTextureNode;
     }
 
-    if (pending.frame.has_value()) {
+    if (pending.frame.has_value() || pending.timeline.has_value()) {
         node->setGeneration(pending.generation);
         QString error;
         if (!node->bind(window(), error)) {
             postRenderState(pending.generation, false, {}, error);
-        } else if (!node->upload(*pending.frame, error)) {
+        } else if (!(pending.timeline ? node->upload(*pending.timeline, error) : node->upload(*pending.frame, error))) {
             postRenderState(pending.generation, false, node->sourceSize(), error);
         } else {
             postRenderState(pending.generation, true, node->sourceSize(), {});

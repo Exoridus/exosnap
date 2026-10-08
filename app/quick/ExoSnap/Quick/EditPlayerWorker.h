@@ -9,6 +9,8 @@
 #include <QTimer>
 
 #include <exosnap/engine/edit_player_session.h>
+#include <exosnap/engine/edit_timeline_render.h>
+#include <exosnap/engine/wasapi_audio_render.h>
 
 #include <memory>
 
@@ -30,6 +32,9 @@ class EditPlayerWorker : public QObject {
     explicit EditPlayerWorker(std::shared_ptr<EditPlayerFrameSink> sink);
     ~EditPlayerWorker() override;
     void setTimeline(edit::Workspace workspace);
+    void setRequestGeneration(uint64_t generation) {
+        request_generation_ = generation;
+    }
 
   public slots:
     void open(const QString& master_path, qint64 duration_ms, double screen_hz);
@@ -55,6 +60,8 @@ class EditPlayerWorker : public QObject {
     void syncClock();
     void onTick();
     void seekTimeline(qint64 position_ms, bool resume);
+    bool renderTimeline(qint64 position_ms);
+    void tickRenderTimeline();
 
     std::shared_ptr<EditPlayerFrameSink> sink_;
     std::unique_ptr<exosnap::engine::EditPlayerSession> session_;
@@ -68,6 +75,13 @@ class EditPlayerWorker : public QObject {
     bool timeline_mode_ = false;
     bool timeline_playing_ = false;
     double volume_ = 1.0;
+    uint64_t request_generation_ = 0;
+    bool render_mode_ = false;
+    std::unique_ptr<engine::EditTimelineReader> render_reader_;
+    std::unique_ptr<engine::WasapiAudioRenderer> render_audio_;
+    engine::EditRenderPlan render_plan_;
+    qint64 render_origin_ms_ = 0;
+    int64_t audio_sample_ = 0;
 };
 
 } // namespace exosnap::quick

@@ -866,7 +866,8 @@ bool MatroskaStreamWriter::Finalize() {
                     last_frame_ns = static_cast<uint64_t>(m_config.frame_rate_den) * 1000000000ULL /
                                     static_cast<uint64_t>(m_config.frame_rate_num);
                 }
-                const uint64_t duration_ms = (m_max_emitted_pts_ns + last_frame_ns) / kTimecodeScaleNs;
+                const uint64_t duration_ms =
+                    m_config.timeline_duration_ns.value_or(m_max_emitted_pts_ns + last_frame_ns) / kTimecodeScaleNs;
                 auto& dur = libebml::GetChild<libmatroska::KaxDuration>(*m_info);
                 dur.SetValue(static_cast<double>(duration_ms));
                 // Patch ONLY the Duration leaf in place. It was rendered as a

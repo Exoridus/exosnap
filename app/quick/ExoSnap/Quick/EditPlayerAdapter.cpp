@@ -1,4 +1,5 @@
 #include "EditPlayerAdapter.h"
+#include "EditRenderText.h"
 #include <QCoreApplication>
 
 #include "EditPlayerWorker.h"
@@ -56,6 +57,19 @@ void EditPlayerFrameSink::publishClock(int64_t media_time_us) {
         item_->setClockUs(media_time_us);
 }
 
+uint64_t EditPlayerFrameSink::invalidate() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (item_)
+        item_->clearFrame();
+    return ++generation_;
+}
+
+void EditPlayerFrameSink::deliverTimeline(exosnap::engine::TimelineVideoFrame frame, uint64_t generation) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (item_ && generation == generation_)
+        item_->presentTimelineFrame(std::move(frame));
+}
+
 void EditPlayerFrameSink::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (item_ != nullptr)
@@ -72,10 +86,10 @@ EditPlayerAdapter::EditPlayerAdapter(QObject* parent) : QObject(parent) {
             clip_open_ = opened;
             emit clipOpenChanged();
         }
-        setPlaceholderText(
-            opened
-                ? QString()
-                : (error.isEmpty() ? QCoreApplication::translate("EditPlayerAdapter", "Preview unavailable") : error));
+        setPlaceholderText(opened ? QString()
+                                  : (error.isEmpty()
+                                         ? QCoreApplication::translate("EditPlayerAdapter", "Preview unavailable")
+                                         : TranslateEditRenderReason(error)));
     });
     connect(worker_, &EditPlayerWorker::positionAdvanced, this, [this](qint64 position_ms) {
         if (session_ != nullptr)
@@ -112,9 +126,11 @@ void EditPlayerAdapter::setSession(EditSessionAdapter* session) {
             return;
         timeline_clips_ = workspace.clips();
         setPlaying(false);
+        const auto generation = sink_->invalidate();
         QMetaObject::invokeMethod(
             worker_,
-            [worker = worker_, workspace = std::move(workspace)]() mutable {
+            [worker = worker_, workspace = std::move(workspace), generation]() mutable {
+                worker->setRequestGeneration(generation);
                 worker->setTimeline(std::move(workspace));
             },
             Qt::QueuedConnection);
@@ -251,7 +267,14 @@ void EditPlayerAdapter::closeClip() {
 
 void EditPlayerAdapter::seek(qint64 position_ms) {
     setPlaying(false);
-    QMetaObject::invokeMethod(worker_, "seek", Qt::QueuedConnection, Q_ARG(qint64, position_ms));
+    const auto generation = sink_->invalidate();
+    QMetaObject::invokeMethod(
+        worker_,
+        [worker = worker_, position_ms, generation]() {
+            worker->setRequestGeneration(generation);
+            worker->seek(position_ms);
+        },
+        Qt::QueuedConnection);
 }
 
 void EditPlayerAdapter::setVolume(double volume) {

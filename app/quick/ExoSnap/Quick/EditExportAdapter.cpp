@@ -1,10 +1,13 @@
 #include "EditExportAdapter.h"
 #include <QCoreApplication>
 
+#include "EditRenderText.h"
 #include "EditSessionAdapter.h"
 
 #include "models/EditTimelineModel.h"
 #include "models/MarkerSidecar.h"
+#include "models/OutputSettingsModel.h"
+#include "models/VideoSettingsModel.h"
 #include "services/AtomicFileOps.h"
 
 #include <QDateTime>
@@ -14,8 +17,12 @@
 #include <QMetaObject>
 #include <QProcess>
 #include <QStandardPaths>
+#include <QThread>
+#include <QTimer>
 #include <QVariantMap>
+#include <capability/encoder_device_resolver.h>
 #include <exosnap/engine/edit_timeline_export.h>
+#include <exosnap/engine/edit_timeline_render.h>
 #include <windows.h>
 
 #include <exosnap/engine/mp4_remuxer.h>
@@ -41,6 +48,75 @@ QVariantMap option(const QString& value, const QString& label) {
 
 } // namespace
 
+engine::ResolvedEncoderDevice
+ResolveEditEncoderDevice(std::span<const capability::AdapterInfo> adapters,
+                         std::span<const capability::AdapterEncoderCapability> adapter_caps,
+                         capability::VideoCodec codec, const engine::EncoderDevicePreference& preference) {
+    const auto candidates = capability::BuildEncoderDeviceCandidates(
+        adapters, adapter_caps, {codec, capability::ChromaSubsampling::Cs420, capability::BitDepth::Bit8});
+    engine::ResolvedEncoderDevice device;
+    const bool automatic = preference.mode == engine::EncoderDevicePreference::Mode::Auto;
+    int64_t compositor_luid = 0;
+    if (automatic) {
+        const auto selected = std::find_if(candidates.begin(), candidates.end(),
+                                           [](const auto& candidate) { return candidate.usable(); });
+        if (selected == candidates.end()) {
+            device.reason =
+                EditExportAdapter::tr("No probed encoder adapter supports this render format.").toStdString();
+            return device;
+        }
+        // Decoded media is composed on this adapter, so its affinity is concrete without a capture source.
+        compositor_luid = selected->adapter.luid;
+    }
+    const auto resolution = capability::ResolveEncoderDevice(candidates, preference, compositor_luid, automatic);
+    if (resolution.resolved && resolution.candidate_index >= 0) {
+        const auto& candidate = candidates[static_cast<size_t>(resolution.candidate_index)];
+        device.valid = true;
+        device.adapter_luid = candidate.adapter.luid;
+        device.vendor_id = candidate.adapter.vendor_id;
+        device.backend = candidate.backend;
+        device.device = capability::FingerprintFromAdapter(candidate.adapter);
+    }
+    device.reason = resolution.reason;
+    return device;
+}
+
+engine::RecorderConfig BuildEditRenderConfig(const OutputSettingsModel& output, const VideoSettingsModel& video,
+                                             const capability::CapabilitySet& encoder_caps,
+                                             const engine::ResolvedEncoderDevice& encoder_device) {
+    engine::RecorderConfig config;
+    config.encoder_device = video.encoder_device;
+    config.resolved_encoder_device = encoder_device;
+    config.backend_tuning =
+        ResolveOutputNvencTuning(output, encoder_caps, output.video_codec, video.rate_control).tuning;
+    config.cq = video.cq;
+    config.rate_control_mode = video.rate_control;
+    config.target_bitrate_kbps = video.bitrate_kbps;
+    switch (output.video_codec) {
+    case capability::VideoCodec::H264:
+        config.video_codec = engine::VideoCodec::H264;
+        break;
+    case capability::VideoCodec::Hevc:
+        config.video_codec = engine::VideoCodec::Hevc;
+        break;
+    case capability::VideoCodec::Av1:
+        config.video_codec = engine::VideoCodec::Av1;
+        break;
+    }
+    switch (video.keyframe_interval) {
+    case KeyframeIntervalMode::Seconds2:
+        config.keyframe_interval_secs = 2.0f;
+        break;
+    case KeyframeIntervalMode::Seconds1:
+        config.keyframe_interval_secs = 1.0f;
+        break;
+    case KeyframeIntervalMode::Seconds0_5:
+        config.keyframe_interval_secs = 0.5f;
+        break;
+    }
+    return config;
+}
+
 std::filesystem::path DefaultEditExportPath(const std::filesystem::path& output_directory, bool to_mp4) {
     return output_directory / (to_mp4 ? L"ExoSnap-export.mp4" : L"ExoSnap-export.mkv");
 }
@@ -50,6 +126,16 @@ bool ShouldPublishExportProgress(float fraction, int last_published_percent) {
 }
 
 EditExportAdapter::EditExportAdapter(QObject* parent) : QObject(parent) {
+    auto* timer = new QTimer(this);
+    timer->setInterval(100);
+    connect(timer, &QTimer::timeout, this, [this] {
+        if (run_ && running()) {
+            const int percent = run_->percent.load();
+            if (percent >= 0 && percent != progress_percent_)
+                publishProgress(percent);
+        }
+    });
+    timer->start();
 }
 
 QVariantList EditExportAdapter::profileOptions() {
@@ -58,7 +144,7 @@ QVariantList EditExportAdapter::profileOptions() {
          {tr("YouTube 1080p"), tr("YouTube 1440p"), tr("YouTube 4K"), tr("Archive / High quality")}) {
         auto profile = option(label, label);
         profile[QStringLiteral("selectable")] = false;
-        profile[QStringLiteral("reason")] = tr("Requires render export, which is not available yet.");
+        profile[QStringLiteral("reason")] = tr("Only Match source is supported for render export.");
         profiles.push_back(profile);
     }
     return profiles;
@@ -93,11 +179,18 @@ void EditExportAdapter::chooseDestination() {
 }
 
 EditExportAdapter::~EditExportAdapter() {
-    // The run captures `this`, so it cannot outlive the adapter. Cancelling
-    // first keeps the wait bounded by one remux packet rather than by the clip.
-    export_cancel_.store(true);
-    if (export_thread_.joinable())
-        export_thread_.join();
+    cancelAndWait();
+}
+
+void EditExportAdapter::cancelAndWait() {
+    if (run_)
+        run_->cancel.store(true);
+    if (auto* worker = std::exchange(export_thread_, nullptr)) {
+        disconnect(worker, nullptr, this, nullptr);
+        worker->wait();
+        delete worker;
+    }
+    run_.reset();
 }
 
 void EditExportAdapter::setSession(EditSessionAdapter* session) {
@@ -193,6 +286,8 @@ bool EditExportAdapter::overwriteSelected() const {
 }
 
 QString EditExportAdapter::destinationText() const {
+    if (session_ && !session_->workspace().transitions().empty())
+        return tr("Render Crossfade: SDR BT.709 video and PCM audio in Matroska. Choose an MKV destination.");
     if (overwriteSelected())
         return QCoreApplication::translate("EditExportAdapter",
                                            "Lossless stream copy\nReplaces the original recording");
@@ -255,12 +350,11 @@ void EditExportAdapter::retryInFolder(const QUrl& folder) {
     startExport();
 }
 
-// Cancel does NOT declare the run finished: the remux thread is still winding
-// down and the join belongs to its own completion, not to the next run.
 void EditExportAdapter::cancel() {
     if (state_ != State::Running)
         return;
-    export_cancel_.store(true);
+    if (run_)
+        run_->cancel.store(true);
     setState(State::Cancelling);
 }
 
@@ -271,7 +365,6 @@ void EditExportAdapter::startExport() {
     error_text_.clear();
     destination_failure_ = false;
     progress_percent_ = 0;
-    last_published_percent_ = -1;
     emit progressChanged();
     emit resultChanged();
 
@@ -291,6 +384,11 @@ void EditExportAdapter::startExport() {
          (to_mp4 ? L".mp4" : L".mkv"));
     const std::filesystem::path output = retry_output_path_.value_or(chosen_output_.value_or(suggested));
     std::vector<engine::TimelineExportClip> recipe;
+    engine::TimelineRenderSnapshot render_snapshot;
+    render_snapshot.timeline = session_->workspace().timeline();
+    for (const auto& asset : session_->workspace().assets())
+        render_snapshot.sources.push_back({asset.id, std::filesystem::path(asset.path), {}});
+    const auto render_config = render_config_ ? render_config_() : engine::RecorderConfig{};
     std::vector<RecordingMarker> timeline_markers;
     for (const auto& clip : session_->workspace().clips()) {
         const auto track = std::find_if(session_->workspace().tracks().begin(), session_->workspace().tracks().end(),
@@ -327,75 +425,86 @@ void EditExportAdapter::startExport() {
     output_path_ = output;
     emit resultChanged();
 
-    // A previous run is always joined by its own completion handler, so the
-    // handle here is never joinable at this point. Kept as a defensive join
-    // rather than an assert because a detached thread would outlive `this`.
-    if (export_thread_.joinable())
-        export_thread_.join();
-    export_cancel_.store(false);
+    run_ = std::make_shared<RunState>();
     setState(State::Running);
 
-    export_thread_ = std::thread(
-        [this, recipe = std::move(recipe), output, to_mp4, replace_existing, marker_plan = std::move(marker_plan)]() {
-            const auto temp_output = MakeDisposableSiblingStagingPath(output);
+    export_thread_ = QThread::create([run = run_, recipe = std::move(recipe),
+                                      render_snapshot = std::move(render_snapshot), render_config, output, to_mp4,
+                                      replace_existing, marker_plan = std::move(marker_plan)]() mutable {
+        const auto temp_output = MakeDisposableSiblingStagingPath(output);
 
-            auto progress_cb = [this](float fraction) -> bool {
-                if (export_cancel_.load())
-                    return false;
-                if (!ShouldPublishExportProgress(fraction, last_published_percent_))
-                    return true;
-                const int percent = fraction <= 0.0f ? 0 : fraction >= 1.0f ? 100 : static_cast<int>(fraction * 100.0f);
-                last_published_percent_ = percent;
-                QMetaObject::invokeMethod(this, [this, percent]() { publishProgress(percent); }, Qt::QueuedConnection);
-                return true;
-            };
+        auto progress_cb = [run](float fraction) -> bool {
+            if (run->cancel.load())
+                return false;
+            const int percent = fraction <= 0.0f ? 0 : fraction >= 1.0f ? 100 : static_cast<int>(fraction * 100.0f);
+            run->percent.store(percent);
+            return true;
+        };
 
-            exosnap::engine::RemuxResult result =
-                engine::ExportTimelineStreamCopy(recipe, temp_output, to_mp4, progress_cb);
-            bool ok = result.success;
-            std::string error = result.message;
+        const auto copy_assessment = engine::AssessTimelineExport(recipe, to_mp4);
+        if (!render_snapshot.timeline.crossfades.empty() ||
+            copy_assessment.eligibility != engine::TimelineExportEligibility::StreamCopy)
+            for (auto& source : render_snapshot.sources)
+                source.metadata = engine::ProbeEditMedia(source.path);
+        const auto plan = engine::ClassifyEditExport(render_snapshot, copy_assessment, to_mp4);
+        exosnap::engine::RemuxResult result;
+        switch (plan.path) {
+        case engine::EditExportPath::StreamCopy:
+            result = engine::ExportTimelineStreamCopy(recipe, temp_output, to_mp4, progress_cb);
+            break;
+        case engine::EditExportPath::Render:
+            result = engine::RenderEditTimeline(render_snapshot, plan, render_config, temp_output, to_mp4, progress_cb);
+            break;
+        case engine::EditExportPath::Unsupported:
+            result = engine::RemuxResult::Fail(-1, plan.reason);
+            break;
+        }
+        bool ok = result.success;
+        std::string error = result.message;
 
-            if (ok) {
-                std::error_code ec;
-                if (replace_existing) {
-                    const auto error_code = AtomicReplaceInPlace(temp_output, output);
-                    if (error_code)
-                        ec = std::error_code(static_cast<int>(error_code), std::system_category());
-                } else {
-                    if (!MoveFileExW(temp_output.c_str(), output.c_str(), MOVEFILE_WRITE_THROUGH))
-                        ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
-                }
-                if (ec) {
-                    ok = false;
-                    error = "Failed to save output file: " + ec.message();
-                    if (const std::string left = exosnap::DescribeFailedStagingRemoval(temp_output); !left.empty())
-                        error += " (" + left + ")";
-                }
+        if (ok) {
+            std::error_code ec;
+            if (replace_existing) {
+                const auto error_code = AtomicReplaceInPlace(temp_output, output);
+                if (error_code)
+                    ec = std::error_code(static_cast<int>(error_code), std::system_category());
             } else {
+                if (!MoveFileExW(temp_output.c_str(), output.c_str(), MOVEFILE_WRITE_THROUGH))
+                    ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+            }
+            if (ec) {
+                ok = false;
+                error = "Failed to save output file: " + ec.message();
                 if (const std::string left = exosnap::DescribeFailedStagingRemoval(temp_output); !left.empty())
                     error += " (" + left + ")";
             }
+        } else {
+            if (const std::string left = exosnap::DescribeFailedStagingRemoval(temp_output); !left.empty())
+                error += " (" + left + ")";
+        }
 
-            if (ok)
-                ApplyMarkerExportPlan(marker_plan);
+        if (ok)
+            ApplyMarkerExportPlan(marker_plan);
 
-            const bool cancelled = export_cancel_.load();
-            QMetaObject::invokeMethod(
-                this,
-                [this, ok, error, output, cancelled]() {
-                    finishRun(ok, QString::fromStdString(error), QString::fromStdWString(output.wstring()), cancelled);
-                },
-                Qt::QueuedConnection);
-        });
+        run->ok = ok;
+        run->error = std::move(error);
+    });
+    export_thread_->setParent(this);
+    connect(export_thread_, &QThread::finished, this, [this, run = run_, output] {
+        if (run_ != run)
+            return;
+        auto* worker = std::exchange(export_thread_, nullptr);
+        // finished precedes thread-local destruction. Join before releasing the worker's resources.
+        worker->wait();
+        delete worker;
+        run_.reset();
+        finishRun(run->ok, QString::fromStdString(run->error), QString::fromStdWString(output.wstring()),
+                  run->cancel.load());
+    });
+    export_thread_->start();
 }
 
-// Runs on the GUI thread once the export thread has posted its result. The join
-// here is what keeps `exportRunning` honest: the flag only drops after the
-// thread is actually gone, so a Retry can never land inside a join.
 void EditExportAdapter::finishRun(bool ok, const QString& error, const QString& output_path, bool cancelled) {
-    if (export_thread_.joinable())
-        export_thread_.join();
-
     output_path_ = std::filesystem::path(output_path.toStdWString());
 
     if (cancelled && !ok) {
@@ -419,8 +528,9 @@ void EditExportAdapter::finishRun(bool ok, const QString& error, const QString& 
         return;
     }
 
-    error_text_ = error.isEmpty() ? QCoreApplication::translate("EditExportAdapter", "Unknown error")
-                                  : EditExportAdapter::tr("Export could not complete: %1").arg(error);
+    error_text_ = error.isEmpty()
+                      ? QCoreApplication::translate("EditExportAdapter", "Unknown error")
+                      : EditExportAdapter::tr("Export could not complete: %1").arg(TranslateEditRenderReason(error));
     const QString lower_error = error_text_.toLower();
     destination_failure_ =
         lower_error.contains(QStringLiteral("save output")) || lower_error.contains(QStringLiteral("permission")) ||

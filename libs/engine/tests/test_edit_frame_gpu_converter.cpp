@@ -14,7 +14,11 @@
 // Tolerance is +-2 codes per channel, matching test_gpu_hdr_tonemap.cpp: the CPU
 // reference rounds 16.16 fixed-point where the GPU rounds a float UNORM write.
 
+#include <algorithm>
+#include <array>
+#include <exosnap/engine/gpu_surface_inventory.h>
 #include <gtest/gtest.h>
+#include <iostream>
 
 #include "exosnap/engine/color_metadata.h"
 #include "exosnap/engine/edit_player_engine.h"
@@ -22,6 +26,8 @@
 #include "yuv_to_bgra.h"
 
 #include <exosnap/engine/edit_frame_gpu_converter.h>
+#include <exosnap/engine/edit_timeline_compositor.h>
+#include <exosnap/engine/sdr_transfer.h>
 
 #include <d3d11.h>
 #include <winrt/base.h>
@@ -233,6 +239,8 @@ RawDecodedVideoFrame Frame420P8(const Planes8& p, MatrixCoefficients matrix, Col
     f.width = kWidth;
     f.height = kHeight;
     f.format = DecodedPixelFormat::Yuv420P8;
+    f.primaries = exosnap::engine::ColorPrimaries::Bt709;
+    f.transfer = exosnap::engine::TransferCharacteristics::Bt709;
     f.y_stride_bytes = p.y_stride;
     f.u_stride_bytes = p.c_stride;
     f.v_stride_bytes = p.c_stride;
@@ -628,6 +636,79 @@ TEST(EditFrameGpuConverterTest, ConvertRejectsInvalidArguments) {
     RawDecodedVideoFrame no_planes = Frame420P8(p, MatrixCoefficients::Bt709, ColorRange::Limited);
     no_planes.u_plane = nullptr;
     EXPECT_FALSE(converter.Convert(no_planes, dst.get(), 1.0f, err));
+}
+
+TEST(EditTimelineCompositor, LinearCrossfadeEndpointsMidpointAndBoundedResources) {
+    using namespace exosnap::engine;
+    auto warp = CreateWarpDevice();
+    auto red = MakePlanes8(kChromaW, kChromaH);
+    auto blue = red;
+    std::fill(red.y.begin(), red.y.end(), 63);
+    std::fill(red.u.begin(), red.u.end(), 102);
+    std::fill(red.v.begin(), red.v.end(), 240);
+    std::fill(blue.y.begin(), blue.y.end(), 32);
+    std::fill(blue.u.begin(), blue.u.end(), 240);
+    std::fill(blue.v.begin(), blue.v.end(), 118);
+    EditTimelineCompositor compositor;
+    std::string error;
+    ASSERT_TRUE(compositor.Init(warp.device.get(), warp.context.get(), {32, 16}, error)) << error;
+    std::array<TimelineVideoLayer, 2> layers{{{Frame420P8(red, MatrixCoefficients::Bt709, ColorRange::Limited), 1},
+                                              {Frame420P8(blue, MatrixCoefficients::Bt709, ColorRange::Limited), 0}}};
+    D3D11_BLEND_DESC masked{};
+    winrt::com_ptr<ID3D11BlendState> blend;
+    ASSERT_TRUE(SUCCEEDED(warp.device->CreateBlendState(&masked, blend.put())));
+    warp.context->OMSetBlendState(blend.get(), nullptr, 0xffffffff);
+    D3D11_RASTERIZER_DESC raster{};
+    raster.FillMode = D3D11_FILL_SOLID;
+    raster.CullMode = D3D11_CULL_NONE;
+    raster.ScissorEnable = TRUE;
+    winrt::com_ptr<ID3D11RasterizerState> scissor;
+    ASSERT_TRUE(SUCCEEDED(warp.device->CreateRasterizerState(&raster, scissor.put())));
+    warp.context->RSSetState(scissor.get());
+    RECT empty{};
+    warp.context->RSSetScissorRects(1, &empty);
+    ASSERT_TRUE(compositor.Compose(layers, error)) << error;
+    const auto before = ReadBgra(warp.device.get(), warp.context.get(), compositor.Result());
+    layers[0].weight = 0;
+    layers[1].weight = 1;
+    ASSERT_TRUE(compositor.Compose(layers, error)) << error;
+    const auto after = ReadBgra(warp.device.get(), warp.context.get(), compositor.Result());
+    const size_t center = (8 * 32 + 16) * 4;
+    EXPECT_GT(before[center + 2], 250);
+    EXPECT_LT(before[center], 3);
+    EXPECT_GT(after[center], 250);
+    EXPECT_LT(after[center + 2], 3);
+    layers[0].weight = layers[1].weight = 0.5;
+    const auto creations = compositor.TextureCreations();
+    const auto surfaces = ReadGpuSurfaceUsage(GpuSurfaceOwner::Editor);
+    for (int i = 0; i < 120; ++i)
+        ASSERT_TRUE(compositor.Compose(layers, error)) << error;
+    EXPECT_EQ(compositor.TextureCreations(), creations);
+    EXPECT_EQ(ReadGpuSurfaceUsage(GpuSurfaceOwner::Editor).surfaces, surfaces.surfaces);
+    EXPECT_EQ(ReadGpuSurfaceUsage(GpuSurfaceOwner::Editor).bytes, surfaces.bytes);
+    std::cout << "timeline GPU inventory: surfaces=" << surfaces.surfaces << " logical_bytes=" << surfaces.bytes
+              << '\n';
+    const auto middle = ReadBgra(warp.device.get(), warp.context.get(), compositor.Result());
+    for (size_t channel = 0; channel < 3; ++channel) {
+        const float expected = LinearToBt709((Bt709ToLinear(before[center + channel] / 255.0f) +
+                                              Bt709ToLinear(after[center + channel] / 255.0f)) *
+                                             0.5f) *
+                               255;
+        EXPECT_NEAR(middle[center + channel], expected, 2);
+        EXPECT_EQ(middle[channel], 0);
+    }
+    D3D11_TEXTURE2D_DESC description{};
+    compositor.Result()->GetDesc(&description);
+    EXPECT_EQ(description.Width, 32u);
+    EXPECT_EQ(description.Height, 16u);
+    layers[0].frame.transfer = static_cast<TransferCharacteristics>(13);
+    EXPECT_FALSE(compositor.Compose(layers, error));
+    EXPECT_FALSE(error.empty());
+    EditTimelineCompositor failed;
+    EXPECT_FALSE(failed.Init(warp.device.get(), warp.context.get(), {65536, 2}, error));
+    EXPECT_FALSE(failed.Compose({}, error));
+    ASSERT_TRUE(failed.Init(warp.device.get(), warp.context.get(), {32, 16}, error));
+    EXPECT_TRUE(failed.Compose({}, error));
 }
 
 } // namespace

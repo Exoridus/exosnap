@@ -1220,6 +1220,7 @@ target_link_libraries(edit_timeline_qml_tests
         Qt6::Widgets
         exosnap_record_viewmodel_test_support
         exosnap_app_log_test_support
+        exosnap_capability
         exosnap_engine
         exosnap::warnings
 )
@@ -1983,6 +1984,7 @@ exosnap_add_gtest(
         Qt6::Qml
         Qt6::Quick
         exosnap_app_log_test_support
+        exosnap_capability
         exosnap_engine
 )
 
