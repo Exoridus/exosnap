@@ -2,17 +2,18 @@
 # changed and runs it. The separate target directory keeps the running binary
 # out of the tree that a verify run's own `cargo test` rebuilds, which Windows
 # would refuse while the executable is in use.
+#
+# Both values below are strings, not arrays. Cargo joins arrays from every
+# config file between the working directory and the filesystem root, so a git
+# worktree created inside this checkout would read the repository's copy and
+# its own: the alias would expand twice and hand exo-dev a literal `run`.
+# A string from the nearer file replaces the outer one instead.
 [alias]
-exo-dev = [
-    "run", "--quiet", "--locked",
-    "--manifest-path", "tools/Cargo.toml",
-    "--target-dir", "tools/target/exo-dev-host",
-    "-p", "exo-dev", "--",
-]
+exo-dev = "run --quiet --locked --manifest-path tools/Cargo.toml --target-dir tools/target/exo-dev-host -p exo-dev --"
 
 # The verifier and the guest agent run inside freshly created Windows guests
 # (Sandbox, Hyper-V base images) that carry no Visual C++ runtime. A binary
 # that imports VCRUNTIME140.dll fails there with STATUS_DLL_NOT_FOUND before
 # it can report anything.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = "-C target-feature=+crt-static"
