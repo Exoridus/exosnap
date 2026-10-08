@@ -8344,6 +8344,10 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::EditExportAdapter</name>
     <message>
+        <source>No probed encoder adapter supports this render format.</source>
+        <translation>Kein geprüfter Encoder-Adapter unterstützt dieses Renderformat.</translation>
+    </message>
+    <message>
         <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="-376"/>
         <source>Match source</source>
         <translation>Wie Quelle</translation>

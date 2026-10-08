@@ -473,6 +473,7 @@ class QuickConsoleDisplayStateFilter final : public QAbstractNativeEventFilter {
 } // namespace
 
 QuickApplication::~QuickApplication() {
+    edit_export_adapter_.cancelAndWait();
     if (console_display_notify_ != nullptr) {
         UnregisterPowerSettingNotification(static_cast<HPOWERNOTIFY>(console_display_notify_));
         console_display_notify_ = nullptr;
@@ -3542,34 +3543,10 @@ void QuickApplication::initializeEditArea() {
     edit_export_adapter_.setOutputDirectoryProvider(
         [this]() { return QString::fromStdWString(live_config_.output.output_folder.wstring()); });
     edit_export_adapter_.setRenderConfigProvider([this]() {
-        engine::RecorderConfig config;
-        config.encoder_device = live_config_.video.encoder_device;
-        config.cq = live_config_.video.cq;
-        config.rate_control_mode = live_config_.video.rate_control;
-        config.target_bitrate_kbps = live_config_.video.bitrate_kbps;
-        switch (live_config_.output.video_codec) {
-        case capability::VideoCodec::H264:
-            config.video_codec = engine::VideoCodec::H264;
-            break;
-        case capability::VideoCodec::Hevc:
-            config.video_codec = engine::VideoCodec::Hevc;
-            break;
-        case capability::VideoCodec::Av1:
-            config.video_codec = engine::VideoCodec::Av1;
-            break;
-        }
-        switch (live_config_.video.keyframe_interval) {
-        case KeyframeIntervalMode::Seconds2:
-            config.keyframe_interval_secs = 2.0f;
-            break;
-        case KeyframeIntervalMode::Seconds1:
-            config.keyframe_interval_secs = 1.0f;
-            break;
-        case KeyframeIntervalMode::Seconds0_5:
-            config.keyframe_interval_secs = 0.5f;
-            break;
-        }
-        return config;
+        const auto device =
+            ResolveEditEncoderDevice(device_adapter_.adapterInfos(), device_adapter_.adapterCapabilities(),
+                                     live_config_.output.video_codec, live_config_.video.encoder_device);
+        return BuildEditRenderConfig(live_config_.output, live_config_.video, encoderCapabilitiesFor(device), device);
     });
     QObject::connect(&edit_session_adapter_, &EditSessionAdapter::historyRequested, &edit_session_adapter_,
                      [this](const QString& path, qint64 at_ms) {
@@ -3748,12 +3725,9 @@ QuickApplication::EffectiveRecordingConfig QuickApplication::resolveEffectiveCon
     effective.config.video.frame_rate_den = resolved.frame_rate_den;
     effective.config.video.frame_pacing = resolved.frame_pacing;
     const auto encoder_caps = encoderCapabilitiesFor(resolveEncoderDeviceFor(selectedCaptureTarget()));
-    auto tuning = effective.config.output.nvenc_tuning;
-    tuning.preset = effective.config.output.nvenc_preset;
     effective.config.output.nvenc_tuning =
-        capability::ResolveNvencTuning(tuning, encoder_caps, effective.config.output.video_codec,
-                                       effective.config.video.rate_control,
-                                       effective.config.output.nvenc_lookahead_policy)
+        ResolveOutputNvencTuning(effective.config.output, encoder_caps, effective.config.output.video_codec,
+                                 effective.config.video.rate_control)
             .tuning;
     return effective;
 }

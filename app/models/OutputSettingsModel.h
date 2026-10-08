@@ -110,6 +110,16 @@ struct OutputSettingsModel {
     static OutputSettingsModel Defaults();
 };
 
+// Resolves the stored preset and tuning for the encoder adapter used by Record or Edit.
+[[nodiscard]] inline capability::NvencTuningResolution
+ResolveOutputNvencTuning(const OutputSettingsModel& settings, const capability::CapabilitySet& encoder_caps,
+                         capability::VideoCodec codec, engine::RateControlMode rate_control) {
+    auto requested = settings.nvenc_tuning;
+    requested.preset = settings.nvenc_preset;
+    return capability::ResolveNvencTuning(requested, encoder_caps, codec, rate_control,
+                                          settings.nvenc_lookahead_policy);
+}
+
 // Merges the format-editor-owned fields of a ConfigPage::formatSettingsChanged payload
 // into the live output settings. MainWindow's handler routes through this ONE function
 // so a model field can never again be dropped silently on the way to output_settings_

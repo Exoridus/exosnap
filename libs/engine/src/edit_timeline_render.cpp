@@ -1,3 +1,4 @@
+#include <capability/adapter_enum.h>
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
 #include <exosnap/engine/edit_timeline_render.h>
@@ -45,6 +46,10 @@ struct RenderDevice {
     winrt::com_ptr<ID3D11DeviceContext> context;
     uint32_t vendor = 0;
     bool Open(const RecorderConfig& config, std::string& error) {
+        if (!config.resolved_encoder_device.valid && !config.resolved_encoder_device.reason.empty()) {
+            error = config.resolved_encoder_device.reason;
+            return false;
+        }
         winrt::com_ptr<IDXGIFactory1> factory;
         if (!Check(CreateDXGIFactory1(__uuidof(IDXGIFactory1), factory.put_void()), "Create DXGI factory", error))
             return false;
@@ -56,6 +61,15 @@ struct RenderDevice {
             DXGI_ADAPTER_DESC1 description{};
             if (FAILED(adapter->GetDesc1(&description)) || (description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE))
                 continue;
+            if (config.resolved_encoder_device.valid) {
+                const auto luid =
+                    capability::PackAdapterLuid(description.AdapterLuid.HighPart, description.AdapterLuid.LowPart);
+                if (luid != config.resolved_encoder_device.adapter_luid)
+                    continue;
+                selected = std::move(adapter);
+                vendor = description.VendorId;
+                break;
+            }
             const auto& preference = config.encoder_device;
             const bool explicit_device = preference.mode == EncoderDevicePreference::Mode::Explicit;
             if (explicit_device && (preference.device.vendor_id != description.VendorId ||

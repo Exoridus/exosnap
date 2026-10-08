@@ -5,6 +5,11 @@
 #include "EditTimelineModels.h"
 
 #include "models/EditTimelineModel.h"
+#include "models/OutputSettingsModel.h"
+#include "models/VideoSettingsModel.h"
+
+#include <capability/capability_builder.h>
+#include <capability/encoder_device_resolver.h>
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -13,18 +18,33 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QPointer>
+#include <QSemaphore>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTimer>
 #include <QTranslator>
 #include <QVariantMap>
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace exosnap::quick {
+class EditExportAdapterTestPeer {
+  public:
+    static QThread* worker(const EditExportAdapter& adapter) {
+        return adapter.export_thread_;
+    }
+    static int progress(const EditExportAdapter& adapter) {
+        return adapter.run_->percent.load();
+    }
+};
+
 namespace {
 
 // EditSessionAdapter posts its keyframe scan through the event loop and every
@@ -720,6 +740,252 @@ TEST(EditExportAdapterRun, AnEmptyWorkspaceFailsBeforeAnyThreadIsStarted) {
     EXPECT_EQ(exporter.stateValue(), static_cast<int>(EditExportAdapter::Failed));
     EXPECT_FALSE(exporter.running());
     EXPECT_EQ(exporter.errorText(), QStringLiteral("No edit master available for export."));
+}
+
+TEST(EditExportAdapterRun, DestructionJoinsActiveRenderAndRemovesStagingWithoutEventDelivery) {
+    EnsureApplication();
+    const QString fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+    if (fixtures.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    QTemporaryDir output;
+    ASSERT_TRUE(output.isValid());
+    EditSessionAdapter session;
+    QEventLoop imported;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
+    QTimer::singleShot(10000, &imported, &QEventLoop::quit);
+    session.importMediaBatch({QUrl::fromLocalFile(QDir(fixtures).filePath(QStringLiteral("red.mkv"))),
+                              QUrl::fromLocalFile(QDir(fixtures).filePath(QStringLiteral("blue.mkv")))},
+                             true);
+    imported.exec();
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    ASSERT_EQ(session.workspace().assets().size(), 2u);
+    ASSERT_TRUE(session.applyCrossfade(session.workspace().clips().front().id));
+    // Enough real frames to observe an in-flight render even on a fast encoder.
+    for (int i = 0; i < 100; ++i)
+        session.appendAsset(session.workspace().assets().back().id);
+
+    auto exporter = std::make_unique<EditExportAdapter>();
+    exporter->setSession(&session);
+    exporter->setOutputDirectoryProvider([&] { return output.path(); });
+    exporter->startExport();
+    QPointer<QThread> worker = EditExportAdapterTestPeer::worker(*exporter);
+    ASSERT_NE(worker, nullptr);
+    std::atomic<bool> finished{false};
+    std::atomic<bool> completion_timed_out{false};
+    QSemaphore completion_gate;
+    QObject observer;
+    QObject::connect(
+        worker, &QThread::finished, &observer,
+        [&] {
+            finished.store(true);
+            completion_timed_out.store(!completion_gate.tryAcquire(1, 10000));
+        },
+        Qt::DirectConnection);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (EditExportAdapterTestPeer::progress(*exporter) < 1 && !finished.load() &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    const bool active = !finished.load() && EditExportAdapterTestPeer::progress(*exporter) >= 1;
+    EXPECT_TRUE(active) << "A real render must produce frames before cancellation.";
+    const auto staging = exporter->outputPath() + QStringLiteral(".tmp");
+    EXPECT_TRUE(QFileInfo::exists(staging));
+    exporter->cancel();
+    EXPECT_EQ(exporter->state(), EditExportAdapter::Cancelling);
+    EXPECT_FALSE(worker->wait(0)) << "UI cancellation must return before the gated worker exits.";
+    completion_gate.release();
+    exporter.reset();
+    EXPECT_FALSE(completion_timed_out.load());
+    EXPECT_TRUE(finished.load()) << "Destruction must join without processing queued completion.";
+    EXPECT_TRUE(worker.isNull()) << "The finished QThread must be destroyed synchronously.";
+    EXPECT_FALSE(QFileInfo::exists(staging));
+    EXPECT_TRUE(QDir(output.path()).entryList(QDir::Files).isEmpty());
+    // Keep teardown safe even when the ownership assertions fail.
+    if (worker) {
+        worker->wait();
+        delete worker.data();
+    }
+    QCoreApplication::processEvents();
+}
+
+TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQueued) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    EditSessionAdapter session;
+    const QString fixture =
+        QFileInfo(QString::fromUtf8(__FILE__))
+            .dir()
+            .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    QEventLoop imported;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
+    QTimer::singleShot(10000, &imported, &QEventLoop::quit);
+    session.importMedia(QUrl::fromLocalFile(fixture), true);
+    imported.exec();
+    ASSERT_EQ(session.workspace().clips().size(), 1u);
+    auto exporter = std::make_unique<EditExportAdapter>();
+    exporter->setSession(&session);
+    exporter->setOutputDirectoryProvider([&] { return directory.path(); });
+    exporter->startExport();
+    QPointer<QThread> worker = EditExportAdapterTestPeer::worker(*exporter);
+    ASSERT_NE(worker, nullptr);
+    ASSERT_TRUE(worker->wait(10000));
+    EXPECT_TRUE(exporter->running());
+    const auto destination = exporter->outputPath();
+    exporter.reset();
+    EXPECT_TRUE(worker.isNull());
+    EXPECT_TRUE(QFileInfo::exists(destination));
+    EXPECT_FALSE(QFileInfo::exists(destination + QStringLiteral(".tmp")));
+    if (worker)
+        delete worker.data();
+    QCoreApplication::processEvents();
+}
+
+capability::CapabilitySet RenderEncoderCaps() {
+    auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.runtime.adapter.vendor_id = 0x10DE;
+    caps.runtime.nvidia.nvenc_codec_probed = true;
+    caps.runtime.nvidia.nvenc_h264 = true;
+    caps.runtime.nvidia.nvenc_av1 = true;
+    caps.runtime.nvidia.nvenc_adv_h264 = {3, 2, true, true};
+    caps.runtime.nvidia.nvenc_adv_av1 = {7, 2, true, true};
+    capability::ApplyNvencCodecSupport(caps, caps.runtime.nvidia);
+    capability::ApplyNvencAdvancedEncodeSupport(caps, caps.runtime.nvidia);
+    return caps;
+}
+
+TEST(EditRenderConfig, PreservesExplicitPresetsAndSupportedAdvancedTuning) {
+    OutputSettingsModel output;
+    VideoSettingsModel video;
+    video.rate_control = engine::RateControlMode::VariableBitrate;
+    output.nvenc_tuning.bframes = 3;
+    output.nvenc_tuning.b_ref_mode = engine::NvencBRefMode::Middle;
+    output.nvenc_tuning.lookahead = true;
+    output.nvenc_tuning.lookahead_depth = 8;
+    output.nvenc_tuning.spatial_aq = true;
+    output.nvenc_tuning.temporal_aq = true;
+    output.nvenc_tuning.multipass = engine::NvencMultipass::QuarterResolution;
+    engine::ResolvedEncoderDevice device;
+    device.valid = true;
+    device.adapter_luid = 42;
+    device.vendor_id = 0x10DE;
+    device.backend = engine::EncoderBackend::Nvenc;
+    for (const auto preset : {engine::NvencPreset::P1, engine::NvencPreset::P7}) {
+        output.nvenc_preset = preset;
+        const auto config = BuildEditRenderConfig(output, video, RenderEncoderCaps(), device);
+        const auto* tuning = engine::GetNvencTuning(config.backend_tuning);
+        ASSERT_NE(tuning, nullptr);
+        auto expected = output.nvenc_tuning;
+        expected.preset = preset;
+        EXPECT_EQ(*tuning, expected);
+        EXPECT_TRUE(config.resolved_encoder_device.valid);
+        EXPECT_EQ(config.resolved_encoder_device.adapter_luid, 42);
+    }
+}
+
+TEST(EditRenderConfig, ResolvesAutomaticLookaheadForCodecAndRateControl) {
+    OutputSettingsModel output;
+    VideoSettingsModel video;
+    output.video_codec = capability::VideoCodec::Av1;
+    output.nvenc_lookahead_policy = capability::NvencLookaheadPolicy::Auto;
+    output.nvenc_tuning.lookahead_depth = 5;
+    video.rate_control = engine::RateControlMode::VariableBitrate;
+    auto config = BuildEditRenderConfig(output, video, RenderEncoderCaps(), {});
+    ASSERT_NE(engine::GetNvencTuning(config.backend_tuning), nullptr);
+    EXPECT_TRUE(engine::GetNvencTuning(config.backend_tuning)->lookahead);
+    EXPECT_EQ(engine::GetNvencTuning(config.backend_tuning)->lookahead_depth, 16u);
+    video.rate_control = engine::RateControlMode::ConstantQuality;
+    config = BuildEditRenderConfig(output, video, RenderEncoderCaps(), {});
+    ASSERT_NE(engine::GetNvencTuning(config.backend_tuning), nullptr);
+    EXPECT_FALSE(engine::GetNvencTuning(config.backend_tuning)->lookahead);
+    EXPECT_FALSE(output.nvenc_tuning.lookahead);
+    EXPECT_EQ(output.nvenc_tuning.lookahead_depth, 5u);
+}
+
+TEST(EditRenderConfig, ReconcilesSelectedAdapterLimitsWithoutChangingPreferences) {
+    OutputSettingsModel output;
+    VideoSettingsModel video;
+    output.nvenc_preset = engine::NvencPreset::P7;
+    output.nvenc_tuning.bframes = 20;
+    output.nvenc_tuning.lookahead = true;
+    output.nvenc_tuning.lookahead_depth = 32;
+    auto config = BuildEditRenderConfig(output, video, RenderEncoderCaps(), {});
+    ASSERT_NE(engine::GetNvencTuning(config.backend_tuning), nullptr);
+    EXPECT_EQ(engine::GetNvencTuning(config.backend_tuning)->bframes, 3u);
+    EXPECT_EQ(engine::GetNvencTuning(config.backend_tuning)->lookahead_depth, 16u);
+    config = BuildEditRenderConfig(output, video, {}, {});
+    ASSERT_NE(engine::GetNvencTuning(config.backend_tuning), nullptr);
+    EXPECT_EQ(engine::GetNvencTuning(config.backend_tuning)->preset, engine::NvencPreset::P7);
+    EXPECT_EQ(engine::GetNvencTuning(config.backend_tuning)->bframes, 0u);
+    EXPECT_FALSE(engine::GetNvencTuning(config.backend_tuning)->lookahead);
+    EXPECT_EQ(output.nvenc_tuning.bframes, 20u);
+    EXPECT_EQ(output.nvenc_tuning.lookahead_depth, 32u);
+}
+
+TEST(EditRenderConfig, AutomaticDeviceUsesActualRenderAdapterAndItsTuningCapabilities) {
+    std::vector<capability::AdapterInfo> adapters(2);
+    for (size_t i = 0; i < adapters.size(); ++i) {
+        adapters[i].vendor = capability::AdapterVendor::Nvidia;
+        adapters[i].vendor_id = 0x10DE;
+        adapters[i].device_id = static_cast<uint32_t>(i + 1);
+        adapters[i].luid = static_cast<int64_t>(i + 10);
+    }
+    std::vector<capability::AdapterEncoderCapability> adapter_caps(2);
+    adapter_caps[0].probed = true;
+    adapter_caps[1].probed = true;
+    adapter_caps[1].h264 = true;
+    adapter_caps[1].max_bframes_h264 = 3;
+    adapter_caps[1].lookahead_h264 = true;
+    OutputSettingsModel output;
+    output.nvenc_preset = engine::NvencPreset::P7;
+    output.nvenc_tuning.bframes = 3;
+    output.nvenc_tuning.lookahead = true;
+    output.nvenc_tuning.lookahead_depth = 8;
+    output.bit_depth = capability::BitDepth::Bit10;
+    output.chroma_subsampling = capability::ChromaSubsampling::Cs444;
+    VideoSettingsModel video;
+    const auto device = ResolveEditEncoderDevice(adapters, adapter_caps, output.video_codec, video.encoder_device);
+    ASSERT_TRUE(device.valid) << device.reason;
+    EXPECT_EQ(device.adapter_luid, adapters[1].luid);
+    const auto caps = capability::CapabilitySetForAdapter(RenderEncoderCaps(), adapters[1], adapter_caps[1]);
+    const auto config = BuildEditRenderConfig(output, video, caps, device);
+    const auto* tuning = engine::GetNvencTuning(config.backend_tuning);
+    ASSERT_NE(tuning, nullptr);
+    EXPECT_EQ(tuning->preset, engine::NvencPreset::P7);
+    EXPECT_EQ(tuning->bframes, 3u);
+    EXPECT_TRUE(tuning->lookahead);
+    EXPECT_EQ(tuning->lookahead_depth, 8u);
+    EXPECT_EQ(config.resolved_encoder_device.adapter_luid, adapters[1].luid);
+    EXPECT_EQ(config.bit_depth, engine::BitDepth::Bit8);
+    EXPECT_EQ(config.chroma, engine::ChromaSubsampling::Cs420);
+    adapter_caps[0].h264 = true;
+    EXPECT_EQ(ResolveEditEncoderDevice(adapters, adapter_caps, output.video_codec, video.encoder_device).adapter_luid,
+              adapters[0].luid);
+}
+
+TEST(EditRenderConfig, DeviceResolutionRejectsUnprobedAndAmbiguousSelections) {
+    capability::AdapterInfo adapter;
+    adapter.vendor = capability::AdapterVendor::Nvidia;
+    adapter.vendor_id = 0x10DE;
+    adapter.luid = 42;
+    std::vector<capability::AdapterInfo> adapters{adapter};
+    std::vector<capability::AdapterEncoderCapability> adapter_caps(1);
+    auto device = ResolveEditEncoderDevice(adapters, adapter_caps, capability::VideoCodec::H264, {});
+    EXPECT_FALSE(device.valid);
+    EXPECT_FALSE(device.reason.empty());
+    engine::EncoderDevicePreference preference;
+    preference.mode = engine::EncoderDevicePreference::Mode::Explicit;
+    preference.device = capability::FingerprintFromAdapter(adapter);
+    adapter_caps[0].probed = true;
+    adapter_caps[0].h264 = true;
+    device = ResolveEditEncoderDevice(adapters, adapter_caps, capability::VideoCodec::H264, preference);
+    EXPECT_TRUE(device.valid) << device.reason;
+    EXPECT_EQ(device.adapter_luid, 42);
+    adapters.push_back(adapter);
+    adapters.back().luid = 43;
+    adapter_caps.push_back(adapter_caps.front());
+    device = ResolveEditEncoderDevice(adapters, adapter_caps, capability::VideoCodec::H264, preference);
+    EXPECT_FALSE(device.valid);
+    EXPECT_NE(device.reason.find("Multiple adapters"), std::string::npos);
 }
 
 // ── Timeline models ────────────────────────────────────────────────────────

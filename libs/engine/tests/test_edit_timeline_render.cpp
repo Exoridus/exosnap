@@ -147,6 +147,23 @@ TEST(EditTimelineMedia, SharedReaderSeeksAudioAndRealExportReopens) {
     EXPECT_EQ(stats.video_frames, 105u);
     EXPECT_EQ(stats.audio_frames, 168000u);
     EXPECT_LE(stats.peak_decoders, 2u);
+    auto unavailable_device = config;
+    unavailable_device.resolved_encoder_device.valid = true;
+    unavailable_device.resolved_encoder_device.adapter_luid = -1;
+    const auto unavailable_output = std::filesystem::path(directory) / L"unavailable-adapter.mkv";
+    std::filesystem::remove(unavailable_output, ignored);
+    const auto unavailable =
+        RenderEditTimeline(snapshot, plan, unavailable_device, unavailable_output, false, RemuxNoopCallback());
+    EXPECT_FALSE(unavailable.success);
+    EXPECT_EQ(unavailable.message, "No supported encoder adapter is available for timeline rendering.");
+    EXPECT_FALSE(std::filesystem::exists(unavailable_output));
+    unavailable_device.resolved_encoder_device.valid = false;
+    unavailable_device.resolved_encoder_device.reason = "The selected adapter capability probe did not complete.";
+    const auto unprobed =
+        RenderEditTimeline(snapshot, plan, unavailable_device, unavailable_output, false, RemuxNoopCallback());
+    EXPECT_FALSE(unprobed.success);
+    EXPECT_EQ(unprobed.message, unavailable_device.resolved_encoder_device.reason);
+    EXPECT_FALSE(std::filesystem::exists(unavailable_output));
     EditPlayerEngine reopened;
     ASSERT_TRUE(reopened.Open(output, error)) << error;
     for (int64_t time : {500000LL, 1750000LL, 3000000LL}) {

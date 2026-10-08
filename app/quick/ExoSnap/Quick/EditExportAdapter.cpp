@@ -6,6 +6,8 @@
 
 #include "models/EditTimelineModel.h"
 #include "models/MarkerSidecar.h"
+#include "models/OutputSettingsModel.h"
+#include "models/VideoSettingsModel.h"
 #include "services/AtomicFileOps.h"
 
 #include <QDateTime>
@@ -18,6 +20,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QVariantMap>
+#include <capability/encoder_device_resolver.h>
 #include <exosnap/engine/edit_timeline_export.h>
 #include <exosnap/engine/edit_timeline_render.h>
 #include <windows.h>
@@ -44,6 +47,75 @@ QVariantMap option(const QString& value, const QString& label) {
 }
 
 } // namespace
+
+engine::ResolvedEncoderDevice
+ResolveEditEncoderDevice(std::span<const capability::AdapterInfo> adapters,
+                         std::span<const capability::AdapterEncoderCapability> adapter_caps,
+                         capability::VideoCodec codec, const engine::EncoderDevicePreference& preference) {
+    const auto candidates = capability::BuildEncoderDeviceCandidates(
+        adapters, adapter_caps, {codec, capability::ChromaSubsampling::Cs420, capability::BitDepth::Bit8});
+    engine::ResolvedEncoderDevice device;
+    const bool automatic = preference.mode == engine::EncoderDevicePreference::Mode::Auto;
+    int64_t compositor_luid = 0;
+    if (automatic) {
+        const auto selected = std::find_if(candidates.begin(), candidates.end(),
+                                           [](const auto& candidate) { return candidate.usable(); });
+        if (selected == candidates.end()) {
+            device.reason =
+                EditExportAdapter::tr("No probed encoder adapter supports this render format.").toStdString();
+            return device;
+        }
+        // Decoded media is composed on this adapter, so its affinity is concrete without a capture source.
+        compositor_luid = selected->adapter.luid;
+    }
+    const auto resolution = capability::ResolveEncoderDevice(candidates, preference, compositor_luid, automatic);
+    if (resolution.resolved && resolution.candidate_index >= 0) {
+        const auto& candidate = candidates[static_cast<size_t>(resolution.candidate_index)];
+        device.valid = true;
+        device.adapter_luid = candidate.adapter.luid;
+        device.vendor_id = candidate.adapter.vendor_id;
+        device.backend = candidate.backend;
+        device.device = capability::FingerprintFromAdapter(candidate.adapter);
+    }
+    device.reason = resolution.reason;
+    return device;
+}
+
+engine::RecorderConfig BuildEditRenderConfig(const OutputSettingsModel& output, const VideoSettingsModel& video,
+                                             const capability::CapabilitySet& encoder_caps,
+                                             const engine::ResolvedEncoderDevice& encoder_device) {
+    engine::RecorderConfig config;
+    config.encoder_device = video.encoder_device;
+    config.resolved_encoder_device = encoder_device;
+    config.backend_tuning =
+        ResolveOutputNvencTuning(output, encoder_caps, output.video_codec, video.rate_control).tuning;
+    config.cq = video.cq;
+    config.rate_control_mode = video.rate_control;
+    config.target_bitrate_kbps = video.bitrate_kbps;
+    switch (output.video_codec) {
+    case capability::VideoCodec::H264:
+        config.video_codec = engine::VideoCodec::H264;
+        break;
+    case capability::VideoCodec::Hevc:
+        config.video_codec = engine::VideoCodec::Hevc;
+        break;
+    case capability::VideoCodec::Av1:
+        config.video_codec = engine::VideoCodec::Av1;
+        break;
+    }
+    switch (video.keyframe_interval) {
+    case KeyframeIntervalMode::Seconds2:
+        config.keyframe_interval_secs = 2.0f;
+        break;
+    case KeyframeIntervalMode::Seconds1:
+        config.keyframe_interval_secs = 1.0f;
+        break;
+    case KeyframeIntervalMode::Seconds0_5:
+        config.keyframe_interval_secs = 0.5f;
+        break;
+    }
+    return config;
+}
 
 std::filesystem::path DefaultEditExportPath(const std::filesystem::path& output_directory, bool to_mp4) {
     return output_directory / (to_mp4 ? L"ExoSnap-export.mp4" : L"ExoSnap-export.mkv");
@@ -107,8 +179,18 @@ void EditExportAdapter::chooseDestination() {
 }
 
 EditExportAdapter::~EditExportAdapter() {
+    cancelAndWait();
+}
+
+void EditExportAdapter::cancelAndWait() {
     if (run_)
         run_->cancel.store(true);
+    if (auto* worker = std::exchange(export_thread_, nullptr)) {
+        disconnect(worker, nullptr, this, nullptr);
+        worker->wait();
+        delete worker;
+    }
+    run_.reset();
 }
 
 void EditExportAdapter::setSession(EditSessionAdapter* session) {
@@ -407,13 +489,18 @@ void EditExportAdapter::startExport() {
         run->ok = ok;
         run->error = std::move(error);
     });
+    export_thread_->setParent(this);
     connect(export_thread_, &QThread::finished, this, [this, run = run_, output] {
-        export_thread_ = nullptr;
+        if (run_ != run)
+            return;
+        auto* worker = std::exchange(export_thread_, nullptr);
+        // finished precedes thread-local destruction. Join before releasing the worker's resources.
+        worker->wait();
+        delete worker;
+        run_.reset();
         finishRun(run->ok, QString::fromStdString(run->error), QString::fromStdWString(output.wstring()),
                   run->cancel.load());
-        run_.reset();
     });
-    connect(export_thread_, &QThread::finished, export_thread_, &QObject::deleteLater);
     export_thread_->start();
 }
 

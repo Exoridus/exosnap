@@ -70,11 +70,13 @@ Render export resolves generic `RecorderConfig` intent and calls `VideoEncoderFa
 | Audio/container | 48 kHz stereo PCM24 in Matroska |
 | Unsupported | HDR/PQ/HLG, 10-bit, 4:4:4, unknown/non-BT.709 color, independent audio edits, resolution profiles, render MP4 |
 
+Recording and Edit render export resolve NVENC preset, tuning and lookahead policy through the same settings helper and `ResolveNvencTuning`. Capability reconciliation uses the selected encoder adapter, and rendering opens that resolved adapter. Explicit presets remain the requested presets when supported.
+
 Unsupported rendering fails closed with a reason. It does not silently tone-map or relabel sources, and does not affect eligible lossless exports.
 
 The render workflow is enabled for timelines containing Crossfade. Other non-copy recipes without a transition remain explicitly unsupported; they do not silently take a render path whose preview still uses the legacy hard-cut presentation.
 
-Export writes a sibling temporary and publishes atomically after successful flush/finalization. Overwrite needs explicit confirmation. Cancel enters Cancelling until `QThread::finished`; there is no GUI-thread join. The worker captures shared run state and immutable media/configuration values, never the page or adapter. The GUI polls atomic progress every 100 ms, so export cannot flood its event queue.
+Export writes a sibling temporary and publishes atomically after successful flush/finalization. Overwrite needs explicit confirmation. Cancel enters Cancelling until `QThread::finished` without blocking the UI. Application teardown explicitly requests cancellation and joins the worker before destroying the QML engine or other application services. Adapter destruction also joins, so staging cleanup completes even after the event loop has stopped. The worker captures shared run state and immutable media/configuration values, never the page or adapter. The GUI polls atomic progress every 100 ms, so export cannot flood its event queue.
 
 The page uses nested native SplitViews. Normalized source-width and timeline-height fractions live in QSettings UI preferences, independently of workspace contents. Restoration clamps against minimum pane sizes and current geometry; handles support native pointer resizing and keyboard arrows.
 

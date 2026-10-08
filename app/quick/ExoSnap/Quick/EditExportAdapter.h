@@ -12,12 +12,35 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 
 class QThread;
+
+namespace exosnap {
+struct OutputSettingsModel;
+struct VideoSettingsModel;
+namespace capability {
+struct CapabilitySet;
+struct AdapterInfo;
+struct AdapterEncoderCapability;
+enum class VideoCodec;
+} // namespace capability
+} // namespace exosnap
 
 namespace exosnap::quick {
 
 class EditSessionAdapter;
+
+// Uses the render compositor's adapter affinity independently of capture selection.
+[[nodiscard]] engine::ResolvedEncoderDevice
+ResolveEditEncoderDevice(std::span<const capability::AdapterInfo> adapters,
+                         std::span<const capability::AdapterEncoderCapability> adapter_caps,
+                         capability::VideoCodec codec, const engine::EncoderDevicePreference& preference);
+
+[[nodiscard]] engine::RecorderConfig BuildEditRenderConfig(const OutputSettingsModel& output,
+                                                           const VideoSettingsModel& video,
+                                                           const capability::CapabilitySet& encoder_caps,
+                                                           const engine::ResolvedEncoderDevice& encoder_device);
 
 // The save dialog starts in the configured recording output folder.
 [[nodiscard]] std::filesystem::path DefaultEditExportPath(const std::filesystem::path& output_directory, bool to_mp4);
@@ -29,7 +52,7 @@ class EditSessionAdapter;
 [[nodiscard]] bool ShouldPublishExportProgress(float fraction, int last_published_percent);
 
 // Owns export options and lifecycle independently of page visibility. Cancellation
-// remains pending until the worker exits. Worker state outlives a destroyed UI.
+// remains pending until the worker exits. Destruction joins before releasing resources.
 class EditExportAdapter : public QObject {
     Q_OBJECT
     QML_ELEMENT
@@ -72,6 +95,9 @@ class EditExportAdapter : public QObject {
 
     explicit EditExportAdapter(QObject* parent = nullptr);
     ~EditExportAdapter() override;
+
+    // Teardown only: cancels and joins without event delivery or completion signals.
+    void cancelAndWait();
 
     // The session supplies the master path, the authoritative trim range and the
     // markers. It is never written to from here.
@@ -133,6 +159,7 @@ class EditExportAdapter : public QObject {
     void exportFailed(const QString& error);
 
   private:
+    friend class EditExportAdapterTestPeer;
     void setState(State state);
     void publishProgress(int percent);
     void finishRun(bool ok, const QString& error, const QString& output_path, bool cancelled);
