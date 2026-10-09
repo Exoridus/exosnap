@@ -93,6 +93,42 @@ TestCase {
         compare(findAccessible(dock, qsTr("Pause recording")), null);
     }
 
+    function findClock(dock) {
+        for (const child of dock.children) {
+            if (child.objectName === "recordTransportClock")
+                return child;
+        }
+        return null;
+    }
+
+    // A successful run returns the bar to its idle arrangement at once: Record
+    // is offered again and nothing of the finished take stays on the bar.
+    function test_completed_returns_to_the_idle_transport() {
+        recordDriver.setRecordingState("completed");
+        const dock = createTemporaryObject(dockComponent, testCase);
+        verify(!!dock, "the transport dock exists");
+        const start = findAccessible(dock, qsTr("Start recording"));
+        verify(!!start, "Start recording is offered right after a successful recording");
+        verify(start.enabled, "Start recording is enabled after a successful recording");
+        compare(findAccessible(dock, qsTr("Back to the transport")), null);
+        compare(findAccessible(dock, qsTr("Edit recording")), null);
+        compare(findAccessible(dock, qsTr("Show the recording in Explorer")), null);
+        compare(findClock(dock).text, "00:00:00");
+        mouseClick(start);
+        compare(startSpy.count, 1);
+    }
+
+    // A failure is not treated as a success: it keeps its acknowledgement and
+    // withholds Record until the failure has been dismissed.
+    function test_failed_keeps_its_acknowledgement() {
+        recordDriver.setRecordingState("failed");
+        const dock = createTemporaryObject(dockComponent, testCase);
+        verify(!!dock, "the transport dock exists");
+        verify(!!findAccessible(dock, qsTr("Back to the transport")), "a failed run offers Back");
+        compare(findAccessible(dock, qsTr("Start recording")), null);
+        compare(findClock(dock).text, "00:00:42");
+    }
+
     function test_paused_clock_clears_actions_at_minimum_width() {
         recordDriver.setRecordingState("paused");
         const dock = createTemporaryObject(dockComponent, testCase);

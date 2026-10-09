@@ -3059,7 +3059,9 @@ void RecordingCoordinator::CaptureFrame() {
         return;
     }
 
-    if (st == UiRecordingState::Ready) {
+    // Completed is idle too: the preview has already left the engine tap and the
+    // transport offers the next recording without a dismissal first.
+    if (st == UiRecordingState::Ready || st == UiRecordingState::Completed) {
         if (!ready_frame_requester_) {
             AppLog::warning(QStringLiteral("capture_frame"), QStringLiteral("no preview frame source in Ready state"));
             if (on_frame_captured_)

@@ -2846,7 +2846,7 @@ Wahrscheinliche Ursache: </translation>
 <context>
     <name>EditExportAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="+198"/>
+        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="+280"/>
         <source>New file</source>
         <translation>Neue Datei</translation>
     </message>
@@ -2882,7 +2882,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Keine Edit-Master-Datei für den Export verfügbar.</translation>
     </message>
     <message>
-        <location line="+155"/>
+        <location line="+160"/>
         <source>Unknown error</source>
         <translation>Unbekannter Fehler</translation>
     </message>
@@ -4437,7 +4437,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>QuickApplication</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+750"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+751"/>
         <source>Recording is blocked</source>
         <translation>Aufnahme blockiert</translation>
     </message>
@@ -4477,7 +4477,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Diese Aufnahme hat keinen Eintrag zur Absturzwiederherstellung: %1. Die Aufnahme läuft unverändert, kann bei einer Unterbrechung von ExoSnap aber nicht wiederhergestellt werden.</translation>
     </message>
     <message>
-        <location line="+795"/>
+        <location line="+781"/>
         <source>Region could not be applied</source>
         <translation>Bereich konnte nicht übernommen werden</translation>
     </message>
@@ -4556,12 +4556,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+4"/>
-        <location line="+1262"/>
+        <location line="+1235"/>
         <source>Window capture appears to have stalled</source>
         <translation>Die Fensteraufnahme scheint stillzustehen</translation>
     </message>
     <message>
-        <location line="-1261"/>
+        <location line="-1234"/>
         <source>No new frame has arrived from the captured window for 12 seconds. The recording is still running, but the captured window may be frozen.</source>
         <translation>Seit 12 Sekunden ist kein neuer Frame vom aufgenommenen Fenster angekommen. Die Aufnahme läuft weiter, das Fenster könnte jedoch eingefroren sein.</translation>
     </message>
@@ -4581,7 +4581,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>2026-08-10 21-14-08.mkv - 2:34, 412 MB</translation>
     </message>
     <message>
-        <location line="+529"/>
+        <location line="+502"/>
         <source>Update checks are paused while a recording is in progress.</source>
         <translation>Während einer Aufnahme wird nicht nach Updates gesucht.</translation>
     </message>
@@ -4632,8 +4632,8 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Letzte Session wiederherstellen?</translation>
     </message>
     <message>
-        <location line="-989"/>
-        <location line="+1134"/>
+        <location line="-962"/>
+        <location line="+1107"/>
         <location line="+466"/>
         <source>Recording saved</source>
         <translation>Aufnahme gespeichert</translation>
@@ -4644,14 +4644,14 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB</translation>
     </message>
     <message>
-        <location line="-1178"/>
-        <location line="+1183"/>
+        <location line="-1151"/>
+        <location line="+1156"/>
         <source>Frames were dropped</source>
         <translation>Frames wurden verworfen</translation>
     </message>
     <message>
-        <location line="-1182"/>
-        <location line="+1183"/>
+        <location line="-1155"/>
+        <location line="+1156"/>
         <source>122 frames did not reach the encoder during the last recording.</source>
         <translation>122 Frames haben den Encoder während der letzten Aufnahme nicht erreicht.</translation>
     </message>
@@ -4672,18 +4672,18 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>ExoSnap 0.9.1 ist zur Installation bereit.</translation>
     </message>
     <message>
-        <location line="-1172"/>
-        <location line="+1641"/>
+        <location line="-1145"/>
+        <location line="+1614"/>
         <source>Storage running low</source>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-4138"/>
+        <location line="-4097"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+3506"/>
+        <location line="+3465"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -5212,7 +5212,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Nicht verfügbar: Die Vorschau hat noch keinen Frame geliefert.</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+10"/>
         <source>Add marker</source>
         <translation>Marker setzen</translation>
     </message>
@@ -5267,22 +5267,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Stopp</translation>
     </message>
     <message>
-        <location line="+33"/>
-        <source>Show the recording in Explorer</source>
-        <translation>Aufnahme im Explorer anzeigen</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Folder</source>
-        <translation>Ordner</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>The recording is no longer on disk.</source>
-        <translation>Die Aufnahme ist nicht mehr auf dem Datenträger vorhanden.</translation>
-    </message>
-    <message>
-        <location line="+16"/>
+        <location line="+25"/>
         <source>Back to the transport</source>
         <translation>Zurück zur Aufnahmesteuerung</translation>
     </message>
@@ -5291,21 +5276,11 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <source>Back</source>
         <translation>Zurück</translation>
     </message>
-    <message>
-        <location line="+11"/>
-        <source>Edit recording</source>
-        <translation>Aufnahme bearbeiten</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Edit</source>
-        <translation>Bearbeiten</translation>
-    </message>
 </context>
 <context>
     <name>RecordViewModelAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="+754"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="+763"/>
         <source>No source</source>
         <translation>Keine Quelle</translation>
     </message>
@@ -5383,7 +5358,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Die PNG-Datei konnte nicht gespeichert werden</translation>
     </message>
     <message>
-        <location line="+43"/>
+        <location line="+45"/>
         <source>No preview frame available</source>
         <translation>Kein Vorschau-Frame verfügbar</translation>
     </message>
@@ -5693,12 +5668,13 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Capabilities werden geprüft...</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-187"/>
+        <location filename="../viewmodels/RecordViewModel.cpp" line="+3"/>
         <source>Ready</source>
         <translation>Bereit</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location filename="../viewmodels/RecordViewModel.cpp" line="+3"/>
         <source>Blocked</source>
         <translation>Blockiert</translation>
     </message>
@@ -8344,11 +8320,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::EditExportAdapter</name>
     <message>
+        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="-468"/>
         <source>No probed encoder adapter supports this render format.</source>
         <translation>Kein geprüfter Encoder-Adapter unterstützt dieses Renderformat.</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="-376"/>
+        <location line="+77"/>
         <source>Match source</source>
         <translation>Wie Quelle</translation>
     </message>
@@ -8398,7 +8375,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Matroska-Video (*.mkv);;MP4-Video (*.mp4)</translation>
     </message>
     <message>
-        <location line="+109"/>
+        <location line="+119"/>
         <source>Render Crossfade: SDR BT.709 video and PCM audio in Matroska. Choose an MKV destination.</source>
         <translation>Überblendung rendern: SDR-BT.709-Video und PCM-Audio in Matroska. Ein MKV-Ziel auswählen.</translation>
     </message>
@@ -8513,12 +8490,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::RecordViewModelAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-871"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-683"/>
         <source>Draw custom</source>
         <translation>Bereich zeichnen</translation>
     </message>
     <message>
-        <location line="+356"/>
+        <location line="+354"/>
         <location line="+6"/>
         <location line="+4"/>
         <source>Select source</source>

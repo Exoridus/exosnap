@@ -66,10 +66,6 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(qreal savingProgress READ savingProgress NOTIFY savingProgressChanged FINAL)
     Q_PROPERTY(bool blocked READ blocked NOTIFY changed FINAL)
     Q_PROPERTY(bool failed READ failed NOTIFY changed FINAL)
-    // A run that is over, one way or the other. The transport swaps its whole
-    // right-hand cluster on this: the way OUT of a finished run is a separate
-    // action from starting the next one.
-    Q_PROPERTY(bool resultPending READ resultPending NOTIFY changed FINAL)
 
     Q_PROPERTY(QVariantList targetOptions READ targetOptions NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(QVariantList displayTargetOptions READ displayTargetOptions NOTIFY targetOptionsChanged FINAL)
@@ -132,13 +128,6 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(bool captureFrameEnabled READ captureFrameEnabled NOTIFY changed FINAL)
     Q_PROPERTY(bool splitEnabled READ splitEnabled NOTIFY changed FINAL)
     Q_PROPERTY(QString resultText READ resultText NOTIFY changed FINAL)
-    // Whether the finished recording can be opened in the Edit surface. False
-    // for a split recording (no single edit master), a missing file, a failed
-    // run, and while a capture still owns the Record surface. The authoritative
-    // gate is QuickApplication::canOpenEditorForCurrentRecording(); this mirrors
-    // the part of it that depends only on the view model, so the affordance can
-    // be a binding rather than a button that does nothing when pressed.
-    Q_PROPERTY(bool canOpenEditor READ canOpenEditor NOTIFY changed FINAL)
     // The Record context strip's Recent menu: the finished recordings this
     // session knows about, newest first, each carrying the path the menu acts
     // on and the label the shared resolver produced for the run's target. Rows
@@ -186,7 +175,6 @@ class RecordViewModelAdapter : public QObject {
     void setSavingProgress(float fraction);
     [[nodiscard]] bool blocked() const noexcept;
     [[nodiscard]] bool failed() const noexcept;
-    [[nodiscard]] bool resultPending() const noexcept;
     [[nodiscard]] const QVariantList& targetOptions() const noexcept;
     [[nodiscard]] const QVariantList& displayTargetOptions() const noexcept;
     [[nodiscard]] const QVariantList& windowTargetOptions() const noexcept;
@@ -236,7 +224,6 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] bool captureFrameEnabled() const noexcept;
     [[nodiscard]] bool splitEnabled() const noexcept;
     [[nodiscard]] QString resultText() const;
-    [[nodiscard]] bool canOpenEditor() const noexcept;
 
     void setSource(const RecordViewModel* source);
     void setFormatText(QString text);
@@ -280,9 +267,7 @@ class RecordViewModelAdapter : public QObject {
     Q_INVOKABLE void requestToggleSource(const QString& key);
     Q_INVOKABLE void requestWebcamOverlayRect(QRectF normalized_rect);
     Q_INVOKABLE void requestCountdownSeconds(int seconds);
-    Q_INVOKABLE void requestOpenEditor();
     Q_INVOKABLE void requestDismissResult();
-    Q_INVOKABLE void requestRevealRecording();
     Q_INVOKABLE void requestOpenRecent(const QString& file_path);
     Q_INVOKABLE void requestRevealRecent(const QString& file_path);
     // The identities the picker currently has on screen, in layout order. The
@@ -319,9 +304,7 @@ class RecordViewModelAdapter : public QObject {
     void toggleSourceRequested(QString key);
     void webcamOverlayRectRequested(QRectF normalized_rect);
     void countdownSecondsRequested(int seconds);
-    void openEditorRequested();
     void dismissResultRequested();
-    void revealRecordingRequested();
     void openRecentRequested(QString file_path);
     void revealRecentRequested(QString file_path);
 
