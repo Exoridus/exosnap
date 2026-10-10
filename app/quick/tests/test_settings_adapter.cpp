@@ -398,6 +398,10 @@ TEST_F(SettingsAdapterTest, SystemAudioHintNamesTheWholeMixOnADisplayTarget) {
     EXPECT_EQ(adapter.systemAudioHint(), QStringLiteral("Everything the computer plays"));
     EXPECT_TRUE(adapter.appAudioHint().isEmpty());
     EXPECT_TRUE(adapter.audioTargetSummary().startsWith(QStringLiteral("Recording Display 1")));
+
+    // Once the default output device is known, the hint names it.
+    adapter.setDefaultOutputDeviceName(QStringLiteral("Speakers"));
+    EXPECT_EQ(adapter.systemAudioHint(), QStringLiteral("Default output · Speakers"));
 }
 
 TEST_F(SettingsAdapterTest, SystemAudioHintExcludesTheCapturedProcessOnAWindowTarget) {
@@ -664,15 +668,187 @@ TEST_F(SettingsAdapterTest, SplitSummaryReportsOffAndActiveThresholds) {
 // Webcam
 // ---------------------------------------------------------------------------
 
-TEST_F(SettingsAdapterTest, WebcamResolutionPairsWidthWithSelectedHeight) {
-    adapter.setWebcamResolution(1080);
-    EXPECT_EQ(adapter.webcamResolution(), 1080);
-    EXPECT_EQ(adapter.config().webcam.width, 1920);
+namespace {
+QVariantList OneWebcam(const QString& id) {
+    QVariantMap entry;
+    entry.insert(QStringLiteral("value"), id);
+    entry.insert(QStringLiteral("label"), QStringLiteral("Camera"));
+    return {entry};
+}
 
-    // The 4:3 VGA entry is the deliberate exception to the 16:9 pairing.
-    adapter.setWebcamResolution(480);
-    EXPECT_EQ(adapter.config().webcam.width, 640);
-    EXPECT_EQ(adapter.config().webcam.height, 480);
+QStringList OptionValues(const QVariantList& options) {
+    QStringList values;
+    for (const QVariant& option : options)
+        values.append(option.toMap().value(QStringLiteral("value")).toString());
+    return values;
+}
+} // namespace
+
+TEST_F(SettingsAdapterTest, WebcamResolutionIsStoredAsWidthAndHeight) {
+    adapter.setWebcamResolution(QStringLiteral("1920x1080"));
+    EXPECT_EQ(adapter.webcamResolution(), QStringLiteral("1920x1080"));
+    EXPECT_EQ(adapter.config().webcam.width, 1920);
+    EXPECT_EQ(adapter.config().webcam.height, 1080);
+
+    adapter.setWebcamResolution(QStringLiteral("not a size"));
+    EXPECT_EQ(adapter.config().webcam.height, 1080);
+}
+
+TEST_F(SettingsAdapterTest, WebcamChoicesListOnlyWhatTheCameraOffers) {
+    const QString id = QStringLiteral("cam");
+    adapter.setWebcamDevices(OneWebcam(id));
+    adapter.setWebcamFormats(id, {{2560, 1440, 30, 1}, {1920, 1080, 60, 1}, {1920, 1080, 30, 1}});
+
+    EXPECT_EQ(OptionValues(adapter.webcamResolutionOptions()),
+              (QStringList{QStringLiteral("2560x1440"), QStringLiteral("1920x1080")}));
+    adapter.setWebcamResolution(QStringLiteral("1920x1080"));
+    EXPECT_EQ(OptionValues(adapter.webcamFrameRateOptions()),
+              (QStringList{QStringLiteral("60"), QStringLiteral("30")}));
+}
+
+namespace {
+std::vector<WebcamControlRange> CameraControls() {
+    WebcamControlRange brightness;
+    brightness.control = WebcamControl::Brightness;
+    brightness.minimum = -64;
+    brightness.maximum = 64;
+    brightness.step = 1;
+    brightness.current = 8;
+    WebcamControlRange white_balance;
+    white_balance.control = WebcamControl::WhiteBalance;
+    white_balance.minimum = 2800;
+    white_balance.maximum = 6500;
+    white_balance.step = 10;
+    white_balance.current = 4600;
+    white_balance.current_automatic = true;
+    white_balance.can_automatic = true;
+    WebcamControlRange anti_flicker;
+    anti_flicker.control = WebcamControl::PowerLineFrequency;
+    anti_flicker.minimum = 0;
+    anti_flicker.maximum = 2;
+    return {brightness, white_balance, anti_flicker};
+}
+
+QVariantMap ControlState(const SettingsAdapter& adapter, WebcamControl control) {
+    return adapter.webcamControlStates().value(QString::number(static_cast<int>(control))).toMap();
+}
+} // namespace
+
+TEST_F(SettingsAdapterTest, TheKeyColourAcceptsHexWithOrWithoutHashAndShorthand) {
+    // The default key colour is the green preset, shown as its hex value.
+    EXPECT_EQ(adapter.chromaKeyHex(), QStringLiteral("00ff00"));
+    adapter.setChromaKeyHex(QStringLiteral("#FF8800"));
+    EXPECT_EQ(adapter.chromaKeyHex(), QStringLiteral("ff8800"));
+    adapter.setChromaKeyHex(QStringLiteral(" 0f0 "));
+    EXPECT_EQ(adapter.chromaKeyHex(), QStringLiteral("00ff00"));
+    EXPECT_TRUE(adapter.chromaKeyHexError().isEmpty());
+
+    // A value that is not a colour is refused, said so, and leaves the colour.
+    adapter.setChromaKeyHex(QStringLiteral("12345"));
+    EXPECT_EQ(adapter.chromaKeyHex(), QStringLiteral("00ff00"));
+    EXPECT_FALSE(adapter.chromaKeyHexError().isEmpty());
+    adapter.setChromaKeyHex(QStringLiteral("#gggggg"));
+    EXPECT_FALSE(adapter.chromaKeyHexError().isEmpty());
+
+    adapter.setChromaKeyColor(QColor(1, 2, 3));
+    EXPECT_EQ(adapter.chromaKeyHex(), QStringLiteral("010203"));
+    EXPECT_TRUE(adapter.chromaKeyHexError().isEmpty()) << "a valid colour clears the error";
+}
+
+TEST_F(SettingsAdapterTest, AnUnpinnedMicrophoneIsTheSystemDefaultEntry) {
+    QVariantMap headset;
+    headset.insert(QStringLiteral("value"), QStringLiteral("mic-1"));
+    headset.insert(QStringLiteral("label"), QStringLiteral("Headset"));
+    headset.insert(QStringLiteral("isDefault"), true);
+    QVariantMap desk;
+    desk.insert(QStringLiteral("value"), QStringLiteral("mic-2"));
+    desk.insert(QStringLiteral("label"), QStringLiteral("Desk mic"));
+    adapter.setMicrophoneDevices({headset, desk});
+
+    const QVariantList options = adapter.microphoneDeviceOptions();
+    ASSERT_EQ(options.size(), 3);
+    EXPECT_EQ(options.first().toMap().value(QStringLiteral("label")).toString(),
+              QStringLiteral("System default (Headset)"));
+    // Unpinned selects that entry, and the summary names it instead of "none".
+    EXPECT_EQ(adapter.microphoneDeviceId(), QString());
+    EXPECT_TRUE(adapter.microphoneSummary().startsWith(QStringLiteral("System default (Headset)")));
+
+    adapter.setMicrophoneDeviceId(QStringLiteral("mic-2"));
+    adapter.setMicrophoneDeviceId(QString());
+    EXPECT_FALSE(adapter.config().audio.selected_mic_device_id.has_value()) << "choosing it unpins again";
+}
+
+TEST_F(SettingsAdapterTest, AnUnpinnedWebcamIsTheAutomaticEntryAndStillResolvesItsCamera) {
+    const QString id = QStringLiteral("cam");
+    adapter.setWebcamDevices(OneWebcam(id));
+    ASSERT_EQ(adapter.webcamDeviceOptions().size(), 2);
+    EXPECT_EQ(adapter.webcamDeviceOptions().first().toMap().value(QStringLiteral("label")).toString(),
+              QStringLiteral("Automatic (Camera)"));
+    EXPECT_EQ(adapter.webcamDeviceId(), QString());
+    // Formats of the camera Automatic resolves to still drive the choices.
+    adapter.setWebcamFormats(id, {{2560, 1440, 30, 1}});
+    EXPECT_EQ(adapter.webcamResolution(), QStringLiteral("2560x1440"));
+}
+
+TEST_F(SettingsAdapterTest, CameraImageControlsListOnlyWhatTheCameraReports) {
+    const QString id = QStringLiteral("cam");
+    adapter.setWebcamDevices(OneWebcam(id));
+    EXPECT_TRUE(adapter.webcamControls().isEmpty()) << "nothing before the camera was probed";
+    adapter.setWebcamControlRanges(id, CameraControls());
+
+    ASSERT_EQ(adapter.webcamControls().size(), 3);
+    // An untouched control shows the camera's own state.
+    EXPECT_EQ(ControlState(adapter, WebcamControl::Brightness).value(QStringLiteral("value")).toInt(), 8);
+    EXPECT_TRUE(ControlState(adapter, WebcamControl::WhiteBalance).value(QStringLiteral("automatic")).toBool());
+    // Anti-flicker offers only the frequencies inside the camera's range.
+    const QVariantList options = adapter.webcamControls().at(2).toMap().value(QStringLiteral("options")).toList();
+    EXPECT_EQ(OptionValues(options), (QStringList{QStringLiteral("1"), QStringLiteral("2"), QStringLiteral("0")}));
+    EXPECT_FALSE(adapter.webcamControlsAdjusted());
+}
+
+TEST_F(SettingsAdapterTest, CameraImageControlEditsAreSnappedStoredAndReset) {
+    const QString id = QStringLiteral("cam");
+    adapter.setWebcamDevices(OneWebcam(id));
+    adapter.setWebcamControlRanges(id, CameraControls());
+
+    adapter.setWebcamControlValue(static_cast<int>(WebcamControl::Brightness), 500);
+    EXPECT_EQ(ControlState(adapter, WebcamControl::Brightness).value(QStringLiteral("value")).toInt(), 64);
+    // Leaving automatic keeps the value the camera was showing.
+    adapter.setWebcamControlAutomatic(static_cast<int>(WebcamControl::WhiteBalance), false);
+    EXPECT_EQ(adapter.config().webcam.controls,
+              (std::vector<WebcamControlSetting>{{WebcamControl::Brightness, false, 64},
+                                                 {WebcamControl::WhiteBalance, false, 4600}}));
+    // A control the camera cannot run automatically stays manual.
+    adapter.setWebcamControlAutomatic(static_cast<int>(WebcamControl::Brightness), true);
+    EXPECT_FALSE(ControlState(adapter, WebcamControl::Brightness).value(QStringLiteral("automatic")).toBool());
+    EXPECT_TRUE(adapter.webcamControlsAdjusted());
+
+    adapter.resetWebcamControls();
+    EXPECT_TRUE(adapter.config().webcam.controls.empty());
+    EXPECT_EQ(ControlState(adapter, WebcamControl::Brightness).value(QStringLiteral("value")).toInt(), 8);
+}
+
+TEST_F(SettingsAdapterTest, ChoosingAnotherCameraDropsTheControlValues) {
+    const QString id = QStringLiteral("cam");
+    adapter.setWebcamDevices(OneWebcam(id));
+    adapter.setWebcamControlRanges(id, CameraControls());
+    adapter.setWebcamControlValue(static_cast<int>(WebcamControl::Brightness), 20);
+    adapter.setWebcamDeviceId(QStringLiteral("other"));
+    EXPECT_TRUE(adapter.config().webcam.controls.empty());
+}
+
+TEST_F(SettingsAdapterTest, AModeTheCameraLacksIsShownAsTheModeCaptureGets) {
+    // A stored 720p request on a camera that only offers 1440p30 used to show
+    // 720p while the camera ran at 1440p.
+    adapter.setWebcamResolution(QStringLiteral("1280x720"));
+    adapter.setWebcamFrameRate(60);
+    const QString id = QStringLiteral("cam");
+    adapter.setWebcamDevices(OneWebcam(id));
+    adapter.setWebcamFormats(id, {{2560, 1440, 30, 1}});
+
+    EXPECT_EQ(adapter.webcamResolution(), QStringLiteral("2560x1440"));
+    EXPECT_EQ(adapter.webcamFrameRate(), 30);
+    EXPECT_EQ(adapter.config().webcam.width, 1280) << "displaying the mode does not rewrite the request";
 }
 
 TEST_F(SettingsAdapterTest, ChromaKeyParametersRoundTripThroughPercent) {
@@ -958,6 +1134,28 @@ TEST_F(SettingsAdapterTest, ClearingAHotkeyDropsItsStaleConflictWarning) {
 
     EXPECT_NE(adapter.hotkeyErrorAction(), 1);
     EXPECT_TRUE(adapter.hotkeyErrorText().isEmpty());
+}
+
+TEST_F(SettingsAdapterTest, ARefusedAttemptKeepsItsKeysUntilDismissed) {
+    adapter.beginHotkeyCapture(3);
+    adapter.setHotkeyError(3, QStringLiteral("Already assigned."),
+                           {QStringLiteral("Alt"), QStringLiteral("Shift"), QStringLiteral("P")});
+    EXPECT_EQ(adapter.hotkeyErrorKeys().size(), 3);
+
+    adapter.dismissHotkeyError();
+
+    EXPECT_EQ(adapter.hotkeyErrorAction(), -1);
+    EXPECT_TRUE(adapter.hotkeyErrorText().isEmpty());
+    EXPECT_TRUE(adapter.hotkeyErrorKeys().isEmpty());
+}
+
+TEST_F(SettingsAdapterTest, StartingANewCaptureDropsTheRefusedAttempt) {
+    adapter.setHotkeyError(3, QStringLiteral("Already assigned."), {QStringLiteral("P")});
+
+    adapter.beginHotkeyCapture(3);
+
+    EXPECT_EQ(adapter.capturingHotkeyAction(), 3);
+    EXPECT_TRUE(adapter.hotkeyErrorKeys().isEmpty());
 }
 
 TEST_F(SettingsAdapterTest, HotkeyCaptureIsRefusedWhileRecordingLocksControls) {

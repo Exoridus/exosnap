@@ -9,6 +9,7 @@
 
 #include "exosnap/engine/color_metadata.h"
 #include "exosnap/engine/edit_player_engine.h"
+#include "gpu_yuv_constants.h"
 #include "measured_shader_compile.h"
 
 #include <cstdio>
@@ -37,7 +38,7 @@ VS_OUTPUT main(uint id : SV_VertexID) {
 
 // SDR YUV -> BGRA. One variant covers all three DecodedPixelFormat values:
 // they differ only in the per-clip matrix/range coefficients (computed on the
-// CPU, see YuvConstantsFor) and in whether the chroma planes are half
+// CPU, see GpuYuvConstantsFor) and in whether the chroma planes are half
 // resolution. The latter is read off the bound textures rather than branched on
 // a constant, so a 4:4:4 plane and a 4:2:0 plane are addressed by the same code.
 //
@@ -164,97 +165,12 @@ float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TAR
 }
 )";
 
-// b0 layout of kYuvPixelShaderSrc. 32 bytes (cbuffers are 16-byte aligned).
-struct GpuYuvConstants {
-    float c_rv;
-    float c_gu;
-    float c_gv;
-    float c_bu;
-    float y_scale;
-    float y_off;
-    float c_off;
-    float pad0;
-};
-static_assert(sizeof(GpuYuvConstants) == 32);
-
 // b0 layout of kPqPixelShaderSrc.
 struct GpuPqConstants {
     float peak_scale;
     float pad[3];
 };
 static_assert(sizeof(GpuPqConstants) == 16);
-
-struct MatrixWeights {
-    double kr;
-    double kb;
-};
-
-// Duplicate of yuv_to_bgra.cpp's WeightsFor (file-local there). Same fallback
-// rationale: Unspecified means BT.709, because that is the only matrix this
-// engine's encoder ever writes. test_edit_frame_gpu_converter.cpp pins the GPU
-// output against the CPU converters, so the two tables cannot drift apart
-// unnoticed.
-MatrixWeights WeightsFor(MatrixCoefficients matrix) noexcept {
-    switch (matrix) {
-    case MatrixCoefficients::Bt601:
-        return {0.299, 0.114};
-    case MatrixCoefficients::Bt2020Ncl:
-        return {0.2627, 0.0593};
-    case MatrixCoefficients::Bt709:
-    case MatrixCoefficients::Unspecified:
-    default:
-        return {0.2126, 0.0722};
-    }
-}
-
-// The float mirror of yuv_to_bgra.cpp's ComputeCoefs. Two differences, both
-// deliberate:
-//   - no 16.16 fixed-point shift (the shader is float already), and
-//   - everything is divided by 255 at the end. ComputeCoefs' scales map the
-//     normalised signal onto the 0..255 *output byte* domain; the shader wants
-//     [0, 1] for its UNORM render target, and 255 is that domain's size
-//     whatever the input bit depth. Dividing by the input's max code (1023 for
-//     10-bit) instead would double-apply the bit-depth normalisation, which
-//     ComputeCoefs already folds into y_scale/c_scale (255/876, 255/896, ...).
-GpuYuvConstants YuvConstantsFor(MatrixCoefficients matrix, ColorRange range, DecodedPixelFormat format) noexcept {
-    const MatrixWeights w = WeightsFor(matrix);
-    const double kg = 1.0 - w.kr - w.kb;
-    const double rv = 2.0 * (1.0 - w.kr);
-    const double bu = 2.0 * (1.0 - w.kb);
-    const double gu = bu * w.kb / kg;
-    const double gv = rv * w.kr / kg;
-
-    const bool ten_bit = format == DecodedPixelFormat::Yuv420P10;
-    const bool limited = range == ColorRange::Limited;
-
-    double y_scale = 0.0;
-    double c_scale = 0.0;
-    double y_off = 0.0;
-    double c_off = 0.0;
-    if (ten_bit) {
-        y_scale = limited ? (255.0 / 876.0) : (255.0 / 1023.0);
-        c_scale = limited ? (255.0 / 896.0) : (255.0 / 1023.0);
-        y_off = limited ? 64.0 : 0.0;
-        c_off = 512.0;
-    } else {
-        y_scale = limited ? (255.0 / 219.0) : 1.0;
-        c_scale = limited ? (255.0 / 224.0) : 1.0;
-        y_off = limited ? 16.0 : 0.0;
-        c_off = 128.0;
-    }
-
-    constexpr double kOutputDomain = 255.0;
-    GpuYuvConstants c{};
-    c.c_rv = static_cast<float>(rv * c_scale / kOutputDomain);
-    c.c_gu = static_cast<float>(gu * c_scale / kOutputDomain);
-    c.c_gv = static_cast<float>(gv * c_scale / kOutputDomain);
-    c.c_bu = static_cast<float>(bu * c_scale / kOutputDomain);
-    c.y_scale = static_cast<float>(y_scale / kOutputDomain);
-    c.y_off = static_cast<float>(y_off);
-    c.c_off = static_cast<float>(c_off);
-    c.pad0 = 0.0f;
-    return c;
-}
 
 void SetHResultError(std::string& err, const char* what, HRESULT hr) {
     char buf[160];
@@ -427,7 +343,7 @@ bool EditFrameGpuConverter::Convert(const RawDecodedVideoFrame& frame, ID3D11Tex
 
     if (!constants_valid_ || frame.matrix != last_matrix_ || frame.range != last_range_ ||
         frame.format != last_format_ || hdr_peak_scale != last_peak_scale_ || linear_bt709 != last_linear_) {
-        GpuYuvConstants yc = YuvConstantsFor(frame.matrix, frame.range, frame.format);
+        GpuYuvConstants yc = GpuYuvConstantsFor(frame.matrix, frame.range, ten_bit);
         yc.pad0 = linear_bt709 ? 1.0f : 0.0f;
         context_->UpdateSubresource(yuv_constants_.get(), 0, nullptr, &yc, 0, 0);
         GpuPqConstants pc{};

@@ -370,8 +370,7 @@ QuickApplication::QuickApplication()
       recovery_service_(recovery_manifest_store_), about_view_model_(buildAboutInfo(settings_, distribution_)),
       record_view_model_adapter_(&record_view_model_), overlay_adapter_(&record_view_model_),
       recording_coordinator_(std::make_unique<RecordingCoordinator>()),
-      webcam_frame_provider_(new RecordWebcamFrameProvider), target_still_provider_(new CaptureTargetStillProvider),
-      edit_tile_provider_(new EditTimelineTileProvider) {
+      target_still_provider_(new CaptureTargetStillProvider), edit_tile_provider_(new EditTimelineTileProvider) {
     // QCR-201. Latched here for the same reason preset_store_repaired_ is: the
     // load runs in the constructor, long before initializeNotifications() exists
     // to report it. The write block itself needs no latch — it follows from
@@ -514,6 +513,10 @@ QuickApplication::~QuickApplication() {
     // holding -- but it stays the right order: a camera nobody listens to has no
     // reason to keep running for the rest of teardown.
     recording_coordinator_->SetWebcamPreviewActive(false);
+    // QML previews unregister as the engine tears down, possibly after the
+    // coordinator is gone; nothing may act on their last viewer change.
+    QObject::disconnect(&webcam_preview_feed_, nullptr, nullptr, nullptr);
+    recording_coordinator_->SetWebcamSettingsPreviewActive(false);
     recording_coordinator_->SetWebcamFrameCallback({});
     if (webcam_overlay_persist_timer_.isActive())
         persistLiveConfig();
@@ -523,8 +526,6 @@ QuickApplication::~QuickApplication() {
     // window, and is therefore safe after the engine is gone.
     if (window_geometry_)
         window_geometry_->flush();
-    if (!webcam_provider_registered_)
-        delete webcam_frame_provider_;
     // Stopped before the provider it feeds is destroyed: the worker emits into
     // this object, and a queued emission from a joined thread is one that never
     // arrives rather than one that arrives late.
@@ -649,15 +650,6 @@ void QuickApplication::initializeRecordWorkflow() {
     meter_update_timer_.setSingleShot(true);
     meter_update_timer_.setInterval(33);
     QObject::connect(&meter_update_timer_, &QTimer::timeout, &record_view_model_adapter_, [this]() { updateMeters(); });
-    webcam_frame_delivery_timer_.setSingleShot(true);
-    webcam_frame_delivery_timer_.setInterval(33);
-    QObject::connect(&webcam_frame_delivery_timer_, &QTimer::timeout, &record_view_model_adapter_, [this]() {
-        if (!record_view_model_adapter_.active())
-            return;
-        ++webcam_frame_revision_;
-        record_view_model_adapter_.setWebcamFrameSource(
-            QStringLiteral("image://record-webcam/frame?revision=%1").arg(webcam_frame_revision_));
-    });
     webcam_overlay_persist_timer_.setSingleShot(true);
     webcam_overlay_persist_timer_.setInterval(250);
     QObject::connect(&webcam_overlay_persist_timer_, &QTimer::timeout, &record_view_model_adapter_,
@@ -701,13 +693,16 @@ void QuickApplication::initializeRecordWorkflow() {
         composition.normalized_source_rect = record_view_model_adapter_.normalizedSourceRect();
         composition.video = live_config_.video;
         composition.webcam = webcamSettingsForCapture();
-        if (webcam_frame_provider_ != nullptr)
-            composition.webcam_frame = webcam_frame_provider_->latestFrame();
+        composition.webcam_frame = recording_coordinator_->WebcamSnapshot();
         record_preview_adapter_.requestReadyFrame(std::move(composition), std::move(callback));
     });
     wireRecordCommands();
 
     recording_coordinator_->SetStateChangedCallback([this](UiRecordingState state) {
+        if (update_check_deferred_ && (state == UiRecordingState::Ready || state == UiRecordingState::Completed)) {
+            update_check_deferred_ = false;
+            triggerUpdateCheck(false);
+        }
         // Cleared on the way out of Saving, and on the way in: a fraction left
         // over from the previous recording would show as that recording's
         // progress for as long as the next remux takes to report.
@@ -987,13 +982,18 @@ void QuickApplication::initializeRecordWorkflow() {
                                                         webcam_error_ = ok ? QString{} : reason;
                                                         synchronizeRecordState();
                                                     });
-    recording_coordinator_->SetWebcamFrameCallback(&record_view_model_adapter_, [this](QImage frame) {
-        if (webcam_frame_provider_ == nullptr)
-            return;
-        webcam_frame_provider_->submitFrame(std::move(frame));
-        if (record_view_model_adapter_.active() && !webcam_frame_delivery_timer_.isActive())
-            webcam_frame_delivery_timer_.start();
+    // One camera frame, one preview recomposition: the item takes the immutable
+    // snapshot and draws it on the GPU at the camera's own cadence.
+    recording_coordinator_->SetWebcamFrameCallback(&record_view_model_adapter_, [this](uint64_t) {
+        auto snapshot = recording_coordinator_->WebcamSnapshot();
+        webcam_preview_feed_.setFrame(snapshot);
+        record_preview_adapter_.setWebcamFrame(std::move(snapshot));
     });
+    // The Settings card's preview keeps the camera open only while it is on
+    // screen; the device rule still requires the webcam to be enabled.
+    QObject::connect(
+        &webcam_preview_feed_, &WebcamPreviewFeed::hasViewersChanged, &record_view_model_adapter_,
+        [this]() { recording_coordinator_->SetWebcamSettingsPreviewActive(webcam_preview_feed_.hasViewers()); });
 
     capture_target_notifier_.setEnumerator([this]() {
         if (auto seeded = HarnessCaptureTargets())
@@ -1148,6 +1148,8 @@ void QuickApplication::initializeRecordWorkflow() {
                              recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
                          }
                          synchronizeRecordState();
+                         for (const auto& device : snapshot.devices)
+                             enumerateWebcamFormats(device.id);
                      });
     audio_notifier_.start();
     webcam_notifier_.start();
@@ -1470,10 +1472,16 @@ void QuickApplication::synchronizeRecordState() {
                live_config_.webcam.overlay.w_norm, live_config_.webcam.overlay.h_norm),
         live_config_.webcam.mirror, live_config_.webcam.opacity);
     const WebcamChromaKeySettings::ActiveRgb key_color = live_config_.webcam.chroma_key.active_color();
-    webcam_frame_provider_->setChromaKey(live_config_.webcam.chroma_key.enabled, key_color.r, key_color.g, key_color.b,
-                                         live_config_.webcam.chroma_key.tolerance,
-                                         live_config_.webcam.chroma_key.softness,
-                                         live_config_.webcam.chroma_key.spill_reduction);
+    exosnap::engine::ChromaKeyParams chroma;
+    chroma.enabled = live_config_.webcam.chroma_key.enabled;
+    chroma.r = key_color.r;
+    chroma.g = key_color.g;
+    chroma.b = key_color.b;
+    chroma.tolerance = live_config_.webcam.chroma_key.tolerance;
+    chroma.softness = live_config_.webcam.chroma_key.softness;
+    chroma.spill_reduction = live_config_.webcam.chroma_key.spill_reduction;
+    record_preview_adapter_.setWebcamStyle(live_config_.webcam.mirror, live_config_.webcam.opacity, chroma);
+    webcam_preview_feed_.setStyle(live_config_.webcam.mirror, live_config_.webcam.opacity, chroma);
     // Latched at the first live state and cleared when the session ends: it lists
     // the sources that were resolved into a track, which is what a live mute can
     // reach. Refilling it as rows change would let a source muted mid-run drop
@@ -2092,7 +2100,7 @@ void QuickApplication::startMeterServices() {
     }
     const bool idle =
         record_view_model_.state == UiRecordingState::Ready || record_view_model_.state == UiRecordingState::Completed;
-    recording_coordinator_->SetWebcamPreviewActive(live_config_.webcam.enabled && idle);
+    recording_coordinator_->SetWebcamPreviewActive(RecordPreviewWantsWebcam(record_view_model_adapter_.active(), idle));
 }
 
 // ---------------------------------------------------------------------------
@@ -2100,6 +2108,7 @@ void QuickApplication::startMeterServices() {
 // ---------------------------------------------------------------------------
 
 void QuickApplication::initializeSettingsArea() {
+    settings_adapter_.setWebcamPreviewFeed(&webcam_preview_feed_);
     settings_adapter_.setAppSettings(settings_);
     // Seeded here as well as in saveAndPublishAppSettings(): the adapter is
     // constructed before settings_ has been handed to anyone, so without this a
@@ -2136,33 +2145,51 @@ void QuickApplication::initializeSettingsArea() {
 
     publishRefreshRateDerivedState();
 
-    QObject::connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, &settings_adapter_,
-                     [this](const AudioDeviceSnapshot& snapshot, DiscoveryReason) {
-                         QVariantList devices;
-                         for (const exosnap::engine::AudioInputDeviceInfo& device : snapshot.inputs) {
-                             QVariantMap entry;
-                             entry.insert(QStringLiteral("value"), QString::fromStdString(device.device_id));
-                             entry.insert(QStringLiteral("label"), QString::fromStdString(device.display_name));
-                             entry.insert(QStringLiteral("selectable"), true);
-                             entry.insert(QStringLiteral("reason"), QString());
-                             devices.append(entry);
-                         }
-                         settings_adapter_.setMicrophoneDevices(std::move(devices));
-                     });
-
-    QObject::connect(&webcam_notifier_, &WebcamDeviceNotifier::snapshotChanged, &settings_adapter_,
-                     [this](const WebcamDeviceSnapshot& snapshot, DiscoveryReason) {
-                         QVariantList devices;
-                         for (const auto& device : snapshot.devices) {
-                             QVariantMap entry;
-                             entry.insert(QStringLiteral("value"), QString::fromStdString(device.id));
-                             entry.insert(QStringLiteral("label"), QString::fromStdString(device.name));
-                             entry.insert(QStringLiteral("selectable"), true);
-                             entry.insert(QStringLiteral("reason"), QString());
-                             devices.append(entry);
-                         }
-                         settings_adapter_.setWebcamDevices(std::move(devices));
-                     });
+    const auto publish_microphones = [this](const AudioDeviceSnapshot& snapshot) {
+        QVariantList devices;
+        for (const exosnap::engine::AudioInputDeviceInfo& device : snapshot.inputs) {
+            QVariantMap entry;
+            entry.insert(QStringLiteral("value"), QString::fromStdString(device.device_id));
+            entry.insert(QStringLiteral("label"), QString::fromStdString(device.display_name));
+            entry.insert(QStringLiteral("selectable"), true);
+            entry.insert(QStringLiteral("reason"), QString());
+            entry.insert(QStringLiteral("isDefault"), device.is_default);
+            devices.append(entry);
+        }
+        settings_adapter_.setMicrophoneDevices(std::move(devices));
+        QString default_output;
+        for (const auto& output : snapshot.outputs) {
+            if (output.device_id == snapshot.default_output_id) {
+                default_output = QString::fromStdString(output.display_name);
+                break;
+            }
+        }
+        settings_adapter_.setDefaultOutputDeviceName(default_output);
+    };
+    const auto publish_webcams = [this](const WebcamDeviceSnapshot& snapshot) {
+        QVariantList devices;
+        for (const auto& device : snapshot.devices) {
+            QVariantMap entry;
+            entry.insert(QStringLiteral("value"), QString::fromStdString(device.id));
+            entry.insert(QStringLiteral("label"), QString::fromStdString(device.name));
+            entry.insert(QStringLiteral("selectable"), true);
+            entry.insert(QStringLiteral("reason"), QString());
+            devices.append(entry);
+        }
+        settings_adapter_.setWebcamDevices(std::move(devices));
+    };
+    QObject::connect(
+        &audio_notifier_, &AudioDeviceNotifier::snapshotChanged, &settings_adapter_,
+        [publish_microphones](const AudioDeviceSnapshot& snapshot, DiscoveryReason) { publish_microphones(snapshot); });
+    QObject::connect(
+        &webcam_notifier_, &WebcamDeviceNotifier::snapshotChanged, &settings_adapter_,
+        [publish_webcams](const WebcamDeviceSnapshot& snapshot, DiscoveryReason) { publish_webcams(snapshot); });
+    // The notifiers started in initializeRecordWorkflow(), and their first scan
+    // has already been emitted by now. They only emit on change, so without
+    // this the Settings page kept "No camera found" until a device was plugged
+    // in or out.
+    publish_microphones(audio_notifier_.currentSnapshot());
+    publish_webcams(webcam_notifier_.currentSnapshot());
 
     refreshPresetState();
     wireSettingsCommands();
@@ -2929,7 +2956,39 @@ WebcamSettings QuickApplication::webcamSettingsForCapture() const {
     if (resolved.device_id.empty()) {
         resolved.device_id = default_webcam_device_id_;
     }
+    // Same resolution as the Settings page shows, so the reader asks for a
+    // native mode the camera has instead of falling back to its default one.
+    const auto formats = webcam_formats_.constFind(QString::fromStdString(resolved.device_id));
+    if (formats != webcam_formats_.cend()) {
+        const WebcamCaptureMode mode =
+            ResolveWebcamCaptureMode(*formats, resolved.width, resolved.height, resolved.fps);
+        resolved.width = mode.width;
+        resolved.height = mode.height;
+        resolved.fps = mode.fps;
+    }
     return resolved;
+}
+
+void QuickApplication::enumerateWebcamFormats(const std::string& device_id) {
+    // Opening a camera to list its modes and controls takes long enough to stall the UI, so
+    // it runs on a pool thread and reports back through the application object;
+    // the adapter is resolved on the GUI thread, where its lifetime is decided.
+    QPointer<SettingsAdapter> adapter(&settings_adapter_);
+    QThreadPool::globalInstance()->start([this, adapter, device_id]() {
+        WebcamDeviceProbe probe = WebcamService::ProbeDevice(device_id);
+        QMetaObject::invokeMethod(
+            QCoreApplication::instance(),
+            [this, adapter, device_id, probe = std::move(probe)]() mutable {
+                if (adapter == nullptr || probe.formats.empty())
+                    return;
+                const QString id = QString::fromStdString(device_id);
+                webcam_formats_.insert(id, probe.formats);
+                settings_adapter_.setWebcamControlRanges(id, std::move(probe.controls));
+                settings_adapter_.setWebcamFormats(id, std::move(probe.formats));
+                recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
+            },
+            Qt::QueuedConnection);
+    });
 }
 
 void QuickApplication::refreshPresetState() {
@@ -3011,15 +3070,29 @@ void QuickApplication::importPresetsFromFile(const QString& path) {
 
 void QuickApplication::initializeHotkeys() {
     hotkey_service_.LoadFromStrings(settings_.hotkey_bindings);
+    settings_adapter_.setHotkeyModifierNames(GlobalHotkeyService::DisplayParts(QKeySequence(QKeyCombination(
+        Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier | Qt::MetaModifier, Qt::Key_unknown))));
     refreshHotkeyRows();
+
+    // While a shortcut field captures, ExoSnap's own shortcuts are released:
+    // a registered combination never reaches the window as a key press, so
+    // pressing one would start that action instead of reporting the conflict.
+    QObject::connect(&settings_adapter_, &SettingsAdapter::hotkeysChanged, &settings_adapter_, [this] {
+        if (settings_adapter_.capturingHotkeyAction() >= 0)
+            hotkey_service_.SuspendRegistrations();
+        else
+            reportResumedHotkeys(hotkey_service_.ResumeRegistrations());
+    });
 
     QObject::connect(&settings_adapter_, &SettingsAdapter::hotkeyRebindRequested, &settings_adapter_,
                      [this](int action, int key, int modifiers) {
+                         reportResumedHotkeys(hotkey_service_.ResumeRegistrations());
                          const auto hotkey_action = static_cast<HotkeyAction>(action);
-                         const RebindResult result =
-                             hotkey_service_.TrySetBinding(hotkey_action, QKeySequence(key | modifiers));
+                         const QKeySequence attempt(QKeyCombination::fromCombined(key | modifiers));
+                         const RebindResult result = hotkey_service_.TrySetBinding(hotkey_action, attempt);
                          if (!result.success) {
-                             settings_adapter_.setHotkeyError(action, result.error_message);
+                             settings_adapter_.setHotkeyError(action, result.error_message,
+                                                              GlobalHotkeyService::DisplayParts(attempt));
                              return;
                          }
                          hotkey_service_.SaveToStrings(settings_.hotkey_bindings);
@@ -3046,6 +3119,23 @@ void QuickApplication::initializeHotkeys() {
                      });
 }
 
+void QuickApplication::reportResumedHotkeys(const std::vector<HotkeyAction>& failed) {
+    if (failed.empty())
+        return;
+    for (const HotkeyAction action : failed) {
+        diagnostics::AppLog::warning(QStringLiteral("hotkeys"),
+                                     QStringLiteral("Hotkey taken by another application during capture: %1")
+                                         .arg(GlobalHotkeyService::ActionDisplayName(action)));
+        hotkey_service_.UnsetBinding(action);
+    }
+    hotkey_service_.SaveToStrings(settings_.hotkey_bindings);
+    saveAndPublishAppSettings(SettingsWriteIntent::UserEdit);
+    refreshHotkeyRows();
+    settings_adapter_.setHotkeyError(
+        static_cast<int>(failed.front()),
+        QCoreApplication::translate("Hotkeys", "This shortcut is already used by Windows or another application."));
+}
+
 void QuickApplication::refreshHotkeyRows() {
     QVariantList rows;
     for (int i = 0; i < kHotkeyActionCount; ++i) {
@@ -3054,6 +3144,7 @@ void QuickApplication::refreshHotkeyRows() {
         row.insert(QStringLiteral("action"), i);
         row.insert(QStringLiteral("label"), GlobalHotkeyService::ActionDisplayName(action));
         row.insert(QStringLiteral("binding"), hotkey_service_.GetBinding(action).toString(QKeySequence::NativeText));
+        row.insert(QStringLiteral("keys"), GlobalHotkeyService::DisplayParts(hotkey_service_.GetBinding(action)));
         row.insert(QStringLiteral("isDefault"), hotkey_service_.IsAtDefault(action));
         rows.append(row);
     }
@@ -3741,7 +3832,11 @@ void QuickApplication::triggerUpdateCheck(bool manual) {
         // "updaterRunning" deliberately writes nothing: the card is already
         // showing "Updater running…" / "Restart pending", and replacing that
         // with an error would describe the handoff as a fault.
-        if (blocker != QLatin1String("updaterRunning")) {
+        if (!manual && blocker != QLatin1String("updaterRunning")) {
+            // Not an error and not news: the startup check simply waits for
+            // the recording to end.
+            update_check_deferred_ = true;
+        } else if (blocker != QLatin1String("updaterRunning")) {
             settings_adapter_.setUpdateStatus(
                 QStringLiteral("error"), QString(), QString(),
                 QCoreApplication::translate("QuickApplication",
@@ -5372,10 +5467,6 @@ bool QuickApplication::canOpenEditorForCurrentRecording() const {
 }
 
 bool QuickApplication::load(bool no_activate) {
-    if (!webcam_provider_registered_) {
-        engine_.addImageProvider(QStringLiteral("record-webcam"), webcam_frame_provider_);
-        webcam_provider_registered_ = true;
-    }
     if (!target_still_provider_registered_) {
         engine_.addImageProvider(CaptureTargetStillProvider::providerId(), target_still_provider_);
         target_still_provider_registered_ = true;

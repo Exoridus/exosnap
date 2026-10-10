@@ -27,8 +27,10 @@
 #include <windows.h>
 #include <wrl/client.h>
 
+#include <exosnap/engine/gpu_compositor.h>
 #include <exosnap/engine/gpu_hdr_tonemap.h>
 #include <exosnap/engine/preview_shared_texture.h>
+#include <exosnap/engine/webcam_placement.h>
 
 #include <algorithm>
 #include <chrono>
@@ -173,7 +175,23 @@ class PreviewTextureNode final : public QSGNode {
             return;
         }
 
-        ID3D11Texture2D* display_texture = local_texture_.Get();
+        // The webcam is drawn into a composite of the private copy, never into
+        // the copy itself: a camera-only update re-composes from the copy, and
+        // a copy that already held the previous overlay would show through a
+        // keyed or translucent one. Formats the compositor does not take, and
+        // sources that already carry the overlay, present the copy directly.
+        source_texture_ = local_texture_.Get();
+        if (!source.overlays_composited) {
+            std::string compositor_error;
+            const float overlay_white_nits = tap_.paper_white_scale * 80.0f;
+            if (compositor_.Init(device_.Get(), context_.Get(), width_, height_, compositor_error, desc.Format,
+                                 overlay_white_nits)) {
+                composes_ = true;
+                source_texture_ = compositor_.Result();
+            }
+        }
+
+        ID3D11Texture2D* display_texture = source_texture_;
         if (tap_.transform != exosnap::engine::PreviewTapTransform::None) {
             if (desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
                 error = QStringLiteral("The preview transform requires an FP16 scRGB source.");
@@ -216,8 +234,8 @@ class PreviewTextureNode final : public QSGNode {
             }
             rgba_converter_ = std::make_unique<QuickPreviewRgbaConverter>();
             std::string conversion_error;
-            if (!rgba_converter_->initialize(device_.Get(), context_.Get(), local_texture_.Get(), sdr_texture_.Get(),
-                                             width_, height_, conversion_error)) {
+            if (!rgba_converter_->initialize(device_.Get(), context_.Get(), source_texture_, sdr_texture_.Get(), width_,
+                                             height_, conversion_error)) {
                 error = QStringLiteral("Initializing the Quick GPU format conversion failed: %1")
                             .arg(QString::fromStdString(conversion_error));
                 return;
@@ -281,20 +299,7 @@ class PreviewTextureNode final : public QSGNode {
         // preview that has in fact stopped. Counted apart so the funnel shows it.
         if (FAILED(keyed_mutex_->ReleaseSync(exosnap::engine::kPreviewSharedProducerKey)))
             metrics.release_failures.fetch_add(1, std::memory_order_relaxed);
-        bool converted = true;
-        if (tone_mapper_ != nullptr) {
-            std::string tone_map_error;
-            if (!tone_mapper_->Convert(local_texture_.Get(), sdr_texture_.Get(), tone_map_error)) {
-                error = QString::fromStdString(tone_map_error);
-                converted = false;
-            }
-        } else if (rgba_converter_ != nullptr) {
-            std::string conversion_error;
-            if (!rgba_converter_->convert(conversion_error)) {
-                error = QString::fromStdString(conversion_error);
-                converted = false;
-            }
-        }
+        const bool converted = composeAndConvert(error);
         window->endExternalCommands();
         if (!converted) {
             metrics.conversion_failures.fetch_add(1, std::memory_order_relaxed);
@@ -316,12 +321,39 @@ class PreviewTextureNode final : public QSGNode {
         return ConsumeOutcome::Presented;
     }
 
+    // Sync point, GUI thread blocked. A changed overlay is taken over by value;
+    // the frame snapshot inside it is immutable and shared.
+    void setWebcamOverlay(const ExoPreviewItem::WebcamOverlay& overlay, quint64 revision) {
+        if (revision == webcam_revision_)
+            return;
+        webcam_ = overlay;
+        webcam_revision_ = revision;
+        webcam_dirty_ = true;
+    }
+
     void preprocess() override {
         // Render thread, after the sync stage released the GUI thread. Nothing
         // below dereferences the item: the link is render-owned and its atomics
         // stay valid even while ~ExoPreviewItem runs on the other thread.
         if (!valid_ || window_ == nullptr || link_ == nullptr ||
             !link_->render_loop_active.load(std::memory_order_acquire)) {
+            return;
+        }
+        // A pass asked for by the camera alone, on a desktop with nothing new:
+        // re-compose the retained copy instead of looking at the transport,
+        // which has nothing to give and would book the look as contention.
+        const bool desktop_owed = scheduler_ == nullptr || scheduler_->HasUnrenderedPublish();
+        if (webcam_dirty_ && composes_ && has_frame_ && !desktop_owed) {
+            QString error;
+            window_->beginExternalCommands();
+            context_->ClearState();
+            const bool composed = composeAndConvert(error);
+            window_->endExternalCommands();
+            if (!composed) {
+                conversion_error_active_ = true;
+                ExoPreviewItem::RenderLink::publishRenderState(link_, generation_, has_frame_, sourceSize(), error);
+            }
+            recordSceneFrame(link_->metrics);
             return;
         }
         // Before the acquire below, so a publish that races this pass stays
@@ -377,6 +409,8 @@ class PreviewTextureNode final : public QSGNode {
         geometry_rect_ = rect;
         geometry_radius_ = radius;
         geometry_top_radius_ = top_radius;
+        if (normalized_source_rect_ != normalized_source_rect)
+            webcam_dirty_ = true; // the overlay is placed inside the content rectangle
         normalized_source_rect_ = normalized_source_rect;
         target_rect_ = rect;
         if (image_node_ != nullptr) {
@@ -399,6 +433,55 @@ class PreviewTextureNode final : public QSGNode {
     }
 
   private:
+    // Composites the webcam into the retained copy (when this source takes it)
+    // and runs the display conversion. Caller brackets the external commands.
+    bool composeAndConvert(QString& error) {
+        if (composes_) {
+            std::string compositor_error;
+            if (!compositor_.BeginFrame(local_texture_.Get(), compositor_error) || !drawWebcam(compositor_error)) {
+                error = QString::fromStdString(compositor_error);
+                return false;
+            }
+            webcam_dirty_ = false;
+        }
+        if (tone_mapper_ != nullptr) {
+            std::string tone_map_error;
+            if (!tone_mapper_->Convert(source_texture_, sdr_texture_.Get(), tone_map_error)) {
+                error = QString::fromStdString(tone_map_error);
+                return false;
+            }
+        } else if (rgba_converter_ != nullptr) {
+            std::string conversion_error;
+            if (!rgba_converter_->convert(conversion_error)) {
+                error = QString::fromStdString(conversion_error);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Same mapping as the recording: the placement is a fraction of the content
+    // rectangle, which here is the part of the source the preview shows.
+    bool drawWebcam(std::string& error) {
+        if (!webcam_.visible || webcam_.frame == nullptr)
+            return true;
+        const int content_x = qRound(normalized_source_rect_.x() * width_);
+        const int content_y = qRound(normalized_source_rect_.y() * height_);
+        const int content_w = qRound(normalized_source_rect_.width() * width_);
+        const int content_h = qRound(normalized_source_rect_.height() * height_);
+        exosnap::engine::WebcamPlacement placement;
+        placement.x = static_cast<float>(webcam_.rect.x());
+        placement.y = static_cast<float>(webcam_.rect.y());
+        placement.w = static_cast<float>(webcam_.rect.width());
+        placement.h = static_cast<float>(webcam_.rect.height());
+        placement.mirror = webcam_.mirror;
+        const exosnap::engine::WebcamPixelRect rect =
+            exosnap::engine::MapWebcamPlacementToContent(placement, content_x, content_y, content_w, content_h);
+        if (rect.w < 2 || rect.h < 2)
+            return true;
+        return compositor_.DrawWebcam(*webcam_.frame, rect, webcam_.mirror, webcam_.chroma, error, webcam_.opacity);
+    }
+
     static void recordSceneFrame(ExoPreviewItem::Metrics& metrics) {
         const qint64 rendered_at = nowNs();
         const qint64 previous = metrics.last_scene_frame_ns.exchange(rendered_at, std::memory_order_relaxed);
@@ -437,6 +520,9 @@ class PreviewTextureNode final : public QSGNode {
         texture_wrapper_ = nullptr;
         rgba_converter_.reset();
         tone_mapper_.reset();
+        compositor_ = exosnap::engine::GpuCompositor{};
+        composes_ = false;
+        source_texture_ = nullptr;
         sdr_texture_.Reset();
         local_texture_.Reset();
         keyed_mutex_.Reset();
@@ -468,6 +554,14 @@ class PreviewTextureNode final : public QSGNode {
     ComPtr<ID3D11Texture2D> sdr_texture_;
     std::unique_ptr<exosnap::engine::HdrToneMapper> tone_mapper_;
     std::unique_ptr<QuickPreviewRgbaConverter> rgba_converter_;
+    exosnap::engine::GpuCompositor compositor_;
+    bool composes_ = false;
+    // What the display conversion reads: the composite when this source takes
+    // the overlay, else the private copy.
+    ID3D11Texture2D* source_texture_ = nullptr;
+    ExoPreviewItem::WebcamOverlay webcam_;
+    quint64 webcam_revision_ = 0;
+    bool webcam_dirty_ = false;
     exosnap::engine::PreviewTapDesc tap_{};
     uint32_t width_ = 0;
     uint32_t height_ = 0;
@@ -572,7 +666,7 @@ const QString& ExoPreviewItem::errorText() const noexcept {
 }
 
 void ExoPreviewItem::presentSharedTexture(void* nt_handle, uint32_t width, uint32_t height,
-                                          exosnap::engine::PreviewTapDesc tap) {
+                                          exosnap::engine::PreviewTapDesc tap, bool overlays_composited) {
     Q_ASSERT(QThread::currentThread() == thread());
     const quint64 generation = next_generation_++;
     void* pending_handle = duplicateHandle(nt_handle);
@@ -580,8 +674,8 @@ void ExoPreviewItem::presentSharedTexture(void* nt_handle, uint32_t width, uint3
         QMutexLocker lock(&pending_mutex_);
         closeHandle(pending_.handle);
         closeHandle(retained_.handle);
-        retained_ = {nt_handle, width, height, tap, generation, false};
-        pending_ = {pending_handle, width, height, tap, generation, false};
+        retained_ = {nt_handle, width, height, tap, generation, false, overlays_composited};
+        pending_ = {pending_handle, width, height, tap, generation, false, overlays_composited};
     }
     active_generation_.store(generation, std::memory_order_release);
     if (pending_handle == nullptr) {
@@ -600,11 +694,64 @@ void ExoPreviewItem::clearSharedTexture() {
         closeHandle(pending_.handle);
         closeHandle(retained_.handle);
         retained_ = {};
-        pending_ = {nullptr, 0, 0, {}, generation, true};
+        pending_ = {nullptr, 0, 0, {}, generation, true, false};
     }
     active_generation_.store(generation, std::memory_order_release);
     renderLoopFlag().store(false, std::memory_order_release);
     applyRenderState(false, {}, {});
+    update();
+}
+
+bool ExoPreviewItem::webcamVisible() const noexcept {
+    return webcam_overlay_.visible;
+}
+
+void ExoPreviewItem::setWebcamVisible(bool visible) {
+    if (webcam_overlay_.visible == visible)
+        return;
+    webcam_overlay_.visible = visible;
+    emit webcamVisibleChanged();
+    webcamOverlayChanged();
+}
+
+QRectF ExoPreviewItem::webcamRect() const noexcept {
+    return webcam_overlay_.rect;
+}
+
+void ExoPreviewItem::setWebcamRect(const QRectF& rect) {
+    if (webcam_overlay_.rect == rect)
+        return;
+    webcam_overlay_.rect = rect;
+    emit webcamRectChanged();
+    webcamOverlayChanged();
+}
+
+void ExoPreviewItem::setWebcamStyle(bool mirror, float opacity, const exosnap::engine::ChromaKeyParams& chroma) {
+    const auto& current = webcam_overlay_.chroma;
+    if (webcam_overlay_.mirror == mirror && webcam_overlay_.opacity == opacity && current.enabled == chroma.enabled &&
+        current.r == chroma.r && current.g == chroma.g && current.b == chroma.b &&
+        current.tolerance == chroma.tolerance && current.softness == chroma.softness &&
+        current.spill_reduction == chroma.spill_reduction) {
+        return;
+    }
+    webcam_overlay_.mirror = mirror;
+    webcam_overlay_.opacity = opacity;
+    webcam_overlay_.chroma = chroma;
+    webcamOverlayChanged();
+}
+
+void ExoPreviewItem::setWebcamFrame(std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> frame) {
+    if (webcam_overlay_.frame == frame)
+        return;
+    webcam_overlay_.frame = std::move(frame);
+    // Without a visible overlay a new camera frame changes nothing on screen;
+    // the next visible change hands the latest one over.
+    if (webcam_overlay_.visible)
+        webcamOverlayChanged();
+}
+
+void ExoPreviewItem::webcamOverlayChanged() {
+    ++webcam_revision_;
     update();
 }
 
@@ -771,6 +918,7 @@ QSGNode* ExoPreviewItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
     if (node == nullptr)
         return nullptr;
 
+    node->setWebcamOverlay(webcam_overlay_, webcam_revision_);
     if (node->valid() && isVisible()) {
         node->setGeometryForRect(boundingRect(), corner_radius_, resolvedTopCornerRadius(), normalized_source_rect_);
     } else {

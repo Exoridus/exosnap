@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtTest
 
 import ExoSnap.Quick.TestControls
@@ -121,5 +122,53 @@ TestCase {
 
         tryCompare(fixture.field, "activeFocus", false);
         compare(fixture.field.text, fixture.backing.canonicalValue);
+    }
+
+    function test_an_error_marks_the_field_without_growing_it() {
+        let fixture = createTemporaryObject(fieldComponent, testCase);
+        verify(fixture);
+        const height = fixture.field.height;
+
+        fixture.field.errorText = "Folder is not writable";
+        verify(fixture.field.hasError);
+        compare(fixture.field.height, height, "the message is not a line under the field");
+        compare(fixture.field.Accessible.description, "Folder is not writable");
+
+        // Keyboard focus shows the message as well as hover does.
+        fixture.field.forceActiveFocus();
+        tryCompare(fixture.field.ToolTip, "visible", true);
+        compare(fixture.field.ToolTip.text, "Folder is not writable");
+
+        fixture.field.errorText = "";
+        verify(!fixture.field.hasError);
+        tryCompare(fixture.field.ToolTip, "visible", false);
+    }
+
+    function test_a_trailing_action_reports_its_click() {
+        let fixture = createTemporaryObject(fieldComponent, testCase);
+        verify(fixture);
+        fixture.field.trailingGlyph = ExoGlyph.Braces;
+        verify(fixture.field.hasTrailingAction);
+        let clicks = 0;
+        fixture.field.trailingClicked.connect(() => ++clicks);
+        mouseClick(fixture.field.trailingButton);
+        compare(clicks, 1);
+        compare(fixture.field.text, "recording-%date%", "the click does not edit the value");
+    }
+
+    function test_tab_reaches_the_field_before_its_action() {
+        let fixture = createTemporaryObject(fieldComponent, testCase);
+        verify(fixture);
+        fixture.field.trailingGlyph = ExoGlyph.Folder;
+        fixture.field.leadingGlyph = ExoGlyph.Hash;
+
+        // The field, then its action. The leading sigil is a label and takes
+        // no stop of its own.
+        compare(fixture.field.nextItemInFocusChain(true), fixture.field.trailingButton);
+        fixture.field.forceActiveFocus();
+        keyClick(Qt.Key_Tab);
+        verify(fixture.field.trailingButton.activeFocus);
+        keyClick(Qt.Key_Backtab);
+        verify(fixture.field.activeFocus);
     }
 }

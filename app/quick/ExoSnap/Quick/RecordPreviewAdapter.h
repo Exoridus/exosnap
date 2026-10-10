@@ -14,6 +14,7 @@
 #include <QVariantMap>
 #include <QtQmlIntegration/qqmlintegration.h>
 
+#include <exosnap/engine/overlay_shader.h>
 #include <exosnap/engine/preview_tap.h>
 #include <exosnap/engine/recorder_session.h>
 
@@ -127,6 +128,10 @@ class RecordPreviewAdapter : public QObject {
     Q_INVOKABLE void resetMetrics();
 
     void attachPreviewItem(ExoPreviewItem* item);
+    // The webcam overlay's style and latest camera frame, forwarded to the
+    // attached preview item and kept for one attached later.
+    void setWebcamStyle(bool mirror, float opacity, const exosnap::engine::ChromaKeyParams& chroma);
+    void setWebcamFrame(std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> frame);
     void detachPreviewItem(ExoPreviewItem* item);
     void bindRecordingCoordinator(RecordingCoordinator* coordinator);
     void setPreviewTarget(const exosnap::engine::CaptureTarget& target);
@@ -151,6 +156,7 @@ class RecordPreviewAdapter : public QObject {
     void harnessTestCardChanged();
 
   private:
+    void forwardWebcamOverlay();
     // The one place `active` and `surfaceVisible` are resolved into "is the
     // preview subscription running". Both setters go through it, and so does the
     // end of observeRecordingState(), because losing the engine lease can turn a
@@ -182,6 +188,10 @@ class RecordPreviewAdapter : public QObject {
     std::unique_ptr<WgcCaptureHubService> wgc_source_;
     std::optional<exosnap::engine::CaptureTarget> selected_target_;
     QPointer<ExoPreviewItem> item_;
+    bool webcam_mirror_ = false;
+    float webcam_opacity_ = 1.0f;
+    exosnap::engine::ChromaKeyParams webcam_chroma_;
+    std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> webcam_frame_;
     QTimer metrics_timer_;
     QTimer preview_update_timer_;
     QElapsedTimer last_preview_update_;

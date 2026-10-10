@@ -54,6 +54,8 @@ An NT shared handle and a keyed mutex transfer access between D3D11 devices. The
 
 The scene-graph node allocates on source adoption or replacement, not on every frame. Native D3D commands are bracketed by `beginExternalCommands()` and `endExternalCommands()`. Conversion establishes the state it needs rather than inheriting Qt scissor or blend state. The imported display texture uses the public, platform-specific Qt D3D11 native interface. Qt upgrades require focused bridge verification.
 
+An idle hub source carries no overlay. The Quick render node composites the webcam into a composite of its private copy with the recording's GpuCompositor, using the same placement mapping into the content rectangle, so the idle picture is the pre-encode picture. The private copy stays clean: a camera-only update re-composes from it without a new desktop frame and without touching the transport or its presentation debt. A recording-tap source is marked as already composited and is presented as delivered.
+
 Source generations reject stale queued callbacks after replacement or stop. The GUI-side adapter retains a duplicate-capable handle; scene-graph reinitialization can rebuild consumers without requiring the capture source to recreate its texture. Readiness follows successful conversion/presentation, not just receipt of a handle. A cross-adapter open failure does not falsely switch preview to the recording tap; independent preview may remain, and must not be described as unconditional WYSIWYG.
 
 ## Producer-driven presentation
@@ -86,7 +88,7 @@ The normal hardware recording path is D3D11 capture, owned held/ring surfaces, G
 | Shared preview to private render texture | GPU copy releases the producer mutex before Qt rendering |
 | HDR statistics | Small asynchronous GPU-to-CPU measurement, not full-frame readback |
 | Screenshot | Requested one-shot readback for image encoding |
-| Webcam | Camera-owned CPU payload is copied into an immutable mailbox generation, then uploaded once per changed generation |
+| Webcam | The camera's native NV12 or YUY2 bytes (or BGRA, or MF-decoded NV12 for MJPEG) are copied once into an immutable mailbox generation, uploaded once per changed generation on each consuming D3D11 device, and converted to RGB on the GPU |
 | Hardware editor decode | GPU-to-CPU readback and normalization followed by renderer upload remain the compatibility bridge between independently owned FFmpeg and Qt devices |
 
 The surface inventory attributes logical owned texels by subsystem across adapters. It excludes external capture/decoder pools and driver overhead, and is not DXGI residency. Provider sampling stays off time-sensitive workers. Required lifetime copies and encoder slot counts must not be reduced merely to lower these numbers.

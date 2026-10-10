@@ -3337,9 +3337,14 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>ExoInfoButton</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/ExoInfoButton.qml" line="+36"/>
+        <location filename="../quick/ExoSnap/Quick/ExoInfoButton.qml" line="+40"/>
         <source>About %1</source>
         <translation>Über %1</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Note on %1</source>
+        <translation>Hinweis zu %1</translation>
     </message>
 </context>
 <context>
@@ -3422,7 +3427,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>schlechtester Wert %1 / %2</translation>
     </message>
     <message>
-        <location line="+76"/>
+        <location line="+97"/>
         <source>now</source>
         <translation>jetzt</translation>
     </message>
@@ -3432,17 +3437,18 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>ruhig</translation>
     </message>
     <message>
-        <location line="+96"/>
+        <location line="+80"/>
+        <location line="+31"/>
         <source>Log excerpt</source>
         <translation>Log-Auszug</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+16"/>
         <source>Show in log</source>
         <translation>Im Log anzeigen</translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="+7"/>
         <source>Compensation: %1</source>
         <translation>Kompensation: %1</translation>
     </message>
@@ -3524,7 +3530,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>ExoSearchField</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/ExoSearchField.qml" line="+69"/>
+        <location filename="../quick/ExoSnap/Quick/ExoSearchField.qml" line="+85"/>
         <source>Clear search</source>
         <translation>Suche löschen</translation>
     </message>
@@ -3620,12 +3626,14 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>HotkeyCaptureField</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/HotkeyCaptureField.qml" line="+43"/>
-        <source>Press a key combination…</source>
-        <translation>Tastenkombination drücken…</translation>
+        <location filename="../quick/ExoSnap/Quick/HotkeyCaptureField.qml" line="+77"/>
+        <location line="+96"/>
+        <source>Press a key combination</source>
+        <translation>Tastenkombination drücken</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-95"/>
+        <location line="+95"/>
         <source>Not set</source>
         <translation>Nicht festgelegt</translation>
     </message>
@@ -3638,7 +3646,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>%1 ist bereits %2 zugewiesen.</translation>
     </message>
     <message>
-        <location line="+59"/>
+        <location line="+90"/>
         <source>Unknown action</source>
         <translation>Unbekannte Aktion</translation>
     </message>
@@ -3654,12 +3662,17 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+2"/>
-        <location line="+228"/>
+        <location line="+261"/>
         <source>This key is not supported for global shortcuts.</source>
         <translation>Diese Taste wird für globale Hotkeys nicht unterstützt.</translation>
     </message>
     <message>
-        <location line="-70"/>
+        <location line="-259"/>
+        <source>Add Ctrl, Alt, Shift or Windows. Only F13 to F24 and Pause work on their own.</source>
+        <translation>Strg, Alt, Umschalt oder Windows dazunehmen. Allein funktionieren nur F13 bis F24 und Pause.</translation>
+    </message>
+    <message>
+        <location line="+161"/>
         <source>Start / Stop recording</source>
         <translation>Aufnahme starten / stoppen</translation>
     </message>
@@ -3689,7 +3702,28 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Unbekannt</translation>
     </message>
     <message>
-        <location line="+73"/>
+        <location line="+43"/>
+        <source>Ctrl</source>
+        <translation>Strg</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Alt</source>
+        <translation>Alt</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Shift</source>
+        <translation>Umschalt</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Win</source>
+        <translation>Win</translation>
+    </message>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3139"/>
+        <location filename="../services/GlobalHotkeyService.cpp" line="+52"/>
         <source>This shortcut is already used by Windows or another application.</source>
         <translation>Dieser Hotkey wird bereits von Windows oder einer anderen Anwendung verwendet.</translation>
     </message>
@@ -4408,7 +4442,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>QObject</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+96"/>
+        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+133"/>
         <source>Ultra</source>
         <translation>Ultra</translation>
     </message>
@@ -4437,7 +4471,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>QuickApplication</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+751"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-2391"/>
         <source>Recording is blocked</source>
         <translation>Aufnahme blockiert</translation>
     </message>
@@ -4477,7 +4511,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Diese Aufnahme hat keinen Eintrag zur Absturzwiederherstellung: %1. Die Aufnahme läuft unverändert, kann bei einer Unterbrechung von ExoSnap aber nicht wiederhergestellt werden.</translation>
     </message>
     <message>
-        <location line="+781"/>
+        <location line="+793"/>
         <source>Region could not be applied</source>
         <translation>Bereich konnte nicht übernommen werden</translation>
     </message>
@@ -4497,20 +4531,20 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Wählen Sie einen Bereich mit mindestens 64 × 64 Pixeln.</translation>
     </message>
     <message>
-        <location line="+1097"/>
-        <location line="+289"/>
+        <location line="+1118"/>
+        <location line="+353"/>
         <location line="+69"/>
         <source>Settings could not be saved</source>
         <translation>Einstellungen konnten nicht gespeichert werden</translation>
     </message>
     <message>
-        <location line="-357"/>
-        <location line="+290"/>
+        <location line="-421"/>
+        <location line="+354"/>
         <source>The change may be lost when ExoSnap restarts.</source>
         <translation>Die Änderung kann beim Neustart von ExoSnap verloren gehen.</translation>
     </message>
     <message>
-        <location line="-174"/>
+        <location line="-206"/>
         <source>The preset file could not be read or written.</source>
         <translation>Die Preset-Datei konnte nicht gelesen oder geschrieben werden.</translation>
     </message>
@@ -4525,7 +4559,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Preset-Import fehlgeschlagen</translation>
     </message>
     <message>
-        <location line="+204"/>
+        <location line="+236"/>
         <source>A hotkey could not be registered</source>
         <translation>Ein Hotkey konnte nicht registriert werden</translation>
     </message>
@@ -4556,12 +4590,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+4"/>
-        <location line="+1235"/>
+        <location line="+1239"/>
         <source>Window capture appears to have stalled</source>
         <translation>Die Fensteraufnahme scheint stillzustehen</translation>
     </message>
     <message>
-        <location line="-1234"/>
+        <location line="-1238"/>
         <source>No new frame has arrived from the captured window for 12 seconds. The recording is still running, but the captured window may be frozen.</source>
         <translation>Seit 12 Sekunden ist kein neuer Frame vom aufgenommenen Fenster angekommen. Die Aufnahme läuft weiter, das Fenster könnte jedoch eingefroren sein.</translation>
     </message>
@@ -4581,7 +4615,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>2026-08-10 21-14-08.mkv - 2:34, 412 MB</translation>
     </message>
     <message>
-        <location line="+502"/>
+        <location line="+506"/>
         <source>Update checks are paused while a recording is in progress.</source>
         <translation>Während einer Aufnahme wird nicht nach Updates gesucht.</translation>
     </message>
@@ -4632,8 +4666,8 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Letzte Session wiederherstellen?</translation>
     </message>
     <message>
-        <location line="-962"/>
-        <location line="+1107"/>
+        <location line="-966"/>
+        <location line="+1111"/>
         <location line="+466"/>
         <source>Recording saved</source>
         <translation>Aufnahme gespeichert</translation>
@@ -4644,14 +4678,14 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB</translation>
     </message>
     <message>
-        <location line="-1151"/>
-        <location line="+1156"/>
+        <location line="-1155"/>
+        <location line="+1160"/>
         <source>Frames were dropped</source>
         <translation>Frames wurden verworfen</translation>
     </message>
     <message>
-        <location line="-1155"/>
-        <location line="+1156"/>
+        <location line="-1159"/>
+        <location line="+1160"/>
         <source>122 frames did not reach the encoder during the last recording.</source>
         <translation>122 Frames haben den Encoder während der letzten Aufnahme nicht erreicht.</translation>
     </message>
@@ -4672,18 +4706,18 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>ExoSnap 0.9.1 ist zur Installation bereit.</translation>
     </message>
     <message>
-        <location line="-1145"/>
-        <location line="+1614"/>
+        <location line="-1149"/>
+        <location line="+1618"/>
         <source>Storage running low</source>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-4097"/>
+        <location line="-4198"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+3465"/>
+        <location line="+3566"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -4711,7 +4745,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Export fehlgeschlagen</translation>
     </message>
     <message>
-        <location line="+376"/>
+        <location line="+372"/>
         <source>Hotkey unavailable</source>
         <translation>Tastenkürzel nicht verfügbar</translation>
     </message>
@@ -4739,7 +4773,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>RecordPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+100"/>
+        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+106"/>
         <source>Preview off</source>
         <translation>Vorschau aus</translation>
     </message>
@@ -4757,21 +4791,6 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <location line="+10"/>
         <source>Choose source</source>
         <translation>Quelle wählen</translation>
-    </message>
-    <message>
-        <location line="+25"/>
-        <source>Webcam overlay</source>
-        <translation>Webcam-Overlay</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Drag to move. Use arrow keys to move and Shift plus arrow keys to resize.</source>
-        <translation>Zum Verschieben ziehen. Pfeiltasten verschieben, Umschalt plus Pfeiltasten ändern die Größe.</translation>
-    </message>
-    <message>
-        <location line="+68"/>
-        <source>Webcam preview unavailable</source>
-        <translation>Webcam-Vorschau nicht verfügbar</translation>
     </message>
 </context>
 <context>
@@ -4857,7 +4876,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>NT shared handle + keyed mutex + GPU CopyResource</translation>
     </message>
     <message>
-        <location line="+220"/>
+        <location line="+241"/>
         <source>No Ready preview frame is available</source>
         <translation>Kein Vorschau-Frame im Zustand „Bereit“ verfügbar</translation>
     </message>
@@ -4867,7 +4886,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Vorschau nicht verfügbar · Aufnahmetextur konnte nicht dupliziert werden</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+13"/>
         <location line="+165"/>
         <source>Live · recording WYSIWYG texture</source>
         <translation>Live · WYSIWYG-Textur der Aufnahme</translation>
@@ -4998,6 +5017,11 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <location line="+0"/>
         <source>Region</source>
         <translation>Bereich</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Source type</source>
+        <translation>Quellentyp</translation>
     </message>
     <message>
         <location line="+20"/>
@@ -5280,7 +5304,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>RecordViewModelAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="+763"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="+750"/>
         <source>No source</source>
         <translation>Keine Quelle</translation>
     </message>
@@ -5331,9 +5355,27 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
 </context>
 <context>
+    <name>RecordWebcamOverlay</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/RecordWebcamOverlay.qml" line="+32"/>
+        <source>Webcam overlay</source>
+        <translation>Webcam-Overlay</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Drag to move. Use arrow keys to move and Shift plus arrow keys to resize.</source>
+        <translation>Zum Verschieben ziehen. Pfeiltasten verschieben, Umschalt plus Pfeiltasten ändern die Größe.</translation>
+    </message>
+    <message>
+        <location line="+41"/>
+        <source>Webcam preview unavailable</source>
+        <translation>Webcam-Vorschau nicht verfügbar</translation>
+    </message>
+</context>
+<context>
     <name>RecordingActions</name>
     <message>
-        <location filename="../services/RecordingCoordinator.cpp" line="+1687"/>
+        <location filename="../services/RecordingCoordinator.cpp" line="+1693"/>
         <source>Split is only available while recording.</source>
         <translation>Aufteilen ist nur während einer Aufnahme möglich.</translation>
     </message>
@@ -5834,15 +5876,93 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
 </context>
 <context>
+    <name>SettingsAdapter</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="-76"/>
+        <source>Brightness</source>
+        <translation>Helligkeit</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Contrast</source>
+        <translation>Kontrast</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Hue</source>
+        <translation>Farbton</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Saturation</source>
+        <translation>Sättigung</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Sharpness</source>
+        <translation>Schärfe</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Gamma</source>
+        <translation>Gamma</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>White balance</source>
+        <translation>Weißabgleich</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Backlight compensation</source>
+        <translation>Gegenlichtkorrektur</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Gain</source>
+        <translation>Verstärkung</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Anti-flicker</source>
+        <translation>Flimmerschutz</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Exposure</source>
+        <translation>Belichtung</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Focus</source>
+        <translation>Fokus</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Zoom</source>
+        <translation>Zoom</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Pan</source>
+        <translation>Schwenken</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Tilt</source>
+        <translation>Neigen</translation>
+    </message>
+</context>
+<context>
     <name>SettingsAppearanceSection</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/SettingsAppearanceSection.qml" line="+19"/>
-        <location line="+32"/>
+        <location line="+31"/>
         <source>Appearance</source>
         <translation>Darstellung</translation>
     </message>
     <message>
-        <location line="-29"/>
+        <location line="-28"/>
         <location line="+10"/>
         <source>Language</source>
         <translation>Sprache</translation>
@@ -5861,11 +5981,6 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <location line="+14"/>
         <source>Mode</source>
         <translation>Modus</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Surface palette · Dark is the shipped default</source>
-        <translation>Oberflächenpalette · Dunkel ist die Standardeinstellung</translation>
     </message>
     <message>
         <location line="+18"/>
@@ -5954,17 +6069,12 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     </message>
     <message>
         <location line="+7"/>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Limiter ceiling</source>
         <translation>Limiter-Obergrenze</translation>
     </message>
     <message>
-        <location line="-12"/>
-        <source>Peak level the limiter holds the mix under</source>
-        <translation>Spitzenpegel, unter dem der Limiter den Mix hält</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location line="-4"/>
         <source>dBFS</source>
         <translation>dBFS</translation>
     </message>
@@ -6110,14 +6220,6 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     </message>
 </context>
 <context>
-    <name>SettingsDestinationChip</name>
-    <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsDestinationChip.qml" line="+28"/>
-        <source>Destination folder</source>
-        <translation>Zielordner</translation>
-    </message>
-</context>
-<context>
     <name>SettingsDeveloperSection</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/SettingsDeveloperSection.qml" line="+10"/>
@@ -6126,27 +6228,22 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     </message>
     <message>
         <location line="+3"/>
-        <location line="+9"/>
+        <location line="+8"/>
         <source>Log level</source>
         <translation>Log-Level</translation>
     </message>
     <message>
-        <location line="-8"/>
-        <source>Narrows what is recorded in the application log</source>
-        <translation>Begrenzt die im Anwendungslog erfassten Meldungen</translation>
+        <location line="+7"/>
+        <source>Sent only with your consent</source>
+        <translation>Versand nur mit Ihrer Zustimmung</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="-1"/>
         <source>Crash reports</source>
         <translation>Absturzberichte</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Privacy-scrubbed, never sent without consent</source>
-        <translation>Datenschutzbereinigt, Versand nur mit Zustimmung</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location line="+9"/>
         <source>Crash report policy</source>
         <translation>Richtlinie für Absturzberichte</translation>
     </message>
@@ -6154,11 +6251,6 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
         <location line="+9"/>
         <source>Diagnostics</source>
         <translation>Diagnose</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Inspect capture and system health</source>
-        <translation>Capture- und Systemzustand prüfen</translation>
     </message>
     <message>
         <location line="+5"/>
@@ -6232,25 +6324,20 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     </message>
     <message>
         <location line="+17"/>
-        <location line="+12"/>
+        <location line="+11"/>
         <source>Encoding device</source>
         <translation>Encoder-Gerät</translation>
     </message>
     <message>
-        <location line="-11"/>
-        <source>Which GPU runs the encoder</source>
-        <translation>GPU für den Encoder</translation>
-    </message>
-    <message>
-        <location line="+17"/>
+        <location line="+6"/>
         <location line="+11"/>
         <source>NVENC preset</source>
         <translation>NVENC-Preset</translation>
     </message>
     <message>
         <location line="-10"/>
-        <source>Speed versus quality on NVIDIA GPUs (P1-P7)</source>
-        <translation>Geschwindigkeit versus Qualität auf NVIDIA-GPUs (P1-P7)</translation>
+        <source>P1 fastest · P7 best quality</source>
+        <translation>P1 am schnellsten · P7 beste Qualität</translation>
     </message>
     <message>
         <location line="+16"/>
@@ -6331,6 +6418,19 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     </message>
 </context>
 <context>
+    <name>SettingsGroupToggle</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/SettingsGroupToggle.qml" line="+65"/>
+        <source>Hide</source>
+        <translation>Ausblenden</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Configure</source>
+        <translation>Konfigurieren</translation>
+    </message>
+</context>
+<context>
     <name>SettingsHotkeysSection</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/SettingsHotkeysSection.qml" line="+14"/>
@@ -6339,26 +6439,21 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     </message>
     <message>
         <location line="+1"/>
-        <source>Global shortcuts stay active while ExoSnap runs in the background.</source>
-        <translation>Globale Tastenkürzel bleiben aktiv, während ExoSnap im Hintergrund läuft.</translation>
+        <source>Also work while ExoSnap is in the background.</source>
+        <translation>Wirken auch, wenn ExoSnap im Hintergrund läuft.</translation>
     </message>
     <message>
-        <location line="+33"/>
+        <location line="+27"/>
         <source>Shortcut for %1</source>
         <translation>Tastenkürzel für %1</translation>
     </message>
     <message>
-        <location line="+6"/>
-        <source>Set</source>
-        <translation>Festlegen</translation>
+        <location line="+1"/>
+        <source>Discard this combination</source>
+        <translation>Diese Kombination verwerfen</translation>
     </message>
     <message>
-        <location line="+0"/>
-        <source>Change</source>
-        <translation>Ändern</translation>
-    </message>
-    <message>
-        <location line="+12"/>
+        <location line="+1"/>
         <source>Clear shortcut for %1</source>
         <translation>Tastenkürzel für %1 löschen</translation>
     </message>
@@ -6372,8 +6467,8 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     </message>
     <message>
         <location line="+1"/>
-        <source>Removes low-frequency rumble below the cutoff frequency</source>
-        <translation>Entfernt tieffrequentes Rumpeln unterhalb der Grenzfrequenz</translation>
+        <source>Removes rumble below the cutoff</source>
+        <translation>Entfernt Rumpeln unter der Grenzfrequenz</translation>
     </message>
     <message>
         <location line="+8"/>
@@ -6449,8 +6544,8 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     </message>
     <message>
         <location line="-8"/>
-        <source>Neural background-noise suppression</source>
-        <translation>Neuronale Unterdrückung von Hintergrundgeräuschen</translation>
+        <source>Neural noise suppression</source>
+        <translation>Neuronale Rauschunterdrückung</translation>
     </message>
 </context>
 <context>
@@ -6466,9 +6561,9 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
         <translation>Gerät</translation>
     </message>
     <message>
-        <location line="+13"/>
-        <source>(no microphone)</source>
-        <translation>(kein Mikrofon)</translation>
+        <location line="+15"/>
+        <source>(not connected)</source>
+        <translation>(nicht angeschlossen)</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -6506,11 +6601,6 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
         <translation>Verstärkung</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Boost or cut the microphone level before encoding</source>
-        <translation>Mikrofonpegel vor dem Encoding anheben oder absenken</translation>
-    </message>
-    <message>
         <location line="+17"/>
         <source>Microphone gain</source>
         <translation>Mikrofonverstärkung</translation>
@@ -6526,19 +6616,9 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
         <translation>Nachbearbeitung</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+9"/>
         <source>Microphone post-processing</source>
         <translation>Mikrofon-Nachbearbeitung</translation>
-    </message>
-    <message>
-        <location line="+38"/>
-        <source>Hide</source>
-        <translation>Ausblenden</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Configure</source>
-        <translation>Konfigurieren</translation>
     </message>
 </context>
 <context>
@@ -6558,35 +6638,46 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     </message>
     <message>
         <location line="+8"/>
+        <location line="+17"/>
         <source>Destination folder</source>
         <translation>Zielordner</translation>
     </message>
     <message>
-        <location line="+23"/>
-        <location line="+10"/>
+        <location line="+14"/>
+        <location line="+15"/>
         <source>Filename pattern</source>
         <translation>Dateinamensmuster</translation>
     </message>
     <message>
-        <location line="-9"/>
-        <source>Example: %1</source>
-        <translation>Beispiel: %1</translation>
-    </message>
-    <message>
-        <location line="+53"/>
+        <location line="+125"/>
         <source>Saves as</source>
         <translation>Wird gespeichert als</translation>
     </message>
     <message>
         <location line="+34"/>
-        <location line="+12"/>
+        <location line="+11"/>
         <source>Output resolution</source>
         <translation>Ausgabeauflösung</translation>
     </message>
     <message>
-        <location line="-11"/>
-        <source>Downscale to save size · re-encodes</source>
-        <translation>Verkleinern spart Platz · erneutes Encoding</translation>
+        <location line="-174"/>
+        <source>Insert placeholder</source>
+        <translation>Platzhalter einfügen</translation>
+    </message>
+    <message>
+        <location line="-28"/>
+        <source>Choose folder</source>
+        <translation>Ordner wählen</translation>
+    </message>
+    <message>
+        <location line="+80"/>
+        <source>Insert %1, %2</source>
+        <translation>%1 einfügen, %2</translation>
+    </message>
+    <message>
+        <location line="+112"/>
+        <source>Downscaling re-encodes</source>
+        <translation>Verkleinern kodiert neu</translation>
     </message>
     <message>
         <location line="+27"/>
@@ -6594,7 +6685,7 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
         <translation>Benutzerdefinierte Breite</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+12"/>
         <source>Custom height</source>
         <translation>Benutzerdefinierte Höhe</translation>
     </message>
@@ -6649,39 +6740,24 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
 <context>
     <name>SettingsOverlaysSection</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsOverlaysSection.qml" line="+37"/>
+        <location filename="../quick/ExoSnap/Quick/SettingsOverlaysSection.qml" line="+46"/>
         <source>Overlays</source>
         <translation>Overlays</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Drawn over the recorded screen and always excluded from the recording.</source>
-        <translation>Wird über dem aufgenommenen Bildschirm angezeigt und ist immer von der Aufnahme ausgeschlossen.</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <location line="+8"/>
+        <location line="+6"/>
+        <location line="+7"/>
         <source>Recording overlay</source>
         <translation>Aufnahme-Overlay</translation>
     </message>
     <message>
-        <location line="-7"/>
-        <source>Status pill on the recorded screen while capturing</source>
-        <translation>Statusanzeige auf dem aufgenommenen Bildschirm während der Aufnahme</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <location line="+8"/>
+        <location line="+7"/>
+        <location line="+10"/>
         <source>Recording overlay content</source>
         <translation>Inhalt des Aufnahme-Overlays</translation>
     </message>
     <message>
-        <location line="-7"/>
-        <source>Minimal shows the state and the elapsed time</source>
-        <translation>Minimal zeigt Status und verstrichene Zeit</translation>
-    </message>
-    <message>
-        <location line="+22"/>
+        <location line="+10"/>
         <source>Elapsed time</source>
         <translation>Verstrichene Zeit</translation>
     </message>
@@ -6697,28 +6773,23 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     </message>
     <message>
         <location line="+9"/>
-        <location line="+8"/>
+        <location line="+7"/>
         <source>Diagnostics overlay</source>
         <translation>Diagnose-Overlay</translation>
     </message>
     <message>
-        <location line="-7"/>
-        <source>Live measurements on the recorded screen while capturing</source>
-        <translation>Live-Messwerte auf dem aufgenommenen Bildschirm während der Aufnahme</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <location line="+8"/>
+        <location line="+7"/>
+        <location line="+10"/>
         <source>Diagnostics overlay content</source>
         <translation>Inhalt des Diagnose-Overlays</translation>
     </message>
     <message>
-        <location line="-7"/>
-        <source>Health shows pipeline status, problem drops and audio state</source>
-        <translation>Pipeline-Status zeigt Status, verworfene Frames und Audiozustand</translation>
+        <location line="-84"/>
+        <source>Visible while recording, never in the file.</source>
+        <translation>Während der Aufnahme sichtbar, nie in der Datei.</translation>
     </message>
     <message>
-        <location line="+25"/>
+        <location line="+97"/>
         <source>health · pipeline status</source>
         <translation>health · Pipeline-Status</translation>
     </message>
@@ -6755,14 +6826,14 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     </message>
     <message>
         <location line="-7"/>
-        <source>Floating pause / stop / capture controls while recording</source>
-        <translation>Schwebende Steuerung für Pause, Stopp und Einzelbilder während der Aufnahme</translation>
+        <source>Pause, stop and still frame while recording</source>
+        <translation>Pause, Stopp und Standbild während der Aufnahme</translation>
     </message>
 </context>
 <context>
     <name>SettingsPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsPage.qml" line="+353"/>
+        <location filename="../quick/ExoSnap/Quick/SettingsPage.qml" line="+357"/>
         <source>Recording is in progress — settings that change the output format are locked until it stops.</source>
         <translation>Eine Aufnahme läuft. Einstellungen, die das Ausgabeformat ändern, bleiben bis zum Ende gesperrt.</translation>
     </message>
@@ -6782,30 +6853,25 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     </message>
     <message>
         <location line="-7"/>
-        <source>Toasts for saved / low disk / stops</source>
-        <translation>Benachrichtigungen bei Speicherung, wenig Speicherplatz und Aufnahmeende</translation>
+        <source>Saved, low disk space, stopped</source>
+        <translation>Gespeichert, wenig Speicherplatz, beendet</translation>
     </message>
     <message>
-        <location line="+14"/>
-        <location line="+8"/>
+        <location line="+32"/>
+        <source>Hidden in calls, screen sharing and screenshots</source>
+        <translation>Unsichtbar in Anrufen, Bildschirmfreigaben und Screenshots</translation>
+    </message>
+    <message>
+        <location line="-18"/>
+        <location line="+7"/>
         <source>Minimize ExoSnap to the system tray</source>
         <translation>ExoSnap in den Infobereich minimieren</translation>
     </message>
     <message>
-        <location line="-7"/>
-        <source>Minimizing hides the window; the tray icon brings it back</source>
-        <translation>Minimieren blendet das Fenster aus; das Tray-Symbol öffnet es wieder</translation>
-    </message>
-    <message>
-        <location line="+14"/>
+        <location line="+7"/>
         <location line="+11"/>
         <source>Hide the ExoSnap window from screen capture</source>
         <translation>ExoSnap-Fenster von Bildschirmaufnahmen ausschließen</translation>
-    </message>
-    <message>
-        <location line="-7"/>
-        <source>Applies to all capture software — calls, screen sharing, screenshots</source>
-        <translation>Gilt für jede Capture-Software: Anrufe, Bildschirmfreigabe, Screenshots</translation>
     </message>
 </context>
 <context>
@@ -6821,7 +6887,7 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
         <translation>Aktives Preset</translation>
     </message>
     <message>
-        <location line="+32"/>
+        <location line="+11"/>
         <source>Save as new…</source>
         <translation>Als neu speichern…</translation>
     </message>
@@ -7026,8 +7092,8 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="-8"/>
-        <source>Off hides framing and camera placement. Recording rate is unchanged.</source>
-        <translation>Aus blendet Bildausschnitt und Kameraposition aus. Die Aufnahmebildrate bleibt unverändert.</translation>
+        <source>Preview only · the recording is unaffected</source>
+        <translation>Nur die Vorschau · die Aufnahme bleibt unverändert</translation>
     </message>
     <message>
         <location line="+14"/>
@@ -7059,12 +7125,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+23"/>
-        <location line="+37"/>
+        <location line="+29"/>
         <source>Encoding on</source>
         <translation>Encoding auf</translation>
     </message>
     <message>
-        <location line="-28"/>
+        <location line="-24"/>
         <source>Fixed by the capture device</source>
         <translation>Vom Capture-Gerät vorgegeben</translation>
     </message>
@@ -7074,12 +7140,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Benennung anhand der Capability-Probe</translation>
     </message>
     <message>
-        <location line="+24"/>
+        <location line="+21"/>
         <source>(detecting…)</source>
         <translation>(wird erkannt…)</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+7"/>
         <location line="+8"/>
         <source>Capture cursor</source>
         <translation>Mauszeiger aufnehmen</translation>
@@ -7100,17 +7166,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+6"/>
-        <location line="+8"/>
-        <source>Check for updates automatically</source>
-        <translation>Automatisch nach Updates suchen</translation>
+        <location line="+7"/>
+        <source>Check for updates at startup</source>
+        <translation>Beim Start nach Updates suchen</translation>
     </message>
     <message>
-        <location line="-7"/>
-        <source>Checks GitHub Releases when ExoSnap starts</source>
-        <translation>Prüft GitHub Releases beim Start von ExoSnap</translation>
-    </message>
-    <message>
-        <location line="+50"/>
+        <location line="+43"/>
         <source>Copy command</source>
         <translation>Befehl kopieren</translation>
     </message>
@@ -7123,7 +7184,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>SettingsWebcamSection</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsWebcamSection.qml" line="+16"/>
+        <location filename="../quick/ExoSnap/Quick/SettingsWebcamSection.qml" line="+17"/>
         <source>Webcam</source>
         <translation>Webcam</translation>
     </message>
@@ -7143,18 +7204,23 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Eine angeschlossene Kamera erscheint hier</translation>
     </message>
     <message>
+        <location line="+37"/>
+        <source>Starting camera…</source>
+        <translation>Kamera wird gestartet…</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Camera off</source>
+        <translation>Kamera aus</translation>
+    </message>
+    <message>
         <location line="+14"/>
-        <location line="+9"/>
+        <location line="+8"/>
         <source>Include webcam</source>
         <translation>Webcam einbeziehen</translation>
     </message>
     <message>
-        <location line="-8"/>
-        <source>Adds a picture-in-picture overlay to the recording</source>
-        <translation>Fügt der Aufnahme ein Bild-im-Bild-Overlay hinzu</translation>
-    </message>
-    <message>
-        <location line="+15"/>
+        <location line="+7"/>
         <source>Camera</source>
         <translation>Kamera</translation>
     </message>
@@ -7169,7 +7235,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Capture-Format</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+14"/>
         <source>Webcam resolution</source>
         <translation>Webcam-Auflösung</translation>
     </message>
@@ -7182,11 +7248,6 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+7"/>
         <source>Mirror image</source>
         <translation>Bild spiegeln</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Applied to the preview and the recording alike</source>
-        <translation>Gilt gleichermaßen für Vorschau und Aufnahme</translation>
     </message>
     <message>
         <location line="+8"/>
@@ -7209,28 +7270,69 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>%1 %</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+15"/>
+        <source>Removes a solid-colour backdrop</source>
+        <translation>Entfernt einen einfarbigen Hintergrund</translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Pick colour</source>
+        <translation>Farbe wählen</translation>
+    </message>
+    <message>
+        <location line="+57"/>
+        <source>Camera image</source>
+        <translation>Kamerabild</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Camera defaults</source>
+        <translation>Kamerastandard</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Camera image controls</source>
+        <translation>Kamerabild-Einstellungen</translation>
+    </message>
+    <message>
+        <location line="+99"/>
+        <source>Reset to camera defaults</source>
+        <translation>Auf Kamerastandard zurücksetzen</translation>
+    </message>
+    <message>
+        <location line="-15"/>
+        <source>Auto</source>
+        <translation>Auto</translation>
+    </message>
+    <message>
+        <location line="-94"/>
+        <source>Adjusted</source>
+        <translation>Angepasst</translation>
+    </message>
+    <message>
+        <location line="+99"/>
+        <source>Automatic %1</source>
+        <translation>%1 automatisch</translation>
+    </message>
+    <message>
+        <location line="-187"/>
         <location line="+9"/>
         <source>Chroma key</source>
         <translation>Chroma Key</translation>
     </message>
     <message>
-        <location line="-8"/>
-        <source>Removes a solid background colour behind you</source>
-        <translation>Entfernt eine einfarbige Hintergrundfarbe hinter Ihnen</translation>
-    </message>
-    <message>
-        <location line="+15"/>
+        <location line="+10"/>
         <source>Key colour</source>
         <translation>Key-Farbe</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+14"/>
+        <location line="+13"/>
         <source>Chroma key colour</source>
         <translation>Chroma-Key-Farbe</translation>
     </message>
     <message>
-        <location line="+6"/>
+        <location line="+7"/>
         <source>Tolerance</source>
         <translation>Toleranz</translation>
     </message>
@@ -8482,7 +8584,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::RecordPreviewAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordPreviewAdapter.cpp" line="-647"/>
+        <location filename="../quick/ExoSnap/Quick/RecordPreviewAdapter.cpp" line="-669"/>
         <source>Preview off</source>
         <translation>Vorschau aus</translation>
     </message>
@@ -8490,7 +8592,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::RecordViewModelAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-683"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-670"/>
         <source>Draw custom</source>
         <translation>Bereich zeichnen</translation>
     </message>
@@ -8570,7 +8672,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::SettingsAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+1278"/>
+        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+1578"/>
         <source>On</source>
         <translation>Ein</translation>
     </message>
@@ -8585,12 +8687,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Auto: Aus. Lookahead wird nur für unterstütztes AV1/VBR aktiviert.</translation>
     </message>
     <message>
-        <location line="-994"/>
-        <source>Unsaved changes</source>
-        <translation>Ungespeicherte Änderungen</translation>
-    </message>
-    <message>
-        <location line="+250"/>
+        <location line="-786"/>
         <source>Managed externally</source>
         <translation>Extern verwaltet</translation>
     </message>
@@ -8617,7 +8714,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <location line="+1"/>
         <location line="+8"/>
-        <location line="+6"/>
+        <location line="+7"/>
         <location line="+4"/>
         <location line="+10"/>
         <location line="+10"/>
@@ -8625,13 +8722,13 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Nach Updates suchen</translation>
     </message>
     <message>
-        <location line="-35"/>
-        <location line="+14"/>
+        <location line="-36"/>
+        <location line="+15"/>
         <source>Update %1 is available.</source>
         <translation>Update %1 ist verfügbar.</translation>
     </message>
     <message>
-        <location line="-13"/>
+        <location line="-14"/>
         <source>Update to %1</source>
         <translation>Auf %1 aktualisieren</translation>
     </message>
@@ -8641,12 +8738,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Update-Prüfung fehlgeschlagen.</translation>
     </message>
     <message>
-        <location line="+6"/>
-        <source>No update check has run yet.</source>
-        <translation>Es wurde noch keine Update-Prüfung durchgeführt.</translation>
-    </message>
-    <message>
-        <location line="+9"/>
+        <location line="+16"/>
         <source>Updater is running — ExoSnap will close to finish installing %1.</source>
         <translation>Updater läuft. ExoSnap wird geschlossen, um die Installation von %1 abzuschließen.</translation>
     </message>
@@ -8728,12 +8820,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <location line="+7"/>
         <location line="+169"/>
-        <location line="+343"/>
+        <location line="+384"/>
         <source>Auto</source>
         <translation>Auto</translation>
     </message>
     <message>
-        <location line="-508"/>
+        <location line="-549"/>
         <source>Auto (%1)</source>
         <translation>Auto (%1)</translation>
     </message>
@@ -8791,19 +8883,19 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+15"/>
-        <location line="+101"/>
-        <location line="+1660"/>
+        <location line="+114"/>
+        <location line="+1713"/>
         <source>%1 fps</source>
         <translation>%1 fps</translation>
     </message>
     <message>
-        <location line="-1760"/>
-        <location line="+1761"/>
+        <location line="-1826"/>
+        <location line="+1827"/>
         <source>Faster than the fastest attached display (%1 Hz)</source>
         <translation>Schneller als der schnellste angeschlossene Bildschirm (%1 Hz)</translation>
     </message>
     <message>
-        <location line="-1744"/>
+        <location line="-1810"/>
         <source>%1 fps (Custom)</source>
         <translation>%1 fps (Benutzerdefiniert)</translation>
     </message>
@@ -8869,18 +8961,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+4"/>
-        <location line="+141"/>
+        <location line="+182"/>
         <source>Mono</source>
         <translation>Mono</translation>
     </message>
     <message>
-        <location line="-140"/>
-        <location line="+140"/>
+        <location line="-181"/>
+        <location line="+181"/>
         <source>Stereo</source>
         <translation>Stereo</translation>
     </message>
     <message>
-        <location line="-137"/>
+        <location line="-178"/>
         <source>16-bit</source>
         <translation>16 Bit</translation>
     </message>
@@ -8915,22 +9007,22 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>2.5 ms</translation>
     </message>
     <message>
-        <location line="+15"/>
-        <source>Green</source>
-        <translation>Grün</translation>
+        <location line="+45"/>
+        <source>50 Hz</source>
+        <translation>50 Hz</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Blue</source>
-        <translation>Blau</translation>
+        <source>60 Hz</source>
+        <translation>60 Hz</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Magenta</source>
-        <translation>Magenta</translation>
+        <source>Automatic</source>
+        <translation>Automatisch</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+19"/>
         <source>%1 · %2 · %3 · %4 · %5</source>
         <translation>%1 · %2 · %3 · %4 · %5</translation>
     </message>
@@ -9005,35 +9097,61 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>RNNoise</translation>
     </message>
     <message>
-        <location line="-255"/>
+        <location line="-296"/>
         <location line="+7"/>
-        <location line="+250"/>
+        <location line="+201"/>
+        <location line="+90"/>
         <location line="+211"/>
-        <location line="+482"/>
+        <location line="+507"/>
         <location line="+877"/>
         <source>Off</source>
         <translation>Aus</translation>
     </message>
     <message>
-        <location line="-1562"/>
-        <location line="+641"/>
+        <location line="-2642"/>
+        <source>System default</source>
+        <translation>Systemstandard</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>System default (%1)</source>
+        <translation>Systemstandard (%1)</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Automatic (%1)</source>
+        <translation>Automatisch (%1)</translation>
+    </message>
+    <message>
+        <location line="+153"/>
+        <source>Changed since this preset was saved. Your settings are kept either way.</source>
+        <translation>Seit dem Speichern dieses Presets geändert. Ihre Einstellungen bleiben so oder so erhalten.</translation>
+    </message>
+    <message>
+        <location line="+229"/>
+        <source>Enter 3 or 6 hex digits, such as 00ff00 or 0f0</source>
+        <translation>3 oder 6 Hex-Ziffern eingeben, etwa 00ff00 oder 0f0</translation>
+    </message>
+    <message>
+        <location line="+651"/>
+        <location line="+666"/>
         <source>Application audio</source>
         <translation>Anwendungsaudio</translation>
     </message>
     <message>
-        <location line="-638"/>
-        <location line="+642"/>
+        <location line="-663"/>
+        <location line="+667"/>
         <source>System audio</source>
         <translation>Systemaudio</translation>
     </message>
     <message>
-        <location line="-639"/>
-        <location line="+642"/>
+        <location line="-664"/>
+        <location line="+667"/>
         <source>Microphone</source>
         <translation>Mikrofon</translation>
     </message>
     <message>
-        <location line="-640"/>
+        <location line="-665"/>
         <source>No audio</source>
         <translation>Kein Audio</translation>
     </message>
@@ -9124,7 +9242,47 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>%1 %2 %3 von %4</translation>
     </message>
     <message>
-        <location line="+312"/>
+        <location line="+73"/>
+        <source>Date and time</source>
+        <translation>Datum und Uhrzeit</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Date</source>
+        <translation>Datum</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Time</source>
+        <translation>Uhrzeit</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Application</source>
+        <translation>Anwendung</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Window title</source>
+        <translation>Fenstertitel</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Display</source>
+        <translation>Bildschirm</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Video codec</source>
+        <translation>Video-Codec</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Container</source>
+        <translation>Container</translation>
+    </message>
+    <message>
+        <location line="+252"/>
         <source>the captured window</source>
         <translation>das aufgenommene Fenster</translation>
     </message>
@@ -9139,14 +9297,19 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>nur %1</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+4"/>
         <source>Everything except %1</source>
         <translation>Alles außer %1</translation>
     </message>
     <message>
-        <location line="+0"/>
+        <location line="+1"/>
         <source>Everything the computer plays</source>
         <translation>Alles, was der Computer wiedergibt</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Default output · %1</source>
+        <translation>Standardausgabe · %1</translation>
     </message>
     <message>
         <location line="+32"/>

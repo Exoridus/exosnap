@@ -1,7 +1,8 @@
 #pragma once
+#include "models/WebcamControls.h"
+#include "models/WebcamFormatPolicy.h"
 #include "models/WebcamFrameMailbox.h"
 
-#include <QImage>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -81,11 +82,13 @@ bool ShouldOpenWebcamPreview(bool webcam_enabled, bool has_device) noexcept;
 // empty selection (which used to make capture silently grab the first device).
 std::string ResolveWebcamDeviceId(const std::string& configured_id, const std::vector<WebcamDeviceInfo>& devices);
 
-struct WebcamFormat {
-    int width = 0;
-    int height = 0;
-    int fps_num = 0;
-    int fps_den = 1;
+// The pixel encodings a camera can deliver, in the order the reader prefers
+// them once size and rate are equal. NV12 and YUY2 reach the GPU untouched and
+// are converted there; anything else (MJPEG, ...) needs a CPU decoder first.
+enum class WebcamNativeEncoding : uint8_t {
+    Nv12,
+    Yuy2,
+    Other,
 };
 
 // One native media type Media Foundation enumerated for a device (as returned
@@ -97,6 +100,7 @@ struct WebcamNativeFormat {
     int height = 0;
     int fps_num = 0;
     int fps_den = 1;
+    WebcamNativeEncoding encoding = WebcamNativeEncoding::Other;
 };
 
 // Selects which entry of `formats` (a device's native types, in MF enumeration
@@ -106,20 +110,19 @@ struct WebcamNativeFormat {
 // closest to want_fps wins: an exact match if the camera offers one at that
 // resolution, otherwise the nearest available rate (a camera's native type
 // list is a fixed discrete set -- e.g. a UVC device offering 1080p only at
-// 30/60 fps cannot produce 1080p50). Ties keep the first (lowest-index) match,
-// mirroring MF's own enumeration order. want_fps <= 0 means "no frame-rate
-// preference": the first width/height match wins outright, same as when the
-// caller does not care about frame rate. Returns -1 when no entry matches
-// (want_w, want_h) at all. Pure/MF-call-free so the selection policy is
-// unit-pinned, like ClassifyWebcamReadResult above.
+// 30/60 fps cannot produce 1080p50). Equally close rates prefer the encoding
+// that needs no CPU decode (NV12, then YUY2), then the first (lowest-index)
+// match, mirroring MF's own enumeration order. Size and rate always outrank
+// the encoding: a camera that reaches the requested mode only as MJPEG gets
+// MJPEG. want_fps <= 0 means "no frame-rate preference". Returns -1 when no
+// entry matches (want_w, want_h) at all. Pure/MF-call-free so the selection
+// policy is unit-pinned, like ClassifyWebcamReadResult above.
 [[nodiscard]] int SelectBestWebcamNativeFormat(const std::vector<WebcamNativeFormat>& formats, int want_w, int want_h,
                                                int want_fps) noexcept;
 
-// Same width/height match + fps-closeness policy as SelectBestWebcamNativeFormat,
-// but returns every matching index ordered from closest to farthest from
-// want_fps (ties keep the earlier/lower index), instead of only the single
-// best one. want_fps <= 0 returns every width/height match in original
-// enumeration order (no fps preference). Used to retry SetCurrentMediaType
+// Same width/height match + fps-closeness + encoding policy as
+// SelectBestWebcamNativeFormat, but returns every matching index in preference
+// order instead of only the single best one. Used to retry SetCurrentMediaType
 // against progressively-less-ideal candidates: the closest-fps native type can
 // fail to negotiate for a reason unrelated to frame rate (e.g. a pixel format
 // this particular native type advertises that the reader can't convert), even
@@ -129,20 +132,30 @@ struct WebcamNativeFormat {
 [[nodiscard]] std::vector<int> RankWebcamNativeFormats(const std::vector<WebcamNativeFormat>& formats, int want_w,
                                                        int want_h, int want_fps) noexcept;
 
-// Rounds a rational frame rate (fps_num/fps_den) to the nearest whole fps --
-// never truncates. Common NTSC rates are the reason this matters: 30000/1001
-// (~29.97 fps) must round to 30, not truncate to 29 (a plain fps_num/fps_den
-// integer division). fps_den <= 0 is treated as 1. Shared by every place that
-// turns a native MF frame rate into the plain-int fps WebcamFormat/
-// WebcamSettings/the negotiated-fps report use, so the resolution combo's
-// label, the stored setting, and the log field always agree with each other.
-[[nodiscard]] int RoundWebcamFps(int fps_num, int fps_den) noexcept;
+// Repacks one locked camera buffer into the tightly packed layout
+// WebcamFrameSnapshot documents. `pitch` is the byte distance between luma (or
+// packed) rows as IMF2DBuffer::Lock2D reports it; a negative pitch is a
+// bottom-up image and is only legal for BGRA. NV12's chroma plane starts
+// `pitch * height` bytes after `scan0`, as in a system-memory 2D buffer.
+// Returns false, leaving `out` unspecified, when the layout or the pitch cannot
+// describe a frame of this size.
+[[nodiscard]] bool PackWebcamFrame(exosnap::engine::WebcamPixelFormat format, int width, int height,
+                                   const uint8_t* scan0, long pitch, std::vector<uint8_t>& out);
+
+// What one camera offers: its native capture modes and the UVC controls it
+// reports, with their ranges and the state they were in when probed.
+struct WebcamDeviceProbe {
+    std::vector<WebcamFormat> formats;
+    std::vector<WebcamControlRange> controls;
+};
 
 // Captures from a webcam via Media Foundation IMFSourceReader.
 // Also implements WebcamFrameProvider so VideoThread can composite frames.
 class WebcamService : public exosnap::engine::WebcamFrameProvider {
   public:
-    using FrameCallback = std::function<void(QImage)>;
+    // Announces that Snapshot() now serves this generation. Carries no pixels:
+    // consumers that draw the camera pull the snapshot themselves.
+    using FrameCallback = std::function<void(uint64_t generation)>;
 
     WebcamService() = default;
     ~WebcamService() override;
@@ -160,11 +173,20 @@ class WebcamService : public exosnap::engine::WebcamFrameProvider {
     // Returns empty when IsMfPresent() is false.
     static std::vector<WebcamDeviceInfo> EnumerateDevices();
 
-    // Enumerate supported formats for a given device id.
+    // Enumerate supported formats for a given device id. Opens the camera
+    // briefly, so call it off the GUI thread; any thread works.
     // Returns empty when IsMfPresent() is false.
     static std::vector<WebcamFormat> EnumerateFormats(const std::string& device_id);
+    // Formats and UVC controls in one opening of the device. Same threading as
+    // EnumerateFormats.
+    static WebcamDeviceProbe ProbeDevice(const std::string& device_id);
 
-    // Set callback invoked on the main thread with each new QImage frame.
+    // The UVC controls to hold the camera at. Any thread. Applied when the
+    // device opens and, while it runs, before the next frame is read; a
+    // control dropped from the list returns to the camera's default.
+    void SetControls(std::vector<WebcamControlSetting> controls);
+
+    // Set callback invoked on the main thread after each new frame.
     // Legacy registration: delivery is bound to the application's lifetime, so the
     // callback must own no receiver it cannot outlive (a consumer should capture a
     // QPointer guard only).
@@ -205,10 +227,10 @@ class WebcamService : public exosnap::engine::WebcamFrameProvider {
                      uint64_t& out_generation) override;
 
   protected:
-    // Marshals `img` to the callback on the main thread. Protected (not private)
-    // so the delivery-lifetime contract can be exercised directly by a unit test
-    // without a live capture device.
-    void PostFrame(QImage img);
+    // Marshals the frame announcement to the callback on the main thread.
+    // Protected (not private) so the delivery-lifetime contract can be exercised
+    // directly by a unit test without a live capture device.
+    void PostFrame(uint64_t generation);
 
     // Marshals an open-reader status transition to the status callback. Same
     // snapshot-and-post delivery as PostFrame.
@@ -216,7 +238,8 @@ class WebcamService : public exosnap::engine::WebcamFrameProvider {
 
   private:
     void ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop);
-    void StoreFrame(int width, int height, const std::vector<uint8_t>& bgra);
+    // Returns the generation the frame was published under.
+    uint64_t StoreFrame(const WebcamFrameLayout& layout, const uint8_t* data, size_t size);
     // Body of Stop(); caller must hold control_mutex_.
     void StopLocked();
 
@@ -256,6 +279,10 @@ class WebcamService : public exosnap::engine::WebcamFrameProvider {
     std::atomic<bool> running_{false};
 
     // Latest captured frame — written by capture thread, read by VideoThread or main thread.
+    std::mutex controls_mutex_;
+    std::vector<WebcamControlSetting> controls_; // guarded by controls_mutex_
+    std::atomic<uint64_t> controls_generation_{1};
+
     mutable std::mutex frame_mutex_;
     WebcamFrameMailbox frame_mailbox_;
     uint64_t frame_generation_ = 0;

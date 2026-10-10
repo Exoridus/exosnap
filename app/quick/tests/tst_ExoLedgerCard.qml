@@ -88,6 +88,27 @@ TestCase {
         compare(openedAt, 468000);
     }
 
+    function test_the_card_and_its_links_work_from_the_keyboard() {
+        let card = createTemporaryObject(cardComponent, testCase, {
+            occurrences: [{ startMs: 151000, text: "02:31" }]
+        });
+        verify(card);
+        verify(card.activeFocusOnTab, "the card is a Tab stop");
+
+        card.forceActiveFocus();
+        keyClick(Qt.Key_Space);
+        compare(card.expanded, true);
+
+        // The link inside is the next Tab stop, and Space opens its time.
+        let openedAt = -1;
+        card.openAtRequested.connect(function (startMs) { openedAt = startMs; });
+        keyClick(Qt.Key_Tab);
+        let link = findLinks(card)[0];
+        verify(link.activeFocus, "Tab reaches the occurrence link");
+        keyClick(Qt.Key_Space);
+        compare(openedAt, 151000);
+    }
+
     function test_show_in_log_is_a_drawn_glyph_not_a_typeset_arrow() {
         let card = createTemporaryObject(cardComponent, testCase, {
             expanded: true,

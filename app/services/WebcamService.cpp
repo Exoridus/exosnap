@@ -9,6 +9,7 @@
 #include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
+#include <strmif.h>
 
 #include <exosnap/engine/util/com_apartment.h>
 #include <exosnap/engine/util/mf_session.h>
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cstring>
 #include <thread>
 
 // MF libs are listed in CMakeLists.txt target_link_libraries and in the
@@ -57,12 +59,10 @@ std::string WcharToString(const WCHAR* w) {
     return s;
 }
 
-// Returns the smallest MFVideoFormat_* GUID that maps to BGRA output via MF.
-// We prefer MFVideoFormat_ARGB32 (= BGRA in memory on little-endian Windows).
-// Falls back to YUY2 when ARGB32 is unavailable; YUY2 is then converted to BGRA below.
-
-bool TrySetBgraOutputType(IMFSourceReader* reader, HRESULT* out_hr = nullptr) {
-    // Request ARGB32 output (BGRA in memory).
+// Asks the reader to deliver `subtype`. For a subtype the current native type
+// already has this is a pass-through; otherwise MF inserts its decoder/video
+// processor (MJPEG decode, colour conversion) on the CPU.
+bool TrySetOutputSubtype(IMFSourceReader* reader, const GUID& subtype, HRESULT* out_hr = nullptr) {
     winrt::com_ptr<IMFMediaType> type;
     HRESULT hr = MFCreateMediaType(type.put());
     if (FAILED(hr)) {
@@ -71,23 +71,7 @@ bool TrySetBgraOutputType(IMFSourceReader* reader, HRESULT* out_hr = nullptr) {
         return false;
     }
     type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-    type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_ARGB32);
-    hr = reader->SetCurrentMediaType(kFirstVideoStream, nullptr, type.get());
-    if (out_hr)
-        *out_hr = hr;
-    return SUCCEEDED(hr);
-}
-
-bool TrySetYuy2OutputType(IMFSourceReader* reader, HRESULT* out_hr = nullptr) {
-    winrt::com_ptr<IMFMediaType> type;
-    HRESULT hr = MFCreateMediaType(type.put());
-    if (FAILED(hr)) {
-        if (out_hr)
-            *out_hr = hr;
-        return false;
-    }
-    type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-    type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_YUY2);
+    type->SetGUID(MF_MT_SUBTYPE, subtype);
     hr = reader->SetCurrentMediaType(kFirstVideoStream, nullptr, type.get());
     if (out_hr)
         *out_hr = hr;
@@ -107,49 +91,175 @@ std::string SubtypeFourCc(const GUID& g) {
     return buf;
 }
 
-// Convert YUY2 → BGRA (row-major, in-place output buffer).
-void Yuy2ToBgra(const uint8_t* src, int width, int height, int src_stride, uint8_t* dst, int dst_stride) {
-    for (int y = 0; y < height; ++y) {
-        const uint8_t* row = src + y * src_stride;
-        uint8_t* out = dst + y * dst_stride;
-        for (int x = 0; x < width; x += 2) {
-            // YUY2: Y0 U0 Y1 V0
-            const int y0 = row[0], u = row[1], y1 = row[2], v = row[3];
-            row += 4;
+WebcamNativeEncoding NativeEncodingOf(const GUID& subtype) noexcept {
+    if (subtype == MFVideoFormat_NV12)
+        return WebcamNativeEncoding::Nv12;
+    if (subtype == MFVideoFormat_YUY2)
+        return WebcamNativeEncoding::Yuy2;
+    return WebcamNativeEncoding::Other;
+}
 
-            auto clamp = [](int v) -> uint8_t { return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v)); };
-            auto pixel = [&](int yy) -> std::tuple<uint8_t, uint8_t, uint8_t> {
-                const int c = yy - 16, d = u - 128, e = v - 128;
-                uint8_t r = clamp((298 * c + 409 * e + 128) >> 8);
-                uint8_t g = clamp((298 * c - 100 * d - 208 * e + 128) >> 8);
-                uint8_t b = clamp((298 * c + 516 * d + 128) >> 8);
-                return {r, g, b};
-            };
+const char* PixelFormatName(exosnap::engine::WebcamPixelFormat format) noexcept {
+    switch (format) {
+    case exosnap::engine::WebcamPixelFormat::Nv12:
+        return "NV12";
+    case exosnap::engine::WebcamPixelFormat::Yuy2:
+        return "YUY2";
+    case exosnap::engine::WebcamPixelFormat::Bgra:
+        return "BGRA";
+    }
+    return "unknown";
+}
 
-            auto [r0, g0, b0] = pixel(y0);
-            out[0] = b0;
-            out[1] = g0;
-            out[2] = r0;
-            out[3] = 255;
-            out += 4;
-            if (x + 1 < width) {
-                auto [r1, g1, b1] = pixel(y1);
-                out[0] = b1;
-                out[1] = g1;
-                out[2] = r1;
-                out[3] = 255;
-                out += 4;
-            }
+// MF leaves both attributes unset on most UVC types. BT.601 limited range is
+// what such cameras send, and what this reader assumed before it read them.
+void ReadYuvColorDescription(IMFMediaType* type, exosnap::engine::MatrixCoefficients& matrix,
+                             exosnap::engine::ColorRange& range) {
+    matrix = exosnap::engine::MatrixCoefficients::Bt601;
+    range = exosnap::engine::ColorRange::Limited;
+    UINT32 value = 0;
+    if (SUCCEEDED(type->GetUINT32(MF_MT_YUV_MATRIX, &value)) && value == MFVideoTransferMatrix_BT709)
+        matrix = exosnap::engine::MatrixCoefficients::Bt709;
+    if (SUCCEEDED(type->GetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, &value)) && value == MFNominalRange_0_255)
+        range = exosnap::engine::ColorRange::Full;
+}
+
+// Where a UVC control lives on a Windows capture source: the processing unit
+// behind IAMVideoProcAmp or the camera terminal behind IAMCameraControl, and
+// the KS property id there. The DirectShow enums stop at gain; the power-line
+// frequency is the next KS id of the same property set and is reached through
+// the same interface.
+struct ControlBinding {
+    bool camera_terminal = false;
+    long id = 0;
+};
+
+ControlBinding BindingOf(WebcamControl control) noexcept {
+    switch (control) {
+    case WebcamControl::Brightness:
+        return {false, VideoProcAmp_Brightness};
+    case WebcamControl::Contrast:
+        return {false, VideoProcAmp_Contrast};
+    case WebcamControl::Hue:
+        return {false, VideoProcAmp_Hue};
+    case WebcamControl::Saturation:
+        return {false, VideoProcAmp_Saturation};
+    case WebcamControl::Sharpness:
+        return {false, VideoProcAmp_Sharpness};
+    case WebcamControl::Gamma:
+        return {false, VideoProcAmp_Gamma};
+    case WebcamControl::WhiteBalance:
+        return {false, VideoProcAmp_WhiteBalance};
+    case WebcamControl::BacklightCompensation:
+        return {false, VideoProcAmp_BacklightCompensation};
+    case WebcamControl::Gain:
+        return {false, VideoProcAmp_Gain};
+    case WebcamControl::PowerLineFrequency:
+        return {false, 13}; // KSPROPERTY_VIDEOPROCAMP_POWERLINE_FREQUENCY
+    case WebcamControl::Exposure:
+        return {true, CameraControl_Exposure};
+    case WebcamControl::Focus:
+        return {true, CameraControl_Focus};
+    case WebcamControl::Zoom:
+        return {true, CameraControl_Zoom};
+    case WebcamControl::Pan:
+        return {true, CameraControl_Pan};
+    case WebcamControl::Tilt:
+        return {true, CameraControl_Tilt};
+    }
+    return {};
+}
+
+// Both interfaces share one flag encoding: 1 = automatic, 2 = manual.
+constexpr long kControlFlagAuto = 0x1;
+constexpr long kControlFlagManual = 0x2;
+
+std::optional<WebcamControlRange> QueryControl(IMFMediaSource* source, WebcamControl control) {
+    const ControlBinding binding = BindingOf(control);
+    WebcamControlRange range;
+    range.control = control;
+    long caps = 0;
+    long flags = 0;
+    HRESULT hr = E_NOINTERFACE;
+    if (binding.camera_terminal) {
+        winrt::com_ptr<IAMCameraControl> camera;
+        if (source == nullptr || FAILED(source->QueryInterface(IID_PPV_ARGS(camera.put()))))
+            return std::nullopt;
+        hr = camera->GetRange(binding.id, &range.minimum, &range.maximum, &range.step, &range.default_value, &caps);
+        if (SUCCEEDED(hr) && FAILED(camera->Get(binding.id, &range.current, &flags)))
+            range.current = range.default_value;
+    } else {
+        winrt::com_ptr<IAMVideoProcAmp> proc_amp;
+        if (source == nullptr || FAILED(source->QueryInterface(IID_PPV_ARGS(proc_amp.put()))))
+            return std::nullopt;
+        hr = proc_amp->GetRange(binding.id, &range.minimum, &range.maximum, &range.step, &range.default_value, &caps);
+        if (SUCCEEDED(hr) && FAILED(proc_amp->Get(binding.id, &range.current, &flags)))
+            range.current = range.default_value;
+    }
+    if (FAILED(hr) || range.maximum < range.minimum)
+        return std::nullopt;
+    range.step = std::max(1L, range.step);
+    range.can_automatic = (caps & kControlFlagAuto) != 0;
+    range.can_manual = (caps & kControlFlagManual) != 0 || caps == 0;
+    range.current_automatic = (flags & kControlFlagAuto) != 0;
+    return range;
+}
+
+std::vector<WebcamControlRange> QueryControls(IMFMediaSource* source) {
+    std::vector<WebcamControlRange> ranges;
+    for (const WebcamControl control : kAllWebcamControls) {
+        if (auto range = QueryControl(source, control))
+            ranges.push_back(*range);
+    }
+    return ranges;
+}
+
+bool ApplyControl(IMFMediaSource* source, const WebcamControlRange& range, bool automatic, long value) {
+    const ControlBinding binding = BindingOf(range.control);
+    const bool use_auto = automatic && range.can_automatic;
+    const long flags = use_auto ? kControlFlagAuto : kControlFlagManual;
+    const long clamped = ClampWebcamControlValue(range, value);
+    if (binding.camera_terminal) {
+        winrt::com_ptr<IAMCameraControl> camera;
+        return SUCCEEDED(source->QueryInterface(IID_PPV_ARGS(camera.put()))) &&
+               SUCCEEDED(camera->Set(binding.id, clamped, flags));
+    }
+    winrt::com_ptr<IAMVideoProcAmp> proc_amp;
+    return SUCCEEDED(source->QueryInterface(IID_PPV_ARGS(proc_amp.put()))) &&
+           SUCCEEDED(proc_amp->Set(binding.id, clamped, flags));
+}
+
+// Brings the camera from `applied` to `desired`. A control that left the list
+// returns to the camera's default, automatic where the camera offers it.
+void ApplyControlChanges(IMFMediaSource* source, const std::vector<WebcamControlRange>& ranges,
+                         const std::vector<WebcamControlSetting>& applied,
+                         const std::vector<WebcamControlSetting>& desired) {
+    if (source == nullptr)
+        return;
+    for (const WebcamControlRange& range : ranges) {
+        const WebcamControlSetting* wanted = FindWebcamControlSetting(desired, range.control);
+        const WebcamControlSetting* before = FindWebcamControlSetting(applied, range.control);
+        if (wanted != nullptr) {
+            if (before == nullptr || !(*before == *wanted))
+                ApplyControl(source, range, wanted->automatic, wanted->value);
+        } else if (before != nullptr) {
+            ApplyControl(source, range, range.can_automatic, range.default_value);
         }
     }
 }
 
 struct ReaderContext {
     winrt::com_ptr<IMFSourceReader> reader;
+    // The device itself, for the UVC controls the reader does not expose.
+    winrt::com_ptr<IMFMediaSource> source;
+    std::vector<WebcamControlRange> control_ranges;
     int width = 0;
     int height = 0;
-    int fps = 0;         // negotiated frame rate (rounded), 0 if unknown
-    bool is_bgra = true; // false = YUY2
+    int fps = 0; // negotiated frame rate (rounded), 0 if unknown
+    exosnap::engine::WebcamPixelFormat format = exosnap::engine::WebcamPixelFormat::Bgra;
+    exosnap::engine::MatrixCoefficients matrix = exosnap::engine::MatrixCoefficients::Bt601;
+    exosnap::engine::ColorRange range = exosnap::engine::ColorRange::Limited;
+    std::string native_fourcc;
 };
 
 // Try to open an IMFSourceReader on device_id (or first device if empty).
@@ -269,6 +379,7 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
         fmt.height = static_cast<int>(sz & 0xFFFFFFFF);
         fmt.fps_num = static_cast<int>(fr >> 32);
         fmt.fps_den = static_cast<int>(fr & 0xFFFFFFFF);
+        fmt.encoding = NativeEncodingOf(sub);
         native_formats.push_back(fmt);
         native_fourccs.push_back(SubtypeFourCc(sub));
     }
@@ -303,17 +414,47 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
         // next-closest candidate.
     }
 
-    // Set output type to BGRA or YUY2.
-    HRESULT bgra_hr = S_OK;
-    HRESULT yuy2_hr = S_OK;
-    bool is_bgra = TrySetBgraOutputType(reader.get(), &bgra_hr);
-    if (!is_bgra && !TrySetYuy2OutputType(reader.get(), &yuy2_hr)) {
-        char buf[192];
+    // Output type. The current native type's own encoding goes first, so an NV12
+    // or YUY2 camera is read untouched: offering NV12 to a YUY2 camera would
+    // succeed too, through a CPU video processor this path exists to avoid.
+    // Anything else (MJPEG, ...) is decoded by MF, preferably straight to NV12.
+    GUID native_subtype{};
+    {
+        winrt::com_ptr<IMFMediaType> native_type;
+        if (SUCCEEDED(reader->GetCurrentMediaType(kFirstVideoStream, native_type.put())))
+            native_type->GetGUID(MF_MT_SUBTYPE, &native_subtype);
+    }
+    struct OutputCandidate {
+        GUID subtype;
+        exosnap::engine::WebcamPixelFormat format;
+    };
+    std::vector<OutputCandidate> outputs;
+    if (NativeEncodingOf(native_subtype) == WebcamNativeEncoding::Yuy2)
+        outputs.push_back({MFVideoFormat_YUY2, exosnap::engine::WebcamPixelFormat::Yuy2});
+    outputs.push_back({MFVideoFormat_NV12, exosnap::engine::WebcamPixelFormat::Nv12});
+    if (NativeEncodingOf(native_subtype) != WebcamNativeEncoding::Yuy2)
+        outputs.push_back({MFVideoFormat_YUY2, exosnap::engine::WebcamPixelFormat::Yuy2});
+    // MFVideoFormat_ARGB32 is BGRA in memory on little-endian Windows.
+    outputs.push_back({MFVideoFormat_ARGB32, exosnap::engine::WebcamPixelFormat::Bgra});
+
+    std::optional<exosnap::engine::WebcamPixelFormat> output_format;
+    std::string output_failures;
+    for (const OutputCandidate& candidate : outputs) {
+        HRESULT output_hr = S_OK;
+        if (TrySetOutputSubtype(reader.get(), candidate.subtype, &output_hr)) {
+            output_format = candidate.format;
+            break;
+        }
+        char part[48];
+        snprintf(part, sizeof(part), " %s_hr=0x%08lX", PixelFormatName(candidate.format),
+                 static_cast<unsigned long>(output_hr));
+        output_failures += part;
+    }
+    if (!output_format) {
+        char buf[256];
         snprintf(buf, sizeof(buf),
-                 "no_bgra_or_yuy2_output_type bgra_hr=0x%08lX yuy2_hr=0x%08lX native_matches=%u/%lu "
-                 "native_fourcc=%s native_set_hr=0x%08lX",
-                 static_cast<unsigned long>(bgra_hr), static_cast<unsigned long>(yuy2_hr), native_match_found ? 1u : 0u,
-                 static_cast<unsigned long>(native_enum_count),
+                 "no_usable_output_type%s native_matches=%u/%lu native_fourcc=%s native_set_hr=0x%08lX",
+                 output_failures.c_str(), native_match_found ? 1u : 0u, static_cast<unsigned long>(native_enum_count),
                  native_match_found ? native_match_fourcc.c_str() : "(no exact match)",
                  static_cast<unsigned long>(native_set_hr));
         if (fail_reason)
@@ -330,15 +471,19 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
     currentType->GetUINT64(MF_MT_FRAME_SIZE, &sz);
     const int actual_w = static_cast<int>(sz >> 32);
     const int actual_h = static_cast<int>(sz & 0xFFFFFFFF);
-    if (actual_w <= 0 || actual_h <= 0)
+    if (exosnap::engine::WebcamFramePayloadBytes(*output_format, actual_w, actual_h) == 0)
         return fail("invalid_output_dimensions", E_FAIL);
 
     ReaderContext ctx;
     ctx.reader = std::move(reader);
+    ctx.source = source;
+    ctx.control_ranges = QueryControls(source.get());
     ctx.width = actual_w;
     ctx.height = actual_h;
     ctx.fps = negotiated_fps;
-    ctx.is_bgra = is_bgra;
+    ctx.format = *output_format;
+    ReadYuvColorDescription(currentType.get(), ctx.matrix, ctx.range);
+    ctx.native_fourcc = SubtypeFourCc(native_subtype);
     return ctx;
 }
 
@@ -359,6 +504,7 @@ std::vector<int> RankWebcamNativeFormats(const std::vector<WebcamNativeFormat>& 
     struct Candidate {
         int index;
         long long distance;
+        WebcamNativeEncoding encoding;
     };
     std::vector<Candidate> candidates;
     candidates.reserve(formats.size());
@@ -380,11 +526,14 @@ std::vector<int> RankWebcamNativeFormats(const std::vector<WebcamNativeFormat>& 
         // want_fps <= 0: every candidate's distance stays 0, so the stable
         // sort below leaves them in original enumeration order (first
         // width/height match first) -- "no frame-rate preference".
-        candidates.push_back({static_cast<int>(i), distance});
+        candidates.push_back({static_cast<int>(i), distance, f.encoding});
     }
 
-    std::stable_sort(candidates.begin(), candidates.end(),
-                     [](const Candidate& a, const Candidate& b) { return a.distance < b.distance; });
+    std::stable_sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        if (a.distance != b.distance)
+            return a.distance < b.distance;
+        return static_cast<int>(a.encoding) < static_cast<int>(b.encoding);
+    });
 
     std::vector<int> result;
     result.reserve(candidates.size());
@@ -393,11 +542,28 @@ std::vector<int> RankWebcamNativeFormats(const std::vector<WebcamNativeFormat>& 
     return result;
 }
 
-int RoundWebcamFps(int fps_num, int fps_den) noexcept {
-    const int den = (fps_den > 0) ? fps_den : 1;
-    // Round-to-nearest via the standard (num + den/2) / den trick; fps_num is
-    // always >= 0 in practice (an MF frame-rate ratio), so no sign handling.
-    return (fps_num + den / 2) / den;
+bool PackWebcamFrame(exosnap::engine::WebcamPixelFormat format, int width, int height, const uint8_t* scan0, long pitch,
+                     std::vector<uint8_t>& out) {
+    using exosnap::engine::WebcamPixelFormat;
+    const size_t total = exosnap::engine::WebcamFramePayloadBytes(format, width, height);
+    if (total == 0 || scan0 == nullptr)
+        return false;
+    const size_t row_bytes = static_cast<size_t>(width) * (format == WebcamPixelFormat::Bgra   ? 4u
+                                                           : format == WebcamPixelFormat::Yuy2 ? 2u
+                                                                                               : 1u);
+    const long long abs_pitch = pitch < 0 ? -static_cast<long long>(pitch) : pitch;
+    if (static_cast<unsigned long long>(abs_pitch) < row_bytes)
+        return false;
+    if (pitch < 0 && format != WebcamPixelFormat::Bgra)
+        return false;
+    // NV12's chroma plane: height / 2 rows of `width` interleaved bytes.
+    const int rows = format == WebcamPixelFormat::Nv12 ? height + height / 2 : height;
+    out.resize(total);
+    for (int row = 0; row < rows; ++row) {
+        std::memcpy(out.data() + static_cast<size_t>(row) * row_bytes, scan0 + static_cast<long long>(row) * pitch,
+                    row_bytes);
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -460,7 +626,7 @@ std::string ResolveWebcamDeviceId(const std::string& configured_id, const std::v
 QString FriendlyWebcamOpenFailure(const QString& raw_reason) {
     // No compatible pixel format: the camera exposes neither a BGRA nor a YUY2
     // output type the reader can convert (the NV12-only-camera failure class).
-    if (raw_reason.contains(QStringLiteral("no_bgra_or_yuy2_output_type"), Qt::CaseInsensitive))
+    if (raw_reason.contains(QStringLiteral("no_usable_output_type"), Qt::CaseInsensitive))
         return QStringLiteral("Camera doesn't offer a compatible video format");
 
     // Device busy / already opened by another application. Media Foundation
@@ -548,9 +714,11 @@ std::vector<WebcamDeviceInfo> WebcamService::EnumerateDevices() {
     return result;
 }
 
-std::vector<WebcamFormat> WebcamService::EnumerateFormats(const std::string& device_id) {
+WebcamDeviceProbe WebcamService::ProbeDevice(const std::string& device_id) {
     if (!IsMfPresent())
         return {};
+    // Callers run this on worker threads that have not joined COM.
+    exosnap::engine::ComApartment com_apartment(COINIT_MULTITHREADED);
     MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
 
     winrt::com_ptr<IMFAttributes> attrs;
@@ -559,7 +727,7 @@ std::vector<WebcamFormat> WebcamService::EnumerateFormats(const std::string& dev
 
     IMFActivate** devices = nullptr;
     UINT32 count = 0;
-    std::vector<WebcamFormat> result;
+    WebcamDeviceProbe result;
 
     if (FAILED(MFEnumDeviceSources(attrs.get(), &devices, &count)) || count == 0) {
         if (devices)
@@ -606,22 +774,30 @@ std::vector<WebcamFormat> WebcamService::EnumerateFormats(const std::string& dev
                     if (w > 0 && h > 0 && fn > 0 && fd > 0) {
                         // deduplicate
                         bool dup = false;
-                        for (const auto& f : result)
+                        for (const auto& f : result.formats)
                             if (f.width == w && f.height == h && f.fps_num == fn && f.fps_den == fd) {
                                 dup = true;
                                 break;
                             }
                         if (!dup)
-                            result.push_back({w, h, fn, fd});
+                            result.formats.push_back({w, h, fn, fd});
                     }
                 }
             }
+            result.controls = QueryControls(source.get());
+            // Releases the camera for the capture reader; a source left to its
+            // final Release keeps the device open until COM gets round to it.
+            source->Shutdown();
         }
         selected->Release();
     }
 
     MFShutdown();
     return result;
+}
+
+std::vector<WebcamFormat> WebcamService::EnumerateFormats(const std::string& device_id) {
+    return ProbeDevice(device_id).formats;
 }
 
 void WebcamService::SetFrameCallback(FrameCallback cb) {
@@ -765,21 +941,56 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
         const bool recovered = open_failure_logged || first_open;
         open_failure_logged = false;
         first_open = false;
-        diagnostics::logEvent(diagnostics::LogSeverity::Info, "webcam", "webcam.open_reader.succeeded",
-                              {{"negotiated_width", std::to_string(ctx->width)},
-                               {"negotiated_height", std::to_string(ctx->height)},
-                               {"negotiated_fps", std::to_string(ctx->fps)}});
+        diagnostics::logEvent(
+            diagnostics::LogSeverity::Info, "webcam", "webcam.open_reader.succeeded",
+            {{"negotiated_width", std::to_string(ctx->width)},
+             {"negotiated_height", std::to_string(ctx->height)},
+             {"negotiated_fps", std::to_string(ctx->fps)},
+             {"native_fourcc", ctx->native_fourcc},
+             {"output_format", PixelFormatName(ctx->format)},
+             {"yuv_matrix", ctx->matrix == exosnap::engine::MatrixCoefficients::Bt709 ? "bt709" : "bt601"},
+             {"yuv_range", ctx->range == exosnap::engine::ColorRange::Full ? "full" : "limited"}});
         if (recovered)
             PostStatus(true, {});
         last_delivered_ts = -1; // fresh reader: its first sample always passes.
 
-        const int W = ctx->width;
-        const int H = ctx->height;
-        std::vector<uint8_t> scratch(static_cast<size_t>(W) * H * 4);
+        const WebcamFrameLayout layout{ctx->width, ctx->height, ctx->format, ctx->matrix, ctx->range};
+        const size_t expected = exosnap::engine::WebcamFramePayloadBytes(layout.format, layout.width, layout.height);
+        // Only for buffers whose rows are padded; a tightly packed buffer is
+        // published straight from the locked memory.
+        std::vector<uint8_t> repacked;
+
+        {
+            std::string supported;
+            for (const WebcamControlRange& range : ctx->control_ranges) {
+                if (!supported.empty())
+                    supported += ',';
+                supported += WebcamControlKey(range.control);
+            }
+            diagnostics::logEvent(diagnostics::LogSeverity::Info, "webcam", "webcam.controls",
+                                  {{"supported", supported.empty() ? std::string("none") : supported}});
+        }
+        // A freshly opened device holds whatever it held before; every control
+        // the user set is applied again.
+        std::vector<WebcamControlSetting> applied_controls;
+        uint64_t applied_controls_generation = 0;
 
         // Inner loop: drain frames until the reader dies or a stop is requested.
         bool reader_lost = false;
         while (!stop.stop_requested() && !reader_lost) {
+            // Between reads, on the thread that owns the source, so a control
+            // change never races the reader.
+            if (const uint64_t wanted = controls_generation_.load(); wanted != applied_controls_generation) {
+                applied_controls_generation = wanted;
+                std::vector<WebcamControlSetting> desired;
+                {
+                    std::lock_guard lk(controls_mutex_);
+                    desired = controls_;
+                }
+                ApplyControlChanges(ctx->source.get(), ctx->control_ranges, applied_controls, desired);
+                applied_controls = std::move(desired);
+            }
+
             DWORD flags = 0;
             LONGLONG ts = 0;
             winrt::com_ptr<IMFSample> sample;
@@ -805,36 +1016,44 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
             if (FAILED(sample->ConvertToContiguousBuffer(buf.put())))
                 continue;
 
-            BYTE* src = nullptr;
-            DWORD maxLen = 0, curLen = 0;
-            if (FAILED(buf->Lock(&src, &maxLen, &curLen)))
-                continue;
-
-            // Both branches trust the locked buffer only as far as curLen says it
-            // goes. The media type promises W x H, but a driver can hand back a
-            // shorter sample (partial frame, stride quirk, a renegotiation in
-            // flight), and reading the promised size out of it walks off the end
-            // of MF-owned memory on this thread, every frame, with no recovery.
-            // A short frame keeps the previous one instead.
-            if (ctx->is_bgra) {
-                const size_t expected = static_cast<size_t>(W) * H * 4;
-                if (curLen >= expected)
-                    scratch.assign(src, src + expected);
+            // Every path trusts the locked buffer only as far as it says it goes.
+            // The media type promises W x H, but a driver can hand back a shorter
+            // sample (partial frame, stride quirk, a renegotiation in flight), and
+            // reading the promised size out of it walks off the end of MF-owned
+            // memory on this thread, every frame, with no recovery. A short frame
+            // keeps the previous one instead.
+            uint64_t generation = 0;
+            if (const auto buffer_2d = buf.try_as<IMF2DBuffer2>()) {
+                BYTE* scan0 = nullptr;
+                LONG pitch = 0;
+                BYTE* start = nullptr;
+                DWORD length = 0;
+                if (FAILED(buffer_2d->Lock2DSize(MF2DBuffer_LockFlags_Read, &scan0, &pitch, &start, &length)))
+                    continue;
+                const size_t rows = layout.format == exosnap::engine::WebcamPixelFormat::Nv12
+                                        ? static_cast<size_t>(layout.height) * 3u / 2u
+                                        : static_cast<size_t>(layout.height);
+                const long long abs_pitch = pitch < 0 ? -static_cast<long long>(pitch) : pitch;
+                const bool fits = static_cast<unsigned long long>(abs_pitch) * rows <= length;
+                if (fits && static_cast<size_t>(pitch) * rows == expected && pitch > 0) {
+                    generation = StoreFrame(layout, scan0, expected);
+                } else if (fits &&
+                           PackWebcamFrame(layout.format, layout.width, layout.height, scan0, pitch, repacked)) {
+                    generation = StoreFrame(layout, repacked.data(), repacked.size());
+                }
+                buffer_2d->Unlock2D();
             } else {
-                // YUY2 → BGRA
-                const int srcStride = W * 2;
-                const size_t expected = static_cast<size_t>(srcStride) * H;
-                if (curLen >= expected)
-                    Yuy2ToBgra(src, W, H, srcStride, scratch.data(), W * 4);
+                BYTE* src = nullptr;
+                DWORD max_length = 0;
+                DWORD current_length = 0;
+                if (FAILED(buf->Lock(&src, &max_length, &current_length)))
+                    continue;
+                if (current_length >= expected)
+                    generation = StoreFrame(layout, src, expected);
+                buf->Unlock();
             }
-            buf->Unlock();
-
-            // Store latest frame.
-            StoreFrame(W, H, scratch);
-
-            // Post QImage preview to main thread.
-            QImage img(scratch.data(), W, H, W * 4, QImage::Format_ARGB32);
-            PostFrame(img.copy()); // copy needed: scratch is reused
+            if (generation != 0)
+                PostFrame(generation);
         }
 
         // Reader released as ctx goes out of scope. Wait before reopening so a
@@ -847,12 +1066,25 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
     running_.store(false);
 }
 
-void WebcamService::StoreFrame(int w, int h, const std::vector<uint8_t>& bgra) {
-    std::lock_guard lk(frame_mutex_);
-    frame_mailbox_.Publish(w, h, bgra, ++frame_generation_);
+void WebcamService::SetControls(std::vector<WebcamControlSetting> controls) {
+    controls = NormalizeWebcamControlSettings(std::move(controls));
+    {
+        std::lock_guard lk(controls_mutex_);
+        if (controls == controls_)
+            return;
+        controls_ = std::move(controls);
+    }
+    controls_generation_.fetch_add(1);
 }
 
-void WebcamService::PostFrame(QImage img) {
+uint64_t WebcamService::StoreFrame(const WebcamFrameLayout& layout, const uint8_t* data, size_t size) {
+    std::lock_guard lk(frame_mutex_);
+    const uint64_t generation = ++frame_generation_;
+    frame_mailbox_.Publish(layout, data, size, generation);
+    return generation;
+}
+
+void WebcamService::PostFrame(uint64_t generation) {
     // Runs on the MF capture thread. Everything it needs is taken as one
     // immutable snapshot under the lock; the lock is released before anything
     // is posted, and no user code ever runs under it.
@@ -875,10 +1107,10 @@ void WebcamService::PostFrame(QImage img) {
         return;
     QMetaObject::invokeMethod(
         target,
-        [delivery, img = std::move(img)]() mutable {
+        [delivery, generation]() {
             if (delivery->receiver_bound && delivery->receiver.isNull())
                 return;
-            delivery->callback(std::move(img));
+            delivery->callback(generation);
         },
         Qt::QueuedConnection);
 }

@@ -30,14 +30,13 @@ ExoCard {
             options: root.settings.languageOptions
             value: root.settings.uiLanguage
             Accessible.name: qsTr("Language")
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+            Layout.fillWidth: true
             onValueActivated: value => root.settings.uiLanguage = value
         }
     }
 
     ExoSettingRow {
         label: qsTr("Mode")
-        hint: qsTr("Surface palette · Dark is the shipped default")
         stacked: root.stacked
         Layout.fillWidth: true
 

@@ -1,5 +1,4 @@
 #include "RecordViewModelAdapter.h"
-#include "RecordWebcamFrameProvider.h"
 
 #include "viewmodels/RecordViewModel.h"
 
@@ -661,38 +660,6 @@ TEST(RecordViewModelAdapterTest, MapsAudioAndDeviceAvailabilityWithoutResolvingP
     EXPECT_TRUE(adapter.webcamEnabled());
     EXPECT_TRUE(adapter.webcamError());
     EXPECT_EQ(adapter.webcamErrorText(), QStringLiteral("Device is busy"));
-}
-
-TEST(RecordWebcamFrameProviderTest, AppliesConfiguredChromaAtRequestedPreviewSize) {
-    RecordWebcamFrameProvider provider;
-    QImage green(2, 2, QImage::Format_RGBA8888);
-    green.fill(QColor(0, 255, 0));
-    provider.submitFrame(green);
-    provider.setChromaKey(true, 0, 255, 0, 0.01f, 0.01f, 0.0f);
-
-    QSize source_size;
-    const QImage keyed = provider.requestImage(QStringLiteral("frame"), &source_size, QSize(1, 1));
-    ASSERT_EQ(keyed.size(), QSize(1, 1));
-    EXPECT_EQ(source_size, QSize(2, 2));
-    EXPECT_EQ(keyed.pixelColor(0, 0).alpha(), 0);
-
-    QImage red(2, 2, QImage::Format_RGBA8888);
-    red.fill(QColor(255, 0, 0));
-    provider.submitFrame(red);
-    const QImage foreground = provider.requestImage(QStringLiteral("frame"), nullptr, QSize(1, 1));
-    EXPECT_EQ(foreground.pixelColor(0, 0).alpha(), 255);
-}
-
-TEST(RecordWebcamFrameProviderTest, NeverUpscalesProviderWorkPastSourceResolution) {
-    RecordWebcamFrameProvider provider;
-    QImage frame(320, 180, QImage::Format_RGBA8888);
-    frame.fill(Qt::red);
-    provider.submitFrame(frame);
-
-    QSize source_size;
-    const QImage requested = provider.requestImage(QStringLiteral("frame"), &source_size, QSize(1920, 1080));
-    EXPECT_EQ(source_size, QSize(320, 180));
-    EXPECT_EQ(requested.size(), QSize(320, 180));
 }
 
 TEST(RecordViewModelAdapterTest, ClampsMetersAndGatesSessionActions) {

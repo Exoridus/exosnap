@@ -12,7 +12,7 @@ ExoCard {
     required property bool stacked
 
     title: qsTr("Hotkeys")
-    subtitle: qsTr("Global shortcuts stay active while ExoSnap runs in the background.")
+    subtitle: qsTr("Also work while ExoSnap is in the background.")
 
     Repeater {
         model: root.settings.hotkeyRows
@@ -22,50 +22,31 @@ ExoCard {
 
             required property var modelData
 
-            readonly property bool capturing: root.settings.capturingHotkeyAction === hotkeyRow.modelData.action
-
             label: hotkeyRow.modelData.label
-            warning: root.settings.hotkeyErrorAction === hotkeyRow.modelData.action ? root.settings.hotkeyErrorText : ""
             stacked: root.stacked
-            // 300 = the capture badge's "Press a key combination..." prompt (150px at
-            // 13px Hanken Grotesk, measured) plus the widest button pair sharing this
-            // row -- Change (81px) + the close glyph (36px) + two 8px gaps (133px) --
-            // with a small margin for font-hinting variance between platforms.
-            controlWidth: 300
+            controlWidth: 240
             Layout.fillWidth: true
 
-            RowLayout {
-                spacing: ExoTheme.spacingSm
+            HotkeyCaptureField {
+                id: shortcutField
+
+                readonly property bool erred: root.settings.hotkeyErrorAction === hotkeyRow.modelData.action
+
+                keys: hotkeyRow.modelData.keys
+                bindingText: hotkeyRow.modelData.binding
+                errorText: shortcutField.erred ? root.settings.hotkeyErrorText : ""
+                errorKeys: shortcutField.erred ? root.settings.hotkeyErrorKeys : []
+                modifierNames: root.settings.hotkeyModifierNames
+                enabled: !root.settings.controlsLocked
                 Layout.fillWidth: true
-
-                HotkeyCaptureField {
-                    id: captureField
-
-                    capturing: hotkeyRow.capturing
-                    binding: hotkeyRow.modelData.binding
-                    enabled: !root.settings.controlsLocked
-                    Layout.fillWidth: true
-                    Accessible.name: qsTr("Shortcut for %1").arg(hotkeyRow.modelData.label)
-                    onCaptureCancelled: root.settings.cancelHotkeyCapture()
-                    onCaptured: (key, modifiers) => root.settings.commitHotkeyCapture(key, modifiers)
-                }
-
-                ExoButton {
-                    text: hotkeyRow.modelData.binding === "" ? qsTr("Set") : qsTr("Change")
-                    enabled: !root.settings.controlsLocked
-                    onClicked: {
-                        captureField.forceActiveFocus();
-                        root.settings.beginHotkeyCapture(hotkeyRow.modelData.action);
-                    }
-                }
-
-                ExoButton {
-                    glyph: ExoGlyph.Close
-                    visible: hotkeyRow.modelData.binding !== ""
-                    enabled: !root.settings.controlsLocked
-                    Accessible.name: qsTr("Clear shortcut for %1").arg(hotkeyRow.modelData.label)
-                    onClicked: root.settings.clearHotkey(hotkeyRow.modelData.action)
-                }
+                Accessible.name: qsTr("Shortcut for %1").arg(hotkeyRow.modelData.label)
+                clearAccessibleName: shortcutField.erred ? qsTr("Discard this combination")
+                                           : qsTr("Clear shortcut for %1").arg(hotkeyRow.modelData.label)
+                onCaptureStarted: root.settings.beginHotkeyCapture(hotkeyRow.modelData.action)
+                onCaptureCancelled: root.settings.cancelHotkeyCapture()
+                onCaptured: (key, modifiers) => root.settings.commitHotkeyCapture(key, modifiers)
+                onCleared: root.settings.clearHotkey(hotkeyRow.modelData.action)
+                onErrorDismissed: root.settings.dismissHotkeyError()
             }
         }
     }

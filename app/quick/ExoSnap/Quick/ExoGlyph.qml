@@ -77,7 +77,10 @@ Item {
         CloseGap,
         Magnet,
         JumpStart,
-        StepBack
+        StepBack,
+        Braces,
+        Hash,
+        Swatch
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -224,11 +227,18 @@ Item {
         "M2 4H5V14H2 M16 4H13V14H16 M5 9H13 M7 7L9 9L7 11 M11 7L9 9L11 11",
         "M3 3V10A6 6 0 0 0 15 10V3H11.5V10A2.5 2.5 0 0 1 6.5 10V3Z M3 6H6.5 M11.5 6H15",
         "M3.5 3.5V14.5 M14 3.5L6 9L14 14.5Z",
-        "M11.5 3.5L4 9L11.5 14.5 M15 3.5V14.5"
+        "M11.5 3.5L4 9L11.5 14.5 M15 3.5V14.5",
+        // Braces -- a pair of curly brackets: insert a {placeholder}.
+        "M7 3.5C5.5 3.5 5.5 4.5 5.5 5.5V7.5C5.5 8.3 4.9 9 4 9C4.9 9 5.5 9.7 5.5 10.5V12.5C5.5 13.5 5.5 14.5 7 14.5"
+            + " M11 3.5C12.5 3.5 12.5 4.5 12.5 5.5V7.5C12.5 8.3 13.1 9 14 9C13.1 9 12.5 9.7 12.5 10.5V12.5C12.5 13.5 12.5 14.5 11 14.5",
+        // Hash -- the number sign: a hex value follows.
+        "M7.5 3.5L6 14.5 M12 3.5L10.5 14.5 M3.5 7H14.5 M3 11H14",
+        // Swatch (filled) -- a rounded square, tinted with the colour it stands for.
+        "M5.5 3.5H12.5A2 2 0 0 1 14.5 5.5V12.5A2 2 0 0 1 12.5 14.5H5.5A2 2 0 0 1 3.5 12.5V5.5A2 2 0 0 1 5.5 3.5Z"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.
-    readonly property var _filledKinds: [ExoGlyph.Pause, ExoGlyph.Stop, ExoGlyph.Overflow, ExoGlyph.Dot]
+    readonly property var _filledKinds: [ExoGlyph.Pause, ExoGlyph.Stop, ExoGlyph.Overflow, ExoGlyph.Dot, ExoGlyph.Swatch]
 
     // Empty for a kind outside the table. Read by tst_ExoGlyph to prove every
     // declared kind is drawn.

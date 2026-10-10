@@ -829,6 +829,9 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (std::abs(a.webcam.chroma_key.spill_reduction - b.webcam.chroma_key.spill_reduction) > kChromaTol) {
         return false;
     }
+    if (a.webcam.controls != b.webcam.controls) {
+        return false;
+    }
 
     return true;
 }
@@ -1116,6 +1119,9 @@ std::string_view ConfigDirtyDifference(const RecordingPresetConfig& a, const Rec
     }
     if (std::abs(a.webcam.chroma_key.spill_reduction - b.webcam.chroma_key.spill_reduction) > kChromaTol) {
         return "webcam.chroma_key.spill_reduction";
+    }
+    if (a.webcam.controls != b.webcam.controls) {
+        return "webcam.controls";
     }
 
     return {};

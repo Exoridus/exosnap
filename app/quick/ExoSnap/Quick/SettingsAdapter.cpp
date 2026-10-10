@@ -9,6 +9,7 @@
 #include "QuickThemeTokens.h"
 #include "i18n/Language.h"
 #include "models/FilenameBuilder.h"
+#include "models/HexColor.h"
 #include "models/OutputPathPolicy.h"
 #include "models/OutputPathValidator.h"
 #include "ui/CodecLabels.h"
@@ -56,6 +57,42 @@ QVariant makeOption(const QString& value, const QString& label) {
     entry.insert(QStringLiteral("selectable"), true);
     entry.insert(QStringLiteral("reason"), QString());
     return entry;
+}
+
+QString webcamControlLabel(WebcamControl control) {
+    switch (control) {
+    case WebcamControl::Brightness:
+        return QCoreApplication::translate("SettingsAdapter", "Brightness");
+    case WebcamControl::Contrast:
+        return QCoreApplication::translate("SettingsAdapter", "Contrast");
+    case WebcamControl::Hue:
+        return QCoreApplication::translate("SettingsAdapter", "Hue");
+    case WebcamControl::Saturation:
+        return QCoreApplication::translate("SettingsAdapter", "Saturation");
+    case WebcamControl::Sharpness:
+        return QCoreApplication::translate("SettingsAdapter", "Sharpness");
+    case WebcamControl::Gamma:
+        return QCoreApplication::translate("SettingsAdapter", "Gamma");
+    case WebcamControl::WhiteBalance:
+        return QCoreApplication::translate("SettingsAdapter", "White balance");
+    case WebcamControl::BacklightCompensation:
+        return QCoreApplication::translate("SettingsAdapter", "Backlight compensation");
+    case WebcamControl::Gain:
+        return QCoreApplication::translate("SettingsAdapter", "Gain");
+    case WebcamControl::PowerLineFrequency:
+        return QCoreApplication::translate("SettingsAdapter", "Anti-flicker");
+    case WebcamControl::Exposure:
+        return QCoreApplication::translate("SettingsAdapter", "Exposure");
+    case WebcamControl::Focus:
+        return QCoreApplication::translate("SettingsAdapter", "Focus");
+    case WebcamControl::Zoom:
+        return QCoreApplication::translate("SettingsAdapter", "Zoom");
+    case WebcamControl::Pan:
+        return QCoreApplication::translate("SettingsAdapter", "Pan");
+    case WebcamControl::Tilt:
+        return QCoreApplication::translate("SettingsAdapter", "Tilt");
+    }
+    return {};
 }
 
 QString fromAnnotation(const capability::SupportAnnotation& annotation) {
@@ -349,7 +386,36 @@ void SettingsAdapter::setMaxFrameRate(int max_fps) {
     emit configChanged();
 }
 
+void SettingsAdapter::setDefaultOutputDeviceName(const QString& name) {
+    if (default_output_device_name_ == name)
+        return;
+    default_output_device_name_ = name;
+    rebuildAudioTargetStrings();
+    emit configChanged();
+}
+
 void SettingsAdapter::setMicrophoneDevices(QVariantList devices) {
+    // An unpinned microphone records Windows' default capture device, so that
+    // is a choice of its own, first in the list and named after the device it
+    // currently resolves to. With no device at all there is no default either.
+    if (!devices.isEmpty()) {
+        QString default_name;
+        for (const QVariant& device : devices) {
+            const QVariantMap entry = device.toMap();
+            if (entry.value(QStringLiteral("isDefault")).toBool()) {
+                default_name = entry.value(QStringLiteral("label")).toString();
+                break;
+            }
+        }
+        QVariantMap system_default;
+        system_default.insert(QStringLiteral("value"), QString());
+        system_default.insert(QStringLiteral("label"), default_name.isEmpty()
+                                                           ? tr("System default")
+                                                           : tr("System default (%1)").arg(default_name));
+        system_default.insert(QStringLiteral("selectable"), true);
+        system_default.insert(QStringLiteral("reason"), QString());
+        devices.prepend(system_default);
+    }
     microphone_devices_ = std::move(devices);
     // The microphone card's own summary names the selected device and says so
     // when there is none, so it moves with this list and not only with config.
@@ -359,12 +425,120 @@ void SettingsAdapter::setMicrophoneDevices(QVariantList devices) {
 }
 
 void SettingsAdapter::setWebcamDevices(QVariantList devices) {
+    // Windows has no default camera an application can ask for. An unpinned
+    // webcam takes the first camera found, which this entry says outright
+    // instead of showing that camera as if it had been chosen.
+    if (!devices.isEmpty()) {
+        QVariantMap automatic;
+        automatic.insert(QStringLiteral("value"), QString());
+        automatic.insert(QStringLiteral("label"),
+                         tr("Automatic (%1)").arg(devices.first().toMap().value(QStringLiteral("label")).toString()));
+        automatic.insert(QStringLiteral("selectable"), true);
+        automatic.insert(QStringLiteral("reason"), QString());
+        devices.prepend(automatic);
+    }
     webcam_devices_ = std::move(devices);
     emit webcamDevicesChanged();
     // webcamDeviceId resolves an unpinned configuration against this list, so
-    // the displayed device changes with the list even though the configuration
-    // did not.
+    // the displayed device -- and with it the offered capture modes -- changes
+    // with the list even though the configuration did not.
+    rebuildOptions();
+    emit optionsChanged();
     emit configChanged();
+}
+
+void SettingsAdapter::setWebcamFormats(const QString& device_id, std::vector<WebcamFormat> formats) {
+    webcam_formats_.insert(device_id, std::move(formats));
+    if (device_id != resolvedWebcamDeviceId())
+        return;
+    rebuildOptions();
+    emit optionsChanged();
+    emit configChanged();
+}
+
+void SettingsAdapter::setWebcamControlRanges(const QString& device_id, std::vector<WebcamControlRange> ranges) {
+    webcam_control_ranges_.insert(device_id, std::move(ranges));
+    if (device_id != resolvedWebcamDeviceId())
+        return;
+    rebuildOptions();
+    emit optionsChanged();
+    emit configChanged();
+}
+
+const WebcamControlRange* SettingsAdapter::selectedWebcamControlRange(int control) const {
+    const auto ranges = webcam_control_ranges_.constFind(resolvedWebcamDeviceId());
+    if (ranges == webcam_control_ranges_.cend())
+        return nullptr;
+    for (const WebcamControlRange& range : *ranges) {
+        if (static_cast<int>(range.control) == control)
+            return &range;
+    }
+    return nullptr;
+}
+
+void SettingsAdapter::storeWebcamControl(const WebcamControlSetting& setting) {
+    auto& controls = config_.webcam.controls;
+    const auto existing = std::find_if(controls.begin(), controls.end(), [&](const WebcamControlSetting& item) {
+        return item.control == setting.control;
+    });
+    if (existing != controls.end()) {
+        if (*existing == setting)
+            return;
+        *existing = setting;
+    } else {
+        controls.push_back(setting);
+    }
+    applyConfigEdit();
+}
+
+void SettingsAdapter::setWebcamControlValue(int control, int value) {
+    const WebcamControlRange* range = selectedWebcamControlRange(control);
+    if (range == nullptr || !range->can_manual)
+        return;
+    storeWebcamControl({range->control, false, ClampWebcamControlValue(*range, value)});
+}
+
+void SettingsAdapter::setWebcamControlAutomatic(int control, bool automatic) {
+    const WebcamControlRange* range = selectedWebcamControlRange(control);
+    if (range == nullptr || (automatic && !range->can_automatic))
+        return;
+    // Leaving automatic keeps the value the camera was showing, rather than
+    // jumping to wherever the slider last stood.
+    const WebcamControlSetting* stored = FindWebcamControlSetting(config_.webcam.controls, range->control);
+    const long value = stored != nullptr ? stored->value : range->current;
+    storeWebcamControl({range->control, automatic, ClampWebcamControlValue(*range, value)});
+}
+
+QVariantMap SettingsAdapter::webcamControlStates() const {
+    QVariantMap states;
+    const auto ranges = webcam_control_ranges_.constFind(resolvedWebcamDeviceId());
+    if (ranges == webcam_control_ranges_.cend())
+        return states;
+    for (const WebcamControlRange& range : *ranges) {
+        const WebcamControlSetting* stored = FindWebcamControlSetting(config_.webcam.controls, range.control);
+        QVariantMap state;
+        state.insert(QStringLiteral("value"), static_cast<int>(ClampWebcamControlValue(
+                                                  range, stored != nullptr ? stored->value : range.current)));
+        state.insert(QStringLiteral("automatic"),
+                     range.can_automatic && (stored != nullptr ? stored->automatic : range.current_automatic));
+        states.insert(QString::number(static_cast<int>(range.control)), state);
+    }
+    return states;
+}
+
+void SettingsAdapter::resetWebcamControls() {
+    if (config_.webcam.controls.empty())
+        return;
+    config_.webcam.controls.clear();
+    applyConfigEdit();
+}
+
+WebcamCaptureMode SettingsAdapter::effectiveWebcamMode() const {
+    const auto formats = webcam_formats_.constFind(resolvedWebcamDeviceId());
+    const WebcamSettings& webcam = config_.webcam;
+    if (formats == webcam_formats_.cend())
+        return {webcam.width, webcam.height, webcam.fps};
+    return ResolveWebcamCaptureMode(*formats, webcam.width, webcam.height, webcam.fps);
 }
 
 void SettingsAdapter::setMeters(double system_dbfs, double app_dbfs, double microphone_dbfs) {
@@ -411,7 +585,8 @@ void SettingsAdapter::setPresetState(QVariantList options, QString selected_id, 
     // badge already shows the name, and a status that repeats it reads as a
     // second, contradicting preset field. Empty while clean, so nothing occupies
     // the bar when there is nothing to say.
-    preset_status_text_ = dirty ? tr("Unsaved changes") : QString();
+    preset_status_text_ =
+        dirty ? tr("Changed since this preset was saved. Your settings are kept either way.") : QString();
     emit presetsChanged();
 }
 
@@ -421,13 +596,29 @@ void SettingsAdapter::setHotkeyRows(QVariantList rows) {
     capturing_hotkey_action_ = -1;
     hotkey_error_action_ = -1;
     hotkey_error_text_.clear();
+    hotkey_error_keys_.clear();
     emit hotkeysChanged();
 }
 
-void SettingsAdapter::setHotkeyError(int action, QString message) {
+void SettingsAdapter::setHotkeyError(int action, QString message, QStringList keys) {
     hotkey_error_action_ = action;
     hotkey_error_text_ = std::move(message);
+    hotkey_error_keys_ = std::move(keys);
     capturing_hotkey_action_ = -1;
+    emit hotkeysChanged();
+}
+
+void SettingsAdapter::setHotkeyModifierNames(QStringList names) {
+    hotkey_modifier_names_ = std::move(names);
+    emit hotkeysChanged();
+}
+
+void SettingsAdapter::dismissHotkeyError() {
+    if (hotkey_error_action_ < 0)
+        return;
+    hotkey_error_action_ = -1;
+    hotkey_error_text_.clear();
+    hotkey_error_keys_.clear();
     emit hotkeysChanged();
 }
 
@@ -438,6 +629,7 @@ void SettingsAdapter::beginHotkeyCapture(int action) {
     capturing_hotkey_action_ = action;
     hotkey_error_action_ = -1;
     hotkey_error_text_.clear();
+    hotkey_error_keys_.clear();
     emit hotkeysChanged();
 }
 
@@ -463,6 +655,7 @@ void SettingsAdapter::clearHotkey(int action) {
     if (hotkey_error_action_ == action) {
         hotkey_error_action_ = -1;
         hotkey_error_text_.clear();
+        hotkey_error_keys_.clear();
         emit hotkeysChanged();
     }
     emit hotkeyClearRequested(action);
@@ -483,30 +676,34 @@ const QVariantList& SettingsAdapter::webcamDeviceOptions() const noexcept {
     return webcam_devices_;
 }
 QString SettingsAdapter::webcamDeviceId() const {
-    if (!config_.webcam.device_id.empty()) {
+    // Empty is "not pinned to a camera" and selects the Automatic entry. The
+    // configuration stays unpinned -- writing the resolved camera back would
+    // make a freshly seeded profile differ from the built-in Default it was
+    // seeded from.
+    return QString::fromStdString(config_.webcam.device_id);
+}
+
+QString SettingsAdapter::resolvedWebcamDeviceId() const {
+    if (!config_.webcam.device_id.empty())
         return QString::fromStdString(config_.webcam.device_id);
-    }
-    // An empty device_id means "not pinned to a camera", which the capture path
-    // resolves to the first enumerated device. The selector shows that resolved
-    // device rather than an empty row, but the configuration stays unpinned --
-    // writing the resolution back would make a freshly seeded profile differ
-    // from the built-in Default it was seeded from.
-    if (webcam_devices_.isEmpty()) {
+    // The capture path resolves an unpinned camera to the first enumerated one,
+    // which follows the Automatic entry in the list.
+    if (webcam_devices_.size() < 2)
         return {};
-    }
-    return webcam_devices_.first().toMap().value(QStringLiteral("value")).toString();
+    return webcam_devices_.at(1).toMap().value(QStringLiteral("value")).toString();
 }
 const QVariantList& SettingsAdapter::webcamResolutionOptions() const noexcept {
     return webcam_resolution_options_;
 }
-int SettingsAdapter::webcamResolution() const noexcept {
-    return config_.webcam.height;
+QString SettingsAdapter::webcamResolution() const {
+    const WebcamCaptureMode mode = effectiveWebcamMode();
+    return QStringLiteral("%1x%2").arg(mode.width).arg(mode.height);
 }
 const QVariantList& SettingsAdapter::webcamFrameRateOptions() const noexcept {
     return webcam_frame_rate_options_;
 }
-int SettingsAdapter::webcamFrameRate() const noexcept {
-    return config_.webcam.fps;
+int SettingsAdapter::webcamFrameRate() const {
+    return effectiveWebcamMode().fps;
 }
 bool SettingsAdapter::webcamMirror() const noexcept {
     return config_.webcam.mirror;
@@ -519,12 +716,6 @@ bool SettingsAdapter::webcamAvailable() const noexcept {
 }
 bool SettingsAdapter::chromaKeyEnabled() const noexcept {
     return config_.webcam.chroma_key.enabled;
-}
-const QVariantList& SettingsAdapter::chromaKeyColorOptions() const noexcept {
-    return chroma_key_color_options_;
-}
-int SettingsAdapter::chromaKeyColorMode() const noexcept {
-    return static_cast<int>(config_.webcam.chroma_key.color_mode);
 }
 int SettingsAdapter::chromaKeyTolerance() const noexcept {
     return qRound(config_.webcam.chroma_key.tolerance * 100.0f);
@@ -550,26 +741,41 @@ void SettingsAdapter::setWebcamDeviceId(const QString& value) {
         return;
     }
     config_.webcam.device_id = device_id;
+    // Control values are on one camera's scale; another camera starts from its own.
+    config_.webcam.controls.clear();
     applyConfigEdit();
 }
 
-void SettingsAdapter::setWebcamResolution(int value) {
-    // The option value is the height; the paired width keeps 16:9 except for the
-    // 4:3 VGA entry, matching what the capture backend requests.
-    const int height = value;
-    const int width = height == 480 ? 640 : height * 16 / 9;
-    if (config_.webcam.height == height && config_.webcam.width == width) {
+void SettingsAdapter::setWebcamResolution(const QString& value) {
+    const QStringList parts = value.split(QLatin1Char('x'));
+    bool width_ok = false;
+    bool height_ok = false;
+    const int width = parts.size() == 2 ? parts[0].toInt(&width_ok) : 0;
+    const int height = parts.size() == 2 ? parts[1].toInt(&height_ok) : 0;
+    if (!width_ok || !height_ok || width <= 0 || height <= 0)
         return;
-    }
-    config_.webcam.height = height;
+    // The rate moves with the size: the one picked before may not exist at the
+    // new size, and the stored request should name a mode the camera has.
+    const auto formats = webcam_formats_.constFind(resolvedWebcamDeviceId());
+    const int fps = formats == webcam_formats_.cend()
+                        ? config_.webcam.fps
+                        : ResolveWebcamCaptureMode(*formats, width, height, config_.webcam.fps).fps;
+    if (config_.webcam.width == width && config_.webcam.height == height && config_.webcam.fps == fps)
+        return;
     config_.webcam.width = width;
+    config_.webcam.height = height;
+    config_.webcam.fps = fps;
     applyConfigEdit();
 }
 
 void SettingsAdapter::setWebcamFrameRate(int value) {
-    if (config_.webcam.fps == value) {
+    // Pins the size the user is looking at, so a request the camera lacks is
+    // replaced by the mode shown rather than kept beside a new rate.
+    const WebcamCaptureMode shown = effectiveWebcamMode();
+    if (config_.webcam.width == shown.width && config_.webcam.height == shown.height && config_.webcam.fps == value)
         return;
-    }
+    config_.webcam.width = shown.width;
+    config_.webcam.height = shown.height;
     config_.webcam.fps = value;
     applyConfigEdit();
 }
@@ -599,13 +805,48 @@ void SettingsAdapter::setChromaKeyEnabled(bool value) {
     applyConfigEdit();
 }
 
-void SettingsAdapter::setChromaKeyColorMode(int value) {
-    const auto mode = static_cast<WebcamChromaKeyColorMode>(value);
-    if (config_.webcam.chroma_key.color_mode == mode) {
+QString SettingsAdapter::chromaKeyHex() const {
+    // The colour in effect, which for a profile from before the single key
+    // colour can still be one of the named presets.
+    const auto key = config_.webcam.chroma_key.active_color();
+    return QString::fromStdString(FormatHexColor(key.r, key.g, key.b));
+}
+
+void SettingsAdapter::setChromaKeyHex(const QString& value) {
+    const auto rgb = ParseHexColor(value.toStdString());
+    if (!rgb) {
+        chroma_key_hex_error_ = tr("Enter 3 or 6 hex digits, such as 00ff00 or 0f0");
+        emit configChanged();
         return;
     }
-    config_.webcam.chroma_key.color_mode = mode;
+    const bool error_cleared = !chroma_key_hex_error_.isEmpty();
+    chroma_key_hex_error_.clear();
+    auto& key = config_.webcam.chroma_key;
+    // Every colour is stored as the custom one; the named presets are only a
+    // way older profiles may still state theirs.
+    if (key.color_mode == WebcamChromaKeyColorMode::Custom && key.custom_r == (*rgb)[0] && key.custom_g == (*rgb)[1] &&
+        key.custom_b == (*rgb)[2]) {
+        if (error_cleared)
+            emit configChanged();
+        return;
+    }
+    key.color_mode = WebcamChromaKeyColorMode::Custom;
+    key.custom_r = (*rgb)[0];
+    key.custom_g = (*rgb)[1];
+    key.custom_b = (*rgb)[2];
     applyConfigEdit();
+}
+
+QColor SettingsAdapter::chromaKeyColor() const {
+    const auto key = config_.webcam.chroma_key.active_color();
+    return QColor(key.r, key.g, key.b);
+}
+
+void SettingsAdapter::setChromaKeyColor(const QColor& color) {
+    if (!color.isValid())
+        return;
+    setChromaKeyHex(QString::fromStdString(FormatHexColor(
+        static_cast<uint8_t>(color.red()), static_cast<uint8_t>(color.green()), static_cast<uint8_t>(color.blue()))));
 }
 
 void SettingsAdapter::setChromaKeyTolerance(int value) {
@@ -646,6 +887,12 @@ const QString& SettingsAdapter::hotkeyErrorText() const noexcept {
 }
 int SettingsAdapter::hotkeyErrorAction() const noexcept {
     return hotkey_error_action_;
+}
+const QStringList& SettingsAdapter::hotkeyErrorKeys() const noexcept {
+    return hotkey_error_keys_;
+}
+const QStringList& SettingsAdapter::hotkeyModifierNames() const noexcept {
+    return hotkey_modifier_names_;
 }
 
 void SettingsAdapter::setDistributionContext(exosnap::update::DistributionContext distribution) {
@@ -710,8 +957,9 @@ void SettingsAdapter::setUpdateStatus(const QString& requested_state, const QStr
         update_action_enabled_ = true;
     } else if (state == QLatin1String("unchecked")) {
         // Distinct from "up to date": nothing has been checked yet this session,
-        // and claiming otherwise would be an assertion the app cannot make.
-        update_status_text_ = tr("No update check has run yet.");
+        // and claiming otherwise would be an assertion the app cannot make. Nor
+        // is it news worth a line under the card title, so it says nothing.
+        update_status_text_.clear();
         update_action_text_ = tr("Check for updates");
         update_action_enabled_ = true;
     } else if (state == QLatin1String("managed")) {
@@ -1073,22 +1321,64 @@ void SettingsAdapter::rebuildOptions() {
     opus_frame_duration_options_.append(
         makeOption(static_cast<int>(exosnap::engine::OpusFrameDuration::Ms2_5), tr("2.5 ms")));
 
-    // Webcam capture formats. Values are the pixel height; the adapter pairs it
-    // with the matching width so QML never carries a resolution table.
+    // Webcam capture modes: only what the selected camera offers. Until its
+    // formats are known the current request is the single choice, rather than
+    // a fixed table of modes the camera may not have.
+    const WebcamCaptureMode webcam_mode = effectiveWebcamMode();
+    const auto webcam_formats = webcam_formats_.constFind(resolvedWebcamDeviceId());
+    std::vector<WebcamCaptureMode> webcam_sizes;
+    std::vector<int> webcam_rates;
+    if (webcam_formats != webcam_formats_.cend()) {
+        webcam_sizes = OfferedWebcamResolutions(*webcam_formats);
+        webcam_rates = OfferedWebcamFrameRates(*webcam_formats, webcam_mode.width, webcam_mode.height);
+    }
+    if (webcam_sizes.empty())
+        webcam_sizes.push_back(webcam_mode);
+    if (webcam_rates.empty())
+        webcam_rates.push_back(webcam_mode.fps);
     webcam_resolution_options_.clear();
-    webcam_resolution_options_.append(makeOption(480, QStringLiteral("640 \xC3\x97 480")));
-    webcam_resolution_options_.append(makeOption(720, QStringLiteral("1280 \xC3\x97 720")));
-    webcam_resolution_options_.append(makeOption(1080, QStringLiteral("1920 \xC3\x97 1080")));
-
+    for (const WebcamCaptureMode& size : webcam_sizes) {
+        webcam_resolution_options_.append(
+            makeOption(QStringLiteral("%1x%2").arg(size.width).arg(size.height),
+                       QStringLiteral("%1 \xC3\x97 %2").arg(size.width).arg(size.height)));
+    }
     webcam_frame_rate_options_.clear();
-    for (const int fps : {24, 30, 60}) {
+    for (const int fps : webcam_rates) {
         webcam_frame_rate_options_.append(makeOption(fps, tr("%1 fps").arg(fps)));
     }
 
-    chroma_key_color_options_.clear();
-    chroma_key_color_options_.append(makeOption(static_cast<int>(WebcamChromaKeyColorMode::Green), tr("Green")));
-    chroma_key_color_options_.append(makeOption(static_cast<int>(WebcamChromaKeyColorMode::Blue), tr("Blue")));
-    chroma_key_color_options_.append(makeOption(static_cast<int>(WebcamChromaKeyColorMode::Magenta), tr("Magenta")));
+    QVariantList webcam_controls;
+    if (const auto ranges = webcam_control_ranges_.constFind(resolvedWebcamDeviceId());
+        ranges != webcam_control_ranges_.cend()) {
+        for (const WebcamControlRange& range : *ranges) {
+            QVariantMap entry;
+            entry.insert(QStringLiteral("control"), static_cast<int>(range.control));
+            entry.insert(QStringLiteral("label"), webcamControlLabel(range.control));
+            entry.insert(QStringLiteral("minimum"), static_cast<int>(range.minimum));
+            entry.insert(QStringLiteral("maximum"), static_cast<int>(range.maximum));
+            entry.insert(QStringLiteral("step"), static_cast<int>(range.step));
+            entry.insert(QStringLiteral("canAutomatic"), range.can_automatic);
+            entry.insert(QStringLiteral("canManual"), range.can_manual);
+            if (range.control == WebcamControl::PowerLineFrequency) {
+                QVariantList options;
+                const auto add = [&](WebcamPowerLineFrequency frequency, const QString& label) {
+                    const long value = static_cast<long>(frequency);
+                    if (value >= range.minimum && value <= range.maximum)
+                        options.append(makeOption(static_cast<int>(value), label));
+                };
+                add(WebcamPowerLineFrequency::Hz50, tr("50 Hz"));
+                add(WebcamPowerLineFrequency::Hz60, tr("60 Hz"));
+                add(WebcamPowerLineFrequency::Auto, tr("Automatic"));
+                add(WebcamPowerLineFrequency::Disabled, tr("Off"));
+                entry.insert(QStringLiteral("options"), options);
+            }
+            webcam_controls.append(entry);
+        }
+    }
+    if (webcam_controls != webcam_controls_) {
+        webcam_controls_ = std::move(webcam_controls);
+        emit webcamControlsChanged();
+    }
 }
 
 void SettingsAdapter::rebuildDerivedText() {
@@ -1554,11 +1844,30 @@ const QString& SettingsAdapter::patternValidation() const noexcept {
 }
 
 QVariantList SettingsAdapter::filenameTokens() const {
+    const struct {
+        QString token;
+        QString label;
+    } entries[] = {
+        {QStringLiteral("{datetime}"), tr("Date and time")},
+        {QStringLiteral("{date}"), tr("Date")},
+        {QStringLiteral("{time}"), tr("Time")},
+        {QStringLiteral("{app}"), tr("Application")},
+        {QStringLiteral("{title}"), tr("Window title")},
+        {QStringLiteral("{display}"), tr("Display")},
+        {QStringLiteral("{codec}"), tr("Video codec")},
+        {QStringLiteral("{container}"), tr("Container")},
+    };
+    // Expanded by the same builder a recording uses, so the preview cannot
+    // disagree with the file name it describes.
+    const std::time_t now = std::time(nullptr);
     QVariantList tokens;
-    for (const auto& token : {QStringLiteral("{datetime}"), QStringLiteral("{date}"), QStringLiteral("{time}"),
-                              QStringLiteral("{app}"), QStringLiteral("{title}"), QStringLiteral("{display}"),
-                              QStringLiteral("{codec}"), QStringLiteral("{container}")}) {
-        tokens.append(token);
+    for (const auto& entry : entries) {
+        const std::filesystem::path expanded = BuildFilename(entry.token.toStdWString(), config_.output.container, now);
+        QVariantMap map;
+        map.insert(QStringLiteral("token"), entry.token);
+        map.insert(QStringLiteral("label"), entry.label);
+        map.insert(QStringLiteral("preview"), QString::fromStdWString(expanded.stem().wstring()));
+        tokens.append(map);
     }
     return tokens;
 }
@@ -1801,7 +2110,13 @@ void SettingsAdapter::rebuildAudioTargetStrings() {
                                : capture_target_name_;
 
     app_audio_hint_ = window_target ? tr("%1 only").arg(target) : QString();
-    system_audio_hint_ = window_target ? tr("Everything except %1").arg(target) : tr("Everything the computer plays");
+    // System audio always records Windows' default output device; naming it
+    // answers "which speakers?" without a selector that would only ever offer
+    // that one device.
+    system_audio_hint_ = window_target ? tr("Everything except %1").arg(target)
+                         : default_output_device_name_.isEmpty()
+                             ? tr("Everything the computer plays")
+                             : tr("Default output · %1").arg(default_output_device_name_);
 
     // The engine resolves rows into tracks; this reads that decision back rather
     // than re-deriving it, so the card can never disagree with the file.

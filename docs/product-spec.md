@@ -68,7 +68,7 @@ Unavailable controls retain labels/current values, drop interactive emphasis and
 | Tracks | One per enabled eligible source unless mixed into the previous track |
 | Webcam / microphone DSP | Off |
 | Mixed-bus limiter / clock slaving | On |
-| Automatic update checks | Off |
+| Check for updates at startup | Off |
 
 The output folder defaults to Windows' Videos Known Folder plus `ExoSnap`, including redirected Videos locations. It is not necessarily a literal path beneath the user profile.
 
@@ -82,7 +82,7 @@ Five read-only built-in presets lead the list:
 | Performance | MKV / AV1 / Opus | High, CQ 19 | P2 |
 | Compatibility | MP4 / H.264 / AAC | High, CQ 19 | P4 |
 
-The live configuration is persisted continuously. A preset is a named snapshot compared with that state. A difference shows `Name (changed)`, not an unsaved-project warning. Applying a preset preserves the capture target and applicable environment-derived depth/HDR choices; compatibility can still force a necessary clamp such as H.264 to 8-bit. Those preserved fields do not count as preset edits.
+The live configuration is persisted continuously. A preset is a named snapshot compared with that state. A difference marks the preset name with a neutral dot whose tooltip says the settings are kept either way, not an unsaved-project warning. Applying a preset preserves the capture target and applicable environment-derived depth/HDR choices; compatibility can still force a necessary clamp such as H.264 to 8-bit. Those preserved fields do not count as preset edits.
 
 Built-ins cannot be renamed, overwritten or deleted. Save as new creates an editable user preset and is the visible toolbar action while changed. The overflow provides Rename, Reset, Delete, Export and Import with truthful availability. Delete names the preset and defaults to cancellation. Preset switching applies immediately and records a hub entry with Undo, without a toast. Undo restores both previous live configuration and selection.
 
@@ -232,9 +232,13 @@ A fullscreen-shaped, alive, visible window with no capture-frame progress for te
 
 ### Webcam
 
-Webcam is an optional recorded PiP, not a fourth target. Device/resolution selection lives in Settings; its include control is synchronized with the Record camera control. Off is the default, and opening Settings alone does not open the camera. The first available camera can be preselected without recording it.
+Webcam is an optional recorded PiP, not a fourth target. Device/resolution selection lives in Settings; its include control is synchronized with the Record camera control. Off is the default, and opening Settings with the webcam off does not open the camera. The first available camera can be preselected without recording it.
 
-Placement/size are adjusted inside the preview's displayed video area, reaching its edges without distortion or clipping. Default placement is bottom-right with a margin. Metadata overlays stay above it. Mirror, opacity and chroma-key settings match the recording composition; opacity defaults to 100%. Chroma choices include green, blue, magenta or a custom color, with tolerance, softness and spill reduction. Extra key controls are disclosed when enabled.
+Resolution and frame-rate choices list only the modes the selected camera offers. A stored mode the camera lacks shows, and is captured as, the smallest offered size at least as large, else the largest; then the closest offered rate. Enabling the camera on an idle Record page shows it in the preview immediately.
+
+The Webcam card shows the included camera live, drawn exactly as recorded; the camera is opened for it only while the card is on screen. Its Camera image group lists the standard UVC controls the selected camera reports (brightness, contrast, hue, saturation, sharpness, gamma, white balance, backlight compensation, gain, anti-flicker, exposure, focus, zoom, pan, tilt), each with Auto where the camera offers it. A control left alone keeps the camera's own value; set values belong to the profile, are applied whenever the camera opens and change live, including during a recording. Reset returns every control to the camera's defaults, and choosing another camera drops the values.
+
+Placement/size are adjusted inside the preview's displayed video area, reaching its edges without distortion or clipping. Default placement is bottom-right with a margin. Metadata overlays stay above it. The idle preview draws the camera with the recording's own compositor, so mirror, opacity and chroma key look exactly as recorded; opacity defaults to 100%. The chroma key uses one key colour, green by default, typed as hex (a leading # and the three-digit shorthand are accepted) or picked; it stays visible while the key is off so it can be set first. Tolerance, softness and spill reduction are disclosed when the key is enabled. Invalid input marks the field and explains itself on hover or focus without changing the layout.
 
 Device and resolution are fixed during recording. Supported mirror/opacity/chroma and inclusion changes apply live. A healthy static desktop is recomposed with the current webcam each CFR tick; actual capture-loss recovery holds the picture. A lost camera holds its last image and retries the same device. No camera and a selected camera that fails to open are different states; the latter exposes the actual reason, not a fabricated generic device absence.
 
@@ -356,6 +360,8 @@ Minimize-to-tray is opt-in and off by default. Without a usable tray, minimize b
 
 Global bindings can be changed or cleared. Invalid/reserved/conflicting bindings are rejected with rollback rather than losing a working binding silently. An unregisterable startup binding stays cleared; a lost user-chosen binding raises a Rebind notification, while an unavailable shipped default can be removed with a log entry. Windows does not identify the process holding a conflicting global shortcut.
 
+A binding needs Ctrl, Alt, Shift or Windows, except F13 to F24 and Pause, which foot pedals and macro keys send and no layout types with. The shortcut field shows the binding as key caps and captures while focused: held modifiers appear at once, the first other key commits, and focus moves to the field's clear button. Tab and Shift+Tab still leave the field, and Escape drops held modifiers. A refused combination is shown with the field's error mark and reason and is not saved; the clear button then discards it and the previous binding stays. While a field captures, ExoSnap's own global shortcuts are released, so pressing one reports the conflict instead of triggering the action.
+
 Starting by hotkey activates Record if the app is visible but does not restore a minimized window. Countdown/Preparing use their cancellation contracts rather than starting a second session.
 
 ### In-window keyboard operation
@@ -408,9 +414,9 @@ Selective information hints explain a real trade-off. Multi-option popovers expl
 
 ### Updates
 
-Checks default off. A manual check is explicit action; changing channel alone does not contact the feed. Stable excludes prereleases, Preview includes them. Switching channel invalidates its old answer and discards an in-flight answer for the previous channel. Normal startup is Unchecked, not a false Up to date.
+Checks default off. A manual check is explicit action; changing channel alone does not contact the feed. Stable excludes prereleases, Preview includes them. Switching channel invalidates its old answer and discards an in-flight answer for the previous channel. Normal startup is Unchecked, not a false Up to date. A startup check that falls into a recording waits until the session ends instead of reporting an error.
 
-The Settings card states Unchecked, Checking, Up to date, Available, managed by an external distribution, Updater running, Restart pending or an actionable Error. A same-version verification run can additionally show Verification reinstall available. Checking does not move the Settings scroll position. Applying is blocked during recording/finalization and never silently restarts the app.
+The Settings card states Unchecked (no status line), Checking, Up to date, Available, managed by an external distribution, Updater running, Restart pending or an actionable Error. A same-version verification run can additionally show Verification reinstall available. Checking does not move the Settings scroll position. Applying is blocked during recording/finalization and never silently restarts the app.
 
 A signed offer pins one full target version. The app hands the separate updater its versioned document plus manifest/signature; the child re-verifies and installs that target or nothing. An app-handoff updater does not search for a newer release itself. Signed-manifest verification precedes parsing, and package SHA-256 is checked before use. Downgrades are refused. WinGet, Chocolatey, Scoop and unknown-managed installations retain update discovery and release notes but never self-apply. The card shows ownership even when up to date or a check fails. Known managers offer Copy command: `winget upgrade --id Codexo.ExoSnap --exact`, `choco upgrade exosnap` or `scoop update exosnap`. Unknown-managed installs instruct the user to use their original package manager without guessing a command. Direct installations retain Update. No package-manager command is executed by ExoSnap.
 

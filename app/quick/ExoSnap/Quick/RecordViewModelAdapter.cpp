@@ -570,10 +570,6 @@ const QString& RecordViewModelAdapter::webcamErrorText() const noexcept {
     return webcam_error_text_;
 }
 
-const QString& RecordViewModelAdapter::webcamFrameSource() const noexcept {
-    return webcam_frame_source_;
-}
-
 QRectF RecordViewModelAdapter::webcamOverlayRect() const noexcept {
     return webcam_overlay_rect_;
 }
@@ -669,13 +665,6 @@ void RecordViewModelAdapter::setWebcamPresentation(QRectF overlay_rect, bool mir
     webcam_mirror_ = mirror;
     webcam_opacity_ = opacity;
     emit changed();
-}
-
-void RecordViewModelAdapter::setWebcamFrameSource(QString source) {
-    if (webcam_frame_source_ == source)
-        return;
-    webcam_frame_source_ = std::move(source);
-    emit webcamFrameChanged();
 }
 
 void RecordViewModelAdapter::setCountdownState(int configured_seconds, int remaining_seconds, double progress) {

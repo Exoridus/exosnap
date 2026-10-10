@@ -754,6 +754,8 @@ RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
     const bool res_changed = sanitized.width != webcam_settings_.width || sanitized.height != webcam_settings_.height;
     const bool fps_changed = sanitized.fps != webcam_settings_.fps;
     webcam_settings_ = sanitized;
+    // Image controls change live, recording or not; they need no reopen.
+    webcam_service_.SetControls(webcam_settings_.controls);
 
     const bool recording = is_recording_.load();
     std::optional<exosnap::engine::AppliedWebcamOverlay> applied;
@@ -813,6 +815,10 @@ void RecordingCoordinator::SetWebcamFrameCallback(WebcamService::FrameCallback c
 
 void RecordingCoordinator::SetWebcamFrameCallback(QObject* receiver, WebcamService::FrameCallback cb) {
     webcam_service_.SetFrameCallback(receiver, std::move(cb));
+}
+
+std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> RecordingCoordinator::WebcamSnapshot() {
+    return webcam_service_.Snapshot();
 }
 
 void RecordingCoordinator::SetWebcamStatusCallback(QObject* receiver, WebcamService::StatusCallback cb) {

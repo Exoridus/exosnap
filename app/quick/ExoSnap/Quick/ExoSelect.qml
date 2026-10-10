@@ -17,6 +17,20 @@ ComboBox {
     // must always display something rather than going empty.
     property string placeholderText: qsTr("(none selected)")
 
+    // A small neutral dot after the current value, explained by `markTip` on
+    // hover: "this choice has been changed since", the convention of an
+    // editor's modified-file marker. Neutral on purpose -- it reports a state,
+    // not a problem.
+    property bool marked: false
+    property string markTip: ""
+
+    // Why the current value is not accepted, or empty when it is. Shown as a
+    // red frame and a warning mark inside the field, with the text as tooltip
+    // on hover and keyboard focus and as the accessible description -- so an
+    // error never adds a line under the row or moves the page.
+    property string errorText: ""
+    readonly property bool hasError: root.errorText !== ""
+
     // ComboBox.indexOfValue() is a plain call, so a binding on it never
     // re-evaluates when `options` is replaced -- the adapter rebuilds its option
     // lists on every edit, which would leave the control permanently blank.
@@ -37,6 +51,10 @@ ComboBox {
     signal valueActivated(var value)
 
     implicitHeight: ExoTheme.controlHeight
+    // Deliberately not the width of the longest label: a select fills the
+    // column it is placed in and elides, so every dropdown on a page lines up
+    // at the same width instead of each one growing to its own text.
+    implicitWidth: 96
     model: root.options
     textRole: "label"
     valueRole: "value"
@@ -48,7 +66,15 @@ ComboBox {
         cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
     }
 
+    ToolTip.visible: !root.popup.visible && (root.hasError ? root.hovered || root.visualFocus
+                                                           : root.marked && root.markTip !== "" && root.hovered)
+    ToolTip.text: root.hasError ? root.errorText : root.markTip
+    ToolTip.delay: root.hasError ? 200 : 400
+    Accessible.description: root.errorText
+
     contentItem: Label {
+        id: valueLabel
+
         text: root.currentIndex === -1 ? root.placeholderText : root.displayText
         textFormat: Text.PlainText
         elide: Text.ElideRight
@@ -60,11 +86,26 @@ ComboBox {
         color: root.currentIndex === -1 ? ExoTheme.textDim
              : root.enabled ? ExoTheme.text : ExoTheme.textSecondary
         leftPadding: ExoTheme.spacingMd
-        rightPadding: root.indicator.width + ExoTheme.spacingMd
+        // The mark needs its own room, so a long value elides before it rather
+        // than under it.
+        rightPadding: root.indicator.width + ExoTheme.spacingMd + (root.marked ? 6 + 2 * ExoTheme.spacingXs : 0)
+                      + (root.hasError ? 16 + ExoTheme.spacingSm : 0)
         font {
             family: ExoTheme.sansFamily
             pixelSize: ExoTheme.fontBody
             italic: root.currentIndex === -1
+        }
+
+        Rectangle {
+            visible: root.marked
+            width: 6
+            height: 6
+            radius: 3
+            color: ExoTheme.textSecondary
+            x: valueLabel.leftPadding
+               + Math.min(valueLabel.contentWidth, valueLabel.width - valueLabel.leftPadding - valueLabel.rightPadding)
+               + ExoTheme.spacingXs
+            anchors.verticalCenter: parent.verticalCenter
         }
     }
 
@@ -91,8 +132,15 @@ ComboBox {
                              : root.popup.visible || root.hovered ? ExoTheme.hoverTint(ExoTheme.surfaceRaised)
                                                                   : ExoTheme.surfaceRaised
         border.width: 1
-        border.color: root.visualFocus || root.popup.visible ? ExoTheme.accent : ExoTheme.line
+        border.color: root.hasError ? ExoTheme.error
+                    : root.visualFocus || root.popup.visible ? ExoTheme.accent : ExoTheme.line
         radius: ExoTheme.radiusSm
+
+        ExoFieldErrorMark {
+            visible: root.hasError
+            x: root.indicator.x - width - ExoTheme.spacingSm
+            anchors.verticalCenter: parent.verticalCenter
+        }
     }
 
     delegate: ItemDelegate {

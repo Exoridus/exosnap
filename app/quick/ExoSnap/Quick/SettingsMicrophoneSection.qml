@@ -36,7 +36,9 @@ ExoCard {
             options: root.settings.microphoneDeviceOptions
             value: root.settings.microphoneDeviceId
             enabled: !root.settings.controlsLocked && root.settings.microphoneConnected
-            placeholderText: root.settings.microphoneConnected ? qsTr("(no microphone)")
+            // Only a pinned device that is not plugged in matches no entry; an
+            // unpinned one is the System default entry.
+            placeholderText: root.settings.microphoneConnected ? qsTr("(not connected)")
                                                                : qsTr("No microphone found")
             Layout.fillWidth: true
             Accessible.name: qsTr("Microphone device")
@@ -75,7 +77,6 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Gain")
-        hint: qsTr("Boost or cut the microphone level before encoding")
         stacked: root.stacked
         Layout.fillWidth: true
 
@@ -119,96 +120,23 @@ ExoCard {
         controlWidth: 100
         Layout.fillWidth: true
 
-        Item {
+        SettingsGroupToggle {
             id: micPostProcessingToggle
 
-            implicitWidth: toggleRow.implicitWidth
-            implicitHeight: toggleRow.implicitHeight
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-
-            // Same pattern as ExoDisclosure's header: a plain Item stands in for
-            // a button, so Tab order, Space activation and the Accessible role
-            // that a real Control gets for free all need to be spelled out here.
-            // Space only, not Enter - product-spec 10.1 reserves Enter for a
-            // dialog's default button and gives every other control exactly one
-            // activation key.
-            activeFocusOnTab: true
-            Accessible.role: Accessible.Button
-            Accessible.name: qsTr("Microphone post-processing")
-            Accessible.checkable: true
-            Accessible.checked: micPostProcessing.visible
-            Accessible.focusable: true
-            Accessible.focused: micPostProcessingToggle.activeFocus
-            Accessible.onPressAction: micPostProcessingToggle.toggle()
-            Accessible.onToggleAction: micPostProcessingToggle.toggle()
-
-            function toggle(): void {
-                micPostProcessing.visible = !micPostProcessing.visible;
-            }
-
-            // Harness seam (--visual-expand-all): the open state here is the
-            // group's visibility, not an `expanded` property the harness can set.
-            function harnessExpand(): void {
-                micPostProcessing.visible = true;
-            }
-
-            Keys.onSpacePressed: event => {
-                micPostProcessingToggle.toggle();
-                event.accepted = true;
-            }
-
-            Rectangle {
-                anchors.fill: parent
-                radius: ExoTheme.radiusSm
-                color: "transparent"
-                border.width: micPostProcessingToggle.activeFocus ? ExoTheme.focusRingWidth : 0
-                border.color: ExoTheme.text
-            }
-
-            RowLayout {
-                id: toggleRow
-
-                anchors.fill: parent
-                spacing: ExoTheme.spacingSm
-
-                Label {
-                    text: micPostProcessing.visible ? qsTr("Hide") : qsTr("Configure")
-                    textFormat: Text.PlainText
-                    color: ExoTheme.textSecondary
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: ExoTheme.fontSecondary
-                    }
-                }
-
-                ExoChevron {
-                    // 0 = down (expanded), -90 = right (collapsed) - same convention
-                    // as ExoDisclosure's header chevron.
-                    direction: micPostProcessing.visible ? 0 : -90
-                    tone: ExoTheme.textMuted
-                    Layout.preferredWidth: 12
-
-                    Behavior on rotation {
-                        NumberAnimation {
-                            duration: ExoTheme.animMedium
-                            easing.type: Easing.OutCubic
-                        }
-                    }
-                }
-            }
-
-            TapHandler {
-                onTapped: micPostProcessingToggle.toggle()
-            }
+            accessibleName: qsTr("Microphone post-processing")
         }
     }
 
-    SettingsMicDspGroup {
-        id: micPostProcessing
-
-        settings: root.settings
-        stacked: root.stacked
-        visible: false
+    // Built when first opened rather than kept hidden: the group stays
+    // collapsed most of the time, and its rows are page-load work nobody sees.
+    Loader {
+        active: micPostProcessingToggle.open
+        visible: active
         Layout.fillWidth: true
+
+        sourceComponent: SettingsMicDspGroup {
+            settings: root.settings
+            stacked: root.stacked
+        }
     }
 }

@@ -776,5 +776,21 @@ TEST(WebcamDeviceAdmission, WithoutAVerificationSourceTheExistingRuleHolds) {
     EXPECT_FALSE(ShouldRunWebcamDevice(false, /*webcam_enabled=*/false, true, true, false, false, false));
 }
 
+TEST(WebcamDeviceAdmission, EnablingTheCameraOnAnIdleRecordPageStartsTheDevice) {
+    // The preview request is made while the camera is still off; enabling it
+    // afterwards changes only the enable flag. The device must follow without a
+    // second preview request, or the PiP stays empty until Record is pressed.
+    const bool preview_wants = RecordPreviewWantsWebcam(/*record_page_visible=*/true, /*idle=*/true);
+    EXPECT_FALSE(ShouldRunWebcamDevice(false, /*webcam_enabled=*/false, true, false, false, preview_wants, false));
+    EXPECT_TRUE(ShouldRunWebcamDevice(false, /*webcam_enabled=*/true, true, false, false, preview_wants, false));
+}
+
+TEST(WebcamDeviceAdmission, OnlyTheVisibleIdleRecordPageAsksForThePreviewCamera) {
+    EXPECT_TRUE(RecordPreviewWantsWebcam(true, true));
+    // The Settings page has its own camera preview request.
+    EXPECT_FALSE(RecordPreviewWantsWebcam(/*record_page_visible=*/false, true));
+    EXPECT_FALSE(RecordPreviewWantsWebcam(true, /*idle=*/false));
+}
+
 } // namespace
 } // namespace exosnap
