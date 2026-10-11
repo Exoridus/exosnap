@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -46,6 +47,9 @@ struct CommittedMatroskaView::State {
     uint64_t length = 0;
     uint64_t cursor = 0;
     std::atomic<bool> cancelled{false};
+    const std::atomic<bool>* external_cancelled = nullptr;
+    std::function<bool(uint64_t)> before_read;
+    std::function<void(uint64_t)> after_read;
     AVIOContext* avio = nullptr;
     std::optional<EngineError> error;
 
@@ -66,6 +70,21 @@ CommittedMatroskaView::~CommittedMatroskaView() = default;
 Outcome<std::unique_ptr<CommittedMatroskaView>>
 CommittedMatroskaView::Open(std::shared_ptr<const RecordingMediaDescriptor> descriptor,
                             std::vector<ClusterExtent> extents, uint64_t readable_end) {
+    return OpenImpl(std::move(descriptor), std::move(extents), readable_end, INVALID_HANDLE_VALUE);
+}
+
+Outcome<std::unique_ptr<CommittedMatroskaView>>
+CommittedMatroskaView::OpenFromPinnedHandle(std::shared_ptr<const RecordingMediaDescriptor> descriptor,
+                                            std::vector<ClusterExtent> extents, uint64_t readable_end,
+                                            HANDLE borrowed_source) {
+    if (borrowed_source == nullptr || borrowed_source == INVALID_HANDLE_VALUE)
+        return ReadError(EngineErrorCode::InvalidConfig, "Committed view needs a pinned source handle");
+    return OpenImpl(std::move(descriptor), std::move(extents), readable_end, borrowed_source);
+}
+
+Outcome<std::unique_ptr<CommittedMatroskaView>>
+CommittedMatroskaView::OpenImpl(std::shared_ptr<const RecordingMediaDescriptor> descriptor,
+                                std::vector<ClusterExtent> extents, uint64_t readable_end, HANDLE borrowed_source) {
     if (!descriptor || descriptor->immutable_header.empty() || extents.empty())
         return ReadError(EngineErrorCode::InvalidConfig, "Committed view needs a header and closed extents");
     if (extents.size() > 4096)
@@ -85,9 +104,14 @@ CommittedMatroskaView::Open(std::shared_ptr<const RecordingMediaDescriptor> desc
         previous_end = extent.file_end;
     }
     state->extents = std::move(extents);
-    const auto path = std::filesystem::path(state->descriptor->path);
-    state->file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                              nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+    if (borrowed_source != INVALID_HANDLE_VALUE) {
+        state->file = ReOpenFile(borrowed_source, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 FILE_FLAG_OVERLAPPED);
+    } else {
+        const auto path = std::filesystem::path(state->descriptor->path);
+        state->file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                  nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+    }
     if (state->file == INVALID_HANDLE_VALUE)
         return ReadError(EngineErrorCode::UnavailableSource, "Cannot open committed source", GetLastError());
     FILE_ID_INFO identity{};
@@ -112,7 +136,11 @@ CommittedMatroskaView::Open(std::shared_ptr<const RecordingMediaDescriptor> desc
 }
 
 Outcome<size_t> CommittedMatroskaView::ReadAt(uint64_t offset, std::span<uint8_t> destination) {
-    if (state_->cancelled.load(std::memory_order_acquire))
+    const auto cancelled = [&] {
+        return state_->cancelled.load(std::memory_order_acquire) ||
+               (state_->external_cancelled && state_->external_cancelled->load(std::memory_order_acquire));
+    };
+    if (cancelled())
         return ReadError(EngineErrorCode::Cancelled, "Committed read cancelled");
     if (offset > state_->length)
         return ReadError(EngineErrorCode::SourceIntegrityFailure, "Read offset exceeds committed view");
@@ -136,6 +164,10 @@ Outcome<size_t> CommittedMatroskaView::ReadAt(uint64_t offset, std::span<uint8_t
             (std::min)({static_cast<uint64_t>(requested - completed), extent.file_end - extent.file_begin - within,
                         static_cast<uint64_t>((std::numeric_limits<DWORD>::max)())}));
         const uint64_t absolute = extent.file_begin + within;
+        if (state_->before_read && !state_->before_read(count))
+            return ReadError(EngineErrorCode::Cancelled, "Committed read cancelled by I/O control");
+        if (cancelled())
+            return ReadError(EngineErrorCode::Cancelled, "Committed read cancelled");
         OVERLAPPED operation{};
         operation.Offset = static_cast<DWORD>(absolute);
         operation.OffsetHigh = static_cast<DWORD>(absolute >> 32);
@@ -147,7 +179,7 @@ Outcome<size_t> CommittedMatroskaView::ReadAt(uint64_t offset, std::span<uint8_t
         DWORD native = ok ? ERROR_SUCCESS : GetLastError();
         if (!ok && native == ERROR_IO_PENDING) {
             while (WaitForSingleObject(operation.hEvent, 50) == WAIT_TIMEOUT) {
-                if (state_->cancelled.load(std::memory_order_acquire))
+                if (cancelled())
                     CancelIoEx(state_->file, &operation);
             }
             // The operation must finish before its stack OVERLAPPED and destination can be released.
@@ -155,7 +187,7 @@ Outcome<size_t> CommittedMatroskaView::ReadAt(uint64_t offset, std::span<uint8_t
             native = ok ? ERROR_SUCCESS : GetLastError();
         }
         CloseHandle(operation.hEvent);
-        if (state_->cancelled.load(std::memory_order_acquire))
+        if (cancelled())
             return ReadError(EngineErrorCode::Cancelled, "Committed read cancelled", native);
         if (!ok || received != count) {
             state_->error =
@@ -163,8 +195,17 @@ Outcome<size_t> CommittedMatroskaView::ReadAt(uint64_t offset, std::span<uint8_t
             return *state_->error;
         }
         completed += received;
+        if (state_->after_read)
+            state_->after_read(received);
     }
     return completed;
+}
+
+void CommittedMatroskaView::SetIoControl(const std::atomic<bool>* cancelled, std::function<bool(uint64_t)> before_read,
+                                         std::function<void(uint64_t)> after_read) {
+    state_->external_cancelled = cancelled;
+    state_->before_read = std::move(before_read);
+    state_->after_read = std::move(after_read);
 }
 
 void CommittedMatroskaView::Cancel() noexcept {

@@ -90,30 +90,21 @@ Outcome<RenderAudioPreflight> PrepareRenderAudioManifest(const TimelineRenderSna
         if (!player.Open(source->path, error))
             return RenderMetadataError(
                 std::string(EXOSNAP_TRANSLATABLE("EditRender", "Cannot validate render source: ")) + error);
-        const auto metadata = player.AudioMetadata();
-        auto selection = source->monitor_selection;
-        if (!selection) {
-            if (metadata.monitoring_confirmation_required)
-                return RenderMetadataError(EXOSNAP_TRANSLATABLE(
-                    "EditRender", "Render source requires an explicit frozen monitoring selection."));
-            if (!metadata.manifest)
-                continue;
-            MonitorSelectionSnapshot defaults;
-            defaults.media_id = metadata.selection_media_id;
-            defaults.revision = {1};
-            for (const auto& id : metadata.manifest->default_monitor_track_ids)
-                defaults.tracks.push_back({id, 1.0f, false});
-            selection = std::move(defaults);
-        }
-        if (!player.SetMonitorSelection(*selection, error))
+        if (!source->monitor_selection)
+            return RenderMetadataError(
+                EXOSNAP_TRANSLATABLE("EditRender", "Render source requires an explicit frozen monitoring selection."));
+        if (!player.SetMonitorSelection(*source->monitor_selection, error))
             return RenderMetadataError(std::string(EXOSNAP_TRANSLATABLE(
                                            "EditRender", "Cannot validate frozen render monitoring selection: ")) +
                                        error);
         if (player.AudioMetadata().monitoring_confirmation_required)
             return RenderMetadataError(
                 EXOSNAP_TRANSLATABLE("EditRender", "Render monitoring selection requires explicit confirmation."));
+        if (!audio_assets.contains(asset) && !source->monitor_selection->tracks.empty())
+            return RenderMetadataError(
+                EXOSNAP_TRANSLATABLE("EditRender", "Video-only render requires an empty frozen monitoring selection."));
         if (audio_assets.contains(asset))
-            contributing.push_back(*selection);
+            contributing.push_back(*source->monitor_selection);
     }
     auto manifest = BuildRenderAudioManifest(contributing);
     if (!manifest.succeeded())

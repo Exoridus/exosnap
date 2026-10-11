@@ -1,6 +1,7 @@
 #include "audio_runtime_graph.h"
 #include <cstdint>
 #include <cwchar>
+#include <exosnap/engine/background_io.h>
 #include <exosnap/engine/mic_dsp_config.h>
 #include <exosnap/engine/recorder_session.h>
 #include <exosnap/engine/recording_media_types.h>
@@ -23,7 +24,7 @@
 #include "pipeline_diagnostics_aggregator.h"
 #include "premux_state.h"
 #include "production_runtime.h"
-#include "runtime_config_key.h"
+#include "recording_media_index.h"
 #include "session_callback_gate.h"
 #include "session_internal.h"
 #include "session_outcome.h"
@@ -184,6 +185,7 @@ struct RecorderSession::Impl {
     PreviewSharedHandleCallback preview_shared_handle_callback;
     PreviewFramePublishedCallback preview_frame_published_callback;
     SegmentCallback segment_callback;
+    BackgroundIoAdmission background_io_admission;
     uint64_t diagnostics_generation{0};
     std::atomic<bool> recording{false};
 
@@ -607,6 +609,41 @@ void RecorderSession::SetSegmentCallback(SegmentCallback cb) {
     m_impl->segment_callback = std::move(cb);
 }
 
+void RecorderSession::SetBackgroundIoAdmission(BackgroundIoAdmission admission) {
+    std::lock_guard lock(m_impl->state_mutex);
+    m_impl->background_io_admission = std::move(admission);
+}
+
+bool RecorderSession::HasCommittedRecordingClipInterval(RecordRequestId request_id) const {
+    const auto state = m_impl->StateForRequest(request_id);
+    if (!state)
+        return false;
+    std::shared_ptr<RecordingMediaIndex> index;
+    {
+        std::lock_guard lock(state->attachment_mutex);
+        index = state->media_index;
+    }
+    return index && index->has_closed_clip_interval();
+}
+
+Outcome<MediaIndexSnapshot> RecorderSession::FreezeRecordingMediaIndex(RecordRequestId request_id) {
+    const auto state = m_impl->StateForRequest(request_id);
+    std::shared_ptr<RecordingMediaIndex> index;
+    if (state) {
+        std::lock_guard lock(state->attachment_mutex);
+        index = state->media_index;
+    }
+    if (!index) {
+        EngineError error;
+        error.code = EngineErrorCode::IndexNotReady;
+        error.owner = EngineModule::MediaIndex;
+        error.context = "No committed index is attached to this recording";
+        error.retryability = Retryability::Transient;
+        return error;
+    }
+    return index->Freeze();
+}
+
 void RecorderSession::RequestFrameSnapshot(FrameSnapshotCallback callback, RecordRequestId request_id) {
     std::shared_ptr<SessionState> st;
     std::shared_ptr<SessionCallbackGate> gate;
@@ -690,6 +727,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         }
         m_impl->state = std::make_shared<SessionState>();
         state_ptr = m_impl->state;
+        state_ptr->background_io_admission = m_impl->background_io_admission;
         m_impl->active_request = request_id;
         // Consumed here (under the same lock as the swap above) so a Stop() that
         // raced ahead of this Record() call is honored regardless of whether the

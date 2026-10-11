@@ -702,6 +702,18 @@ void RecordViewModelAdapter::setPreviewFrameReady(bool ready) {
     emit changed();
 }
 
+void RecordViewModelAdapter::setPendingEditMasterAvailable(bool available) {
+    if (pending_edit_master_available_ == available)
+        return;
+    pending_edit_master_available_ = available;
+    publishChanged();
+}
+
+void RecordViewModelAdapter::requestEditMaster() {
+    if (pending_edit_master_available_)
+        emit editMasterRequested();
+}
+
 void RecordViewModelAdapter::setSplitEnabled(bool enabled) {
     if (split_enabled_ == enabled)
         return;

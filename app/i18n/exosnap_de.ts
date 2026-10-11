@@ -90,7 +90,7 @@
 <context>
     <name>AppShell</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/AppShell.qml" line="+233"/>
+        <location filename="../quick/ExoSnap/Quick/AppShell.qml" line="+234"/>
         <source>Record</source>
         <translation>Aufnehmen</translation>
     </message>
@@ -3291,7 +3291,12 @@ Wahrscheinliche Ursache: </translation>
 <context>
     <name>EditExportAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="+280"/>
+        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="+242"/>
+        <source>Rendered Mix</source>
+        <translation>Gerenderter Mix</translation>
+    </message>
+    <message>
+        <location line="+271"/>
         <source>New file</source>
         <translation>Neue Datei</translation>
     </message>
@@ -3322,12 +3327,12 @@ The original cannot be recovered afterwards.</source>
 Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
-        <location line="+65"/>
+        <location line="+81"/>
         <source>No edit master available for export.</source>
         <translation>Keine Edit-Master-Datei für den Export verfügbar.</translation>
     </message>
     <message>
-        <location line="+160"/>
+        <location line="+244"/>
         <source>Unknown error</source>
         <translation>Unbekannter Fehler</translation>
     </message>
@@ -3403,11 +3408,16 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+23"/>
+        <source>Preparing export…</source>
+        <translation>Export wird vorbereitet…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
         <source>Cancelling…</source>
         <translation>Wird abgebrochen…</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+8"/>
         <source>Cancel export</source>
         <translation>Export abbrechen</translation>
     </message>
@@ -3422,12 +3432,88 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Exportprofil</translation>
     </message>
     <message>
-        <location line="-34"/>
+        <location line="+42"/>
+        <source>MP4 delivery in progress. The finalized edit master is ready.</source>
+        <translation>Die MP4-Datei wird noch erstellt. Die fertige MKV-Datei ist bereits zum Bearbeiten verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Review export</source>
+        <translation>Export prüfen</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>%1 to %2 · %3 video · %4</source>
+        <translation>%1 nach %2 · %3-Video · %4</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Copy</source>
+        <translation>Kopieren</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Render</source>
+        <translation>Rendern</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>All %1 source audio tracks will be copied: %2</source>
+        <translation>Alle %1 Audiospuren der Quelle werden kopiert: %2</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+17"/>
+        <source>none</source>
+        <translation>keine</translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <source>Video-only render. No audio tracks will be included.</source>
+        <translation>Nur Video rendern. Es werden keine Audiospuren übernommen.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Selected tracks (%1) will be mixed into one 48 kHz stereo PCM24 track: %2</source>
+        <translation>Die ausgewählten Spuren (%1) werden zu einer Stereo-PCM24-Spur mit 48 kHz gemischt: %2</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Other tracks will not be included: %1</source>
+        <translation>Weitere Spuren werden nicht übernommen: %1</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Original source recordings remain unchanged.</source>
+        <translation>Die Originalaufnahmen bleiben unverändert.</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The existing destination file will be replaced.</source>
+        <translation>Die vorhandene Zieldatei wird ersetzt.</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Render with selected tracks</source>
+        <translation>Mit ausgewählten Spuren rendern</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Start copy</source>
+        <translation>Kopieren starten</translation>
+    </message>
+    <message>
+        <location line="-175"/>
         <source>Exporting %1%</source>
         <translation>Export läuft: %1 %</translation>
     </message>
     <message>
-        <location line="-179"/>
+        <location line="-181"/>
         <source>Resize preview and timeline. Use Up and Down.</source>
         <translation>Größe von Vorschau und Zeitleiste ändern. Pfeiltasten nach oben und unten verwenden.</translation>
     </message>
@@ -3442,7 +3528,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Einrasten</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+13"/>
         <source>%1%</source>
         <translation>%1 %</translation>
     </message>
@@ -3528,12 +3614,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditRender</name>
     <message>
-        <location filename="../../libs/engine/src/edit_timeline_reader.cpp" line="+31"/>
-        <source>This recipe is not stream-copy compatible. Render export currently requires a Crossfade timeline.</source>
-        <translation>Diese Bearbeitung ist nicht mit Stream Copy kompatibel. Renderexport benötigt derzeit eine Zeitleiste mit Überblendung.</translation>
-    </message>
-    <message>
-        <location line="+7"/>
+        <location filename="../../libs/engine/src/edit_timeline_reader.cpp" line="+32"/>
         <source>Render export currently supports Matroska with PCM audio. Choose MKV.</source>
         <translation>Renderexport unterstützt derzeit Matroska mit PCM-Audio. MKV auswählen.</translation>
     </message>
@@ -3553,17 +3634,18 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Renderexport unterstützt keine unabhängige Audiobearbeitung.</translation>
     </message>
     <message>
-        <location line="+24"/>
+        <location line="+12"/>
+        <location line="+18"/>
         <source>Match source rendering needs even video dimensions and an exact positive frame rate.</source>
         <translation>Rendern mit „Wie Quelle“ benötigt gerade Videomaße und eine exakte positive Bildrate.</translation>
     </message>
     <message>
-        <location filename="../../libs/engine/src/edit_timeline_export.cpp" line="+299"/>
+        <location filename="../../libs/engine/src/edit_timeline_export.cpp" line="+321"/>
         <source>Render export requires explicitly tagged 8-bit BT.709 4:2:0 SDR with known range. HDR and unsupported color paths remain lossless-only.</source>
         <translation>Renderexport benötigt ausdrücklich gekennzeichnetes SDR-Video mit 8 Bit, BT.709, 4:2:0 und bekanntem Wertebereich. HDR und nicht unterstützte Farbformate bleiben auf verlustlosen Export beschränkt.</translation>
     </message>
     <message>
-        <location filename="../../libs/engine/src/render_audio_manifest.cpp" line="+42"/>
+        <location filename="../../libs/engine/src/render_audio_manifest.cpp" line="+48"/>
         <source>Rendered Mix</source>
         <translation>Gerenderter Mix</translation>
     </message>
@@ -3578,12 +3660,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Renderquelle kann nicht überprüft werden: </translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+3"/>
         <source>Render source requires an explicit frozen monitoring selection.</source>
         <translation>Für die Renderquelle muss eine ausdrücklich festgelegte Abhör-Auswahl vorliegen.</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+2"/>
         <source>Cannot validate frozen render monitoring selection: </source>
         <translation>Die festgelegte Abhör-Auswahl für das Rendern kann nicht überprüft werden: </translation>
     </message>
@@ -3592,11 +3674,16 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <source>Render monitoring selection requires explicit confirmation.</source>
         <translation>Die Abhör-Auswahl für das Rendern muss ausdrücklich bestätigt werden.</translation>
     </message>
+    <message>
+        <location line="+3"/>
+        <source>Video-only render requires an empty frozen monitoring selection.</source>
+        <translation>Für das Rendern ohne Audio muss eine leere, festgelegte Abhörauswahl vorliegen.</translation>
+    </message>
 </context>
 <context>
     <name>EditSessionAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+425"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+432"/>
         <source>Frame drops: %1%</source>
         <translation>Verworfene Frames: %1%</translation>
     </message>
@@ -4238,7 +4325,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Win</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3217"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3285"/>
         <location filename="../services/GlobalHotkeyService.cpp" line="+52"/>
         <source>This shortcut is already used by Windows or another application.</source>
         <translation>Dieser Hotkey wird bereits von Windows oder einer anderen Anwendung verwendet.</translation>
@@ -4987,12 +5074,17 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>QuickApplication</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-2466"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-2534"/>
         <source>Recording is blocked</source>
         <translation>Aufnahme blockiert</translation>
     </message>
     <message>
-        <location line="+176"/>
+        <location line="+147"/>
+        <source>Clip unavailable</source>
+        <translation>Clip nicht verfügbar</translation>
+    </message>
+    <message>
+        <location line="+91"/>
         <source>Frame saved</source>
         <translation>Einzelbild gespeichert</translation>
     </message>
@@ -5027,7 +5119,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Diese Aufnahme hat keinen Eintrag zur Absturzwiederherstellung: %1. Die Aufnahme läuft unverändert, kann bei einer Unterbrechung von ExoSnap aber nicht wiederhergestellt werden.</translation>
     </message>
     <message>
-        <location line="+796"/>
+        <location line="+554"/>
+        <source>Start recording and wait for committed media to create a clip.</source>
+        <translation>Starte eine Aufnahme und warte, bis genügend Aufnahmedaten für einen Clip vorliegen.</translation>
+    </message>
+    <message>
+        <location line="+248"/>
         <source>Region could not be applied</source>
         <translation>Bereich konnte nicht übernommen werden</translation>
     </message>
@@ -5228,12 +5325,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-4273"/>
+        <location line="-4341"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+3641"/>
+        <location line="+3709"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -5251,7 +5348,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Aufnahme gestoppt: Speicherplatz auf dem Ausgabelaufwerk kritisch niedrig.</translation>
     </message>
     <message>
-        <location line="+397"/>
+        <location line="+399"/>
         <source>Export complete</source>
         <translation>Export abgeschlossen</translation>
     </message>
@@ -5261,7 +5358,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Export fehlgeschlagen</translation>
     </message>
     <message>
-        <location line="+372"/>
+        <location line="+386"/>
         <source>Hotkey unavailable</source>
         <translation>Tastenkürzel nicht verfügbar</translation>
     </message>
@@ -5289,7 +5386,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>RecordPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+28"/>
+        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+29"/>
         <source>Audio profile</source>
         <translation>Audioprofil</translation>
     </message>
@@ -5677,7 +5774,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>RecordTransportDock</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordTransportDock.qml" line="+70"/>
+        <location filename="../quick/ExoSnap/Quick/RecordTransportDock.qml" line="+71"/>
         <source>Unavailable — the capture setup is locked while a recording runs.</source>
         <translation>Nicht verfügbar: Die Capture-Konfiguration ist während einer Aufnahme gesperrt.</translation>
     </message>
@@ -5787,7 +5884,27 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Nicht verfügbar: Manuelles Teilen erfordert MKV oder WebM.</translation>
     </message>
     <message>
+        <location line="+8"/>
+        <source>Save clip, %1 seconds selected</source>
+        <translation>Clip speichern, %1 Sekunden ausgewählt</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clip · %1 s</source>
+        <translation>Clip · %1 s</translation>
+    </message>
+    <message>
         <location line="+10"/>
+        <source>Edit finalized recording</source>
+        <translation>Fertiggestellte Aufnahme bearbeiten</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Edit</source>
+        <translation>Bearbeiten</translation>
+    </message>
+    <message>
+        <location line="+11"/>
         <source>Pause recording</source>
         <translation>Aufnahme pausieren</translation>
     </message>
@@ -5830,7 +5947,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>RecordViewModelAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="+750"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="+762"/>
         <source>No source</source>
         <translation>Keine Quelle</translation>
     </message>
@@ -5901,7 +6018,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>RecordingActions</name>
     <message>
-        <location filename="../services/RecordingCoordinator.cpp" line="+1785"/>
+        <location filename="../services/RecordingCoordinator.cpp" line="+1796"/>
         <source>Split is only available while recording.</source>
         <translation>Aufteilen ist nur während einer Aufnahme möglich.</translation>
     </message>
@@ -5916,12 +6033,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Die Aufnahme wurde noch nicht gestartet.</translation>
     </message>
     <message>
-        <location line="+202"/>
+        <location line="+211"/>
         <source>Started segment %1</source>
         <translation>Segment %1 gestartet</translation>
     </message>
     <message>
-        <location line="+1116"/>
+        <location line="+1251"/>
         <source>Failed to write PNG file</source>
         <translation>Die PNG-Datei konnte nicht gespeichert werden</translation>
     </message>
@@ -5934,6 +6051,77 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <location line="+34"/>
         <source>Capture frame is not available in this state</source>
         <translation>In diesem Zustand kann kein Frame gespeichert werden</translation>
+    </message>
+</context>
+<context>
+    <name>RecordingClipAdapter</name>
+    <message>
+        <location filename="../services/RecordingClipJobs.cpp" line="+247"/>
+        <source>MKV preserves every recorded track. Copy includes only proven closed GOPs; the recording continues independently.</source>
+        <translation>MKV erhält alle aufgenommenen Spuren. Beim Kopieren werden nur nachweislich abgeschlossene GOPs einbezogen; die Aufnahme läuft unabhängig weiter.</translation>
+    </message>
+</context>
+<context>
+    <name>RecordingClipPanel</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/RecordingClipPanel.qml" line="+19"/>
+        <source>Save clip</source>
+        <translation>Clip speichern</translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Custom seconds</source>
+        <translation>Eigene Dauer in Sekunden</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Plan clip</source>
+        <translation>Clip planen</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The recording continues while clips are saved.</source>
+        <translation>Die Aufnahme läuft weiter, während Clips gespeichert werden.</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Requested %1–%2</source>
+        <translation>Angefordert: %1–%2</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Available %1–%2</source>
+        <translation>Verfügbar: %1–%2</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>MKV stream copy. The range follows safe GOP boundaries.</source>
+        <translation>MKV-Stream-Kopie. Der Bereich richtet sich nach sicheren GOP-Grenzen.</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Tracks: %1</source>
+        <translation>Spuren: %1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Read %1 bytes · wrote %2 bytes</source>
+        <translation>%1 Byte gelesen · %2 Byte geschrieben</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Save this range</source>
+        <translation>Diesen Bereich speichern</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Cancel clip</source>
+        <translation>Clip abbrechen</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Edit saved clip</source>
+        <translation>Gespeicherten Clip bearbeiten</translation>
     </message>
 </context>
 <context>
@@ -8764,37 +8952,37 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::AudioRoutingAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/AudioRoutingAdapter.cpp" line="+60"/>
+        <location filename="../quick/ExoSnap/Quick/AudioRoutingAdapter.cpp" line="+65"/>
         <source>Available</source>
         <translation>Verfügbar</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>Unsupported on this platform</source>
         <translation>Auf dieser Plattform nicht unterstützt</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>Device unavailable</source>
         <translation>Gerät nicht verfügbar</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>Application exited</source>
         <translation>Anwendung wurde beendet</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>Application identity changed</source>
         <translation>Anwendungsidentität hat sich geändert</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>No target application</source>
         <translation>Keine Zielanwendung</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>Application needs confirmation</source>
         <translation>Für die Anwendung ist eine Bestätigung erforderlich</translation>
     </message>
@@ -8809,17 +8997,17 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Unbekannte Audioquelleneinstellung: %1.</translation>
     </message>
     <message>
-        <location line="+144"/>
+        <location line="+159"/>
         <source>Audio %1</source>
         <translation>Audio %1</translation>
     </message>
     <message>
-        <location line="+45"/>
+        <location line="+58"/>
         <source>The current track layout will become fixed. Activating sources later will no longer move existing merge groups.</source>
         <translation>Das aktuelle Spur-Layout wird festgelegt. Später aktivierte Quellen verschieben vorhandene zusammengeführte Gruppen nicht mehr.</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="+4"/>
         <source>Next recording plan</source>
         <translation>Nächster Aufnahmeplan</translation>
     </message>
@@ -8829,7 +9017,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Aufnahmeplan</translation>
     </message>
     <message>
-        <location line="+33"/>
+        <location line="+39"/>
         <source>Audio settings are being saved.</source>
         <translation>Audioeinstellungen werden gespeichert.</translation>
     </message>
@@ -8844,7 +9032,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Diese Audiokonfiguration ist schreibgeschützt.</translation>
     </message>
     <message>
-        <location line="+51"/>
+        <location line="+54"/>
         <source>Audio settings cannot be saved.</source>
         <translation>Audioeinstellungen können nicht gespeichert werden.</translation>
     </message>
@@ -8855,27 +9043,27 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+61"/>
-        <location line="+16"/>
-        <location line="+11"/>
-        <location line="+133"/>
-        <location line="+6"/>
-        <location line="+13"/>
-        <location line="+6"/>
+        <location line="+17"/>
+        <location line="+14"/>
+        <location line="+154"/>
+        <location line="+7"/>
+        <location line="+15"/>
+        <location line="+7"/>
         <source>Audio track was not found.</source>
         <translation>Audiospur wurde nicht gefunden.</translation>
     </message>
     <message>
-        <location line="-161"/>
+        <location line="-188"/>
         <source>Move a track up or down one position.</source>
         <translation>Verschiebe eine Spur um eine Position nach oben oder unten.</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+9"/>
         <source>The track is already at the edge of the list.</source>
         <translation>Die Spur befindet sich bereits am Listenanfang oder -ende.</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+11"/>
         <source>Choose Move or Additional for the audio source.</source>
         <translation>Wähle für die Audioquelle „Verschieben“ oder „Zusätzlich hinzufügen“.</translation>
     </message>
@@ -8885,31 +9073,31 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Audioquelle oder Spur wurde nicht gefunden.</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+23"/>
+        <location line="+14"/>
+        <location line="+8"/>
         <location line="+12"/>
-        <location line="+7"/>
-        <location line="+10"/>
-        <location line="+7"/>
+        <location line="+8"/>
         <source>Audio route was not found.</source>
         <translation>Audio-Routing wurde nicht gefunden.</translation>
     </message>
     <message>
-        <location line="-28"/>
+        <location line="-33"/>
         <source>Route gain must be between -60 and +24 dB.</source>
         <translation>Die Routing-Verstärkung muss zwischen -60 und +24 dB liegen.</translation>
     </message>
     <message>
-        <location line="+38"/>
-        <location line="+7"/>
-        <location line="+25"/>
-        <location line="+7"/>
-        <location line="+91"/>
+        <location line="+45"/>
+        <location line="+8"/>
+        <location line="+29"/>
+        <location line="+8"/>
+        <location line="+108"/>
         <location line="+22"/>
         <source>Audio source was not found.</source>
         <translation>Audioquelle wurde nicht gefunden.</translation>
     </message>
     <message>
-        <location line="-132"/>
+        <location line="-151"/>
         <source>Only sources in the active recording plan can be muted live.</source>
         <translation>Nur Quellen im aktiven Aufnahmeplan können während der Aufnahme stummgeschaltet werden.</translation>
     </message>
@@ -8919,27 +9107,27 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Die aktive Audioquelle konnte nicht stummgeschaltet werden.</translation>
     </message>
     <message>
-        <location line="+42"/>
+        <location line="+48"/>
         <source>Audio track role is invalid.</source>
         <translation>Die Rolle der Audiospur ist ungültig.</translation>
     </message>
     <message>
-        <location line="+24"/>
+        <location line="+27"/>
         <source>Monitor selection contains an invalid or duplicate track.</source>
         <translation>Die Abhör-Auswahl enthält eine ungültige oder doppelte Spur.</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+16"/>
         <source>There is no pending track layout conversion.</source>
         <translation>Es gibt keine ausstehende Umwandlung des Spur-Layouts.</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+21"/>
         <source>There is no audio change to undo.</source>
         <translation>Es gibt keine Audioänderung, die rückgängig gemacht werden kann.</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+17"/>
         <source>Device and processing settings are shared by the legacy microphone sources only.</source>
         <translation>Geräte- und Verarbeitungseinstellungen gelten nur gemeinsam für die bisherigen Mikrofonquellen.</translation>
     </message>
@@ -9118,7 +9306,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::EditExportAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="-468"/>
+        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="-575"/>
         <source>No probed encoder adapter supports this render format.</source>
         <translation>Kein geprüfter Encoder-Adapter unterstützt dieses Renderformat.</translation>
     </message>
@@ -9153,7 +9341,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Renderexport unterstützt nur „Wie Quelle“.</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+19"/>
         <source>MP4 video (*.mp4)</source>
         <translation>MP4-Video (*.mp4)</translation>
     </message>
@@ -9173,7 +9361,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Matroska-Video (*.mkv);;MP4-Video (*.mp4)</translation>
     </message>
     <message>
-        <location line="+119"/>
+        <location line="+125"/>
         <source>Render Crossfade: SDR BT.709 video and PCM audio in Matroska. Choose an MKV destination.</source>
         <translation>Überblendung rendern: SDR-BT.709-Video und PCM-Audio in Matroska. Ein MKV-Ziel auswählen.</translation>
     </message>
@@ -9183,7 +9371,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Verlustfreie Stream-Kopie. Dateinamen und Ordner wählen (%1).</translation>
     </message>
     <message>
-        <location line="+105"/>
+        <location line="+121"/>
         <source>The timeline contains unavailable media.</source>
         <translation>Die Zeitleiste enthält nicht verfügbare Medien.</translation>
     </message>
@@ -9191,6 +9379,11 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+16"/>
         <source>Choose a destination and confirm before replacing an existing file.</source>
         <translation>Ziel wählen und das Ersetzen einer vorhandenen Datei bestätigen.</translation>
+    </message>
+    <message>
+        <location line="+49"/>
+        <source>The timeline or monitoring selection changed during export preparation.</source>
+        <translation>Zeitleiste oder Abhörauswahl haben sich während der Exportvorbereitung geändert.</translation>
     </message>
 </context>
 <context>
@@ -9241,7 +9434,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Medium kann nicht importiert werden: %1</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-386"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-393"/>
         <source>The recording overlaps existing clips.</source>
         <translation>Die Aufnahme überlappt vorhandene Clips.</translation>
     </message>
@@ -9300,7 +9493,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::RecordViewModelAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-670"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-682"/>
         <source>Draw custom</source>
         <translation>Bereich zeichnen</translation>
     </message>
@@ -9375,6 +9568,114 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+1"/>
         <source>Camera active</source>
         <translation>Kamera aktiv</translation>
+    </message>
+</context>
+<context>
+    <name>exosnap::quick::RecordingClipAdapter</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/RecordingClipAdapter.cpp" line="+24"/>
+        <source>Planning clip</source>
+        <translation>Clip wird geplant</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Review clip range</source>
+        <translation>Clipbereich prüfen</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Clip queued</source>
+        <translation>Clip in der Warteschlange</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Reading recording</source>
+        <translation>Aufnahme wird gelesen</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Saving clip</source>
+        <translation>Clip wird gespeichert</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Finalizing clip</source>
+        <translation>Clip wird fertiggestellt</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Verifying metadata</source>
+        <translation>Metadaten werden überprüft</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Publishing clip</source>
+        <translation>Clip wird bereitgestellt</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Clip saved</source>
+        <translation>Clip gespeichert</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Cancelling clip</source>
+        <translation>Clip wird abgebrochen</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Clip cancelled</source>
+        <translation>Clip abgebrochen</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Clip failed</source>
+        <translation>Clip fehlgeschlagen</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Not enough space to save the clip.</source>
+        <translation>Nicht genug Speicherplatz, um den Clip zu speichern.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The clip queue is full. Try again after another clip finishes.</source>
+        <translation>Die Clip-Warteschlange ist voll. Versuche es erneut, wenn ein anderer Clip fertig ist.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Recording history is not ready for a clip yet.</source>
+        <translation>Der Aufnahmeverlauf ist noch nicht bereit, einen Clip zu erstellen.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>This clip format is not supported.</source>
+        <translation>Dieses Clipformat wird nicht unterstützt.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The recording changed while saving the clip.</source>
+        <translation>Die Aufnahme hat sich beim Speichern des Clips geändert.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The clip could not be saved.</source>
+        <translation>Der Clip konnte nicht gespeichert werden.</translation>
+    </message>
+    <message>
+        <location line="+64"/>
+        <source>Last 30 seconds</source>
+        <translation>Letzte 30 Sekunden</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Last 5 minutes</source>
+        <translation>Letzte 5 Minuten</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Last 30 minutes</source>
+        <translation>Letzte 30 Minuten</translation>
     </message>
 </context>
 <context>

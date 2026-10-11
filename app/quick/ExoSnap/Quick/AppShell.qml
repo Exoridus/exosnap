@@ -9,6 +9,7 @@ Item {
 
     required property AboutViewModelAdapter aboutViewModel
     required property RecordViewModelAdapter recordViewModel
+    required property RecordingClipAdapter clipAdapter
     required property RecordPreviewAdapter previewAdapter
     required property SettingsAdapter settingsAdapter
     required property DeviceAdapter deviceAdapter
@@ -687,6 +688,7 @@ Item {
 
             RecordPage {
                 recordViewModel: root.recordViewModel
+                clipAdapter: root.clipAdapter
                 previewAdapter: root.previewAdapter
                 shell: root.shell
                 // displayedPage, not currentPage: `active` drives the live preview,

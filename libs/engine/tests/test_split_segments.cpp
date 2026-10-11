@@ -186,6 +186,7 @@ constexpr uint64_t kIdTracks = 0x1654AE6BULL;
 constexpr uint64_t kIdCues = 0x1C53BB6BULL;
 constexpr uint64_t kIdCluster = 0x1F43B675ULL;
 constexpr uint64_t kIdDuration = 0x4489ULL;
+constexpr uint64_t kIdTimestampScale = 0x2AD7B1ULL;
 
 std::vector<EbmlNode> SegmentChildren(const std::vector<uint8_t>& d) {
     const auto top = ParseChildren(d, 0, d.size());
@@ -210,6 +211,24 @@ int CountClusters(const std::vector<uint8_t>& d) {
     return n;
 }
 
+uint64_t ReadTimestampScaleNs(const std::vector<uint8_t>& d) {
+    for (const auto& c : SegmentChildren(d)) {
+        if (c.id != kIdInfo)
+            continue;
+        for (const auto& e : ParseChildren(d, c.data_off, c.data_off + c.data_size)) {
+            if (e.id != kIdTimestampScale)
+                continue;
+            if (e.data_size == 0 || e.data_size > 8)
+                return 0;
+            uint64_t scale = 0;
+            for (size_t i = 0; i < e.data_size; ++i)
+                scale = (scale << 8) | d[e.data_off + i];
+            return scale;
+        }
+    }
+    return 1'000'000;
+}
+
 double ReadDurationMs(const std::vector<uint8_t>& d) {
     for (const auto& c : SegmentChildren(d)) {
         if (c.id != kIdInfo)
@@ -225,7 +244,7 @@ double ReadDurationMs(const std::vector<uint8_t>& d) {
                 bits = (bits << 8) | d[e.data_off + static_cast<size_t>(i)];
             double val = 0.0;
             std::memcpy(&val, &bits, sizeof(val));
-            return val;
+            return val * static_cast<double>(ReadTimestampScaleNs(d)) / 1'000'000.0;
         }
     }
     return -1.0;
@@ -248,16 +267,17 @@ using AudioMarkers = std::array<std::vector<std::pair<uint8_t, int64_t>>, 2>;
 
 AudioMarkers ReadAudioMarkers(const std::filesystem::path& path) {
     const auto bytes = ReadFile(path.string());
+    const auto timestamp_scale_ns = ReadTimestampScaleNs(bytes);
     AudioMarkers markers;
     for (const auto& cluster : SegmentChildren(bytes)) {
         if (cluster.id != kIdCluster)
             continue;
         const auto blocks = ParseChildren(bytes, cluster.data_off, cluster.data_off + cluster.data_size);
-        int64_t cluster_ms = 0;
+        int64_t cluster_ticks = 0;
         for (const auto& block : blocks) {
             if (block.id == 0xE7) {
                 for (size_t i = 0; i < block.data_size; ++i)
-                    cluster_ms = (cluster_ms << 8) | bytes[block.data_off + i];
+                    cluster_ticks = (cluster_ticks << 8) | bytes[block.data_off + i];
             }
         }
         for (const auto& block : blocks) {
@@ -266,8 +286,11 @@ AudioMarkers ReadAudioMarkers(const std::filesystem::path& path) {
             const uint8_t track = bytes[block.data_off] & 0x7F;
             if (track < 2 || track > 3)
                 continue;
-            const auto relative_ms = static_cast<int16_t>((bytes[block.data_off + 1] << 8) | bytes[block.data_off + 2]);
-            markers[track - 2].emplace_back(bytes[block.data_off + 4], cluster_ms + relative_ms);
+            const auto relative_ticks =
+                static_cast<int16_t>((bytes[block.data_off + 1] << 8) | bytes[block.data_off + 2]);
+            const auto timestamp_ms =
+                (cluster_ticks + relative_ticks) * static_cast<int64_t>(timestamp_scale_ns) / 1'000'000;
+            markers[track - 2].emplace_back(bytes[block.data_off + 4], timestamp_ms);
         }
     }
     return markers;

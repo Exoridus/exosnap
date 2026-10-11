@@ -13,6 +13,8 @@ if(NOT EXISTS "${_nvenc_header}")
         src/recording_media_types.cpp
         src/committed_matroska_view.cpp
         src/recording_media_index.cpp
+    src/clip_boundary_plan.cpp
+    src/recording_clip_job.cpp
         src/audio_routing_model.cpp
         src/audio_routing_resolver.cpp
         src/audio_tee.cpp
@@ -22,6 +24,7 @@ if(NOT EXISTS "${_nvenc_header}")
         include/exosnap/engine/capture_hub_policy.h
         src/capture_hub_policy.cpp
         src/codec_private.cpp
+    src/codec_random_access.cpp
         include/exosnap/engine/audio_meter.h
         src/audio_meter.cpp
         src/opus_audio_encoder.cpp
@@ -289,6 +292,7 @@ add_library(exosnap_engine STATIC
     src/recorder_session.cpp
     src/audio_input_device.cpp
     src/codec_private.cpp
+    src/codec_random_access.cpp
     include/exosnap/engine/audio_meter.h
     src/audio_meter.cpp
     src/wgc_capture.cpp
@@ -382,6 +386,8 @@ add_library(exosnap_engine STATIC
     src/recording_media_types.cpp
     src/committed_matroska_view.cpp
     src/recording_media_index.cpp
+    src/clip_boundary_plan.cpp
+    src/recording_clip_job.cpp
     src/audio_routing_model.cpp
     src/audio_routing_resolver.cpp
     src/runtime_config_key.cpp
@@ -1919,6 +1925,25 @@ target_compile_definitions(test_render_audio_manifest PRIVATE NOMINMAX)
 set_tests_properties(engine.test_render_audio_manifest PROPERTIES ENVIRONMENT "EXOSNAP_EDIT_SOFTWARE_DECODE=1")
 
 exosnap_add_gtest(
+    NAME test_edit_hard_cut_render
+    TEST_PREFIX engine.
+    SOURCES tests/test_edit_hard_cut_render.cpp
+    LIBRARIES exosnap_engine FFmpeg::mux
+)
+target_include_directories(test_edit_hard_cut_render PRIVATE src)
+target_compile_definitions(test_edit_hard_cut_render PRIVATE NOMINMAX)
+set_tests_properties(engine.test_edit_hard_cut_render PROPERTIES ENVIRONMENT "EXOSNAP_EDIT_SOFTWARE_DECODE=1")
+
+exosnap_add_gtest(
+    NAME test_segment_media_mapping
+    TEST_PREFIX engine.
+    SOURCES tests/test_segment_media_mapping.cpp
+    LIBRARIES exosnap_engine EBML::ebml Matroska::matroska FFmpeg::mux
+)
+target_include_directories(test_segment_media_mapping PRIVATE src)
+target_compile_definitions(test_segment_media_mapping PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
     NAME test_audio_runtime_graph
     TEST_PREFIX engine.
     SOURCES tests/test_audio_runtime_graph.cpp
@@ -1926,3 +1951,11 @@ exosnap_add_gtest(
 )
 target_include_directories(test_audio_runtime_graph PRIVATE src)
 target_compile_definitions(test_audio_runtime_graph PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME test_recording_clip
+    TEST_PREFIX engine.
+    SOURCES tests/test_recording_clip.cpp
+    LIBRARIES exosnap_engine FFmpeg::mux
+)
+target_include_directories(test_recording_clip PRIVATE src)

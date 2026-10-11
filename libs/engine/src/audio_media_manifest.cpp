@@ -1,20 +1,25 @@
 #include "audio_media_manifest_adapter.h"
+#include "budgeted_media_avio.h"
 #include "media_identity_sidecar.h"
 #include <exosnap/engine/audio_limits.h>
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/audio_routing_model.h>
 #include <exosnap/engine/audio_track_model.h>
+#include <exosnap/engine/background_io.h>
 #include <exosnap/engine/mic_dsp_config.h>
 #include <exosnap/engine/recording_media_types.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <initializer_list>
 #include <ios>
 #include <limits>
@@ -35,6 +40,7 @@
 extern "C" {
 #include <libavcodec/codec_id.h>
 #include <libavformat/avformat.h>
+#include <libavformat/avio.h>
 #include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/dict.h>
@@ -212,6 +218,20 @@ void Keys(const Json& value, std::initializer_list<const char*> keys) {
         if (!value.contains(key))
             throw std::invalid_argument("Missing metadata field");
 }
+void KeysWithOptional(const Json& value, std::initializer_list<const char*> required,
+                      std::initializer_list<const char*> optional) {
+    if (!value.is_object())
+        throw std::invalid_argument("Expected metadata object");
+    for (const auto* key : required)
+        if (!value.contains(key))
+            throw std::invalid_argument("Missing metadata field");
+    for (auto it = value.begin(); it != value.end(); ++it) {
+        const auto known = [&](const char* key) { return it.key() == key; };
+        if (std::none_of(required.begin(), required.end(), known) &&
+            std::none_of(optional.begin(), optional.end(), known))
+            throw std::invalid_argument("Unexpected metadata field");
+    }
+}
 template <typename Integer> Integer Checked(const Json& value) {
     if (!value.is_number_integer())
         throw std::invalid_argument("Expected metadata integer");
@@ -290,18 +310,29 @@ Json ManifestJson(const AudioManifest1& manifest) {
         for (const auto& route : track.routes)
             routes.push_back(
                 {{"id", ToUuid(route.id)}, {"source_id", ToUuid(route.source_id)}, {"gain_linear", route.gain_linear}});
-        tracks.push_back({{"track_id", ToUuid(track.container.track_id)},
-                          {"stream_index", track.container.stream_index.value},
-                          {"track_uid", track.container.track_uid},
-                          {"name", track.container.name},
-                          {"role", track.container.role},
-                          {"codec", CodecJson(track.container.codec)},
-                          {"format_fingerprint", Fingerprint(track.container.codec)},
-                          {"source_ids", IdsJson(track.container.source_ids)},
-                          {"routes", std::move(routes)},
-                          {"fixed_average_divisor", track.fixed_average_divisor},
-                          {"limiter", {{"enabled", track.limiter.enabled}, {"ceiling_db", track.limiter.ceiling_db}}},
-                          {"derived_from_track_ids", IdsJson(track.derived_from_track_ids)}});
+        Json item = {{"track_id", ToUuid(track.container.track_id)},
+                     {"stream_index", track.container.stream_index.value},
+                     {"track_uid", track.container.track_uid},
+                     {"name", track.container.name},
+                     {"role", track.container.role},
+                     {"codec", CodecJson(track.container.codec)},
+                     {"format_fingerprint", Fingerprint(track.container.codec)},
+                     {"source_ids", IdsJson(track.container.source_ids)},
+                     {"routes", std::move(routes)},
+                     {"fixed_average_divisor", track.fixed_average_divisor},
+                     {"limiter", {{"enabled", track.limiter.enabled}, {"ceiling_db", track.limiter.ceiling_db}}},
+                     {"derived_from_track_ids", IdsJson(track.derived_from_track_ids)}};
+        if (ValidId(track.container.encoder_instance_id)) {
+            item["encoder_instance_id"] = ToUuid(track.container.encoder_instance_id);
+            item["encoder_reset"] = track.container.encoder_reset;
+        }
+        if (track.container.first_decoded_sample_r)
+            item["first_decoded_sample_r"] = *track.container.first_decoded_sample_r;
+        if (track.container.packet_duration_ns)
+            item["packet_duration_ns"] = *track.container.packet_duration_ns;
+        if (track.container.preroll_ns)
+            item["preroll_ns"] = *track.container.preroll_ns;
+        tracks.push_back(std::move(item));
     }
     return {{"version", manifest.version},
             {"media_id", ToUuid(manifest.media_id)},
@@ -338,8 +369,11 @@ AudioManifest1 ManifestValue(const Json& value) {
                                   Boolean(source["muted"])});
     }
     for (const auto& item : value["tracks"]) {
-        Keys(item, {"track_id", "stream_index", "track_uid", "name", "role", "codec", "format_fingerprint",
-                    "source_ids", "routes", "fixed_average_divisor", "limiter", "derived_from_track_ids"});
+        KeysWithOptional(
+            item,
+            {"track_id", "stream_index", "track_uid", "name", "role", "codec", "format_fingerprint", "source_ids",
+             "routes", "fixed_average_divisor", "limiter", "derived_from_track_ids"},
+            {"encoder_instance_id", "encoder_reset", "first_decoded_sample_r", "packet_duration_ns", "preroll_ns"});
         AudioManifestTrack track;
         track.container.track_id = IdValue<AudioTrackId>(item["track_id"]);
         track.container.stream_index = {Checked<uint32_t>(item["stream_index"])};
@@ -357,6 +391,16 @@ AudioManifest1 ManifestValue(const Json& value) {
         if (item["format_fingerprint"] != Fingerprint(track.container.codec))
             throw std::invalid_argument("Audio fingerprint mismatch");
         track.container.source_ids = Ids<AudioSourceId>(item["source_ids"], kMaxAudioSources);
+        if (item.contains("encoder_instance_id"))
+            track.container.encoder_instance_id = IdValue<AudioEncoderInstanceId>(item["encoder_instance_id"]);
+        if (item.contains("encoder_reset"))
+            track.container.encoder_reset = Boolean(item["encoder_reset"]);
+        if (item.contains("first_decoded_sample_r"))
+            track.container.first_decoded_sample_r = Checked<int64_t>(item["first_decoded_sample_r"]);
+        if (item.contains("packet_duration_ns"))
+            track.container.packet_duration_ns = Checked<uint64_t>(item["packet_duration_ns"]);
+        if (item.contains("preroll_ns"))
+            track.container.preroll_ns = Checked<uint64_t>(item["preroll_ns"]);
         if (!item["routes"].is_array() || item["routes"].size() > kMaxAudioRoutes)
             throw std::invalid_argument("Route budget exceeded");
         for (const auto& route : item["routes"]) {
@@ -410,7 +454,9 @@ Outcome<std::monostate> ValidateAudioManifest1(const AudioManifest1& manifest) {
             container.codec.channels == 0 || container.codec.channels > 64 || container.codec.bit_depth > 64 ||
             !ValidLayout(container.codec) || !UniqueIds(container.source_ids, kMaxAudioSources) ||
             !UniqueIds(track.derived_from_track_ids, kDerivationIds) || !std::isfinite(track.limiter.ceiling_db) ||
-            track.limiter.ceiling_db > 0 || track.fixed_average_divisor > kMaxAudioRoutes)
+            track.limiter.ceiling_db > 0 || track.fixed_average_divisor > kMaxAudioRoutes ||
+            (container.encoder_reset && !ValidId(container.encoder_instance_id)) ||
+            (container.packet_duration_ns && *container.packet_duration_ns == 0))
             return MetadataError("Invalid audio track mapping, format or provenance");
         if (std::find(track.derived_from_track_ids.begin(), track.derived_from_track_ids.end(), container.track_id) !=
             track.derived_from_track_ids.end())
@@ -544,24 +590,46 @@ HeaderElement Element(std::span<const uint8_t> bytes, size_t at) {
     result.payload = at;
     return result;
 }
-std::vector<HeaderTrack> ReadHeaderTracks(const std::filesystem::path& path, const AVFormatContext* input) {
+std::vector<HeaderTrack> ReadHeaderTracks(const std::filesystem::path& path, const AVFormatContext* input,
+                                          const BackgroundIoAdmission& before_io, const std::atomic<bool>* cancelled) {
     constexpr uint64_t kHeaderBytes = 16 * 1024 * 1024;
     constexpr uint64_t kTracksBytes = 2 * 1024 * 1024;
-    std::ifstream file(path, std::ios::binary);
-    file.seekg(0, std::ios::end);
-    const auto end = file.tellg();
-    if (!file || end < 0)
+    bool denied = false;
+    std::unique_ptr<BudgetedMediaAvio> budgeted;
+    std::ifstream file;
+    int64_t end = -1;
+    if (before_io || cancelled) {
+        budgeted = BudgetedMediaAvio::Open(path, false, &before_io, cancelled, &denied);
+        if (budgeted)
+            end = avio_size(budgeted->context());
+    } else {
+        file.open(path, std::ios::binary);
+        file.seekg(0, std::ios::end);
+        if (file)
+            end = static_cast<int64_t>(file.tellg());
+    }
+    if (end < 0)
         throw std::invalid_argument("Cannot read Matroska header identity");
     const auto length = static_cast<uint64_t>(end);
+    const auto read_at = [&](uint64_t offset, uint8_t* bytes, size_t count) {
+        if (budgeted) {
+            if (avio_seek(budgeted->context(), static_cast<int64_t>(offset), SEEK_SET) < 0)
+                return size_t{0};
+            const int read = avio_read(budgeted->context(), bytes, static_cast<int>(count));
+            return read > 0 ? static_cast<size_t>(read) : size_t{0};
+        }
+        file.clear();
+        file.seekg(static_cast<std::streamoff>(offset));
+        file.read(reinterpret_cast<char*>(bytes), static_cast<std::streamsize>(count));
+        return static_cast<size_t>(file.gcount());
+    };
     uint64_t position = 0;
     bool segment = false;
     std::vector<uint8_t> tracks;
     for (size_t count = 0; count < 4096 && position < (std::min)(length, kHeaderBytes); ++count) {
-        file.clear();
-        file.seekg(static_cast<std::streamoff>(position));
         std::array<uint8_t, 12> header{};
-        file.read(reinterpret_cast<char*>(header.data()), header.size());
-        const auto element = Element({header.data(), static_cast<size_t>(file.gcount())}, 0);
+        const auto header_read = read_at(position, header.data(), header.size());
+        const auto element = Element({header.data(), header_read}, 0);
         const auto payload = position + element.payload;
         if (payload > length || (!element.unknown && element.size > length - payload))
             throw std::invalid_argument("Matroska header element exceeds file bounds");
@@ -575,9 +643,7 @@ std::vector<HeaderTrack> ReadHeaderTracks(const std::filesystem::path& path, con
                 element.size > kHeaderBytes - payload)
                 throw std::invalid_argument("Matroska tracks exceed header budget");
             tracks.resize(static_cast<size_t>(element.size));
-            file.clear();
-            file.seekg(static_cast<std::streamoff>(payload));
-            if (!file.read(reinterpret_cast<char*>(tracks.data()), tracks.size()))
+            if (read_at(payload, tracks.data(), tracks.size()) != tracks.size())
                 throw std::invalid_argument("Truncated Matroska tracks");
             break;
         }
@@ -844,14 +910,17 @@ Outcome<std::monostate> WriteAudioManifestMetadata(AVFormatContext* output, cons
     }
     return std::monostate{};
 }
-AudioMetadataReadResult ReadAudioMediaMetadata(const std::filesystem::path& path, const AVFormatContext* input) {
+AudioMetadataReadResult ReadAudioMediaMetadata(const std::filesystem::path& path, const AVFormatContext* input,
+                                               const std::function<bool()>& continue_io,
+                                               const BackgroundIoAdmission& before_io,
+                                               const std::atomic<bool>* cancelled) {
     AudioMetadataReadResult result;
     const auto lease = AcquireMediaReadLease(path);
     PopulateActual(result, input);
     const auto unverified = [&]() {
         result.monitoring_confirmation_required = !AudioStreams(input).empty();
         if (lease.succeeded()) {
-            const auto identity = HashFinalMedia(path);
+            const auto identity = HashFinalMedia(path, continue_io, before_io, cancelled);
             if (identity.succeeded()) {
                 auto binding = std::make_shared<UnverifiedAudioAssetBinding>();
                 binding->file_identity = identity.value()->file_identity;
@@ -874,7 +943,7 @@ AudioMetadataReadResult ReadAudioMediaMetadata(const std::filesystem::path& path
     std::vector<HeaderTrack> header;
     if (Matroska(input)) {
         try {
-            header = ReadHeaderTracks(path, input);
+            header = ReadHeaderTracks(path, input, before_io, cancelled);
             size_t audio = 0;
             for (const auto& track : header)
                 if (track.type == 2 && audio < result.actual_tracks.size())
@@ -904,7 +973,7 @@ AudioMetadataReadResult ReadAudioMediaMetadata(const std::filesystem::path& path
             result.actual_tracks.push_back(track.container);
         std::error_code error;
         if (std::filesystem::exists(MediaIdentitySidecarPath(path), error)) {
-            const auto sidecar = ReadMediaIdentitySidecar(path);
+            const auto sidecar = ReadMediaIdentitySidecar(path, continue_io, before_io, cancelled);
             const auto canonical = SerializeAudioManifest1(*result.manifest);
             const auto external = sidecar.manifest ? SerializeAudioManifest1(*sidecar.manifest)
                                                    : Outcome<std::string>{MetadataError("Missing sidecar authority")};
@@ -916,7 +985,7 @@ AudioMetadataReadResult ReadAudioMediaMetadata(const std::filesystem::path& path
                 result.references = sidecar.references;
         }
     } else {
-        auto sidecar = ReadMediaIdentitySidecar(path);
+        auto sidecar = ReadMediaIdentitySidecar(path, continue_io, before_io, cancelled);
         const auto valid = sidecar.manifest ? ValidateAudioManifestStreams(*sidecar.manifest, input)
                                             : Outcome<std::monostate>{MetadataError("Missing sidecar")};
         if (sidecar.status == AudioMetadataStatus::Verified && sidecar.manifest && valid.succeeded() &&

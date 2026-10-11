@@ -1,4 +1,3 @@
-#include "runtime_config_key.h"
 #include <cstddef>
 #include <cstdint>
 #include <exosnap/engine/audio_routing_model.h>
@@ -6,6 +5,7 @@
 #include <exosnap/engine/backend_tuning.h>
 #include <exosnap/engine/encoder_device.h>
 #include <exosnap/engine/mic_dsp_config.h>
+#include <exosnap/engine/recorder_session.h>
 #include <exosnap/engine/recording_media_types.h>
 #include <optional>
 #include <string>

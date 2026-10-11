@@ -145,6 +145,10 @@ QString ExportStateName(EditExportAdapter::State state) {
     switch (state) {
     case EditExportAdapter::Options:
         return QStringLiteral("idle");
+    case EditExportAdapter::Preparing:
+        return QStringLiteral("preparing");
+    case EditExportAdapter::Review:
+        return QStringLiteral("review");
     case EditExportAdapter::Running:
         return QStringLiteral("exporting");
     case EditExportAdapter::Cancelling:

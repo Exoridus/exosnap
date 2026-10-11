@@ -7,6 +7,7 @@
 #include <exosnap/engine/audio_limits.h>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -32,6 +33,7 @@
 #include "../diagnostics/SessionLedger.h"
 #include "../diagnostics/SessionReport.h"
 #include "../diagnostics/WindowTargetFacts.h"
+#include "../models/EditContext.h"
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathValidator.h"
 #include "../models/OutputSettingsModel.h"
@@ -41,6 +43,8 @@
 #include "../settings/RecoveryManifestStore.h"
 #include "../viewmodels/RecordViewModel.h"
 #include "RecordingAdmission.h"
+#include "RecordingArtifactRegistry.h"
+#include "RecordingClipJobs.h"
 #include "StaticWebcamFrameSource.h"
 #include "WebcamService.h"
 
@@ -112,6 +116,7 @@ class RecordingCoordinator {
     using StatsUpdatedCallback = std::function<void(const exosnap::engine::SessionStats&)>;
     using DiagnosticsUpdatedCallback = std::function<void(const exosnap::engine::RecordingDiagnosticsSnapshot&)>;
     using ResultReadyCallback = std::function<void(const UiRecordingResult&)>;
+    using EditMasterReadyCallback = std::function<void(const EditContext&)>;
     using MicMeterUpdatedCallback = std::function<void(float rms_linear)>;
     using SysMeterUpdatedCallback = std::function<void(float rms_linear)>;
     using AppMeterUpdatedCallback = std::function<void(float rms_linear)>;
@@ -425,6 +430,17 @@ class RecordingCoordinator {
     void SetFrameCapturedCallback(FrameCapturedCallback cb);
     void SetSplitFeedbackCallback(SplitFeedbackCallback cb);
     void SetRemuxProgressCallback(RemuxProgressCallback cb);
+    void SetEditMasterReadyCallback(EditMasterReadyCallback cb) {
+        on_edit_master_ready_ = std::move(cb);
+    }
+    std::optional<RecordingArtifactRegistry::SourceLease> AcquireEditMasterLease(const std::filesystem::path& path);
+    using ClipJobsChangedCallback = std::function<void()>;
+    void SetClipJobsChangedCallback(ClipJobsChangedCallback callback);
+    [[nodiscard]] bool CanRequestRecordingClip() const;
+    [[nodiscard]] engine::Outcome<engine::JobId> RequestRecordingClip(int64_t duration_seconds);
+    [[nodiscard]] bool ConfirmRecordingClip(engine::JobId job_id, uint64_t generation);
+    [[nodiscard]] bool CancelRecordingClip(engine::JobId job_id, uint64_t generation);
+    [[nodiscard]] std::vector<RecordingClipJobSnapshot> RecordingClipSnapshots() const;
 
     // Register a callback fired (from the engine's video thread) once the shared
     // WYSIWYG preview texture is ready. nt_handle is a Windows HANDLE passed as
@@ -510,6 +526,7 @@ class RecordingCoordinator {
     void PostResultForTest(UiRecordingResult result);
 
   private:
+    friend class RecordingCoordinatorTestPeer;
     // Shared tail of CaptureFrame()'s Recording/Paused and Ready paths: converts
     // a raw BGRA readback (or a failure) into a saved PNG + FrameCapturedCallback
     // notification. Static and parameter-only (no captured `this`) so it stays
@@ -789,6 +806,17 @@ class RecordingCoordinator {
     // Segments accumulated from the engine SegmentCallback (mux worker thread).
     mutable std::mutex segments_mutex_;
     std::vector<exosnap::engine::CompletedSegment> segments_;
+    RecordingArtifactRegistry recording_artifacts_;
+    std::shared_ptr<BackgroundStorageBudget> background_storage_ = std::make_shared<BackgroundStorageBudget>();
+    std::unique_ptr<RecordingClipJobs> clip_jobs_;
+    ClipJobsChangedCallback on_clip_jobs_changed_;
+    std::atomic<std::shared_ptr<int>> clip_callback_life_{std::make_shared<int>(0)};
+    std::atomic<uint64_t> primary_clip_reserve_bytes_{0};
+    std::atomic<uint64_t> active_segment_remux_jobs_{0};
+    void PostClipJobsChanged();
+    [[nodiscard]] bool PauseClipBackground();
+    std::map<std::filesystem::path, std::filesystem::path> edit_master_paths_;
+    std::filesystem::path RetainEditMaster(const std::filesystem::path& source);
     SplitFeedbackCallback on_split_feedback_;
     void PostSplitFeedback(bool accepted, QString message);
     void OnSegmentCompleted(const exosnap::engine::CompletedSegment& segment);
@@ -915,6 +943,7 @@ class RecordingCoordinator {
     exosnap::engine::RecorderConfig last_committed_config_;
     bool has_last_committed_config_ = false;
     ResultReadyCallback on_result_ready_;
+    EditMasterReadyCallback on_edit_master_ready_;
     MicMeterUpdatedCallback on_mic_meter_updated_;
     SysMeterUpdatedCallback on_sys_meter_updated_;
     AppMeterUpdatedCallback on_app_meter_updated_;

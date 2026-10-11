@@ -161,6 +161,13 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
     emit editPageRequested();
 }
 
+void EditSessionAdapter::setDeliveryPending(bool pending) {
+    if (context_.delivery_pending == pending)
+        return;
+    context_.delivery_pending = pending;
+    emit clipChanged();
+}
+
 const EditContext& EditSessionAdapter::editContext() const noexcept {
     return context_;
 }

@@ -4,6 +4,7 @@
 #include <QString>
 #include <QUrl>
 #include <QVariantList>
+#include <QVariantMap>
 #include <QtQmlIntegration/qqmlintegration.h>
 #include <exosnap/engine/recorder_session.h>
 
@@ -80,6 +81,7 @@ class EditExportAdapter : public QObject {
     Q_PROPERTY(bool overwriteSelected READ overwriteSelected NOTIFY optionsChanged FINAL)
     Q_PROPERTY(QString overwritePrompt READ overwritePrompt NOTIFY optionsChanged FINAL)
     Q_PROPERTY(bool canExport READ canExport NOTIFY stateChanged FINAL)
+    Q_PROPERTY(QVariantMap reviewOutcome READ reviewOutcome NOTIFY reviewChanged FINAL)
     Q_PROPERTY(QVariantList profileOptions READ profileOptions CONSTANT FINAL)
     Q_PROPERTY(QString profileKey READ profileKey WRITE setProfileKey NOTIFY optionsChanged FINAL)
 
@@ -90,6 +92,8 @@ class EditExportAdapter : public QObject {
         Cancelling = 2,
         Done = 3,
         Failed = 4,
+        Preparing = 5,
+        Review = 6,
     };
     Q_ENUM(State)
 
@@ -135,10 +139,13 @@ class EditExportAdapter : public QObject {
     [[nodiscard]] bool overwriteSelected() const;
     [[nodiscard]] QString overwritePrompt() const;
     [[nodiscard]] bool canExport() const noexcept;
+    [[nodiscard]] QVariantMap reviewOutcome() const;
 
     // Starts a run. The overwrite confirmation is the caller's (the QML dialog's)
     // job: this method assumes it has already been answered.
     Q_INVOKABLE void startExport();
+    Q_INVOKABLE void confirmPreparedExport();
+    Q_INVOKABLE void discardPreparedExport();
     Q_INVOKABLE void retry();
     Q_INVOKABLE void retryInFolder(const QUrl& folder);
     Q_INVOKABLE void cancel();
@@ -155,6 +162,7 @@ class EditExportAdapter : public QObject {
     void progressChanged();
     void resultChanged();
     void optionsChanged();
+    void reviewChanged();
     void exportCompleted(const QString& output_path);
     void exportFailed(const QString& error);
 
@@ -163,6 +171,8 @@ class EditExportAdapter : public QObject {
     void setState(State state);
     void publishProgress(int percent);
     void finishRun(bool ok, const QString& error, const QString& output_path, bool cancelled);
+    void beginPreparedExport();
+    struct PreparedExport;
 
     EditSessionAdapter* session_ = nullptr;
     State state_ = State::Options;
@@ -178,12 +188,15 @@ class EditExportAdapter : public QObject {
     QString profile_key_ = QStringLiteral("match");
     std::optional<std::filesystem::path> chosen_output_;
     bool overwrite_confirmed_ = false;
+    QVariantMap review_outcome_;
+    std::shared_ptr<PreparedExport> prepared_;
 
     struct RunState {
         std::atomic<bool> cancel{false};
         std::atomic<int> percent{-1};
         bool ok = false;
         std::string error;
+        std::shared_ptr<PreparedExport> prepared;
     };
     QThread* export_thread_ = nullptr;
     std::shared_ptr<RunState> run_;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/background_io.h>
 
 #include <array>
 #include <filesystem>
@@ -31,12 +32,18 @@ struct MediaIdentityReferenceCopyGuard {
 std::filesystem::path MediaIdentitySidecarPath(const std::filesystem::path& media);
 Outcome<std::shared_ptr<void>> AcquireMediaReadLease(const std::filesystem::path& media);
 Outcome<MediaIdentitySnapshot> HashFinalMedia(const std::filesystem::path& media,
-                                              const std::function<bool()>& continue_io = {});
+                                              const std::function<bool()>& continue_io = {},
+                                              const BackgroundIoAdmission& before_io = {},
+                                              const std::atomic<bool>* cancelled = nullptr);
 AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& media,
-                                                 const std::function<bool()>& continue_io = {});
+                                                 const std::function<bool()>& continue_io = {},
+                                                 const BackgroundIoAdmission& before_io = {},
+                                                 const std::atomic<bool>* cancelled = nullptr);
 Outcome<std::monostate> CopyMediaIdentityReferenceFiles(const std::filesystem::path& source,
                                                         const std::filesystem::path& output,
                                                         const MediaIdentitySidecarReferences& references,
-                                                        MediaIdentityReferenceCopyGuard* guard = nullptr);
+                                                        MediaIdentityReferenceCopyGuard* guard = nullptr,
+                                                        const BackgroundIoAdmission& before_io = {},
+                                                        const std::atomic<bool>* cancelled = nullptr);
 
 } // namespace exosnap::engine

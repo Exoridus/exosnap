@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exosnap/engine/audio_routing_model.h>
+#include <exosnap/engine/background_io.h>
 
 #include <filesystem>
 #include <functional>
@@ -99,7 +100,8 @@ struct AudioMetadataReadResult {
 [[nodiscard]] Outcome<std::monostate>
 WriteMediaIdentitySidecar(const std::filesystem::path& media, const AudioManifest1& manifest,
                           const std::function<bool()>& continue_io = {},
-                          const std::optional<MediaIdentitySidecarReferences>& references = std::nullopt);
+                          const std::optional<MediaIdentitySidecarReferences>& references = std::nullopt,
+                          const BackgroundIoAdmission& before_io = {}, const std::atomic<bool>* cancelled = nullptr);
 // Updates an existing final-byte-verified envelope. Missing semantic metadata
 // remains missing and is never synthesized from marker files. Only the supplied
 // owned reference is replaced. Other verified associations are preserved.

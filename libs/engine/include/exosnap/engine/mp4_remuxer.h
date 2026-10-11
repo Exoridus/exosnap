@@ -15,6 +15,8 @@
 // The output container is MP4 with +faststart (moov atom moved before mdat by
 // libavformat's two-pass mechanism).
 
+#include <exosnap/engine/background_io.h>
+
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -33,6 +35,11 @@ namespace exosnap::engine {
 // causing libav error — none of them are downgraded to a "best effort"
 // success. Callers that delete the source input on completion (the MKV a
 // remux was produced from) must gate that deletion on success == true.
+struct RemuxIoControl {
+    BackgroundIoAdmission before_io;
+    const std::atomic<bool>* cancelled = nullptr;
+};
+
 struct RemuxIoFaults {
     bool fail_output_close = false;
 };
@@ -106,10 +113,11 @@ struct TrimRange {
 // to the no-TrimRange overloads below.
 RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
                                   RemuxProgressCallback progress_cb, TrimRange tr,
-                                  const RemuxIoFaults* faults = nullptr);
+                                  const RemuxIoFaults* faults = nullptr, const RemuxIoControl* io = nullptr);
 
 RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
-                       RemuxProgressCallback progress_cb, TrimRange tr, const RemuxIoFaults* faults = nullptr);
+                       RemuxProgressCallback progress_cb, TrimRange tr, const RemuxIoFaults* faults = nullptr,
+                       const RemuxIoControl* io = nullptr);
 
 // Scan `input_path` for all video keyframe PTS values and return them sorted
 // in ascending order (microseconds at AV_TIME_BASE). The file is read without

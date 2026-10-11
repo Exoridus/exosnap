@@ -48,6 +48,7 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(QString driftText READ driftText NOTIFY changed FINAL)
     Q_PROPERTY(bool liveStatsAvailable READ liveStatsAvailable NOTIFY liveStatsAvailableChanged FINAL)
 
+    Q_PROPERTY(bool pendingEditMasterAvailable READ pendingEditMasterAvailable NOTIFY changed FINAL)
     Q_PROPERTY(bool canStart READ canStart NOTIFY changed FINAL)
     Q_PROPERTY(bool canStop READ canStop NOTIFY changed FINAL)
     Q_PROPERTY(bool canPause READ canPause NOTIFY changed FINAL)
@@ -232,6 +233,10 @@ class RecordViewModelAdapter : public QObject {
     void setRegionState(QRectF normalized_rect, bool selection_needed);
     void setPreviewFrameReady(bool ready);
     void setSplitEnabled(bool enabled);
+    void setPendingEditMasterAvailable(bool available);
+    [[nodiscard]] bool pendingEditMasterAvailable() const noexcept {
+        return pending_edit_master_available_;
+    }
     void setMeters(double system, double app, double microphone);
     // `tone` defaults to "warning" so an existing caller that never named one
     // keeps the banner it already had; the callers that state a tone are the
@@ -254,6 +259,7 @@ class RecordViewModelAdapter : public QObject {
     Q_INVOKABLE void requestCaptureFrame();
     Q_INVOKABLE void requestAddMarker();
     Q_INVOKABLE void requestSplit();
+    Q_INVOKABLE void requestEditMaster();
     Q_INVOKABLE void requestSelectTarget(int target_index, int capture_mode);
     Q_INVOKABLE void requestSelectRegion(QRectF normalized_rect);
     // The Region tab's preset choice. "custom" means draw-from-scratch; the
@@ -294,6 +300,7 @@ class RecordViewModelAdapter : public QObject {
     void captureFrameRequested();
     void addMarkerRequested();
     void splitRequested();
+    void editMasterRequested();
     void selectTargetRequested(int target_index, int capture_mode);
     void selectRegionRequested(QRectF normalized_rect);
     void regionPresetRequested(QString key);
@@ -374,6 +381,7 @@ class RecordViewModelAdapter : public QObject {
     double countdown_progress_ = 1.0;
     bool preview_frame_ready_ = false;
     bool split_enabled_ = false;
+    bool pending_edit_master_available_ = false;
 };
 
 } // namespace quick

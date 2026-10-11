@@ -1,8 +1,10 @@
 #include "exosnap/engine/edit_timeline_export.h"
 #include <capability/translatable.h>
 #include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/background_io.h>
 
 #include "audio_media_manifest_adapter.h"
+#include "budgeted_media_avio.h"
 #include "exosnap/engine/mp4_remuxer.h"
 #include "matroska_packet_timestamps.h"
 #include "matroska_stream_writer.h"
@@ -15,9 +17,11 @@
 #include <vector>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -62,6 +66,9 @@ std::string AvError(int code) {
 struct Input {
     std::shared_ptr<void> media_read_lease;
     AudioMetadataReadResult metadata;
+    BackgroundIoAdmission metered_admission;
+    std::unique_ptr<BudgetedMediaAvio> budgeted_input;
+    bool admission_denied = false;
     AVFormatContext* context = nullptr;
     ~Input() {
         avformat_close_input(&context);
@@ -69,15 +76,38 @@ struct Input {
     Input() = default;
     Input(const Input&) = delete;
     Input& operator=(const Input&) = delete;
-    int Open(const std::filesystem::path& source) {
+    int Open(const std::filesystem::path& source, const std::function<bool()>& continue_io = {},
+             const BackgroundIoAdmission& before_io = {}, const std::atomic<bool>* cancelled = nullptr) {
         auto lease = AcquireMediaReadLease(source);
         if (!lease.succeeded())
             return AVERROR(EACCES);
         media_read_lease = std::move(*lease.value());
-        int result = avformat_open_input(&context, Utf8Path(source).c_str(), nullptr, nullptr);
+        if (before_io || cancelled) {
+            metered_admission = [&, cancelled](uint64_t bytes, const std::atomic<bool>*) {
+                if ((!cancelled || !cancelled->load(std::memory_order_relaxed)) &&
+                    (!before_io || before_io(bytes, cancelled)))
+                    return true;
+                admission_denied = true;
+                return false;
+            };
+            budgeted_input = BudgetedMediaAvio::Open(source, false, &metered_admission, cancelled, &admission_denied);
+            if (!budgeted_input)
+                return AVERROR(EIO);
+            context = avformat_alloc_context();
+            if (!context)
+                return AVERROR(ENOMEM);
+            context->pb = budgeted_input->context();
+            context->flags |= AVFMT_FLAG_CUSTOM_IO;
+        }
+        int result =
+            avformat_open_input(&context, budgeted_input ? nullptr : Utf8Path(source).c_str(), nullptr, nullptr);
         if (result < 0 || (result = avformat_find_stream_info(context, nullptr)) < 0)
             return result;
-        metadata = ReadAudioMediaMetadata(source, context);
+        if (admission_denied)
+            return AVERROR_EXIT;
+        metadata = ReadAudioMediaMetadata(source, context, continue_io, metered_admission, cancelled);
+        if (admission_denied || (cancelled && cancelled->load(std::memory_order_relaxed)))
+            return AVERROR_EXIT;
         return result;
     }
 };
@@ -290,19 +320,22 @@ TimelineExportAssessment ValidateRecipe(const std::vector<TimelineExportClip>& c
 
 } // namespace
 
-EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source) {
+EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source, const std::function<bool()>& continue_io,
+                                 const BackgroundIoAdmission& before_io, const std::atomic<bool>* cancelled) {
     EditMediaMetadata result;
     Input input;
-    const int status = input.Open(source);
+    const int status = input.Open(source, continue_io, before_io, cancelled);
     if (status < 0) {
         result.error = AvError(status);
         return result;
     }
+    result.audio_metadata = input.metadata;
     result.duration_us = std::max<int64_t>(0, input.context->duration);
     for (unsigned i = 0; i < input.context->nb_streams; ++i) {
         auto* stream = input.context->streams[i];
         if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && result.width == 0) {
             ResolveDecodedColor(input.context, stream);
+            result.video_codec = avcodec_get_name(stream->codecpar->codec_id);
             result.width = stream->codecpar->width;
             result.height = stream->codecpar->height;
             const auto fps = stream->avg_frame_rate.num > 0 ? stream->avg_frame_rate : stream->r_frame_rate;
@@ -328,6 +361,17 @@ EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source) {
     }
     if (result.duration_us <= 0 || (result.width == 0 && !result.has_audio))
         result.error = "Media has no supported timed video or audio stream.";
+    if (result.error.empty()) {
+        const auto identity = HashFinalMedia(source, continue_io, input.metered_admission, cancelled);
+        if (!identity.succeeded())
+            result.error = identity.error()->context;
+        else {
+            result.file_identity = identity.value()->file_identity;
+            result.file_size = identity.value()->file_size;
+            result.content_sha256 = identity.value()->sha256;
+            result.content_identity_valid = true;
+        }
+    }
     return result;
 }
 

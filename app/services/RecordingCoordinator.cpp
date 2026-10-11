@@ -315,9 +315,19 @@ RecordingCoordinator::RecordingCoordinator()
       app_meter_service_(std::make_unique<exosnap::engine::LoopbackMeterService>()) {
     // One screenshot write at a time — see the snapshot_pool_ declaration.
     snapshot_pool_.setMaxThreadCount(1);
+    clip_jobs_ = std::make_unique<RecordingClipJobs>(
+        recording_artifacts_, [this](const RecordingClipJobSnapshot&) { PostClipJobsChanged(); },
+        [this] { return PauseClipBackground(); }, [this] { return primary_clip_reserve_bytes_.load(); },
+        background_storage_);
+    session_.SetBackgroundIoAdmission([storage = background_storage_](uint64_t bytes, const std::atomic<bool>* cancel) {
+        return storage->Acquire(bytes, cancel);
+    });
 }
 
 RecordingCoordinator::~RecordingCoordinator() {
+    clip_callback_life_.store({});
+    clip_jobs_->BeginShutdown();
+    background_storage_->Close();
     // Before anything else: a disk-space auto-stop already queued on the UI thread
     // must find this expired rather than run against a half-destroyed coordinator.
     disk_stop_life_token_.reset();
@@ -400,6 +410,7 @@ RecordingCoordinator::~RecordingCoordinator() {
     //    success=false when the session stops), so waiting here — rather than
     //    relying only on the member's destructor — guarantees the wait happens
     //    after the last possible enqueue, not before it.
+    clip_jobs_->Shutdown();
     snapshot_pool_.waitForDone();
 }
 
@@ -593,9 +604,12 @@ void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_
                         remux_reserve += static_cast<uint64_t>(mkv_size);
                 }
                 // (b) segments awaiting background remux
-                remux_reserve += this->PendingRemuxReserveBytes();
+                const uint64_t pending_reserve = this->PendingRemuxReserveBytes();
+                remux_reserve =
+                    pending_reserve > UINT64_MAX - remux_reserve ? UINT64_MAX : remux_reserve + pending_reserve;
             }
 
+            primary_clip_reserve_bytes_.store(remux_reserve);
             const uint64_t threshold = diagnostics::ComputeHardStopThreshold(remux_reserve);
             if (free_bytes <= threshold) {
                 OnDiskSpaceLow(request, free_bytes, threshold);
@@ -1482,6 +1496,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     {
         std::lock_guard<std::mutex> lock(segments_mutex_);
         segments_.clear();
+        edit_master_paths_.clear();
     }
     split_pending_.store(false);
     session_.SetSegmentCallback([this](const exosnap::engine::CompletedSegment& seg) { OnSegmentCompleted(seg); });
@@ -1861,6 +1876,15 @@ void RecordingCoordinator::PostSplitFeedback(bool accepted, QString message) {
 }
 
 void RecordingCoordinator::OnSegmentCompleted(const exosnap::engine::CompletedSegment& segment) {
+    if (segment.media_descriptor) {
+        const auto& descriptor = *segment.media_descriptor;
+        const RecordingArtifactKey key{descriptor.recording_id, descriptor.segment_id, descriptor.writer_generation,
+                                       descriptor.descriptor_revision};
+        (void)recording_artifacts_.MarkWriterClosed(key);
+        if (!recording_artifacts_.RegisterSource(descriptor, false))
+            diagnostics::AppLog::warning(QStringLiteral("recording.artifacts"),
+                                         QStringLiteral("Finalized source identity could not be registered."));
+    }
     // Fired from the mux worker thread as each segment is finalized (including the
     // final one at session end). Accumulate for the multi-segment result and clear
     // the pending flag — the next segment has started.
@@ -2183,6 +2207,11 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
             out.duration_seconds = static_cast<double>(seg.duration_ms) / 1000.0;
             out.file_size_bytes = static_cast<qint64>(seg.file_size_bytes);
             out.succeeded = seg.succeeded;
+            out.session_start_ns = seg.session_start_ns;
+            out.duration_ns = seg.duration_ns;
+            const auto master = edit_master_paths_.find(seg.path);
+            out.edit_master_path =
+                QString::fromStdWString((master == edit_master_paths_.end() ? seg.path : master->second).wstring());
             ui_result.segments.push_back(std::move(out));
         }
     }
@@ -2342,6 +2371,12 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
             // and accumulate the total output bytes across all segments.
             uint64_t total_bytes = 0;
             for (auto& seg : ui_result.segments) {
+                {
+                    std::lock_guard lock(segments_mutex_);
+                    const auto master = edit_master_paths_.find(std::filesystem::path(seg.file_path.toStdWString()));
+                    if (master != edit_master_paths_.end())
+                        seg.edit_master_path = QString::fromStdWString(master->second.wstring());
+                }
                 const std::optional<std::filesystem::path> seg_mp4 = DeriveSegmentPathLogged(
                     output_path, static_cast<uint32_t>(seg.index), "final result segment path rewrite");
                 if (!seg_mp4.has_value()) {
@@ -2431,6 +2466,17 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
                         .arg(move_error));
                 return false;
             }
+            if (completed && completed->media_descriptor) {
+                const auto& descriptor = *completed->media_descriptor;
+                if (recording_artifacts_.RebindClosedSource({descriptor.recording_id, descriptor.segment_id,
+                                                             descriptor.writer_generation,
+                                                             descriptor.descriptor_revision},
+                                                            final) != ArtifactDisposition::Completed)
+                    diagnostics::AppLog::warning(QStringLiteral("recording.artifacts"),
+                                                 QStringLiteral("Published source locator could not be rebound."));
+                std::lock_guard lock(segments_mutex_);
+                edit_master_paths_.insert_or_assign(partial, final);
+            }
             return true;
         };
 
@@ -2445,6 +2491,7 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
                     break;
                 }
                 segment.file_path = QString::fromStdWString(final_segment->wstring());
+                segment.edit_master_path = segment.file_path;
             }
         }
     }
@@ -2476,6 +2523,20 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
 
 void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mkv,
                                        const std::filesystem::path& final_mp4, UiRecordingResult base_result) {
+    if (on_edit_master_ready_) {
+        EditContext context;
+        context.output_path = QString::fromStdWString(final_mp4.wstring());
+        context.mkv_master_path = QString::fromStdWString(transient_mkv.wstring());
+        context.duration_seconds = base_result.media_duration_seconds;
+        context.markers = base_result.markers;
+        context.delivery_pending = true;
+        auto callback = on_edit_master_ready_;
+        if (QCoreApplication::instance())
+            QMetaObject::invokeMethod(
+                QCoreApplication::instance(), [callback, context] { callback(context); }, Qt::QueuedConnection);
+        else
+            callback(context);
+    }
     is_remuxing_.store(true);
     remux_cancel_requested_.store(false);
     transient_mkv_path_ = transient_mkv;
@@ -2501,7 +2562,12 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
         // rename it onto the final path. A kill/powerloss mid-remux leaves only the
         // temp — the user-visible output path never holds a half-written MP4.
         const std::filesystem::path remux_temp = MakeSiblingTempPath(final_mp4);
-        auto remux_result = exosnap::engine::RemuxToProgressiveMp4(transient_mkv, remux_temp, progress_cb);
+        engine::RemuxIoControl io{[storage = background_storage_](uint64_t bytes, const std::atomic<bool>* cancel) {
+                                      return storage->Acquire(bytes, cancel);
+                                  },
+                                  &remux_cancel_requested_};
+        auto remux_result = exosnap::engine::RemuxToProgressiveMp4(transient_mkv, remux_temp, progress_cb,
+                                                                   engine::TrimRange{}, nullptr, &io);
         MetadataCompanionPublicationGuard companion_guard(std::move(remux_result.created_metadata_companions));
 
         if (remux_result.success) {
@@ -2540,39 +2606,10 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
         is_remuxing_.store(false);
 
         if (remux_result.success) {
-            // Retain the transient MKV as the edit master by renaming it to .edit.mkv.
-            // The companion file lives alongside the final MP4 for the edit surface.
-            std::filesystem::path edit_master = transient_mkv;
-            edit_master.replace_extension(L".edit.mkv");
-            std::error_code ec;
-            std::filesystem::rename(transient_mkv, edit_master, ec);
-            if (ec) {
-                // Rename failed (e.g. cross-device); fall back to copy+delete.
-                std::error_code copy_ec;
-                std::filesystem::copy_file(transient_mkv, edit_master,
-                                           std::filesystem::copy_options::overwrite_existing, copy_ec);
-                if (!copy_ec) {
-                    std::error_code del_ec;
-                    std::filesystem::remove(transient_mkv, del_ec);
-                    ec = del_ec; // report deletion error if any, clear on success
-                }
-            }
-            if (!ec) {
-                mkv_master_path_ = edit_master;
-                final_result.mkv_master_path = edit_master.wstring();
-                diagnostics::AppLog::info(
-                    QStringLiteral("remux"),
-                    QStringLiteral("edit master retained: \"%1\"").arg(QString::fromStdWString(edit_master.wstring())));
-            } else {
-                // Retention failed — edit surface degrades gracefully (no master path).
-                mkv_master_path_.clear();
-                diagnostics::AppLog::warning(QStringLiteral("remux"),
-                                             QStringLiteral("edit master retention failed: %1")
-                                                 .arg(QString::fromStdWString(ToWide(ec.message()))));
-                // Best-effort cleanup of the original transient path.
-                std::error_code del_ec;
-                std::filesystem::remove(transient_mkv, del_ec);
-            }
+            mkv_master_path_ = RetainEditMaster(transient_mkv);
+            final_result.mkv_master_path = mkv_master_path_.wstring();
+            for (auto& segment : final_result.segments)
+                segment.edit_master_path = QString::fromStdWString(mkv_master_path_.wstring());
 
             // Update file size to reflect the final MP4.
             std::error_code size_ec;
@@ -2646,6 +2683,7 @@ void RecordingCoordinator::QueueSegmentRemux(SegmentRemuxJob& job, std::function
     const auto queued_at = std::chrono::steady_clock::now();
     pending_segment_remux_jobs_.fetch_add(1);
     segment_remux_pool_.start([this, &job, work = std::move(work), queued_at] {
+        active_segment_remux_jobs_.fetch_add(1);
         const auto pending = pending_segment_remux_jobs_.fetch_sub(1) - 1;
         const auto age_ms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - queued_at).count();
@@ -2661,8 +2699,94 @@ void RecordingCoordinator::QueueSegmentRemux(SegmentRemuxJob& job, std::function
             job.error_message = "Unexpected remux failure";
             job.succeeded = false;
         }
+        active_segment_remux_jobs_.fetch_sub(1);
         job.completed.store(true, std::memory_order_release);
     });
+}
+
+std::filesystem::path RecordingCoordinator::RetainEditMaster(const std::filesystem::path& source) {
+    std::shared_ptr<const engine::RecordingMediaDescriptor> descriptor;
+    {
+        std::lock_guard lock(segments_mutex_);
+        const auto segment =
+            std::find_if(segments_.begin(), segments_.end(), [&](const auto& item) { return item.path == source; });
+        if (segment != segments_.end())
+            descriptor = segment->media_descriptor;
+    }
+    auto master = source;
+    master.replace_extension(L".edit.mkv");
+    const auto markers = ReadMarkerSidecar(DeriveMarkerSidecarPath(source));
+    const auto marker_bytes = SerializeMarkerSidecar(markers, QString::fromStdWString(master.filename().wstring()))
+                                  .toJson(QJsonDocument::Indented);
+    const auto identity_sidecar = std::filesystem::path(master.wstring() + L".exosnap.json");
+    const auto source_identity = std::filesystem::path(source.wstring() + L".exosnap.json");
+    std::error_code identity_error;
+    const bool master_identity_exists = std::filesystem::exists(identity_sidecar, identity_error);
+    const bool master_identity_unavailable = static_cast<bool>(identity_error);
+    const bool source_identity_exists = std::filesystem::exists(source_identity, identity_error);
+    const bool identities_clear =
+        !master_identity_exists && !master_identity_unavailable && !source_identity_exists && !identity_error;
+    HANDLE marker_reservation = INVALID_HANDLE_VALUE;
+    bool marker_ready = false;
+    if (descriptor && identities_clear) {
+        // Hold the exact companion identity through the media rename. A path-only
+        // existence check would allow another publisher to install unrelated markers.
+        marker_reservation = CreateFileW(DeriveMarkerSidecarPath(master).c_str(), GENERIC_WRITE | DELETE,
+                                         FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (marker_reservation != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            marker_ready = markers.empty() ||
+                           (WriteFile(marker_reservation, marker_bytes.constData(),
+                                      static_cast<DWORD>(marker_bytes.size()), &written, nullptr) &&
+                            written == static_cast<DWORD>(marker_bytes.size()) && FlushFileBuffers(marker_reservation));
+        }
+    }
+    const bool renamed = marker_ready && recording_artifacts_.RenameClosed(
+                                             {descriptor->recording_id, descriptor->segment_id,
+                                              descriptor->writer_generation, descriptor->descriptor_revision},
+                                             master, true) == ArtifactDisposition::Completed;
+    if (marker_reservation != INVALID_HANDLE_VALUE) {
+        if (!renamed || markers.empty()) {
+            FILE_DISPOSITION_INFO disposition{TRUE};
+            if (!SetFileInformationByHandle(marker_reservation, FileDispositionInfo, &disposition, sizeof(disposition)))
+                diagnostics::AppLog::warning(
+                    QStringLiteral("recording.artifacts"),
+                    QStringLiteral("Owned edit-master marker reservation could not be removed."));
+        }
+        if (!CloseHandle(marker_reservation))
+            diagnostics::AppLog::warning(QStringLiteral("recording.artifacts"),
+                                         QStringLiteral("Edit-master marker reservation could not be closed."));
+    }
+    if (!renamed) {
+        diagnostics::AppLog::warning(
+            QStringLiteral("recording.artifacts"),
+            QStringLiteral("Edit master remains at its source path; publication was not completed."));
+        master = source;
+    }
+    {
+        std::lock_guard lock(segments_mutex_);
+        edit_master_paths_.insert_or_assign(source, master);
+    }
+    return master;
+}
+
+std::optional<RecordingArtifactRegistry::SourceLease>
+RecordingCoordinator::AcquireEditMasterLease(const std::filesystem::path& path) {
+    std::shared_ptr<const engine::RecordingMediaDescriptor> descriptor;
+    {
+        std::lock_guard lock(segments_mutex_);
+        const auto segment = std::find_if(segments_.begin(), segments_.end(), [&](const auto& item) {
+            const auto alias = edit_master_paths_.find(item.path);
+            return item.path == path || (alias != edit_master_paths_.end() && alias->second == path);
+        });
+        if (segment != segments_.end())
+            descriptor = segment->media_descriptor;
+    }
+    if (!descriptor)
+        return std::nullopt;
+    return recording_artifacts_.AcquireSourceLease({descriptor->recording_id, descriptor->segment_id,
+                                                    descriptor->writer_generation, descriptor->descriptor_revision},
+                                                   descriptor->file_identity);
 }
 
 bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& transient_mkv,
@@ -2678,7 +2802,12 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
     // atomically rename it onto the segment path. A kill mid-remux leaves only the
     // temp — the segment output path never holds a half-written MP4.
     const std::filesystem::path segment_temp = MakeSiblingTempPath(output_mp4);
-    auto result = exosnap::engine::RemuxToProgressiveMp4(transient_mkv, segment_temp, progress_cb);
+    engine::RemuxIoControl io{[storage = background_storage_](uint64_t bytes, const std::atomic<bool>* cancel) {
+                                  return storage->Acquire(bytes, cancel);
+                              },
+                              &remux_cancel_requested_};
+    auto result = exosnap::engine::RemuxToProgressiveMp4(transient_mkv, segment_temp, progress_cb, engine::TrimRange{},
+                                                         nullptr, &io);
     MetadataCompanionPublicationGuard companion_guard(std::move(result.created_metadata_companions));
 
     if (result.success) {
@@ -2707,15 +2836,7 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
     }
 
     if (result.success) {
-        // Delete the transient MKV for this segment.
-        std::error_code ec;
-        std::filesystem::remove(transient_mkv, ec);
-        if (ec) {
-            diagnostics::AppLog::warning(QStringLiteral("remux"),
-                                         QStringLiteral("segment transient MKV removal failed: %1 path=\"%2\"")
-                                             .arg(QString::fromStdWString(ToWide(ec.message())),
-                                                  QString::fromStdWString(transient_mkv.filename().wstring())));
-        }
+        (void)RetainEditMaster(transient_mkv);
 
         std::error_code size_ec;
         const auto mp4_size = std::filesystem::file_size(output_mp4, size_ec);
@@ -2828,15 +2949,22 @@ uint64_t RecordingCoordinator::PendingRemuxReserveBytes() const {
     // of a two-hour session would keep its bytes in the reserve for the rest of
     // it, and a FAILED job (whose transient MKV is deliberately retained) would do
     // so permanently. The explicit completion flag is the only honest signal.
-    std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+    std::vector<std::filesystem::path> pending_sources;
+    {
+        std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+        for (const auto& job : segment_remux_jobs_)
+            if (!job->completed.load(std::memory_order_acquire))
+                pending_sources.push_back(job->transient_mkv);
+    }
     uint64_t total = 0;
-    for (const auto& job : segment_remux_jobs_) {
-        if (job->completed.load(std::memory_order_acquire))
-            continue; // finished — its transient MKV is either gone or permanent
+    for (const auto& source : pending_sources) {
         std::error_code ec;
-        const auto sz = std::filesystem::file_size(job->transient_mkv, ec);
-        if (!ec)
+        const auto sz = std::filesystem::file_size(source, ec);
+        if (!ec) {
+            if (sz > UINT64_MAX - total)
+                return UINT64_MAX;
             total += static_cast<uint64_t>(sz);
+        }
     }
     return total;
 }
@@ -3474,6 +3602,19 @@ void RecordingCoordinator::PostDiagnostics(exosnap::engine::RecordingDiagnostics
         last_snapshot_ = snapshot;
         has_last_snapshot_ = true;
     }
+    const bool recording = snapshot.lifecycle == engine::DiagnosticsLifecycle::Recording ||
+                           snapshot.lifecycle == engine::DiagnosticsLifecycle::Paused;
+    const bool pressure =
+        snapshot.valid &&
+        (snapshot.health == engine::PipelineHealth::Critical ||
+         snapshot.bottleneck == engine::PipelineBottleneck::Disk ||
+         (snapshot.video_queue.availability == engine::MetricAvailability::Available &&
+          snapshot.video_queue.current_depth > 16) ||
+         (snapshot.audio_queue.availability == engine::MetricAvailability::Available &&
+          snapshot.audio_queue.current_depth > 64) ||
+         (snapshot.mux.availability == engine::MetricAvailability::Available && snapshot.mux.latest_write_ms > 100) ||
+         snapshot.disk.write_failures > 0 || snapshot.disk.durability_flush_failures > 0);
+    background_storage_->SetPaused(recording && pressure);
     if (!on_diagnostics_updated_) {
         return;
     }

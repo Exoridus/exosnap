@@ -2,7 +2,6 @@
 #include "matroska_stream_writer.h"
 #include "production_runtime.h"
 #include "recording_audio_manifest.h"
-#include "runtime_config_key.h"
 #include "session_internal.h"
 #include <cstdint>
 #include <exosnap/engine/audio_media_manifest.h>

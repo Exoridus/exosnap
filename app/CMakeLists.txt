@@ -608,6 +608,9 @@ exosnap_add_gtest(
     SOURCES
         tests/test_output_settings.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingCoordinatorClips.cpp
+        services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         models/CaptureTargetPresentation.cpp
@@ -711,6 +714,9 @@ exosnap_add_gtest(
     SOURCES
         tests/test_recording_admission.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingCoordinatorClips.cpp
+        services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         models/CaptureTargetPresentation.cpp
@@ -735,6 +741,9 @@ exosnap_add_gtest(
     SOURCES
         tests/test_session_report_handoff.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingCoordinatorClips.cpp
+        services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         models/CaptureTargetPresentation.cpp
@@ -757,6 +766,9 @@ exosnap_add_gtest(
     SOURCES
         tests/test_mp4_split_remux.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingCoordinatorClips.cpp
+        services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         models/CaptureTargetPresentation.cpp
@@ -1278,6 +1290,9 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_capture_frame.cpp
             services/RecordingCoordinator.cpp
+            services/RecordingCoordinatorClips.cpp
+            services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
             services/RecordingAdmission.cpp
             services/AtomicFileOps.cpp
             models/CaptureTargetPresentation.cpp
@@ -1331,6 +1346,9 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_recording_markers.cpp
             services/RecordingCoordinator.cpp
+            services/RecordingCoordinatorClips.cpp
+            services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
             services/RecordingAdmission.cpp
             services/AtomicFileOps.cpp
             models/CaptureTargetPresentation.cpp
@@ -1501,6 +1519,9 @@ exosnap_add_gtest(
         services/UpdateCheckGate.cpp
         services/WhatsNewPayload.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingCoordinatorClips.cpp
+        services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         models/CaptureTargetPresentation.cpp
@@ -1520,3 +1541,24 @@ target_compile_definitions(update_service_distribution_tests PRIVATE NOMINMAX)
 target_link_libraries(update_service_distribution_tests PRIVATE
     mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib shell32.lib)
 add_dependencies(update_service_distribution_tests exosnap_build_info)
+
+exosnap_add_gtest(
+    NAME recording_artifact_lease_tests
+    TEST_PREFIX recording_artifacts.
+    SOURCES tests/test_recording_artifact_leases.cpp services/RecordingArtifactRegistry.cpp
+    LIBRARIES exosnap_engine Qt6::Core
+)
+target_include_directories(recording_artifact_lease_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(recording_artifact_lease_tests PRIVATE NOMINMAX)
+
+
+exosnap_add_gtest(
+    NAME recording_clip_jobs_tests
+    TEST_PREFIX recording_clips.
+    SOURCES tests/test_recording_clip_jobs.cpp tests/test_recording_clip_publication.cpp services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp services/AtomicFileOps.cpp
+    LIBRARIES exosnap_engine exosnap_diagnostics_test_support exosnap_app_log_test_support FFmpeg::mux Qt6::Core Qt6::Gui
+)
+target_include_directories(recording_clip_jobs_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/libs/engine/src ${PROJECT_SOURCE_DIR}/libs/engine/tests)
+target_compile_definitions(recording_clip_jobs_tests PRIVATE NOMINMAX)

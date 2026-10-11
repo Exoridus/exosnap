@@ -6,6 +6,7 @@ ApplicationWindow {
 
     required property AboutViewModelAdapter aboutViewModel
     required property RecordViewModelAdapter recordViewModel
+    required property RecordingClipAdapter clipAdapter
     required property RecordPreviewAdapter previewAdapter
     required property SettingsAdapter settingsAdapter
     required property DeviceAdapter deviceAdapter
@@ -468,6 +469,7 @@ ApplicationWindow {
         shellPresence: root.shellPresence
         aboutViewModel: root.aboutViewModel
         recordViewModel: root.recordViewModel
+        clipAdapter: root.clipAdapter
         previewAdapter: root.previewAdapter
         settingsAdapter: root.settingsAdapter
         deviceAdapter: root.deviceAdapter

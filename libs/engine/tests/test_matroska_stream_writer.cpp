@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <ios>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <utility>
@@ -41,6 +42,7 @@ using exosnap::engine::DurabilityFlushScheduler;
 using exosnap::engine::MatroskaStreamConfig;
 using exosnap::engine::MatroskaStreamWriter;
 using exosnap::engine::MuxPacket;
+using exosnap::engine::OutputIoOperation;
 using exosnap::engine::StreamAudioCodec;
 
 constexpr uint64_t kTimescaleNs = 1000000ULL;
@@ -120,6 +122,7 @@ constexpr uint64_t kIdSeekHead = 0x114D9B74ULL;
 constexpr uint64_t kIdCluster = 0x1F43B675ULL;
 constexpr uint64_t kIdCuePoint = 0xBBULL;
 constexpr uint64_t kIdDuration = 0x4489ULL;
+constexpr uint64_t kIdTimestampScale = 0x2AD7B1ULL;
 
 // Locate the Segment's level-1 children.
 std::vector<EbmlNode> SegmentChildren(const std::vector<uint8_t>& d) {
@@ -202,7 +205,20 @@ SegmentLayout ReadSegmentLayout(const std::vector<uint8_t>& d) {
     return out;
 }
 
-// Read the KaxDuration (8-byte big-endian double) from Info. Returns -1 if absent.
+uint64_t ReadUInt(const std::vector<uint8_t>& d, const EbmlNode& n);
+
+uint64_t ReadTimestampScaleNs(const std::vector<uint8_t>& d) {
+    for (const auto& c : SegmentChildren(d)) {
+        if (c.id != kIdInfo)
+            continue;
+        for (const auto& e : ParseChildren(d, c.data_off, c.data_off + c.data_size))
+            if (e.id == kIdTimestampScale)
+                return ReadUInt(d, e);
+    }
+    return 1'000'000;
+}
+
+// Read the KaxDuration (8-byte big-endian double) from Info in milliseconds. Returns -1 if absent.
 double ReadDurationMs(const std::vector<uint8_t>& d) {
     for (const auto& c : SegmentChildren(d)) {
         if (c.id != kIdInfo)
@@ -218,7 +234,7 @@ double ReadDurationMs(const std::vector<uint8_t>& d) {
                 bits = (bits << 8) | d[e.data_off + static_cast<size_t>(i)];
             double val = 0.0;
             std::memcpy(&val, &bits, sizeof(val));
-            return val;
+            return val * static_cast<double>(ReadTimestampScaleNs(d)) / 1'000'000.0;
         }
     }
     return -1.0;
@@ -558,7 +574,8 @@ TEST_F(StreamWriterTest, ReorderedVideoRetainsDecodeOrderAndPresentationTimestam
             ASSERT_GE(block.data_size, 5u);
             const size_t start = block.data_off;
             const auto relative = static_cast<int16_t>((static_cast<uint16_t>(file[start + 1]) << 8) | file[start + 2]);
-            actual_pts.push_back(static_cast<uint64_t>(static_cast<int64_t>(cluster_time) + relative) * 1000000);
+            actual_pts.push_back(static_cast<uint64_t>(static_cast<int64_t>(cluster_time) + relative) *
+                                 ReadTimestampScaleNs(file));
             markers.push_back(file[start + 4]);
         }
     }
@@ -973,6 +990,69 @@ TEST_F(StreamWriterTest, ReorderPayloadBudgetRejectsAnOversizedPacket) {
     packet.bytes.resize(64u * 1024 * 1024 + 1, 1);
     EXPECT_FALSE(writer.Push(std::move(packet)));
     EXPECT_TRUE(writer.failed());
+}
+
+TEST_F(StreamWriterTest, ThrottledClipWritesAdmitAndReportPhysicalChunks) {
+    auto config = MakeConfig(tmp_, true, false);
+    bool armed = false;
+    std::vector<uint64_t> admitted;
+    std::vector<uint64_t> written;
+    config.before_write = [&](OutputIoOperation, uint64_t bytes) {
+        if (armed)
+            admitted.push_back(bytes);
+        return true;
+    };
+    config.after_write = [&](OutputIoOperation, uint64_t bytes) {
+        if (armed)
+            written.push_back(bytes);
+    };
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config)) << writer.error();
+    armed = true;
+    MuxPacket packet;
+    packet.track_num = 1;
+    packet.is_key = true;
+    packet.bytes.assign(9ULL * 1024 * 1024, 0x65);
+    ASSERT_TRUE(writer.Push(std::move(packet))) << writer.error();
+    ASSERT_TRUE(writer.Finalize()) << writer.error();
+    ASSERT_FALSE(admitted.empty());
+    EXPECT_GE(std::count(admitted.begin(), admitted.end(), 4ULL * 1024 * 1024), 2);
+    for (const auto bytes : admitted)
+        EXPECT_LE(bytes, 4ULL * 1024 * 1024);
+    for (const auto bytes : written)
+        EXPECT_LE(bytes, 4ULL * 1024 * 1024);
+    EXPECT_EQ(std::accumulate(written.begin(), written.end(), uint64_t{0}),
+              std::accumulate(admitted.begin(), admitted.end(), uint64_t{0}));
+    EXPECT_GT(std::filesystem::file_size(tmp_), 9ULL * 1024 * 1024);
+}
+
+TEST_F(StreamWriterTest, ThrottledClipWriteCanCancelBetweenPhysicalChunks) {
+    auto config = MakeConfig(tmp_, true, false);
+    bool armed = false;
+    unsigned full_chunks = 0;
+    uint64_t physically_written = 0;
+    config.before_write = [&](OutputIoOperation, uint64_t bytes) {
+        if (armed && bytes == 4ULL * 1024 * 1024 && ++full_chunks == 2)
+            return false;
+        return true;
+    };
+    config.after_write = [&](OutputIoOperation, uint64_t bytes) {
+        if (armed)
+            physically_written += bytes;
+    };
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config)) << writer.error();
+    armed = true;
+    MuxPacket packet;
+    packet.track_num = 1;
+    packet.is_key = true;
+    packet.bytes.assign(9ULL * 1024 * 1024, 0x65);
+    ASSERT_TRUE(writer.Push(std::move(packet))) << writer.error();
+    EXPECT_FALSE(writer.Finalize());
+    EXPECT_TRUE(writer.failed());
+    EXPECT_EQ(full_chunks, 2u);
+    EXPECT_GE(physically_written, 4ULL * 1024 * 1024);
+    EXPECT_LT(physically_written, 9ULL * 1024 * 1024);
 }
 
 TEST_F(StreamWriterTest, PeakWindowBoundedRegardlessOfLength) {

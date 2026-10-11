@@ -46,6 +46,7 @@ static inline const char* av_err2str_cpp_test(int errnum) noexcept {
 
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/edit_timeline_export.h"
 #include "exosnap/engine/mp4_remuxer.h"
 #include "matroska_stream_writer.h"
 #include "test_unique_temp.h"
@@ -122,6 +123,7 @@ using exosnap::engine::ColorRange;
 using exosnap::engine::MatroskaStreamConfig;
 using exosnap::engine::MatroskaStreamWriter;
 using exosnap::engine::MuxPacket;
+using exosnap::engine::RemuxNoopCallback;
 using exosnap::engine::RemuxToMkv;
 using exosnap::engine::RemuxToProgressiveMp4;
 
@@ -430,6 +432,73 @@ TEST_F(RemuxerTest, SuccessfulRemux) {
     avformat_close_input(&ctx);
 
     EXPECT_GE(packet_count, 1) << "Could not read any packets from the output MP4";
+}
+
+TEST_F(RemuxerTest, BudgetedFaststartMetersPhysicalTransfersInBoundedChunks) {
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(MakeConfig(mkv_path_, 0)));
+    FeedSeconds(writer, 0.01, 1, 5 * 1024 * 1024, 0);
+    ASSERT_TRUE(writer.Finalize());
+    const auto source_bytes = std::filesystem::file_size(mkv_path_);
+
+    uint64_t admitted_bytes = 0;
+    uint64_t largest_request = 0;
+    exosnap::engine::RemuxIoControl io;
+    io.before_io = [&](uint64_t bytes, const std::atomic<bool>*) {
+        admitted_bytes += bytes;
+        largest_request = (std::max)(largest_request, bytes);
+        return true;
+    };
+    const auto result = RemuxToProgressiveMp4(mkv_path_, mp4_path_, RemuxNoopCallback(), {}, nullptr, &io);
+    ASSERT_TRUE(result.success) << result.message;
+    EXPECT_TRUE(MoovBeforeMdat(mp4_path_));
+    EXPECT_LE(largest_request, 4 * 1024 * 1024u);
+    EXPECT_GT(admitted_bytes, source_bytes * 3);
+}
+
+TEST_F(RemuxerTest, DeniedIoAbortsRemuxWithoutChangingSource) {
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(MakeConfig(mkv_path_, 0)));
+    FeedSeconds(writer, 0.01, 1, 5 * 1024 * 1024, 0);
+    ASSERT_TRUE(writer.Finalize());
+    const auto source_bytes = std::filesystem::file_size(mkv_path_);
+
+    uint64_t admitted_bytes = 0;
+    std::atomic<bool> cancelled{false};
+    exosnap::engine::RemuxIoControl io;
+    io.cancelled = &cancelled;
+    io.before_io = [&](uint64_t bytes, const std::atomic<bool>*) {
+        if (admitted_bytes + bytes > source_bytes * 3) {
+            cancelled.store(true);
+            return false;
+        }
+        admitted_bytes += bytes;
+        return true;
+    };
+    const auto result = RemuxToProgressiveMp4(mkv_path_, mp4_path_, RemuxNoopCallback(), {}, nullptr, &io);
+    EXPECT_FALSE(result.success);
+    EXPECT_TRUE(cancelled.load());
+    EXPECT_EQ(std::filesystem::file_size(mkv_path_), source_bytes);
+}
+
+TEST_F(RemuxerTest, BudgetedProbeReadsRealMediaAndHonorsCancellation) {
+    const auto source = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    uint64_t admitted_bytes = 0;
+    uint64_t largest_request = 0;
+    const exosnap::engine::BackgroundIoAdmission before_io = [&](uint64_t bytes, const std::atomic<bool>*) {
+        admitted_bytes += bytes;
+        largest_request = (std::max)(largest_request, bytes);
+        return true;
+    };
+    const auto metadata = exosnap::engine::ProbeEditMedia(source, {}, before_io);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    EXPECT_TRUE(metadata.content_identity_valid);
+    EXPECT_GT(admitted_bytes, std::filesystem::file_size(source));
+    EXPECT_LE(largest_request, 4 * 1024 * 1024u);
+
+    std::atomic<bool> cancelled{true};
+    const auto stopped = exosnap::engine::ProbeEditMedia(source, {}, before_io, &cancelled);
+    EXPECT_FALSE(stopped.error.empty());
 }
 
 // ---------------------------------------------------------------------------

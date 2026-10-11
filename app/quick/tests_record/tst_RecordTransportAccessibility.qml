@@ -24,6 +24,7 @@ TestCase {
             width: 1100
             height: 96
             recordViewModel: recordDriver.adapter
+            clipAdapter: recordDriver.clipAdapter
         }
     }
 

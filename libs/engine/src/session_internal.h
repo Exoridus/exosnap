@@ -50,6 +50,7 @@ struct SessionState {
     std::shared_ptr<ProductionRuntime> production_runtime;
     std::shared_ptr<FileOutput> file_output;
     std::shared_ptr<RecordingMediaIndex> media_index;
+    BackgroundIoAdmission background_io_admission;
     std::function<bool(OutputIoOperation)> output_io_failure;
     SessionState() : stop_event(CreateEventW(nullptr, /*manual reset*/ TRUE, FALSE, nullptr)) {
     }

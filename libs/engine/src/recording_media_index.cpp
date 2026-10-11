@@ -1,4 +1,6 @@
 #include "recording_media_index.h"
+#include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/background_io.h>
 #include <exosnap/engine/color_metadata.h>
 #include <exosnap/engine/recording_media_types.h>
 
@@ -27,6 +29,21 @@
 #include <windows.h>
 
 namespace exosnap::engine {
+
+std::optional<int64_t> SegmentLocalToRecordingNs(int64_t segment_origin_r_ns, int64_t local_ns) noexcept {
+    if ((local_ns > 0 && segment_origin_r_ns > (std::numeric_limits<int64_t>::max)() - local_ns) ||
+        (local_ns < 0 && segment_origin_r_ns < (std::numeric_limits<int64_t>::min)() - local_ns))
+        return std::nullopt;
+    return segment_origin_r_ns + local_ns;
+}
+
+std::optional<int64_t> RecordingToSegmentLocalNs(int64_t segment_origin_r_ns, int64_t recording_ns) noexcept {
+    if ((segment_origin_r_ns < 0 && recording_ns > (std::numeric_limits<int64_t>::max)() + segment_origin_r_ns) ||
+        (segment_origin_r_ns > 0 && recording_ns < (std::numeric_limits<int64_t>::min)() + segment_origin_r_ns))
+        return std::nullopt;
+    return recording_ns - segment_origin_r_ns;
+}
+
 namespace {
 
 using Json = nlohmann::json;
@@ -169,14 +186,50 @@ MediaCodecDescriptor ReadCodec(const Json& value) {
             value.size() == 7 ? value[6].get<std::string>() : std::string{}};
 }
 
+bool ManifestMatchesDescriptor(const AudioManifest1& manifest, const RecordingMediaDescriptor& descriptor) {
+    if (manifest.recording_id != descriptor.recording_id || manifest.media_id != descriptor.media_id ||
+        manifest.segment_id != descriptor.segment_id ||
+        manifest.segment_origin_r_ns != descriptor.segment_origin_r_ns ||
+        manifest.continuity_group != descriptor.continuity_group ||
+        manifest.default_monitor_track_ids != descriptor.default_monitor_track_ids ||
+        manifest.tracks.size() != descriptor.audio_tracks.size())
+        return false;
+    for (const auto& source : manifest.tracks) {
+        const auto index = source.container.stream_index.value;
+        if (index >= descriptor.audio_tracks.size())
+            return false;
+        const auto& track = descriptor.audio_tracks[index];
+        const auto& claimed = source.container;
+        if (track.track_id != claimed.track_id || track.stream_index.value != index ||
+            track.track_uid != claimed.track_uid || track.name != claimed.name || track.role != claimed.role ||
+            track.source_ids != claimed.source_ids || track.codec.codec_id != claimed.codec.codec_id ||
+            track.codec.codec_private != claimed.codec.codec_private ||
+            track.codec.sample_rate != claimed.codec.sample_rate || track.codec.channels != claimed.codec.channels ||
+            track.codec.bit_depth != claimed.codec.bit_depth ||
+            track.codec.codec_delay_samples != claimed.codec.codec_delay_samples ||
+            track.codec.channel_layout != claimed.codec.channel_layout ||
+            track.encoder_instance_id != claimed.encoder_instance_id || track.encoder_reset != claimed.encoder_reset ||
+            track.first_decoded_sample_r != claimed.first_decoded_sample_r ||
+            track.packet_duration_ns != claimed.packet_duration_ns || track.preroll_ns != claimed.preroll_ns)
+            return false;
+    }
+    return true;
+}
+
 Json Descriptor(const RecordingMediaDescriptor& value) {
     Json tracks = Json::array();
     for (const auto& track : value.audio_tracks) {
         Json sources = Json::array();
         for (const auto& source : track.source_ids)
             sources.push_back(ToUuid(source));
-        tracks.push_back(Json::array({ToUuid(track.track_id), track.stream_index.value, track.track_uid, track.name,
-                                      track.role, Codec(track.codec), sources}));
+        tracks.push_back(Json::array(
+            {ToUuid(track.track_id), track.stream_index.value, track.track_uid, track.name, track.role,
+             Codec(track.codec), sources,
+             track.encoder_instance_id == AudioEncoderInstanceId{} ? Json(nullptr)
+                                                                   : Json(ToUuid(track.encoder_instance_id)),
+             track.encoder_reset, track.first_decoded_sample_r ? Json(*track.first_decoded_sample_r) : Json(nullptr),
+             track.packet_duration_ns ? Json(*track.packet_duration_ns) : Json(nullptr),
+             track.preroll_ns ? Json(*track.preroll_ns) : Json(nullptr)}));
     }
     Json monitor = Json::array();
     for (const auto& id : value.default_monitor_track_ids)
@@ -189,12 +242,34 @@ Json Descriptor(const RecordingMediaDescriptor& value) {
          c.mastering_display_primary_r_y, c.mastering_display_primary_g_x, c.mastering_display_primary_g_y,
          c.mastering_display_primary_b_x, c.mastering_display_primary_b_y, c.mastering_display_white_point_x,
          c.mastering_display_white_point_y, c.mastering_display_max_luminance, c.mastering_display_min_luminance});
-    return Json::array(
-        {ToUuid(value.recording_id), ToUuid(value.media_id), ToUuid(value.segment_id), value.source_timeline_revision,
-         value.writer_generation, value.descriptor_revision, value.file_identity.volume_serial,
+    auto result = Json::array(
+        {ToUuid(value.recording_id),
+         ToUuid(value.media_id),
+         ToUuid(value.segment_id),
+         value.source_timeline_revision,
+         value.writer_generation,
+         value.descriptor_revision,
+         value.file_identity.volume_serial,
          Json::binary(std::vector<uint8_t>(value.file_identity.file_id.begin(), value.file_identity.file_id.end())),
-         value.path, Codec(value.video), tracks, monitor, color, value.segment_origin_r_ns, value.continuity_group,
-         Json::binary(value.immutable_header)});
+         value.path,
+         Codec(value.video),
+         tracks,
+         monitor,
+         color,
+         value.segment_origin_r_ns,
+         value.continuity_group,
+         Json::binary(value.immutable_header),
+         value.video_width,
+         value.video_height,
+         value.frame_rate_num,
+         value.frame_rate_den});
+    if (value.audio_manifest) {
+        const auto serialized = SerializeAudioManifest1(*value.audio_manifest);
+        if (!serialized.succeeded() || !ManifestMatchesDescriptor(*value.audio_manifest, value))
+            throw std::runtime_error("Invalid media descriptor audio manifest");
+        result.push_back(*serialized.value());
+    }
+    return result;
 }
 
 template <typename Id> Id ReadId(const Json& value) {
@@ -205,8 +280,8 @@ template <typename Id> Id ReadId(const Json& value) {
 }
 
 RecordingMediaDescriptor ReadDescriptor(const Json& value) {
-    if (!value.is_array() || value.size() != 16 || value[10].size() > 8 || value[11].size() > 8 ||
-        value[12].size() != 19 || value[15].size() > kQueueBytes)
+    if (!value.is_array() || (value.size() != 16 && value.size() != 20 && value.size() != 21) || value[10].size() > 8 ||
+        value[11].size() > 8 || value[12].size() != 19 || value[15].size() > kQueueBytes)
         throw std::runtime_error("Invalid media descriptor");
     RecordingMediaDescriptor result;
     result.recording_id = ReadId<RecordingId>(value[0]);
@@ -223,7 +298,7 @@ RecordingMediaDescriptor ReadDescriptor(const Json& value) {
     result.path = value[8].get<std::string>();
     result.video = ReadCodec(value[9]);
     for (const auto& item : value[10]) {
-        if (item.size() != 7 || item[6].size() > 1024)
+        if ((item.size() != 7 && item.size() != 12) || item[6].size() > 1024)
             throw std::runtime_error("Invalid audio track descriptor");
         ContainerAudioTrack track;
         track.track_id = ReadId<AudioTrackId>(item[0]);
@@ -234,6 +309,21 @@ RecordingMediaDescriptor ReadDescriptor(const Json& value) {
         track.codec = ReadCodec(item[5]);
         for (const auto& id : item[6])
             track.source_ids.push_back(ReadId<AudioSourceId>(id));
+        if (item.size() == 12) {
+            if (!item[7].is_null())
+                track.encoder_instance_id = ReadId<AudioEncoderInstanceId>(item[7]);
+            track.encoder_reset = item[8].get<bool>();
+            if (!item[9].is_null())
+                track.first_decoded_sample_r = Checked<int64_t>(item[9]);
+            if (!item[10].is_null())
+                track.packet_duration_ns = Checked<uint64_t>(item[10]);
+            if (!item[11].is_null())
+                track.preroll_ns = Checked<uint64_t>(item[11]);
+            if (track.encoder_reset && track.encoder_instance_id == AudioEncoderInstanceId{})
+                throw std::runtime_error("Encoder reset has no instance identity");
+            if (track.packet_duration_ns && *track.packet_duration_ns == 0)
+                throw std::runtime_error("Invalid audio packet duration");
+        }
         result.audio_tracks.push_back(std::move(track));
     }
     for (const auto& id : value[11])
@@ -258,6 +348,15 @@ RecordingMediaDescriptor ReadDescriptor(const Json& value) {
     result.segment_origin_r_ns = Checked<int64_t>(value[13]);
     result.continuity_group = Checked<uint64_t>(value[14]);
     result.immutable_header = Bytes(value[15]);
+    if (value.size() >= 20) {
+        result.video_width = Checked<uint32_t>(value[16]);
+        result.video_height = Checked<uint32_t>(value[17]);
+        result.frame_rate_num = Checked<uint32_t>(value[18]);
+        result.frame_rate_den = Checked<uint32_t>(value[19]);
+        if ((result.video_width == 0) != (result.video_height == 0) ||
+            (result.frame_rate_num != 0 && result.frame_rate_den == 0))
+            throw std::runtime_error("Invalid video geometry or frame rate");
+    }
     if (result.writer_generation == 0 || result.descriptor_revision == 0 || result.file_identity == FileIdentity{} ||
         result.immutable_header.empty())
         throw std::runtime_error("Incomplete media descriptor");
@@ -268,6 +367,13 @@ RecordingMediaDescriptor ReadDescriptor(const Json& value) {
         for (size_t prior = 0; prior < index; ++prior)
             if (track.track_id == result.audio_tracks[prior].track_id)
                 throw std::runtime_error("Duplicate audio track identity");
+    }
+    if (value.size() == 21) {
+        const auto serialized = value[20].get<std::string>();
+        const auto parsed = ParseAudioManifest1(serialized);
+        if (!parsed.succeeded() || !ManifestMatchesDescriptor(*parsed.value(), result))
+            throw std::runtime_error("Invalid media descriptor audio manifest");
+        result.audio_manifest = std::make_shared<const AudioManifest1>(*parsed.value());
     }
     return result;
 }
@@ -303,7 +409,7 @@ CommittedMediaReceipt ReadReceipt(const Json& value) {
         if (item.size() != 4 || item[2].size() > 9 || item[3].size() > 65536)
             throw std::runtime_error("Invalid cluster record");
         ClusterExtent extent{Checked<uint64_t>(item[0]), Checked<uint64_t>(item[1]), {}, {}};
-        if (extent.file_begin < previous || extent.file_end <= extent.file_begin ||
+        if ((!result.clusters.empty() && extent.file_begin != previous) || extent.file_end <= extent.file_begin ||
             extent.file_end > result.readable_end_offset)
             throw std::runtime_error("Invalid cluster boundary");
         for (const auto& c : item[2]) {
@@ -331,18 +437,30 @@ CommittedMediaReceipt ReadReceipt(const Json& value) {
         previous = extent.file_end;
         result.clusters.push_back(std::move(extent));
     }
+    if (previous != result.readable_end_offset)
+        throw std::runtime_error("Receipt readable prefix exceeds complete clusters");
     return result;
 }
 
 void ValidateReceipt(const CommittedMediaReceipt& receipt, const RecordingMediaDescriptor& descriptor,
-                     uint64_t last_commit, uint64_t last_readable) {
+                     uint64_t last_commit, uint64_t last_readable, uint64_t last_durable) {
     const uint64_t expected_begin = last_readable == 0 ? descriptor.immutable_header.size() : last_readable;
     if (receipt.recording_id != descriptor.recording_id || receipt.segment_id != descriptor.segment_id ||
         receipt.writer_generation != descriptor.writer_generation ||
         receipt.descriptor_revision != descriptor.descriptor_revision || receipt.commit_sequence <= last_commit ||
-        receipt.readable_end_offset < last_readable || receipt.clusters.empty() ||
+        receipt.readable_end_offset < last_readable || receipt.durable_end_offset < last_durable ||
+        receipt.durable_end_offset > receipt.readable_end_offset || receipt.clusters.empty() ||
         receipt.clusters.front().file_begin != expected_begin)
         throw std::runtime_error("Receipt generation, sequence or prefix mismatch");
+    uint64_t next_begin = expected_begin;
+    for (const auto& extent : receipt.clusters) {
+        if (extent.file_begin != next_begin || extent.file_end <= extent.file_begin ||
+            extent.file_end > receipt.readable_end_offset)
+            throw std::runtime_error("Receipt clusters do not cover the readable prefix");
+        next_begin = extent.file_end;
+    }
+    if (next_begin != receipt.readable_end_offset)
+        throw std::runtime_error("Receipt clusters do not reach the readable end");
 }
 
 size_t ReceiptBytes(const CommittedMediaReceipt& receipt) {
@@ -361,7 +479,8 @@ size_t ReceiptBytes(const CommittedMediaReceipt& receipt) {
 
 Outcome<size_t> ReadJournal(const std::filesystem::path& path, uint64_t end, bool recover, const FileIdentity* identity,
                             const std::function<bool(const RecordingMediaDescriptor&)>& descriptor_visitor,
-                            const std::function<bool(const CommittedMediaReceipt&)>& receipt_visitor) {
+                            const std::function<bool(const CommittedMediaReceipt&)>& receipt_visitor,
+                            const std::function<bool(uint64_t)>& before_read) {
     Handle file;
     file.value = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -377,7 +496,7 @@ Outcome<size_t> ReadJournal(const std::filesystem::path& path, uint64_t end, boo
     end = recover ? available : end;
     uint64_t cursor = 0, sequence = 0;
     size_t count = 0;
-    uint64_t last_commit = 0, last_readable = 0;
+    uint64_t last_commit = 0, last_readable = 0, last_durable = 0;
     std::optional<RecordingMediaDescriptor> descriptor;
     try {
         while (cursor < end) {
@@ -385,18 +504,22 @@ Outcome<size_t> ReadJournal(const std::filesystem::path& path, uint64_t end, boo
                 return recover ? Outcome<size_t>{count} : Outcome<size_t>{IndexError("Truncated journal header")};
             std::array<uint8_t, kRecordHeader> header{};
             DWORD read = 0;
+            if (before_read && !before_read(header.size()))
+                return IndexError("Index journal read cancelled", EngineErrorCode::Cancelled);
             if (!ReadFile(file.value, header.data(), static_cast<DWORD>(header.size()), &read, nullptr) ||
                 read != header.size())
                 return IndexError("Cannot read journal header");
             const uint64_t payload_size = Get(header, 12, 4);
             const uint64_t next_sequence = Get(header, 16, 8);
             const uint64_t type = Get(header, 8, 4);
-            if (Get(header, 0, 4) != kMagic || Get(header, 4, 4) != 1 || (type != 1 && type != 2) ||
-                payload_size > kQueueBytes || next_sequence != sequence + 1)
+            if (Get(header, 0, 4) != kMagic || (Get(header, 4, 4) != 1 && Get(header, 4, 4) != 2) ||
+                (type != 1 && type != 2) || payload_size > kQueueBytes || next_sequence != sequence + 1)
                 return IndexError("Invalid journal record header", EngineErrorCode::SourceIntegrityFailure);
             if (payload_size > end - cursor - kRecordHeader)
                 return recover ? Outcome<size_t>{count} : Outcome<size_t>{IndexError("Truncated journal payload")};
             std::vector<uint8_t> payload(static_cast<size_t>(payload_size));
+            if (before_read && !before_read(payload.size()))
+                return IndexError("Index journal read cancelled", EngineErrorCode::Cancelled);
             if (!ReadFile(file.value, payload.data(), static_cast<DWORD>(payload.size()), &read, nullptr) ||
                 read != payload.size())
                 return IndexError("Cannot read journal payload");
@@ -410,15 +533,17 @@ Outcome<size_t> ReadJournal(const std::filesystem::path& path, uint64_t end, boo
                     throw std::runtime_error("Journal recording identity changed");
                 descriptor = std::move(next);
                 last_readable = 0;
+                last_durable = 0;
                 if (descriptor_visitor)
                     keep = descriptor_visitor(*descriptor);
             } else {
                 auto receipt = ReadReceipt(value);
                 if (!descriptor)
                     throw std::runtime_error("Missing journal media descriptor");
-                ValidateReceipt(receipt, *descriptor, last_commit, last_readable);
+                ValidateReceipt(receipt, *descriptor, last_commit, last_readable, last_durable);
                 last_commit = receipt.commit_sequence;
                 last_readable = receipt.readable_end_offset;
+                last_durable = receipt.durable_end_offset;
                 if (receipt_visitor)
                     keep = receipt_visitor(receipt);
             }
@@ -445,10 +570,12 @@ struct RecordingMediaIndex::State {
     std::array<std::optional<Entry>, kQueueSlots> queue;
     std::atomic<uint64_t> written{0}, consumed{0}, committed{0};
     std::atomic<size_t> payload_bytes{0}, cached_bytes{0};
-    std::atomic<bool> rebuild{false}, stopping{false};
+    std::atomic<bool> rebuild{false}, stopping{false}, clip_interval{false};
+    std::optional<int64_t> first_rap_r;
     std::condition_variable wake;
     std::mutex wait_mutex, snapshot_mutex;
     std::filesystem::path path;
+    BackgroundIoAdmission admission;
     std::optional<MediaIndexSnapshot> snapshot;
 
     ReceiptAcceptance Enqueue(Entry entry) noexcept {
@@ -476,7 +603,7 @@ struct RecordingMediaIndex::State {
             rebuild.store(true, std::memory_order_release);
             return;
         }
-        uint64_t sequence = 0, end = 0, last_commit = 0, last_readable = 0;
+        uint64_t sequence = 0, end = 0, last_commit = 0, last_readable = 0, last_durable = 0;
         std::shared_ptr<const RecordingMediaDescriptor> descriptor;
         std::deque<std::vector<uint8_t>> cache;
         try {
@@ -501,13 +628,15 @@ struct RecordingMediaIndex::State {
                         throw std::runtime_error("Index recording identity changed");
                     descriptor = std::move(entry.descriptor);
                     last_readable = 0;
+                    last_durable = 0;
                 } else {
                     const auto& receipt = entry.receipt;
                     if (!descriptor)
                         throw std::runtime_error("Missing index media descriptor");
-                    ValidateReceipt(receipt, *descriptor, last_commit, last_readable);
+                    ValidateReceipt(receipt, *descriptor, last_commit, last_readable, last_durable);
                     last_commit = receipt.commit_sequence;
                     last_readable = receipt.readable_end_offset;
+                    last_durable = receipt.durable_end_offset;
                 }
                 auto payload = Json::to_cbor(type == 1 ? Descriptor(*descriptor) : Receipt(entry.receipt));
                 if (payload.size() > kQueueBytes)
@@ -519,14 +648,15 @@ struct RecordingMediaIndex::State {
                     (void)ReadReceipt(Json::from_cbor(payload));
                 std::array<uint8_t, kRecordHeader> header{};
                 Put(header, 0, kMagic, 4);
-                Put(header, 4, 1, 4);
+                Put(header, 4, 2, 4);
                 Put(header, 8, type, 4);
                 Put(header, 12, payload.size(), 4);
                 Put(header, 16, ++sequence, 8);
                 Put(header, 24, Crc(payload), 4);
                 DWORD count = 0;
-                if (!WriteFile(file.value, header.data(), static_cast<DWORD>(header.size()), &count, nullptr) ||
-                    count != header.size() ||
+                if ((admission && !admission(header.size(), &stopping)) ||
+                    !WriteFile(file.value, header.data(), static_cast<DWORD>(header.size()), &count, nullptr) ||
+                    count != header.size() || (admission && !admission(payload.size(), &stopping)) ||
                     !WriteFile(file.value, payload.data(), static_cast<DWORD>(payload.size()), &count, nullptr) ||
                     count != payload.size())
                     throw std::runtime_error("Index journal write failed");
@@ -552,6 +682,19 @@ struct RecordingMediaIndex::State {
                         std::lock_guard lock(snapshot_mutex);
                         snapshot = std::move(next);
                     }
+                    for (const auto& cluster : entry.receipt.clusters)
+                        for (const auto& rap : cluster.random_access_points) {
+                            if (rap.track_number != 1 || rap.kind != RandomAccessKind::ClosedGop)
+                                continue;
+                            const auto recording_pts =
+                                SegmentLocalToRecordingNs(descriptor->segment_origin_r_ns, rap.pts_ns);
+                            if (!recording_pts)
+                                continue;
+                            if (first_rap_r && *recording_pts > *first_rap_r)
+                                clip_interval.store(true, std::memory_order_release);
+                            if (!first_rap_r)
+                                first_rap_r = *recording_pts;
+                        }
                     committed.store(last_commit, std::memory_order_release);
                 }
             }
@@ -561,7 +704,9 @@ struct RecordingMediaIndex::State {
     }
 };
 
-RecordingMediaIndex::RecordingMediaIndex(std::filesystem::path journal_path) : state_(std::make_shared<State>()) {
+RecordingMediaIndex::RecordingMediaIndex(std::filesystem::path journal_path, BackgroundIoAdmission admission)
+    : state_(std::make_shared<State>()) {
+    state_->admission = std::move(admission);
     state_->path = std::move(journal_path);
     std::thread([state = state_] { state->Run(); }).detach();
 }
@@ -576,9 +721,18 @@ RecordingMediaIndex::RegisterDescriptor(std::shared_ptr<const RecordingMediaDesc
         state_->rebuild.store(true, std::memory_order_release);
         return ReceiptAcceptance::IndexDegraded;
     }
+    size_t manifest_bytes = 0;
+    if (descriptor->audio_manifest) {
+        const auto serialized = SerializeAudioManifest1(*descriptor->audio_manifest);
+        if (!serialized.succeeded() || !ManifestMatchesDescriptor(*descriptor->audio_manifest, *descriptor)) {
+            state_->rebuild.store(true, std::memory_order_release);
+            return ReceiptAcceptance::IndexDegraded;
+        }
+        manifest_bytes = serialized.value()->size();
+    }
     size_t bytes = sizeof(RecordingMediaDescriptor) + descriptor->immutable_header.capacity() +
                    descriptor->video.codec_private.capacity() + descriptor->video.channel_layout.capacity() +
-                   descriptor->path.capacity();
+                   descriptor->path.capacity() + manifest_bytes;
     for (const auto& track : descriptor->audio_tracks) {
         if (track.source_ids.size() > 1024 || track.codec.codec_private.capacity() > kQueueBytes) {
             state_->rebuild.store(true, std::memory_order_release);
@@ -601,6 +755,9 @@ Outcome<MediaIndexSnapshot> RecordingMediaIndex::Freeze() const {
 bool RecordingMediaIndex::needs_rebuild() const noexcept {
     return state_->rebuild.load(std::memory_order_acquire);
 }
+bool RecordingMediaIndex::has_closed_clip_interval() const noexcept {
+    return !needs_rebuild() && state_->clip_interval.load(std::memory_order_acquire);
+}
 uint64_t RecordingMediaIndex::journal_committed_through() const noexcept {
     return state_->committed.load(std::memory_order_acquire);
 }
@@ -613,12 +770,13 @@ size_t RecordingMediaIndex::cache_bytes() const noexcept {
 Outcome<size_t>
 RecordingMediaIndex::Visit(const MediaIndexSnapshot& snapshot,
                            const std::function<bool(const RecordingMediaDescriptor&)>& descriptor_visitor,
-                           const std::function<bool(const CommittedMediaReceipt&)>& receipt_visitor) {
+                           const std::function<bool(const CommittedMediaReceipt&)>& receipt_visitor,
+                           const std::function<bool(uint64_t)>& before_read) {
     return ReadJournal(snapshot.journal_path, snapshot.journal_end, false, &snapshot.journal_identity,
-                       descriptor_visitor, receipt_visitor);
+                       descriptor_visitor, receipt_visitor, before_read);
 }
 Outcome<size_t> RecordingMediaIndex::InspectJournal(const std::filesystem::path& path) {
-    return ReadJournal(path, 0, true, nullptr, {}, {});
+    return ReadJournal(path, 0, true, nullptr, {}, {}, {});
 }
 
 } // namespace exosnap::engine

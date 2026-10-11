@@ -150,6 +150,9 @@ struct MatroskaStreamConfig {
     std::function<ReceiptAcceptance(CommittedMediaReceipt)> publish_committed;
     // Optional deterministic fault injector. Called only by the owning mux worker.
     std::function<bool(OutputIoOperation)> fail_io;
+    // Optional clip-worker budget hooks. Recorder configurations leave them empty.
+    std::function<bool(OutputIoOperation, uint64_t)> before_write;
+    std::function<void(OutputIoOperation, uint64_t)> after_write;
     std::string output_path;
 
     // True when the caller has already created output_path exclusively and is
@@ -217,6 +220,9 @@ struct MatroskaStreamConfig {
     uint64_t reorder_window_ns = 3ULL * 1000000000ULL; // 3 seconds
     size_t reorder_window_max_packets = 4096;
     size_t reorder_window_max_bytes = kMuxReorderPayloadBytes;
+    // Zero preserves the recorder's time-based clusters. Clip jobs may cap an
+    // in-memory cluster and start a new one before admitting the next packet.
+    size_t max_cluster_payload_bytes = 0;
 };
 
 class MatroskaStreamWriter {
@@ -227,6 +233,16 @@ class MatroskaStreamWriter {
     [[nodiscard]] bool media_index_degraded() const noexcept {
         return m_media_index_degraded;
     }
+    // Segment-local end of emitted, decoded audio or video coverage after a successful finalize.
+    // Empty when no measured coverage is available; an explicit Duration override does not alter it.
+    [[nodiscard]] std::optional<uint64_t> measured_content_end_ns() const noexcept {
+        if (!m_finalized || m_failed || m_media_index_degraded || !m_has_covered_end)
+            return std::nullopt;
+        return m_max_covered_end_ns;
+    }
+    // A closed writer can prove the final video endpoint only after its last cluster was accepted.
+    // The caller must match this seal against a frozen journal snapshot before using EOS as a boundary.
+    [[nodiscard]] std::optional<RecordingSegmentSeal> finalized_segment_seal() const noexcept;
 
     MatroskaStreamWriter();
     ~MatroskaStreamWriter();
@@ -295,6 +311,9 @@ class MatroskaStreamWriter {
     [[nodiscard]] uint64_t current_window_bytes() const noexcept {
         return m_cur_window_bytes;
     }
+    [[nodiscard]] uint64_t peak_cluster_payload_bytes() const noexcept {
+        return m_peak_cluster_payload_bytes;
+    }
 
     // Filesystem write-boundary diagnostics. bytes_written is the cumulative file
     // offset advanced by cluster renders; last_flush_ms is the most recent cluster
@@ -320,7 +339,7 @@ class MatroskaStreamWriter {
     // Minimum spacing between durability flushes performed inside FlushCluster()
     // (see DurabilityFlushScheduler above and FlushCluster()'s use of it in the
     // .cpp). Deliberately NOT a user-facing setting (no UI scope). Clusters
-    // already land roughly every 2 s in steady-state recording (kClusterBoundaryMs
+    // already land roughly every 2 s in steady-state recording (kClusterBoundaryTicks
     // in matroska_stream_writer.cpp), so this keeps the added OS-durability
     // syscall on the same cadence as that steady rhythm instead of firing on
     // every cluster — a pathological burst of clusters (e.g. Finalize()'s forced
@@ -395,15 +414,23 @@ class MatroskaStreamWriter {
     // Active cluster state.
     libmatroska::KaxCluster* m_cluster = nullptr;
     bool m_first_cluster = true;
-    uint64_t m_cluster_start_ms = 0;
+    uint64_t m_cluster_start_ticks = 0;
     // Backing bytes for blocks in the current cluster must outlive its Render().
     std::vector<std::vector<uint8_t>> m_cluster_bytes;
+    uint64_t m_cluster_payload_bytes = 0;
+    uint64_t m_peak_cluster_payload_bytes = 0;
     // Video keyframe cue points pending for the current cluster.
-    std::vector<uint64_t> m_pending_cue_ms;
+    std::vector<uint64_t> m_pending_cue_ticks;
+    std::array<uint64_t, exosnap::engine::kMaxAudioTracks> m_opus_emitted_samples{};
 
     uint64_t m_max_emitted_pts_ns = 0; // for final Duration
+    uint64_t m_max_covered_end_ns = 0;
+    bool m_has_covered_end = false;
+    uint64_t m_max_video_covered_end_ns = 0;
+    bool m_has_video_covered_end = false;
     bool m_opened = false;
     bool m_finalized = false;
+    bool m_finalize_succeeded = false;
     bool m_failed = false;
     std::string m_error;
 

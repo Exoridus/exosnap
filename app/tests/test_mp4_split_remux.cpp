@@ -20,12 +20,15 @@
 #include <QDir>
 #include <QFile>
 #include <QString>
+#include <QTemporaryDir>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -33,11 +36,28 @@
 #include <exosnap/engine/recorder_session.h>
 
 #include "diagnostics/DiskSpaceThresholds.h"
+#include "models/MarkerSidecar.h"
 #include "models/OutputSettingsModel.h"
 #include "services/RecordingCoordinator.h"
 #include "settings/RecoveryManifestStore.h"
 
 namespace exosnap {
+class RecordingCoordinatorTestPeer {
+  public:
+    static std::filesystem::path Retain(RecordingCoordinator& coordinator,
+                                        const engine::RecordingMediaDescriptor& descriptor) {
+        if (!coordinator.recording_artifacts_.RegisterSource(descriptor, false))
+            return {};
+        engine::CompletedSegment segment;
+        segment.path = descriptor.path;
+        segment.media_descriptor = std::make_shared<const engine::RecordingMediaDescriptor>(descriptor);
+        {
+            std::lock_guard lock(coordinator.segments_mutex_);
+            coordinator.segments_.push_back(std::move(segment));
+        }
+        return coordinator.RetainEditMaster(descriptor.path);
+    }
+};
 namespace {
 
 // ─── QCoreApplication init ────────────────────────────────────────────────────
@@ -92,6 +112,137 @@ static RecoveryManifestEntry MakeManifestEntry(const QString& id, const QString&
 
 TEST_F(Mp4SplitRemuxTest, ComputeHardStopThreshold_ZeroReserve_EqualsBase) {
     EXPECT_EQ(diagnostics::ComputeHardStopThreshold(0), diagnostics::kHardStopFreeBytes);
+}
+
+TEST_F(Mp4SplitRemuxTest, EditMasterRetentionPreservesSourceWhenTargetIsOccupied) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const std::filesystem::path source = directory.filePath(QStringLiteral("segment.partial")).toStdWString();
+    auto master = source;
+    master.replace_extension(L".edit.mkv");
+    {
+        std::ofstream source_file(source, std::ios::binary);
+        source_file << "recorded source";
+        ASSERT_TRUE(source_file.good());
+        std::ofstream occupied(master, std::ios::binary);
+        occupied << "existing master";
+        ASSERT_TRUE(occupied.good());
+    }
+    const auto handle =
+        CreateFileW(source.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+    FILE_ID_INFO info{};
+    const bool have_identity = GetFileInformationByHandleEx(handle, FileIdInfo, &info, sizeof(info)) != 0;
+    CloseHandle(handle);
+    ASSERT_TRUE(have_identity);
+    engine::RecordingMediaDescriptor descriptor;
+    descriptor.recording_id = engine::NewId<engine::RecordingId>();
+    descriptor.segment_id = engine::NewId<engine::SegmentId>();
+    descriptor.writer_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.path = source.string();
+    descriptor.file_identity.volume_serial = info.VolumeSerialNumber;
+    std::copy(std::begin(info.FileId.Identifier), std::end(info.FileId.Identifier),
+              descriptor.file_identity.file_id.begin());
+    RecordingCoordinator coordinator;
+    EXPECT_EQ(RecordingCoordinatorTestPeer::Retain(coordinator, descriptor), source);
+    EXPECT_TRUE(std::filesystem::exists(source));
+    std::ifstream source_file(source, std::ios::binary);
+    std::string content;
+    std::getline(source_file, content);
+    EXPECT_EQ(content, "recorded source");
+    std::ifstream occupied(master, std::ios::binary);
+    std::getline(occupied, content);
+    EXPECT_EQ(content, "existing master");
+}
+
+TEST_F(Mp4SplitRemuxTest, EditMasterRetentionPublishesMarkersWithRenamedSource) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const std::filesystem::path source = directory.filePath(QStringLiteral("segment.partial")).toStdWString();
+    auto master = source;
+    master.replace_extension(L".edit.mkv");
+    {
+        std::ofstream source_file(source, std::ios::binary);
+        source_file << "recorded source";
+        ASSERT_TRUE(source_file.good());
+    }
+    RecordingMarker marker;
+    marker.time_ms = 123;
+    marker.label = "retained marker";
+    ASSERT_TRUE(WriteMarkerSidecar(DeriveMarkerSidecarPath(source), {marker}));
+    const auto handle =
+        CreateFileW(source.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+    FILE_ID_INFO info{};
+    const bool have_identity = GetFileInformationByHandleEx(handle, FileIdInfo, &info, sizeof(info)) != 0;
+    CloseHandle(handle);
+    ASSERT_TRUE(have_identity);
+    engine::RecordingMediaDescriptor descriptor;
+    descriptor.recording_id = engine::NewId<engine::RecordingId>();
+    descriptor.segment_id = engine::NewId<engine::SegmentId>();
+    descriptor.writer_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.path = source.string();
+    descriptor.file_identity.volume_serial = info.VolumeSerialNumber;
+    std::copy(std::begin(info.FileId.Identifier), std::end(info.FileId.Identifier),
+              descriptor.file_identity.file_id.begin());
+    RecordingCoordinator coordinator;
+    EXPECT_EQ(RecordingCoordinatorTestPeer::Retain(coordinator, descriptor), master);
+    EXPECT_FALSE(std::filesystem::exists(source));
+    std::ifstream source_file(master, std::ios::binary);
+    std::string content;
+    std::getline(source_file, content);
+    EXPECT_EQ(content, "recorded source");
+    const auto retained = ReadMarkerSidecar(DeriveMarkerSidecarPath(master));
+    ASSERT_EQ(retained.size(), 1U);
+    EXPECT_EQ(retained.front().time_ms, 123U);
+    EXPECT_EQ(retained.front().label, "retained marker");
+}
+
+TEST_F(Mp4SplitRemuxTest, EditMasterRetentionPreservesSourceWhenMarkerCompanionIsOccupied) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const std::filesystem::path source = directory.filePath(QStringLiteral("segment.partial")).toStdWString();
+    auto master = source;
+    master.replace_extension(L".edit.mkv");
+    {
+        std::ofstream source_file(source, std::ios::binary);
+        source_file << "recorded source";
+        ASSERT_TRUE(source_file.good());
+        std::ofstream occupied(DeriveMarkerSidecarPath(master), std::ios::binary);
+        occupied << "existing master";
+        ASSERT_TRUE(occupied.good());
+    }
+    const auto handle =
+        CreateFileW(source.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+    FILE_ID_INFO info{};
+    const bool have_identity = GetFileInformationByHandleEx(handle, FileIdInfo, &info, sizeof(info)) != 0;
+    CloseHandle(handle);
+    ASSERT_TRUE(have_identity);
+    engine::RecordingMediaDescriptor descriptor;
+    descriptor.recording_id = engine::NewId<engine::RecordingId>();
+    descriptor.segment_id = engine::NewId<engine::SegmentId>();
+    descriptor.writer_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.path = source.string();
+    descriptor.file_identity.volume_serial = info.VolumeSerialNumber;
+    std::copy(std::begin(info.FileId.Identifier), std::end(info.FileId.Identifier),
+              descriptor.file_identity.file_id.begin());
+    RecordingCoordinator coordinator;
+    EXPECT_EQ(RecordingCoordinatorTestPeer::Retain(coordinator, descriptor), source);
+    EXPECT_TRUE(std::filesystem::exists(source));
+    std::ifstream source_file(source, std::ios::binary);
+    std::string content;
+    std::getline(source_file, content);
+    EXPECT_EQ(content, "recorded source");
+    std::ifstream occupied(DeriveMarkerSidecarPath(master), std::ios::binary);
+    std::getline(occupied, content);
+    EXPECT_EQ(content, "existing master");
 }
 
 // ─── 2. ComputeHardStopThreshold: reserve added to base ──────────────────────

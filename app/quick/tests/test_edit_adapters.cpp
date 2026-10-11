@@ -10,6 +10,7 @@
 
 #include <capability/capability_builder.h>
 #include <capability/encoder_device_resolver.h>
+#include <exosnap/engine/edit_player_engine.h>
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -118,6 +119,23 @@ TEST(EditWorkspacePresentation, SelectingEitherLinkedRowHighlightsTheWholeGroup)
     rows = session.visibleClips(0, 100000);
     EXPECT_TRUE(rows[0].toMap().value(QStringLiteral("selected")).toBool());
     EXPECT_TRUE(rows[1].toMap().value(QStringLiteral("selected")).toBool());
+}
+
+TEST(EditSessionAdapterPresentation, DeliveryPendingChangesNotifyTheOpenEditPage) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    int notifications = 0;
+    QObject::connect(&session, &EditSessionAdapter::clipChanged, [&] { ++notifications; });
+    EXPECT_FALSE(session.deliveryPending());
+    session.setDeliveryPending(true);
+    EXPECT_TRUE(session.deliveryPending());
+    EXPECT_EQ(notifications, 1);
+    session.setDeliveryPending(true);
+    EXPECT_EQ(notifications, 1);
+    session.setDeliveryPending(false);
+    EXPECT_FALSE(session.deliveryPending());
+    EXPECT_EQ(notifications, 2);
 }
 
 TEST(EditTrimSnap, SnapsBackToTheKeyframeAtOrBeforeTheRequest) {
@@ -742,6 +760,32 @@ TEST(EditExportAdapterRun, AnEmptyWorkspaceFailsBeforeAnyThreadIsStarted) {
     EXPECT_EQ(exporter.errorText(), QStringLiteral("No edit master available for export."));
 }
 
+TEST(EditExportAdapterRun, CancellingPreparationAndDestroyingAdapterLeavesNoOutput) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    EditSessionAdapter session;
+    const QString fixture =
+        QFileInfo(QString::fromUtf8(__FILE__))
+            .dir()
+            .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    QEventLoop imported;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
+    QTimer::singleShot(10000, &imported, &QEventLoop::quit);
+    session.importMedia(QUrl::fromLocalFile(fixture), true);
+    imported.exec();
+    ASSERT_EQ(session.workspace().clips().size(), 1u);
+    auto exporter = std::make_unique<EditExportAdapter>();
+    exporter->setSession(&session);
+    exporter->setOutputDirectoryProvider([&] { return directory.path(); });
+    exporter->startExport();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Preparing);
+    exporter->cancel();
+    EXPECT_EQ(exporter->state(), EditExportAdapter::Cancelling);
+    exporter.reset();
+    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+}
+
 TEST(EditExportAdapterRun, DestructionJoinsActiveRenderAndRemovesStagingWithoutEventDelivery) {
     EnsureApplication();
     const QString fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
@@ -759,6 +803,17 @@ TEST(EditExportAdapterRun, DestructionJoinsActiveRenderAndRemovesStagingWithoutE
     imported.exec();
     ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
     ASSERT_EQ(session.workspace().assets().size(), 2u);
+    for (const auto& asset : session.workspace().assets()) {
+        engine::EditPlayerEngine player;
+        std::string error;
+        ASSERT_TRUE(player.Open(std::filesystem::path(asset.path), error)) << error;
+        const auto metadata = player.AudioMetadata();
+        engine::MonitorSelectionSnapshot selection{
+            metadata.selection_media_id, {1}, {}, true, metadata.unverified_asset_binding};
+        for (const auto& track : metadata.actual_tracks)
+            selection.tracks.push_back({track.track_id, 1.0f, false});
+        session.setAssetMonitorSelection(asset.id, std::move(selection));
+    }
     ASSERT_TRUE(session.applyCrossfade(session.workspace().clips().front().id));
     // Enough real frames to observe an in-flight render even on a fast encoder.
     for (int i = 0; i < 100; ++i)
@@ -768,6 +823,16 @@ TEST(EditExportAdapterRun, DestructionJoinsActiveRenderAndRemovesStagingWithoutE
     exporter->setSession(&session);
     exporter->setOutputDirectoryProvider([&] { return output.path(); });
     exporter->startExport();
+    QEventLoop review;
+    QObject::connect(exporter.get(), &EditExportAdapter::stateChanged, &review, [&] {
+        if (exporter->state() == EditExportAdapter::Review || exporter->state() == EditExportAdapter::Failed)
+            review.quit();
+    });
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    if (exporter->state() == EditExportAdapter::Preparing)
+        review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    exporter->confirmPreparedExport();
     QPointer<QThread> worker = EditExportAdapterTestPeer::worker(*exporter);
     ASSERT_NE(worker, nullptr);
     std::atomic<bool> finished{false};
@@ -811,11 +876,15 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
     EnsureApplication();
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
+    QTemporaryDir source_directory;
+    ASSERT_TRUE(source_directory.isValid());
     EditSessionAdapter session;
-    const QString fixture =
+    const QString fixture_template =
         QFileInfo(QString::fromUtf8(__FILE__))
             .dir()
             .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const QString fixture = QDir(source_directory.path()).filePath(QStringLiteral("source.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture_template, fixture));
     QEventLoop imported;
     QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
     QTimer::singleShot(10000, &imported, &QEventLoop::quit);
@@ -826,6 +895,73 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
     exporter->setSession(&session);
     exporter->setOutputDirectoryProvider([&] { return directory.path(); });
     exporter->startExport();
+    QEventLoop review;
+    QObject::connect(exporter.get(), &EditExportAdapter::stateChanged, &review, [&] {
+        if (exporter->state() == EditExportAdapter::Review)
+            review.quit();
+    });
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    if (exporter->state() != EditExportAdapter::Review)
+        review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    EXPECT_EQ(exporter->reviewOutcome().value(QStringLiteral("path")).toString(), QStringLiteral("Copy"));
+    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    const auto first_destination = exporter->outputPath();
+    EXPECT_FALSE(QFileInfo::exists(first_destination + QStringLiteral(".tmp")));
+    session.trimClip(session.workspace().clips().front().id, 0, 2000);
+    EXPECT_EQ(exporter->state(), EditExportAdapter::Options);
+    exporter->startExport();
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    if (exporter->state() != EditExportAdapter::Review)
+        review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    engine::RecorderConfig changed_config;
+    changed_config.video_codec = engine::VideoCodec::H264;
+    exporter->setRenderConfigProvider([&] { return changed_config; });
+    exporter->confirmPreparedExport();
+    EXPECT_EQ(exporter->state(), EditExportAdapter::Preparing);
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    engine::AudioMetadataReadResult metadata;
+    {
+        engine::EditPlayerEngine player;
+        std::string error;
+        ASSERT_TRUE(player.Open(std::filesystem::path(fixture.toStdWString()), error)) << error;
+        metadata = player.AudioMetadata();
+    }
+    session.setAssetMonitorSelection(session.workspace().assets().front().id,
+                                     {metadata.selection_media_id, {1}, {}, true, metadata.unverified_asset_binding});
+    EXPECT_EQ(exporter->state(), EditExportAdapter::Options);
+    exporter->startExport();
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    QFile source_file(fixture);
+    ASSERT_TRUE(source_file.open(QIODevice::Append));
+    ASSERT_EQ(source_file.write("x", 1), 1);
+    source_file.close();
+    exporter->confirmPreparedExport();
+    QEventLoop changed_source;
+    QObject::connect(exporter.get(), &EditExportAdapter::stateChanged, &changed_source, [&] {
+        if (exporter->state() == EditExportAdapter::Failed)
+            changed_source.quit();
+    });
+    QTimer::singleShot(10000, &changed_source, &QEventLoop::quit);
+    if (exporter->state() != EditExportAdapter::Failed)
+        changed_source.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Failed) << exporter->errorText().toStdString();
+    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    session.setAssetMonitorSelection(session.workspace().assets().front().id,
+                                     {metadata.selection_media_id, {2}, {}, true, metadata.unverified_asset_binding});
+    exporter->retry();
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    exporter->confirmPreparedExport();
     QPointer<QThread> worker = EditExportAdapterTestPeer::worker(*exporter);
     ASSERT_NE(worker, nullptr);
     ASSERT_TRUE(worker->wait(10000));

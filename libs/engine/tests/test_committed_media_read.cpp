@@ -3,6 +3,8 @@
 #include "matroska_stream_writer.h"
 #include "recording_media_index.h"
 #include "test_unique_temp.h"
+#include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/recording_clip.h>
 #include <exosnap/engine/recording_media_types.h>
 
 #include <algorithm>
@@ -21,6 +23,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <windows.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -34,6 +37,14 @@ extern "C" {
 
 namespace exosnap::engine {
 namespace {
+
+struct NativeHandle {
+    HANDLE value = INVALID_HANDLE_VALUE;
+    ~NativeHandle() {
+        if (value != INVALID_HANDLE_VALUE)
+            CloseHandle(value);
+    }
+};
 
 class CommittedMediaReadTest : public testing::Test {
   protected:
@@ -134,6 +145,19 @@ TEST_F(CommittedMediaReadTest, FreezesOwnedHeaderAndPublishesClosedClustersBefor
     }
     ASSERT_TRUE(writer.Finalize());
     EXPECT_EQ(descriptor->immutable_header, header);
+    const auto seal = writer.finalized_segment_seal();
+    ASSERT_TRUE(seal.has_value());
+    EXPECT_EQ(seal->recording_id, descriptor->recording_id);
+    EXPECT_EQ(seal->segment_id, descriptor->segment_id);
+    EXPECT_EQ(seal->final_commit_sequence, receipts.back().commit_sequence);
+    EXPECT_EQ(seal->final_readable_end, receipts.back().readable_end_offset);
+    EXPECT_GT(seal->measured_video_end_r_ns, descriptor->segment_origin_r_ns);
+    bool closed_rap = false;
+    for (const auto& receipt : receipts)
+        for (const auto& cluster : receipt.clusters)
+            for (const auto& rap : cluster.random_access_points)
+                closed_rap |= rap.kind == RandomAccessKind::ClosedGop;
+    EXPECT_TRUE(closed_rap);
 }
 
 TEST_F(CommittedMediaReadTest, CrtFlushFailureNeverPublishesReceipt) {
@@ -312,6 +336,38 @@ TEST_F(CommittedMediaReadTest, SourceLeaseSurvivesRenameAndRejectsReplacementAtO
     EXPECT_TRUE(std::filesystem::remove(renamed));
 }
 
+TEST_F(CommittedMediaReadTest, PinnedHandleOpensAfterRenameWithoutTrustingReplacedPath) {
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config));
+    ASSERT_TRUE(Feed(writer));
+    ASSERT_TRUE(writer.Finalize());
+    const auto descriptor = writer.media_descriptor();
+    const auto receipt = receipts.front();
+    NativeHandle pinned{CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
+    ASSERT_NE(pinned.value, INVALID_HANDLE_VALUE);
+    const auto renamed = exosnap_test::UniqueTempPath("pinned_renamed.edit.mkv");
+    ASSERT_TRUE(MoveFileExW(path.c_str(), renamed.c_str(), MOVEFILE_WRITE_THROUGH));
+    {
+        std::ofstream replacement(path, std::ios::binary);
+        replacement << "different file";
+    }
+    EXPECT_FALSE(CommittedMatroskaView::Open(descriptor, receipt.clusters, receipt.readable_end_offset).succeeded());
+    auto opened = CommittedMatroskaView::OpenFromPinnedHandle(descriptor, receipt.clusters, receipt.readable_end_offset,
+                                                              pinned.value);
+    ASSERT_TRUE(opened.succeeded()) << opened.error()->context;
+    auto view = std::move(*opened.value());
+    LARGE_INTEGER before{};
+    ASSERT_TRUE(SetFilePointerEx(pinned.value, {}, &before, FILE_CURRENT));
+    std::array<uint8_t, 16> buffer{};
+    ASSERT_EQ(*view->ReadAt(descriptor->immutable_header.size(), buffer).value(), buffer.size());
+    LARGE_INTEGER after{};
+    ASSERT_TRUE(SetFilePointerEx(pinned.value, {}, &after, FILE_CURRENT));
+    EXPECT_EQ(before.QuadPart, after.QuadPart);
+    view.reset();
+    EXPECT_TRUE(std::filesystem::remove(renamed));
+}
+
 bool WaitForCommit(const RecordingMediaIndex& index, uint64_t sequence) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (std::chrono::steady_clock::now() < deadline) {
@@ -385,6 +441,111 @@ TEST_F(CommittedMediaReadTest, JournalSnapshotStaysFiniteWhileNewReceiptsArePubl
     EXPECT_LE(index.cache_bytes(), 16u * 1024 * 1024);
     RecordProperty("index_cache_bytes", std::to_string(index.cache_bytes()));
     RecordProperty("index_journal_prefix_bytes", std::to_string(frozen.value()->journal_end));
+    EXPECT_TRUE(std::filesystem::remove(journal));
+}
+
+TEST_F(CommittedMediaReadTest, ClipAvailabilityRequiresTwoCommittedVideoBoundaries) {
+    const auto journal = exosnap_test::UniqueTempPath("clip_availability.index");
+    RecordingMediaIndex index(journal);
+    EXPECT_FALSE(index.has_closed_clip_interval());
+    config.publish_committed = [&](CommittedMediaReceipt receipt) {
+        receipts.push_back(receipt);
+        return index.PublishCommitted(std::move(receipt));
+    };
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config));
+    ASSERT_EQ(index.RegisterDescriptor(writer.media_descriptor()), ReceiptAcceptance::Accepted);
+    ASSERT_TRUE(Feed(writer, 2));
+    ASSERT_FALSE(receipts.empty());
+    ASSERT_TRUE(WaitForCommit(index, receipts.back().commit_sequence));
+    EXPECT_FALSE(index.has_closed_clip_interval());
+    ASSERT_TRUE(Feed(writer, 1, 2));
+    ASSERT_TRUE(WaitForCommit(index, receipts.back().commit_sequence));
+    ASSERT_TRUE(writer.Finalize());
+    ASSERT_TRUE(WaitForCommit(index, receipts.back().commit_sequence));
+    EXPECT_TRUE(index.has_closed_clip_interval());
+    const auto frozen = index.Freeze();
+    ASSERT_TRUE(frozen.succeeded());
+    size_t reads = 0;
+    const auto rejected = RecordingMediaIndex::Visit(*frozen.value(), {}, {}, [&](uint64_t bytes) {
+        EXPECT_GT(bytes, 0u);
+        ++reads;
+        return false;
+    });
+    EXPECT_FALSE(rejected.succeeded());
+    EXPECT_EQ(reads, 1u);
+    EXPECT_TRUE(std::filesystem::remove(journal));
+}
+
+TEST_F(CommittedMediaReadTest, JournalPreservesVerifiedAudioManifestProvenance) {
+    const auto journal = exosnap_test::UniqueTempPath("manifest.index");
+    RecordingMediaIndex index(journal);
+    config.audio_track_count = 1;
+    config.audio_tracks[0].name = "System";
+    AudioManifest1 manifest;
+    manifest.recording_id = NewId<RecordingId>();
+    manifest.media_id = NewId<MediaId>();
+    manifest.segment_id = NewId<SegmentId>();
+    manifest.continuity_group = 7;
+    AudioManifestSource source;
+    source.id = NewId<AudioSourceId>();
+    source.post_dsp_gain_linear = 0.75f;
+    source.muted = true;
+    manifest.sources.push_back(source);
+    AudioManifestTrack track;
+    track.container.track_id = NewId<AudioTrackId>();
+    track.container.stream_index.value = 0;
+    track.container.track_uid = 2;
+    track.container.name = "System";
+    track.container.role = "standard";
+    track.container.codec.codec_id = "A_PCM/INT/LIT";
+    track.container.codec.sample_rate = 48000;
+    track.container.codec.channels = 2;
+    track.container.codec.bit_depth = 16;
+    track.container.codec.channel_layout = "stereo";
+    track.container.source_ids.push_back(source.id);
+    AudioManifestRoute route;
+    route.id = NewId<AudioRouteId>();
+    route.source_id = source.id;
+    route.gain_linear = 0.5f;
+    track.routes.push_back(route);
+    manifest.default_monitor_track_ids.push_back(track.container.track_id);
+    manifest.tracks.push_back(track);
+    ASSERT_TRUE(ValidateAudioManifest1(manifest).succeeded());
+    config.audio_manifest = manifest;
+    uint64_t final_commit_sequence = 0;
+    config.publish_committed = [&](CommittedMediaReceipt receipt) {
+        final_commit_sequence = receipt.commit_sequence;
+        return index.PublishCommitted(std::move(receipt));
+    };
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config)) << writer.error();
+    ASSERT_TRUE(writer.media_descriptor()->audio_manifest);
+    ASSERT_EQ(index.RegisterDescriptor(writer.media_descriptor()), ReceiptAcceptance::Accepted);
+    for (auto packet : video)
+        ASSERT_TRUE(writer.Push(std::move(packet))) << writer.error();
+    ASSERT_TRUE(writer.Finalize()) << writer.error();
+    ASSERT_GT(final_commit_sequence, 0u);
+    ASSERT_TRUE(WaitForCommit(index, final_commit_sequence));
+    const auto snapshot = index.Freeze();
+    ASSERT_TRUE(snapshot.succeeded());
+    const auto expected = SerializeAudioManifest1(manifest);
+    ASSERT_TRUE(expected.succeeded());
+    size_t seen = 0;
+    const auto visited =
+        VisitRecordingClipDescriptors(*snapshot.value(), [&](const RecordingMediaDescriptor& descriptor) {
+            EXPECT_TRUE(descriptor.audio_manifest);
+            if (descriptor.audio_manifest) {
+                const auto actual = SerializeAudioManifest1(*descriptor.audio_manifest);
+                EXPECT_TRUE(actual.succeeded());
+                if (actual.succeeded())
+                    EXPECT_EQ(*actual.value(), *expected.value());
+            }
+            ++seen;
+            return true;
+        });
+    ASSERT_TRUE(visited.succeeded()) << visited.error()->context;
+    EXPECT_EQ(seen, 1u);
     EXPECT_TRUE(std::filesystem::remove(journal));
 }
 
@@ -539,6 +700,14 @@ TEST_F(CommittedMediaReadTest, SharedJournalRetainsSegmentsWithContinuousCommitS
                     .succeeded());
     ASSERT_EQ(segments.size(), 2u);
     EXPECT_NE(segments[0], segments[1]);
+    std::vector<SegmentId> public_segments;
+    const auto public_visit =
+        VisitRecordingClipDescriptors(*snapshot.value(), [&](const RecordingMediaDescriptor& descriptor) {
+            public_segments.push_back(descriptor.segment_id);
+            return true;
+        });
+    ASSERT_TRUE(public_visit.succeeded()) << public_visit.error()->context;
+    EXPECT_EQ(public_segments, segments);
     EXPECT_EQ(previous_sequence, sequence);
     EXPECT_FALSE(index.needs_rebuild());
     EXPECT_TRUE(std::filesystem::remove(second_path));

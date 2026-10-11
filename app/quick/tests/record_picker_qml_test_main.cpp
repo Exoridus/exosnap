@@ -9,6 +9,7 @@
 // rebuilds the target list through the same revision bump a rescan uses.
 
 #include "RecordViewModelAdapter.h"
+#include "RecordingClipAdapter.h"
 
 #include "viewmodels/RecordViewModel.h"
 
@@ -26,12 +27,14 @@
 #include <memory>
 
 using exosnap::RecordViewModel;
+using exosnap::quick::RecordingClipAdapter;
 using exosnap::quick::RecordViewModelAdapter;
 
 class RecordPickerTestDriver final : public QObject {
     Q_OBJECT
 
     Q_PROPERTY(exosnap::quick::RecordViewModelAdapter* adapter READ adapter CONSTANT)
+    Q_PROPERTY(exosnap::quick::RecordingClipAdapter* clipAdapter READ clipAdapter CONSTANT)
 
   public:
     explicit RecordPickerTestDriver(QObject* parent = nullptr) : QObject(parent) {
@@ -40,6 +43,10 @@ class RecordPickerTestDriver final : public QObject {
 
     [[nodiscard]] RecordViewModelAdapter* adapter() {
         return &adapter_;
+    }
+
+    [[nodiscard]] RecordingClipAdapter* clipAdapter() {
+        return &clip_adapter_;
     }
 
     Q_INVOKABLE void seedTargets(int display_count, const QStringList& window_labels) {
@@ -113,6 +120,7 @@ class RecordPickerTestDriver final : public QObject {
   private:
     RecordViewModel source_;
     RecordViewModelAdapter adapter_;
+    RecordingClipAdapter clip_adapter_;
 };
 
 class Setup final : public QObject {

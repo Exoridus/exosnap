@@ -6,6 +6,8 @@
 #include <array>
 #include <compare>
 #include <cstdint>
+#include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -14,6 +16,8 @@
 #include <vector>
 
 namespace exosnap::engine {
+
+struct AudioManifest1;
 
 template <typename Tag> struct OpaqueId {
     std::array<uint8_t, 16> bytes{};
@@ -31,6 +35,7 @@ using MediaId = OpaqueId<struct MediaIdTag>;
 using CommandId = OpaqueId<struct CommandIdTag>;
 using JobId = OpaqueId<struct JobIdTag>;
 using PhysicalClockId = OpaqueId<struct PhysicalClockIdTag>;
+using AudioEncoderInstanceId = OpaqueId<struct AudioEncoderInstanceIdTag>;
 
 [[nodiscard]] std::string FormatIdentity(const std::array<uint8_t, 16>& bytes);
 [[nodiscard]] std::optional<std::array<uint8_t, 16>> ParseIdentity(std::string_view text);
@@ -145,6 +150,13 @@ struct ContainerAudioTrack {
     std::string role;
     MediaCodecDescriptor codec;
     std::vector<AudioSourceId> source_ids;
+    AudioEncoderInstanceId encoder_instance_id;
+    bool encoder_reset = false;
+    // Signed recording sample-frame position at this track's sample rate.
+    // Absence means that decoded sample coverage has not been established.
+    std::optional<int64_t> first_decoded_sample_r;
+    std::optional<uint64_t> packet_duration_ns;
+    std::optional<uint64_t> preroll_ns;
 };
 
 struct RecordingMediaDescriptor {
@@ -163,6 +175,11 @@ struct RecordingMediaDescriptor {
     int64_t segment_origin_r_ns = 0;
     uint64_t continuity_group = 0;
     std::vector<uint8_t> immutable_header;
+    uint32_t video_width = 0;
+    uint32_t video_height = 0;
+    uint32_t frame_rate_num = 0;
+    uint32_t frame_rate_den = 1;
+    std::shared_ptr<const AudioManifest1> audio_manifest;
 };
 
 struct MediaTrackCoverage {
@@ -210,6 +227,25 @@ struct IndexSnapshotToken {
     uint64_t descriptor_revision = 0;
     uint64_t journal_revision = 0;
     Nanoseconds freeze_qpc_ns;
+};
+
+// A closed writer's final media extent, tied to the receipt that must be present in a snapshot.
+struct RecordingSegmentSeal {
+    RecordingId recording_id;
+    SegmentId segment_id;
+    uint64_t writer_generation = 0;
+    uint64_t descriptor_revision = 0;
+    uint64_t final_commit_sequence = 0;
+    uint64_t final_readable_end = 0;
+    int64_t measured_video_end_r_ns = 0;
+};
+
+struct MediaIndexSnapshot {
+    IndexSnapshotToken token;
+    std::filesystem::path journal_path;
+    FileIdentity journal_identity;
+    uint64_t journal_end = 0;
+    std::shared_ptr<const RecordingMediaDescriptor> descriptor;
 };
 
 } // namespace exosnap::engine

@@ -1,6 +1,11 @@
 #pragma once
 
+#include "exosnap/engine/audio_media_manifest.h"
 #include "exosnap/engine/mp4_remuxer.h"
+
+#include <array>
+#include <cstdint>
+#include <string>
 
 namespace exosnap::engine {
 
@@ -14,10 +19,18 @@ struct EditMediaMetadata {
     bool render_color_supported = false;
     std::string render_color_reason;
     bool has_audio = false;
+    AudioMetadataReadResult audio_metadata;
+    std::string video_codec;
+    FileIdentity file_identity;
+    uint64_t file_size = 0;
+    std::array<uint8_t, 32> content_sha256{};
+    bool content_identity_valid = false;
     std::string error;
 };
 
-EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source);
+EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source, const std::function<bool()>& continue_io = {},
+                                 const BackgroundIoAdmission& before_io = {},
+                                 const std::atomic<bool>* cancelled = nullptr);
 
 struct TimelineExportClip {
     std::filesystem::path source;

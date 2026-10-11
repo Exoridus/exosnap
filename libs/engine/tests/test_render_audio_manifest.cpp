@@ -218,18 +218,16 @@ TEST_F(RenderAudioPreflightTest, VerifiedFrozenSelectionKeepsOnlySelectedDerivat
     EXPECT_NE(result.value()->manifest.tracks[0].container.track_id, selected.tracks[0].track_id);
 }
 
-TEST_F(RenderAudioPreflightTest, VerifiedDefaultsMatchPreviewWithoutInventingAnUnconfirmedSelection) {
+TEST_F(RenderAudioPreflightTest, VerifiedSourceStillRequiresFrozenSelection) {
     ASSERT_NO_FATAL_FAILURE(WriteSource(true));
     const auto result = PrepareRenderAudioManifest(snapshot);
-    ASSERT_TRUE(result.succeeded()) << result.error()->context;
-    ASSERT_EQ(result.value()->manifest.tracks.size(), 1u);
-    EditPlayerEngine player;
-    std::string error;
-    ASSERT_TRUE(player.Open(path, error)) << error;
-    const auto metadata = player.AudioMetadata();
-    ASSERT_TRUE(metadata.manifest);
-    EXPECT_FALSE(metadata.monitoring_confirmation_required);
-    EXPECT_EQ(result.value()->manifest.tracks[0].derived_from_track_ids, metadata.manifest->default_monitor_track_ids);
+    ASSERT_FALSE(result.succeeded());
+    EXPECT_NE(result.error()->context.find("frozen monitoring selection"), std::string::npos);
+    ASSERT_NO_FATAL_FAILURE(FreezeSelection());
+    const auto confirmed = PrepareRenderAudioManifest(snapshot);
+    ASSERT_TRUE(confirmed.succeeded()) << confirmed.error()->context;
+    EXPECT_EQ(confirmed.value()->manifest.tracks[0].derived_from_track_ids,
+              std::vector<AudioTrackId>{snapshot.sources[0].monitor_selection->tracks[0].track_id});
 }
 
 TEST_F(RenderAudioPreflightTest, ReferencedVideoAssetStillRejectsAnInvalidFrozenSelection) {
@@ -238,6 +236,18 @@ TEST_F(RenderAudioPreflightTest, ReferencedVideoAssetStillRejectsAnInvalidFrozen
     snapshot.timeline.clips.pop_back();
     snapshot.sources[0].monitor_selection->tracks[0].track_id = NewId<AudioTrackId>();
     EXPECT_FALSE(PrepareRenderAudioManifest(snapshot).succeeded());
+}
+
+TEST_F(RenderAudioPreflightTest, VideoOnlyTimelineRequiresAnEmptyFrozenSelection) {
+    ASSERT_NO_FATAL_FAILURE(WriteSource());
+    ASSERT_NO_FATAL_FAILURE(FreezeSelection());
+    snapshot.timeline.clips.pop_back();
+    const auto with_audio_selected = PrepareRenderAudioManifest(snapshot);
+    ASSERT_FALSE(with_audio_selected.succeeded());
+    ASSERT_NO_FATAL_FAILURE(FreezeSelection(true));
+    const auto video_only = PrepareRenderAudioManifest(snapshot);
+    ASSERT_TRUE(video_only.succeeded()) << video_only.error()->context;
+    EXPECT_TRUE(video_only.value()->manifest.tracks.empty());
 }
 
 } // namespace

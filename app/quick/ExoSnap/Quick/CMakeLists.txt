@@ -131,6 +131,7 @@ qt_add_qml_module(exosnap
         RecordSourceToggle.qml
         RecordSplitButton.qml
         RecordTransportDock.qml
+        RecordingClipPanel.qml
         RecoveryOverlay.qml
         RegionSelectionOverlay.qml
         RegionSelectionWindow.qml
@@ -229,6 +230,8 @@ qt_add_qml_module(exosnap
         OverlayTelemetryAdapter.h
         RecordViewModelAdapter.cpp
         RecordViewModelAdapter.h
+        RecordingClipAdapter.cpp
+        RecordingClipAdapter.h
         RecordingErrorAdapter.cpp
         RecordingErrorAdapter.h
         RecoveryAdapter.cpp
@@ -420,6 +423,9 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/WindowEvidenceProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/services/WindowEvidenceProbe.h
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinator.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinatorClips.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/RecordingClipJobs.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/RecordingArtifactRegistry.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingAdmission.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinator.h
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCountdownController.cpp
@@ -1167,6 +1173,8 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditExportAdapter.h
         RecordViewModelAdapter.cpp
         RecordViewModelAdapter.h
+        RecordingClipAdapter.cpp
+        RecordingClipAdapter.h
         EditPlayerAdapter.cpp
         EditPlayerAdapter.h
         EditPlayerWorker.cpp
@@ -1281,6 +1289,8 @@ qt_add_qml_module(record_source_picker_qml_tests
     SOURCES
         RecordViewModelAdapter.cpp
         RecordViewModelAdapter.h
+        RecordingClipAdapter.cpp
+        RecordingClipAdapter.h
         QuickThemeTokens.cpp
         QuickThemeTokens.h
         # ExoTheme.qml resolves wheelScrollLines through this singleton.
@@ -1301,6 +1311,7 @@ qt_add_qml_module(record_source_picker_qml_tests
         RecordSourceToggle.qml
         RecordSplitButton.qml
         RecordTransportDock.qml
+        RecordingClipPanel.qml
         RegionSelectionOverlay.qml
 )
 
@@ -1379,6 +1390,8 @@ exosnap_add_gtest(
         ${EXOSNAP_QUICK_TESTS_DIR}/test_record_viewmodel_adapter.cpp
         RecordViewModelAdapter.cpp
         RecordViewModelAdapter.h
+        RecordingClipAdapter.cpp
+        RecordingClipAdapter.h
         CaptureTargetStillProvider.cpp
         CaptureTargetStillProvider.h
     LIBRARIES
@@ -2209,3 +2222,15 @@ foreach(_i18n_scale IN ITEMS 1 1.25 1.5 2)
     )
     exosnap_set_test_phase("${_i18n_test}" desktop)
 endforeach()
+
+
+exosnap_add_gtest(
+    NAME recording_clip_qml_adapter_tests
+    TEST_PREFIX quick_adapter.
+    SOURCES ${EXOSNAP_QUICK_TESTS_DIR}/test_recording_clip_adapter.cpp
+        RecordingClipAdapter.cpp RecordingClipAdapter.h
+    LIBRARIES Qt6::Core Qt6::Qml exosnap_engine
+)
+target_include_directories(recording_clip_qml_adapter_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/app)
+target_compile_definitions(recording_clip_qml_adapter_tests PRIVATE NOMINMAX)

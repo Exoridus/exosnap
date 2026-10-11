@@ -762,6 +762,7 @@ void QuickApplication::initializeRecordWorkflow() {
         // post-flight numbers. They feed the Edit surface's report badge, so
         // carrying them over would attribute one recording's drops to the next.
         if (state == UiRecordingState::Recording && previous != UiRecordingState::Paused) {
+            pending_edit_master_.reset();
             peak_av_drift_ms_ = 0.0;
             av_drift_ever_available_ = false;
             last_completed_snapshot_ = {};
@@ -879,7 +880,56 @@ void QuickApplication::initializeRecordWorkflow() {
                      [this, sink = recording_coordinator_->FrozenLedgerSink()]() {
                          sink->Set(diagnostics_adapter_.frozenLedger(), diagnostics_adapter_.compensatedConditions());
                      });
+    recording_coordinator_->SetClipJobsChangedCallback([this] {
+        const auto jobs = recording_coordinator_->RecordingClipSnapshots();
+        recording_clip_adapter_.setJobs(jobs);
+        for (const auto& job : jobs)
+            if (job.phase == RecordingClipPhase::Completed && job.asset_id && job.completed &&
+                published_clip_assets_.insert(*job.asset_id).second)
+                record_view_model_.AddToRecentRecordings(*job.completed);
+        record_view_model_adapter_.synchronize();
+    });
+    QObject::connect(&recording_clip_adapter_, &RecordingClipAdapter::planRequested, &recording_clip_adapter_,
+                     [this](int64_t seconds) {
+                         const auto requested = recording_coordinator_->RequestRecordingClip(seconds);
+                         if (!requested.succeeded()) {
+                             notifications::NotificationEvent event;
+                             event.type = notifications::NotificationType::CaptureActionFailed;
+                             event.title = QCoreApplication::translate("QuickApplication", "Clip unavailable");
+                             event.body = QString::fromStdString(requested.error()->context);
+                             notifications_adapter_.manager().Enqueue(std::move(event));
+                         }
+                     });
+    QObject::connect(
+        &recording_clip_adapter_, &RecordingClipAdapter::confirmRequested, &recording_clip_adapter_,
+        [this](engine::JobId job, uint64_t generation) {
+            const auto snapshots = recording_coordinator_->RecordingClipSnapshots();
+            const auto requested = std::find_if(snapshots.begin(), snapshots.end(), [&](const auto& snapshot) {
+                return snapshot.job_id == job && snapshot.generation == generation;
+            });
+            if (requested != snapshots.end() && recording_coordinator_->ConfirmRecordingClip(job, generation))
+                recording_clip_adapter_.acceptConfirmedDuration(requested->requested_duration_seconds);
+        });
+    QObject::connect(&recording_clip_adapter_, &RecordingClipAdapter::cancelRequested, &recording_clip_adapter_,
+                     [this](engine::JobId job, uint64_t generation) {
+                         (void)recording_coordinator_->CancelRecordingClip(job, generation);
+                     });
+    QObject::connect(&recording_clip_adapter_, &RecordingClipAdapter::openCompletedRequested, &recording_clip_adapter_,
+                     [this](engine::MediaId asset) {
+                         const auto jobs = recording_coordinator_->RecordingClipSnapshots();
+                         const auto completed = std::find_if(jobs.begin(), jobs.end(), [&](const auto& job) {
+                             return job.phase == RecordingClipPhase::Completed && job.asset_id == asset &&
+                                    job.completed && job.completed->succeeded;
+                         });
+                         if (completed == jobs.end() || !QFileInfo::exists(completed->completed->file_path))
+                             return;
+                         pending_master_editor_lease_.reset();
+                         edit_session_adapter_.setEditContext(MakeEditContextForCurrentSession(
+                             *completed->completed, completed->completed->file_path, 0.0, false, {}));
+                     });
     recording_coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
+        pending_edit_master_.reset();
+        edit_session_adapter_.setDeliveryPending(false);
         record_view_model_.SetResult(result);
         diagnostics_adapter_.setLastSession(result);
         // Only a failure earns a page banner. A SUCCESSFUL stop used to add a
@@ -910,6 +960,19 @@ void QuickApplication::initializeRecordWorkflow() {
             // capture can send anything, so only there is the action offered.
             presentRecordingFailure(*failure, crash_capture::IsActive());
         }
+    });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::editMasterRequested,
+                     &record_view_model_adapter_, [this] { openEditorForCurrentRecording(); });
+    recording_coordinator_->SetEditMasterReadyCallback(
+        [this, alive = QPointer<RecordViewModelAdapter>(&record_view_model_adapter_)](const EditContext& context) {
+            if (!alive)
+                return;
+            pending_edit_master_ = context;
+            synchronizeRecordState();
+        });
+    QObject::connect(&edit_session_adapter_, &EditSessionAdapter::openChanged, &record_view_model_adapter_, [this] {
+        if (!edit_session_adapter_.open())
+            pending_master_editor_lease_.reset();
     });
     // A toast, not the page notice. The banner above the Preview Surface is for
     // UNRESOLVED conditions; a frame that has been written is a confirmation, and
@@ -1512,6 +1575,15 @@ void QuickApplication::synchronizeRecordState() {
                                                  countdown_progress_);
     record_view_model_adapter_.setPreviewFrameReady(record_preview_adapter_.frameReady());
     record_view_model_adapter_.setSplitEnabled(mkv && !recording_coordinator_->IsSplitPending());
+    const bool clip_available = recording_coordinator_->CanRequestRecordingClip();
+    recording_clip_adapter_.setAvailability(
+        clip_available,
+        clip_available ? QString()
+                       : QCoreApplication::translate("QuickApplication",
+                                                     "Start recording and wait for committed media to create a clip."));
+    record_view_model_adapter_.setPendingEditMasterAvailable(record_view_model_.state == UiRecordingState::Saving &&
+                                                             pending_edit_master_ &&
+                                                             canOpenEditorForCurrentRecording());
     // Recording configuration must not be editable while a capture is in flight:
     // container and codec are fixed for the session once the encoder is up.
     // Sampling this once during initialization left every Settings row unlocked
@@ -5393,6 +5465,8 @@ void QuickApplication::wireTaskbarProgress() {
             export_progress_lease_ = {};
             break;
         case EditExportAdapter::Options:
+        case EditExportAdapter::Preparing:
+        case EditExportAdapter::Review:
             // Reached from Cancelling once the thread has been joined, and from
             // reset(). Either way the run is over and owes the bar nothing.
             taskbar_presence_.cancelProgress(export_progress_lease_);
@@ -5531,6 +5605,17 @@ void QuickApplication::flushPendingPersists() {
 void QuickApplication::openEditorForCurrentRecording() {
     if (!canOpenEditorForCurrentRecording())
         return;
+    if (record_view_model_.state == UiRecordingState::Saving && pending_edit_master_) {
+        auto lease = recording_coordinator_->AcquireEditMasterLease(
+            std::filesystem::path(pending_edit_master_->mkv_master_path.toStdWString()));
+        if (!lease)
+            return;
+        auto context = *pending_edit_master_;
+        context.mkv_master_path = QString::fromStdWString(lease->path().wstring());
+        pending_master_editor_lease_ = std::move(lease);
+        edit_session_adapter_.setEditContext(context);
+        return;
+    }
     edit_session_adapter_.setEditContext(
         MakeEditContextForCurrentSession(record_view_model_.current_completed_recording,
                                          QString::fromStdWString(record_view_model_.result_mkv_master_path),
@@ -5538,6 +5623,8 @@ void QuickApplication::openEditorForCurrentRecording() {
 }
 
 bool QuickApplication::canOpenEditorForCurrentRecording() const {
+    if (record_view_model_.state == UiRecordingState::Saving && pending_edit_master_)
+        return QFileInfo::exists(pending_edit_master_->mkv_master_path);
     if (!record_view_model_.last_succeeded)
         return false;
     // A live capture owns the Record surface until the entire session ends.
@@ -5579,6 +5666,7 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("minimumWindowSize"), QVariant::fromValue(QSizeF(minimum_size))},
         {QStringLiteral("aboutViewModel"), QVariant::fromValue(&about_view_model_)},
         {QStringLiteral("recordViewModel"), QVariant::fromValue(&record_view_model_adapter_)},
+        {QStringLiteral("clipAdapter"), QVariant::fromValue(&recording_clip_adapter_)},
         {QStringLiteral("previewAdapter"), QVariant::fromValue(&record_preview_adapter_)},
         {QStringLiteral("settingsAdapter"), QVariant::fromValue(&settings_adapter_)},
         {QStringLiteral("deviceAdapter"), QVariant::fromValue(&device_adapter_)},

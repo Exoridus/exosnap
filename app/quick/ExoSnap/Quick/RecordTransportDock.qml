@@ -8,6 +8,7 @@ Rectangle {
     id: root
 
     required property RecordViewModelAdapter recordViewModel
+    required property RecordingClipAdapter clipAdapter
 
     // Three groups, three weights. Left: which sources feed the recording, as
     // round peers. Centre: the elapsed time, the largest thing on the page.
@@ -256,6 +257,27 @@ Rectangle {
             onClicked: root.recordViewModel.requestSplit()
         }
 
+        RecordActionButton {
+            id: clipAction
+            compact: root.compactControls
+            accessibleLabel: qsTr("Save clip, %1 seconds selected").arg(root.clipAdapter.preferredDurationSeconds)
+            text: qsTr("Clip · %1 s").arg(root.clipAdapter.preferredDurationSeconds)
+            glyph: ExoGlyph.Scissors
+            visible: root.recordViewModel.recording || root.recordViewModel.paused || root.clipAdapter.jobs.length > 0
+            available: root.clipAdapter.canRequest || root.clipAdapter.jobs.length > 0
+            unavailableReason: root.clipAdapter.unavailableReason
+            onClicked: clipPanel.open()
+        }
+
+        RecordActionButton {
+            compact: root.compactControls
+            accessibleLabel: qsTr("Edit finalized recording")
+            text: qsTr("Edit")
+            glyph: ExoGlyph.ExternalLink
+            visible: root.recordViewModel.pendingEditMasterAvailable
+            onClicked: root.recordViewModel.requestEditMaster()
+        }
+
         // Pause is a secondary action DURING a recording — Stop is the one that
         // ends it — so it stays a round peer of the three above.
         RecordActionButton {
@@ -330,6 +352,13 @@ Rectangle {
                      !root.recordViewModel.failed
             Layout.leftMargin: root.actionGap
         }
+    }
+
+    RecordingClipPanel {
+        id: clipPanel
+        clipAdapter: root.clipAdapter
+        x: Math.max(8, root.width - width - 8)
+        y: -height - ExoTheme.spacingSm
     }
 
     // No focus is claimed here on a state change. Every recording state change

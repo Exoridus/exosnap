@@ -1,5 +1,6 @@
 #include "matroska_stream_writer.h"
 #include "audio_media_manifest_adapter.h"
+#include "codec_random_access.h"
 #include "matroska_packet_timestamps.h"
 #include <atomic>
 #include <cstdint>
@@ -10,6 +11,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <ratio>
 #include <utility>
 #include <vector>
@@ -66,12 +68,10 @@ namespace exosnap::engine {
 
 namespace {
 
-// Timecode scale: 1 000 000 ns per unit = 1 ms resolution (unchanged contract).
-constexpr uint64_t kTimecodeScaleNs = 1000000ULL;
-// Start a new cluster at a video keyframe once >= 2000 ms have elapsed.
-constexpr uint64_t kClusterBoundaryMs = 2000ULL;
-// Maximum relative timecode inside a cluster (int16_t range, in ms).
-constexpr int64_t kMaxClusterRelativeMs = 32767LL;
+// A half-millisecond tick represents Opus's 6.5 ms initial pre-skip exactly.
+constexpr uint64_t kTimecodeScaleNs = 500000ULL;
+constexpr uint64_t kClusterBoundaryTicks = 2'000'000'000ULL / kTimecodeScaleNs;
+constexpr int64_t kMaxClusterRelativeTicks = 32767LL;
 // Space reserved for the SeekHead placeholder at the start of the Segment.
 constexpr uint64_t kSeekHeadReservedBytes = 150ULL;
 constexpr size_t kReceiptPayloadLimit = 4ULL * 1024 * 1024;
@@ -126,8 +126,9 @@ void LogDurabilityFlushFailure(const char* message, const std::string& reason) {
 class DurableFileIo final : public libebml::IOCallback {
   public:
     DurableFileIo(const std::string& path, bool pre_reserved, const std::function<bool(OutputIoOperation)>& fail_io,
-                  OutputIoTimings& timings)
-        : m_fail_io(fail_io), m_timings(timings) {
+                  const std::function<bool(OutputIoOperation, uint64_t)>& before_write,
+                  const std::function<void(OutputIoOperation, uint64_t)>& after_write, OutputIoTimings& timings)
+        : m_fail_io(fail_io), m_before_write(before_write), m_after_write(after_write), m_timings(timings) {
         const int flags = pre_reserved ? (_O_TRUNC | _O_RDWR | _O_BINARY) : (_O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY);
         int fd = -1;
         const errno_t open_err = _sopen_s(&fd, path.c_str(), flags, _SH_DENYNO, _S_IREAD | _S_IWRITE);
@@ -173,22 +174,37 @@ class DurableFileIo final : public libebml::IOCallback {
     size_t write(const void* buffer, size_t size) override {
         if (Fails(OutputIoOperation::PayloadWrite) || (m_phase != OutputIoOperation::PayloadWrite && Fails(m_phase)))
             throw std::runtime_error("Injected output write failure");
-        const auto start = std::chrono::steady_clock::now();
-        const size_t written = std::fwrite(buffer, 1, size, m_file);
-        m_timings.write_ms += ElapsedMs(start);
-        if (m_capture_header) {
-            try {
-                const uint64_t end = getFilePointer();
-                if (end > kReceiptPayloadLimit)
-                    throw std::length_error("Immutable media header budget exceeded");
-                m_header.resize((std::max)(m_header.size(), static_cast<size_t>(end)));
-                std::memcpy(m_header.data() + static_cast<size_t>(end) - written, buffer, written);
-            } catch (...) {
-                m_header.clear();
-                m_capture_header = false;
+        constexpr size_t kThrottledWriteChunk = 4ULL * 1024 * 1024;
+        const size_t limit = m_before_write ? kThrottledWriteChunk : size;
+        const auto* bytes = static_cast<const uint8_t*>(buffer);
+        size_t total_written = 0;
+        do {
+            const size_t chunk = (std::min)(size - total_written, limit);
+            if (m_before_write && !m_before_write(m_phase, chunk))
+                throw std::runtime_error("Clip output I/O was cancelled");
+            const void* current = chunk ? bytes + total_written : buffer;
+            const auto start = std::chrono::steady_clock::now();
+            const size_t written = std::fwrite(current, 1, chunk, m_file);
+            m_timings.write_ms += ElapsedMs(start);
+            if (m_after_write)
+                m_after_write(m_phase, written);
+            if (m_capture_header) {
+                try {
+                    const uint64_t end = getFilePointer();
+                    if (end > kReceiptPayloadLimit)
+                        throw std::length_error("Immutable media header budget exceeded");
+                    m_header.resize((std::max)(m_header.size(), static_cast<size_t>(end)));
+                    std::memcpy(m_header.data() + static_cast<size_t>(end) - written, current, written);
+                } catch (...) {
+                    m_header.clear();
+                    m_capture_header = false;
+                }
             }
-        }
-        return written;
+            total_written += written;
+            if (written != chunk)
+                break;
+        } while (total_written < size);
+        return total_written;
     }
 
     uint64 getFilePointer() override {
@@ -279,6 +295,8 @@ class DurableFileIo final : public libebml::IOCallback {
         return m_fail_io && m_fail_io(operation);
     }
     const std::function<bool(OutputIoOperation)>& m_fail_io;
+    const std::function<bool(OutputIoOperation, uint64_t)>& m_before_write;
+    const std::function<void(OutputIoOperation, uint64_t)>& m_after_write;
     OutputIoTimings& m_timings;
     OutputIoOperation m_phase = OutputIoOperation::PayloadWrite;
     FILE* m_file = nullptr;
@@ -311,6 +329,10 @@ bool MatroskaStreamWriter::InitializeMediaDescriptor() {
         descriptor->path = m_config.output_path;
         descriptor->video.codec_id = m_config.video_codec_id;
         descriptor->video.codec_private = m_config.video_codec_private;
+        descriptor->video_width = m_config.encode_width;
+        descriptor->video_height = m_config.encode_height;
+        descriptor->frame_rate_num = m_config.frame_rate_num;
+        descriptor->frame_rate_den = m_config.frame_rate_den;
         descriptor->color = m_config.color;
         if (m_config.reserve_content_light_level) {
             descriptor->color.max_content_light_level = 0;
@@ -346,6 +368,7 @@ bool MatroskaStreamWriter::InitializeMediaDescriptor() {
             for (const auto& track : m_config.audio_manifest->tracks)
                 descriptor->audio_tracks[track.container.stream_index.value] = track.container;
             descriptor->default_monitor_track_ids = m_config.audio_manifest->default_monitor_track_ids;
+            descriptor->audio_manifest = std::make_shared<const AudioManifest1>(*m_config.audio_manifest);
         }
         descriptor->immutable_header = m_io->TakeHeader();
         if (descriptor->immutable_header.empty() || !m_io->GetIdentity(descriptor->file_identity)) {
@@ -389,6 +412,25 @@ void MatroskaStreamWriter::PublishCommitted(bool durable) noexcept {
 }
 
 MatroskaStreamWriter::MatroskaStreamWriter() = default;
+
+std::optional<RecordingSegmentSeal> MatroskaStreamWriter::finalized_segment_seal() const noexcept {
+    if (!m_finalize_succeeded || m_io != nullptr || m_media_index_degraded || !m_config.publish_committed ||
+        !m_media_descriptor || !m_has_video_covered_end || m_readable_end == 0 ||
+        m_commit_sequence <= m_config.initial_commit_sequence ||
+        m_max_video_covered_end_ns > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()))
+        return std::nullopt;
+    const auto local_end = static_cast<int64_t>(m_max_video_covered_end_ns);
+    const auto origin = m_media_descriptor->segment_origin_r_ns;
+    if (origin > 0 && local_end > (std::numeric_limits<int64_t>::max)() - origin)
+        return std::nullopt;
+    return RecordingSegmentSeal{m_media_descriptor->recording_id,
+                                m_media_descriptor->segment_id,
+                                m_media_descriptor->writer_generation,
+                                m_media_descriptor->descriptor_revision,
+                                m_commit_sequence,
+                                m_readable_end,
+                                origin + local_end};
+}
 
 MatroskaStreamWriter::~MatroskaStreamWriter() {
     // Defensive: if Finalize() was never called, release the cluster and close
@@ -480,7 +522,8 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
 
     // --- Open output file ---
     try {
-        m_io = new DurableFileIo(m_config.output_path, m_config.path_pre_reserved, m_config.fail_io, m_io_timings);
+        m_io = new DurableFileIo(m_config.output_path, m_config.path_pre_reserved, m_config.fail_io,
+                                 m_config.before_write, m_config.after_write, m_io_timings);
     } catch (const std::exception& ex) {
         m_io = nullptr;
         Fail(std::string("DurableFileIo::open failed: ") + ex.what());
@@ -878,15 +921,23 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
         track_entry = m_track_entries[entry_idx];
     }
 
-    const uint64_t pkt_ms = e.pts_ns / kTimecodeScaleNs;
+    const uint64_t pkt_tick = e.pts_ns / kTimecodeScaleNs;
+
+    if (m_config.max_cluster_payload_bytes && e.bytes.size() > m_config.max_cluster_payload_bytes) {
+        Fail("Encoded packet exceeds clip cluster payload budget");
+        return false;
+    }
 
     bool need_new_cluster = m_first_cluster;
     if (!m_first_cluster && m_cluster != nullptr) {
-        const int64_t rel_ms = static_cast<int64_t>(pkt_ms) - static_cast<int64_t>(m_cluster_start_ms);
-        if (rel_ms > kMaxClusterRelativeMs || rel_ms < -kMaxClusterRelativeMs) {
+        if (m_config.max_cluster_payload_bytes && m_cluster_payload_bytes &&
+            e.bytes.size() > m_config.max_cluster_payload_bytes - m_cluster_payload_bytes)
             need_new_cluster = true;
-        } else if (e.is_key && e.track_num == 1 && pkt_ms >= m_cluster_start_ms &&
-                   (pkt_ms - m_cluster_start_ms) >= kClusterBoundaryMs) {
+        const int64_t rel_ticks = static_cast<int64_t>(pkt_tick) - static_cast<int64_t>(m_cluster_start_ticks);
+        if (rel_ticks > kMaxClusterRelativeTicks || rel_ticks < -kMaxClusterRelativeTicks) {
+            need_new_cluster = true;
+        } else if (e.is_key && e.track_num == 1 && pkt_tick >= m_cluster_start_ticks &&
+                   (pkt_tick - m_cluster_start_ticks) >= kClusterBoundaryTicks) {
             need_new_cluster = true;
         }
     }
@@ -896,16 +947,18 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
             if (!FlushCluster())
                 return false;
             m_first_cluster = false;
-            m_cluster_start_ms = pkt_ms;
+            m_cluster_start_ticks = pkt_tick;
             m_cluster = new libmatroska::KaxCluster();
             m_cluster->SetParent(*m_segment);
             m_cluster->SetGlobalTimecodeScale(kTimecodeScaleNs);
-            m_cluster->InitTimecode(m_cluster_start_ms, static_cast<int64_t>(kTimecodeScaleNs));
+            m_cluster->InitTimecode(m_cluster_start_ticks, static_cast<int64_t>(kTimecodeScaleNs));
         }
 
         // Backing bytes must outlive FlushCluster()/Render(). Keep them in a
         // per-cluster store that is cleared only after the cluster is rendered.
         m_cluster_bytes.push_back(e.bytes);
+        m_cluster_payload_bytes += e.bytes.size();
+        m_peak_cluster_payload_bytes = (std::max)(m_peak_cluster_payload_bytes, m_cluster_payload_bytes);
         std::vector<uint8_t>& stored = m_cluster_bytes.back();
 
         auto* data_buf = new libmatroska::DataBuffer(stored.data(), static_cast<uint32_t>(stored.size()));
@@ -958,20 +1011,51 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
                         samples = 1024;
                     duration = samples * 1000000000ULL / m_config.audio_sample_rate;
                 }
-                if (e.pts_ns > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()) - duration)
+                if (e.pts_ns > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()))
                     throw std::overflow_error("Media coverage timestamp overflow");
-                const auto pts = static_cast<int64_t>(e.pts_ns);
-                const auto end = static_cast<int64_t>(e.pts_ns + duration);
-                auto& coverage = m_active_cluster_extent.coverage;
-                auto found = std::find_if(coverage.begin(), coverage.end(),
-                                          [&](const auto& entry) { return entry.track_number == e.track_num; });
-                if (found == coverage.end())
-                    coverage.push_back({e.track_num, pts, end, e.ordering_ns, e.ordering_ns});
-                else {
-                    found->begin_pts_ns = (std::min)(found->begin_pts_ns, pts);
-                    found->end_pts_ns = (std::max)(found->end_pts_ns, end);
-                    found->min_dts_ns = (std::min)(found->min_dts_ns, e.ordering_ns);
-                    found->max_dts_ns = (std::max)(found->max_dts_ns, e.ordering_ns);
+                auto pts = static_cast<int64_t>(e.pts_ns);
+                bool audible = true;
+                if (e.track_num > 1 && m_config.audio_codec == StreamAudioCodec::Opus &&
+                    m_config.opus_frame_samples != 0) {
+                    const auto index = static_cast<size_t>(e.track_num - 2);
+                    const auto& codec_private = m_config.audio_tracks[index].codec_private;
+                    const uint64_t delay_samples =
+                        static_cast<uint64_t>(codec_private[10]) | (static_cast<uint64_t>(codec_private[11]) << 8);
+                    const uint64_t samples = m_config.opus_frame_samples;
+                    const uint64_t emitted = m_opus_emitted_samples[index];
+                    if (emitted > (std::numeric_limits<uint64_t>::max)() - samples)
+                        throw std::overflow_error("Opus sample count overflow");
+                    const uint64_t remaining_delay = emitted < delay_samples ? delay_samples - emitted : 0;
+                    const uint64_t skipped = (std::min)(samples, remaining_delay);
+                    m_opus_emitted_samples[index] = emitted + samples;
+                    audible = skipped < samples;
+                    pts -= static_cast<int64_t>(delay_samples * 1000000000ULL / 48000);
+                    duration = (samples - skipped) * 1000000000ULL / 48000;
+                }
+                if (pts > (std::numeric_limits<int64_t>::max)() - static_cast<int64_t>(duration))
+                    throw std::overflow_error("Media coverage timestamp overflow");
+                const auto end = pts + static_cast<int64_t>(duration);
+                if (audible) {
+                    if (end >= 0) {
+                        m_max_covered_end_ns = (std::max)(m_max_covered_end_ns, static_cast<uint64_t>(end));
+                        m_has_covered_end = true;
+                        if (e.track_num == 1) {
+                            m_max_video_covered_end_ns =
+                                (std::max)(m_max_video_covered_end_ns, static_cast<uint64_t>(end));
+                            m_has_video_covered_end = true;
+                        }
+                    }
+                    auto& coverage = m_active_cluster_extent.coverage;
+                    auto found = std::find_if(coverage.begin(), coverage.end(),
+                                              [&](const auto& entry) { return entry.track_number == e.track_num; });
+                    if (found == coverage.end())
+                        coverage.push_back({e.track_num, pts, end, e.ordering_ns, e.ordering_ns});
+                    else {
+                        found->begin_pts_ns = (std::min)(found->begin_pts_ns, pts);
+                        found->end_pts_ns = (std::max)(found->end_pts_ns, end);
+                        found->min_dts_ns = (std::min)(found->min_dts_ns, e.ordering_ns);
+                        found->max_dts_ns = (std::max)(found->max_dts_ns, e.ordering_ns);
+                    }
                 }
                 if (e.is_key && e.track_num == 1) {
                     if (m_active_cluster_extent.random_access_points.size() >=
@@ -979,7 +1063,9 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
                         throw std::length_error("Media random-access metadata budget exceeded");
                     const size_t index = m_active_cluster_extent.random_access_points.size();
                     m_active_cluster_extent.random_access_points.push_back(
-                        {1, 0, 0, pts, e.ordering_ns, RandomAccessKind::Unknown});
+                        {1, 0, 0, pts, e.ordering_ns,
+                         QualifyClosedRandomAccess(m_config.video_codec_id, m_config.video_codec_private, e.bytes,
+                                                   e.is_key)});
                     m_pending_rap_blocks.emplace_back(rendered_block, index);
                 }
             } catch (...) {
@@ -991,7 +1077,7 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
         }
 
         if (e.is_key && e.track_num == 1)
-            m_pending_cue_ms.push_back(pkt_ms);
+            m_pending_cue_ticks.push_back(pkt_tick);
 
         if (e.pts_ns > m_max_emitted_pts_ns)
             m_max_emitted_pts_ns = e.pts_ns;
@@ -1053,25 +1139,27 @@ bool MatroskaStreamWriter::FlushCluster() {
         // GetRelativePosition() again would subtract the Segment header twice and
         // point every cue that many bytes short of its cluster.
         const uint64_t cluster_rel = m_cluster->GetPosition();
-        for (const uint64_t cue_ms : m_pending_cue_ms) {
+        for (const uint64_t cue_tick : m_pending_cue_ticks) {
             auto& point = libebml::AddNewChild<libmatroska::KaxCuePoint>(*m_cues);
-            libebml::GetChild<libmatroska::KaxCueTime>(point).SetValue(cue_ms);
+            libebml::GetChild<libmatroska::KaxCueTime>(point).SetValue(cue_tick);
             auto& tp = libebml::AddNewChild<libmatroska::KaxCueTrackPositions>(point);
             libebml::GetChild<libmatroska::KaxCueTrack>(tp).SetValue(1);
             libebml::GetChild<libmatroska::KaxCueClusterPosition>(tp).SetValue(cluster_rel);
         }
-        m_pending_cue_ms.clear();
+        m_pending_cue_ticks.clear();
     } catch (const std::exception& ex) {
         Fail(std::string("MatroskaStreamWriter::FlushCluster failed: ") + ex.what());
         delete m_cluster;
         m_cluster = nullptr;
         m_cluster_bytes.clear();
+        m_cluster_payload_bytes = 0;
         return false;
     }
     delete m_cluster;
     m_cluster = nullptr;
     // Block bytes are now serialized to disk; free them.
     m_cluster_bytes.clear();
+    m_cluster_payload_bytes = 0;
 
     // Flush the stream before requesting best-effort OS durability.
     // The cluster Render() above only reaches the CRT stdio buffer / OS
@@ -1081,7 +1169,7 @@ bool MatroskaStreamWriter::FlushCluster() {
     // which without this flush is unbounded (grows for the whole recording).
     // Gate by wall-clock time (not "every cluster") so this cannot fire faster
     // than the interval even if clusters ever land much more often than the
-    // steady-state ~2 s cadence (kClusterBoundaryMs) — e.g. Finalize()'s forced
+    // steady-state ~2 s cadence (kClusterBoundaryTicks) — e.g. Finalize()'s forced
     // window drain, which can flush several small clusters back-to-back.
     if (m_io != nullptr) {
         const auto now = std::chrono::steady_clock::now();
@@ -1177,10 +1265,11 @@ bool MatroskaStreamWriter::Finalize() {
                     last_frame_ns = static_cast<uint64_t>(m_config.frame_rate_den) * 1000000000ULL /
                                     static_cast<uint64_t>(m_config.frame_rate_num);
                 }
-                const uint64_t duration_ms =
-                    m_config.timeline_duration_ns.value_or(m_max_emitted_pts_ns + last_frame_ns) / kTimecodeScaleNs;
+                const uint64_t duration_ns = m_config.timeline_duration_ns.value_or(
+                    m_media_index_degraded ? m_max_emitted_pts_ns + last_frame_ns : m_max_covered_end_ns);
+                const uint64_t duration_ticks = duration_ns / kTimecodeScaleNs;
                 auto& dur = libebml::GetChild<libmatroska::KaxDuration>(*m_info);
-                dur.SetValue(static_cast<double>(duration_ms));
+                dur.SetValue(static_cast<double>(duration_ticks));
                 // Patch ONLY the Duration leaf in place. It was rendered as a
                 // fixed 8-byte float at Open() (FLOAT_64), and its ElementPosition
                 // was recorded when the parent Info was rendered, so OverwriteData
@@ -1241,7 +1330,8 @@ bool MatroskaStreamWriter::Finalize() {
     PublishProgress();
 
     CloseIo();
-    return ok && !m_failed;
+    m_finalize_succeeded = ok && !m_failed;
+    return m_finalize_succeeded;
 }
 
 } // namespace exosnap::engine

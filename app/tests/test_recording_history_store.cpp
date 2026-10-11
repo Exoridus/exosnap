@@ -67,6 +67,32 @@ TEST(RecordingHistoryStoreTest, MissingStoreRestoresEmptyHistory) {
     EXPECT_TRUE(recordings.isEmpty());
 }
 
+TEST(RecordingHistoryStoreTest, SegmentNanosecondsAndMasterPathRoundTripExactly) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto media = directory.filePath(QStringLiteral("recording.mp4"));
+    QFile file(media);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("media");
+    file.close();
+    auto recording = MakeTestRecording(media);
+    CompletedRecordingSegment segment;
+    segment.file_path = media;
+    segment.edit_master_path = directory.filePath(QStringLiteral("recording.edit.mkv"));
+    segment.succeeded = true;
+    segment.session_start_ns = 9'007'199'254'740'993ULL;
+    segment.duration_ns = 16'666'667;
+    recording.segments.push_back(segment);
+    RecordingHistoryStore store(directory.filePath(QStringLiteral("history.json")));
+    ASSERT_TRUE(store.Save({recording}));
+    const auto loaded = store.Load();
+    ASSERT_EQ(loaded.size(), 1);
+    ASSERT_EQ(loaded.front().segments.size(), 1u);
+    EXPECT_EQ(loaded.front().segments.front().session_start_ns, segment.session_start_ns);
+    EXPECT_EQ(loaded.front().segments.front().duration_ns, segment.duration_ns);
+    EXPECT_EQ(loaded.front().segments.front().edit_master_path, segment.edit_master_path);
+}
+
 // =============================================================================
 // 2. Empty valid store restores empty history
 // =============================================================================

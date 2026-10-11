@@ -1,15 +1,15 @@
 #include "media_identity_sidecar.h"
 #include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/background_io.h>
 #include <exosnap/engine/recording_media_types.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <functional>
-#include <ios>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
@@ -136,7 +136,9 @@ Outcome<std::shared_ptr<void>> AcquireMediaReadLease(const std::filesystem::path
     return std::shared_ptr<void>(std::move(lease));
 }
 Outcome<MediaIdentitySnapshot> HashFinalMedia(const std::filesystem::path& media,
-                                              const std::function<bool()>& continue_io) {
+                                              const std::function<bool()>& continue_io,
+                                              const BackgroundIoAdmission& before_io,
+                                              const std::atomic<bool>* cancelled) {
     FileLease file(media);
     MediaIdentitySnapshot before, after;
     if (file.handle == INVALID_HANDLE_VALUE || !Snapshot(file.handle, before))
@@ -146,15 +148,17 @@ Outcome<MediaIdentitySnapshot> HashFinalMedia(const std::filesystem::path& media
         return IdentityError("Cannot initialize final media hash");
     std::array<uint8_t, 64 * 1024> bytes{};
     uint64_t total = 0;
-    for (;;) {
-        if (continue_io && !continue_io())
+    if ((continue_io && !continue_io()) || (cancelled && cancelled->load(std::memory_order_relaxed)))
+        return IdentityError("Media identity verification cancelled", EngineErrorCode::Cancelled);
+    while (total < before.file_size) {
+        const auto chunk = static_cast<DWORD>((std::min)(before.file_size - total, uint64_t{bytes.size()}));
+        if ((continue_io && !continue_io()) || (cancelled && cancelled->load(std::memory_order_relaxed)) ||
+            (before_io && !before_io(chunk, cancelled)))
             return IdentityError("Media identity verification cancelled", EngineErrorCode::Cancelled);
         DWORD read = 0;
-        if (!ReadFile(file.handle, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr))
+        if (!ReadFile(file.handle, bytes.data(), chunk, &read, nullptr))
             return IdentityError("Final media hash read failed", EngineErrorCode::SourceIntegrityFailure);
         if (read == 0)
-            break;
-        if (read > before.file_size - (std::min)(total, before.file_size))
             return IdentityError("Media changed during final hash", EngineErrorCode::SourceIntegrityFailure);
         av_sha_update(sha.get(), bytes.data(), read);
         total += read;
@@ -168,14 +172,16 @@ Outcome<MediaIdentitySnapshot> HashFinalMedia(const std::filesystem::path& media
 }
 Outcome<std::monostate> WriteMediaIdentitySidecar(const std::filesystem::path& media, const AudioManifest1& manifest,
                                                   const std::function<bool()>& continue_io,
-                                                  const std::optional<MediaIdentitySidecarReferences>& references) {
+                                                  const std::optional<MediaIdentitySidecarReferences>& references,
+                                                  const BackgroundIoAdmission& before_io,
+                                                  const std::atomic<bool>* cancelled) {
     auto serialized = SerializeAudioManifest1(manifest);
     if (!serialized.succeeded())
         return *serialized.error();
     const auto lease = AcquireMediaReadLease(media);
     if (!lease.succeeded())
         return *lease.error();
-    auto hash = HashFinalMedia(media, continue_io);
+    auto hash = HashFinalMedia(media, continue_io, before_io, cancelled);
     if (!hash.succeeded())
         return *hash.error();
     const auto final_path = MediaIdentitySidecarPath(media);
@@ -188,7 +194,7 @@ Outcome<std::monostate> WriteMediaIdentitySidecar(const std::filesystem::path& m
         } else {
             std::error_code error;
             if (std::filesystem::exists(final_path, error)) {
-                auto existing = ReadMediaIdentitySidecar(media, continue_io);
+                auto existing = ReadMediaIdentitySidecar(media, continue_io, before_io, cancelled);
                 if (existing.status != AudioMetadataStatus::Verified || !existing.manifest ||
                     existing.manifest->media_id != manifest.media_id)
                     return IdentityError("Cannot preserve unverified identity references");
@@ -214,7 +220,10 @@ Outcome<std::monostate> WriteMediaIdentitySidecar(const std::filesystem::path& m
         if (file == INVALID_HANDLE_VALUE)
             return IdentityError("Cannot create identity sidecar staging file");
         DWORD written = 0;
-        const bool complete = WriteFile(file, payload.data(), static_cast<DWORD>(payload.size()), &written, nullptr) &&
+        const bool admitted = (!cancelled || !cancelled->load(std::memory_order_relaxed)) &&
+                              (!before_io || before_io(payload.size(), cancelled));
+        const bool complete = admitted &&
+                              WriteFile(file, payload.data(), static_cast<DWORD>(payload.size()), &written, nullptr) &&
                               written == payload.size() && FlushFileBuffers(file);
         const bool closed = CloseHandle(file) != FALSE;
         if (!complete || !closed ||
@@ -229,7 +238,9 @@ Outcome<std::monostate> WriteMediaIdentitySidecar(const std::filesystem::path& m
     }
 }
 AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& media,
-                                                 const std::function<bool()>& continue_io) {
+                                                 const std::function<bool()>& continue_io,
+                                                 const BackgroundIoAdmission& before_io,
+                                                 const std::atomic<bool>* cancelled) {
     const auto path = MediaIdentitySidecarPath(media);
     std::error_code error;
     const auto size = std::filesystem::file_size(path, error);
@@ -240,10 +251,17 @@ AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& me
     if (size == 0 || size > kSidecarBytes)
         return Status(AudioMetadataStatus::Invalid, "Audio identity sidecar exceeds byte budget");
     try {
-        std::ifstream input(path, std::ios::binary);
+        HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+            return Status(AudioMetadataStatus::Invalid, "Audio identity sidecar is unavailable");
+        std::unique_ptr<void, decltype(&CloseHandle)> input(handle, CloseHandle);
         std::string bytes(static_cast<size_t>(size), '\0');
-        if (!input.read(bytes.data(), static_cast<std::streamsize>(bytes.size())) ||
-            input.peek() != std::char_traits<char>::eof())
+        DWORD read = 0;
+        LARGE_INTEGER final_size{};
+        if ((cancelled && cancelled->load(std::memory_order_relaxed)) || (before_io && !before_io(size, cancelled)) ||
+            !ReadFile(handle, bytes.data(), static_cast<DWORD>(size), &read, nullptr) || read != size ||
+            !GetFileSizeEx(handle, &final_size) || final_size.QuadPart != static_cast<int64_t>(size))
             return Status(AudioMetadataStatus::Invalid, "Audio identity sidecar changed during read");
         std::vector<std::set<std::string>> keys;
         const auto callback = [&](int depth, Json::parse_event_t event, Json& value) {
@@ -268,7 +286,7 @@ AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& me
         const auto expected_hash = json.at("sha256").get<std::string>();
         if (expected_hash.size() != 64 || expected_hash.find_first_not_of("0123456789abcdef") != std::string::npos)
             return Status(AudioMetadataStatus::Invalid, "Identity sidecar hash is invalid");
-        const auto hash = HashFinalMedia(media, continue_io);
+        const auto hash = HashFinalMedia(media, continue_io, before_io, cancelled);
         if (!hash.succeeded() || Length(json.at("file_size")) != hash.value()->file_size ||
             expected_hash != Hex(hash.value()->sha256))
             return Status(AudioMetadataStatus::Stale, "Audio identity sidecar does not match final media bytes");
@@ -326,9 +344,15 @@ std::vector<std::filesystem::path> MediaIdentityReferenceCopyGuard::Commit() {
 Outcome<std::monostate> CopyMediaIdentityReferenceFiles(const std::filesystem::path& source,
                                                         const std::filesystem::path& output,
                                                         const MediaIdentitySidecarReferences& references,
-                                                        MediaIdentityReferenceCopyGuard* guard) {
+                                                        MediaIdentityReferenceCopyGuard* guard,
+                                                        const BackgroundIoAdmission& before_io,
+                                                        const std::atomic<bool>* cancelled) {
     MediaIdentityReferenceCopyGuard local_guard;
     auto* owner = guard ? guard : &local_guard;
+    const auto admit = [&](uint64_t bytes) {
+        return (!cancelled || !cancelled->load(std::memory_order_relaxed)) &&
+               (!before_io || before_io(bytes, cancelled));
+    };
     try {
         (void)ReferenceRanges(references);
         owner->created_paths.reserve(owner->created_paths.size() + references.marker_refs.size());
@@ -340,6 +364,7 @@ Outcome<std::monostate> CopyMediaIdentityReferenceFiles(const std::filesystem::p
             const auto lease = AcquireMediaReadLease(source_path);
             if (!lease.succeeded())
                 return IdentityError("A referenced marker companion is unavailable");
+            auto source_guard = std::static_pointer_cast<FileLease>(*lease.value());
             std::error_code error;
             const auto size = std::filesystem::file_size(source_path, error);
             if (error || size > kSidecarBytes || total_bytes > 32 * 1024 * 1024 - size)
@@ -354,17 +379,20 @@ Outcome<std::monostate> CopyMediaIdentityReferenceFiles(const std::filesystem::p
                 const auto output_lease = AcquireMediaReadLease(output_path);
                 if (!output_lease.succeeded() || std::filesystem::file_size(output_path, error) != size || error)
                     return IdentityError("Conflicting marker companion destination");
-                std::ifstream input(source_path, std::ios::binary);
-                std::ifstream existing(output_path, std::ios::binary);
-                std::string left(static_cast<size_t>(size), '\0');
-                std::string right(static_cast<size_t>(size), '\0');
-                if (!input.read(left.data(), static_cast<std::streamsize>(size)) ||
-                    !existing.read(right.data(), static_cast<std::streamsize>(size)) || left != right)
-                    return IdentityError("Conflicting marker companion bytes");
+                auto existing_guard = std::static_pointer_cast<FileLease>(*output_lease.value());
+                std::array<char, 64 * 1024> left{}, right{};
+                uint64_t remaining = size;
+                while (remaining) {
+                    const auto chunk = static_cast<DWORD>((std::min)(remaining, static_cast<uint64_t>(left.size())));
+                    DWORD left_read = 0, right_read = 0;
+                    if (!admit(chunk) || !ReadFile(source_guard->handle, left.data(), chunk, &left_read, nullptr) ||
+                        left_read != chunk || !admit(chunk) ||
+                        !ReadFile(existing_guard->handle, right.data(), chunk, &right_read, nullptr) ||
+                        right_read != chunk || !std::equal(left.begin(), left.begin() + chunk, right.begin()))
+                        return IdentityError("Conflicting marker companion bytes");
+                    remaining -= chunk;
+                }
             } else {
-                std::ifstream input(source_path, std::ios::binary);
-                if (!input)
-                    return IdentityError("Cannot read marker companion");
                 HANDLE destination = CreateFileW(output_path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
                                                  FILE_ATTRIBUTE_NORMAL, nullptr);
                 if (destination == INVALID_HANDLE_VALUE)
@@ -377,13 +405,16 @@ Outcome<std::monostate> CopyMediaIdentityReferenceFiles(const std::filesystem::p
                 uint64_t remaining = size;
                 while (remaining) {
                     const auto chunk = static_cast<DWORD>((std::min)(remaining, static_cast<uint64_t>(bytes.size())));
-                    DWORD written = 0;
-                    if (!input.read(bytes.data(), chunk) ||
+                    DWORD read = 0, written = 0;
+                    if (!admit(chunk) || !ReadFile(source_guard->handle, bytes.data(), chunk, &read, nullptr) ||
+                        read != chunk || !admit(chunk) ||
                         !WriteFile(destination, bytes.data(), chunk, &written, nullptr) || written != chunk)
                         return IdentityError("Cannot complete marker companion copy");
                     remaining -= chunk;
                 }
-                if (input.peek() != std::char_traits<char>::eof() || !FlushFileBuffers(destination))
+                LARGE_INTEGER final_source_size{};
+                if (!GetFileSizeEx(source_guard->handle, &final_source_size) ||
+                    final_source_size.QuadPart != static_cast<int64_t>(size) || !FlushFileBuffers(destination))
                     return IdentityError("Cannot finalize marker companion copy");
                 if (!CloseHandle(destination_guard.release()))
                     return IdentityError("Cannot close marker companion copy");

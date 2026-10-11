@@ -115,6 +115,29 @@ TEST(RecordViewModelAdapterTest, AStateChangeStillInvalidatesTheBroadSignalExact
     EXPECT_EQ(broad_changes, 1);
 }
 
+TEST(RecordViewModelAdapterTest, FinalizedEditMasterActionOnlySignalsWhenAvailable) {
+    RecordViewModelAdapter adapter;
+    int changes = 0;
+    int requests = 0;
+    QObject::connect(&adapter, &RecordViewModelAdapter::changed, [&] { ++changes; });
+    QObject::connect(&adapter, &RecordViewModelAdapter::editMasterRequested, [&] { ++requests; });
+
+    adapter.requestEditMaster();
+    EXPECT_EQ(requests, 0);
+    adapter.setPendingEditMasterAvailable(true);
+    EXPECT_TRUE(adapter.pendingEditMasterAvailable());
+    EXPECT_EQ(changes, 1);
+    adapter.setPendingEditMasterAvailable(true);
+    EXPECT_EQ(changes, 1);
+    adapter.requestEditMaster();
+    EXPECT_EQ(requests, 1);
+    adapter.setPendingEditMasterAvailable(false);
+    EXPECT_FALSE(adapter.pendingEditMasterAvailable());
+    EXPECT_EQ(changes, 2);
+    adapter.requestEditMaster();
+    EXPECT_EQ(requests, 1);
+}
+
 // The three option lists are the expensive half: a QVariantMap of three QStrings
 // per monitor and per eligible window, each label parsed out of the target.
 TEST(RecordViewModelAdapterTest, TargetOptionsAreRebuiltOnlyWhenTheTargetVectorIsReplaced) {

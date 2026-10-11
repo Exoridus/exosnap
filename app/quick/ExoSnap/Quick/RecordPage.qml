@@ -8,6 +8,7 @@ Item {
     id: root
 
     required property RecordViewModelAdapter recordViewModel
+    required property RecordingClipAdapter clipAdapter
     required property RecordPreviewAdapter previewAdapter
     // The shell adapter, for the two directions the source picker now has to
     // travel: it publishes whether the picker is on screen (nothing outside this
@@ -311,6 +312,7 @@ Item {
         // notification and Edit History, not through a row on this page.
         RecordTransportDock {
             recordViewModel: root.recordViewModel
+            clipAdapter: root.clipAdapter
             Layout.fillWidth: true
         }
     }
