@@ -3380,7 +3380,7 @@ void RecordingCoordinator::PostAppMeter(float rms_linear) {
         QCoreApplication::instance(), [cb, rms_linear]() { cb(rms_linear); }, Qt::QueuedConnection);
 }
 
-void RecordingCoordinator::PostRecordingMeter(std::array<float, 3> per_track_rms) {
+void RecordingCoordinator::PostRecordingMeter(std::array<float, exosnap::engine::kMaxAudioTracks> per_track_rms) {
     if (!on_recording_meter_updated_) {
         return;
     }

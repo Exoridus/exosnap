@@ -253,14 +253,6 @@ struct CaptureRegion {
 };
 
 // Microphone channel mapping policy for MIC capture in M4 Phase 4.2.
-enum class MicChannelMode {
-    Auto,
-    PreserveStereo,
-    MonoMix,
-    LeftToStereo,
-    RightToStereo,
-};
-
 // ---------------------------------------------------------------------------
 // Split recording (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1)
 // ---------------------------------------------------------------------------

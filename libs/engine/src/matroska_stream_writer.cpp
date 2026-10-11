@@ -293,6 +293,12 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
     m_config = config;
     m_opened = true;
 
+    if (config.audio_track_count > kMaxAudioTracks || config.reorder_window_max_packets == 0 ||
+        config.reorder_window_max_bytes == 0) {
+        Fail("Invalid audio track count or reorder budget");
+        return false;
+    }
+
     // --- Open output file ---
     try {
         m_io = new DurableFileIo(m_config.output_path, m_config.path_pre_reserved, m_config.fail_io, m_io_timings);
@@ -580,6 +586,11 @@ bool MatroskaStreamWriter::Push(MuxPacket packet) {
     if (packet.bytes.empty())
         return true; // skip empties silently (matches old muxer)
 
+    if (packet.bytes.size() > m_config.reorder_window_max_bytes - m_cur_window_bytes) {
+        Fail("Reorder payload budget exceeded before a safe interleave boundary");
+        return false;
+    }
+
     WindowEntry e;
     e.pts_ns = packet.pts_ns;
     e.ordering_ns = packet.dts_ns.value_or(static_cast<int64_t>(packet.pts_ns));
@@ -622,7 +633,12 @@ bool MatroskaStreamWriter::DrainWindow(bool force) {
             m_max_pushed_ordering_ns >= front.ordering_ns &&
             static_cast<uint64_t>(m_max_pushed_ordering_ns - front.ordering_ns) >= m_config.reorder_window_ns;
         const bool over_capacity = m_window.size() > m_config.reorder_window_max_packets;
-        if (!force && !behind_horizon && !over_capacity)
+        if (!force && !behind_horizon && over_capacity) {
+            // Capacity alone cannot prove that a stalled producer has no earlier packet.
+            Fail("Reorder packet budget exceeded before a safe interleave boundary");
+            return false;
+        }
+        if (!force && !behind_horizon)
             break;
 
         if (!EmitPacket(front))

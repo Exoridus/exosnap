@@ -12,9 +12,9 @@ Input snapshots include output, split, video, webcam, audio, target context and 
 
 ## Workers and queues
 
-`RecorderSession` owns shared session state. Video work owns its D3D11 immediate/video contexts and encoder resources. Audio workers own capture, conversion and encoding for their resolved tracks. The mux worker serializes encoded audio/video packets into the container. UI callbacks are queued observations and may not touch an engine context from the GUI thread.
+`RecorderSession` owns shared session state. Video work owns its D3D11 immediate/video contexts and encoder resources. Audio workers own capture, conversion and encoding for their resolved tracks. The mux worker serializes encoded audio/video packets into the container. Codec-private slots, duration accounting, track meters and container configuration share the central eight-track limit. UI callbacks are queued observations and may not touch an engine context from the GUI thread.
 
-Codec initialization and packet arrival are asynchronous. A bounded pre-mux buffer holds packets until the video private data and every declared audio track are ready. Readiness is explicit: PCM legitimately has empty codec-private bytes, which cannot be confused with an uninitialized track. Audio pre-mux storage is bounded at 600 packets. Exceeding the preparation bound is a visible failure rather than unbounded memory growth.
+Codec initialization and packet arrival are asynchronous. A bounded pre-mux buffer holds packets until the video private data and every declared audio track are ready. Readiness is explicit: PCM legitimately has empty codec-private bytes, which cannot be confused with an uninitialized track. Audio pre-mux storage reserves a three-second packet horizon for up to eight tracks at the shortest supported packet duration, with a separate 32 MiB payload ceiling. Exceeding either preparation bound is a visible failure rather than unbounded memory growth.
 
 The steady-state mux queue is also bounded. Producers wait for room within the queue policy, then fail cleanly if storage cannot keep up. They do not silently discard encoded audio or relabel a shortened recording as complete. Stop/failure wakes the waiters, and stop-related incomplete tails are distinguishable from ordinary backpressure.
 

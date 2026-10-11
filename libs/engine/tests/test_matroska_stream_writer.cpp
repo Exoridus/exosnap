@@ -950,6 +950,31 @@ TEST_F(StreamWriterTest, DurationBackPatched) {
 // 6. HEADLINE: peak buffered RAM is bounded by the reorder window, independent of
 //    total session length. Feed 60 s and assert the window never holds more than
 //    a few seconds' worth of packets — proving constant-RAM streaming.
+TEST_F(StreamWriterTest, PacketCapacityCannotForceAnUnsafeEarlyEmission) {
+    auto cfg = MakeConfig(tmp_, true, false);
+    cfg.reorder_window_max_packets = 1;
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(cfg));
+    MuxPacket packet;
+    packet.track_num = 1;
+    packet.is_key = true;
+    packet.bytes = {1};
+    ASSERT_TRUE(writer.Push(packet));
+    EXPECT_FALSE(writer.Push(packet));
+    EXPECT_TRUE(writer.failed());
+}
+
+TEST_F(StreamWriterTest, ReorderPayloadBudgetRejectsAnOversizedPacket) {
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(MakeConfig(tmp_, true, false)));
+    MuxPacket packet;
+    packet.track_num = 1;
+    packet.is_key = true;
+    packet.bytes.resize(64u * 1024 * 1024 + 1, 1);
+    EXPECT_FALSE(writer.Push(std::move(packet)));
+    EXPECT_TRUE(writer.failed());
+}
+
 TEST_F(StreamWriterTest, PeakWindowBoundedRegardlessOfLength) {
     auto cfg = MakeConfig(tmp_, true, false);
     cfg.reorder_window_ns = 2ULL * 1000000000ULL; // 2 s window

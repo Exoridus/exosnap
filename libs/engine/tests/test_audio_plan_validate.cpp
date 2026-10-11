@@ -211,4 +211,16 @@ TEST(AudioPlanValidateTest, Validate_RejectsPcmFloatWithBitDepth16) {
     EXPECT_EQ(validation.error_phase, ErrorPhase::Prepare);
 }
 
+TEST(AudioPlanValidateTest, EightDenseTracksValidateAndNinthFailsBeforeCapture) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidBaseConfig();
+    for (uint32_t index = 0; index < 8; ++index)
+        cfg.audio_track_plan.tracks.push_back(MakeTrack(index, {AudioSourceKind::SystemOutput}));
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    cfg.audio_track_plan.tracks.push_back(MakeTrack(8, {AudioSourceKind::SystemOutput}));
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+}
+
 } // namespace

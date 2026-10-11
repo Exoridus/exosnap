@@ -432,7 +432,7 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
 
     if (config.record_audio) {
         if (config.audio_track_plan.tracks.size() > CodecPrivateData::kMaxAudioTracks) {
-            return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_track_plan: max 3 audio tracks supported");
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_track_plan: max 8 audio tracks supported");
         }
 
         // track_index is the position a worker writes into -- codec-private slots,

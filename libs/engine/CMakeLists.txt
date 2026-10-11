@@ -10,6 +10,8 @@ if(NOT EXISTS "${_nvenc_header}")
         src/logging/logging.cpp
         src/audio_input_device.cpp
         src/audio_track_model.cpp
+    src/recording_media_types.cpp
+    src/audio_routing_model.cpp
         include/exosnap/engine/capture_hub_policy.h
         src/capture_hub_policy.cpp
         src/codec_private.cpp
@@ -370,6 +372,8 @@ add_library(exosnap_engine STATIC
     src/annexb_to_avcc.cpp
     src/annexb_to_hvcc.cpp
     src/audio_track_model.cpp
+    src/recording_media_types.cpp
+    src/audio_routing_model.cpp
     include/exosnap/engine/capture_hub_policy.h
     src/capture_hub_policy.cpp
     src/mic_meter_service.cpp
@@ -1823,4 +1827,11 @@ exosnap_add_gtest(
     TEST_PREFIX engine.
     SOURCES tests/test_edit_timeline_export.cpp
     LIBRARIES exosnap_engine FFmpeg::mux
+)
+
+exosnap_add_gtest(
+    NAME test_audio_routing_model
+    TEST_PREFIX engine.
+    SOURCES tests/test_audio_routing_model.cpp
+    LIBRARIES exosnap_engine
 )

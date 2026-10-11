@@ -1,5 +1,7 @@
 #pragma once
 
+#include <exosnap/engine/audio_limits.h>
+
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/packet_types.h>
 
@@ -34,7 +36,7 @@ struct CodecPrivateData {
     std::vector<uint8_t> hevc_vps_sps_pps;
     bool hevc_ready = false;
 
-    static constexpr uint32_t kMaxAudioTracks = 3;
+    static constexpr uint32_t kMaxAudioTracks = exosnap::engine::kMaxAudioTracks;
 
     std::array<AudioCodecPrivateSlot, kMaxAudioTracks> audio_codec_private{};
     std::array<bool, kMaxAudioTracks> audio_track_ready{};
@@ -69,7 +71,7 @@ enum class PremuxRoute { Buffered, Mux, Full };
 class PremuxState {
   public:
     static constexpr size_t kVideoLimit = 120;
-    static constexpr size_t kAudioLimit = 600;
+    static constexpr size_t kAudioLimit = AudioHoldPacketLimit(kMaxAudioTracks);
 
     struct Pending {
         std::deque<EncodedVideoPacket> video;
@@ -122,9 +124,11 @@ class PremuxState {
         if (Ready(codec, tracks)) {
             return PremuxRoute::Mux;
         }
-        if (pending_.audio.size() >= kAudioLimit) {
+        if (pending_.audio.size() >= AudioHoldPacketLimit(tracks) ||
+            packet.bytes.size() > kAudioPremuxPayloadBytes - audio_payload_bytes_) {
             return PremuxRoute::Full;
         }
+        audio_payload_bytes_ += packet.bytes.size();
         pending_.audio.push_back(std::move(packet));
         buffered_depth = static_cast<uint32_t>(pending_.audio.size());
         return PremuxRoute::Buffered;
@@ -152,6 +156,7 @@ class PremuxState {
 
     [[nodiscard]] Pending TakePending() {
         std::lock_guard lock(mutex_);
+        audio_payload_bytes_ = 0;
         return std::exchange(pending_, {});
     }
 
@@ -169,6 +174,7 @@ class PremuxState {
         std::lock_guard lock(mutex_);
         codec_private_ = {};
         pending_ = {};
+        audio_payload_bytes_ = 0;
     }
 
     [[nodiscard]] bool WaitForWaiter(std::chrono::milliseconds timeout) {
@@ -187,6 +193,7 @@ class PremuxState {
     CodecPrivateData codec_private_;
     Pending pending_;
     size_t waiting_ = 0;
+    size_t audio_payload_bytes_ = 0;
 };
 
 } // namespace exosnap::engine

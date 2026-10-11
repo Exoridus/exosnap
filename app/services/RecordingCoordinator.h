@@ -1,8 +1,10 @@
 #pragma once
+
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <exosnap/engine/audio_limits.h>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -112,7 +114,7 @@ class RecordingCoordinator {
     using SysMeterUpdatedCallback = std::function<void(float rms_linear)>;
     using AppMeterUpdatedCallback = std::function<void(float rms_linear)>;
     // Fired at ~30 Hz during recording; per-track RMS indexed by AudioThread track_id.
-    using RecordingMeterCallback = std::function<void(const std::array<float, 3>&)>;
+    using RecordingMeterCallback = std::function<void(const std::array<float, exosnap::engine::kMaxAudioTracks>&)>;
     // Capture frame result: (success, saved_path_or_empty, error_message_or_empty)
     using FrameCapturedCallback = std::function<void(bool success, const QString& path, const QString& error)>;
     // Transient split feedback for the UI: (accepted, message). On accept the
@@ -584,7 +586,7 @@ class RecordingCoordinator {
     void PostMicMeter(float rms_linear);
     void PostSysMeter(float rms_linear);
     void PostAppMeter(float rms_linear);
-    void PostRecordingMeter(std::array<float, 3> per_track_rms);
+    void PostRecordingMeter(std::array<float, exosnap::engine::kMaxAudioTracks> per_track_rms);
 
     // Builds the output path from the prepare snapshot (reads only from ctx). Runs
     // on the preparation worker thread.

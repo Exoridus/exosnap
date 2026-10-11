@@ -1,5 +1,7 @@
 #pragma once
 
+#include <exosnap/engine/audio_limits.h>
+
 // MatroskaStreamWriter: incremental, constant-RAM Matroska/WebM container writer.
 //
 // Replaces the previous batch-collect-then-write-once muxer body. Instead of
@@ -186,7 +188,7 @@ struct MatroskaStreamConfig {
     // Audio
     StreamAudioCodec audio_codec = StreamAudioCodec::Aac;
     uint32_t audio_track_count = 0;
-    std::array<StreamAudioTrack, 3> audio_tracks{}; // CodecPrivateData::kMaxAudioTracks
+    std::array<StreamAudioTrack, exosnap::engine::kMaxAudioTracks> audio_tracks{}; // CodecPrivateData::kMaxAudioTracks
 
     // Audio format. These values are written into KaxTrackAudio for
     // every audio track. bit_depth is only written for PCM and FLAC.
@@ -206,7 +208,8 @@ struct MatroskaStreamConfig {
     // A/V streams whose PTS interleave within this horizon get sorted correctly.
     // The window is ALSO bounded by count to cap RAM if one track stalls.
     uint64_t reorder_window_ns = 3ULL * 1000000000ULL; // 3 seconds
-    size_t reorder_window_max_packets = 4096;          // hard ceiling
+    size_t reorder_window_max_packets = 4096;
+    size_t reorder_window_max_bytes = kMuxReorderPayloadBytes;
 };
 
 class MatroskaStreamWriter {

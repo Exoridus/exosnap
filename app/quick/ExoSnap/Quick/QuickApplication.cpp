@@ -973,10 +973,11 @@ void QuickApplication::initializeRecordWorkflow() {
         preflight_app_rms_ = std::clamp(rms, 0.0f, 1.0f);
         scheduleMeterUpdate();
     });
-    recording_coordinator_->SetRecordingMeterCallback([this](const std::array<float, 3>& rms) {
-        record_view_model_.UpdateMeterRms(rms);
-        scheduleMeterUpdate();
-    });
+    recording_coordinator_->SetRecordingMeterCallback(
+        [this](const std::array<float, exosnap::engine::kMaxAudioTracks>& rms) {
+            record_view_model_.UpdateMeterRms(rms);
+            scheduleMeterUpdate();
+        });
     recording_coordinator_->SetWebcamStatusCallback(&record_view_model_adapter_,
                                                     [this](bool ok, const QString& reason) {
                                                         webcam_error_ = ok ? QString{} : reason;

@@ -209,7 +209,7 @@ void RecordViewModel::SetState(UiRecordingState new_state) {
     }
 }
 
-void RecordViewModel::UpdateMeterRms(const std::array<float, 3>& per_track_rms) {
+void RecordViewModel::UpdateMeterRms(const std::array<float, exosnap::engine::kMaxAudioTracks>& per_track_rms) {
     audio_rms_app = 0.0f;
     audio_rms_sys = 0.0f;
     audio_rms_mic = 0.0f;

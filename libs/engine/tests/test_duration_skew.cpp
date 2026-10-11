@@ -31,7 +31,7 @@ TEST(DurationSkew, AnAlignedRecordingWithAnEpochOffsetReportsNoSkew) {
     // the video clock, the muxer shifted the track by -200 ms, and the file ends
     // aligned. The encoder's own last PTS is 30.2 s -- which is what the metric
     // used to read, reporting 200 ms.
-    const std::array<uint64_t, 3> aligned{kVideoEnd, 0, 0};
+    const std::array<uint64_t, exosnap::engine::kMaxAudioTracks> aligned{kVideoEnd, 0, 0};
     const DurationSkew skew = ComputeDurationSkew(kVideoEnd, aligned);
     ASSERT_TRUE(skew.available);
     EXPECT_NEAR(skew.ms, 0.0, 0.001) << "an aligned file must not report its epoch offset as drift";
@@ -40,7 +40,7 @@ TEST(DurationSkew, AnAlignedRecordingWithAnEpochOffsetReportsNoSkew) {
 TEST(DurationSkew, ARealLossOfTwoHundredMillisecondsStillReportsIt) {
     // The control. If the fix were "subtract the epoch offset", this would read
     // 0 too, and the metric would be worth nothing.
-    const std::array<uint64_t, 3> aligned{kVideoEnd - 200 * kMs, 0, 0};
+    const std::array<uint64_t, exosnap::engine::kMaxAudioTracks> aligned{kVideoEnd - 200 * kMs, 0, 0};
     const DurationSkew skew = ComputeDurationSkew(kVideoEnd, aligned);
     ASSERT_TRUE(skew.available);
     EXPECT_NEAR(skew.ms, 200.0, 0.001) << "audio that really ends early must still be reported";
@@ -48,7 +48,7 @@ TEST(DurationSkew, ARealLossOfTwoHundredMillisecondsStillReportsIt) {
 
 TEST(DurationSkew, AudioEndingLateIsReportedToo) {
     // Sign-independent: the question is distance from the picture, either way.
-    const std::array<uint64_t, 3> aligned{kVideoEnd + 200 * kMs, 0, 0};
+    const std::array<uint64_t, exosnap::engine::kMaxAudioTracks> aligned{kVideoEnd + 200 * kMs, 0, 0};
     const DurationSkew skew = ComputeDurationSkew(kVideoEnd, aligned);
     ASSERT_TRUE(skew.available);
     EXPECT_NEAR(skew.ms, 200.0, 0.001);
@@ -66,7 +66,7 @@ TEST(DurationSkew, ATrackWithNothingWrittenIsNotAZeroSkew) {
     // A second track that never produced a packet has an aligned end of 0. Read
     // as a duration, that is 30 s of skew; read correctly, it is not a
     // measurement at all. The written track is what the answer comes from.
-    const std::array<uint64_t, 3> aligned{kVideoEnd - 50 * kMs, 0, 0};
+    const std::array<uint64_t, exosnap::engine::kMaxAudioTracks> aligned{kVideoEnd - 50 * kMs, 0, 0};
     const DurationSkew skew = ComputeDurationSkew(kVideoEnd, aligned);
     ASSERT_TRUE(skew.available);
     EXPECT_NEAR(skew.ms, 50.0, 0.001) << "an absent track must not be read as a 30 s skew";
@@ -75,7 +75,8 @@ TEST(DurationSkew, ATrackWithNothingWrittenIsNotAZeroSkew) {
 TEST(DurationSkew, TheWorstTrackIsWhatIsReported) {
     // Multi-track: the question is whether ANY audio ends away from the picture,
     // so an average would hide one bad track behind two good ones.
-    const std::array<uint64_t, 3> aligned{kVideoEnd, kVideoEnd - 300 * kMs, kVideoEnd - 10 * kMs};
+    const std::array<uint64_t, exosnap::engine::kMaxAudioTracks> aligned{kVideoEnd, kVideoEnd - 300 * kMs,
+                                                                         kVideoEnd - 10 * kMs};
     const DurationSkew skew = ComputeDurationSkew(kVideoEnd, aligned);
     ASSERT_TRUE(skew.available);
     EXPECT_NEAR(skew.ms, 300.0, 0.001);

@@ -191,6 +191,14 @@ void MuxThread::Run() {
     sw_config_template.opus_frame_samples =
         static_cast<uint32_t>(OpusFrameSizeSamples(m_state.config.opus_frame_duration));
     sw_config_template.audio_track_count = track_count;
+    const uint32_t video_fps = static_cast<uint32_t>(
+        (static_cast<uint64_t>(m_state.config.frame_rate_num) + m_state.config.frame_rate_den - 1) /
+        m_state.config.frame_rate_den);
+    const uint64_t packet_duration_ns =
+        m_state.config.audio_codec == AudioCodec::Opus
+            ? static_cast<uint64_t>(sw_config_template.opus_frame_samples) * 1000000000ULL / 48000
+            : kMinimumAudioPacketDurationNs;
+    sw_config_template.reorder_window_max_packets = ReorderPacketLimit(track_count, video_fps, packet_duration_ns);
     for (uint32_t i = 0; i < track_count; ++i) {
         sw_config_template.audio_tracks[i].codec_private = audioCp[i].bytes;
         sw_config_template.audio_tracks[i].codec_delay_samples = audioCp[i].codec_delay_samples;

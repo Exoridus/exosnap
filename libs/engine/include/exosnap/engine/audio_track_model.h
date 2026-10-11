@@ -8,6 +8,14 @@
 
 namespace exosnap::engine {
 
+enum class MicChannelMode {
+    Auto,
+    PreserveStereo,
+    MonoMix,
+    LeftToStereo,
+    RightToStereo,
+};
+
 enum class AudioSourceKind {
     App,
     Mic,

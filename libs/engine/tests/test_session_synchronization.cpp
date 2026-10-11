@@ -78,7 +78,7 @@ TEST(PremuxState, RoutesPreserveBoundsPacketOwnershipAndResetReadiness) {
 
     EncodedAudioPacket audio;
     uint32_t depth = 0;
-    for (size_t i = 0; i < PremuxState::kAudioLimit; ++i) {
+    for (size_t i = 0; i < AudioHoldPacketLimit(1); ++i) {
         audio.bytes = {4};
         ASSERT_EQ(state.Route(audio, VideoCodec::Av1, 1, depth), PremuxRoute::Buffered);
         EXPECT_EQ(depth, i + 1);
@@ -87,6 +87,28 @@ TEST(PremuxState, RoutesPreserveBoundsPacketOwnershipAndResetReadiness) {
     EXPECT_EQ(state.Route(audio, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
     EXPECT_EQ(audio.bytes, (std::vector<uint8_t>{5}));
     state.Reset();
+    EXPECT_TRUE(state.PendingSnapshot().audio.empty());
+}
+
+TEST(PremuxState, EightShortOpusTracksRetainThreeSecondsBeforeHeaders) {
+    PremuxState state;
+    uint32_t depth = 0;
+    for (uint32_t frame = 0; frame < 1200; ++frame) {
+        for (uint32_t track = 0; track < 8; ++track) {
+            EncodedAudioPacket packet{{1}, static_cast<uint64_t>(frame) * 2500000, track};
+            ASSERT_EQ(state.Route(packet, VideoCodec::Av1, 8, depth), PremuxRoute::Buffered);
+        }
+    }
+    EXPECT_EQ(state.TakePending().audio.size(), 9600u);
+}
+
+TEST(PremuxState, AudioByteOverflowPreservesTheRejectedPacket) {
+    PremuxState state;
+    uint32_t depth = 0;
+    EncodedAudioPacket packet;
+    packet.bytes.resize(32u * 1024 * 1024 + 1, 7);
+    EXPECT_EQ(state.Route(packet, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
+    EXPECT_EQ(packet.bytes.size(), 32u * 1024 * 1024 + 1);
     EXPECT_TRUE(state.PendingSnapshot().audio.empty());
 }
 

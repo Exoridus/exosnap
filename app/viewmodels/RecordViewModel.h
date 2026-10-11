@@ -1,5 +1,7 @@
 #pragma once
 
+#include <exosnap/engine/audio_limits.h>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -302,7 +304,7 @@ class RecordViewModel {
     void SetState(UiRecordingState new_state);
     void UpdateStats(const exosnap::engine::SessionStats& stats);
     // Update only the audio meter RMS fields — used by the high-cadence recording meter path.
-    void UpdateMeterRms(const std::array<float, 3>& per_track_rms);
+    void UpdateMeterRms(const std::array<float, exosnap::engine::kMaxAudioTracks>& per_track_rms);
     void SetResult(const UiRecordingResult& result);
     void ResetStats();
     void ClearCompletedResult();

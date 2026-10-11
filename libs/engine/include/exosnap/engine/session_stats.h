@@ -1,5 +1,7 @@
 #pragma once
 
+#include <exosnap/engine/audio_limits.h>
+
 #include "codec_types.h"
 #include "output_geometry.h"
 
@@ -28,7 +30,7 @@ struct SessionStats {
     // video_duration_ns is on, per track. This is the figure the file's own
     // timestamps agree with, and the only one duration_skew_ms may be computed
     // from. Zero for a track that had nothing written.
-    std::array<uint64_t, 3> aligned_audio_duration_ns{};
+    std::array<uint64_t, exosnap::engine::kMaxAudioTracks> aligned_audio_duration_ns{};
     // |video end - aligned audio end| on one timeline. Comparing video against
     // the unshifted audio_duration_ns reported the epoch offset as skew: a
     // correctly aligned recording whose audio clock started 200 ms after the
@@ -50,7 +52,7 @@ struct SessionStats {
     AudioCodec audio_codec = AudioCodec::Opus;
     // Smoothed linear RMS level [0..1] per audio track.
     // Index is AudioThread track_id_ and is bounded by CodecPrivateData::kMaxAudioTracks.
-    std::array<float, 3> per_track_rms{};
+    std::array<float, exosnap::engine::kMaxAudioTracks> per_track_rms{};
     // Resampler tail flushed at stop, per audio track (same indexing as
     // per_track_rms). `drained` counts the frames libswresample still held in its
     // filter delay and that the drain pushed into the encoder; `undrained` is what
@@ -62,9 +64,9 @@ struct SessionStats {
     // 0 — which is not a measurement of "nothing was left behind". This bit says
     // whether the drain actually ran for that track; without it the counters mean
     // nothing and must not be reported as a figure.
-    std::array<bool, 3> per_track_resampler_drain_recorded{};
-    std::array<uint64_t, 3> per_track_resampler_drained_frames{};
-    std::array<uint64_t, 3> per_track_resampler_undrained_frames{};
+    std::array<bool, exosnap::engine::kMaxAudioTracks> per_track_resampler_drain_recorded{};
+    std::array<uint64_t, exosnap::engine::kMaxAudioTracks> per_track_resampler_drained_frames{};
+    std::array<uint64_t, exosnap::engine::kMaxAudioTracks> per_track_resampler_undrained_frames{};
     bool source_loss = false;
     // True once any audio capture source was lost mid-recording and degraded to
     // honest silence. A post-flight fact so the "Saved" report can
@@ -110,7 +112,8 @@ struct DurationSkew {
 };
 
 [[nodiscard]] inline DurationSkew
-ComputeDurationSkew(uint64_t video_duration_ns, const std::array<uint64_t, 3>& aligned_audio_duration_ns) noexcept {
+ComputeDurationSkew(uint64_t video_duration_ns,
+                    const std::array<uint64_t, kMaxAudioTracks>& aligned_audio_duration_ns) noexcept {
     if (video_duration_ns == 0)
         return {};
     DurationSkew worst;
@@ -130,7 +133,7 @@ ComputeDurationSkew(uint64_t video_duration_ns, const std::array<uint64_t, 3>& a
 
 // Lightweight RMS snapshot for high-cadence meter updates (~30 Hz).
 struct MeterSnapshot {
-    std::array<float, 3> per_track_rms{};
+    std::array<float, exosnap::engine::kMaxAudioTracks> per_track_rms{};
 };
 
 // Callback invoked approximately every 264 ms while recording is active.
