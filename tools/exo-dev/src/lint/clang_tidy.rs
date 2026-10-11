@@ -172,6 +172,7 @@ pub fn run_blocking(
 
     let tool = clang_tidy_path
         .map(Path::to_path_buf)
+        .or_else(|| build_toolchain_clang_tidy(&entries))
         .or_else(discover_vs2022_clang_tidy)
         .or_else(|| lint::find_tool(&["clang-tidy"]))
         .ok_or_else(|| {
@@ -858,6 +859,40 @@ fn discover_vs2022_clang_tidy() -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
+/// The clang-tidy bundled with the Visual Studio installation whose compiler
+/// produced the compile database. clang-tidy parses that installation's STL
+/// headers, and each MSVC STL refuses Clang versions older than the one it was
+/// released with, so a clang-tidy from another installation can fail on every
+/// translation unit. This differs from the VS-2022 pin the formatter uses:
+/// with VS 2022 and a newer VS line side by side, the build imports the newer
+/// toolchain while that pin would still pick VS 2022's older LLVM.
+fn build_toolchain_clang_tidy(entries: &[CompileEntry]) -> Option<PathBuf> {
+    let root = entries
+        .iter()
+        .find_map(|entry| compiler_installation(&entry.command_line))?;
+    let candidate = root.join("VC/Tools/Llvm/x64/bin/clang-tidy.exe");
+    candidate.is_file().then_some(candidate)
+}
+
+/// The Visual Studio installation root of the compiler an entry's
+/// `directory|command` line invokes: everything before `\VC\Tools\MSVC\` in
+/// the compiler path. `None` for a compiler outside a Visual Studio layout.
+fn compiler_installation(command_line: &str) -> Option<PathBuf> {
+    let command = command_line
+        .split_once('|')
+        .map_or(command_line, |(_, command)| command)
+        .trim_start();
+    let compiler = match command.strip_prefix('"') {
+        Some(quoted) => quoted.split('"').next()?,
+        None => command.split_whitespace().next()?,
+    };
+    let normalized = compiler.replace('/', "\\");
+    let marker = normalized
+        .to_ascii_lowercase()
+        .find("\\vc\\tools\\msvc\\")?;
+    Some(PathBuf::from(&normalized[..marker]))
+}
+
 fn clang_tidy_version_banner(tool: &Path) -> anyhow::Result<String> {
     let mut command = crate::process::command(&tool.to_string_lossy());
     command.arg("--version");
@@ -1082,6 +1117,36 @@ mod tests {
             extract_violations(&[("file.cpp".into(), output)], "C:/repo", "C:/repo/build");
         assert_eq!(findings.len(), 3);
         assert!(findings.iter().all(|finding| finding.starts_with("libs/")));
+    }
+
+    #[test]
+    fn the_compiler_installation_is_read_from_a_quoted_compiler_path() {
+        let line = r#"C:/repo/build|"C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\bin\Hostx64\x64\cl.exe"  /nologo /TP"#;
+        assert_eq!(
+            compiler_installation(line),
+            Some(PathBuf::from(
+                r"C:\Program Files\Microsoft Visual Studio\18\Community"
+            ))
+        );
+    }
+
+    #[test]
+    fn the_compiler_installation_is_read_from_an_unquoted_forward_slash_path() {
+        let line =
+            "C:/repo/build|C:/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe /nologo";
+        assert_eq!(
+            compiler_installation(line),
+            Some(PathBuf::from(r"C:\BuildTools"))
+        );
+    }
+
+    #[test]
+    fn a_compiler_outside_a_visual_studio_layout_names_no_installation() {
+        assert_eq!(
+            compiler_installation(r"C:/repo/build|C:\LLVM\bin\clang-cl.exe /nologo"),
+            None
+        );
+        assert_eq!(compiler_installation("C:/repo/build|"), None);
     }
 
     fn entry(file: &str, output: &str, command: &str) -> CompileEntry {

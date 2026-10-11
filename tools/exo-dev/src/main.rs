@@ -611,8 +611,9 @@ enum LintCommand {
         /// translation units are analysed. Omit for a full-tree pass.
         #[arg(long)]
         base: Option<String>,
-        /// Explicit path to clang-tidy.exe. Autodetected from the Visual
-        /// Studio LLVM toolset and then from PATH when omitted.
+        /// Explicit path to clang-tidy.exe. Autodetected when omitted: first
+        /// the LLVM toolset of the Visual Studio installation that compiled
+        /// the tree, then the VS 2022 LLVM toolset, then PATH.
         #[arg(long)]
         clang_tidy: Option<PathBuf>,
         /// Parallel clang-tidy processes. Defaults to the processor count.
