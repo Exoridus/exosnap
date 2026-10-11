@@ -1,4 +1,5 @@
 #include "audio_runtime_graph.h"
+#include "audio_tee.h"
 #include "logical_audio_source.h"
 #include "qpc_100ns.h"
 #include "shared_audio_capture.h"
