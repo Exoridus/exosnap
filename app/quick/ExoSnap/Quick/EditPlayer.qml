@@ -1,5 +1,8 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Layouts
 
 // Scene-graph video keeps playback controls composited over the decoded frame.
 Rectangle {
@@ -13,6 +16,67 @@ Rectangle {
     border.color: ExoTheme.line
     radius: ExoTheme.radiusLg
     clip: true
+    property bool monitoringEditorOpen: false
+    property var monitoringSelection: []
+    function openMonitoring(): void {
+        root.player.setPlaying(false);
+        overlapConfirmation.checked = false;
+        root.monitoringSelection = root.player.monitoringTracks.filter(track => track.selected).map(track => track.id);
+        root.monitoringEditorOpen = true;
+    }
+    ExoButton {
+        z: 4
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: ExoTheme.spacingSm
+        text: root.player.monitoringConfirmationRequired ? qsTr("Confirm audio selection") : qsTr("Monitor tracks")
+        visible: root.player.monitoringTracks.length > 0
+        Accessible.name: qsTr("Review the editor audio monitoring selection")
+        onClicked: root.openMonitoring()
+    }
+    ExoCard {
+        z: 5
+        visible: root.monitoringEditorOpen
+        anchors.centerIn: parent
+        width: Math.min(parent.width - 24, 480)
+        title: qsTr("Monitor tracks")
+        subtitle: qsTr("Preview and render use this selection. Stream copy retains all recorded tracks.")
+        Repeater {
+            model: root.player.monitoringTracks
+            delegate: ExoCheckBox {
+                required property var modelData
+                text: modelData.name
+                Layout.fillWidth: true
+                checked: root.monitoringSelection.indexOf(modelData.id) >= 0
+                Accessible.name: qsTr("Monitor %1").arg(modelData.name)
+                onToggledByUser: value => {
+                    const selected = root.monitoringSelection.slice();
+                    const index = selected.indexOf(modelData.id);
+                    if (value && index < 0) selected.push(modelData.id);
+                    else if (!value && index >= 0) selected.splice(index, 1);
+                    root.monitoringSelection = selected;
+                }
+            }
+        }
+        ExoCheckBox {
+            id: overlapConfirmation
+            text: qsTr("I confirm any overlapping audio in this selection")
+            Layout.fillWidth: true
+        }
+        RowLayout {
+            ExoButton {
+                text: qsTr("Confirm selection")
+                onClicked: {
+                    root.player.confirmMonitoring(root.monitoringSelection, overlapConfirmation.checked);
+                    root.monitoringEditorOpen = false;
+                }
+            }
+            ExoButton {
+                text: qsTr("Cancel")
+                onClicked: root.monitoringEditorOpen = false
+            }
+        }
+    }
 
     gradient: Gradient {
         GradientStop {

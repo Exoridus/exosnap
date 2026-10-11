@@ -3,21 +3,32 @@
 #include "matroska_stream_writer.h"
 #include "recording_media_index.h"
 #include "test_unique_temp.h"
+#include <exosnap/engine/recording_media_types.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <ios>
 #include <memory>
+#include <string>
+#include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/codec.h>
+#include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
+#include <libavutil/error.h>
+#include <libavutil/frame.h>
 #include <libavutil/mathematics.h>
 }
 
@@ -478,6 +489,60 @@ TEST_F(CommittedMediaReadTest, SequenceExhaustionDegradesClipsWithoutInvalidatin
     EXPECT_TRUE(receipts.empty());
     EXPECT_TRUE(writer.media_index_degraded());
     EXPECT_TRUE(writer.Finalize());
+}
+
+TEST_F(CommittedMediaReadTest, SharedJournalRetainsSegmentsWithContinuousCommitSequence) {
+    const auto journal = exosnap_test::UniqueTempPath("segments.index");
+    const auto second_path = exosnap_test::UniqueTempPath("second_segment.mkv");
+    RecordingMediaIndex index(journal);
+    uint64_t sequence = 0;
+    RecordingMediaDescriptor descriptor;
+    descriptor.recording_id = NewId<RecordingId>();
+    config.media_descriptor = descriptor;
+    config.publish_committed = [&](CommittedMediaReceipt receipt) {
+        sequence = receipt.commit_sequence;
+        return index.PublishCommitted(std::move(receipt));
+    };
+    MatroskaStreamWriter first;
+    ASSERT_TRUE(first.Open(config));
+    ASSERT_EQ(index.RegisterDescriptor(first.media_descriptor()), ReceiptAcceptance::Accepted);
+    ASSERT_TRUE(Feed(first, 1));
+    ASSERT_TRUE(first.Finalize());
+    const auto first_sequence = sequence;
+    ASSERT_GT(first_sequence, 0u);
+    config.output_path = second_path.string();
+    config.initial_commit_sequence = first_sequence;
+    config.media_descriptor->descriptor_revision = 2;
+    config.media_descriptor->segment_origin_r_ns = 4'000'000'000;
+    MatroskaStreamWriter second;
+    ASSERT_TRUE(second.Open(config));
+    ASSERT_EQ(index.RegisterDescriptor(second.media_descriptor()), ReceiptAcceptance::Accepted);
+    ASSERT_TRUE(Feed(second, 1));
+    ASSERT_TRUE(second.Finalize());
+    ASSERT_GT(sequence, first_sequence);
+    ASSERT_TRUE(WaitForCommit(index, sequence));
+    auto snapshot = index.Freeze();
+    ASSERT_TRUE(snapshot.succeeded());
+    std::vector<SegmentId> segments;
+    uint64_t previous_sequence = 0;
+    ASSERT_TRUE(RecordingMediaIndex::Visit(
+                    *snapshot.value(),
+                    [&](const RecordingMediaDescriptor& descriptor) {
+                        segments.push_back(descriptor.segment_id);
+                        return true;
+                    },
+                    [&](const CommittedMediaReceipt& receipt) {
+                        EXPECT_GT(receipt.commit_sequence, previous_sequence);
+                        previous_sequence = receipt.commit_sequence;
+                        return true;
+                    })
+                    .succeeded());
+    ASSERT_EQ(segments.size(), 2u);
+    EXPECT_NE(segments[0], segments[1]);
+    EXPECT_EQ(previous_sequence, sequence);
+    EXPECT_FALSE(index.needs_rebuild());
+    EXPECT_TRUE(std::filesystem::remove(second_path));
+    EXPECT_TRUE(std::filesystem::remove(journal));
 }
 
 } // namespace

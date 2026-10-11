@@ -144,7 +144,7 @@ AudioThread::AudioThread(std::shared_ptr<SessionState> state, std::unique_ptr<IA
                          uint32_t track_id, std::vector<AudioSourceKind> source_kinds)
     : m_state_ptr(std::move(state)), m_state(*m_state_ptr), source_(std::move(source)),
       source_kinds_(std::move(source_kinds)), mixed_src_(dynamic_cast<MixedAudioSrc*>(source_.get())),
-      track_id_(track_id) {
+      runtime_track_(dynamic_cast<AudioRuntimeTrackSource*>(source_.get())), track_id_(track_id) {
 }
 
 AudioThread::~AudioThread() {
@@ -390,7 +390,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     // controller is never fed, so the default 48 kHz/stereo path stays a
     // byte-identical passthrough.
     ClockSlavingController clock_controller;
-    const bool clock_slaving_enabled = m_state.config.audio_clock_slaving_enabled;
+    const bool clock_slaving_enabled = m_state.config.audio_clock_slaving_enabled && !source_->ClockCorrected();
     bool clock_slaving_logged_engage = false;
     bool clock_slaving_logged_saturation = false;
     bool clock_slaving_logged_fault = false;
@@ -524,7 +524,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
 
     // A merged source owns both captured and missing intervals on its QPC timeline.
     // A second wall-clock filler would count an endpoint outage twice.
-    const bool source_owns_timeline = mixed_src_ != nullptr && mixed_src_->CaptureSourceCount() > 1;
+    const bool source_owns_timeline =
+        source_->ClockCorrected() || (mixed_src_ != nullptr && mixed_src_->CaptureSourceCount() > 1);
     // --- Capture / encode loop ---
     while (!m_state.stop_requested.load()) {
         if (m_state.pause_requested.load()) {
@@ -886,6 +887,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                 }
                 if (track_id_ < m_state.stats.per_track_rms.size()) {
                     m_state.stats.per_track_rms[track_id_] = m_smoothed_rms_;
+                    m_state.stats.per_track_meter_measured[track_id_] = raw.num_frames != 0;
                 }
             }
 
@@ -918,9 +920,17 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             waitForCaptureWork();
     }
 
-    if (mixed_src_ != nullptr && !failed) {
-        mixed_src_->BeginDrain();
-        while (source_->PendingFrameCount() > 0) {
+    if ((mixed_src_ != nullptr || runtime_track_ != nullptr) && !failed) {
+        if (mixed_src_)
+            mixed_src_->BeginDrain();
+        if (runtime_track_) {
+            std::string error;
+            if (!runtime_track_->BeginDrain(m_state.file_output->end_qpc().value * 100, error)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture, error);
+                failed = true;
+            }
+        }
+        while (!failed && source_->PendingFrameCount() > 0) {
             RawAudioBuffer tail{};
             std::string error;
             if (!source_->AcquireBuffer(tail, error)) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exosnap/engine/audio_limits.h>
+#include <exosnap/engine/recording_media_types.h>
 
 #include "codec_types.h"
 #include "output_geometry.h"
@@ -53,6 +54,7 @@ struct SessionStats {
     // Smoothed linear RMS level [0..1] per audio track.
     // Index is AudioThread track_id_ and is bounded by CodecPrivateData::kMaxAudioTracks.
     std::array<float, exosnap::engine::kMaxAudioTracks> per_track_rms{};
+    std::array<bool, exosnap::engine::kMaxAudioTracks> per_track_meter_measured{};
     // Resampler tail flushed at stop, per audio track (same indexing as
     // per_track_rms). `drained` counts the frames libswresample still held in its
     // filter delay and that the drain pushed into the encoder; `undrained` is what
@@ -132,8 +134,25 @@ ComputeDurationSkew(uint64_t video_duration_ns,
 }
 
 // Lightweight RMS snapshot for high-cadence meter updates (~30 Hz).
+struct SourceMeterSnapshot {
+    AudioSourceId source_id;
+    SourceGeneration generation;
+    bool has_measurement = false;
+    float rms = 0;
+    float peak = 0;
+    bool muted = false;
+};
+
+struct TrackMeterSnapshot {
+    AudioTrackId track_id;
+    bool has_measurement = false;
+    float rms = 0;
+};
+
 struct MeterSnapshot {
     std::array<float, exosnap::engine::kMaxAudioTracks> per_track_rms{};
+    std::vector<SourceMeterSnapshot> sources;
+    std::vector<TrackMeterSnapshot> tracks;
 };
 
 // Callback invoked approximately every 264 ms while recording is active.

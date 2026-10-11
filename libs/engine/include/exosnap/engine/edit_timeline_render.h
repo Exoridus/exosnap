@@ -13,6 +13,7 @@ struct TimelineMediaSource {
     uint64_t id = 0;
     std::filesystem::path path;
     EditMediaMetadata metadata;
+    std::optional<MonitorSelectionSnapshot> monitor_selection;
 };
 
 struct TimelineRenderSnapshot {

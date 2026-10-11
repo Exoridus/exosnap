@@ -199,6 +199,451 @@
     </message>
 </context>
 <context>
+    <name>AudioRoutingPanel</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/AudioRoutingPanel.qml" line="+11"/>
+        <source>Audio routing</source>
+        <translation>Audio-Routing</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>No assigned tracks</source>
+        <translation>Keine zugewiesenen Spuren</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Legacy audio settings need conversion before they can be edited.</source>
+        <translation>Die bisherigen Audioeinstellungen müssen vor der Bearbeitung umgewandelt werden.</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Confirm conversion</source>
+        <translation>Umwandlung bestätigen</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Next plan</source>
+        <translation>Nächster Plan</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Add empty track</source>
+        <translation>Leere Spur hinzufügen</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Add an empty audio track</source>
+        <translation>Leere Audiospur hinzufügen</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Undo</source>
+        <translation>Rückgängig</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Active output</source>
+        <translation>Aktive Ausgabe</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <location line="+12"/>
+        <source>%1: %2</source>
+        <translation>%1: %2</translation>
+    </message>
+    <message>
+        <location line="-12"/>
+        <source>Recording</source>
+        <translation>Aufnahme</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Not recording</source>
+        <translation>Keine Aufnahme</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Live mute</source>
+        <translation>Stummschaltung während der Aufnahme</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Mute active source %1</source>
+        <translation>Aktive Quelle %1 stummschalten</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Sources</source>
+        <translation>Quellen</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>System audio</source>
+        <translation>Systemaudio</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Microphone</source>
+        <translation>Mikrofon</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Capture target audio</source>
+        <translation>Audio des Aufnahmeziels</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Independent selected application</source>
+        <translation>Unabhängige ausgewählte Anwendung</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>New audio source type</source>
+        <translation>Typ der neuen Audioquelle</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Add source</source>
+        <translation>Quelle hinzufügen</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>New sources are unassigned. Move or add them to a track. Independent application audio binds to the currently selected capture application.</source>
+        <translation>Neue Quellen sind zunächst keiner Spur zugewiesen. Verschiebe sie auf eine Spur oder füge sie dort hinzu. Das Anwendungs-Audio wird mit der aktuell ausgewählten Aufnahme-Anwendung verknüpft.</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>%1 - assigned to: %2</source>
+        <translation>%1 – zugewiesen zu: %2</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Participate</source>
+        <translation>Einbeziehen</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Include source %1</source>
+        <translation>Quelle %1 einbeziehen</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Mute</source>
+        <translation>Stummschalten</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Mute source %1</source>
+        <translation>Quelle %1 stummschalten</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Source RMS</source>
+        <translation>Effektivwert der Quelle (RMS)</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+8"/>
+        <source>%1 dBFS</source>
+        <translation>%1 dBFS</translation>
+    </message>
+    <message>
+        <location line="-8"/>
+        <location line="+8"/>
+        <source>Unavailable</source>
+        <translation>Nicht verfügbar</translation>
+    </message>
+    <message>
+        <location line="-4"/>
+        <source>Source peak</source>
+        <translation>Spitzenpegel der Quelle</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Target track for %1</source>
+        <translation>Zielspur für %1</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Move here</source>
+        <translation>Hierher verschieben</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Move %1 to %2</source>
+        <translation>%1 nach %2 verschieben</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Also add</source>
+        <translation>Ebenfalls hinzufügen</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Also add %1 to %2</source>
+        <translation>%1 ebenfalls zu %2 hinzufügen</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Hide source details</source>
+        <translation>Quelldetails ausblenden</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Source details</source>
+        <translation>Quelldetails</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Details for source %1</source>
+        <translation>Details für Quelle %1</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>These microphone settings are shared by the legacy sources.</source>
+        <translation>Diese Mikrofoneinstellungen gelten gemeinsam für die bisherigen Quellen.</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Changes apply to this source in the next recording.</source>
+        <translation>Änderungen an dieser Quelle gelten für die nächste Aufnahme.</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Microphone device for %1</source>
+        <translation>Mikrofongerät für %1</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Channel mode for %1</source>
+        <translation>Kanalmodus für %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Auto</source>
+        <translation>Automatisch</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Preserve stereo</source>
+        <translation>Stereo beibehalten</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Mono mix</source>
+        <translation>Mono-Mix</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Left channel</source>
+        <translation>Linker Kanal</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Right channel</source>
+        <translation>Rechter Kanal</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Source gain in dB for %1</source>
+        <translation>Quellenverstärkung in dB für %1</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>High-pass filter</source>
+        <translation>Hochpassfilter</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Noise gate</source>
+        <translation>Noise Gate</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Automatic gain</source>
+        <translation>Automatische Verstärkung</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Noise suppression</source>
+        <translation>Rauschunterdrückung</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <location line="+14"/>
+        <source>%1 for %2</source>
+        <translation>%1 für %2</translation>
+    </message>
+    <message>
+        <location line="-8"/>
+        <source>High-pass cutoff in Hz</source>
+        <translation>Grenzfrequenz des Hochpassfilters in Hz</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Gate threshold in dB</source>
+        <translation>Schwellwert des Noise Gate in dB</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Automatic gain target in dB</source>
+        <translation>Zielpegel der automatischen Verstärkung in dB</translation>
+    </message>
+</context>
+<context>
+    <name>AudioTrackCard</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/AudioTrackCard.qml" line="+16"/>
+        <source>Empty track</source>
+        <translation>Leere Spur</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Track %1</source>
+        <translation>Spur %1</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Track name</source>
+        <translation>Spurname</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Move up</source>
+        <translation>Nach oben verschieben</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Move %1 up</source>
+        <translation>%1 nach oben verschieben</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Move down</source>
+        <translation>Nach unten verschieben</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Move %1 down</source>
+        <translation>%1 nach unten verschieben</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Record</source>
+        <translation>Aufnehmen</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Record track %1</source>
+        <translation>Spur %1 aufnehmen</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Default monitor</source>
+        <translation>Standardmäßig abhören</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Monitor track %1 by default</source>
+        <translation>Spur %1 standardmäßig abhören</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Role for %1</source>
+        <translation>Rolle für %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Standard</source>
+        <translation>Standard</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Stem</source>
+        <translation>Einzelspur</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Mix</source>
+        <translation>Mix</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Hide details</source>
+        <translation>Details ausblenden</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Track details</source>
+        <translation>Spurdetails</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Toggle details for %1</source>
+        <translation>Details für %1 umschalten</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Track level: Unavailable</source>
+        <translation>Spurpegel: Nicht verfügbar</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Track level: %1 dBFS</source>
+        <translation>Spurpegel: %1 dBFS</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Remove</source>
+        <translation>Entfernen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove %1 from %2</source>
+        <translation>%1 aus %2 entfernen</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>%1 gain: %2 dB</source>
+        <translation>Verstärkung für %1: %2 dB</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>-1 dB</source>
+        <translation>-1 dB</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Lower gain for %1</source>
+        <translation>Verstärkung für %1 verringern</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>+1 dB</source>
+        <translation>+1 dB</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Raise gain for %1</source>
+        <translation>Verstärkung für %1 erhöhen</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Mute route</source>
+        <translation>Routing stummschalten</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Mute %1 on %2</source>
+        <translation>%1 auf %2 stummschalten</translation>
+    </message>
+</context>
+<context>
     <name>Capabilities</name>
     <message>
         <location filename="../../libs/capability/src/capability_builder.cpp" line="+21"/>
@@ -3005,7 +3450,48 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditPlayer</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPlayer.qml" line="+70"/>
+        <location filename="../quick/ExoSnap/Quick/EditPlayer.qml" line="+32"/>
+        <source>Confirm audio selection</source>
+        <translation>Audioauswahl bestätigen</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <location line="+10"/>
+        <source>Monitor tracks</source>
+        <translation>Spuren abhören</translation>
+    </message>
+    <message>
+        <location line="-8"/>
+        <source>Review the editor audio monitoring selection</source>
+        <translation>Auswahl der Audioüberwachung im Editor prüfen</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Preview and render use this selection. Stream copy retains all recorded tracks.</source>
+        <translation>Vorschau und Rendern verwenden diese Auswahl. Beim Stream Copy bleiben alle aufgenommenen Spuren erhalten.</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Monitor %1</source>
+        <translation>%1 abhören</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>I confirm any overlapping audio in this selection</source>
+        <translation>Ich bestätige, dass sich Audio in dieser Auswahl überlagern kann</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Confirm selection</source>
+        <translation>Auswahl bestätigen</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <location line="+59"/>
         <source>Pause preview</source>
         <translation>Vorschau pausieren</translation>
     </message>
@@ -3028,13 +3514,13 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditPlayerAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPlayerAdapter.cpp" line="+91"/>
-        <location line="+173"/>
+        <location filename="../quick/ExoSnap/Quick/EditPlayerAdapter.cpp" line="+92"/>
+        <location line="+210"/>
         <source>Preview unavailable</source>
         <translation>Vorschau nicht verfügbar</translation>
     </message>
     <message>
-        <location line="-16"/>
+        <location line="-19"/>
         <source>Opening clip…</source>
         <translation>Clip wird geöffnet…</translation>
     </message>
@@ -3072,15 +3558,45 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Rendern mit „Wie Quelle“ benötigt gerade Videomaße und eine exakte positive Bildrate.</translation>
     </message>
     <message>
-        <location filename="../../libs/engine/src/edit_timeline_export.cpp" line="+218"/>
+        <location filename="../../libs/engine/src/edit_timeline_export.cpp" line="+299"/>
         <source>Render export requires explicitly tagged 8-bit BT.709 4:2:0 SDR with known range. HDR and unsupported color paths remain lossless-only.</source>
         <translation>Renderexport benötigt ausdrücklich gekennzeichnetes SDR-Video mit 8 Bit, BT.709, 4:2:0 und bekanntem Wertebereich. HDR und nicht unterstützte Farbformate bleiben auf verlustlosen Export beschränkt.</translation>
+    </message>
+    <message>
+        <location filename="../../libs/engine/src/render_audio_manifest.cpp" line="+42"/>
+        <source>Rendered Mix</source>
+        <translation>Gerenderter Mix</translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Render source asset is missing or ambiguous.</source>
+        <translation>Die Render-Quelldatei fehlt oder ist nicht eindeutig.</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Cannot validate render source: </source>
+        <translation>Renderquelle kann nicht überprüft werden: </translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Render source requires an explicit frozen monitoring selection.</source>
+        <translation>Für die Renderquelle muss eine ausdrücklich festgelegte Abhör-Auswahl vorliegen.</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Cannot validate frozen render monitoring selection: </source>
+        <translation>Die festgelegte Abhör-Auswahl für das Rendern kann nicht überprüft werden: </translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Render monitoring selection requires explicit confirmation.</source>
+        <translation>Die Abhör-Auswahl für das Rendern muss ausdrücklich bestätigt werden.</translation>
     </message>
 </context>
 <context>
     <name>EditSessionAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+420"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+425"/>
         <source>Frame drops: %1%</source>
         <translation>Verworfene Frames: %1%</translation>
     </message>
@@ -3722,7 +4238,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Win</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3139"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3217"/>
         <location filename="../services/GlobalHotkeyService.cpp" line="+52"/>
         <source>This shortcut is already used by Windows or another application.</source>
         <translation>Dieser Hotkey wird bereits von Windows oder einer anderen Anwendung verwendet.</translation>
@@ -4471,7 +4987,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>QuickApplication</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-2391"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-2466"/>
         <source>Recording is blocked</source>
         <translation>Aufnahme blockiert</translation>
     </message>
@@ -4511,7 +5027,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Diese Aufnahme hat keinen Eintrag zur Absturzwiederherstellung: %1. Die Aufnahme läuft unverändert, kann bei einer Unterbrechung von ExoSnap aber nicht wiederhergestellt werden.</translation>
     </message>
     <message>
-        <location line="+793"/>
+        <location line="+796"/>
         <source>Region could not be applied</source>
         <translation>Bereich konnte nicht übernommen werden</translation>
     </message>
@@ -4531,15 +5047,15 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Wählen Sie einen Bereich mit mindestens 64 × 64 Pixeln.</translation>
     </message>
     <message>
-        <location line="+1118"/>
-        <location line="+353"/>
+        <location line="+1172"/>
+        <location line="+371"/>
         <location line="+69"/>
         <source>Settings could not be saved</source>
         <translation>Einstellungen konnten nicht gespeichert werden</translation>
     </message>
     <message>
-        <location line="-421"/>
-        <location line="+354"/>
+        <location line="-439"/>
+        <location line="+372"/>
         <source>The change may be lost when ExoSnap restarts.</source>
         <translation>Die Änderung kann beim Neustart von ExoSnap verloren gehen.</translation>
     </message>
@@ -4712,12 +5228,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-4198"/>
+        <location line="-4273"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+3566"/>
+        <location line="+3641"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -4773,7 +5289,17 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>RecordPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+106"/>
+        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+28"/>
+        <source>Audio profile</source>
+        <translation>Audioprofil</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open the audio track profile</source>
+        <translation>Audio-Spurprofil öffnen</translation>
+    </message>
+    <message>
+        <location line="+86"/>
         <source>Preview off</source>
         <translation>Vorschau aus</translation>
     </message>
@@ -5375,7 +5901,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>RecordingActions</name>
     <message>
-        <location filename="../services/RecordingCoordinator.cpp" line="+1693"/>
+        <location filename="../services/RecordingCoordinator.cpp" line="+1785"/>
         <source>Split is only available while recording.</source>
         <translation>Aufteilen ist nur während einer Aufnahme möglich.</translation>
     </message>
@@ -5395,7 +5921,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Segment %1 gestartet</translation>
     </message>
     <message>
-        <location line="+1093"/>
+        <location line="+1116"/>
         <source>Failed to write PNG file</source>
         <translation>Die PNG-Datei konnte nicht gespeichert werden</translation>
     </message>
@@ -6158,44 +6684,6 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
         <location line="+10"/>
         <source>Mix %1 into the previous track</source>
         <translation>%1 in die vorherige Spur mischen</translation>
-    </message>
-</context>
-<context>
-    <name>SettingsAudioSourcesSection</name>
-    <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsAudioSourcesSection.qml" line="+22"/>
-        <source>Audio sources</source>
-        <translation>Audioquellen</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Application audio</source>
-        <translation>Anwendungsaudio</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Only while capturing a window</source>
-        <translation>Nur bei Fensteraufnahme</translation>
-    </message>
-    <message>
-        <location line="+23"/>
-        <source>System audio</source>
-        <translation>Systemaudio</translation>
-    </message>
-    <message>
-        <location line="+27"/>
-        <source>Microphone</source>
-        <translation>Mikrofon</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>No microphone connected</source>
-        <translation>Kein Mikrofon angeschlossen</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>To record one application on a track of its own, capture its window instead.</source>
-        <translation>Um eine Anwendung auf einer eigenen Spur aufzunehmen, nehmen Sie stattdessen ihr Fenster auf.</translation>
     </message>
 </context>
 <context>
@@ -8274,6 +8762,214 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
 </context>
 <context>
+    <name>exosnap::quick::AudioRoutingAdapter</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/AudioRoutingAdapter.cpp" line="+60"/>
+        <source>Available</source>
+        <translation>Verfügbar</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Unsupported on this platform</source>
+        <translation>Auf dieser Plattform nicht unterstützt</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Device unavailable</source>
+        <translation>Gerät nicht verfügbar</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Application exited</source>
+        <translation>Anwendung wurde beendet</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Application identity changed</source>
+        <translation>Anwendungsidentität hat sich geändert</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No target application</source>
+        <translation>Keine Zielanwendung</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Application needs confirmation</source>
+        <translation>Für die Anwendung ist eine Bestätigung erforderlich</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Invalid audio source setting: %1.</source>
+        <translation>Ungültige Audioquelleneinstellung: %1.</translation>
+    </message>
+    <message>
+        <location line="+65"/>
+        <source>Unknown audio source setting: %1.</source>
+        <translation>Unbekannte Audioquelleneinstellung: %1.</translation>
+    </message>
+    <message>
+        <location line="+144"/>
+        <source>Audio %1</source>
+        <translation>Audio %1</translation>
+    </message>
+    <message>
+        <location line="+45"/>
+        <source>The current track layout will become fixed. Activating sources later will no longer move existing merge groups.</source>
+        <translation>Das aktuelle Spur-Layout wird festgelegt. Später aktivierte Quellen verschieben vorhandene zusammengeführte Gruppen nicht mehr.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Next recording plan</source>
+        <translation>Nächster Aufnahmeplan</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Recording plan</source>
+        <translation>Aufnahmeplan</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Audio settings are being saved.</source>
+        <translation>Audioeinstellungen werden gespeichert.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Audio settings changed. Review the current plan and try again.</source>
+        <translation>Die Audioeinstellungen wurden geändert. Prüfe den aktuellen Plan und versuche es erneut.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>This audio configuration is read-only.</source>
+        <translation>Diese Audiokonfiguration ist schreibgeschützt.</translation>
+    </message>
+    <message>
+        <location line="+51"/>
+        <source>Audio settings cannot be saved.</source>
+        <translation>Audioeinstellungen können nicht gespeichert werden.</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Audio settings could not be saved.</source>
+        <translation>Audioeinstellungen konnten nicht gespeichert werden.</translation>
+    </message>
+    <message>
+        <location line="+61"/>
+        <location line="+16"/>
+        <location line="+11"/>
+        <location line="+133"/>
+        <location line="+6"/>
+        <location line="+13"/>
+        <location line="+6"/>
+        <source>Audio track was not found.</source>
+        <translation>Audiospur wurde nicht gefunden.</translation>
+    </message>
+    <message>
+        <location line="-161"/>
+        <source>Move a track up or down one position.</source>
+        <translation>Verschiebe eine Spur um eine Position nach oben oder unten.</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>The track is already at the edge of the list.</source>
+        <translation>Die Spur befindet sich bereits am Listenanfang oder -ende.</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Choose Move or Additional for the audio source.</source>
+        <translation>Wähle für die Audioquelle „Verschieben“ oder „Zusätzlich hinzufügen“.</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Audio source or track was not found.</source>
+        <translation>Audioquelle oder Spur wurde nicht gefunden.</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <location line="+12"/>
+        <location line="+7"/>
+        <location line="+10"/>
+        <location line="+7"/>
+        <source>Audio route was not found.</source>
+        <translation>Audio-Routing wurde nicht gefunden.</translation>
+    </message>
+    <message>
+        <location line="-28"/>
+        <source>Route gain must be between -60 and +24 dB.</source>
+        <translation>Die Routing-Verstärkung muss zwischen -60 und +24 dB liegen.</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <location line="+7"/>
+        <location line="+25"/>
+        <location line="+7"/>
+        <location line="+91"/>
+        <location line="+22"/>
+        <source>Audio source was not found.</source>
+        <translation>Audioquelle wurde nicht gefunden.</translation>
+    </message>
+    <message>
+        <location line="-132"/>
+        <source>Only sources in the active recording plan can be muted live.</source>
+        <translation>Nur Quellen im aktiven Aufnahmeplan können während der Aufnahme stummgeschaltet werden.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The active audio source could not be muted.</source>
+        <translation>Die aktive Audioquelle konnte nicht stummgeschaltet werden.</translation>
+    </message>
+    <message>
+        <location line="+42"/>
+        <source>Audio track role is invalid.</source>
+        <translation>Die Rolle der Audiospur ist ungültig.</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Monitor selection contains an invalid or duplicate track.</source>
+        <translation>Die Abhör-Auswahl enthält eine ungültige oder doppelte Spur.</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>There is no pending track layout conversion.</source>
+        <translation>Es gibt keine ausstehende Umwandlung des Spur-Layouts.</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>There is no audio change to undo.</source>
+        <translation>Es gibt keine Audioänderung, die rückgängig gemacht werden kann.</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Device and processing settings are shared by the legacy microphone sources only.</source>
+        <translation>Geräte- und Verarbeitungseinstellungen gelten nur gemeinsam für die bisherigen Mikrofonquellen.</translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>Choose a supported audio source kind.</source>
+        <translation>Wähle eine unterstützte Audioquellenart.</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Source name must contain 1 to 128 characters without control characters.</source>
+        <translation>Der Quellenname muss 1 bis 128 Zeichen umfassen und darf keine Steuerzeichen enthalten.</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Application audio capture is unsupported on this platform.</source>
+        <translation>Die Audioaufnahme von Anwendungen wird auf dieser Plattform nicht unterstützt.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Select a window capture target before adding application audio.</source>
+        <translation>Wähle ein Fenster-Aufnahmeziel aus, bevor du Anwendungs-Audio hinzufügst.</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The selected application identity must be confirmed before adding its audio source.</source>
+        <translation>Bestätige die Identität der ausgewählten Anwendung, bevor du ihre Audioquelle hinzufügst.</translation>
+    </message>
+</context>
+<context>
     <name>exosnap::quick::DiagnosticsAdapter</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/DiagnosticsAdapter.cpp" line="-36"/>
@@ -8500,17 +9196,29 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::EditPlayerWorker</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPlayerWorker.cpp" line="+280"/>
+        <location filename="../quick/ExoSnap/Quick/EditPlayerWorker.cpp" line="+93"/>
+        <location line="+254"/>
+        <location line="+83"/>
+        <source>Confirm the audio monitoring selection before playback.</source>
+        <translation>Bestätige die Auswahl der Audioüberwachung vor der Wiedergabe.</translation>
+    </message>
+    <message>
+        <location line="-145"/>
+        <source>The audio monitoring track identity is invalid.</source>
+        <translation>Die Identität der Audioüberwachungsspur ist ungültig.</translation>
+    </message>
+    <message>
+        <location line="+115"/>
         <source>The audio output could not start.</source>
         <translation>Die Audioausgabe konnte nicht gestartet werden.</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+21"/>
         <source>Media unavailable</source>
         <translation>Medium nicht verfügbar</translation>
     </message>
     <message>
-        <location line="+47"/>
+        <location line="+52"/>
         <source>The audio output stopped unexpectedly.</source>
         <translation>Die Audioausgabe wurde unerwartet beendet.</translation>
     </message>
@@ -8533,7 +9241,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Medium kann nicht importiert werden: %1</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-381"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-386"/>
         <source>The recording overlaps existing clips.</source>
         <translation>Die Aufnahme überlappt vorhandene Clips.</translation>
     </message>
@@ -8672,7 +9380,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::SettingsAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+1578"/>
+        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+1579"/>
         <source>On</source>
         <translation>Ein</translation>
     </message>
@@ -8687,7 +9395,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Auto: Aus. Lookahead wird nur für unterstütztes AV1/VBR aktiviert.</translation>
     </message>
     <message>
-        <location line="-786"/>
+        <location line="-787"/>
         <source>Managed externally</source>
         <translation>Extern verwaltet</translation>
     </message>
@@ -8820,12 +9528,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <location line="+7"/>
         <location line="+169"/>
-        <location line="+384"/>
+        <location line="+385"/>
         <source>Auto</source>
         <translation>Auto</translation>
     </message>
     <message>
-        <location line="-549"/>
+        <location line="-550"/>
         <source>Auto (%1)</source>
         <translation>Auto (%1)</translation>
     </message>
@@ -8883,19 +9591,19 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+15"/>
-        <location line="+114"/>
+        <location line="+115"/>
         <location line="+1713"/>
         <source>%1 fps</source>
         <translation>%1 fps</translation>
     </message>
     <message>
-        <location line="-1826"/>
-        <location line="+1827"/>
+        <location line="-1827"/>
+        <location line="+1828"/>
         <source>Faster than the fastest attached display (%1 Hz)</source>
         <translation>Schneller als der schnellste angeschlossene Bildschirm (%1 Hz)</translation>
     </message>
     <message>
-        <location line="-1810"/>
+        <location line="-1811"/>
         <source>%1 fps (Custom)</source>
         <translation>%1 fps (Benutzerdefiniert)</translation>
     </message>
@@ -8961,18 +9669,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+4"/>
-        <location line="+182"/>
+        <location line="+183"/>
         <source>Mono</source>
         <translation>Mono</translation>
     </message>
     <message>
-        <location line="-181"/>
-        <location line="+181"/>
+        <location line="-182"/>
+        <location line="+182"/>
         <source>Stereo</source>
         <translation>Stereo</translation>
     </message>
     <message>
-        <location line="-178"/>
+        <location line="-179"/>
         <source>16-bit</source>
         <translation>16 Bit</translation>
     </message>
@@ -9007,7 +9715,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>2.5 ms</translation>
     </message>
     <message>
-        <location line="+45"/>
+        <location line="+47"/>
         <source>50 Hz</source>
         <translation>50 Hz</translation>
     </message>
@@ -9022,7 +9730,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Automatisch</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="+18"/>
         <source>%1 · %2 · %3 · %4 · %5</source>
         <translation>%1 · %2 · %3 · %4 · %5</translation>
     </message>
@@ -9097,10 +9805,10 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>RNNoise</translation>
     </message>
     <message>
-        <location line="-296"/>
+        <location line="-297"/>
         <location line="+7"/>
-        <location line="+201"/>
-        <location line="+90"/>
+        <location line="+203"/>
+        <location line="+89"/>
         <location line="+211"/>
         <location line="+507"/>
         <location line="+877"/>
@@ -9108,7 +9816,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Aus</translation>
     </message>
     <message>
-        <location line="-2642"/>
+        <location line="-2643"/>
         <source>System default</source>
         <translation>Systemstandard</translation>
     </message>
@@ -9123,7 +9831,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Automatisch (%1)</translation>
     </message>
     <message>
-        <location line="+153"/>
+        <location line="+154"/>
         <source>Changed since this preset was saved. Your settings are kept either way.</source>
         <translation>Seit dem Speichern dieses Presets geändert. Ihre Einstellungen bleiben so oder so erhalten.</translation>
     </message>
@@ -9282,7 +9990,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Container</translation>
     </message>
     <message>
-        <location line="+252"/>
+        <location line="+251"/>
         <source>the captured window</source>
         <translation>das aufgenommene Fenster</translation>
     </message>
@@ -9302,7 +10010,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Alles außer %1</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>Everything the computer plays</source>
         <translation>Alles, was der Computer wiedergibt</translation>
     </message>

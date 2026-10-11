@@ -63,9 +63,9 @@ Unavailable controls retain labels/current values, drop interactive emphasis and
 | HDR handling | Tone-map to SDR on an HDR-active source |
 | Cursor | Included |
 | Countdown | Off; choices Off, 3, 5 or 10 seconds |
-| Application audio | Configured on; contributes only for a specific window target |
+| Application audio | Added explicitly for a selected application window |
 | System audio / microphone | System on, microphone off |
-| Tracks | One per enabled eligible source unless mixed into the previous track |
+| Tracks | One named Audio 1 track with system audio assigned; microphone initially unassigned and off |
 | Webcam / microphone DSP | Off |
 | Mixed-bus limiter / clock slaving | On |
 | Check for updates at startup | Off |
@@ -110,9 +110,11 @@ SDR and native-HDR outputs carry their actual color descriptions. Native HDR is 
 
 ### Sources and tracks
 
-Settings lists Application, System and Microphone in product order (`APP`, `SYS`, `MIC`). Application remains configured while a display/region target is selected but recedes with the explanation that it takes effect for a specific application window. It has no Mix into previous track control because it is first.
+New configurations use stable source, track and route identities. Settings presents track cards with names, roles, recording participation, assigned source chips and route gains. Empty tracks remain visible and produce no output stream. Move removes a source's previous routes and assigns it to the chosen track; Also add preserves existing routes. One source can feed several tracks, and several sources can feed one track. Output supports up to eight recorded tracks.
 
-Eligible enabled sources form separate tracks by default. **Mix into previous track** appends a source to the track being built from the preceding eligible rows. Chained selections can produce one combined track. The engine resolves the actual track structure and names; the UI does not invent one from visible row positions.
+The source list separates participation, availability and mute. New sources are unassigned until explicitly routed. Application sources use a specific selected capture application; independent application sources freeze that process instance instead of following later capture-target edits. Source details own device, channel, post-DSP gain and individual processing controls.
+
+Existing configurations retain their ordered-row routing and shared microphone settings until a structural edit is explicitly converted. Conversion fixes the current track layout, preserves IDs and can be undone. Unsupported future configurations remain read-only. There is one persistent routing editor; during recording its Active view describes the frozen output and edits configure the Next plan.
 
 During recording, a source admitted at start can be muted and unmuted. Muting preserves its track and duration with silence. A source absent from the initial plan cannot be added mid-session and its toggle remains locked. Changing capture device or track structure requires a new recording.
 
@@ -120,9 +122,9 @@ Source gain is −60 to +24 dB, default 0 dB, with microphone gain on its own ca
 
 ### Meters and microphone
 
-Source blocks align the include control/name, measured level and mix-to-previous slot. Meter position, ruler and numeric readout use the same decibel value. Settings meters provide a full-width segmented scale with −60, −40, −20, −6 and 0 dBFS marks and peak hold. Silence is distinct from a finite −60 dB reading. An off source collapses to its header instead of displaying a meaningless full-width meter.
+Source rows show measured pre-mute RMS and peak independently of post-limiter track RMS. Values use dBFS and remain unavailable until measured; silence is distinct from a finite -60 dB reading. Meter updates publish separately from editable routing cards so they do not replace focused inputs or drafts. Active output meter snapshots reach the routing panel at 10 Hz.
 
-Microphone Device, Channels, Gain and Post-processing are a separate card below Audio sources. The summary identifies the chosen device/gain/processing and says No microphone connected when appropriate. A disconnected configured device is not silently replaced by an arbitrary one.
+Microphone Device, Channels, Gain and Post-processing belong to the explicitly chosen source's details. Legacy configurations retain a separate shared microphone card. A disconnected configured device is not silently replaced by an arbitrary one.
 
 The optional microphone chain is **high-pass → noise gate → AGC → RNNoise**, each independently off by default. RNNoise adds one 10 ms block of latency at 48 kHz; turning processing off does not negate other conversions or clock compensation. No master DSP switch implies all stages share one setting.
 
@@ -147,7 +149,7 @@ An endpoint lost during recording silences the affected source while video and o
 
 Merged sources share one QPC-aligned output timeline after normalization to 48 kHz stereo. A bounded 30 ms arrival horizon fills missing intervals with silence, including quiet sources and endpoint outages. Rejoining sources occupy their timestamped intervals rather than extending the track. Single-source loss retains elapsed-time silence accounting. Long-running independent device clocks and physical partial recovery require hardware validation. An ordinary quiet but connected loopback source is not labeled lost. Diagnostics and standing notifications identify real degradation and clear when it ends; the report records that a gap occurred. No system can recover sound that was not captured.
 
-Clock slaving is on by default. It gently resamples a measurable single-device track to the video/QPC clock. It engages from drift above roughly 15 ms or a measured drift rate likely to exceed that within ten minutes. The displayed drift is the residual after actual correction; raw drift and applied rate are also diagnostic data. Correction is capped at ±500 ppm. Within that envelope the residual can approach zero; at/beyond the cap it can remain or grow. Multi-source merged tracks are not slaved because they have several clocks.
+Clock slaving is on by default. It gently resamples each measurable physical capture to the video/QPC clock before logical-source DSP and track fanout. It engages from drift above roughly 15 ms or a measured drift rate likely to exceed that within ten minutes. The displayed drift is the residual after actual correction; raw drift and applied rate are also diagnostic data. Correction is capped at ±500 ppm. Within that envelope the residual can approach zero; at/beyond the cap it can remain or grow. Merged tracks consume already corrected sources and do not run a second clock controller.
 
 Expert can disable clock slaving for a bit-exact workflow. That only removes this correction: gain, mixing, channel conversion, quantization and lossy encoding still determine whether the overall chosen path is bit-exact.
 
@@ -404,7 +406,7 @@ Logs provides a virtualized structured list with Time, Level, Category and Messa
 
 Settings serves technically inclined users without assuming video/audio specialization. Default exposes practical format, source, quality, output and recovery choices. Expert reveals raw or compatibility-sensitive mechanics **within** existing cards; it never hides an entire section.
 
-At desktop width the left column is Recording format, Audio sources, Microphone, Output, App behaviour, Hotkeys and Appearance. The right is Video quality & timing, Audio encoding, Webcam, Overlays, Updates and Support & diagnostics. Narrow layout retains the same sections and operability. Preset actions and Expert share the first toolbar.
+At desktop width the left column is Recording format, Audio routing, Output, App behaviour, Hotkeys and Appearance. Legacy configurations additionally retain the shared Microphone card; native source details sit in Audio routing. The right is Video quality & timing, Audio encoding, Webcam, Overlays, Updates and Support & diagnostics. Narrow layout retains the same operability. Preset actions and Expert share the first toolbar.
 
 Expert owns numeric rate control/CQ/bitrate, custom frame-rate entry, pacing, NVENC preset and advanced tuning, keyframe interval, color range/depth/chroma, specialized Opus/sample-rate/clock controls and relevant raw gain/limiter/float choices. Relevance can narrow these further: no H.264 10-bit row, no unsupported 4:4:4 row, and no lossy-codec bit-depth field. HDR handling is Default-visible on a relevant HDR display. Automatic splitting, microphone processing and ordinary audio controls are not hidden just for sounding technical.
 

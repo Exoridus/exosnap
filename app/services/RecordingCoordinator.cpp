@@ -2,11 +2,14 @@
 
 #include "models/CaptureTargetPresentation.h"
 #include "services/AtomicFileOps.h"
+#include "services/MediaMetadataPublication.h"
 #include "services/TargetDisplayFacts.h"
 
 #include "../../libs/engine/src/loopback_meter_service.h"
 #include "../../libs/engine/src/mic_meter_service.h"
 
+#include <exosnap/engine/audio_input_device.h>
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/hdr_native.h>
 #include <exosnap/engine/mp4_remuxer.h>
 
@@ -155,6 +158,47 @@ static FilenameTargetContext BuildFilenameContextFromTarget(const exosnap::engin
                                                    ? CaptureTargetPresentationKind::Window
                                                    : CaptureTargetPresentationKind::Display;
     return ResolveCaptureTargetPresentation(target, kind).filename;
+}
+
+exosnap::engine::AudioEnvironmentSnapshot ObserveRecordingAudioEnvironment(const exosnap::engine::CaptureTarget& target,
+                                                                           uint32_t os_build) {
+    using namespace exosnap::engine;
+    AudioEnvironmentSnapshot environment;
+    environment.window_target = target.kind == CaptureTarget::Kind::Window;
+    environment.process_loopback_supported = os_build >= 20348;
+    const auto observe_endpoints = [](const std::vector<AudioInputDeviceInfo>& devices,
+                                      std::vector<std::string>& endpoints, std::array<std::string, 3>& defaults) {
+        for (const auto& device : devices) {
+            endpoints.push_back(device.device_id);
+            for (size_t role = 0; role < defaults.size(); ++role)
+                if (device.is_default_by_role[role])
+                    defaults[role] = device.device_id;
+        }
+    };
+    observe_endpoints(EnumerateAudioOutputDevices(), environment.playback_endpoints,
+                      environment.default_playback_by_role);
+    observe_endpoints(EnumerateAudioInputDevices(), environment.microphone_endpoints,
+                      environment.default_microphone_by_role);
+    environment.default_playback_endpoint = environment.default_playback_by_role[0];
+    environment.default_microphone_endpoint = environment.default_microphone_by_role[0];
+    if (environment.window_target && target.native_id != 0) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(reinterpret_cast<HWND>(target.native_id), &pid);
+        if (pid != 0) {
+            const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if (process != nullptr) {
+                FILETIME creation{}, exit_time{}, kernel{}, user{};
+                DWORD exit_code = 0;
+                if (GetProcessTimes(process, &creation, &exit_time, &kernel, &user) &&
+                    GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE) {
+                    environment.capture_target_process = ProcessInstanceIdentity{
+                        pid, (uint64_t{creation.dwHighDateTime} << 32) | creation.dwLowDateTime, {}};
+                }
+                CloseHandle(process);
+            }
+        }
+    }
+    return environment;
 }
 
 static bool PlanRequiresTargetPid(const exosnap::engine::AudioTrackPlan& plan) {
@@ -735,6 +779,20 @@ void RecordingCoordinator::SetAudioSourceMuted(exosnap::engine::AudioSourceKind 
     session_.SetAudioSourceMuted(kind, muted, record_request_.load());
 }
 
+bool RecordingCoordinator::SetAudioSourceMuted(exosnap::engine::AudioSourceId id, bool muted) {
+    return is_recording_.load() && session_.SetAudioSourceMuted(id, muted, record_request_.load());
+}
+
+exosnap::engine::MeterSnapshot RecordingCoordinator::LatestAudioRoutingMeters() const {
+    std::lock_guard lock(audio_routing_mutex_);
+    return audio_routing_meters_;
+}
+
+std::optional<exosnap::engine::ResolvedAudioPlan> RecordingCoordinator::ActiveAudioPlan() const {
+    std::lock_guard lock(audio_routing_mutex_);
+    return active_audio_plan_;
+}
+
 void RecordingCoordinator::UseStaticVerificationWebcam(int width, int height) {
     static_webcam_source_ = std::make_unique<exosnap::StaticWebcamFrameSource>(width, height);
     // Applied at once, not at the next state change: whatever asked for the
@@ -828,7 +886,9 @@ void RecordingCoordinator::SetWebcamStatusCallback(QObject* receiver, WebcamServ
 bool RecordingCoordinator::StartRecording(const exosnap::engine::CaptureTarget& target,
                                           const capability::AudioUiState& audio_ui_state,
                                           std::optional<exosnap::engine::CaptureRegion> crop_region,
-                                          exosnap::engine::CaptureBackend capture_backend) {
+                                          exosnap::engine::CaptureBackend capture_backend,
+                                          std::optional<exosnap::engine::AudioIntent> audio_intent,
+                                          exosnap::engine::ConfigRevision audio_revision) {
     StopMicMeter();
 
     // ── Thin gate (UI thread) ────────────────────────────────────────────────
@@ -869,6 +929,8 @@ bool RecordingCoordinator::StartRecording(const exosnap::engine::CaptureTarget& 
     PrepareContext ctx;
     ctx.target = target;
     ctx.audio_ui_state = audio_ui_state;
+    ctx.audio_intent = std::move(audio_intent);
+    ctx.audio_revision = audio_revision;
     ctx.crop_region = crop_region;
     ctx.capture_backend = capture_backend;
     ctx.output_settings = output_settings_;
@@ -1320,7 +1382,27 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     config.audio_pcm_float = plan.audio_pcm_float;
     config.flac_compression_level = plan.flac_compression_level;
 
-    if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {
+    if (ctx.audio_intent) {
+        auto environment = ObserveRecordingAudioEnvironment(target, ctx.caps.runtime.os.build_number);
+        auto resolved = exosnap::engine::ResolveAudioIntent(*ctx.audio_intent, environment, ctx.audio_revision);
+        if (!resolved.succeeded()) {
+            PostStateChange(UiRecordingState::Failed);
+            UiRecordingResult result;
+            result.output_path = output_path.wstring();
+            result.error_phase = FormatErrorPhase(exosnap::engine::ErrorPhase::Prepare);
+            result.error_detail = ToWide(resolved.error()->context);
+            FillResultFormat(result, ctx);
+            PostResult(std::move(result));
+            prepare_in_flight_.store(false);
+            return;
+        }
+        config.resolved_audio_plan = std::move(*resolved.value());
+        config.record_audio = !config.resolved_audio_plan->tracks.empty();
+        config.audio_track_plan = {};
+    }
+
+    if (!ctx.audio_intent && plan.record_audio && PlanRequiresTargetPid(plan.plan) &&
+        !plan.audio_target_process_id.has_value()) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),
                                    QStringLiteral("phase=Prepare category=TargetPid output_path=\"%1\" "
                                                   "detail=\"Window target PID unavailable\"")
@@ -1369,7 +1451,18 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     }
 
     session_.SetStatsCallback([this](const exosnap::engine::SessionStats& stats) { PostStats(stats); });
-    session_.SetMeterCallback([this](const exosnap::engine::MeterSnapshot& m) { PostRecordingMeter(m.per_track_rms); });
+    {
+        std::lock_guard lock(audio_routing_mutex_);
+        active_audio_plan_ = config.resolved_audio_plan;
+        audio_routing_meters_ = {};
+    }
+    session_.SetMeterCallback([this](const exosnap::engine::MeterSnapshot& m) {
+        {
+            std::lock_guard lock(audio_routing_mutex_);
+            audio_routing_meters_ = m;
+        }
+        PostRecordingMeter(m.per_track_rms);
+    });
     session_.SetDiagnosticsCallback(
         [this](const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) { PostDiagnostics(snapshot); });
     // Forward the shared WYSIWYG preview handle to whoever registered. Bridges the
@@ -2286,7 +2379,47 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
 
     if (result.succeeded) {
         auto publish = [&](const std::filesystem::path& partial, const std::filesystem::path& final) {
-            if (const unsigned long move_error = AtomicReplaceInPlace(partial, final); move_error != 0) {
+            std::optional<exosnap::engine::CompletedSegment> completed;
+            {
+                std::lock_guard lock(segments_mutex_);
+                const auto segment = std::find_if(segments_.begin(), segments_.end(),
+                                                  [&](const auto& item) { return item.path == partial; });
+                if (segment != segments_.end())
+                    completed = *segment;
+            }
+            const auto markers = completed ? PartitionSegmentMarkers(ui_result.markers, completed->session_start_ms,
+                                                                     completed->duration_ms)
+                                           : ui_result.markers;
+            if (config.container == exosnap::engine::Container::WebM && config.resolved_audio_plan) {
+                const auto manifest = completed ? completed->audio_manifest : nullptr;
+                if (!manifest) {
+                    ui_result.succeeded = false;
+                    ui_result.error_phase = L"MetadataIncomplete";
+                    ui_result.error_detail = L"The recording has no frozen audio identity manifest.";
+                    return false;
+                }
+                exosnap::engine::MediaIdentitySidecarReferences references;
+                if (!markers.empty())
+                    references.marker_refs.push_back(
+                        QString::fromStdWString(DeriveMarkerSidecarPath(final).filename().wstring()).toStdString());
+                auto sidecar = exosnap::engine::WriteMediaIdentitySidecar(partial, *manifest, {}, references);
+                if (!sidecar.succeeded()) {
+                    ui_result.succeeded = false;
+                    ui_result.error_phase = L"MetadataIncomplete";
+                    ui_result.error_detail = QString::fromStdString(sidecar.error()->context).toStdWString();
+                    return false;
+                }
+            }
+            std::string metadata_error;
+            if (!StageMarkerSidecarForPublication(partial, final, markers, metadata_error,
+                                                  completed ? std::optional<int>{static_cast<int>(completed->index)}
+                                                            : std::nullopt)) {
+                ui_result.succeeded = false;
+                ui_result.error_phase = L"MetadataIncomplete";
+                ui_result.error_detail = QString::fromStdString(metadata_error).toStdWString();
+                return false;
+            }
+            if (const unsigned long move_error = PublishMediaAndIdentitySidecar(partial, final); move_error != 0) {
                 ui_result.succeeded = false;
                 ui_result.error_phase = L"Publish";
                 ui_result.error_detail =
@@ -2369,9 +2502,19 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
         // temp — the user-visible output path never holds a half-written MP4.
         const std::filesystem::path remux_temp = MakeSiblingTempPath(final_mp4);
         auto remux_result = exosnap::engine::RemuxToProgressiveMp4(transient_mkv, remux_temp, progress_cb);
+        MetadataCompanionPublicationGuard companion_guard(std::move(remux_result.created_metadata_companions));
 
         if (remux_result.success) {
-            if (const unsigned long move_err = AtomicReplaceInPlace(remux_temp, final_mp4); move_err != 0) {
+            std::string metadata_error;
+            if (!StageMarkerSidecarForPublication(remux_temp, final_mp4, base.markers, metadata_error, std::nullopt,
+                                                  [&] { return !remux_cancel_requested_.load(); }))
+                remux_result = exosnap::engine::RemuxResult::Fail(0, metadata_error);
+        }
+
+        if (remux_result.success && remux_cancel_requested_.load())
+            remux_result = exosnap::engine::RemuxResult::Fail(0, "Metadata publication cancelled");
+        if (remux_result.success) {
+            if (const unsigned long move_err = PublishMediaAndIdentitySidecar(remux_temp, final_mp4); move_err != 0) {
                 // The remux produced a complete file but publishing it atomically
                 // failed. The transient MKV is still the trustworthy recording, so
                 // demote this to a remux failure: drop the temp, keep the MKV.
@@ -2379,6 +2522,8 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
                     diagnostics::AppLog::warning(QStringLiteral("remux"), QString::fromStdString(left));
                 remux_result = exosnap::engine::RemuxResult::Fail(
                     0, "Atomic move to final output failed (Win32 error " + std::to_string(move_err) + ")");
+            } else {
+                companion_guard.Commit();
             }
         } else {
             // Failed or cancelled: the target path was never written. Drop the temp so
@@ -2534,13 +2679,26 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
     // temp — the segment output path never holds a half-written MP4.
     const std::filesystem::path segment_temp = MakeSiblingTempPath(output_mp4);
     auto result = exosnap::engine::RemuxToProgressiveMp4(transient_mkv, segment_temp, progress_cb);
+    MetadataCompanionPublicationGuard companion_guard(std::move(result.created_metadata_companions));
 
     if (result.success) {
-        if (const unsigned long move_err = AtomicReplaceInPlace(segment_temp, output_mp4); move_err != 0) {
+        std::string metadata_error;
+        const auto markers = ReadMarkerSidecar(DeriveMarkerSidecarPath(transient_mkv));
+        if (!StageMarkerSidecarForPublication(segment_temp, output_mp4, markers, metadata_error, std::nullopt,
+                                              [&] { return !remux_cancel_requested_.load(); }))
+            result = exosnap::engine::RemuxResult::Fail(0, metadata_error);
+    }
+
+    if (result.success && remux_cancel_requested_.load())
+        result = exosnap::engine::RemuxResult::Fail(0, "Metadata publication cancelled");
+    if (result.success) {
+        if (const unsigned long move_err = PublishMediaAndIdentitySidecar(segment_temp, output_mp4); move_err != 0) {
             if (const std::string left = DescribeFailedStagingRemoval(segment_temp); !left.empty())
                 diagnostics::AppLog::warning(QStringLiteral("remux"), QString::fromStdString(left));
             result = exosnap::engine::RemuxResult::Fail(0, "Atomic move to segment output failed (Win32 error " +
                                                                std::to_string(move_err) + ")");
+        } else {
+            companion_guard.Commit();
         }
     } else {
         // Failed or cancelled: the segment path was never written. Drop the temp.

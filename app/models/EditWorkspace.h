@@ -1,5 +1,6 @@
 #pragma once
 #include "RecordingMarker.h"
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_timeline.h>
 
 #include <algorithm>
@@ -30,6 +31,7 @@ struct Asset {
     bool audio = true;
     AssetState state = AssetState::Available;
     std::vector<RecordingMarker> markers;
+    std::optional<engine::MonitorSelectionSnapshot> monitor_selection;
 };
 
 struct Clip {
@@ -70,6 +72,18 @@ class Workspace {
 
     [[nodiscard]] const std::vector<Asset>& assets() const {
         return assets_;
+    }
+    [[nodiscard]] uint64_t monitoringRevision() const {
+        return monitoring_revision_;
+    }
+    bool setMonitorSelection(Id id, engine::MonitorSelectionSnapshot selection) {
+        const auto found =
+            std::find_if(assets_.begin(), assets_.end(), [id](const auto& asset) { return asset.id == id; });
+        if (found == assets_.end())
+            return false;
+        found->monitor_selection = std::move(selection);
+        ++monitoring_revision_;
+        return true;
     }
     [[nodiscard]] const std::vector<Track>& tracks() const {
         return tracks_;
@@ -457,6 +471,7 @@ class Workspace {
         order(clips_);
     }
     Id next_id_ = 0;
+    uint64_t monitoring_revision_ = 0;
     Id selection_ = 0;
     Time playhead_ = 0;
     std::vector<Asset> assets_;

@@ -1,6 +1,7 @@
 #pragma once
 #include <update/update_types.h>
 
+#include "AudioRoutingAdapter.h"
 #include "models/AudioMeterScale.h"
 #include "models/CrashReportPolicy.h"
 #include "models/OutputPathValidator.h"
@@ -74,6 +75,13 @@ class SettingsAdapter : public QObject {
     Q_ENUM(FocusTarget)
 
     using OutputFolderValidator = std::function<FolderValidationResult(const std::filesystem::path&)>;
+    Q_PROPERTY(AudioRoutingAdapter* audioRouting READ audioRouting CONSTANT FINAL)
+    AudioRoutingAdapter* audioRouting() const {
+        return audio_routing_;
+    }
+    void setAudioRouting(AudioRoutingAdapter* routing) {
+        audio_routing_ = routing;
+    }
 
     // ---- Global tier / lock -------------------------------------------------
     Q_PROPERTY(bool expertMode READ expertMode WRITE setExpertMode NOTIFY appSettingsChanged FINAL)
@@ -1057,6 +1065,7 @@ class SettingsAdapter : public QObject {
     QString update_available_version_;
     bool update_action_enabled_ = true;
     bool whats_new_available_ = false;
+    AudioRoutingAdapter* audio_routing_ = nullptr;
 };
 
 } // namespace exosnap::quick

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AboutViewModelAdapter.h"
+#include "AudioRoutingAdapter.h"
 #include "BlockingSurfaceArbiter.h"
 #include "CaptureTargetStillProvider.h"
 #include "CrashReportAdapter.h"
@@ -199,6 +200,7 @@ class QuickApplication {
         CountdownCancelled,
         RefusedByBlockingSurface,
         RefusedByState,
+        RefusedByConfiguration,
         RefusedNoTarget,
     };
     [[nodiscard]] StartAdmission lastStartAdmission() const noexcept {
@@ -711,6 +713,9 @@ class QuickApplication {
     RecoveryService recovery_service_;
     AboutViewModelAdapter about_view_model_;
     SettingsAdapter settings_adapter_;
+    AudioRoutingAdapter audio_routing_adapter_;
+    QTimer audio_routing_meter_timer_;
+    std::optional<engine::ConfigRevision> audio_routing_active_revision_;
     DeviceAdapter device_adapter_;
     // DPC/ISR latency. Declared BEFORE the adapter that borrows it: the
     // adapter samples it on every evaluation, so this member has to outlive it —

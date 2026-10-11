@@ -14,6 +14,7 @@
 #include <capability/audio_ui_state.h>
 #include <exosnap/engine/audio_track_model.h>
 
+#include "models/AudioRoutingMigration.h"
 #include "models/RecordingPreset.h"
 #include "settings/RecordingPresetStore.h"
 
@@ -52,6 +53,7 @@ RecordingPreset MakeGainPreset(float app_gain, bool app_muted, float mic_gain, b
         {exosnap::engine::AudioSourceKind::Mic, true, false, mic_gain, mic_muted},
         {exosnap::engine::AudioSourceKind::Sys, true, false, 0.0f, false},
     };
+    p.config.audio_intent = CreateLegacyAudioIntent(p.config.audio, engine::NewId<engine::PresetNamespaceId>());
     return p;
 }
 
@@ -72,6 +74,11 @@ TEST(AudioGainPreset, RoundTrip_GainAndMuted) {
     const PersistedPresetState loaded = store.Load();
     ASSERT_FALSE(loaded.user_presets.empty());
     const auto& lp = loaded.user_presets.front();
+
+    ASSERT_TRUE(lp.config.audio_intent);
+    const auto* persisted_intent = std::get_if<engine::LegacyRows25Intent>(&*lp.config.audio_intent);
+    ASSERT_NE(persisted_intent, nullptr);
+    EXPECT_EQ(persisted_intent->rows, std::get<engine::LegacyRows25Intent>(*preset.config.audio_intent).rows);
 
     ASSERT_EQ(lp.config.audio.source_rows.size(), 3u);
 

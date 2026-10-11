@@ -256,6 +256,16 @@ TEST_F(TimelineExportTest, AudioHardCutPreservesEverySampleAndMonotoneTimestamps
     EXPECT_LE(std::abs(input->duration - 2000000), 1000);
 }
 
+TEST_F(TimelineExportTest, UntaggedDistinctAssetsRequireExplicitSemanticMapping) {
+    ASSERT_TRUE(WritePcmMatroska(audio_source));
+    const auto other = output.parent_path() / "distinct-audio-source.mkv";
+    ASSERT_TRUE(std::filesystem::copy_file(audio_source, other));
+    const auto result = AssessTimelineExport({{audio_source, 0, 1000000, 0}, {other, 0, 1000000, 1000000}}, false);
+    EXPECT_EQ(result.eligibility, TimelineExportEligibility::Invalid);
+    EXPECT_FALSE(std::filesystem::exists(output));
+    std::filesystem::remove(other);
+}
+
 TEST_F(TimelineExportTest, CancellationRemovesPartialOutput) {
     const auto first = FullClip();
     const auto result = ExportTimelineStreamCopy({first, FullClip(first.source_out_us)}, output, true,

@@ -11,7 +11,9 @@ namespace exosnap::engine {
 
 class WasapiLoopbackSrc : public IAudioCaptureSource {
   public:
-    WasapiLoopbackSrc() = default;
+    explicit WasapiLoopbackSrc(std::optional<std::string> endpoint_id = std::nullopt, bool native_format = false)
+        : endpoint_id_(std::move(endpoint_id)), native_format_(native_format) {
+    }
     ~WasapiLoopbackSrc() override;
 
     WasapiLoopbackSrc(const WasapiLoopbackSrc&) = delete;
@@ -32,6 +34,8 @@ class WasapiLoopbackSrc : public IAudioCaptureSource {
     void Shutdown() override;
 
   private:
+    std::optional<std::string> endpoint_id_;
+    bool native_format_ = false;
     WasapiLoopback wasapi_;
     uint32_t last_frames_ = 0;
     bool buffer_acquired_ = false;
@@ -49,6 +53,7 @@ class WasapiLoopbackSrc : public IAudioCaptureSource {
     // clock-drift metric (audio_clock_drift.h).
     bool last_timing_valid_ = false;
     uint64_t last_device_position_ns_ = 0;
+    uint64_t last_device_position_frames_ = 0;
     uint64_t last_qpc_position_ns_ = 0;
 };
 

@@ -35,6 +35,18 @@ std::filesystem::path MakeSiblingTempPath(const std::filesystem::path& target);
 // header).
 unsigned long AtomicReplaceInPlace(const std::filesystem::path& from, const std::filesystem::path& to);
 
+// Retains the recovery master until publication succeeds. Requires a same-volume
+// hard link and copies an existing identity envelope into the private staging name.
+unsigned long StageCompletedMediaForPublication(const std::filesystem::path& source,
+                                                const std::filesystem::path& staging);
+
+// Installs identity and marker companions before renaming completed media.
+// Restores previous companions on failure. This is not a multi-file atomic
+// transaction. With replacement disabled, an existing media target is retained.
+// Retire recovery sources only after successful publication.
+unsigned long PublishMediaAndIdentitySidecar(const std::filesystem::path& from, const std::filesystem::path& to,
+                                             bool replace_existing = true);
+
 // Remove a staging file this attempt created, and SAY SO if it could not be
 // removed.
 //

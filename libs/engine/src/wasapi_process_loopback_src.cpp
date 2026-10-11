@@ -1,4 +1,5 @@
 #include "wasapi_process_loopback_src.h"
+#include <optional>
 
 #include "discontinuity_gap.h"
 #include "exosnap/engine/interfaces/IAudioCaptureSource.h"
@@ -230,8 +231,13 @@ uint64_t QueryProcessCreationTime(DWORD pid, bool& out_alive) noexcept {
 
 } // namespace
 
-WasapiProcessLoopbackSrc::WasapiProcessLoopbackSrc(DWORD target_pid, ProcessLoopbackMode mode)
+WasapiProcessLoopbackSrc::WasapiProcessLoopbackSrc(DWORD target_pid, ProcessLoopbackMode mode,
+                                                   std::optional<uint64_t> expected_creation_time)
     : pid_(target_pid), mode_(mode) {
+    if (expected_creation_time) {
+        process_creation_time_ = *expected_creation_time;
+        identity_captured_ = true;
+    }
     char name[128] = {};
     snprintf(name, sizeof(name), "Process loopback (%s, pid=%lu)", ModeLabel(mode_), static_cast<unsigned long>(pid_));
     endpoint_name_ = name;
@@ -252,6 +258,16 @@ bool WasapiProcessLoopbackSrc::Init(std::string& out_error) {
         Shutdown();
         return false;
     };
+
+    const auto identity_matches = [&] {
+        if (!identity_captured_)
+            return true;
+        bool alive = false;
+        const uint64_t current_creation_time = QueryProcessCreationTime(pid_, alive);
+        return ProcessIdentityMatches(process_creation_time_, current_creation_time, alive);
+    };
+    if (!identity_matches())
+        return fail("Process loopback: process identity changed before activation", E_INVALIDARG);
 
     PFN_ActivateAudioInterfaceAsync activate_pfn = nullptr;
     const HRESULT load_hr = EnsureActivateAudioInterfaceAsyncLoaded(activate_pfn);
@@ -385,6 +401,9 @@ bool WasapiProcessLoopbackSrc::Init(std::string& out_error) {
         Shutdown();
         return false;
     }
+
+    if (!identity_matches())
+        return fail("Process loopback: process identity changed during activation", E_INVALIDARG);
 
     hr = audio_client_->Start();
     if (FAILED(hr)) {
@@ -520,6 +539,7 @@ bool WasapiProcessLoopbackSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::strin
     // units; 0 means the engine did not attribute a timestamp to this packet.
     last_timing_valid_ = (qpcPos != 0);
     last_device_position_ns_ = DeviceFramesToNs(devicePos, SampleRate());
+    last_device_position_frames_ = devicePos;
     last_qpc_position_ns_ = qpcPos * 100ULL;
 
     out_buf.bytes = reinterpret_cast<const uint8_t*>(data);
@@ -569,6 +589,8 @@ bool WasapiProcessLoopbackSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_tim
     }
     out_timing.device_position_ns = last_device_position_ns_;
     out_timing.qpc_position_ns = last_qpc_position_ns_;
+    out_timing.device_position_frames = last_device_position_frames_;
+    out_timing.device_position_frames_valid = true;
     return true;
 }
 
@@ -582,6 +604,7 @@ void WasapiProcessLoopbackSrc::Shutdown() {
     pending_capture_error_msg_.clear();
     last_timing_valid_ = false;
     last_device_position_ns_ = 0;
+    last_device_position_frames_ = 0;
     last_qpc_position_ns_ = 0;
 
     if (capture_client_ != nullptr) {

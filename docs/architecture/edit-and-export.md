@@ -80,7 +80,13 @@ Export writes a sibling temporary and publishes atomically after successful flus
 
 The page uses nested native SplitViews. Normalized source-width and timeline-height fractions live in QSettings UI preferences, independently of workspace contents. Restoration clamps against minimum pane sizes and current geometry; handles support native pointer resizing and keyboard arrows.
 
-Only after media publication succeeds does the sidecar operation reflect the exported recipe. Marker times are filtered to the trim range, rebased to zero, and serialized with the shared model. An empty surviving set removes a stale destination sidecar instead of writing an empty artifact. Sidecar paths replace the media extension: `clip.mkv` and `clip.mp4` each derive `clip.markers.json`. No chapters are written into the container. A sidecar failure must not be confused with failure to create the already-published media.
+Marker times are filtered to the trim range, rebased to zero, and staged with the final media filename using the shared model. Publication installs identity and marker companions before renaming the completed media, restoring previous companions if the media rename fails. This ordering is not a filesystem-wide atomic transaction. An empty surviving set removes a stale destination marker sidecar after media publication and before reporting success. A metadata failure retains the recovery source and must not be reported as success. Sidecar paths replace the media extension: `clip.mkv` and `clip.mp4` each derive `clip.markers.json`. No chapters are written into the container.
+
+## Audio identity and monitoring
+
+Audio metadata carries stable track IDs, physical container mappings, names, roles, processing provenance and default monitoring. Matroska tags are authoritative only when they agree with the actual tracks and codec formats. MP4 and the WebM sidecar fallback use a sidecar bound to final file identity, length and full SHA-256 after container updates. File publication completes only after both media and identity sidecar are available; interrupted publication retains recovery artifacts.
+
+Missing, invalid or stale metadata requires an explicit stopped-state monitoring selection. Legacy selections are bound to exact source bytes before their IDs can be reused after reopening. Preview and render consume the same immutable selection. Confirmed empty selections yield video-only render output. A rendered PCM24 stereo mix receives a new track ID and records its input track/media lineage; stream copy preserves identities while updating the actual output mapping.
 
 ## Shutdown
 

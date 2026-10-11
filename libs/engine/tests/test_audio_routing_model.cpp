@@ -1,4 +1,7 @@
+#include <cstdint>
+#include <exosnap/engine/audio_limits.h>
 #include <exosnap/engine/audio_routing_model.h>
+#include <exosnap/engine/recording_media_types.h>
 
 #include <gtest/gtest.h>
 #include <limits>

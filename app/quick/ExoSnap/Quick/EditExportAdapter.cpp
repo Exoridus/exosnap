@@ -9,6 +9,7 @@
 #include "models/OutputSettingsModel.h"
 #include "models/VideoSettingsModel.h"
 #include "services/AtomicFileOps.h"
+#include "services/MediaMetadataPublication.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -387,7 +388,7 @@ void EditExportAdapter::startExport() {
     engine::TimelineRenderSnapshot render_snapshot;
     render_snapshot.timeline = session_->workspace().timeline();
     for (const auto& asset : session_->workspace().assets())
-        render_snapshot.sources.push_back({asset.id, std::filesystem::path(asset.path), {}});
+        render_snapshot.sources.push_back({asset.id, std::filesystem::path(asset.path), {}, asset.monitor_selection});
     const auto render_config = render_config_ ? render_config_() : engine::RecorderConfig{};
     std::vector<RecordingMarker> timeline_markers;
     for (const auto& clip : session_->workspace().clips()) {
@@ -459,19 +460,25 @@ void EditExportAdapter::startExport() {
             result = engine::RemuxResult::Fail(-1, plan.reason);
             break;
         }
+        MetadataCompanionPublicationGuard companion_guard(std::move(result.created_metadata_companions));
         bool ok = result.success;
         std::string error = result.message;
 
+        if (ok && !StageMarkerSidecarForPublication(temp_output, output, marker_plan.markers, error, std::nullopt,
+                                                    [&] { return !run->cancel.load(); }))
+            ok = false;
+
+        if (ok && run->cancel.load()) {
+            ok = false;
+            error = "Metadata publication cancelled";
+        }
         if (ok) {
             std::error_code ec;
-            if (replace_existing) {
-                const auto error_code = AtomicReplaceInPlace(temp_output, output);
-                if (error_code)
-                    ec = std::error_code(static_cast<int>(error_code), std::system_category());
-            } else {
-                if (!MoveFileExW(temp_output.c_str(), output.c_str(), MOVEFILE_WRITE_THROUGH))
-                    ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
-            }
+            const auto error_code = PublishMediaAndIdentitySidecar(temp_output, output, replace_existing);
+            if (error_code)
+                ec = std::error_code(static_cast<int>(error_code), std::system_category());
+            if (!ec)
+                companion_guard.Commit();
             if (ec) {
                 ok = false;
                 error = "Failed to save output file: " + ec.message();
@@ -483,8 +490,10 @@ void EditExportAdapter::startExport() {
                 error += " (" + left + ")";
         }
 
-        if (ok)
-            ApplyMarkerExportPlan(marker_plan);
+        if (ok && marker_plan.markers.empty() && !ApplyMarkerExportPlan(marker_plan)) {
+            ok = false;
+            error = "MetadataIncomplete: cannot publish exported markers";
+        }
 
         run->ok = ok;
         run->error = std::move(error);

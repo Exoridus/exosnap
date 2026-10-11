@@ -78,6 +78,7 @@ class EditSessionAdapter : public QObject {
     [[nodiscard]] const edit::Workspace& workspace() const {
         return workspace_;
     }
+    void setAssetMonitorSelection(edit::Id asset, engine::MonitorSelectionSnapshot selection);
     [[nodiscard]] QVariantList media() const;
     [[nodiscard]] QVariantList tracks() const;
     [[nodiscard]] bool canUndo() const {

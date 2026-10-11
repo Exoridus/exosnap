@@ -28,6 +28,7 @@
 // (the scrub and trim-handle-drag path) as well as continuous playback decode
 // (StartPlaybackDecode/StopPlaybackDecode).
 
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/color_metadata.h>
 
 #include <cstdint>
@@ -74,6 +75,8 @@ struct DecodedAudioBlock {
 struct AudioTrackDescription {
     int stream_index = -1;
     std::string name;
+    std::optional<AudioTrackId> track_id;
+    std::string role;
 };
 
 using AudioBlockCallback = std::function<void(DecodedAudioBlock)>;
@@ -224,6 +227,10 @@ class EditPlayerEngine {
     // points at. The vector holds at most a handful of entries.
     // cppcheck-suppress returnByReference
     [[nodiscard]] std::vector<AudioTrackDescription> AudioTracks() const;
+    [[nodiscard]] AudioMetadataReadResult AudioMetadata() const;
+    // Selection changes require a stopped decode run. The same snapshot is used
+    // by continuous playback and range decoding for export.
+    bool SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error);
 
     // ---- Continuous playback decode ----
 

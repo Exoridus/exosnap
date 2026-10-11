@@ -109,7 +109,9 @@ class ClockSlavingController {
     // one that would not is left in its byte-identical passthrough.
     static constexpr double kProjectionHorizonS = 600.0;
 
-    ClockSlavingController() = default;
+    explicit ClockSlavingController(double rate_estimate_min_s = kRateEstimateMinS)
+        : rate_estimate_min_s_(rate_estimate_min_s > 0 ? rate_estimate_min_s : kRateEstimateMinS) {
+    }
 
     // Feed the latest measured drift D and the decorator's actually-applied
     // compensation A (both ms) plus the observation's QPC time (ns, the update
@@ -151,7 +153,7 @@ class ClockSlavingController {
         double rate_ppm = 0.0;
         if (has_rate_reference_) {
             const double span_s = elapsed_s - rate_reference_s_;
-            if (span_s >= kRateEstimateMinS) {
+            if (span_s >= rate_estimate_min_s_) {
                 rate_ppm = (drift_ms - rate_reference_ms_) * 1000.0 / span_s;
             }
         }
@@ -235,6 +237,7 @@ class ClockSlavingController {
     }
 
   private:
+    double rate_estimate_min_s_ = kRateEstimateMinS;
     bool engaged_ = false;
     bool measurement_faulted_ = false;
     bool has_first_ = false;

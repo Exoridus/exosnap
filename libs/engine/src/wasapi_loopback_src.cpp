@@ -13,7 +13,7 @@ WasapiLoopbackSrc::~WasapiLoopbackSrc() {
 
 bool WasapiLoopbackSrc::Init(std::string& out_error) {
     last_capture_hr_ = 0;
-    return wasapi_.Init(out_error);
+    return wasapi_.Init(out_error, endpoint_id_, native_format_);
 }
 
 uint32_t WasapiLoopbackSrc::PendingFrameCount() {
@@ -63,6 +63,7 @@ bool WasapiLoopbackSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_
     // units; 0 means the engine did not attribute a timestamp to this packet.
     last_timing_valid_ = (qpcPos != 0);
     last_device_position_ns_ = DeviceFramesToNs(devicePos, SampleRate());
+    last_device_position_frames_ = devicePos;
     last_qpc_position_ns_ = qpcPos * 100ULL;
 
     out_buf.bytes = reinterpret_cast<const uint8_t*>(data);
@@ -82,15 +83,15 @@ void WasapiLoopbackSrc::ReleaseBuffer() {
 }
 
 uint32_t WasapiLoopbackSrc::SampleRate() const {
-    return 48000;
+    return wasapi_.Format().sample_rate;
 }
 
 uint32_t WasapiLoopbackSrc::Channels() const {
-    return 2;
+    return wasapi_.Format().channels;
 }
 
 AudioSampleFormat WasapiLoopbackSrc::SampleFormat() const {
-    return AudioSampleFormat::Float32;
+    return wasapi_.Format().sample_format;
 }
 
 const std::string& WasapiLoopbackSrc::EndpointName() const {
@@ -107,6 +108,8 @@ bool WasapiLoopbackSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing) co
     }
     out_timing.device_position_ns = last_device_position_ns_;
     out_timing.qpc_position_ns = last_qpc_position_ns_;
+    out_timing.device_position_frames = last_device_position_frames_;
+    out_timing.device_position_frames_valid = true;
     return true;
 }
 
@@ -114,6 +117,7 @@ void WasapiLoopbackSrc::Shutdown() {
     ReleaseBuffer();
     last_timing_valid_ = false;
     last_device_position_ns_ = 0;
+    last_device_position_frames_ = 0;
     last_qpc_position_ns_ = 0;
     wasapi_.Shutdown();
 }

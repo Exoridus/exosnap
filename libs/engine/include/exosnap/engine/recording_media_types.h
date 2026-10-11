@@ -134,6 +134,7 @@ struct MediaCodecDescriptor {
     uint32_t channels = 0;
     uint32_t bit_depth = 0;
     uint32_t codec_delay_samples = 0;
+    std::string channel_layout;
 };
 
 struct ContainerAudioTrack {

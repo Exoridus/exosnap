@@ -50,6 +50,8 @@ class LoopbackMeterService;
 } // namespace exosnap::engine
 
 namespace exosnap {
+exosnap::engine::AudioEnvironmentSnapshot ObserveRecordingAudioEnvironment(const exosnap::engine::CaptureTarget& target,
+                                                                           uint32_t os_build);
 
 // One recording's frozen session ledger, on its way from the Qt main thread that
 // closes it to the session report that carries it.
@@ -257,13 +259,18 @@ class RecordingCoordinator {
     std::vector<exosnap::engine::CaptureTarget> EnumerateTargets();
     bool StartRecording(const exosnap::engine::CaptureTarget& target, const capability::AudioUiState& audio_ui_state,
                         std::optional<exosnap::engine::CaptureRegion> crop_region = std::nullopt,
-                        exosnap::engine::CaptureBackend capture_backend = exosnap::engine::CaptureBackend::Default);
+                        exosnap::engine::CaptureBackend capture_backend = exosnap::engine::CaptureBackend::Default,
+                        std::optional<exosnap::engine::AudioIntent> audio_intent = std::nullopt,
+                        exosnap::engine::ConfigRevision audio_revision = {});
 
     // Webcam overlay
     // Mute or unmute one audio source kind while a recording runs. No-op when
     // no session is in flight: between recordings the source rows are the truth
     // and a new session starts from them.
     void SetAudioSourceMuted(exosnap::engine::AudioSourceKind kind, bool muted);
+    bool SetAudioSourceMuted(exosnap::engine::AudioSourceId id, bool muted);
+    exosnap::engine::MeterSnapshot LatestAudioRoutingMeters() const;
+    std::optional<exosnap::engine::ResolvedAudioPlan> ActiveAudioPlan() const;
 
     // Returns what a live session put into effect, or nothing when no recording
     // was running to apply it to. The live overlay fields are the only part of
@@ -529,6 +536,8 @@ class RecordingCoordinator {
     struct PrepareContext {
         exosnap::engine::CaptureTarget target;
         capability::AudioUiState audio_ui_state;
+        std::optional<exosnap::engine::AudioIntent> audio_intent;
+        exosnap::engine::ConfigRevision audio_revision;
         std::optional<exosnap::engine::CaptureRegion> crop_region;
         exosnap::engine::CaptureBackend capture_backend = exosnap::engine::CaptureBackend::Default;
         OutputSettingsModel output_settings;
@@ -744,6 +753,9 @@ class RecordingCoordinator {
     // engine only knew "some stop happened outside a recording window": the next
     // session began already stopped and reported no frames.
     std::atomic<exosnap::engine::RecordRequestId> record_request_{exosnap::engine::kUnscopedRecordRequest};
+    mutable std::mutex audio_routing_mutex_;
+    exosnap::engine::MeterSnapshot audio_routing_meters_;
+    std::optional<exosnap::engine::ResolvedAudioPlan> active_audio_plan_;
     // Cooperative cancel request for the Preparing phase; honored at the worker's
     // checkpoints (after disk/FS, after display facts, after webcam start, and
     // immediately before the recording commits).

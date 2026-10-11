@@ -1,5 +1,6 @@
 #pragma once
 
+#include <exosnap/engine/audio_routing_model.h>
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/color_metadata.h>
 #include <exosnap/engine/split_trigger_source.h>
@@ -25,6 +26,8 @@
 #include <vector>
 
 namespace exosnap::engine {
+
+struct AudioManifest1;
 
 // ---------------------------------------------------------------------------
 // WebcamFrameProvider — injected into RecorderConfig for compositing
@@ -297,6 +300,7 @@ struct CompletedSegment {
     // than inferred from an outstanding split request, which may never have
     // reached a boundary (a split asked for while paused, or just before stop).
     bool session_end = false;
+    std::shared_ptr<const AudioManifest1> audio_manifest;
 };
 
 // Invoked from the mux worker thread as each segment is finalized. Must be
@@ -510,6 +514,9 @@ struct RecorderConfig {
     // Resolved output audio tracks from the APP/MIC/SYS source model.
     // Phase 2 legacy compatibility: empty plan means single audio track.
     AudioTrackPlan audio_track_plan;
+
+    // Authoritative when present. An empty resolved plan explicitly records no audio.
+    std::optional<ResolvedAudioPlan> resolved_audio_plan;
 
     // When false, no audio threads are started and audio_track_plan is ignored.
     // Default true preserves backward compatibility: empty plan -> WasapiLoopbackSrc.
@@ -821,6 +828,8 @@ class RecorderSession {
     // request_id scopes the call exactly as it does for Stop().
     void SetAudioSourceMuted(AudioSourceKind kind, bool muted,
                              RecordRequestId request_id = kUnscopedRecordRequest) noexcept;
+    // Addresses a logical source in the active plan without restarting capture.
+    bool SetAudioSourceMuted(const AudioSourceId& id, bool muted, RecordRequestId request_id = kUnscopedRecordRequest);
 
     void SetSegmentCallback(SegmentCallback cb);
 

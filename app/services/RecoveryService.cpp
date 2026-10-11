@@ -1,6 +1,7 @@
 #include "RecoveryService.h"
 
 #include "services/AtomicFileOps.h"
+#include "services/MediaMetadataPublication.h"
 
 #include <exosnap/engine/mp4_remuxer.h>
 
@@ -142,17 +143,23 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
         const std::filesystem::path preferred = dest_folder / (stem + L".mkv");
 
         if (entry.finalized) {
-            // Artefact is cleanly finalized — simple rename, no remux needed. A pure
-            // rename is already atomic and cannot leave a torn file, so it keeps the
-            // collision-safe (never-clobber) behaviour rather than replacing in place.
             const auto target = ResolveUniqueOutputPath(preferred);
-            std::error_code ec;
-            std::filesystem::rename(artefact, target, ec);
-            if (ec) {
-                const std::string msg = "Rename failed: " + ec.message();
-                diagnostics::AppLog::warning(QStringLiteral("recovery"), QString::fromStdString(msg));
-                return {false, msg};
+            const auto staging = MakeSiblingTempPath(target);
+            if (const auto error = StageCompletedMediaForPublication(artefact, staging))
+                return {false, "Cannot stage completed recovery media (Win32 error " + std::to_string(error) + ")"};
+            std::string metadata_error;
+            if (!StageMarkerSidecarForPublication(staging, target, ReadMarkerSidecar(DeriveMarkerSidecarPath(artefact)),
+                                                  metadata_error, std::nullopt,
+                                                  [&] { return !progress_cb || progress_cb(0.99f); })) {
+                (void)DescribeFailedStagingRemoval(staging);
+                return {false, metadata_error};
             }
+            if (const auto error = PublishMediaAndIdentitySidecar(staging, target, false)) {
+                (void)DescribeFailedStagingRemoval(staging);
+                return {false, "Cannot publish completed recovery media (Win32 error " + std::to_string(error) + ")"};
+            }
+            std::error_code ec;
+            std::filesystem::remove(artefact, ec);
             store_.Remove(entry.id);
             diagnostics::AppLog::info(QStringLiteral("recovery"),
                                       QStringLiteral("Finish(mkv/rename) id=%1 → %2")
@@ -166,7 +173,8 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
         // half-written MKV.
         const std::filesystem::path repair_target = resolve_remux_target(preferred);
         const std::filesystem::path temp = MakeSiblingTempPath(repair_target);
-        const auto result = exosnap::engine::RemuxToMkv(artefact, temp, WrapProgress(std::move(progress_cb)));
+        const auto result = exosnap::engine::RemuxToMkv(artefact, temp, WrapProgress(progress_cb));
+        MetadataCompanionPublicationGuard companion_guard(result.created_metadata_companions);
         if (!result.success) {
             // The repair did not complete cleanly — the artefact (the original,
             // possibly-unfinalized MKV) is the only trustworthy recording and
@@ -177,7 +185,14 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
             return {false, result.message};
         }
 
-        if (const unsigned long move_err = AtomicReplaceInPlace(temp, repair_target); move_err != 0) {
+        std::string metadata_error;
+        if (!StageMarkerSidecarForPublication(temp, repair_target, ReadMarkerSidecar(DeriveMarkerSidecarPath(artefact)),
+                                              metadata_error, std::nullopt,
+                                              [&] { return !progress_cb || progress_cb(0.99f); })) {
+            (void)DescribeFailedStagingRemoval(temp);
+            return {false, metadata_error};
+        }
+        if (const unsigned long move_err = PublishMediaAndIdentitySidecar(temp, repair_target); move_err != 0) {
             if (const std::string left = DescribeFailedStagingRemoval(temp); !left.empty())
                 diagnostics::AppLog::warning(QStringLiteral("recovery"), QString::fromStdString(left));
             const std::string msg = "Atomic move to final output failed (Win32 error " + std::to_string(move_err) + ")";
@@ -185,6 +200,7 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
             return {false, msg};
         }
 
+        companion_guard.Commit();
         std::error_code rm_ec;
         std::filesystem::remove(artefact, rm_ec);
         if (rm_ec) {
@@ -210,7 +226,8 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
     const std::filesystem::path target = resolve_remux_target(preferred);
     const std::filesystem::path temp = MakeSiblingTempPath(target);
 
-    const auto result = exosnap::engine::RemuxToProgressiveMp4(artefact, temp, WrapProgress(std::move(progress_cb)));
+    const auto result = exosnap::engine::RemuxToProgressiveMp4(artefact, temp, WrapProgress(progress_cb));
+    MetadataCompanionPublicationGuard companion_guard(result.created_metadata_companions);
     if (!result.success) {
         // The remux did not complete cleanly — the artefact (playable MKV) is the
         // only trustworthy recording and must be kept. Remove the abandoned temp; the
@@ -220,7 +237,14 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
         return {false, result.message};
     }
 
-    if (const unsigned long move_err = AtomicReplaceInPlace(temp, target); move_err != 0) {
+    std::string metadata_error;
+    if (!StageMarkerSidecarForPublication(temp, target, ReadMarkerSidecar(DeriveMarkerSidecarPath(artefact)),
+                                          metadata_error, std::nullopt,
+                                          [&] { return !progress_cb || progress_cb(0.99f); })) {
+        (void)DescribeFailedStagingRemoval(temp);
+        return {false, metadata_error};
+    }
+    if (const unsigned long move_err = PublishMediaAndIdentitySidecar(temp, target); move_err != 0) {
         if (const std::string left = DescribeFailedStagingRemoval(temp); !left.empty())
             diagnostics::AppLog::warning(QStringLiteral("recovery"), QString::fromStdString(left));
         const std::string msg = "Atomic move to final output failed (Win32 error " + std::to_string(move_err) + ")";
@@ -228,6 +252,7 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
         return {false, msg};
     }
 
+    companion_guard.Commit();
     std::error_code rm_ec;
     std::filesystem::remove(artefact, rm_ec);
     if (rm_ec) {

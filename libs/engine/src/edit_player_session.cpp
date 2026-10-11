@@ -1,4 +1,5 @@
 #include "exosnap/engine/edit_player_session.h"
+#include <exosnap/engine/audio_media_manifest.h>
 
 #include "exosnap/engine/edit_player_engine.h"
 #include "exosnap/engine/wasapi_audio_render.h"
@@ -126,8 +127,24 @@ void EditPlayerSession::SetOnFrameReady(std::function<void(RawDecodedVideoFrame)
     impl_->on_frame = std::move(callback);
 }
 
+AudioMetadataReadResult EditPlayerSession::AudioMetadata() const {
+    return impl_->engine.AudioMetadata();
+}
+
+bool EditPlayerSession::SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error) {
+    if (impl_->playing) {
+        error = "Pause playback before changing the monitoring selection.";
+        return false;
+    }
+    return impl_->engine.SetMonitorSelection(std::move(selection), error);
+}
+
+bool EditPlayerSession::MonitoringConfirmationRequired() const {
+    return impl_->engine.AudioMetadata().monitoring_confirmation_required;
+}
+
 void EditPlayerSession::Play(int64_t start_us) {
-    if (impl_->playing)
+    if (impl_->playing || MonitoringConfirmationRequired())
         return;
 
     // Ensure any in-flight scrub seek (spawned by SeekTo) has fully finished

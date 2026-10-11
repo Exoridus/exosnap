@@ -118,7 +118,7 @@ Item {
         case SettingsAdapter.Quality:
             return qualitySection;
         case SettingsAdapter.Microphone:
-            return microphoneSection;
+            return root.settings.audioRouting.legacy ? microphoneSection : audioSourcesSection;
         case SettingsAdapter.ClockSlaving:
             return audioEncodingSection;
         case SettingsAdapter.AudioSources:
@@ -398,7 +398,7 @@ Item {
                     LayoutItemProxy { target: presetSection }
                     LayoutItemProxy { target: formatSection }
                     LayoutItemProxy { target: audioSourcesSection }
-                    LayoutItemProxy { target: microphoneSection }
+                    LayoutItemProxy { target: microphoneSection; visible: root.settings.audioRouting.legacy }
                     LayoutItemProxy { target: outputSection }
                     LayoutItemProxy { target: presenceSection }
                     LayoutItemProxy { target: hotkeysSection }
@@ -444,7 +444,7 @@ Item {
 
                             LayoutItemProxy { target: formatSection }
                             LayoutItemProxy { target: audioSourcesSection }
-                            LayoutItemProxy { target: microphoneSection }
+                            LayoutItemProxy { target: microphoneSection; visible: root.settings.audioRouting.legacy }
                             LayoutItemProxy { target: outputSection }
                             LayoutItemProxy { target: presenceSection }
                             LayoutItemProxy { target: hotkeysSection }

@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstdint>
+#include <exosnap/engine/audio_limits.h>
 #include <exosnap/engine/session_stats.h>
 
 #include <gtest/gtest.h>

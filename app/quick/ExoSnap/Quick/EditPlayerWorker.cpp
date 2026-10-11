@@ -45,6 +45,14 @@ void EditPlayerWorker::open(const QString& master_path, qint64 duration_ms, doub
     auto sink = sink_;
     session_->SetOnFrameReady([sink](exosnap::engine::RawDecodedVideoFrame frame) { sink->deliver(std::move(frame)); });
     session_->SetVolume(static_cast<float>(volume_));
+    const auto* clip = workspace_.clip(active_clip_);
+    const auto* asset = clip ? workspace_.asset(clip->asset) : nullptr;
+    if (asset && asset->monitor_selection) {
+        monitor_revision_ = std::max(monitor_revision_, asset->monitor_selection->revision.value);
+        if (!session_->SetMonitorSelection(*asset->monitor_selection, error))
+            emit monitoringRejected(QString::fromStdString(error));
+    }
+    publishMonitoring();
     ensureTimer();
     tick_timer_->setInterval(EditPreviewTickMsFor(session_->VideoFrameRate(), screen_hz_));
     // Poster frame: show the clip's first frame instead of the placeholder while
@@ -70,6 +78,7 @@ void EditPlayerWorker::close() {
     }
     position_ms_ = 0;
     sink_->publishClock(-1);
+    emit monitoringChanged({}, false);
 }
 
 void EditPlayerWorker::play(qint64 from_ms) {
@@ -79,6 +88,11 @@ void EditPlayerWorker::play(qint64 from_ms) {
     }
     if (!session_)
         return;
+    if (session_->MonitoringConfirmationRequired()) {
+        publishMonitoring();
+        emit monitoringRejected(tr("Confirm the audio monitoring selection before playback."));
+        return;
+    }
     position_ms_ = from_ms;
     ensureTimer();
     tick_timer_->setInterval(EditPreviewTickMsFor(session_->VideoFrameRate(), screen_hz_));
@@ -191,7 +205,8 @@ void EditPlayerWorker::onTick() {
 }
 
 void EditPlayerWorker::setTimeline(edit::Workspace workspace) {
-    if (timeline_mode_ && workspace.clips() == workspace_.clips())
+    if (timeline_mode_ && !render_mode_ && workspace.clips() == workspace_.clips() &&
+        workspace.monitoringRevision() == workspace_.monitoringRevision())
         return;
     pause();
     close();
@@ -205,7 +220,7 @@ void EditPlayerWorker::setTimeline(edit::Workspace workspace) {
         snapshot.timeline = workspace_.timeline();
         for (const auto& asset : workspace_.assets()) {
             const std::filesystem::path path(asset.path);
-            snapshot.sources.push_back({asset.id, path, engine::ProbeEditMedia(path)});
+            snapshot.sources.push_back({asset.id, path, engine::ProbeEditMedia(path), asset.monitor_selection});
         }
         render_plan_ =
             engine::ClassifyEditExport(snapshot, {engine::TimelineExportEligibility::RenderRequired, {}}, false);
@@ -223,6 +238,70 @@ void EditPlayerWorker::setTimeline(edit::Workspace workspace) {
         emit openFinished(workspace_.duration() > 0, {});
 }
 
+void EditPlayerWorker::publishMonitoring() {
+    if (!session_) {
+        emit monitoringChanged({}, false);
+        return;
+    }
+    const auto metadata = session_->AudioMetadata();
+    const auto* clip = workspace_.clip(active_clip_);
+    const auto* asset = clip ? workspace_.asset(clip->asset) : nullptr;
+    QVariantList tracks;
+    for (const auto& actual : metadata.actual_tracks) {
+        bool selected = false;
+        if (asset && asset->monitor_selection && !session_->MonitoringConfirmationRequired()) {
+            selected =
+                std::any_of(asset->monitor_selection->tracks.begin(), asset->monitor_selection->tracks.end(),
+                            [&](const auto& entry) { return entry.track_id == actual.track_id && !entry.muted; });
+        } else if (metadata.status == engine::AudioMetadataStatus::Verified && metadata.manifest) {
+            const auto& defaults = metadata.manifest->default_monitor_track_ids;
+            selected = std::find(defaults.begin(), defaults.end(), actual.track_id) != defaults.end();
+        }
+        tracks.push_back(QVariantMap{
+            {QStringLiteral("id"), QString::fromStdString(engine::ToUuid(actual.track_id))},
+            {QStringLiteral("name"), QString::fromStdString(actual.name)},
+            {QStringLiteral("role"), QString::fromStdString(actual.role)},
+            {QStringLiteral("selected"), selected},
+            {QStringLiteral("provenanceVerified"), metadata.status == engine::AudioMetadataStatus::Verified},
+            {QStringLiteral("available"), true}});
+    }
+    emit monitoringChanged(std::move(tracks), session_->MonitoringConfirmationRequired());
+}
+
+void EditPlayerWorker::confirmMonitoring(const QStringList& track_ids, bool overlap_confirmed) {
+    if (!session_)
+        return;
+    pause();
+    const auto metadata = session_->AudioMetadata();
+    engine::MonitorSelectionSnapshot selection;
+    selection.media_id = metadata.selection_media_id;
+    selection.revision = {++monitor_revision_};
+    selection.overlap_confirmed = overlap_confirmed;
+    selection.unverified_asset_binding = metadata.unverified_asset_binding;
+    for (const auto& text : track_ids) {
+        const auto id = engine::FromUuid<engine::AudioTrackId>(text.toStdString());
+        if (!id) {
+            publishMonitoring();
+            emit monitoringRejected(tr("The audio monitoring track identity is invalid."));
+            return;
+        }
+        selection.tracks.push_back({*id, 1.0f, false});
+    }
+    std::string error;
+    if (!session_->SetMonitorSelection(selection, error)) {
+        publishMonitoring();
+        emit monitoringRejected(QString::fromStdString(error));
+        return;
+    }
+    const auto* clip = workspace_.clip(active_clip_);
+    if (clip) {
+        const auto asset = clip->asset;
+        workspace_.setMonitorSelection(asset, selection);
+        emit monitorSelectionConfirmed(asset, selection);
+    }
+    publishMonitoring();
+}
+
 void EditPlayerWorker::setVolume(double volume) {
     volume_ = volume;
     if (session_)
@@ -233,6 +312,47 @@ void EditPlayerWorker::seekTimeline(qint64 position_ms, bool resume) {
     if (render_mode_) {
         if (!render_reader_)
             return;
+        pause();
+        position_ms_ = std::clamp<qint64>(position_ms, 0, workspace_.duration() / 1000);
+        const auto prepareMonitoring = [this](const edit::Clip& clip) {
+            const auto* asset = workspace_.asset(clip.asset);
+            if (!asset || asset->state != edit::AssetState::Available)
+                return false;
+            if (active_clip_ != clip.id || !session_) {
+                if (session_)
+                    session_->Close();
+                session_ = std::make_unique<engine::EditPlayerSession>();
+                active_clip_ = clip.id;
+                std::string error;
+                if (!session_->Open(std::filesystem::path(asset->path), error)) {
+                    session_.reset();
+                    emit monitoringRejected(QString::fromStdString(error));
+                    return false;
+                }
+                if (asset->monitor_selection) {
+                    monitor_revision_ = std::max(monitor_revision_, asset->monitor_selection->revision.value);
+                    if (!session_->SetMonitorSelection(*asset->monitor_selection, error))
+                        emit monitoringRejected(QString::fromStdString(error));
+                }
+            }
+            publishMonitoring();
+            return !session_->MonitoringConfirmationRequired();
+        };
+        if (resume) {
+            for (const auto& clip : workspace_.clips()) {
+                const auto* asset = workspace_.asset(clip.asset);
+                if (asset && asset->audio && !prepareMonitoring(clip)) {
+                    if (!session_)
+                        emit monitoringChanged({}, true);
+                    emit monitoringRejected(tr("Confirm the audio monitoring selection before playback."));
+                    return;
+                }
+            }
+        }
+        if (const auto* clip = EvaluatedClip(workspace_, position_ms_ * 1000))
+            prepareMonitoring(*clip);
+        else
+            emit monitoringChanged({}, false);
         if (render_audio_)
             render_audio_->Stop();
         render_reader_->ResetAudio();
@@ -294,16 +414,22 @@ void EditPlayerWorker::seekTimeline(qint64 position_ms, bool resume) {
     if (id != active_clip_ || (clip && !session_)) {
         close();
         sink_->clear();
+        active_clip_ = id;
         if (asset && asset->state == edit::AssetState::Available)
             open(QString::fromStdWString(asset->path), asset->duration / 1000, screen_hz_);
         else
             emit openFinished(workspace_.duration() > 0, asset ? tr("Media unavailable") : QString());
-        active_clip_ = id;
     }
     position_ms_ = position_ms;
     if (session_ && clip) {
         const auto source_us = position_ms * 1000 - clip->start + clip->source_in;
         session_->SeekTo(source_us);
+        if (resume && session_->MonitoringConfirmationRequired()) {
+            pause();
+            publishMonitoring();
+            emit monitoringRejected(tr("Confirm the audio monitoring selection before playback."));
+            return;
+        }
         if (resume && session_->HasAudioStream())
             session_->Play(source_us);
         syncClock();

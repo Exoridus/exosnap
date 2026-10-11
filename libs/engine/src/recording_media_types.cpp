@@ -1,6 +1,12 @@
 #include <exosnap/engine/recording_media_types.h>
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <random>
+#include <string>
+#include <string_view>
 
 namespace exosnap::engine {
 namespace {

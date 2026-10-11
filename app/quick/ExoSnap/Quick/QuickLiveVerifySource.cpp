@@ -1037,6 +1037,9 @@ bool QuickLiveVerifySource::RecordStart(QString* error) {
     case QuickApplication::StartAdmission::RefusedByState:
         *error = QStringLiteral("record.start is not available in the current state");
         return false;
+    case QuickApplication::StartAdmission::RefusedByConfiguration:
+        *error = QStringLiteral("The audio configuration is unsupported or read-only");
+        return false;
     case QuickApplication::StartAdmission::RefusedNoTarget:
         *error = QStringLiteral("There is no capture target to record");
         return false;

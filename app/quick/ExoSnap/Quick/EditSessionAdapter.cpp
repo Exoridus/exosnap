@@ -405,6 +405,11 @@ void EditSessionAdapter::setTrimUs(int64_t start_us, int64_t end_us) {
         emit unsavedEditsChanged();
 }
 
+void EditSessionAdapter::setAssetMonitorSelection(edit::Id asset, engine::MonitorSelectionSnapshot selection) {
+    if (workspace_.setMonitorSelection(asset, std::move(selection)))
+        emit workspaceChanged();
+}
+
 void EditSessionAdapter::applyReport(const EditContext& context) {
     const auto& snapshot = context.completed_snapshot;
     const bool has_snapshot = snapshot.valid || snapshot.session_generation > 0;

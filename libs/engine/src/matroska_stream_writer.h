@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exosnap/engine/audio_limits.h>
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/recording_media_types.h>
 
 // MatroskaStreamWriter: incremental, constant-RAM Matroska/WebM container writer.
@@ -143,6 +144,7 @@ struct OutputIoTimings {
 };
 
 struct MatroskaStreamConfig {
+    std::optional<AudioManifest1> audio_manifest;
     std::optional<RecordingMediaDescriptor> media_descriptor;
     uint64_t initial_commit_sequence = 0;
     std::function<ReceiptAcceptance(CommittedMediaReceipt)> publish_committed;

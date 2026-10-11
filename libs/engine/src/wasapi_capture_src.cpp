@@ -1,8 +1,10 @@
 #include "wasapi_capture_src.h"
+#include "audio_tee.h"
+#include "wasapi_loopback.h"
+#include <exosnap/engine/audio_track_model.h>
 
 #include "discontinuity_gap.h"
 #include "exosnap/engine/interfaces/IAudioCaptureSource.h"
-#include "exosnap/engine/recorder_session.h"
 #include "wgc_capture.h"
 
 #include <cstdint>
@@ -25,12 +27,8 @@ constexpr uint32_t kRequiredSampleRate = 48000;
 constexpr uint32_t kRequiredOutputChannels = 2;
 constexpr REFERENCE_TIME kFallbackDevicePeriodHns = 100000; // 10 ms
 
-// How many device periods of slack the capture buffer carries. One period (the
-// previous value) leaves none: a loaded 30 min recording lost frames to the
-// device repeatedly, an idle one never did. Four periods is roughly 40 ms of
-// room to miss a wake-up in. Still far tighter than the two loopback sources,
-// which have always asked for 200 ms -- and that difference is exactly why a
-// loaded session lost frames on the microphone track and not on the system one.
+// Four device periods leave bounded slack before the device overwrites unread
+// frames when the owner misses a wakeup. Format admission includes this payload.
 constexpr REFERENCE_TIME kCaptureBufferPeriods = 4;
 constexpr uint64_t kAutoDetectMinFrames = 4800; // 100 ms
 
@@ -46,20 +44,12 @@ int16_t ClampInt32ToInt16(int32_t value) {
     return static_cast<int16_t>(value);
 }
 
-WORD ResolveWaveFormatTag(const WAVEFORMATEX* fmt) {
-    if (fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE && fmt->cbSize >= 22) {
-        const auto* ext = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(fmt);
-        return static_cast<WORD>(ext->SubFormat.Data1);
-    }
-    return fmt->wFormatTag;
-}
-
 AcceptedSampleKind DetectAcceptedSampleKind(const WAVEFORMATEX* fmt) {
-    const WORD tag = ResolveWaveFormatTag(fmt);
-    if (tag == WAVE_FORMAT_IEEE_FLOAT && fmt->wBitsPerSample == 32) {
+    const auto format = fmt ? ClassifyNativeWasapiFormat(*fmt) : std::nullopt;
+    if (format && format->sample_format == AudioSampleFormat::Float32) {
         return AcceptedSampleKind::Float32;
     }
-    if (tag == WAVE_FORMAT_PCM && fmt->wBitsPerSample == 16) {
+    if (format && format->sample_format == AudioSampleFormat::Int16) {
         return AcceptedSampleKind::Pcm16;
     }
     return AcceptedSampleKind::Unsupported;
@@ -253,8 +243,67 @@ WasapiAcquireFailAction ClassifyWasapiAcquireFailure(HRESULT hr) noexcept {
     }
 }
 
-WasapiCaptureSrc::WasapiCaptureSrc(MicChannelMode channel_mode, std::optional<std::string> device_id)
-    : requested_channel_mode_(channel_mode), device_id_(std::move(device_id)) {
+bool DescribeNativeMicrophoneFormat(const std::optional<std::string>& device_id, AudioCaptureDescriptor& descriptor,
+                                    std::string& out_error) {
+    IMMDeviceEnumerator* enumerator = nullptr;
+    IMMDevice* device = nullptr;
+    IAudioClient* client = nullptr;
+    WAVEFORMATEX* format = nullptr;
+    out_error.clear();
+    auto cleanup = [&] {
+        if (format)
+            CoTaskMemFree(format);
+        if (client)
+            client->Release();
+        if (device)
+            device->Release();
+        if (enumerator)
+            enumerator->Release();
+    };
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    if (SUCCEEDED(hr)) {
+        const auto wide_id = device_id ? Utf8ToWide(*device_id) : std::wstring{};
+        hr = device_id ? (wide_id.empty() ? E_INVALIDARG : enumerator->GetDevice(wide_id.c_str(), &device))
+                       : enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &device);
+    }
+    if (SUCCEEDED(hr))
+        hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&client));
+    if (SUCCEEDED(hr))
+        hr = client->GetMixFormat(&format);
+    REFERENCE_TIME period = 0;
+    if (SUCCEEDED(hr))
+        hr = client->GetDevicePeriod(&period, nullptr);
+    if (FAILED(hr) || !format) {
+        out_error = "Native microphone format query failed: HRESULT " + std::to_string(static_cast<int32_t>(hr));
+        cleanup();
+        return false;
+    }
+    const auto kind = DetectAcceptedSampleKind(format);
+    if (!format->nSamplesPerSec || !format->nChannels ||
+        (kind != AcceptedSampleKind::Float32 && kind != AcceptedSampleKind::Pcm16)) {
+        out_error = "Native microphone format is unsupported by the Float32/PCM16 capture path";
+        cleanup();
+        return false;
+    }
+    if (period <= 0)
+        period = kFallbackDevicePeriodHns;
+    descriptor.sample_rate = format->nSamplesPerSec;
+    descriptor.channels = format->nChannels;
+    const uint64_t packet_frames =
+        (static_cast<uint64_t>(period) * kCaptureBufferPeriods * descriptor.sample_rate + 9'999'999ULL) / 10'000'000ULL;
+    if (packet_frames > UINT32_MAX - 256u) {
+        out_error = "Native microphone packet capacity exceeds the audio admission range";
+        cleanup();
+        return false;
+    }
+    descriptor.maximum_packet_frames = static_cast<uint32_t>(packet_frames) + 256;
+    cleanup();
+    return true;
+}
+
+WasapiCaptureSrc::WasapiCaptureSrc(MicChannelMode channel_mode, std::optional<std::string> device_id,
+                                   bool native_format)
+    : requested_channel_mode_(channel_mode), device_id_(std::move(device_id)), native_format_(native_format) {
 }
 
 WasapiCaptureSrc::~WasapiCaptureSrc() {
@@ -349,14 +398,25 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
     desired.nAvgBytesPerSec = desired.nSamplesPerSec * desired.nBlockAlign;
     desired.cbSize = 0;
 
-    hr = audio_client_->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, &desired, &closestMatch);
+    hr = native_format_ ? S_OK : audio_client_->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, &desired, &closestMatch);
 
     const WAVEFORMATEX* initFormat = nullptr;
     AcceptedSampleKind selectedKind = AcceptedSampleKind::Float32;
     uint32_t selectedInputChannels = 2;
     bool selectedMonoToStereo = false;
 
-    if (hr == S_OK) {
+    if (native_format_) {
+        selectedKind = DetectAcceptedSampleKind(mixFormat);
+        if (mixFormat->nSamplesPerSec == 0 || mixFormat->nChannels == 0 ||
+            (selectedKind != AcceptedSampleKind::Float32 && selectedKind != AcceptedSampleKind::Pcm16)) {
+            out_error = "Native microphone format must be Float32 or PCM16 with a valid rate and channel count";
+            cleanupFormats();
+            Shutdown();
+            return false;
+        }
+        initFormat = mixFormat;
+        selectedInputChannels = mixFormat->nChannels;
+    } else if (hr == S_OK) {
         initFormat = &desired;
         selectedKind = AcceptedSampleKind::Float32;
         selectedInputChannels = 2;
@@ -451,11 +511,12 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
         return failHr("IAudioClient::Start", hr);
     }
 
+    const uint32_t selectedRate = initFormat->nSamplesPerSec;
     cleanupFormats();
 
     mono_to_stereo_ = selectedMonoToStereo;
-    sample_rate_ = kRequiredSampleRate;
-    channels_ = kRequiredOutputChannels;
+    sample_rate_ = native_format_ ? selectedRate : kRequiredSampleRate;
+    channels_ = native_format_ ? selectedInputChannels : kRequiredOutputChannels;
     input_channels_ = selectedInputChannels;
     sample_format_ =
         (selectedKind == AcceptedSampleKind::Pcm16) ? AudioSampleFormat::Int16 : AudioSampleFormat::Float32;
@@ -572,13 +633,15 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
     // units; 0 means the engine did not attribute a timestamp to this packet.
     last_timing_valid_ = (qpcPos != 0);
     last_device_position_ns_ = DeviceFramesToNs(devicePos, sample_rate_);
+    last_device_position_frames_ = devicePos;
     last_qpc_position_ns_ = qpcPos * 100ULL;
 
     buffer_acquired_ = true;
     acquired_frames_ = numFrames;
 
-    UpdateAutoModeFromBuffer(reinterpret_cast<const uint8_t*>(data), numFrames, silent);
-    const MicChannelMode effective_mode = EffectiveChannelMode();
+    if (!native_format_)
+        UpdateAutoModeFromBuffer(reinterpret_cast<const uint8_t*>(data), numFrames, silent);
+    const MicChannelMode effective_mode = native_format_ ? MicChannelMode::PreserveStereo : EffectiveChannelMode();
 
     const bool needs_mapping_buffer =
         mono_to_stereo_ || (input_channels_ == 2 && effective_mode != MicChannelMode::PreserveStereo);
@@ -691,6 +754,8 @@ bool WasapiCaptureSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing) con
         return false;
     }
     out_timing.device_position_ns = last_device_position_ns_;
+    out_timing.device_position_frames = last_device_position_frames_;
+    out_timing.device_position_frames_valid = true;
     out_timing.qpc_position_ns = last_qpc_position_ns_;
     return true;
 }

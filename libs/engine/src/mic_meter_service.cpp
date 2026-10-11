@@ -1,7 +1,7 @@
 #include "mic_meter_service.h"
 #include "exosnap/engine/interfaces/IAudioCaptureSource.h"
-#include "exosnap/engine/recorder_session.h"
 #include "meter_start_mode.h"
+#include <exosnap/engine/audio_track_model.h>
 
 #include <exosnap/engine/audio_meter.h>
 #include <future>

@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace exosnap::engine {
@@ -17,7 +18,8 @@ enum class ProcessLoopbackMode {
 
 class WasapiProcessLoopbackSrc : public IAudioCaptureSource {
   public:
-    WasapiProcessLoopbackSrc(DWORD target_pid, ProcessLoopbackMode mode);
+    WasapiProcessLoopbackSrc(DWORD target_pid, ProcessLoopbackMode mode,
+                             std::optional<uint64_t> expected_creation_time = std::nullopt);
     ~WasapiProcessLoopbackSrc() override;
 
     WasapiProcessLoopbackSrc(const WasapiProcessLoopbackSrc&) = delete;
@@ -67,6 +69,7 @@ class WasapiProcessLoopbackSrc : public IAudioCaptureSource {
     // clock-drift metric (audio_clock_drift.h).
     bool last_timing_valid_ = false;
     uint64_t last_device_position_ns_ = 0;
+    uint64_t last_device_position_frames_ = 0;
     uint64_t last_qpc_position_ns_ = 0;
 
     bool pending_capture_error_ = false;

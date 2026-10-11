@@ -1,4 +1,7 @@
 #include "mux_thread.h"
+#include "recording_media_index.h"
+#include <exosnap/engine/audio_limits.h>
+#include <exosnap/engine/recording_media_types.h>
 
 #include "annexb_to_avcc.h"
 #include "annexb_to_hvcc.h"
@@ -13,6 +16,7 @@
 #include "mux_queue.h"
 #include "pipeline_diagnostics_aggregator.h"
 #include "premux_state.h"
+#include "recording_audio_manifest.h"
 #include "session_internal.h"
 #include "split_sentinel_policy.h"
 
@@ -207,7 +211,9 @@ void MuxThread::Run() {
         // single-loopback-track path (see recorder_session.cpp) has no
         // ResolvedAudioTrack to name, so that track is left unnamed rather than
         // guessed at.
-        if (i < m_state.config.audio_track_plan.tracks.size()) {
+        if (m_state.config.resolved_audio_plan && i < m_state.config.resolved_audio_plan->tracks.size()) {
+            sw_config_template.audio_tracks[i].name = m_state.config.resolved_audio_plan->tracks[i].name;
+        } else if (i < m_state.config.audio_track_plan.tracks.size()) {
             sw_config_template.audio_tracks[i].name = DeriveAudioTrackName(m_state.config.audio_track_plan.tracks[i]);
         }
     }
@@ -225,6 +231,7 @@ void MuxThread::Run() {
     // --- Segment state ---
     struct SegmentState {
         std::unique_ptr<MatroskaStreamWriter> writer;
+        std::shared_ptr<const AudioManifest1> audio_manifest;
         std::filesystem::path path;
         uint32_t index = 0;
         // session PTS at which this segment began (epoch for segment-local rebasing)
@@ -234,6 +241,16 @@ void MuxThread::Run() {
         uint64_t max_local_pts_ns = 0;
     };
     SegmentState seg;
+    const auto recording_id = NewId<RecordingId>();
+    const uint64_t output_generation = m_state.file_output ? m_state.file_output->generation().value : 1;
+    auto journal_path = base_output_path;
+    journal_path += L".exosnap.index";
+    auto media_index = std::make_shared<RecordingMediaIndex>(journal_path);
+    auto commit_sequence = std::make_shared<std::atomic<uint64_t>>(0);
+    {
+        std::lock_guard lock(m_state.attachment_mutex);
+        m_state.media_index = media_index;
+    }
 
     bool write_error = false;
     bool any_segment_opened = false;
@@ -272,6 +289,31 @@ void MuxThread::Run() {
 
         MatroskaStreamConfig cfg = sw_config_template;
         cfg.output_path = seg.path.string();
+        if (m_state.config.resolved_audio_plan) {
+            auto manifest = BuildRecordingAudioManifest(*m_state.config.resolved_audio_plan, cfg, recording_id,
+                                                        epoch_session_pts_ns);
+            if (!manifest.succeeded()) {
+                m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Mux, manifest.error()->context);
+                seg.writer.reset();
+                return false;
+            }
+            cfg.audio_manifest = std::move(*manifest.value());
+        }
+        RecordingMediaDescriptor descriptor;
+        descriptor.recording_id = recording_id;
+        descriptor.writer_generation = output_generation;
+        descriptor.descriptor_revision = static_cast<uint64_t>(index) + 1;
+        descriptor.segment_origin_r_ns = static_cast<int64_t>(epoch_session_pts_ns);
+        descriptor.continuity_group = 1;
+        if (m_state.config.resolved_audio_plan)
+            descriptor.source_timeline_revision = m_state.config.resolved_audio_plan->revision.value;
+        cfg.media_descriptor = std::move(descriptor);
+        seg.audio_manifest = cfg.audio_manifest ? std::make_shared<const AudioManifest1>(*cfg.audio_manifest) : nullptr;
+        cfg.initial_commit_sequence = commit_sequence->load(std::memory_order_relaxed);
+        cfg.publish_committed = [media_index, commit_sequence](CommittedMediaReceipt receipt) {
+            commit_sequence->store(receipt.commit_sequence, std::memory_order_relaxed);
+            return media_index->PublishCommitted(std::move(receipt));
+        };
         cfg.fail_io = m_state.output_io_failure;
         // Only segment 0 keeps the base path the caller reserved; DeriveSegmentPath
         // mints every later one, so those are the writer's to create exclusively.
@@ -284,6 +326,7 @@ void MuxThread::Run() {
             return false;
         }
         any_segment_opened = true;
+        media_index->RegisterDescriptor(seg.writer->media_descriptor());
         m_state.diagnostics.OnSegmentOpened(index);
         diag_prev_bytes = 0;
         diag_prev_flush = 0;
@@ -341,6 +384,7 @@ void MuxThread::Run() {
         info.file_size_bytes = file_bytes;
         info.succeeded = ok;
         info.session_end = session_end;
+        info.audio_manifest = seg.audio_manifest;
 
         if (!ok) {
             write_error = true;
@@ -662,13 +706,13 @@ void MuxThread::Run() {
         // cppcheck-suppress identicalConditionAfterEarlyExit
         if (write_error)
             return;
-        // Open the next segment with epoch unset; push_video sets it from the
-        // first video packet (the forced keyframe that follows the sentinel).
+        // The keyframe boundary also freezes the origin in the immutable header
+        // and index descriptor before any segment media is published.
         m_state.diagnostics.OnSplitTransition(ToDiagnosticsSplitTrigger(s.trigger));
         // Reset size-split guard so the new segment can trigger if it also exceeds
         // the threshold.
         m_state.size_split_armed.store(false);
-        open_segment(s.new_segment_index, /*epoch*/ 0, /*epoch_set*/ false);
+        open_segment(s.new_segment_index, boundary_ns, true);
     };
 
     // A single dispatch for a queued MuxItem payload.

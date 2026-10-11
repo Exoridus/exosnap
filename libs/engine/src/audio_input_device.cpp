@@ -1,3 +1,4 @@
+#include <array>
 #include <cstddef>
 #include <exosnap/engine/audio_input_device.h>
 
@@ -59,21 +60,20 @@ std::vector<AudioInputDeviceInfo> EnumerateAudioEndpoints(EDataFlow flow) {
         return {};
     }
 
-    std::string default_device_id;
-    IMMDevice* default_device = nullptr;
-    LPWSTR default_id_wide = nullptr;
-    hr = enumerator->GetDefaultAudioEndpoint(flow, eConsole, &default_device);
-    if (SUCCEEDED(hr) && default_device != nullptr) {
-        hr = default_device->GetId(&default_id_wide);
-        if (SUCCEEDED(hr) && default_id_wide != nullptr) {
-            default_device_id = WideToUtf8(default_id_wide);
+    std::array<std::string, 3> default_device_ids;
+    for (size_t role = 0; role < default_device_ids.size(); ++role) {
+        IMMDevice* default_device = nullptr;
+        LPWSTR default_id_wide = nullptr;
+        hr = enumerator->GetDefaultAudioEndpoint(flow, static_cast<ERole>(role), &default_device);
+        if (SUCCEEDED(hr) && default_device != nullptr) {
+            hr = default_device->GetId(&default_id_wide);
+            if (SUCCEEDED(hr) && default_id_wide != nullptr)
+                default_device_ids[role] = WideToUtf8(default_id_wide);
         }
-    }
-    if (default_id_wide != nullptr) {
-        CoTaskMemFree(default_id_wide);
-    }
-    if (default_device != nullptr) {
-        default_device->Release();
+        if (default_id_wide != nullptr)
+            CoTaskMemFree(default_id_wide);
+        if (default_device != nullptr)
+            default_device->Release();
     }
 
     IMMDeviceCollection* collection = nullptr;
@@ -129,7 +129,10 @@ std::vector<AudioInputDeviceInfo> EnumerateAudioEndpoints(EDataFlow flow) {
         if (info.display_name.empty()) {
             info.display_name = info.device_id;
         }
-        info.is_default = !default_device_id.empty() && info.device_id == default_device_id;
+        for (size_t role = 0; role < default_device_ids.size(); ++role)
+            info.is_default_by_role[role] =
+                !default_device_ids[role].empty() && info.device_id == default_device_ids[role];
+        info.is_default = info.is_default_by_role[0];
 
         if (!info.device_id.empty()) {
             devices.push_back(std::move(info));

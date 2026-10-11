@@ -13,6 +13,7 @@
 // the real unplug remains a live/manual check (see PR description).
 
 #include "wasapi_loopback.h"
+#include <exosnap/engine/interfaces/IAudioCaptureSource.h>
 
 #include <Audioclient.h>
 #include <gtest/gtest.h>
@@ -61,3 +62,43 @@ TEST(WasapiLoopbackAcquire, UnexpectedHresultFailsClosed) {
 }
 
 } // namespace
+
+TEST(WasapiNativeFormat, PreservesFloatRateAndSurroundChannels) {
+    WAVEFORMATEX format{};
+    format.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+    format.nSamplesPerSec = 44100;
+    format.nChannels = 6;
+    format.wBitsPerSample = 32;
+    format.nBlockAlign = 24;
+    format.nAvgBytesPerSec = 44100 * 24;
+    const auto native = ClassifyNativeWasapiFormat(format);
+    ASSERT_TRUE(native);
+    EXPECT_EQ(native->sample_rate, 44100u);
+    EXPECT_EQ(native->channels, 6u);
+    EXPECT_EQ(native->sample_format, AudioSampleFormat::Float32);
+    format.nBlockAlign = 4;
+    EXPECT_FALSE(ClassifyNativeWasapiFormat(format));
+}
+
+TEST(WasapiNativeFormat, RejectsUnknownExtensibleGuidAndInvalidValidBits) {
+    WAVEFORMATEXTENSIBLE format{};
+    format.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    format.Format.cbSize = 22;
+    format.Format.nSamplesPerSec = 96000;
+    format.Format.nChannels = 2;
+    format.Format.wBitsPerSample = 16;
+    format.Format.nBlockAlign = 4;
+    format.Format.nAvgBytesPerSec = 384000;
+    format.Samples.wValidBitsPerSample = 16;
+    const GUID pcm = {1, 0, 0x0010, {0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71}};
+    format.SubFormat = pcm;
+    ASSERT_TRUE(ClassifyNativeWasapiFormat(format.Format));
+    format.SubFormat.Data4[7] ^= 1;
+    EXPECT_FALSE(ClassifyNativeWasapiFormat(format.Format));
+    format.SubFormat = pcm;
+    format.Samples.wValidBitsPerSample = 12;
+    EXPECT_FALSE(ClassifyNativeWasapiFormat(format.Format));
+    format.Samples.wValidBitsPerSample = 16;
+    format.Format.cbSize = 0;
+    EXPECT_FALSE(ClassifyNativeWasapiFormat(format.Format));
+}

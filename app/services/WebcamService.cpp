@@ -425,8 +425,8 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
             native_type->GetGUID(MF_MT_SUBTYPE, &native_subtype);
     }
     struct OutputCandidate {
-        GUID subtype;
-        exosnap::engine::WebcamPixelFormat format;
+        GUID subtype{};
+        exosnap::engine::WebcamPixelFormat format = exosnap::engine::WebcamPixelFormat::Nv12;
     };
     std::vector<OutputCandidate> outputs;
     if (NativeEncodingOf(native_subtype) == WebcamNativeEncoding::Yuy2)

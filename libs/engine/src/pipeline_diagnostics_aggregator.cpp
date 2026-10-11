@@ -4,6 +4,7 @@
 #include "exosnap/engine/recorder_session.h"
 #include "exosnap/engine/session_stats.h"
 #include "exosnap/engine/split_trigger_source.h"
+#include <exosnap/engine/audio_limits.h>
 
 #include <algorithm>
 #include <chrono>

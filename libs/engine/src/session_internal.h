@@ -1,4 +1,8 @@
 #pragma once
+#include "audio_runtime_graph.h"
+#include "file_output.h"
+#include "qpc_100ns.h"
+#include "recording_media_index.h"
 
 // Internal shared state for a live RecorderSession.
 // Not part of the public API.
@@ -37,8 +41,15 @@
 namespace exosnap::engine {
 
 enum class OutputIoOperation;
+class ProductionRuntime;
+class FileOutput;
 
 struct SessionState {
+    std::mutex attachment_mutex;
+    std::shared_ptr<AudioRuntimeGraph> audio_runtime_graph;
+    std::shared_ptr<ProductionRuntime> production_runtime;
+    std::shared_ptr<FileOutput> file_output;
+    std::shared_ptr<RecordingMediaIndex> media_index;
     std::function<bool(OutputIoOperation)> output_io_failure;
     SessionState() : stop_event(CreateEventW(nullptr, /*manual reset*/ TRUE, FALSE, nullptr)) {
     }
@@ -427,6 +438,22 @@ struct SessionState {
         // Before the flag, so no worker can observe the stop and start draining
         // while the instant that stop happened is still unrecorded.
         NoteCaptureEnded();
+        std::shared_ptr<FileOutput> output;
+        std::shared_ptr<AudioRuntimeGraph> graph;
+        {
+            std::lock_guard lock(attachment_mutex);
+            output = file_output;
+            graph = audio_runtime_graph;
+        }
+        if (output) {
+            LARGE_INTEGER ticks{}, frequency{};
+            QueryPerformanceCounter(&ticks);
+            QueryPerformanceFrequency(&frequency);
+            output->RequestStop(
+                {QpcTicksTo100ns(static_cast<uint64_t>(ticks.QuadPart), static_cast<uint64_t>(frequency.QuadPart))});
+            if (graph)
+                graph->RequestStop(output->end_qpc().value * 100);
+        }
         stop_requested.store(true);
         SignalStopEvent();
         premux.NotifyStop();

@@ -45,12 +45,16 @@ struct RemuxResult {
     int av_error_code = 0;
     std::string message;
 
+    // Newly created referenced files. Staging callers remove these on failed
+    // publication, preserving companions that existed before this operation.
+    std::vector<std::filesystem::path> created_metadata_companions;
+
     // Convenience factory methods.
     static RemuxResult Ok() {
-        return {true, 0, {}};
+        return {true, 0, {}, {}};
     }
     static RemuxResult Fail(int av_err, std::string msg) {
-        return {false, av_err, std::move(msg)};
+        return {false, av_err, std::move(msg), {}};
     }
 };
 

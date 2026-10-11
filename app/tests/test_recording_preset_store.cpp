@@ -2420,6 +2420,22 @@ TEST(RecordingPresetStore, ClearingWebcamControlsSurvivesSaveReload) {
     EXPECT_TRUE(reloaded.live->webcam.controls.empty());
 }
 
+TEST(RecordingPresetStore, LegacyLimiterProjectsBeforeUnrelatedSettingsEdits) {
+    auto audio = MakeDefaultPreset().config.audio;
+    auto intent = CreateLegacyAudioIntent(audio, engine::NewId<engine::PresetNamespaceId>());
+    intent.limiter = {false, -3.0f};
+    audio.limiter_enabled = true;
+    audio.limiter_ceiling_db = 0;
+    ProjectLegacyAudioIntent(intent, audio);
+    EXPECT_FALSE(audio.limiter_enabled);
+    EXPECT_FLOAT_EQ(audio.limiter_ceiling_db, -3.0f);
+    audio.mic_gain_linear = 0.5f;
+    const auto edited = SynchronizeLegacyAudioRows(intent, audio);
+    ASSERT_TRUE(edited.succeeded());
+    EXPECT_FALSE(edited.value()->limiter.enabled);
+    EXPECT_FLOAT_EQ(edited.value()->limiter.ceiling_db, -3.0f);
+}
+
 TEST(RecordingPresetStore, ClearingNativeOptionalSourceFieldsSurvivesSaveReload) {
     const QString path = UniqueTempPath();
     RecordingPresetStore store(path);

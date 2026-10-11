@@ -42,7 +42,7 @@ A worker that outlives a bounded join must retain everything it can still access
 
 ## Cross-cutting invariants
 
-There is one owner for each policy. The source rows are editable inputs, the resolved tracks are engine results, and neither is reconstructed in JavaScript. Hardware availability is measured, not inferred from a product name. Unknown metrics remain unavailable rather than becoming zero. Files become final only after the operation that makes them valid succeeds. An update offer, its signed manifest, its installed version and its release notes refer to the same target.
+There is one owner for each policy. Typed source/track/route intents are editable inputs and resolved tracks are engine results; neither is reconstructed in JavaScript. Legacy row configuration remains an explicit compatibility variant. Hardware availability is measured, not inferred from a product name. Unknown metrics remain unavailable rather than becoming zero. Files become final only after the operation that makes them valid succeeds. An update offer, its signed manifest, its installed version and its release notes refer to the same target.
 
 Errors cross boundaries as typed outcomes with a phase and actionable detail. A diagnostic notice is not a blocker. A verification infrastructure error is not a product failure. A UI indication that a command was accepted is not evidence that an asynchronous operation completed.
 

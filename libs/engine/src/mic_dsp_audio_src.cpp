@@ -4,6 +4,7 @@
 #include "high_pass_filter.h"
 #include "noise_gate.h"
 #include "rnnoise_denoiser.h"
+#include <exosnap/engine/mic_dsp_config.h>
 
 #include <algorithm>
 #include <cstddef>

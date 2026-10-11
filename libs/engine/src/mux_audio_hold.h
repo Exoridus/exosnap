@@ -25,7 +25,7 @@ class MuxAudioHold {
     };
 
     MuxAudioHold() = default;
-    explicit MuxAudioHold(Limits limits) : limits_(limits) {
+    explicit MuxAudioHold(const Limits& limits) : limits_(limits) {
     }
 
     bool Push(EncodedAudioPacket packet) {

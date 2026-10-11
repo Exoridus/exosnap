@@ -16,6 +16,7 @@ namespace exosnap::engine {
 class IAudioEncoder;
 class MixedAudioSrc;
 class OutputFormatAudioSrc;
+class AudioRuntimeTrackSource;
 
 // Ownership contract (shared by all session workers): the object must be owned
 // by a std::shared_ptr, and Start() hands the running thread a shared_ptr to
@@ -67,6 +68,7 @@ class AudioThread : public std::enable_shared_from_this<AudioThread> {
     // OutputFormatAudioSrc wrapper hides it. Null for a bare single source,
     // which the encode loop mutes by feeding silence instead.
     MixedAudioSrc* const mixed_src_;
+    AudioRuntimeTrackSource* const runtime_track_;
     uint32_t track_id_ = 0;
     // Set once the measured audio zero point (the QPC instant of the first
     // captured sample) has been published for this track. A source that never

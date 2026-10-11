@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <gtest/gtest.h>
 
+#include <exosnap/engine/audio_limits.h>
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/recorder_session.h>
 
@@ -131,10 +132,8 @@ TEST(AudioSourceSemanticsTest, Validate_RejectsTooManyTracks_RecordAudioTrue) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidBaseConfig();
     cfg.record_audio = true;
-    cfg.audio_track_plan.tracks.push_back(MakeTrack(0, {AudioSourceKind::Mic}));
-    cfg.audio_track_plan.tracks.push_back(MakeTrack(1, {AudioSourceKind::Mic}));
-    cfg.audio_track_plan.tracks.push_back(MakeTrack(2, {AudioSourceKind::Mic}));
-    cfg.audio_track_plan.tracks.push_back(MakeTrack(3, {AudioSourceKind::Mic}));
+    for (uint32_t index = 0; index <= exosnap::engine::kMaxAudioTracks; ++index)
+        cfg.audio_track_plan.tracks.push_back(MakeTrack(index, {AudioSourceKind::Mic}));
 
     RecorderResult validation{};
     EXPECT_FALSE(session.Validate(cfg, &validation));

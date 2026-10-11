@@ -4,8 +4,10 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <QThread>
 #include <QTimer>
+#include <QVariantList>
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <exosnap/engine/edit_player_session.h>
@@ -72,6 +74,8 @@ class EditPlayerAdapter : public QObject {
     // FACT is the shell's, the POLICY is here.
     Q_PROPERTY(bool surfaceVisible READ surfaceVisible WRITE setSurfaceVisible NOTIFY surfaceVisibleChanged FINAL)
     Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY volumeChanged FINAL)
+    Q_PROPERTY(QVariantList monitoringTracks READ monitoringTracks NOTIFY monitoringChanged FINAL)
+    Q_PROPERTY(bool monitoringConfirmationRequired READ monitoringConfirmationRequired NOTIFY monitoringChanged FINAL)
 
   public:
     explicit EditPlayerAdapter(QObject* parent = nullptr);
@@ -102,6 +106,14 @@ class EditPlayerAdapter : public QObject {
 
     Q_INVOKABLE void togglePlay();
     Q_INVOKABLE void setPlaying(bool playing);
+    Q_INVOKABLE void confirmMonitoring(QStringList trackIds, bool overlapConfirmed);
+    QVariantList monitoringTracks() const {
+        return monitoring_tracks_;
+    }
+    bool monitoringConfirmationRequired() const {
+        return monitoring_confirmation_required_;
+    }
+    void setMonitoringState(QVariantList tracks, bool confirmationRequired);
     // Scrubbing pauses; whether it resumes on release depends on whether the
     // preview was playing when the scrub began.
     Q_INVOKABLE void beginScrub();
@@ -120,6 +132,7 @@ class EditPlayerAdapter : public QObject {
     void placeholderTextChanged();
     void surfaceVisibleChanged();
     void volumeChanged();
+    void monitoringChanged();
 
   private:
     void openClip(const QString& master_path, qint64 duration_ms);
@@ -144,6 +157,9 @@ class EditPlayerAdapter : public QObject {
     bool surface_visible_ = true;
     double volume_ = 1.0;
     std::vector<edit::Clip> timeline_clips_;
+    uint64_t timeline_monitoring_revision_ = 0;
+    QVariantList monitoring_tracks_;
+    bool monitoring_confirmation_required_ = false;
 };
 
 } // namespace exosnap::quick

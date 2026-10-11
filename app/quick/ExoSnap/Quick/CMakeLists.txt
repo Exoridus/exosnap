@@ -137,6 +137,8 @@ qt_add_qml_module(exosnap
         SettingsAppearanceSection.qml
         SettingsAudioEncodingSection.qml
         SettingsAudioSourcesSection.qml
+        AudioTrackCard.qml
+        AudioRoutingPanel.qml
         SettingsAudioSourceRow.qml
         SettingsAudioTrackLedger.qml
         SettingsMicrophoneSection.qml
@@ -238,6 +240,8 @@ qt_add_qml_module(exosnap
         QuickWheelMetrics.h
         SettingsAdapter.cpp
         SettingsAdapter.h
+        AudioRoutingAdapter.cpp
+        AudioRoutingAdapter.h
         ShellAdapter.cpp
         ShellAdapter.h
         WhatsNewAdapter.cpp
@@ -347,6 +351,8 @@ target_sources(exosnap
         # read or written.
         SettingsAutomationKeys.cpp
         SettingsAutomationKeys.h
+        AudioRoutingAdapter.cpp
+        AudioRoutingAdapter.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
@@ -1192,6 +1198,8 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditActionButton.qml
         EditTimelineRuler.qml
         ExoButton.qml
+        ExoCard.qml
+        ExoCheckBox.qml
         ExoNavTab.qml
         ExoSelect.qml
         ExoChevron.qml
@@ -1450,6 +1458,8 @@ exosnap_add_gtest(
     TEST_PREFIX quick_settings_adapter.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_settings_adapter.cpp
+        AudioRoutingAdapter.cpp
+        AudioRoutingAdapter.h
         # The automation key table lives with the adapter it binds to, so a
         # renamed setter is a compile error in both at once.
         ${EXOSNAP_QUICK_TESTS_DIR}/test_settings_automation_keys.cpp

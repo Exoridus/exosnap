@@ -1,4 +1,7 @@
 #include "wasapi_loopback.h"
+#include <exosnap/engine/interfaces/IAudioCaptureSource.h>
+#include <optional>
+#include <string>
 
 // ClassifyWasapiAcquireFailure/WasapiAcquireFailAction — the shared WASAPI
 // acquire fail-closed policy this mirrors (see wasapi_capture_src.h).
@@ -12,12 +15,88 @@
 #include <initguid.h>
 
 #include <cstdio>
+#include <wrl/client.h>
 
 namespace exosnap::engine {
+
+namespace {
+HRESULT SelectRenderEndpoint(IMMDeviceEnumerator* enumerator, const std::optional<std::string>& id,
+                             IMMDevice** device) {
+    if (!id)
+        return enumerator->GetDefaultAudioEndpoint(eRender, eConsole, device);
+    if (id->empty() || id->size() > 32768)
+        return E_INVALIDARG;
+    const int count =
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, id->data(), static_cast<int>(id->size()), nullptr, 0);
+    if (count <= 0)
+        return E_INVALIDARG;
+    std::wstring wide(static_cast<size_t>(count), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, id->data(), static_cast<int>(id->size()), wide.data(),
+                            count) != count)
+        return E_INVALIDARG;
+    return enumerator->GetDevice(wide.c_str(), device);
+}
+} // namespace
+
+bool DescribeNativePlaybackFormat(const std::optional<std::string>& endpoint_id, WasapiNativeFormat& format,
+                                  std::string& out_error) {
+    Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
+    Microsoft::WRL::ComPtr<IMMDevice> device;
+    Microsoft::WRL::ComPtr<IAudioClient> client;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    if (SUCCEEDED(hr))
+        hr = SelectRenderEndpoint(enumerator.Get(), endpoint_id, device.GetAddressOf());
+    if (SUCCEEDED(hr))
+        hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                              reinterpret_cast<void**>(client.GetAddressOf()));
+    WAVEFORMATEX* wave = nullptr;
+    if (SUCCEEDED(hr))
+        hr = client->GetMixFormat(&wave);
+    const auto result = SUCCEEDED(hr) && wave ? ClassifyNativeWasapiFormat(*wave) : std::nullopt;
+    CoTaskMemFree(wave);
+    if (!result) {
+        out_error = "Playback native mix format is unavailable or unsupported";
+        return false;
+    }
+    format = *result;
+    out_error.clear();
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // ClassifyLoopbackAcquire
 // ---------------------------------------------------------------------------
+
+std::optional<WasapiNativeFormat> ClassifyNativeWasapiFormat(const WAVEFORMATEX& format) {
+    WORD tag = format.wFormatTag;
+    if (tag == WAVE_FORMAT_EXTENSIBLE) {
+        if (format.cbSize < sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX))
+            return std::nullopt;
+        const auto& extended = reinterpret_cast<const WAVEFORMATEXTENSIBLE&>(format);
+        const GUID pcm = {1, 0, 0x0010, {0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71}};
+        const GUID floating = {3, 0, 0x0010, {0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71}};
+        if (IsEqualGUID(extended.SubFormat, pcm))
+            tag = WAVE_FORMAT_PCM;
+        else if (IsEqualGUID(extended.SubFormat, floating))
+            tag = WAVE_FORMAT_IEEE_FLOAT;
+        else
+            return std::nullopt;
+        if (extended.Samples.wValidBitsPerSample != 0 && extended.Samples.wValidBitsPerSample != format.wBitsPerSample)
+            return std::nullopt;
+    }
+    AudioSampleFormat kind;
+    if (tag == WAVE_FORMAT_IEEE_FLOAT && format.wBitsPerSample == 32)
+        kind = AudioSampleFormat::Float32;
+    else if (tag == WAVE_FORMAT_PCM && format.wBitsPerSample == 16)
+        kind = AudioSampleFormat::Int16;
+    else
+        return std::nullopt;
+    if (format.nSamplesPerSec < 8000 || format.nSamplesPerSec > 192000 || format.nChannels == 0 ||
+        format.nChannels > 8 || format.nBlockAlign != format.nChannels * (format.wBitsPerSample / 8) ||
+        format.nAvgBytesPerSec != format.nSamplesPerSec * format.nBlockAlign)
+        return std::nullopt;
+    return WasapiNativeFormat{format.nSamplesPerSec, format.nChannels, kind};
+}
 
 LoopbackAcquireResult ClassifyLoopbackAcquire(const char* api_name, HRESULT hr) {
     LoopbackAcquireResult result;
@@ -54,7 +133,7 @@ WasapiLoopback::~WasapiLoopback() {
 // Init — lifted from M2.8 probe Phase11
 // ---------------------------------------------------------------------------
 
-bool WasapiLoopback::Init(std::string& out_error) {
+bool WasapiLoopback::Init(std::string& out_error, const std::optional<std::string>& endpoint_id, bool native_format) {
     constexpr uint32_t kRequiredSampleRate = 48000;
     constexpr uint32_t kRequiredChannels = 2;
     constexpr LONGLONG kHnsBuffer = 2000000LL; // 200 ms
@@ -74,7 +153,7 @@ bool WasapiLoopback::Init(std::string& out_error) {
         return false;
     }
 
-    hr = pEnum->GetDefaultAudioEndpoint(eRender, eConsole, &m_pDevice);
+    hr = SelectRenderEndpoint(pEnum, endpoint_id, &m_pDevice);
     pEnum->Release();
     if (FAILED(hr)) {
         char buf[80];
@@ -132,10 +211,25 @@ bool WasapiLoopback::Init(std::string& out_error) {
     fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * fmt.nBlockAlign;
     fmt.cbSize = 0;
 
-    hr = m_pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,
-                                    AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
-                                        AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-                                    kHnsBuffer, 0, &fmt, nullptr);
+    WAVEFORMATEX* native = nullptr;
+    format_ = {kRequiredSampleRate, kRequiredChannels, AudioSampleFormat::Float32};
+    if (native_format) {
+        hr = m_pAudioClient->GetMixFormat(&native);
+        const auto resolved = SUCCEEDED(hr) && native ? ClassifyNativeWasapiFormat(*native) : std::nullopt;
+        if (!resolved) {
+            CoTaskMemFree(native);
+            out_error = "Playback native mix format is unavailable or unsupported";
+            Shutdown();
+            return false;
+        }
+        format_ = *resolved;
+    }
+    const DWORD flags =
+        AUDCLNT_STREAMFLAGS_LOOPBACK |
+        (native_format ? 0 : AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY);
+    hr = m_pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, kHnsBuffer, 0, native_format ? native : &fmt,
+                                    nullptr);
+    CoTaskMemFree(native);
     if (FAILED(hr)) {
         char buf[80];
         snprintf(buf, sizeof(buf), "IAudioClient::Initialize(LOOPBACK) 0x%08lX", static_cast<unsigned long>(hr));

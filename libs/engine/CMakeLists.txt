@@ -15,6 +15,10 @@ if(NOT EXISTS "${_nvenc_header}")
         src/recording_media_index.cpp
         src/audio_routing_model.cpp
         src/audio_routing_resolver.cpp
+        src/audio_tee.cpp
+        src/audio_tee.h
+        src/shared_audio_capture.cpp
+        src/shared_audio_capture.h
         include/exosnap/engine/capture_hub_policy.h
         src/capture_hub_policy.cpp
         src/codec_private.cpp
@@ -380,6 +384,22 @@ add_library(exosnap_engine STATIC
     src/recording_media_index.cpp
     src/audio_routing_model.cpp
     src/audio_routing_resolver.cpp
+    src/runtime_config_key.cpp
+    src/audio_runtime_graph.cpp
+    src/audio_media_manifest.cpp
+    src/media_identity_sidecar.cpp
+    src/production_runtime.cpp
+    src/production_runtime.h
+    src/file_output.cpp
+    src/file_output.h
+    src/audio_tee.cpp
+    src/audio_tee.h
+    src/shared_audio_capture.cpp
+    src/shared_audio_capture.h
+    src/logical_audio_source.cpp
+    src/logical_audio_source.h
+    src/track_audio_mixer.cpp
+    src/track_audio_mixer.h
     include/exosnap/engine/capture_hub_policy.h
     src/capture_hub_policy.cpp
     src/mic_meter_service.cpp
@@ -397,6 +417,7 @@ add_library(exosnap_engine STATIC
     src/edit_timeline_compositor.cpp
     src/edit_timeline_reader.cpp
     src/edit_timeline_render.cpp
+    src/render_audio_manifest.cpp
     src/edit_audio_mix.h
     src/edit_audio_mix.cpp
     src/edit_playback_pacing.h
@@ -1849,3 +1870,59 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine EBML::ebml Matroska::matroska FFmpeg::mux
 )
 target_include_directories(test_committed_media_read PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_audio_tee
+    TEST_PREFIX engine.
+    SOURCES tests/test_audio_tee.cpp tests/test_physical_audio_clock.cpp
+    LIBRARIES exosnap_engine FFmpeg::swresample ole32.lib
+)
+target_include_directories(test_audio_tee PRIVATE src)
+target_compile_definitions(test_audio_tee PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME test_production_runtime_lifetime
+    TEST_PREFIX engine.
+    SOURCES tests/test_production_runtime_lifetime.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_production_runtime_lifetime PRIVATE src)
+target_compile_definitions(test_production_runtime_lifetime PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME test_audio_source_routes
+    TEST_PREFIX engine.
+    SOURCES tests/test_audio_source_routes.cpp
+    LIBRARIES exosnap_engine FFmpeg::swresample
+)
+target_include_directories(test_audio_source_routes PRIVATE src)
+target_compile_definitions(test_audio_source_routes PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME test_audio_metadata_roundtrip
+    TEST_PREFIX engine.
+    SOURCES tests/test_audio_metadata_roundtrip.cpp
+    LIBRARIES exosnap_engine EBML::ebml Matroska::matroska FFmpeg::mux
+)
+target_include_directories(test_audio_metadata_roundtrip PRIVATE src)
+target_link_libraries(test_audio_metadata_roundtrip PRIVATE nlohmann_json::nlohmann_json)
+target_compile_definitions(test_audio_metadata_roundtrip PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME test_render_audio_manifest
+    TEST_PREFIX engine.
+    SOURCES tests/test_render_audio_manifest.cpp
+    LIBRARIES exosnap_engine FFmpeg::mux
+)
+target_include_directories(test_render_audio_manifest PRIVATE src)
+target_compile_definitions(test_render_audio_manifest PRIVATE NOMINMAX)
+set_tests_properties(engine.test_render_audio_manifest PROPERTIES ENVIRONMENT "EXOSNAP_EDIT_SOFTWARE_DECODE=1")
+
+exosnap_add_gtest(
+    NAME test_audio_runtime_graph
+    TEST_PREFIX engine.
+    SOURCES tests/test_audio_runtime_graph.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(test_audio_runtime_graph PRIVATE src)
+target_compile_definitions(test_audio_runtime_graph PRIVATE NOMINMAX)

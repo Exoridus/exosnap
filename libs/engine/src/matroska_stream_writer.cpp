@@ -1,7 +1,11 @@
 #include "matroska_stream_writer.h"
+#include "audio_media_manifest_adapter.h"
 #include "matroska_packet_timestamps.h"
 #include <atomic>
 #include <cstdint>
+#include <exosnap/engine/audio_limits.h>
+#include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/recording_media_types.h>
 #include <functional>
 #include <iterator>
 #include <limits>
@@ -287,6 +291,13 @@ bool MatroskaStreamWriter::InitializeMediaDescriptor() {
     try {
         auto descriptor =
             std::make_shared<RecordingMediaDescriptor>(m_config.media_descriptor.value_or(RecordingMediaDescriptor{}));
+        if (m_config.audio_manifest) {
+            descriptor->recording_id = m_config.audio_manifest->recording_id;
+            descriptor->segment_id = m_config.audio_manifest->segment_id;
+            descriptor->media_id = m_config.audio_manifest->media_id;
+            descriptor->segment_origin_r_ns = m_config.audio_manifest->segment_origin_r_ns;
+            descriptor->continuity_group = m_config.audio_manifest->continuity_group;
+        }
         if (descriptor->recording_id == RecordingId{})
             descriptor->recording_id = NewId<RecordingId>();
         if (descriptor->segment_id == SegmentId{})
@@ -323,10 +334,18 @@ bool MatroskaStreamWriter::InitializeMediaDescriptor() {
                            m_config.audio_sample_rate,
                            m_config.audio_channels,
                            m_config.audio_bit_depth,
-                           m_config.audio_tracks[index].codec_delay_samples};
+                           m_config.audio_tracks[index].codec_delay_samples,
+                           DefaultAudioChannelLayout(m_config.audio_channels)};
+            if (m_config.audio_codec == StreamAudioCodec::Aac || m_config.audio_codec == StreamAudioCodec::Opus)
+                track.codec.bit_depth = 0;
             if (m_config.audio_codec == StreamAudioCodec::Opus && track.codec.codec_private.size() >= 12)
                 track.codec.codec_delay_samples = static_cast<uint32_t>(track.codec.codec_private[10]) |
                                                   (static_cast<uint32_t>(track.codec.codec_private[11]) << 8);
+        }
+        if (m_config.audio_manifest) {
+            for (const auto& track : m_config.audio_manifest->tracks)
+                descriptor->audio_tracks[track.container.stream_index.value] = track.container;
+            descriptor->default_monitor_track_ids = m_config.audio_manifest->default_monitor_track_ids;
         }
         descriptor->immutable_header = m_io->TakeHeader();
         if (descriptor->immutable_header.empty() || !m_io->GetIdentity(descriptor->file_identity)) {
@@ -414,6 +433,49 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
         config.reorder_window_max_bytes == 0) {
         Fail("Invalid audio track count or reorder budget");
         return false;
+    }
+    if (config.audio_manifest) {
+        const auto valid = ValidateAudioManifest1(*config.audio_manifest);
+        if (!valid.succeeded() || config.audio_manifest->tracks.size() != config.audio_track_count) {
+            Fail("Invalid audio manifest or track count");
+            return false;
+        }
+        const auto& manifest = *config.audio_manifest;
+        if (config.media_descriptor && ((config.media_descriptor->recording_id != RecordingId{} &&
+                                         config.media_descriptor->recording_id != manifest.recording_id) ||
+                                        (config.media_descriptor->segment_id != SegmentId{} &&
+                                         config.media_descriptor->segment_id != manifest.segment_id) ||
+                                        (config.media_descriptor->media_id != MediaId{} &&
+                                         config.media_descriptor->media_id != manifest.media_id))) {
+            Fail("Audio manifest contradicts the media descriptor identity");
+            return false;
+        }
+        for (const auto& track : manifest.tracks) {
+            const auto index = track.container.stream_index.value;
+            const char* codec = config.audio_codec == StreamAudioCodec::Opus   ? "A_OPUS"
+                                : config.audio_codec == StreamAudioCodec::Aac  ? "A_AAC"
+                                : config.audio_codec == StreamAudioCodec::Flac ? "A_FLAC"
+                                : config.audio_float                           ? "A_PCM/FLOAT/IEEE"
+                                                                               : "A_PCM/INT/LIT";
+            uint32_t delay = config.audio_tracks[index].codec_delay_samples;
+            if (config.audio_codec == StreamAudioCodec::Opus && config.audio_tracks[index].codec_private.size() >= 12)
+                delay = config.audio_tracks[index].codec_private[10] |
+                        (static_cast<uint32_t>(config.audio_tracks[index].codec_private[11]) << 8);
+            if (track.container.track_uid != index + 2 || track.container.name != config.audio_tracks[index].name ||
+                track.container.codec.codec_id != codec ||
+                track.container.codec.codec_private != config.audio_tracks[index].codec_private ||
+                track.container.codec.sample_rate != config.audio_sample_rate ||
+                track.container.codec.channels != config.audio_channels ||
+                track.container.codec.bit_depth !=
+                    ((config.audio_codec == StreamAudioCodec::Aac || config.audio_codec == StreamAudioCodec::Opus)
+                         ? 0
+                         : config.audio_bit_depth) ||
+                track.container.codec.channel_layout != DefaultAudioChannelLayout(config.audio_channels) ||
+                track.container.codec.codec_delay_samples != delay) {
+                Fail("Audio manifest contradicts the configured container tracks");
+                return false;
+            }
+        }
     }
 
     // --- Open output file ---
@@ -678,12 +740,46 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
             if (m_config.audio_codec == StreamAudioCodec::Pcm || m_config.audio_codec == StreamAudioCodec::Flac) {
                 libebml::GetChild<libmatroska::KaxAudioBitDepth>(as).SetValue(m_config.audio_bit_depth);
             }
+            if (m_config.audio_manifest && !m_config.webm) {
+                libebml::GetChild<libmatroska::KaxMaxBlockAdditionID>(aud).SetValue(kPacketTimestampBlockId);
+                auto& timestamps = libebml::GetChild<libmatroska::KaxBlockAdditionMapping>(aud);
+                libebml::GetChild<libmatroska::KaxBlockAddIDValue>(timestamps).SetValue(kPacketTimestampBlockId);
+                libebml::GetChild<libmatroska::KaxBlockAddIDType>(timestamps).SetValue(kPacketTimestampMappingType);
+                libebml::GetChild<libmatroska::KaxBlockAddIDName>(timestamps).SetValue("ExoSnap packet timestamps v1");
+            }
             aud.SetGlobalTimecodeScale(kTimecodeScaleNs);
             m_track_entries.push_back(&aud);
         }
 
         // bSaveDefault=false avoids rendering deprecated KaxTrackTimecodeScale.
         m_tracks->Render(*m_io);
+        if (m_config.audio_manifest && !m_config.webm) {
+            const auto serialized = SerializeAudioManifest1(*m_config.audio_manifest);
+            if (!serialized.succeeded())
+                throw std::runtime_error("Cannot serialize audio manifest");
+            libmatroska::KaxTags tags;
+            auto& global = libebml::AddNewChild<libmatroska::KaxTag>(tags);
+            libebml::GetChild<libmatroska::KaxTagTargets>(global);
+            const auto add_tag = [](libmatroska::KaxTag& tag, const char* name, const std::string& value) {
+                auto& simple = libebml::AddNewChild<libmatroska::KaxTagSimple>(tag);
+                libebml::GetChild<libmatroska::KaxTagName>(simple).SetValueUTF8(name);
+                libebml::GetChild<libmatroska::KaxTagString>(simple).SetValueUTF8(value);
+            };
+            add_tag(global, "EXOSNAP_AUDIO_MANIFEST", *serialized.value());
+            for (const auto& track : m_config.audio_manifest->tracks) {
+                auto& tag = libebml::AddNewChild<libmatroska::KaxTag>(tags);
+                auto& target = libebml::GetChild<libmatroska::KaxTagTargets>(tag);
+                libebml::GetChild<libmatroska::KaxTagTrackUID>(target).SetValue(track.container.track_uid);
+                add_tag(tag, "EXOSNAP_TRACK_ID", ToUuid(track.container.track_id));
+                add_tag(tag, "EXOSNAP_ROLE", track.container.role);
+                const auto provenance =
+                    SerializeAudioTrackProvenance(*m_config.audio_manifest, track.container.track_id);
+                if (!provenance.succeeded())
+                    throw std::runtime_error("Cannot serialize audio track provenance");
+                add_tag(tag, "EXOSNAP_PROVENANCE", *provenance.value());
+            }
+            tags.Render(*m_io);
+        }
 
         // --- Cues accumulator (entries added incrementally per keyframe). ---
         m_cues = std::make_unique<libmatroska::KaxCues>();
@@ -814,7 +910,10 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
 
         auto* data_buf = new libmatroska::DataBuffer(stored.data(), static_cast<uint32_t>(stored.size()));
         libebml::EbmlElement* rendered_block = nullptr;
-        if (e.track_num == 1 && e.dts_ns) {
+        const bool exact_audio = e.track_num > 1 && m_config.audio_manifest && !m_config.webm;
+        if (exact_audio && e.pts_ns > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()))
+            throw std::overflow_error("Audio timestamp exceeds the signed timestamp domain");
+        if ((e.track_num == 1 && e.dts_ns) || exact_audio) {
             auto& group = libebml::AddNewChild<libmatroska::KaxBlockGroup>(*m_cluster);
             rendered_block = &group;
             group.SetParent(*m_cluster);
@@ -824,13 +923,14 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
                 // unknown. Omitting ReferenceBlock would mark this as a keyframe.
                 libebml::GetChild<libmatroska::KaxReferenceBlock>(group).SetReferencedTimecode(0);
             }
-            if (m_config.frame_rate_num > 0 && m_config.frame_rate_den > 0)
+            if (e.track_num == 1 && m_config.frame_rate_num > 0 && m_config.frame_rate_den > 0)
                 group.SetBlockDuration(static_cast<uint64_t>(m_config.frame_rate_den) * 1000000000ULL /
                                        m_config.frame_rate_num);
             auto& additions = libebml::GetChild<libmatroska::KaxBlockAdditions>(group);
             auto& more = libebml::GetChild<libmatroska::KaxBlockMore>(additions);
             libebml::GetChild<libmatroska::KaxBlockAddID>(more).SetValue(kPacketTimestampBlockId);
-            const auto timestamps = EncodeMatroskaPacketTimestamps(e.pts_ns, *e.dts_ns);
+            const auto timestamps =
+                EncodeMatroskaPacketTimestamps(e.pts_ns, e.dts_ns.value_or(static_cast<int64_t>(e.pts_ns)));
             libebml::GetChild<libmatroska::KaxBlockAdditional>(more).CopyBuffer(
                 timestamps.data(), static_cast<uint32_t>(timestamps.size()));
         } else {

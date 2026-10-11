@@ -1031,6 +1031,20 @@ exosnap_add_gtest(
 target_include_directories(recording_preset_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_store_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
+exosnap_add_gtest(
+    NAME audio_routing_adapter_tests
+    TEST_PREFIX audio.
+    SOURCES tests/test_audio_routing_adapter.cpp
+            quick/ExoSnap/Quick/AudioRoutingAdapter.cpp
+            quick/ExoSnap/Quick/AudioRoutingAdapter.h
+            settings/RecordingPresetStore.cpp
+            models/RecordingPreset.cpp
+            models/AudioRoutingMigration.cpp
+            models/OutputSettingsModel.cpp
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core Qt6::Qml)
+target_include_directories(audio_routing_adapter_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(audio_routing_adapter_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
+
 # PRESET-EXPORT-IMPORT-R1 tests
 exosnap_add_gtest(
     NAME preset_export_import_tests

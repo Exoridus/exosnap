@@ -1,8 +1,12 @@
 #include "exosnap/engine/edit_timeline_export.h"
 #include <capability/translatable.h>
+#include <exosnap/engine/audio_media_manifest.h>
 
+#include "audio_media_manifest_adapter.h"
 #include "exosnap/engine/mp4_remuxer.h"
 #include "matroska_packet_timestamps.h"
+#include "matroska_stream_writer.h"
+#include "media_identity_sidecar.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -16,11 +20,13 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <system_error>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavcodec/codec.h>
+#include <libavcodec/codec_id.h>
 #include <libavcodec/codec_par.h>
 #include <libavcodec/defs.h>
 #include <libavcodec/packet.h>
@@ -31,6 +37,7 @@ extern "C" {
 #include <libavutil/dict.h>
 #include <libavutil/error.h>
 #include <libavutil/frame.h>
+#include <libavutil/macros.h>
 #include <libavutil/mathematics.h>
 #include <libavutil/pixfmt.h>
 #include <libavutil/rational.h>
@@ -53,6 +60,8 @@ std::string AvError(int code) {
 }
 
 struct Input {
+    std::shared_ptr<void> media_read_lease;
+    AudioMetadataReadResult metadata;
     AVFormatContext* context = nullptr;
     ~Input() {
         avformat_close_input(&context);
@@ -61,10 +70,102 @@ struct Input {
     Input(const Input&) = delete;
     Input& operator=(const Input&) = delete;
     int Open(const std::filesystem::path& source) {
+        auto lease = AcquireMediaReadLease(source);
+        if (!lease.succeeded())
+            return AVERROR(EACCES);
+        media_read_lease = std::move(*lease.value());
         int result = avformat_open_input(&context, Utf8Path(source).c_str(), nullptr, nullptr);
-        return result < 0 ? result : avformat_find_stream_info(context, nullptr);
+        if (result < 0 || (result = avformat_find_stream_info(context, nullptr)) < 0)
+            return result;
+        metadata = ReadAudioMediaMetadata(source, context);
+        return result;
     }
 };
+
+bool SemanticStreamMap(const Input& source, const Input& reference, std::vector<unsigned>& mapping) {
+    if (source.context->nb_streams != reference.context->nb_streams)
+        return false;
+    mapping.resize(source.context->nb_streams);
+    const auto& source_binding = source.metadata.unverified_asset_binding;
+    const auto& reference_binding = reference.metadata.unverified_asset_binding;
+    if (source_binding && reference_binding && source_binding->file_identity == reference_binding->file_identity &&
+        source_binding->file_size == reference_binding->file_size &&
+        source_binding->sha256 == reference_binding->sha256) {
+        // Ordinals are unambiguous only within the same leased immutable asset.
+        for (unsigned index = 0; index < source.context->nb_streams; ++index) {
+            if (source.context->streams[index]->codecpar->codec_type !=
+                reference.context->streams[index]->codecpar->codec_type)
+                return false;
+            mapping[index] = index;
+        }
+        return true;
+    }
+    std::vector<unsigned> reference_audio;
+    std::vector<unsigned> reference_video;
+    for (unsigned i = 0; i < reference.context->nb_streams; ++i) {
+        const auto type = reference.context->streams[i]->codecpar->codec_type;
+        if (type == AVMEDIA_TYPE_AUDIO)
+            reference_audio.push_back(i);
+        else if (type == AVMEDIA_TYPE_VIDEO)
+            reference_video.push_back(i);
+        else
+            return false;
+    }
+    if (!reference_audio.empty() && (source.metadata.status != AudioMetadataStatus::Verified ||
+                                     reference.metadata.status != AudioMetadataStatus::Verified ||
+                                     !source.metadata.manifest || !reference.metadata.manifest))
+        return false;
+    size_t audio = 0;
+    size_t video = 0;
+    std::vector<bool> used(mapping.size(), false);
+    for (unsigned i = 0; i < source.context->nb_streams; ++i) {
+        const auto type = source.context->streams[i]->codecpar->codec_type;
+        unsigned destination = 0;
+        if (type == AVMEDIA_TYPE_AUDIO) {
+            if (!source.metadata.manifest || !reference.metadata.manifest)
+                return false;
+            const auto& source_tracks = source.metadata.manifest->tracks;
+            const auto found = std::find_if(source_tracks.begin(), source_tracks.end(), [audio](const auto& track) {
+                return track.container.stream_index.value == audio;
+            });
+            if (found == source_tracks.end())
+                return false;
+            const auto& reference_tracks = reference.metadata.manifest->tracks;
+            const auto target = std::find_if(reference_tracks.begin(), reference_tracks.end(), [&](const auto& track) {
+                return track.container.track_id == found->container.track_id;
+            });
+            if (target == reference_tracks.end() || target->container.stream_index.value >= reference_audio.size())
+                return false;
+            auto normalized = *source.metadata.manifest;
+            for (auto& track : normalized.tracks) {
+                const auto identity =
+                    std::find_if(reference_tracks.begin(), reference_tracks.end(), [&](const auto& value) {
+                        return value.container.track_id == track.container.track_id;
+                    });
+                if (identity == reference_tracks.end())
+                    return false;
+                track.container.stream_index = identity->container.stream_index;
+                track.container.track_uid = identity->container.track_uid;
+            }
+            // Compare the frozen processing, not a codec match or a positional label.
+            const auto original =
+                SerializeAudioTrackProvenance(*reference.metadata.manifest, target->container.track_id);
+            const auto incoming = SerializeAudioTrackProvenance(normalized, found->container.track_id);
+            if (!original.succeeded() || !incoming.succeeded() || *original.value() != *incoming.value())
+                return false;
+            destination = reference_audio[target->container.stream_index.value];
+            ++audio;
+        } else if (type == AVMEDIA_TYPE_VIDEO && video < reference_video.size()) {
+            destination = reference_video[video++];
+        } else
+            return false;
+        if (used[destination])
+            return false;
+        used[destination] = true;
+        mapping[i] = destination;
+    }
+    return std::all_of(used.begin(), used.end(), [](bool value) { return value; });
+}
 
 struct Output {
     AVFormatContext* context = nullptr;
@@ -253,6 +354,21 @@ TimelineExportAssessment AssessTimelineExport(const std::vector<TimelineExportCl
             return Invalid("The source has no streams.");
         if (reference && reference->context->nb_streams != input->context->nb_streams)
             return Render("Sources with different stream layouts require render export.");
+        if (reference) {
+            for (const auto type : {AVMEDIA_TYPE_AUDIO, AVMEDIA_TYPE_VIDEO}) {
+                const auto count = [type](const AVFormatContext* context) {
+                    unsigned total = 0;
+                    for (unsigned index = 0; index < context->nb_streams; ++index)
+                        total += context->streams[index]->codecpar->codec_type == type;
+                    return total;
+                };
+                if (count(reference->context) != count(input->context))
+                    return Render("Sources with different stream layouts require render export.");
+            }
+        }
+        std::vector<unsigned> stream_mapping;
+        if (reference && !SemanticStreamMap(*input, *reference, stream_mapping))
+            return Invalid("Audio track identity or processing differs. Explicit semantic mapping is required.");
         for (unsigned i = 0; i < input->context->nb_streams; ++i) {
             const auto* stream = input->context->streams[i];
             const auto* codec = stream->codecpar;
@@ -260,7 +376,7 @@ TimelineExportAssessment AssessTimelineExport(const std::vector<TimelineExportCl
                 return Render("Only video and audio streams can be copied from a timeline.");
             if (avformat_query_codec(format, codec->codec_id, FF_COMPLIANCE_NORMAL) <= 0)
                 return Render("The chosen container cannot copy a source codec.");
-            if (reference && !Compatible(reference->context->streams[i], stream))
+            if (reference && !Compatible(reference->context->streams[stream_mapping[i]], stream))
                 return Render("Sources with different codecs or media parameters require render export.");
             if (recipe.size() > 1 && codec->codec_type == AVMEDIA_TYPE_AUDIO && codec->initial_padding != 0)
                 return Render("Concatenating independently primed audio streams requires render export.");
@@ -295,6 +411,7 @@ TimelineExportAssessment AssessTimelineExport(const std::vector<TimelineExportCl
 
 RemuxResult ExportTimelineStreamCopy(const std::vector<TimelineExportClip>& clips, const std::filesystem::path& output,
                                      bool to_mp4, RemuxProgressCallback progress_cb) {
+    MediaIdentityReferenceCopyGuard reference_copies;
     std::error_code path_error;
     if (output.empty() || std::filesystem::exists(output, path_error) || path_error)
         return RemuxResult::Fail(AVERROR(EEXIST), "Timeline export requires a new staging output path.");
@@ -331,17 +448,70 @@ RemuxResult ExportTimelineStreamCopy(const std::vector<TimelineExportClip>& clip
         if ((status = avcodec_parameters_copy(stream->codecpar, first.context->streams[i]->codecpar)) < 0)
             return RemuxResult::Fail(status, AvError(status));
         stream->codecpar->codec_tag = 0;
+        if (to_mp4 && stream->codecpar->codec_id == AV_CODEC_ID_HEVC)
+            stream->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
         stream->time_base = first.context->streams[i]->time_base;
         stream->avg_frame_rate = first.context->streams[i]->avg_frame_rate;
         stream->disposition = first.context->streams[i]->disposition;
         av_dict_copy(&stream->metadata, first.context->streams[i]->metadata, 0);
     }
-    if ((status = avio_open(&destination.context->pb, Utf8Path(output).c_str(), AVIO_FLAG_WRITE)) < 0)
+    std::optional<AudioManifest1> output_manifest;
+    MediaIdentitySidecarReferences output_references;
+    if (first.metadata.manifest) {
+        output_manifest = DeriveAudioManifest(*first.metadata.manifest);
+        output_manifest->derived_from_media_ids.clear();
+        for (const auto& clip : recipe) {
+            Input source;
+            if ((status = source.Open(clip.source)) < 0)
+                return RemuxResult::Fail(status, AvError(status));
+            if (!source.metadata.manifest)
+                return RemuxResult::Fail(AVERROR(EINVAL), "Audio metadata changed before export");
+            const auto id = source.metadata.manifest->media_id;
+            const auto copied =
+                CopyMediaIdentityReferenceFiles(clip.source, output, source.metadata.references, &reference_copies);
+            if (!copied.succeeded())
+                return RemuxResult::Fail(AVERROR(EIO), copied.error()->context);
+            for (const auto& name : source.metadata.references.marker_refs)
+                if (std::find(output_references.marker_refs.begin(), output_references.marker_refs.end(), name) ==
+                    output_references.marker_refs.end())
+                    output_references.marker_refs.push_back(name);
+            if (source.metadata.references.source_ranges_json != "[]") {
+                if (output_references.source_ranges_json != "[]" &&
+                    output_references.source_ranges_json != source.metadata.references.source_ranges_json)
+                    return RemuxResult::Fail(AVERROR(EINVAL),
+                                             "Conflicting source-range associations require an explicit export plan");
+                output_references.source_ranges_json = source.metadata.references.source_ranges_json;
+            }
+            if (std::find(output_manifest->derived_from_media_ids.begin(),
+                          output_manifest->derived_from_media_ids.end(),
+                          id) == output_manifest->derived_from_media_ids.end())
+                output_manifest->derived_from_media_ids.push_back(id);
+        }
+        if (!to_mp4)
+            for (auto& track : output_manifest->tracks)
+                track.container.track_uid = 2 + track.container.stream_index.value;
+        if (!WriteAudioManifestMetadata(destination.context, *output_manifest).succeeded())
+            return RemuxResult::Fail(AVERROR(EINVAL), "Cannot write concatenated audio metadata");
+    }
+    std::unique_ptr<MatroskaStreamWriter> writer;
+    std::vector<uint64_t> track_numbers;
+    if (!to_mp4 && output_manifest) {
+        MatroskaStreamConfig config;
+        if (!ConfigureMatroskaStreamCopy(first.context, Utf8Path(output), config, track_numbers))
+            return RemuxResult::Fail(AVERROR(ENOSYS),
+                                     "Unsupported track configuration for semantic MKV concatenation.");
+        config.audio_manifest = *output_manifest;
+        for (const auto& track : output_manifest->tracks)
+            config.audio_tracks[track.container.stream_index.value].name = track.container.name;
+        writer = std::make_unique<MatroskaStreamWriter>();
+        if (!writer->Open(config))
+            return RemuxResult::Fail(AVERROR(EIO), writer->error());
+    } else if ((status = avio_open(&destination.context->pb, Utf8Path(output).c_str(), AVIO_FLAG_WRITE)) < 0)
         return RemuxResult::Fail(status, AvError(status));
     AVDictionary* options = nullptr;
     if (to_mp4)
         av_dict_set(&options, "movflags", "+faststart", 0);
-    status = avformat_write_header(destination.context, &options);
+    status = writer ? 0 : avformat_write_header(destination.context, &options);
     av_dict_free(&options);
     if (status < 0)
         return RemuxResult::Fail(status, AvError(status));
@@ -356,11 +526,16 @@ RemuxResult ExportTimelineStreamCopy(const std::vector<TimelineExportClip>& clip
         Input source;
         if ((status = source.Open(clip.source)) < 0)
             return RemuxResult::Fail(status, AvError(status));
+        std::vector<unsigned> mapping;
+        if (!SemanticStreamMap(source, first, mapping))
+            return RemuxResult::Fail(AVERROR(EINVAL), "Audio track identity changed before export");
         const int64_t origin = source.context->start_time == AV_NOPTS_VALUE ? 0 : source.context->start_time;
         while ((status = av_read_frame(source.context, packet.get())) >= 0) {
             const auto index = static_cast<unsigned>(packet->stream_index);
             auto* input_stream = source.context->streams[index];
-            auto* output_stream = destination.context->streams[index];
+            const auto destination_index = mapping[index];
+            auto* output_stream = destination.context->streams[destination_index];
+            std::optional<MatroskaPacketTimestamps> exact_timestamps;
             size_t additional_size = 0;
             const auto* additional =
                 av_packet_get_side_data(packet.get(), AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL, &additional_size);
@@ -372,6 +547,7 @@ RemuxResult ExportTimelineStreamCopy(const std::vector<TimelineExportClip>& clip
                     const auto exact = DecodeMatroskaPacketTimestamps({additional + 8, additional_size - 8});
                     if (!exact)
                         return RemuxResult::Fail(AVERROR_INVALIDDATA, "Invalid ExoSnap timestamp metadata.");
+                    exact_timestamps = exact;
                     packet->pts =
                         av_rescale_q(static_cast<int64_t>(exact->pts_ns), {1, 1000000000}, input_stream->time_base);
                     packet->dts = av_rescale_q(exact->dts_ns, {1, 1000000000}, input_stream->time_base);
@@ -382,19 +558,45 @@ RemuxResult ExportTimelineStreamCopy(const std::vector<TimelineExportClip>& clip
             }
             if (packet->pts == AV_NOPTS_VALUE || packet->dts == AV_NOPTS_VALUE)
                 return RemuxResult::Fail(AVERROR_INVALIDDATA, "A source packet has no usable timestamps.");
+            int64_t pts_ns = exact_timestamps ? static_cast<int64_t>(exact_timestamps->pts_ns)
+                                              : av_rescale_q(packet->pts, input_stream->time_base, {1, 1000000000});
+            int64_t dts_ns = exact_timestamps ? exact_timestamps->dts_ns
+                                              : av_rescale_q(packet->dts, input_stream->time_base, {1, 1000000000});
             av_packet_rescale_ts(packet.get(), input_stream->time_base, output_stream->time_base);
             const auto offset = av_rescale_q(clip.timeline_start_us - origin, kMicroseconds, output_stream->time_base);
             packet->pts += offset;
             packet->dts += offset;
-            if (last_dts[index] != AV_NOPTS_VALUE && packet->dts <= last_dts[index])
+            if (last_dts[destination_index] != AV_NOPTS_VALUE && packet->dts <= last_dts[destination_index])
                 return RemuxResult::Fail(AVERROR_INVALIDDATA,
                                          "Source boundary has overlapping decode timestamps; render required.");
-            last_dts[index] = packet->dts;
+            last_dts[destination_index] = packet->dts;
+            packet->stream_index = static_cast<int>(destination_index);
             packet->pos = -1;
             const auto position = av_rescale_q(packet->pts, output_stream->time_base, kMicroseconds);
             progress =
                 std::max(progress, std::clamp(static_cast<float>(position) / static_cast<float>(total), 0.0f, 0.99f));
-            if ((status = av_interleaved_write_frame(destination.context, packet.get())) < 0)
+            if (writer) {
+                const auto offset_ns = av_rescale_q(clip.timeline_start_us - origin, kMicroseconds, {1, 1000000000});
+                const auto shifted = [offset_ns](int64_t value) -> std::optional<int64_t> {
+                    if ((offset_ns > 0 && value > (std::numeric_limits<int64_t>::max)() - offset_ns) ||
+                        (offset_ns < 0 && value < (std::numeric_limits<int64_t>::min)() - offset_ns))
+                        return std::nullopt;
+                    return value + offset_ns;
+                };
+                const auto pts = shifted(pts_ns);
+                const auto dts = shifted(dts_ns);
+                if (!pts || !dts || *pts < 0 || *dts == AV_NOPTS_VALUE || *dts > *pts)
+                    return RemuxResult::Fail(AVERROR_INVALIDDATA, "Invalid concatenated MKV timestamps.");
+                MuxPacket mux;
+                mux.track_num = track_numbers[destination_index];
+                mux.pts_ns = static_cast<uint64_t>(*pts);
+                mux.dts_ns = *dts;
+                mux.is_key = (packet->flags & AV_PKT_FLAG_KEY) != 0;
+                mux.bytes.assign(packet->data, packet->data + packet->size);
+                if (!writer->Push(std::move(mux)))
+                    return RemuxResult::Fail(AVERROR(EIO), writer->error());
+                av_packet_unref(packet.get());
+            } else if ((status = av_interleaved_write_frame(destination.context, packet.get())) < 0)
                 return RemuxResult::Fail(status, AvError(status));
             if (!progress_cb(progress))
                 return RemuxResult::Fail(AVERROR_EXIT, "Export cancelled.");
@@ -402,13 +604,27 @@ RemuxResult ExportTimelineStreamCopy(const std::vector<TimelineExportClip>& clip
         if (status != AVERROR_EOF)
             return RemuxResult::Fail(status, AvError(status));
     }
-    if ((status = av_write_trailer(destination.context)) < 0)
-        return RemuxResult::Fail(status, AvError(status));
-    if ((status = avio_closep(&destination.context->pb)) < 0)
-        return RemuxResult::Fail(status, AvError(status));
+    if (writer) {
+        if (!writer->Finalize())
+            return RemuxResult::Fail(AVERROR(EIO), writer->error());
+    } else {
+        if ((status = av_write_trailer(destination.context)) < 0)
+            return RemuxResult::Fail(status, AvError(status));
+        if ((status = avio_closep(&destination.context->pb)) < 0)
+            return RemuxResult::Fail(status, AvError(status));
+    }
+    if (output_manifest &&
+        (to_mp4 || !output_references.marker_refs.empty() || output_references.source_ranges_json != "[]") &&
+        !WriteMediaIdentitySidecar(
+             output, *output_manifest, [&] { return progress_cb(0.99f); }, output_references)
+             .succeeded())
+        return RemuxResult::Fail(AVERROR(EIO), "MetadataIncomplete: cannot publish the final media identity sidecar");
+    if (!progress_cb(1))
+        return RemuxResult::Fail(AVERROR_EXIT, "Export cancelled.");
     staging.complete = true;
-    progress_cb(1);
-    return RemuxResult::Ok();
+    auto result = RemuxResult::Ok();
+    result.created_metadata_companions = reference_copies.Commit();
+    return result;
 }
 
 } // namespace exosnap::engine

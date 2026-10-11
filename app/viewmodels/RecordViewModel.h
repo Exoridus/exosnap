@@ -190,6 +190,7 @@ class RecordViewModel {
     std::uint64_t targets_revision = 0;
     std::vector<std::wstring> target_display_names;
     int selected_target_index = -1;
+    bool audio_configuration_valid = true;
     capability::AudioUiState audio_ui_state;
     capability::AudioPlanResult audio_plan;
     std::vector<capability::AudioTrackPreview> audio_track_preview;

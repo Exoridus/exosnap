@@ -20,6 +20,15 @@ Item {
     property bool showMetricsOverlay: false
 
     objectName: "quickRecordPage"
+    ExoButton {
+        z: 3
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.margins: ExoTheme.spacingSm
+        text: qsTr("Audio profile")
+        Accessible.name: qsTr("Open the audio track profile")
+        onClicked: root.shell.audioProfileRequested()
+    }
 
     Binding {
         target: root.previewAdapter

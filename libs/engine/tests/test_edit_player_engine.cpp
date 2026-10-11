@@ -7,6 +7,7 @@
 
 #include "edit_playback_pacing.h"
 #include "exosnap/engine/edit_player_engine.h"
+#include <exosnap/engine/audio_media_manifest.h>
 
 extern "C" {
 #include <libavcodec/codec_id.h>
@@ -623,6 +624,14 @@ TEST(EditPlayerEngine, DecodeRawDeliversRefcountedFramesThatOutliveEngineTeardow
         std::string err;
         ASSERT_TRUE(engine.Open(fixture, err)) << err;
         ASSERT_TRUE(engine.HasVideoStream());
+
+        const auto metadata = engine.AudioMetadata();
+        exosnap::engine::MonitorSelectionSnapshot selection;
+        selection.media_id = metadata.selection_media_id;
+        selection.revision = {1};
+        selection.overlap_confirmed = true;
+        selection.unverified_asset_binding = metadata.unverified_asset_binding;
+        ASSERT_TRUE(engine.SetMonitorSelection(selection, err)) << err;
 
         // No media clock: nothing is presenting these frames, so nothing is
         // discarded before conversion (ShouldConvertDecodedFrame) -- every

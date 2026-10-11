@@ -98,6 +98,8 @@ engine::TrackGraph1Intent MakeNewAudioIntent() {
 }
 
 void ProjectLegacyAudioIntent(const engine::LegacyRows25Intent& intent, capability::AudioUiState& audio) {
+    audio.limiter_enabled = intent.limiter.enabled;
+    audio.limiter_ceiling_db = intent.limiter.ceiling_db;
     audio.source_rows.clear();
     for (const auto& row : intent.rows)
         audio.source_rows.push_back(row.row);
@@ -115,6 +117,8 @@ void ProjectLegacyAudioIntent(const engine::LegacyRows25Intent& intent, capabili
 }
 
 void ProjectNativeAudioIntent(const engine::TrackGraph1Intent& intent, capability::AudioUiState& audio) {
+    audio.limiter_enabled = intent.limiter.enabled;
+    audio.limiter_ceiling_db = intent.limiter.ceiling_db;
     audio.source_rows.clear();
     for (const auto& source : intent.sources) {
         engine::AudioSourceRow row;

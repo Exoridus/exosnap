@@ -70,6 +70,7 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     uint32_t CaptureSourceCount() const override;
     uint32_t DegradedSourceCount() const override;
     uint32_t DegradedSourceIndexMask() const override;
+    bool ClockCorrected() const override;
     void Shutdown() override;
     [[nodiscard]] uint64_t LastBufferQpcNs() const override {
         return output_qpc_ns_;
@@ -116,6 +117,11 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     // residual R = D - A — measured, not integrated from p, because gap silence,
     // pauses and swr filter latency all decouple applied from commanded.
     [[nodiscard]] double AppliedCompensationMs() const;
+    bool SetBufferSampleLimit(size_t maximum_samples, std::string& out_error);
+    [[nodiscard]] uint32_t LastInputFrames() const {
+        return last_input_frames_;
+    }
+    [[nodiscard]] uint64_t BufferedFrames() const;
 
   private:
     // Derive inner rate/channels/format and (re)build the SwrContext for the
@@ -134,6 +140,8 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     std::unique_ptr<IAudioCaptureSource> inner_;
     uint32_t target_sample_rate_;
     uint32_t target_channels_;
+    bool native_rate_ = false;
+    bool native_channels_ = false;
 
     // Inner source's rate/channels captured during ConfigureConversion (needed by
     // the lazy SwrContext build and the applied-compensation accounting).
@@ -171,6 +179,8 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     RawAudioBuffer exposed_buf_{};
 
     bool initialized_ = false;
+    size_t buffer_sample_limit_ = 0;
+    uint32_t last_input_frames_ = 0;
 };
 
 } // namespace exosnap::engine

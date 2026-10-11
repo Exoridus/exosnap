@@ -21,6 +21,7 @@
 #include "diagnostics/PresentSnapshotOverlay.h"
 #include "diagnostics/StartupClock.h"
 #include "models/AudioMeterScale.h"
+#include "models/AudioRoutingMigration.h"
 #include "models/CompletedRecording.h"
 #include "models/EditContextFactory.h"
 #include "models/FrameRateLimits.h"
@@ -382,6 +383,10 @@ QuickApplication::QuickApplication()
     preset_registry_.LoadState(persisted.user_presets,
                                persisted.selected_id.empty() ? std::string(kDefaultPresetId) : persisted.selected_id);
     live_config_ = persisted.live.has_value() ? SanitizePresetConfig(*persisted.live) : MakeDefaultPreset().config;
+    if (persisted.read_only) {
+        live_config_.audio_read_only = true;
+        live_config_.audio_validation_error = "The preset store uses an unsupported configuration version.";
+    }
     seed_video_codec_from_capabilities_ = !persisted.live.has_value();
     // Latched rather than raised here: the notification manager is not wired up
     // until initializeNotifications(). Silently repairing a user's saved
@@ -1443,6 +1448,7 @@ void QuickApplication::wireRecordCommands() {
 }
 
 void QuickApplication::synchronizeRecordState() {
+    record_view_model_.audio_configuration_valid = !live_config_.audio_read_only;
     const bool mkv = live_config_.output.container == capability::Container::Matroska ||
                      live_config_.output.container == capability::Container::WebM;
     const QSize previewSize = record_preview_adapter_.sourceSize();
@@ -1805,6 +1811,10 @@ void QuickApplication::startRequested() {
         last_start_admission_ = StartAdmission::RefusedByBlockingSurface;
         return;
     }
+    if (live_config_.audio_read_only) {
+        last_start_admission_ = StartAdmission::RefusedByConfiguration;
+        return;
+    }
     if (!record_view_model_adapter_.canStart()) {
         last_start_admission_ = StartAdmission::RefusedByState;
         return;
@@ -1823,10 +1833,16 @@ void QuickApplication::startRequested() {
         last_start_admission_ = StartAdmission::Accepted;
         return;
     }
-    last_start_admission_ = startRecordingNow() ? StartAdmission::Accepted : StartAdmission::RefusedNoTarget;
+    if (startRecordingNow())
+        last_start_admission_ = StartAdmission::Accepted;
 }
 
 bool QuickApplication::startRecordingNow() {
+    last_start_admission_ = StartAdmission::RefusedNoTarget;
+    if (live_config_.audio_read_only) {
+        last_start_admission_ = StartAdmission::RefusedByConfiguration;
+        return false;
+    }
     if (record_view_model_.selected_target_index < 0 ||
         record_view_model_.selected_target_index >= static_cast<int>(record_view_model_.targets.size()))
         return false;
@@ -1848,8 +1864,10 @@ bool QuickApplication::startRecordingNow() {
     recording_coordinator_->SetEncoderDeviceResolution(encoder_device, &encoder_caps);
     recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
     record_view_model_.ResetStats();
-    recording_coordinator_->StartRecording(target, record_view_model_.audio_ui_state, crop);
-    return true;
+    last_start_admission_ = StartAdmission::RefusedByState;
+    return recording_coordinator_->StartRecording(target, record_view_model_.audio_ui_state, crop,
+                                                  engine::CaptureBackend::Default, live_config_.audio_intent,
+                                                  {audio_routing_adapter_.revision()});
 }
 
 void QuickApplication::cancelCountdown() {
@@ -1941,7 +1959,8 @@ void QuickApplication::updateMeters() {
         settings_adapter_.setMeters(db[0], db[1], db[2]);
         return;
     }
-    const bool session = record_view_model_.state == UiRecordingState::Recording ||
+    const bool session = record_view_model_.state == UiRecordingState::Preparing ||
+                         record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;
     const float system = recording_coordinator_->IsSysMeterRunning() ? preflight_system_rms_
@@ -2060,7 +2079,8 @@ void QuickApplication::updateMeterServices() {
     // source row. Feeding them only for Record left the Settings readings at
     // silence while the user was looking at them.
     const bool visible = record_view_model_adapter_.active() || settings_adapter_.active();
-    const bool session = record_view_model_.state == UiRecordingState::Recording ||
+    const bool session = record_view_model_.state == UiRecordingState::Preparing ||
+                         record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;
     if (!visible || session) {
@@ -2759,6 +2779,48 @@ void QuickApplication::applyDiagnosticsFix(const QString& fix_id) {
 }
 
 void QuickApplication::wireSettingsCommands() {
+    QObject::connect(&shell_adapter_, &ShellAdapter::audioProfileRequested, &settings_adapter_, [this]() {
+        emit shell_adapter_.navigateToPageRequested(ShellAdapter::SettingsPage);
+        settings_adapter_.requestSettingsFocus(SettingsAdapter::FocusTarget::AudioSources);
+    });
+    settings_adapter_.setAudioRouting(&audio_routing_adapter_);
+    audio_routing_adapter_.configure(
+        [this](const engine::AudioIntent& intent, QString& error) {
+            auto candidate = live_config_;
+            candidate.audio_intent = intent;
+            candidate = SanitizePresetConfig(std::move(candidate));
+            if (!preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), candidate, &error))
+                return false;
+            live_config_ = std::move(candidate);
+            settings_adapter_.setConfig(live_config_);
+            refreshPresetState();
+            synchronizeRecordState();
+            return true;
+        },
+        [this]() {
+            return ObserveRecordingAudioEnvironment(selectedCaptureTarget().value_or(engine::CaptureTarget{}),
+                                                    capabilities_.runtime.os.build_number);
+        },
+        [this](engine::AudioSourceId id, bool muted) {
+            return recording_coordinator_->SetAudioSourceMuted(id, muted);
+        });
+    audio_routing_adapter_.refresh(live_config_.audio_intent.value_or(engine::AudioIntent{engine::TrackGraph1Intent{}}),
+                                   live_config_.audio_read_only,
+                                   QString::fromStdString(live_config_.audio_validation_error));
+    audio_routing_meter_timer_.setInterval(100);
+    QObject::connect(&audio_routing_meter_timer_, &QTimer::timeout, &audio_routing_adapter_, [this]() {
+        const auto active = recording_coordinator_->ActiveAudioPlan();
+        const auto revision = active && locksCaptureTargets(recording_coordinator_->State())
+                                  ? std::optional<engine::ConfigRevision>{active->revision}
+                                  : std::nullopt;
+        if (revision != audio_routing_active_revision_) {
+            audio_routing_active_revision_ = revision;
+            audio_routing_adapter_.setActivePlan(revision ? active : std::nullopt);
+        }
+        const auto meters = recording_coordinator_->LatestAudioRoutingMeters();
+        audio_routing_adapter_.setMeters(meters.sources, meters.tracks);
+    });
+    audio_routing_meter_timer_.start();
     QObject::connect(&settings_adapter_, &SettingsAdapter::configEdited, &settings_adapter_,
                      [this]() { applySettingsConfigEdit(); });
     QObject::connect(&settings_adapter_, &SettingsAdapter::appSettingsEdited, &settings_adapter_, [this]() {
@@ -2918,7 +2980,22 @@ void QuickApplication::applySettingsConfigEdit() {
     edited.capture = live_config_.capture;
     edited.countdown_seconds = live_config_.countdown_seconds;
     edited.webcam.overlay = live_config_.webcam.overlay;
+    if (edited.audio_intent) {
+        if (const auto* legacy = std::get_if<engine::LegacyRows25Intent>(&*edited.audio_intent)) {
+            auto synchronized = SynchronizeLegacyAudioRows(*legacy, edited.audio);
+            if (!synchronized.succeeded()) {
+                settings_adapter_.setConfig(live_config_);
+                return;
+            }
+            edited.audio_intent = std::move(*synchronized.value());
+        } else if (auto* graph = std::get_if<engine::TrackGraph1Intent>(&*edited.audio_intent)) {
+            graph->limiter = {edited.audio.limiter_enabled, edited.audio.limiter_ceiling_db};
+        }
+    }
     live_config_ = std::move(edited);
+    audio_routing_adapter_.refresh(live_config_.audio_intent.value_or(engine::AudioIntent{engine::TrackGraph1Intent{}}),
+                                   live_config_.audio_read_only,
+                                   QString::fromStdString(live_config_.audio_validation_error));
     // Audio rows and the webcam enable/mirror flags ARE editable here, so the
     // Record-side mirror has to follow.
     record_view_model_.audio_ui_state = live_config_.audio;
@@ -2940,6 +3017,9 @@ void QuickApplication::applySettingsConfigEdit() {
 
 void QuickApplication::applyPresetConfig(RecordingPresetConfig config) {
     live_config_ = SanitizePresetConfig(std::move(config));
+    audio_routing_adapter_.refresh(live_config_.audio_intent.value_or(engine::AudioIntent{engine::TrackGraph1Intent{}}),
+                                   live_config_.audio_read_only,
+                                   QString::fromStdString(live_config_.audio_validation_error));
     settings_adapter_.setConfig(live_config_);
     recording_coordinator_->SetOutputSettings(live_config_.output);
     recording_coordinator_->SetVideoSettings(live_config_.video);

@@ -111,7 +111,7 @@ bool RecordViewModel::CanStart() const noexcept {
     if (state != UiRecordingState::Ready && state != UiRecordingState::Completed && state != UiRecordingState::Failed) {
         return false;
     }
-    return HasStartableTarget();
+    return audio_configuration_valid && HasStartableTarget();
 }
 
 bool RecordViewModel::CanStop() const noexcept {
@@ -134,7 +134,7 @@ bool RecordViewModel::CanResume() const noexcept {
     // manifest does not record the capture target, so that press needs one
     // chosen the way a first start does.
     if (state == UiRecordingState::ArmedFromRecovery)
-        return HasStartableTarget();
+        return audio_configuration_valid && HasStartableTarget();
     return false;
 }
 

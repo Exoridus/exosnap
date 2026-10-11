@@ -4,6 +4,7 @@
 #include "premux_state.h"
 #include "session_failure.h"
 #include "split_sentinel_policy.h"
+#include <exosnap/engine/audio_limits.h>
 
 #include <gtest/gtest.h>
 

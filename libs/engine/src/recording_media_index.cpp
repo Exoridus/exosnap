@@ -1,19 +1,29 @@
 #include "recording_media_index.h"
+#include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/recording_media_types.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <bit>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
+#include <cstdint>
 #include <deque>
+#include <filesystem>
+#include <functional>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
+#include <utility>
+#include <vector>
 #include <windows.h>
 
 namespace exosnap::engine {
@@ -145,14 +155,18 @@ Json ParsePayload(std::span<const uint8_t> payload) {
 
 Json Codec(const MediaCodecDescriptor& codec) {
     return Json::array({codec.codec_id, Json::binary(codec.codec_private), codec.sample_rate, codec.channels,
-                        codec.bit_depth, codec.codec_delay_samples});
+                        codec.bit_depth, codec.codec_delay_samples, codec.channel_layout});
 }
 MediaCodecDescriptor ReadCodec(const Json& value) {
-    if (!value.is_array() || value.size() != 6 || value[1].size() > kQueueBytes)
+    if (!value.is_array() || (value.size() != 6 && value.size() != 7) || value[1].size() > kQueueBytes)
         throw std::runtime_error("Invalid codec descriptor");
-    return {value[0].get<std::string>(), Bytes(value[1]),
-            Checked<uint32_t>(value[2]), Checked<uint32_t>(value[3]),
-            Checked<uint32_t>(value[4]), Checked<uint32_t>(value[5])};
+    return {value[0].get<std::string>(),
+            Bytes(value[1]),
+            Checked<uint32_t>(value[2]),
+            Checked<uint32_t>(value[3]),
+            Checked<uint32_t>(value[4]),
+            Checked<uint32_t>(value[5]),
+            value.size() == 7 ? value[6].get<std::string>() : std::string{}};
 }
 
 Json Descriptor(const RecordingMediaDescriptor& value) {
@@ -563,14 +577,15 @@ RecordingMediaIndex::RegisterDescriptor(std::shared_ptr<const RecordingMediaDesc
         return ReceiptAcceptance::IndexDegraded;
     }
     size_t bytes = sizeof(RecordingMediaDescriptor) + descriptor->immutable_header.capacity() +
-                   descriptor->video.codec_private.capacity() + descriptor->path.capacity();
+                   descriptor->video.codec_private.capacity() + descriptor->video.channel_layout.capacity() +
+                   descriptor->path.capacity();
     for (const auto& track : descriptor->audio_tracks) {
         if (track.source_ids.size() > 1024 || track.codec.codec_private.capacity() > kQueueBytes) {
             state_->rebuild.store(true, std::memory_order_release);
             return ReceiptAcceptance::IndexDegraded;
         }
         bytes += sizeof(track) + track.codec.codec_private.capacity() + track.name.capacity() + track.role.capacity() +
-                 track.source_ids.capacity() * sizeof(AudioSourceId);
+                 track.source_ids.capacity() * sizeof(AudioSourceId) + track.codec.channel_layout.capacity();
     }
     return state_->Enqueue({std::move(descriptor), {}, bytes});
 }

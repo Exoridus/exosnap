@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -9,6 +10,8 @@ struct AudioInputDeviceInfo {
     std::string device_id;    // WASAPI endpoint ID, UTF-8
     std::string display_name; // PKEY_Device_FriendlyName, UTF-8
     bool is_default = false;
+    // Console, Multimedia and Communications, in that order.
+    std::array<bool, 3> is_default_by_role{};
 };
 
 // Enumerates active WASAPI capture endpoints (eCapture).

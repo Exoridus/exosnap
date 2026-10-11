@@ -887,6 +887,19 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DisplayDefault_OnlySysIsActive) {
 
 // ---------------------------------------------------------------------------
 
+TEST(RecordViewModelStateGuardTest, UnsupportedAudioConfigurationBlocksEveryStartableState) {
+    RecordViewModel vm;
+    vm.targets.push_back({});
+    vm.selected_target_index = 0;
+    vm.audio_configuration_valid = false;
+    for (const auto state : {UiRecordingState::Ready, UiRecordingState::Completed, UiRecordingState::Failed}) {
+        vm.state = state;
+        EXPECT_FALSE(vm.CanStart());
+    }
+    vm.audio_configuration_valid = true;
+    EXPECT_TRUE(vm.CanStart());
+}
+
 TEST(RecordViewModelStateGuardTest, CanStart_Ready_WithTargets_ReturnsTrue) {
     RecordViewModel vm;
     vm.SetState(UiRecordingState::Ready);

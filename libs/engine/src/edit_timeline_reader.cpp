@@ -131,6 +131,10 @@ struct EditTimelineReader::Impl {
                 slot->engine.reset();
                 return false;
             }
+            if (source->monitor_selection && !slot->engine->SetMonitorSelection(*source->monitor_selection, error)) {
+                slot->engine.reset();
+                return false;
+            }
             slot->clip = contribution.clip;
         }
         peak_decoders =

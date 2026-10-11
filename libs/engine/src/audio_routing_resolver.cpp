@@ -1,4 +1,13 @@
+#include <cstddef>
+#include <cstdint>
+#include <exosnap/engine/audio_limits.h>
 #include <exosnap/engine/audio_routing_model.h>
+#include <exosnap/engine/audio_track_model.h>
+#include <exosnap/engine/recording_media_types.h>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
 #include <algorithm>
 #include <cmath>

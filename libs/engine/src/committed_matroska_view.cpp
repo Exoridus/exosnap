@@ -1,10 +1,20 @@
 #include "committed_matroska_view.h"
+#include <exosnap/engine/recording_media_types.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <limits>
+#include <memory>
+#include <optional>
+#include <span>
+#include <utility>
+#include <vector>
 #include <windows.h>
 
 extern "C" {
