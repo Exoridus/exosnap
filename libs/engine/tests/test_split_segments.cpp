@@ -65,7 +65,7 @@ TEST(MuxAudioHoldTest, ReorderedVideoProgressRetainsBoundaryAudio) {
 }
 
 TEST(MuxAudioHoldTest, BytesAndMediaTimeFailClosedWithoutLosingHeldPackets) {
-    const size_t one_packet = sizeof(exosnap::engine::EncodedAudioPacket) + 1;
+    const size_t one_packet = 1;
     exosnap::engine::MuxAudioHold hold({one_packet, 60});
     hold.AdvanceVideo(100);
     EXPECT_FALSE(hold.Push(AudioPacket(161, 3)));
@@ -78,13 +78,29 @@ TEST(MuxAudioHoldTest, BytesAndMediaTimeFailClosedWithoutLosingHeldPackets) {
     EXPECT_EQ(hold.bytes(), 0u);
 }
 
-TEST(MuxAudioHoldTest, BudgetCoversMaximumSupportedPcmAudioForOneMinute) {
+TEST(MuxAudioHoldTest, PacketLimitRejectsPressureWithoutDiscardingEarlierAudio) {
+    exosnap::engine::MuxAudioHold hold;
+    for (uint32_t frame = 0; frame < 1200; ++frame) {
+        for (uint32_t track = 0; track < 8; ++track)
+            ASSERT_TRUE(hold.Push(AudioPacket(static_cast<uint64_t>(frame) * 2500000, 1, track)));
+    }
+    EXPECT_FALSE(hold.Push(AudioPacket(2997500000, 2)));
+    auto first = hold.Pop();
+    ASSERT_TRUE(first);
+    EXPECT_EQ(first->bytes.front(), 1);
+}
+
+TEST(MuxAudioHoldTest, ThreeSecondMediaHorizonRejectsAStalledVideoProducer) {
+    exosnap::engine::MuxAudioHold hold;
+    hold.AdvanceVideo(0);
+    EXPECT_FALSE(hold.Push(AudioPacket(3000000001, 1)));
+}
+
+TEST(MuxAudioHoldTest, BudgetCoversMaximumSupportedPcmAudioForThreeSeconds) {
     const exosnap::engine::MuxAudioHold::Limits limits;
-    const uint64_t pcm_bytes = 96000ull * 2 * 4 * exosnap::engine::CodecPrivateData::kMaxAudioTracks * 60;
-    const uint64_t packet_overhead =
-        100ull * exosnap::engine::CodecPrivateData::kMaxAudioTracks * 60 * sizeof(exosnap::engine::EncodedAudioPacket);
-    EXPECT_GT(limits.bytes, pcm_bytes + packet_overhead);
-    EXPECT_EQ(limits.duration_ns, 60000000000ull);
+    const uint64_t pcm_bytes = 96000ull * 2 * 4 * exosnap::engine::CodecPrivateData::kMaxAudioTracks * 3;
+    EXPECT_GT(limits.bytes, pcm_bytes);
+    EXPECT_EQ(limits.duration_ns, 3000000000ull);
 }
 
 // Convenience: most call sites in these tests only care about the derived

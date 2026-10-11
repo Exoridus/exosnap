@@ -112,6 +112,34 @@ TEST(PremuxState, AudioByteOverflowPreservesTheRejectedPacket) {
     EXPECT_TRUE(state.PendingSnapshot().audio.empty());
 }
 
+TEST(PremuxState, MediaTimeLimitRejectsLongGapsEvenWithOnlyTwoPackets) {
+    PremuxState state;
+    uint32_t depth = 0;
+    EncodedAudioPacket first{{1}, 0, 0};
+    ASSERT_EQ(state.Route(first, VideoCodec::Av1, 1, depth), PremuxRoute::Buffered);
+    EncodedAudioPacket late{{2}, 3000000001, 0};
+    ASSERT_EQ(state.Route(late, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
+    EXPECT_EQ(late.bytes.front(), 2);
+    EXPECT_EQ(state.TakePending().audio.size(), 1u);
+}
+
+TEST(PremuxState, OutOfOrderPacketsCannotHideMediaTimeOrInvalidTrack) {
+    PremuxState state;
+    uint32_t depth = 0;
+    EncodedAudioPacket late{{1}, 9000000000, 0};
+    ASSERT_EQ(state.Route(late, VideoCodec::Av1, 1, depth), PremuxRoute::Buffered);
+    EncodedAudioPacket earlier{{2}, 5999999999, 0};
+    EXPECT_EQ(state.Route(earlier, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
+    EXPECT_EQ(earlier.bytes, (std::vector<uint8_t>{2}));
+    (void)state.TakePending();
+    EXPECT_EQ(state.Route(earlier, VideoCodec::Av1, 1, depth), PremuxRoute::Buffered);
+    state.PublishVideo(VideoCodec::Av1, {3});
+    state.PublishAudio(0, {});
+    EncodedAudioPacket invalid{{4}, 6000000000, 1};
+    EXPECT_EQ(state.Route(invalid, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
+    EXPECT_EQ(invalid.bytes, (std::vector<uint8_t>{4}));
+}
+
 TEST(SessionFailureState, ConcurrentWritersPublishOneWholeFailure) {
     for (int iteration = 0; iteration < 128; ++iteration) {
         SessionFailureState state;

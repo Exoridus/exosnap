@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -12,11 +13,13 @@
 #include <QString>
 #include <QTemporaryDir>
 #include <QTextStream>
+#include <sstream>
 
 #include <capability/audio_ui_state.h>
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/recorder_session.h>
 
+#include "models/AudioRoutingMigration.h"
 #include "models/RecordingPreset.h"
 #include "settings/RecordingPresetStore.h"
 
@@ -63,6 +66,7 @@ RecordingPreset MakeRegionPreset() {
     p.id = GeneratePresetId();
     p.name = "Region Preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.capture.kind = PresetCaptureKind::Region;
     p.config.capture.has_region = true;
     p.config.capture.region_x_norm = 0.1f;
@@ -80,6 +84,7 @@ RecordingPreset MakeWindowWithPidPreset() {
     p.id = GeneratePresetId();
     p.name = "Window Preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.capture.kind = PresetCaptureKind::Window;
     p.config.capture.window_key = "chrome.exe";
     p.config.audio.target_kind = capability::CaptureTargetKind::Window;
@@ -93,6 +98,7 @@ RecordingPreset MakeWebcamPreset() {
     p.id = GeneratePresetId();
     p.name = "Webcam Preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.webcam.enabled = true;
     p.config.webcam.device_id = "\\\\?\\usb#vid_046d";
     p.config.webcam.width = 1920;
@@ -190,6 +196,7 @@ TEST(RecordingPresetStore, StableDisplayId_SubTable_RoundTrips) {
     p.id = GeneratePresetId();
     p.name = "Stable id";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.capture.kind = PresetCaptureKind::Display;
     p.config.capture.display_id.device_path = "\\\\?\\DISPLAY#GSM5B09#5&abcd&UID4352#{guid}";
     p.config.capture.display_id.edid_vendor = "GSM";
@@ -232,6 +239,7 @@ TEST(RecordingPresetStore, VideoBitDepthPersists_HevcTenBit) {
     p.id = GeneratePresetId();
     p.name = "HEVC 10-bit";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     // 10-bit is only valid for HEVC/AV1 — use MKV + HEVC so sanitize keeps it.
     p.config.output.container = capability::Container::Matroska;
     p.config.output.video_codec = capability::VideoCodec::Hevc;
@@ -262,7 +270,8 @@ TEST(RecordingPresetStore, VideoBitDepthPersists_DefaultEightBit) {
     RecordingPreset p;
     p.id = GeneratePresetId();
     p.name = "Default depth";
-    p.config = MakeDefaultPreset().config; // AV1, Bit8 by default
+    p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset(); // AV1, Bit8 by default
 
     {
         RecordingPresetStore store(path);
@@ -291,7 +300,8 @@ TEST(RecordingPresetStore, ColorRangePersists_DefaultLimited) {
     RecordingPreset p;
     p.id = GeneratePresetId();
     p.name = "Default range";
-    p.config = MakeDefaultPreset().config; // Limited by default
+    p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset(); // Limited by default
 
     {
         RecordingPresetStore store(path);
@@ -317,6 +327,7 @@ TEST(RecordingPresetStore, ColorRangePersists_Full) {
     p.id = GeneratePresetId();
     p.name = "Full range";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.output.color_range = capability::ColorRange::Full;
 
     {
@@ -346,7 +357,8 @@ TEST(RecordingPresetStore, NvencPresetPersists_DefaultP4) {
     RecordingPreset p;
     p.id = GeneratePresetId();
     p.name = "Default preset";
-    p.config = MakeDefaultPreset().config; // P4 by default
+    p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset(); // P4 by default
 
     {
         RecordingPresetStore store(path);
@@ -371,6 +383,7 @@ TEST(RecordingPresetStore, NvencPresetPersists_P7) {
     p.id = GeneratePresetId();
     p.name = "P7 preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.output.nvenc_preset = exosnap::engine::NvencPreset::P7;
 
     {
@@ -445,7 +458,8 @@ TEST(RecordingPresetStore, HdrModePersists_DefaultTonemapSdr) {
     RecordingPreset p;
     p.id = GeneratePresetId();
     p.name = "Default preset";
-    p.config = MakeDefaultPreset().config; // TonemapSdr by default
+    p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset(); // TonemapSdr by default
 
     {
         RecordingPresetStore store(path);
@@ -470,6 +484,7 @@ TEST(RecordingPresetStore, HdrModePersists_Hdr10) {
     p.id = GeneratePresetId();
     p.name = "HDR10 preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.output.hdr_mode = exosnap::engine::HdrMode::Hdr10;
 
     {
@@ -647,6 +662,7 @@ TEST(RecordingPresetStore, EncoderDeviceDefaultsToAuto) {
     p.id = GeneratePresetId();
     p.name = "Auto device preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     EXPECT_EQ(p.config.video.encoder_device.mode, exosnap::engine::EncoderDevicePreference::Mode::Auto);
 
     {
@@ -671,6 +687,7 @@ TEST(RecordingPresetStore, EncoderDeviceExplicitFingerprintRoundTrips) {
     p.id = GeneratePresetId();
     p.name = "Explicit device preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.video.encoder_device.mode = exosnap::engine::EncoderDevicePreference::Mode::Explicit;
     p.config.video.encoder_device.device = {0x10DEu, 0x2684u, 0x16A1u, "NVIDIA GeForce RTX 4090"};
 
@@ -878,6 +895,7 @@ TEST(RecordingPresetStore, FrameRatePersists_50fps) {
     p.id = GeneratePresetId();
     p.name = "50fps Preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.video.frame_rate_num = 50;
     p.config.video.frame_rate_den = 1;
 
@@ -905,6 +923,7 @@ TEST(RecordingPresetStore, FrameRate120_PersistsThroughStore) {
     p.id = GeneratePresetId();
     p.name = "120fps Preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.video.frame_rate_num = 120;
     p.config.video.frame_rate_den = 1;
 
@@ -932,6 +951,7 @@ TEST(RecordingPresetStore, OutputResolutionPersists_1440p) {
     p.id = GeneratePresetId();
     p.name = "1440p Preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.output.resolution.mode = OutputResolutionMode::QHD1440;
     p.config.video.frame_rate_num = 30;
     p.config.video.frame_rate_den = 1;
@@ -962,6 +982,7 @@ TEST(RecordingPresetStore, OutputResolutionPersists_Custom) {
     p.id = GeneratePresetId();
     p.name = "Custom Resolution Preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.output.resolution.mode = OutputResolutionMode::Custom;
     p.config.output.resolution.custom_width = 2560;
     p.config.output.resolution.custom_height = 1440;
@@ -991,6 +1012,7 @@ TEST(RecordingPresetStore, SplitSettingsPersist_Custom) {
     p.id = GeneratePresetId();
     p.name = "Split Preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.output.split.mode = SplitRecordingMode::Custom;
     p.config.output.split.custom_minutes = 45;
 
@@ -1018,6 +1040,7 @@ TEST(RecordingPresetStore, SplitSettingsPersist_PresetDuration) {
     p.id = GeneratePresetId();
     p.name = "Split 30 Preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.output.split.mode = SplitRecordingMode::Every30Min;
 
     {
@@ -1043,6 +1066,7 @@ TEST(RecordingPresetStore, SplitSizeSettingsPersist_Custom) {
     p.id = GeneratePresetId();
     p.name = "Size Split Preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.output.split.size_mode = SplitSizeMode::Custom;
     p.config.output.split.custom_size_mb = 512;
 
@@ -1070,6 +1094,7 @@ TEST(RecordingPresetStore, SplitSizeSettingsPersist_Off) {
     p.id = GeneratePresetId();
     p.name = "Size Split Off Preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.output.split.size_mode = SplitSizeMode::Off;
 
     {
@@ -1371,6 +1396,7 @@ TEST(RecordingPresetStore, InvalidSelectedId_FallsBackToDefaultPreset) {
     p.id = GeneratePresetId();
     p.name = "Solo Preset";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
 
     {
         RecordingPresetStore store(path);
@@ -1671,6 +1697,7 @@ TEST(RecordingPresetStore, FramePacingRoundtrips) {
     p.id = GeneratePresetId();
     p.name = "Pacing Test";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
 
     // Default must be Smooth.
     EXPECT_EQ(p.config.video.frame_pacing, FramePacingMode::Smooth);
@@ -1705,6 +1732,7 @@ TEST(RecordingPresetStore, ChromaColorMode_RoundTrip_Custom) {
     p.id = GeneratePresetId();
     p.name = "Chroma Custom";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.webcam.chroma_key.enabled = true;
     p.config.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Custom;
     p.config.webcam.chroma_key.custom_r = 128;
@@ -1745,6 +1773,7 @@ TEST(RecordingPresetStore, ChromaColorMode_RoundTrip_Magenta) {
     p.id = GeneratePresetId();
     p.name = "Chroma Magenta";
     p.config = MakeDefaultPreset().config;
+    p.config.audio_intent.reset();
     p.config.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Magenta;
     p.config.webcam.chroma_key.spill_reduction = 0.20f;
 
@@ -1777,6 +1806,7 @@ TEST(RecordingPresetStore, LiveTable_RoundTrips) {
     RecordingPresetStore store(path);
 
     RecordingPresetConfig live = MakeDefaultPreset().config;
+    live.audio_intent.reset();
     live.video.cq = 33;
     live.output.container = capability::Container::Mp4;
     live.output.video_codec = capability::VideoCodec::H264;
@@ -1800,6 +1830,7 @@ TEST(RecordingPresetStore, AudioCodecAac_PersistsAsAac) {
     RecordingPresetStore store(path);
 
     RecordingPresetConfig live = MakeDefaultPreset().config;
+    live.audio_intent.reset();
     live.output.container = capability::Container::Mp4;
     live.output.video_codec = capability::VideoCodec::H264;
     live.output.audio_codec = capability::AudioCodec::Aac;
@@ -1826,6 +1857,7 @@ TEST(RecordingPresetStore, VideoCodec_PersistsWithoutVendorSuffix) {
     RecordingPresetStore store(path);
 
     RecordingPresetConfig live = MakeDefaultPreset().config;
+    live.audio_intent.reset();
     live.output.container = capability::Container::Matroska;
     live.output.video_codec = capability::VideoCodec::Hevc;
     store.Save({}, std::string(kDefaultPresetId), live);
@@ -1885,7 +1917,7 @@ TEST(RecordingPresetStore, TomlOnDisk_HasLiveTable_NoDefaultId) {
     ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
     const QString text = QString::fromUtf8(f.readAll());
     EXPECT_TRUE(text.contains(QStringLiteral("[live]")));
-    EXPECT_TRUE(text.contains(QStringLiteral("schema_version = 25")));
+    EXPECT_TRUE(text.contains(QStringLiteral("schema_version = 26")));
     EXPECT_FALSE(text.contains(QStringLiteral("default_id")));
     CleanupFile(path);
 }
@@ -1900,6 +1932,7 @@ TEST(RecordingPresetStore, SchemaMismatch_KeepsData_NotRepaired) {
     RecordingPresetStore store(path);
     RecordingPreset user = MakeRegionPreset();
     RecordingPresetConfig live = MakeDefaultPreset().config;
+    live.audio_intent.reset();
     live.video.cq = 27;
     store.Save({user}, user.id, live);
 
@@ -1908,7 +1941,7 @@ TEST(RecordingPresetStore, SchemaMismatch_KeepsData_NotRepaired) {
     ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
     QString text = QString::fromUtf8(f.readAll());
     f.close();
-    text.replace(QStringLiteral("schema_version = 25"), QStringLiteral("schema_version = 22"));
+    text.replace(QStringLiteral("schema_version = 26"), QStringLiteral("schema_version = 22"));
     ASSERT_TRUE(WriteTomlString(path, text));
 
     const PersistedPresetState state = store.Load();
@@ -2105,5 +2138,311 @@ TEST(RecordingPresetStore, LookaheadPolicyParticipatesInPresetDirtyStateAndForma
     EXPECT_EQ(merged.nvenc_lookahead_policy, capability::NvencLookaheadPolicy::Explicit);
 }
 
+TEST(RecordingPresetStore, FutureSchemaCannotBeOverwritten) {
+    const QString path = UniqueTempPath();
+    const QString original = QStringLiteral("schema_version = 99\nopaque = 'preserve'\n");
+    ASSERT_TRUE(WriteTomlString(path, original));
+    QFile before(path);
+    ASSERT_TRUE(before.open(QIODevice::ReadOnly));
+    const auto original_bytes = before.readAll();
+    before.close();
+    RecordingPresetStore store(path);
+    const auto loaded = store.Load();
+    QString error;
+    EXPECT_FALSE(store.Save({}, std::string(kDefaultPresetId), MakeDefaultPreset().config, &error));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(file.readAll(), original_bytes);
+}
+
+TEST(RecordingPresetStore, UnknownNestedFieldsSurviveKnownFieldEdit) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(
+        path, QStringLiteral("schema_version = 25\n[future]\nkey = [1, 2]\n[live.audio.vendor]\nmode = 'custom'\n")));
+    RecordingPresetStore store(path);
+    auto loaded = store.Load();
+    ASSERT_TRUE(loaded.live.has_value());
+    loaded.live->video.cq = 29;
+    ASSERT_TRUE(store.Save({}, std::string(kDefaultPresetId), *loaded.live));
+    const auto doc = toml::parse_file(path.toStdString());
+    EXPECT_EQ(doc["live"]["audio"]["vendor"]["mode"].value<std::string>(), "custom");
+    ASSERT_TRUE(doc["future"]["key"].is_array());
+    EXPECT_EQ(doc["future"]["key"].as_array()->size(), 2u);
+}
+TEST(RecordingPresetStore, LegacyAnchorToggleSurvivesEverySaveReload) {
+    using namespace engine;
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(
+        path, QStringLiteral(
+                  "schema_version = "
+                  "25\n[[live.audio.sources]]\nkind='mic'\nenabled=true\n[[live.audio.sources]]\nkind='mic'\nenabled="
+                  "false\n[[live.audio.sources]]\nkind='mic'\nenabled=true\nmerge=true\nvendor_hint='keep'\n")));
+    RecordingPresetStore store(path);
+    auto loaded = store.Load();
+    ASSERT_TRUE(loaded.live.has_value());
+    ASSERT_TRUE(loaded.live->audio_intent.has_value());
+    auto legacy = std::get<LegacyRows25Intent>(*loaded.live->audio_intent);
+    const auto row_id = legacy.rows[1].row_id;
+    const auto first_anchor = legacy.rows[0].anchor_track_id;
+    const auto middle_anchor = legacy.rows[1].anchor_track_id;
+    AudioEnvironmentSnapshot env;
+    env.default_microphone_endpoint = "mic";
+    env.microphone_endpoints = {"mic"};
+    for (const bool enabled : {false, true, false, true}) {
+        LegacyRowPatch patch;
+        patch.enabled = enabled;
+        auto edited = ApplyLegacyRowEdit(legacy, row_id, patch);
+        ASSERT_TRUE(edited.succeeded());
+        loaded.live->audio_intent = *edited.value();
+        ProjectLegacyAudioIntent(*edited.value(), loaded.live->audio);
+        ASSERT_TRUE(store.Save({}, std::string(kDefaultPresetId), *loaded.live));
+        loaded = store.Load();
+        ASSERT_TRUE(loaded.live.has_value());
+        ASSERT_FALSE(loaded.live->audio_read_only) << loaded.live->audio_validation_error;
+        legacy = std::get<LegacyRows25Intent>(*loaded.live->audio_intent);
+        EXPECT_EQ(legacy.rows[1].row_id, row_id);
+        auto resolved = ResolveAudioIntent(legacy, env);
+        ASSERT_TRUE(resolved.succeeded());
+        ASSERT_EQ(resolved.value()->tracks.size(), enabled ? 2u : 1u);
+        EXPECT_EQ(resolved.value()->tracks[0].id, first_anchor);
+        if (enabled)
+            EXPECT_EQ(resolved.value()->tracks[1].id, middle_anchor);
+    }
+    const auto doc = toml::parse_file(path.toStdString());
+    EXPECT_FALSE(doc["live"]["audio"]["sources"]);
+    EXPECT_EQ((*(*doc["live"]["audio"]["intent"]["rows"].as_array())[2].as_table())["vendor_hint"].value<std::string>(),
+              "keep");
+    EXPECT_EQ(QDir(QFileInfo(path).absolutePath())
+                  .entryList({QFileInfo(path).fileName() + ".schema25.*.bak"}, QDir::Files)
+                  .size(),
+              1);
+}
+
+TEST(RecordingPresetStore, UnknownSchema26DiscriminatorIsProtected) {
+    const QString path = UniqueTempPath();
+    const QString original = QStringLiteral("schema_version = 26\naudio_contract = 'unrecognized'\n");
+    ASSERT_TRUE(WriteTomlString(path, original));
+    QFile before(path);
+    ASSERT_TRUE(before.open(QIODevice::ReadOnly));
+    const auto original_bytes = before.readAll();
+    before.close();
+    RecordingPresetStore store(path);
+    EXPECT_TRUE(store.Load().read_only);
+    EXPECT_FALSE(store.Save({}, std::string(kDefaultPresetId), MakeDefaultPreset().config));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(file.readAll(), original_bytes);
+}
+
+TEST(RecordingPresetStore, ConversionKeepsUndoAndRejectsDanglingRoute) {
+    using namespace engine;
+    capability::AudioUiState audio;
+    audio.source_rows = {{AudioSourceKind::Mic, true, false}};
+    const auto legacy = CreateLegacyAudioIntent(audio, NewId<PresetNamespaceId>());
+    auto failed = PrepareAudioIntentConversion(
+        legacy, {}, [](TrackGraph1Intent& graph) { graph.routes[0].track_id = NewId<AudioTrackId>(); });
+    EXPECT_FALSE(failed.succeeded());
+    auto success = PrepareAudioIntentConversion(legacy, {}, [](TrackGraph1Intent& graph) {
+        AudioTrackSpec track;
+        track.id = NewId<AudioTrackId>();
+        track.order = 1;
+        graph.tracks.push_back(track);
+    });
+    ASSERT_TRUE(success.succeeded());
+    EXPECT_EQ(std::get<LegacyRows25Intent>(success.value()->before), legacy);
+    EXPECT_EQ(std::get<TrackGraph1Intent>(success.value()->after).tracks.size(), 2u);
+}
+TEST(RecordingPresetStore, BackupFailureLeavesOriginalBytesUnchanged) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, QStringLiteral("schema_version = 25\n[live.video]\ncq=27\n")));
+    QFile before(path);
+    ASSERT_TRUE(before.open(QIODevice::ReadOnly));
+    const auto bytes = before.readAll();
+    before.close();
+    const auto hash = QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+    const QString backup = path + QStringLiteral(".schema25.%1.bak").arg(QString::fromLatin1(hash));
+    ASSERT_TRUE(QDir().mkpath(backup));
+    RecordingPresetStore store(path);
+    const auto loaded = store.Load();
+    ASSERT_TRUE(loaded.live.has_value());
+    QString error;
+    EXPECT_FALSE(store.Save({}, std::string(kDefaultPresetId), *loaded.live, &error));
+    EXPECT_FALSE(error.isEmpty());
+    QFile after(path);
+    ASSERT_TRUE(after.open(QIODevice::ReadOnly));
+    EXPECT_EQ(after.readAll(), bytes);
+}
+
+TEST(RecordingPresetStore, NativeUnknownSourceFieldsSurviveEditedRouteAndExport) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+    RecordingPreset preset = MakeDefaultPreset();
+    preset.id = "preset.native";
+    ASSERT_TRUE(store.Save({preset}, preset.id, preset.config));
+    auto doc = toml::parse_file(path.toStdString());
+    auto* sources = (*doc["presets"].as_array())[0].as_table()->operator[]("audio")["intent"]["sources"].as_array();
+    ASSERT_NE(sources, nullptr);
+    (*sources)[0].as_table()->insert("vendor", toml::table{{"opaque", "preserve"}});
+    std::ostringstream text;
+    text << doc;
+    ASSERT_TRUE(WriteTomlString(path, QString::fromStdString(text.str())));
+    auto loaded = store.Load();
+    ASSERT_EQ(loaded.user_presets.size(), 1u);
+    auto& edited = loaded.user_presets[0];
+    auto& graph = std::get<engine::TrackGraph1Intent>(*edited.config.audio_intent);
+    graph.routes[0].gain_db = -6.0f;
+    ASSERT_TRUE(store.Save(loaded.user_presets, edited.id, *loaded.live));
+    const QString export_path = UniqueTempPath();
+    ASSERT_TRUE(RecordingPresetStore::ExportPresetToFile(edited, export_path, nullptr));
+    const auto exported = toml::parse_file(export_path.toStdString());
+    const auto* exported_preset = (*exported["presets"].as_array())[0].as_table();
+    const auto* exported_sources = (*exported_preset)["audio"]["intent"]["sources"].as_array();
+    ASSERT_NE(exported_sources, nullptr);
+    EXPECT_EQ((*(*exported_sources)[0].as_table())["vendor"]["opaque"].value<std::string>(), "preserve");
+    const auto reloaded = store.Load();
+    EXPECT_EQ(std::get<engine::TrackGraph1Intent>(*reloaded.user_presets[0].config.audio_intent).routes[0].gain_db,
+              -6.0f);
+}
+TEST(RecordingPresetStore, InvalidNativePresetSurvivesRepeatedSaveWithoutDuplication) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+    RecordingPreset preset = MakeDefaultPreset();
+    preset.id = "preset.invalid";
+    ASSERT_TRUE(store.Save({preset}, preset.id, preset.config));
+    auto doc = toml::parse_file(path.toStdString());
+    auto* item = (*doc["presets"].as_array())[0].as_table();
+    auto* sources = (*item)["audio"]["intent"]["sources"].as_array();
+    ASSERT_NE(sources, nullptr);
+    sources->push_back(*(*sources)[0].as_table());
+    std::ostringstream text;
+    text << doc;
+    ASSERT_TRUE(WriteTomlString(path, QString::fromStdString(text.str())));
+    for (int save = 0; save < 3; ++save) {
+        auto loaded = store.Load();
+        ASSERT_EQ(loaded.user_presets.size(), 1u);
+        EXPECT_TRUE(loaded.user_presets[0].config.audio_read_only);
+        ASSERT_TRUE(loaded.live.has_value());
+        ASSERT_TRUE(store.Save(loaded.user_presets, loaded.selected_id, *loaded.live));
+    }
+    const auto persisted = toml::parse_file(path.toStdString());
+    ASSERT_EQ(persisted["presets"].as_array()->size(), 1u);
+    const auto* persisted_item = (*persisted["presets"].as_array())[0].as_table();
+    EXPECT_EQ((*persisted_item)["audio"]["intent"]["sources"].as_array()->size(), 3u);
+}
+
+TEST(RecordingPresetStore, MigrationWithoutAudioTableStillPersistsOneIntent) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, QStringLiteral("schema_version=25\n[live.video]\ncq=27\n")));
+    RecordingPresetStore store(path);
+    const auto loaded = store.Load();
+    ASSERT_TRUE(loaded.live.has_value());
+    ASSERT_TRUE(store.Save({}, std::string(kDefaultPresetId), *loaded.live));
+    const auto persisted = toml::parse_file(path.toStdString());
+    EXPECT_EQ(persisted["live"]["audio"]["intent"]["kind"].value<std::string>(), "LegacyRows25");
+    EXPECT_FALSE(persisted["live"]["audio"]["sources"]);
+    EXPECT_EQ(store.Load().live->audio_intent, loaded.live->audio_intent);
+}
+
+TEST(RecordingPresetStore, FreshGraphIdentityAndDuplicationPreserveActualLayout) {
+    const auto first = MakeNewAudioIntent();
+    const auto second = MakeNewAudioIntent();
+    EXPECT_NE(first.tracks[0].id, second.tracks[0].id);
+    EXPECT_NE(first.sources[0].id, second.sources[0].id);
+    const auto duplicate = first;
+    EXPECT_EQ(duplicate, first);
+    ASSERT_EQ(first.routes.size(), 1u);
+    EXPECT_EQ(first.routes[0].track_id, first.tracks[0].id);
+    EXPECT_EQ(first.default_monitor_track_ids, std::vector{first.tracks[0].id});
+    EXPECT_FALSE(first.sources[1].participation);
+}
+TEST(RecordingPresetStore, NamedLegacyUpgradeDoesNotRetainSecondTopology) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(
+        WriteTomlString(path, QStringLiteral("schema_version=25\n[[presets]]\nid='preset.legacy'\nname='Legacy'\n[["
+                                             "presets.audio.sources]]\nkind='mic'\nenabled=true\n[live]\n")));
+    RecordingPresetStore store(path);
+    const auto loaded = store.Load();
+    ASSERT_EQ(loaded.user_presets.size(), 1u);
+    ASSERT_TRUE(loaded.live.has_value());
+    ASSERT_TRUE(store.Save(loaded.user_presets, loaded.selected_id, *loaded.live));
+    const auto persisted = toml::parse_file(path.toStdString());
+    const auto* preset = (*persisted["presets"].as_array())[0].as_table();
+    EXPECT_FALSE((*preset)["audio"]["sources"]);
+    EXPECT_EQ((*preset)["audio"]["intent"]["kind"].value<std::string>(), "LegacyRows25");
+}
+TEST(RecordingPresetStore, UnsupportedLegacySourceArrayCannotBeDestructivelyMigrated) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(
+        WriteTomlString(path, QStringLiteral("schema_version=25\n[live.audio]\nsources='opaque source contract'\n")));
+    QFile before(path);
+    ASSERT_TRUE(before.open(QIODevice::ReadOnly));
+    const auto bytes = before.readAll();
+    before.close();
+    RecordingPresetStore store(path);
+    const auto loaded = store.Load();
+    ASSERT_TRUE(loaded.live.has_value());
+    EXPECT_TRUE(loaded.live->audio_read_only);
+    EXPECT_FALSE(store.Save({}, std::string(kDefaultPresetId), *loaded.live));
+    QFile after(path);
+    ASSERT_TRUE(after.open(QIODevice::ReadOnly));
+    EXPECT_EQ(after.readAll(), bytes);
+}
+
+TEST(RecordingPresetStore, ExplicitInvalidSchemaCannotBeOverwritten) {
+    for (const QString version : {QStringLiteral("'unknown'"), QStringLiteral("-1")}) {
+        const QString path = UniqueTempPath();
+        ASSERT_TRUE(WriteTomlString(path, "schema_version=" + version + "\n[future]\nvalue='keep'\n"));
+        QFile before(path);
+        ASSERT_TRUE(before.open(QIODevice::ReadOnly));
+        const auto bytes = before.readAll();
+        before.close();
+        RecordingPresetStore store(path);
+        EXPECT_TRUE(store.Load().read_only);
+        EXPECT_FALSE(store.Save({}, std::string(kDefaultPresetId), MakeDefaultPreset().config));
+        QFile after(path);
+        ASSERT_TRUE(after.open(QIODevice::ReadOnly));
+        EXPECT_EQ(after.readAll(), bytes);
+    }
+}
+TEST(RecordingPresetStore, ClearingWebcamControlsSurvivesSaveReload) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+    auto live = MakeDefaultPreset().config;
+    live.webcam.controls = {{WebcamControl::Brightness, false, -12}};
+    ASSERT_TRUE(store.Save({}, std::string(kDefaultPresetId), live));
+    auto loaded = store.Load();
+    ASSERT_TRUE(loaded.live.has_value());
+    ASSERT_EQ(loaded.live->webcam.controls.size(), 1u);
+    loaded.live->webcam.controls.clear();
+    ASSERT_TRUE(store.Save({}, std::string(kDefaultPresetId), *loaded.live));
+    const auto reloaded = store.Load();
+    ASSERT_TRUE(reloaded.live.has_value());
+    EXPECT_TRUE(reloaded.live->webcam.controls.empty());
+}
+
+TEST(RecordingPresetStore, ClearingNativeOptionalSourceFieldsSurvivesSaveReload) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+    auto live = MakeDefaultPreset().config;
+    auto& source = std::get<engine::TrackGraph1Intent>(*live.audio_intent).sources[0];
+    source.binding.kind = engine::AudioBindingKind::IndependentProcess;
+    source.binding.process = engine::ProcessInstanceIdentity{123, 456, "player"};
+    source.legacy_row_id = engine::NewId<engine::LegacyRowId>();
+    ASSERT_TRUE(store.Save({}, std::string(kDefaultPresetId), live));
+    auto loaded = store.Load();
+    ASSERT_TRUE(loaded.live.has_value());
+    auto& edited = std::get<engine::TrackGraph1Intent>(*loaded.live->audio_intent).sources[0];
+    ASSERT_TRUE(edited.binding.process.has_value());
+    ASSERT_TRUE(edited.legacy_row_id.has_value());
+    edited.binding.kind = engine::AudioBindingKind::PlaybackEndpoint;
+    edited.binding.process.reset();
+    edited.legacy_row_id.reset();
+    ASSERT_TRUE(store.Save({}, std::string(kDefaultPresetId), *loaded.live));
+    const auto reloaded = store.Load();
+    ASSERT_TRUE(reloaded.live.has_value());
+    const auto& saved = std::get<engine::TrackGraph1Intent>(*reloaded.live->audio_intent).sources[0];
+    EXPECT_FALSE(saved.binding.process.has_value());
+    EXPECT_FALSE(saved.legacy_row_id.has_value());
+}
 } // namespace
 } // namespace exosnap

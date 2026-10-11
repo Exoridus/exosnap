@@ -14,6 +14,7 @@ struct MicDspConfig {
     [[nodiscard]] bool AnyEnabled() const noexcept {
         return hpf_enabled || gate_enabled || agc_enabled || rnnoise_enabled;
     }
+    bool operator==(const MicDspConfig&) const = default;
 };
 
 } // namespace exosnap::engine

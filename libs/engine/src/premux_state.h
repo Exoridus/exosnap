@@ -5,6 +5,7 @@
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/packet_types.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <condition_variable>
@@ -12,6 +13,7 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -121,13 +123,21 @@ class PremuxState {
     [[nodiscard]] PremuxRoute Route(EncodedAudioPacket& packet, VideoCodec codec, uint32_t tracks,
                                     uint32_t& buffered_depth) {
         std::lock_guard lock(mutex_);
+        if (tracks > kMaxAudioTracks || packet.track_id >= tracks) {
+            return PremuxRoute::Full;
+        }
         if (Ready(codec, tracks)) {
             return PremuxRoute::Mux;
         }
-        if (pending_.audio.size() >= AudioHoldPacketLimit(tracks) ||
+        const uint64_t first = audio_first_pts_ ? (std::min)(packet.pts_ns, *audio_first_pts_) : packet.pts_ns;
+        const uint64_t last = audio_last_pts_ ? (std::max)(packet.pts_ns, *audio_last_pts_) : packet.pts_ns;
+        if (tracks > kMaxAudioTracks || packet.track_id >= tracks || last - first > kAudioHoldHorizonNs ||
+            pending_.audio.size() >= AudioHoldPacketLimit(tracks) ||
             packet.bytes.size() > kAudioPremuxPayloadBytes - audio_payload_bytes_) {
             return PremuxRoute::Full;
         }
+        audio_first_pts_ = first;
+        audio_last_pts_ = last;
         audio_payload_bytes_ += packet.bytes.size();
         pending_.audio.push_back(std::move(packet));
         buffered_depth = static_cast<uint32_t>(pending_.audio.size());
@@ -157,6 +167,8 @@ class PremuxState {
     [[nodiscard]] Pending TakePending() {
         std::lock_guard lock(mutex_);
         audio_payload_bytes_ = 0;
+        audio_first_pts_.reset();
+        audio_last_pts_.reset();
         return std::exchange(pending_, {});
     }
 
@@ -175,6 +187,8 @@ class PremuxState {
         codec_private_ = {};
         pending_ = {};
         audio_payload_bytes_ = 0;
+        audio_first_pts_.reset();
+        audio_last_pts_.reset();
     }
 
     [[nodiscard]] bool WaitForWaiter(std::chrono::milliseconds timeout) {
@@ -194,6 +208,8 @@ class PremuxState {
     Pending pending_;
     size_t waiting_ = 0;
     size_t audio_payload_bytes_ = 0;
+    std::optional<uint64_t> audio_first_pts_;
+    std::optional<uint64_t> audio_last_pts_;
 };
 
 } // namespace exosnap::engine

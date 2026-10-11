@@ -323,7 +323,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                 if (route != PremuxRoute::Mux) {
                     if (route == PremuxRoute::Full) {
                         m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                              "Pre-mux audio buffer limit (600 packets) exceeded "
+                                              "Pre-mux audio packet, payload or media-time limit exceeded "
                                               "before codec private data was ready");
                         return false;
                     }

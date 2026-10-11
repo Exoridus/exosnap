@@ -16,10 +16,6 @@
 
 namespace exosnap::engine {
 
-namespace {
-constexpr uint32_t kAudioPremuxCapacity = 600; // SessionState::kAudioPremuxLimit
-} // namespace
-
 DiagnosticsSplitTrigger ToDiagnosticsSplitTrigger(SplitTriggerSource src) noexcept {
     switch (src) {
     case SplitTriggerSource::AutomaticDuration:
@@ -67,7 +63,7 @@ DiagnosticsStaticConfig MakeDiagnosticsStaticConfig(const RecorderConfig& config
     }
 
     cfg.video_queue_capacity = 0; // mux queue is unbounded by design (architecture finding)
-    cfg.audio_queue_capacity = kAudioPremuxCapacity;
+    cfg.audio_queue_capacity = static_cast<uint32_t>(AudioHoldPacketLimit(cfg.audio_track_count));
     return cfg;
 }
 

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <ratio>
 #include <utility>
@@ -69,6 +70,8 @@ constexpr uint64_t kClusterBoundaryMs = 2000ULL;
 constexpr int64_t kMaxClusterRelativeMs = 32767LL;
 // Space reserved for the SeekHead placeholder at the start of the Segment.
 constexpr uint64_t kSeekHeadReservedBytes = 150ULL;
+constexpr size_t kReceiptPayloadLimit = 4ULL * 1024 * 1024;
+constexpr size_t kPendingClusterLimit = 1024;
 
 // Width of each reserved MaxCLL / MaxFALL leaf. CTA-861.3 codes both as u(16),
 // so two bytes hold every representable level and the back-patch at Finalize()
@@ -169,6 +172,18 @@ class DurableFileIo final : public libebml::IOCallback {
         const auto start = std::chrono::steady_clock::now();
         const size_t written = std::fwrite(buffer, 1, size, m_file);
         m_timings.write_ms += ElapsedMs(start);
+        if (m_capture_header) {
+            try {
+                const uint64_t end = getFilePointer();
+                if (end > kReceiptPayloadLimit)
+                    throw std::length_error("Immutable media header budget exceeded");
+                m_header.resize((std::max)(m_header.size(), static_cast<size_t>(end)));
+                std::memcpy(m_header.data() + static_cast<size_t>(end) - written, buffer, written);
+            } catch (...) {
+                m_header.clear();
+                m_capture_header = false;
+            }
+        }
         return written;
     }
 
@@ -196,6 +211,19 @@ class DurableFileIo final : public libebml::IOCallback {
     }
 
     enum class FlushResult { Success, StreamFailure, DurabilityFailure };
+    std::vector<uint8_t> TakeHeader() {
+        m_capture_header = false;
+        return std::move(m_header);
+    }
+    bool GetIdentity(FileIdentity& identity) const noexcept {
+        FILE_ID_INFO info{};
+        const HANDLE handle = reinterpret_cast<HANDLE>(static_cast<intptr_t>(_get_osfhandle(_fileno(m_file))));
+        if (!GetFileInformationByHandleEx(handle, FileIdInfo, &info, sizeof(info)))
+            return false;
+        identity.volume_serial = info.VolumeSerialNumber;
+        std::copy(std::begin(info.FileId.Identifier), std::end(info.FileId.Identifier), identity.file_id.begin());
+        return true;
+    }
     void SetPhase(OutputIoOperation phase) {
         m_phase = phase;
     }
@@ -250,7 +278,96 @@ class DurableFileIo final : public libebml::IOCallback {
     OutputIoTimings& m_timings;
     OutputIoOperation m_phase = OutputIoOperation::PayloadWrite;
     FILE* m_file = nullptr;
+    bool m_capture_header = true;
+    std::vector<uint8_t> m_header;
 };
+
+bool MatroskaStreamWriter::InitializeMediaDescriptor() {
+    m_commit_sequence = m_config.initial_commit_sequence;
+    try {
+        auto descriptor =
+            std::make_shared<RecordingMediaDescriptor>(m_config.media_descriptor.value_or(RecordingMediaDescriptor{}));
+        if (descriptor->recording_id == RecordingId{})
+            descriptor->recording_id = NewId<RecordingId>();
+        if (descriptor->segment_id == SegmentId{})
+            descriptor->segment_id = NewId<SegmentId>();
+        if (descriptor->media_id == MediaId{})
+            descriptor->media_id = NewId<MediaId>();
+        if (descriptor->writer_generation == 0)
+            descriptor->writer_generation = 1;
+        if (descriptor->descriptor_revision == 0)
+            descriptor->descriptor_revision = 1;
+        descriptor->path = m_config.output_path;
+        descriptor->video.codec_id = m_config.video_codec_id;
+        descriptor->video.codec_private = m_config.video_codec_private;
+        descriptor->color = m_config.color;
+        if (m_config.reserve_content_light_level) {
+            descriptor->color.max_content_light_level = 0;
+            descriptor->color.max_frame_average_light_level = 0;
+        }
+        descriptor->audio_tracks.resize(m_config.audio_track_count);
+        for (uint32_t index = 0; index < m_config.audio_track_count; ++index) {
+            auto& track = descriptor->audio_tracks[index];
+            if (track.track_id == AudioTrackId{})
+                track.track_id = NewId<AudioTrackId>();
+            track.stream_index.value = index;
+            track.track_uid = 2 + index;
+            track.name = m_config.audio_tracks[index].name;
+            const char* codec = m_config.audio_codec == StreamAudioCodec::Opus   ? "A_OPUS"
+                                : m_config.audio_codec == StreamAudioCodec::Aac  ? "A_AAC"
+                                : m_config.audio_codec == StreamAudioCodec::Flac ? "A_FLAC"
+                                : m_config.audio_float                           ? "A_PCM/FLOAT/IEEE"
+                                                                                 : "A_PCM/INT/LIT";
+            track.codec = {codec,
+                           m_config.audio_tracks[index].codec_private,
+                           m_config.audio_sample_rate,
+                           m_config.audio_channels,
+                           m_config.audio_bit_depth,
+                           m_config.audio_tracks[index].codec_delay_samples};
+            if (m_config.audio_codec == StreamAudioCodec::Opus && track.codec.codec_private.size() >= 12)
+                track.codec.codec_delay_samples = static_cast<uint32_t>(track.codec.codec_private[10]) |
+                                                  (static_cast<uint32_t>(track.codec.codec_private[11]) << 8);
+        }
+        descriptor->immutable_header = m_io->TakeHeader();
+        if (descriptor->immutable_header.empty() || !m_io->GetIdentity(descriptor->file_identity)) {
+            m_media_index_degraded = true;
+            return false;
+        }
+        m_media_descriptor = std::move(descriptor);
+        return true;
+    } catch (...) {
+        m_media_index_degraded = true;
+        return false;
+    }
+}
+
+void MatroskaStreamWriter::PublishCommitted(bool durable) noexcept {
+    if (m_media_index_degraded || !m_media_descriptor || m_pending_closed_extents.empty())
+        return;
+    try {
+        if (m_commit_sequence == (std::numeric_limits<uint64_t>::max)())
+            throw std::overflow_error("Media commit sequence exhausted");
+        m_readable_end = m_pending_closed_extents.back().file_end;
+        if (durable)
+            m_durable_end = m_readable_end;
+        CommittedMediaReceipt receipt{m_media_descriptor->recording_id,
+                                      m_media_descriptor->segment_id,
+                                      m_media_descriptor->writer_generation,
+                                      ++m_commit_sequence,
+                                      m_media_descriptor->descriptor_revision,
+                                      m_readable_end,
+                                      m_durable_end,
+                                      std::move(m_pending_closed_extents)};
+        m_pending_closed_extents.clear();
+        m_pending_receipt_bytes = 0;
+        if (m_config.publish_committed && m_config.publish_committed(std::move(receipt)) != ReceiptAcceptance::Accepted)
+            m_media_index_degraded = true;
+    } catch (...) {
+        m_media_index_degraded = true;
+        m_pending_closed_extents.clear();
+        m_pending_receipt_bytes = 0;
+    }
+}
 
 MatroskaStreamWriter::MatroskaStreamWriter() = default;
 
@@ -577,6 +694,7 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
         return false;
     }
 
+    InitializeMediaDescriptor();
     return true;
 }
 
@@ -695,8 +813,10 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
         std::vector<uint8_t>& stored = m_cluster_bytes.back();
 
         auto* data_buf = new libmatroska::DataBuffer(stored.data(), static_cast<uint32_t>(stored.size()));
+        libebml::EbmlElement* rendered_block = nullptr;
         if (e.track_num == 1 && e.dts_ns) {
             auto& group = libebml::AddNewChild<libmatroska::KaxBlockGroup>(*m_cluster);
+            rendered_block = &group;
             group.SetParent(*m_cluster);
             group.AddFrame(*track_entry, e.pts_ns, *data_buf, libmatroska::LACING_NONE);
             if (!e.is_key) {
@@ -715,9 +835,59 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
                 timestamps.data(), static_cast<uint32_t>(timestamps.size()));
         } else {
             auto& sb = libebml::AddNewChild<libmatroska::KaxSimpleBlock>(*m_cluster);
+            rendered_block = &sb;
             sb.SetParent(*m_cluster);
             sb.AddFrame(*track_entry, e.pts_ns, *data_buf, libmatroska::LACING_NONE);
             sb.SetKeyframe(e.is_key);
+        }
+
+        if (!m_media_index_degraded) {
+            try {
+                uint64_t duration = 0;
+                if (e.track_num == 1 && m_config.frame_rate_num != 0)
+                    duration = static_cast<uint64_t>(m_config.frame_rate_den) * 1000000000ULL / m_config.frame_rate_num;
+                else if (m_config.audio_sample_rate != 0) {
+                    uint64_t samples = 0;
+                    if (m_config.audio_codec == StreamAudioCodec::Pcm && m_config.audio_channels &&
+                        m_config.audio_bit_depth >= 8)
+                        samples = e.bytes.size() /
+                                  (static_cast<size_t>(m_config.audio_channels) * (m_config.audio_bit_depth / 8));
+                    else if (m_config.audio_codec == StreamAudioCodec::Opus)
+                        samples = m_config.opus_frame_samples;
+                    else if (m_config.audio_codec == StreamAudioCodec::Aac)
+                        samples = 1024;
+                    duration = samples * 1000000000ULL / m_config.audio_sample_rate;
+                }
+                if (e.pts_ns > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()) - duration)
+                    throw std::overflow_error("Media coverage timestamp overflow");
+                const auto pts = static_cast<int64_t>(e.pts_ns);
+                const auto end = static_cast<int64_t>(e.pts_ns + duration);
+                auto& coverage = m_active_cluster_extent.coverage;
+                auto found = std::find_if(coverage.begin(), coverage.end(),
+                                          [&](const auto& entry) { return entry.track_number == e.track_num; });
+                if (found == coverage.end())
+                    coverage.push_back({e.track_num, pts, end, e.ordering_ns, e.ordering_ns});
+                else {
+                    found->begin_pts_ns = (std::min)(found->begin_pts_ns, pts);
+                    found->end_pts_ns = (std::max)(found->end_pts_ns, end);
+                    found->min_dts_ns = (std::min)(found->min_dts_ns, e.ordering_ns);
+                    found->max_dts_ns = (std::max)(found->max_dts_ns, e.ordering_ns);
+                }
+                if (e.is_key && e.track_num == 1) {
+                    if (m_active_cluster_extent.random_access_points.size() >=
+                        kReceiptPayloadLimit / sizeof(MediaRandomAccessPoint))
+                        throw std::length_error("Media random-access metadata budget exceeded");
+                    const size_t index = m_active_cluster_extent.random_access_points.size();
+                    m_active_cluster_extent.random_access_points.push_back(
+                        {1, 0, 0, pts, e.ordering_ns, RandomAccessKind::Unknown});
+                    m_pending_rap_blocks.emplace_back(rendered_block, index);
+                }
+            } catch (...) {
+                m_media_index_degraded = true;
+                m_active_cluster_extent = {};
+                m_pending_rap_blocks.clear();
+                m_pending_closed_extents.clear();
+            }
         }
 
         if (e.is_key && e.track_num == 1)
@@ -745,6 +915,30 @@ bool MatroskaStreamWriter::FlushCluster() {
         m_last_flush_ms = std::chrono::duration<double, std::milli>(flush_t1 - flush_t0).count();
         ++m_flush_count;
         const uint64_t pos_after = static_cast<uint64_t>(m_io->getFilePointer());
+        if (!m_media_index_degraded) {
+            try {
+                m_active_cluster_extent.file_begin = pos_before;
+                m_active_cluster_extent.file_end = pos_after;
+                for (const auto& [block, index] : m_pending_rap_blocks) {
+                    auto& rap = m_active_cluster_extent.random_access_points[index];
+                    rap.cluster_offset = pos_before;
+                    rap.block_offset = block->GetElementPosition();
+                }
+                const size_t bytes =
+                    sizeof(ClusterExtent) + m_active_cluster_extent.coverage.capacity() * sizeof(MediaTrackCoverage) +
+                    m_active_cluster_extent.random_access_points.capacity() * sizeof(MediaRandomAccessPoint);
+                if (bytes > kReceiptPayloadLimit - m_pending_receipt_bytes ||
+                    m_pending_closed_extents.size() == kPendingClusterLimit)
+                    throw std::length_error("Pending media receipt budget exceeded");
+                m_pending_receipt_bytes += bytes;
+                m_pending_closed_extents.push_back(std::move(m_active_cluster_extent));
+            } catch (...) {
+                m_media_index_degraded = true;
+                m_pending_closed_extents.clear();
+            }
+        }
+        m_active_cluster_extent = {};
+        m_pending_rap_blocks.clear();
         if (pos_after > pos_before) {
             m_bytes_written += pos_after - pos_before;
         }
@@ -800,6 +994,7 @@ bool MatroskaStreamWriter::FlushCluster() {
             }
             if (result == DurableFileIo::FlushResult::DurabilityFailure)
                 LogDurabilityFlushFailure("durability flush failed", reason);
+            PublishCommitted(result == DurableFileIo::FlushResult::Success);
             ++m_durability_flush_count;
             m_durability_flush_scheduler.MarkFlushed(now);
         }
@@ -935,6 +1130,8 @@ bool MatroskaStreamWriter::Finalize() {
             Fail(reason);
         if (result == DurableFileIo::FlushResult::DurabilityFailure)
             LogDurabilityFlushFailure("final durability flush failed", reason);
+        if (result != DurableFileIo::FlushResult::StreamFailure)
+            PublishCommitted(result == DurableFileIo::FlushResult::Success);
         ++m_durability_flush_count;
     }
     // Checkpoint around the final flush too: even though FlushFileBuffers

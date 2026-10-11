@@ -1,6 +1,7 @@
 #include <exosnap/engine/audio_routing_model.h>
 
 #include <gtest/gtest.h>
+#include <limits>
 
 #include <type_traits>
 
@@ -101,6 +102,18 @@ TEST(AudioRoutingValidation, RejectsDuplicateIdentityDanglingReferencesAndDuplic
     EXPECT_FALSE(ValidateTrackGraph1Intent(graph).succeeded());
     graph = GraphWithTracks(2);
     graph.routes[1].id = graph.routes[0].id;
+    EXPECT_FALSE(ValidateTrackGraph1Intent(graph).succeeded());
+}
+
+TEST(AudioRoutingValidation, RejectsNonfiniteDspParametersBeforeSourcePreparation) {
+    auto graph = GraphWithTracks(1);
+    graph.sources.front().dsp.hpf_cutoff_hz = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FALSE(ValidateTrackGraph1Intent(graph).succeeded());
+    graph.sources.front().dsp.hpf_cutoff_hz = 80.0f;
+    graph.sources.front().dsp.gate_threshold_db = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(ValidateTrackGraph1Intent(graph).succeeded());
+    graph.sources.front().dsp.gate_threshold_db = -45.0f;
+    graph.sources.front().dsp.agc_target_db = -std::numeric_limits<float>::infinity();
     EXPECT_FALSE(ValidateTrackGraph1Intent(graph).succeeded());
 }
 

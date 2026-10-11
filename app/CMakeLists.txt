@@ -243,6 +243,7 @@ exosnap_add_app_test_support(exosnap_output_model_test_support
     models/OutputPathValidator.cpp
     models/OutputSettingsModel.cpp
     models/RecordingPreset.cpp
+    models/AudioRoutingMigration.cpp
 )
 target_link_libraries(exosnap_output_model_test_support PUBLIC
     Qt6::Core Qt6::Gui exosnap_capability exosnap_engine ole32.lib shell32.lib
@@ -341,6 +342,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_recording_preset.cpp
         models/RecordingPreset.cpp
+        models/AudioRoutingMigration.cpp
         models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine
 )
@@ -414,6 +416,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_video_rate_control.cpp
         models/RecordingPreset.cpp
+        models/AudioRoutingMigration.cpp
         models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine
 )
@@ -428,6 +431,7 @@ exosnap_add_gtest(
         tests/test_audio_encoding_preset.cpp
         settings/RecordingPresetStore.cpp
         models/RecordingPreset.cpp
+        models/AudioRoutingMigration.cpp
         models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core
 )
@@ -1009,6 +1013,7 @@ exosnap_add_gtest(
     SOURCES tests/test_recording_preset_registry.cpp
             models/RecordingPresetRegistry.cpp
             models/RecordingPreset.cpp
+            models/AudioRoutingMigration.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine)
 target_include_directories(recording_preset_registry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -1020,6 +1025,7 @@ exosnap_add_gtest(
     SOURCES tests/test_recording_preset_store.cpp
             settings/RecordingPresetStore.cpp
             models/RecordingPreset.cpp
+            models/AudioRoutingMigration.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core)
 target_include_directories(recording_preset_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -1032,6 +1038,7 @@ exosnap_add_gtest(
     SOURCES tests/test_preset_export_import.cpp
             settings/RecordingPresetStore.cpp
             models/RecordingPreset.cpp
+            models/AudioRoutingMigration.cpp
             models/RecordingPresetRegistry.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core)
@@ -1045,6 +1052,7 @@ exosnap_add_gtest(
     SOURCES tests/test_audio_gain_preset.cpp
             settings/RecordingPresetStore.cpp
             models/RecordingPreset.cpp
+            models/AudioRoutingMigration.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core)
 target_include_directories(audio_gain_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

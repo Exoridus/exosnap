@@ -34,6 +34,7 @@ struct AudioSourceBinding {
     AudioEndpointRole endpoint_role = AudioEndpointRole::Multimedia;
     std::string endpoint_id;
     std::optional<ProcessInstanceIdentity> process;
+    bool operator==(const AudioSourceBinding&) const = default;
 };
 
 struct AudioSourceSpec {
@@ -46,6 +47,7 @@ struct AudioSourceSpec {
     float post_dsp_gain_linear = 1.0f;
     bool participation = true;
     bool muted = false;
+    bool operator==(const AudioSourceSpec&) const = default;
 };
 
 enum class AudioTrackNameKind { Automatic, Custom };
@@ -55,6 +57,7 @@ enum class MonitorSelectionOrigin { Default, User };
 struct TrackLimiterConfig {
     bool enabled = true;
     float ceiling_db = 0.0f;
+    bool operator==(const TrackLimiterConfig&) const = default;
 };
 
 struct AudioTrackSpec {
@@ -64,6 +67,7 @@ struct AudioTrackSpec {
     std::string name;
     bool record_enabled = true;
     AudioTrackRole role = AudioTrackRole::Standard;
+    bool operator==(const AudioTrackSpec&) const = default;
 };
 
 struct AudioRouteSpec {
@@ -73,6 +77,7 @@ struct AudioRouteSpec {
     float gain_db = 0.0f;
     bool muted = false;
     bool enabled = true;
+    bool operator==(const AudioRouteSpec&) const = default;
 };
 
 struct TrackGraph1Intent {
@@ -82,6 +87,7 @@ struct TrackGraph1Intent {
     std::vector<AudioTrackId> default_monitor_track_ids;
     MonitorSelectionOrigin monitor_selection_origin = MonitorSelectionOrigin::Default;
     TrackLimiterConfig limiter;
+    bool operator==(const TrackGraph1Intent&) const = default;
 };
 
 struct LegacyAudioRow {
@@ -93,18 +99,20 @@ struct LegacyAudioRow {
     std::string name;
     AudioTrackRole role = AudioTrackRole::Standard;
     bool record_enabled = true;
+    bool operator==(const LegacyAudioRow&) const = default;
 };
 
 struct LegacyRows25Intent {
     PresetNamespaceId id_namespace;
     std::vector<LegacyAudioRow> rows;
-    AudioSourceBinding microphone_binding{AudioBindingKind::MicrophoneEndpoint};
+    AudioSourceBinding microphone_binding{AudioBindingKind::MicrophoneEndpoint, true, AudioEndpointRole::Console};
     MicChannelMode microphone_channel_mode = MicChannelMode::Auto;
     MicDspConfig microphone_dsp;
     float microphone_gain_linear = 1.0f;
     std::vector<AudioTrackId> default_monitor_track_ids;
     MonitorSelectionOrigin monitor_selection_origin = MonitorSelectionOrigin::Default;
     TrackLimiterConfig limiter;
+    bool operator==(const LegacyRows25Intent&) const = default;
 };
 
 using AudioIntent = std::variant<LegacyRows25Intent, TrackGraph1Intent>;
@@ -132,6 +140,7 @@ struct AudioEnvironmentSnapshot {
     bool window_target = false;
     bool process_loopback_supported = false;
     std::optional<ProcessInstanceIdentity> capture_target_process;
+    // Legacy default fields identify the Console endpoint.
     std::string default_playback_endpoint;
     std::string default_microphone_endpoint;
     std::array<std::string, 3> default_playback_by_role;
@@ -172,6 +181,7 @@ struct ResolvedAudioPlan {
     std::vector<ResolvedRoutingTrack> tracks;
     std::vector<AudioTrackId> default_monitor_track_ids;
     MonitorSelectionOrigin monitor_selection_origin = MonitorSelectionOrigin::Default;
+    bool monitor_confirmation_required = false;
     std::vector<std::string> warnings;
 };
 

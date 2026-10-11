@@ -1,6 +1,8 @@
+#include <algorithm>
 #include <cstdint>
 #include <gtest/gtest.h>
 
+#include <exosnap/engine/audio_routing_model.h>
 #include <exosnap/engine/audio_track_model.h>
 
 #include <cstddef>
@@ -394,3 +396,304 @@ TEST(AudioTrackIndices, WhatTheResolverProducesIsAlwaysAccepted) {
 }
 
 } // namespace
+TEST(AudioIntentResolver, LegacyParticipationRecomputesAnchors) {
+    using namespace exosnap::engine;
+    LegacyRows25Intent legacy;
+    legacy.id_namespace = NewId<PresetNamespaceId>();
+    for (int i = 0; i != 3; ++i) {
+        LegacyAudioRow row;
+        row.row_id = NewId<LegacyRowId>();
+        row.source_id = NewId<AudioSourceId>();
+        row.anchor_track_id = NewId<AudioTrackId>();
+        row.row = {AudioSourceKind::Mic, i != 1, i == 2};
+        legacy.rows.push_back(row);
+    }
+    AudioEnvironmentSnapshot env;
+    env.default_microphone_endpoint = "mic";
+    env.microphone_endpoints = {"mic"};
+    auto initial = ResolveAudioIntent(legacy, env);
+    ASSERT_TRUE(initial.succeeded());
+    ASSERT_EQ(initial.value()->tracks.size(), 1u);
+    EXPECT_EQ(initial.value()->tracks[0].routes.size(), 2u);
+    LegacyRowPatch patch;
+    patch.enabled = true;
+    auto edited = ApplyLegacyRowEdit(legacy, legacy.rows[1].row_id, patch);
+    ASSERT_TRUE(edited.succeeded());
+    auto enabled = ResolveAudioIntent(*edited.value(), env);
+    ASSERT_TRUE(enabled.succeeded());
+    ASSERT_EQ(enabled.value()->tracks.size(), 2u);
+    EXPECT_EQ(enabled.value()->tracks[0].id, legacy.rows[0].anchor_track_id);
+    EXPECT_EQ(enabled.value()->tracks[1].id, legacy.rows[1].anchor_track_id);
+    EXPECT_EQ(enabled.value()->tracks[1].routes.size(), 2u);
+}
+
+TEST(AudioIntentResolver, NativeMutedOrNonparticipatingSourceKeepsTrackAndDivisor) {
+    using namespace exosnap::engine;
+    TrackGraph1Intent graph;
+    AudioSourceSpec source;
+    source.id = NewId<AudioSourceId>();
+    source.participation = false;
+    graph.sources.push_back(source);
+    AudioTrackSpec track;
+    track.id = NewId<AudioTrackId>();
+    graph.tracks.push_back(track);
+    graph.routes.push_back({NewId<AudioRouteId>(), source.id, track.id});
+    graph.default_monitor_track_ids = {track.id};
+    auto resolved = ResolveAudioIntent(graph, {});
+    ASSERT_TRUE(resolved.succeeded());
+    ASSERT_EQ(resolved.value()->tracks.size(), 1u);
+    EXPECT_EQ(resolved.value()->tracks[0].fixed_average_divisor, 1u);
+    EXPECT_EQ(resolved.value()->tracks[0].routes[0].gain_linear, 1.0f);
+    EXPECT_FALSE(resolved.value()->sources[0].capture_key.has_value());
+}
+
+TEST(AudioIntentResolver, MaterializationKeepsNormalizedLegacyRowsUnassigned) {
+    using namespace exosnap::engine;
+    LegacyRows25Intent legacy;
+    legacy.id_namespace = NewId<PresetNamespaceId>();
+    LegacyAudioRow row;
+    row.row_id = NewId<LegacyRowId>();
+    row.source_id = NewId<AudioSourceId>();
+    row.anchor_track_id = NewId<AudioTrackId>();
+    row.row = {AudioSourceKind::App, true, false};
+    legacy.rows.push_back(row);
+    auto graph = MaterializeLegacyIntent(legacy, {});
+    ASSERT_TRUE(graph.succeeded());
+    ASSERT_EQ(graph.value()->sources.size(), 1u);
+    EXPECT_FALSE(graph.value()->sources[0].participation);
+    EXPECT_EQ(graph.value()->sources[0].legacy_row_id, row.row_id);
+    EXPECT_TRUE(graph.value()->routes.empty());
+}
+TEST(AudioIntentResolver, NonparticipatingMissingEndpointIsObservableAndDoesNotBlock) {
+    using namespace exosnap::engine;
+    TrackGraph1Intent graph;
+    AudioSourceSpec source;
+    source.id = NewId<AudioSourceId>();
+    source.participation = false;
+    graph.sources.push_back(source);
+    AudioTrackSpec track;
+    track.id = NewId<AudioTrackId>();
+    graph.tracks.push_back(track);
+    graph.routes.push_back({NewId<AudioRouteId>(), source.id, track.id});
+    auto resolved = ResolveAudioIntent(graph, {});
+    ASSERT_TRUE(resolved.succeeded());
+    EXPECT_EQ(resolved.value()->sources[0].availability, AudioSourceAvailability::EndpointUnavailable);
+    EXPECT_FALSE(resolved.value()->sources[0].capture_key);
+    ASSERT_EQ(resolved.value()->tracks.size(), 1u);
+}
+
+TEST(AudioIntentResolver, DefaultAndFixedEndpointShareCaptureAndRequireMonitorConfirmation) {
+    using namespace exosnap::engine;
+    TrackGraph1Intent graph;
+    AudioTrackSpec track;
+    track.id = NewId<AudioTrackId>();
+    graph.tracks.push_back(track);
+    for (bool follow_default : {true, false}) {
+        AudioSourceSpec source;
+        source.id = NewId<AudioSourceId>();
+        source.binding.follow_default = follow_default;
+        source.binding.endpoint_id = follow_default ? "" : "playback";
+        graph.sources.push_back(source);
+        graph.routes.push_back({NewId<AudioRouteId>(), source.id, track.id});
+    }
+    AudioEnvironmentSnapshot environment;
+    environment.default_playback_endpoint = "playback";
+    environment.default_playback_by_role[static_cast<size_t>(AudioEndpointRole::Multimedia)] = "playback";
+    environment.playback_endpoints = {"playback"};
+    auto resolved = ResolveAudioIntent(graph, environment);
+    ASSERT_TRUE(resolved.succeeded());
+    EXPECT_EQ(resolved.value()->sources[0].capture_key, resolved.value()->sources[1].capture_key);
+    EXPECT_TRUE(resolved.value()->monitor_confirmation_required);
+    graph.monitor_selection_origin = MonitorSelectionOrigin::User;
+    graph.default_monitor_track_ids = {track.id};
+    auto user = ResolveAudioIntent(graph, environment);
+    ASSERT_TRUE(user.succeeded());
+    EXPECT_FALSE(user.value()->monitor_confirmation_required);
+    EXPECT_FALSE(user.value()->warnings.empty());
+}
+
+TEST(AudioIntentResolver, TargetAndIndependentConfirmedProcessShareCapture) {
+    using namespace exosnap::engine;
+    const ProcessInstanceIdentity process{123, 456, "player"};
+    TrackGraph1Intent graph;
+    AudioTrackSpec track;
+    track.id = NewId<AudioTrackId>();
+    graph.tracks.push_back(track);
+    for (const auto kind : {AudioBindingKind::CaptureTargetProcess, AudioBindingKind::IndependentProcess}) {
+        AudioSourceSpec source;
+        source.id = NewId<AudioSourceId>();
+        source.binding.kind = kind;
+        source.binding.process = process;
+        graph.sources.push_back(source);
+        graph.routes.push_back({NewId<AudioRouteId>(), source.id, track.id});
+    }
+    AudioEnvironmentSnapshot environment;
+    environment.window_target = true;
+    environment.process_loopback_supported = true;
+    environment.capture_target_process = process;
+    environment.confirmed_processes = {process};
+    auto resolved = ResolveAudioIntent(graph, environment);
+    ASSERT_TRUE(resolved.succeeded());
+    EXPECT_EQ(resolved.value()->sources[0].capture_key, resolved.value()->sources[1].capture_key);
+    EXPECT_EQ(resolved.value()->sources[0].spec.binding.kind, AudioBindingKind::CaptureTargetProcess);
+    environment.confirmed_processes[0].creation_time = 457;
+    EXPECT_FALSE(ResolveAudioIntent(graph, environment).succeeded());
+}
+
+TEST(AudioIntentResolver, LegacyDisabledSystemCollisionDoesNotEnableLaterSys) {
+    using namespace exosnap::engine;
+    LegacyRows25Intent legacy;
+    legacy.id_namespace = NewId<PresetNamespaceId>();
+    for (const auto kind : {AudioSourceKind::SystemOutput, AudioSourceKind::Sys, AudioSourceKind::Mic}) {
+        LegacyAudioRow row;
+        row.row_id = NewId<LegacyRowId>();
+        row.source_id = NewId<AudioSourceId>();
+        row.anchor_track_id = NewId<AudioTrackId>();
+        row.row = {kind, kind != AudioSourceKind::SystemOutput, false};
+        legacy.rows.push_back(row);
+    }
+    AudioEnvironmentSnapshot environment;
+    environment.default_microphone_endpoint = "mic";
+    environment.microphone_endpoints = {"mic"};
+    auto resolved = ResolveAudioIntent(legacy, environment);
+    ASSERT_TRUE(resolved.succeeded());
+    ASSERT_EQ(resolved.value()->tracks.size(), 1u);
+    EXPECT_EQ(resolved.value()->tracks[0].id, legacy.rows[2].anchor_track_id);
+    EXPECT_EQ(resolved.value()->tracks[0].routes[0].source_id, legacy.rows[2].source_id);
+    EXPECT_EQ(legacy.rows[1].row.kind, AudioSourceKind::Sys);
+}
+
+TEST(AudioIntentResolver, EmptyNativeCardsKeepVisiblePositionAndDenseMuxIndices) {
+    using namespace exosnap::engine;
+    TrackGraph1Intent graph;
+    AudioSourceSpec source;
+    source.id = NewId<AudioSourceId>();
+    source.participation = false;
+    graph.sources.push_back(source);
+    for (uint32_t order : {2u, 0u, 1u}) {
+        AudioTrackSpec track;
+        track.id = NewId<AudioTrackId>();
+        track.order = order;
+        graph.tracks.push_back(track);
+    }
+    graph.routes.push_back({NewId<AudioRouteId>(), source.id, graph.tracks[0].id});
+    auto resolved = ResolveAudioIntent(graph, {});
+    ASSERT_TRUE(resolved.succeeded());
+    ASSERT_EQ(resolved.value()->tracks.size(), 1u);
+    EXPECT_EQ(resolved.value()->tracks[0].id, graph.tracks[0].id);
+    EXPECT_EQ(resolved.value()->tracks[0].visible_position, 3u);
+    EXPECT_EQ(resolved.value()->tracks[0].name, "Audio 3");
+    EXPECT_EQ(resolved.value()->tracks[0].mux_index.value, 0u);
+    graph.routes[0].source_id = NewId<AudioSourceId>();
+    EXPECT_FALSE(ResolveAudioIntent(graph, {}).succeeded());
+}
+TEST(AudioIntentResolver, LegacyOracleMatchesAllThreeRowKindsParticipationMergeAndMuteMasks) {
+    using namespace exosnap::engine;
+    for (uint32_t kinds = 0; kinds < 64; ++kinds) {
+        LegacyRows25Intent legacy;
+        legacy.id_namespace = NewId<PresetNamespaceId>();
+        legacy.microphone_binding.endpoint_role = AudioEndpointRole::Console;
+        for (uint32_t ordinal = 0; ordinal < 3; ++ordinal) {
+            LegacyAudioRow row;
+            row.row_id = NewId<LegacyRowId>();
+            row.source_id = NewId<AudioSourceId>();
+            row.anchor_track_id = NewId<AudioTrackId>();
+            row.row.kind = static_cast<AudioSourceKind>((kinds >> (2 * ordinal)) & 3);
+            row.row.gain_db = float(int(ordinal) * 6 - 6);
+            legacy.rows.push_back(row);
+        }
+        for (uint32_t enabled = 0; enabled < 8; ++enabled)
+            for (uint32_t merged = 0; merged < 8; ++merged)
+                for (uint32_t muted = 0; muted < 8; ++muted)
+                    for (bool window : {false, true}) {
+                        std::vector<AudioSourceRow> raw;
+                        for (uint32_t ordinal = 0; ordinal < 3; ++ordinal) {
+                            auto& row = legacy.rows[ordinal].row;
+                            row.enabled = (enabled & (1u << ordinal)) != 0;
+                            row.merge_with_above = (merged & (1u << ordinal)) != 0;
+                            row.muted = (muted & (1u << ordinal)) != 0;
+                            raw.push_back(row);
+                        }
+                        const auto oracle = ResolveAudioTracks(NormalizeSourceRowsForTarget(raw, window));
+                        AudioEnvironmentSnapshot environment;
+                        environment.window_target = window;
+                        environment.process_loopback_supported = true;
+                        environment.capture_target_process = ProcessInstanceIdentity{42, 99, "fixture"};
+                        environment.confirmed_processes = {*environment.capture_target_process};
+                        environment.default_microphone_endpoint = "mic";
+                        environment.default_playback_endpoint = "playback";
+                        environment.microphone_endpoints = {"mic"};
+                        environment.playback_endpoints = {"playback"};
+                        const auto result = ResolveAudioIntent(legacy, environment);
+                        ASSERT_TRUE(result.succeeded())
+                            << kinds << ',' << enabled << ',' << merged << ',' << muted << ',' << window;
+                        ASSERT_EQ(result.value()->tracks.size(), oracle.tracks.size());
+                        for (size_t track = 0; track < oracle.tracks.size(); ++track) {
+                            const auto& resolved = result.value()->tracks[track];
+                            ASSERT_EQ(resolved.routes.size(), oracle.tracks[track].sources.size());
+                            EXPECT_EQ(resolved.fixed_average_divisor, resolved.routes.size());
+                            for (size_t route = 0; route < resolved.routes.size(); ++route) {
+                                const auto source = std::find_if(
+                                    result.value()->sources.begin(), result.value()->sources.end(),
+                                    [&](const auto& item) { return item.spec.id == resolved.routes[route].source_id; });
+                                ASSERT_NE(source, result.value()->sources.end());
+                                const auto kind = source->spec.binding.kind == AudioBindingKind::MicrophoneEndpoint
+                                                      ? AudioSourceKind::Mic
+                                                  : source->spec.binding.kind == AudioBindingKind::PlaybackEndpoint
+                                                      ? AudioSourceKind::SystemOutput
+                                                  : source->spec.binding.kind == AudioBindingKind::LegacyExcludeTarget
+                                                      ? AudioSourceKind::Sys
+                                                      : AudioSourceKind::App;
+                                EXPECT_EQ(kind, oracle.tracks[track].sources[route]);
+                                EXPECT_FLOAT_EQ(source->spec.muted ? 0.0f : resolved.routes[route].gain_linear,
+                                                oracle.tracks[track].source_gain_linear[route]);
+                            }
+                        }
+                    }
+    }
+}
+
+TEST(AudioIntentResolver, FrozenMonitorSelectionOmitsEmptyAndDisabledCards) {
+    using namespace exosnap::engine;
+    TrackGraph1Intent graph;
+    AudioSourceSpec source;
+    source.id = NewId<AudioSourceId>();
+    source.participation = false;
+    graph.sources.push_back(source);
+    for (uint32_t order = 0; order < 3; ++order) {
+        AudioTrackSpec track;
+        track.id = NewId<AudioTrackId>();
+        track.order = order;
+        track.record_enabled = order != 1;
+        graph.tracks.push_back(track);
+        graph.default_monitor_track_ids.push_back(track.id);
+        if (order != 0)
+            graph.routes.push_back({NewId<AudioRouteId>(), source.id, track.id});
+    }
+    graph.monitor_selection_origin = MonitorSelectionOrigin::User;
+    const auto result = ResolveAudioIntent(graph, {});
+    ASSERT_TRUE(result.succeeded());
+    ASSERT_EQ(result.value()->default_monitor_track_ids.size(), 1u);
+    EXPECT_EQ(result.value()->default_monitor_track_ids[0], graph.tracks[2].id);
+    EXPECT_EQ(graph.default_monitor_track_ids.size(), 3u);
+    EXPECT_EQ(result.value()->warnings.size(), 2u);
+}
+
+TEST(AudioIntentResolver, LegacySystemOutputKeepsConsoleDefaultRole) {
+    using namespace exosnap::engine;
+    LegacyRows25Intent legacy;
+    legacy.id_namespace = NewId<PresetNamespaceId>();
+    LegacyAudioRow row;
+    row.row_id = NewId<LegacyRowId>();
+    row.source_id = NewId<AudioSourceId>();
+    row.anchor_track_id = NewId<AudioTrackId>();
+    row.row.kind = AudioSourceKind::SystemOutput;
+    legacy.rows.push_back(row);
+    AudioEnvironmentSnapshot environment;
+    environment.playback_endpoints = {"console", "multimedia"};
+    environment.default_playback_by_role[0] = "console";
+    environment.default_playback_by_role[1] = "multimedia";
+    const auto result = ResolveAudioIntent(legacy, environment);
+    ASSERT_TRUE(result.succeeded());
+    EXPECT_EQ(result.value()->sources[0].capture_key->endpoint_id, "console");
+}

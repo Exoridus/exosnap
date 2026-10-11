@@ -379,7 +379,9 @@ void MuxThread::Run() {
     // --- A/V timestamp alignment, resolved incrementally (see header note) ---
     bool epoch_resolved = false;
     uint64_t video_epoch_100ns = 0;
-    MuxAudioHold pending_audio;
+    const MuxAudioHold::Limits audio_hold_limits{kAudioPremuxPayloadBytes, kAudioHoldHorizonNs,
+                                                 AudioHoldPacketLimit(track_count)};
+    MuxAudioHold pending_audio(audio_hold_limits);
 
     auto resolve_epoch = [&]() {
         if (epoch_resolved)
@@ -438,13 +440,13 @@ void MuxThread::Run() {
     // and the audio queue is independent -- so audio can arrive first, and
     // writing it before the epoch exists is what put ten-minute timestamps in a
     // freshly-opened file.
-    MuxAudioHold segment_pending_audio;
+    MuxAudioHold segment_pending_audio(audio_hold_limits);
     // Audio that belonged to a segment already closed. Counted, not just dropped.
     uint64_t trimmed_audio_packets = 0;
     // Highest aligned session PTS actually WRITTEN per audio track, so the
     // duration reported for audio describes the file rather than the encoder.
     std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> aligned_audio_end_ns{};
-    MuxAudioHold audio_hold;
+    MuxAudioHold audio_hold(audio_hold_limits);
     std::optional<SplitSentinel> pending_split;
 
     std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> audio_codec_delay_ns{};
@@ -478,8 +480,9 @@ void MuxThread::Run() {
             if (!segment_pending_audio.Push(std::move(payload))) {
                 write_error = true;
                 m_state.diagnostics.OnMuxFailure();
-                m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                      "Audio waiting for the segment epoch exceeded the mux byte or media-time limit");
+                m_state.RecordFailure(
+                    E_OUTOFMEMORY, ErrorPhase::Mux,
+                    "Audio waiting for the segment epoch exceeded the mux packet, payload or media-time limit");
             }
             return;
         }
@@ -599,15 +602,16 @@ void MuxThread::Run() {
             write_error = true;
             m_state.diagnostics.OnMuxFailure();
             m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                  "Audio waiting for video exceeded the mux byte or media-time limit");
+                                  "Audio waiting for video exceeded the mux packet, payload or media-time limit");
         }
     };
     auto buffer_pending_audio = [&](EncodedAudioPacket&& payload) {
         if (!pending_audio.Push(std::move(payload))) {
             write_error = true;
             m_state.diagnostics.OnMuxFailure();
-            m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                  "Audio waiting for the video epoch exceeded the mux byte or media-time limit");
+            m_state.RecordFailure(
+                E_OUTOFMEMORY, ErrorPhase::Mux,
+                "Audio waiting for the video epoch exceeded the mux packet, payload or media-time limit");
         }
     };
     auto drain_pending_audio = [&]() {

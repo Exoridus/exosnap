@@ -9,6 +9,9 @@
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/recorder_session.h>
 
+#include <exosnap/engine/audio_routing_model.h>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -57,7 +60,8 @@ namespace exosnap {
 // with explicit "full" is a deliberate post-flip opt-in and is respected.
 //
 // ---------------------------------------------------------------------------
-inline constexpr int kPresetSchemaVersion = 25;
+inline constexpr int kPresetSchemaVersion = 26;
+inline constexpr std::string_view kAudioContract = "exosnap.audio.v1.3-final.1";
 
 // Files at or below this schema get the targeted color_range full->limited
 // rewrite on top of the ordinary field-wise repair.
@@ -114,11 +118,17 @@ struct PresetCaptureTarget {
 // RecordingPresetConfig
 // ---------------------------------------------------------------------------
 
+struct PresetRawDocument;
+
 struct RecordingPresetConfig {
     PresetCaptureTarget capture;
     OutputSettingsModel output;
     VideoSettingsModel video;
     capability::AudioUiState audio;
+    std::optional<engine::AudioIntent> audio_intent;
+    std::shared_ptr<const PresetRawDocument> raw_document;
+    bool audio_read_only = false;
+    std::string audio_validation_error;
     WebcamSettings webcam;
     int countdown_seconds = 0; // One of {0, 3, 5, 10}
 };

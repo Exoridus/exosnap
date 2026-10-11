@@ -10,8 +10,11 @@ if(NOT EXISTS "${_nvenc_header}")
         src/logging/logging.cpp
         src/audio_input_device.cpp
         src/audio_track_model.cpp
-    src/recording_media_types.cpp
-    src/audio_routing_model.cpp
+        src/recording_media_types.cpp
+        src/committed_matroska_view.cpp
+        src/recording_media_index.cpp
+        src/audio_routing_model.cpp
+        src/audio_routing_resolver.cpp
         include/exosnap/engine/capture_hub_policy.h
         src/capture_hub_policy.cpp
         src/codec_private.cpp
@@ -373,7 +376,10 @@ add_library(exosnap_engine STATIC
     src/annexb_to_hvcc.cpp
     src/audio_track_model.cpp
     src/recording_media_types.cpp
+    src/committed_matroska_view.cpp
+    src/recording_media_index.cpp
     src/audio_routing_model.cpp
+    src/audio_routing_resolver.cpp
     include/exosnap/engine/capture_hub_policy.h
     src/capture_hub_policy.cpp
     src/mic_meter_service.cpp
@@ -1835,3 +1841,11 @@ exosnap_add_gtest(
     SOURCES tests/test_audio_routing_model.cpp
     LIBRARIES exosnap_engine
 )
+
+exosnap_add_gtest(
+    NAME test_committed_media_read
+    TEST_PREFIX engine.
+    SOURCES tests/test_committed_media_read.cpp
+    LIBRARIES exosnap_engine EBML::ebml Matroska::matroska FFmpeg::mux
+)
+target_include_directories(test_committed_media_read PRIVATE src)

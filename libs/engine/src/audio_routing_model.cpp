@@ -66,6 +66,9 @@ Outcome<std::monostate> ValidateTrackGraph1Intent(const TrackGraph1Intent& inten
     for (const auto& source : intent.sources) {
         if (IsNil(source.id) || !sources.insert(source.id).second)
             return InvalidGraph("Audio source identity is missing or duplicated");
+        if (!std::isfinite(source.dsp.hpf_cutoff_hz) || !std::isfinite(source.dsp.gate_threshold_db) ||
+            !std::isfinite(source.dsp.agc_target_db))
+            return InvalidGraph("Audio source DSP parameters must be finite");
         if (!std::isfinite(source.post_dsp_gain_linear) || source.post_dsp_gain_linear < 0)
             return InvalidGraph("Audio source gain must be finite and nonnegative");
     }

@@ -984,6 +984,18 @@ TEST(PipelineDiagnostics, StaticConfigDerivesSourceTypeAndSplitSupport) {
     EXPECT_FALSE(MakeDiagnosticsStaticConfig(cfg).split_supported);
 }
 
+TEST(PipelineDiagnostics, AudioQueueCapacityMatchesRecordedTrackBudget) {
+    RecorderConfig config;
+    config.record_audio = false;
+    EXPECT_EQ(MakeDiagnosticsStaticConfig(config).audio_queue_capacity, 0u);
+    config.record_audio = true;
+    EXPECT_EQ(MakeDiagnosticsStaticConfig(config).audio_queue_capacity, 1200u);
+    for (uint32_t tracks : {1u, 3u, 8u}) {
+        config.audio_track_plan.tracks.resize(tracks);
+        EXPECT_EQ(MakeDiagnosticsStaticConfig(config).audio_queue_capacity, tracks * 1200u);
+    }
+}
+
 TEST(PipelineDiagnostics, SessionGuardRejectsOlderGeneration) {
     DiagnosticsSessionGuard guard;
     RecordingDiagnosticsSnapshot s;

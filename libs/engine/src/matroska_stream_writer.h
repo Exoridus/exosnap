@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exosnap/engine/audio_limits.h>
+#include <exosnap/engine/recording_media_types.h>
 
 // MatroskaStreamWriter: incremental, constant-RAM Matroska/WebM container writer.
 //
@@ -43,6 +44,7 @@
 // this header does not drag third-party headers (and their MSVC warnings) into
 // every translation unit that only needs the interface.
 namespace libebml {
+class EbmlElement;
 class EbmlVoid;
 } // namespace libebml
 namespace libmatroska {
@@ -141,6 +143,9 @@ struct OutputIoTimings {
 };
 
 struct MatroskaStreamConfig {
+    std::optional<RecordingMediaDescriptor> media_descriptor;
+    uint64_t initial_commit_sequence = 0;
+    std::function<ReceiptAcceptance(CommittedMediaReceipt)> publish_committed;
     // Optional deterministic fault injector. Called only by the owning mux worker.
     std::function<bool(OutputIoOperation)> fail_io;
     std::string output_path;
@@ -214,6 +219,13 @@ struct MatroskaStreamConfig {
 
 class MatroskaStreamWriter {
   public:
+    [[nodiscard]] std::shared_ptr<const RecordingMediaDescriptor> media_descriptor() const noexcept {
+        return m_media_descriptor;
+    }
+    [[nodiscard]] bool media_index_degraded() const noexcept {
+        return m_media_index_degraded;
+    }
+
     MatroskaStreamWriter();
     ~MatroskaStreamWriter();
 
@@ -319,6 +331,18 @@ class MatroskaStreamWriter {
     }
 
   private:
+    bool InitializeMediaDescriptor();
+    void PublishCommitted(bool durable) noexcept;
+    std::shared_ptr<const RecordingMediaDescriptor> m_media_descriptor;
+    ClusterExtent m_active_cluster_extent;
+    std::vector<std::pair<libebml::EbmlElement*, size_t>> m_pending_rap_blocks;
+    std::vector<ClusterExtent> m_pending_closed_extents;
+    uint64_t m_commit_sequence = 0;
+    uint64_t m_readable_end = 0;
+    uint64_t m_durable_end = 0;
+    size_t m_pending_receipt_bytes = 0;
+    bool m_media_index_degraded = false;
+
     // Decode-time interleave window entry.
     struct WindowEntry {
         uint64_t pts_ns = 0;
