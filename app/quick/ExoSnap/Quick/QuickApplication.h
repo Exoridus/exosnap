@@ -632,6 +632,7 @@ class QuickApplication {
     // state wants. Re-checks the stop condition, because it runs one debounce
     // interval after the decision that scheduled it.
     void startMeterServices();
+    void synchronizeWindowIdentities(const CaptureTargetSnapshot& snapshot);
     void refreshCaptureTargets(const CaptureTargetSnapshot& snapshot, DiscoveryReason reason);
     void updateOutputTargetContext(const exosnap::engine::CaptureTarget& target);
     void persistLiveConfig();

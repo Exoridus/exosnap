@@ -43,6 +43,18 @@ class RecordPickerTestDriver final : public QObject {
 
   public:
     explicit RecordPickerTestDriver(QObject* parent = nullptr) : QObject(parent) {
+        adapter_.setTargetConfirmation([this](const QString& identity, int mode) {
+            for (int index = 0; index < static_cast<int>(source_.targets.size()); ++index) {
+                const auto& target = source_.targets[static_cast<size_t>(index)];
+                if (adapter_.targetIdentity(target) == identity &&
+                    (mode == static_cast<int>(exosnap::CaptureMode::Window)) ==
+                        (target.kind == exosnap::engine::CaptureTarget::Kind::Window)) {
+                    adapter_.requestSelectTarget(index, mode);
+                    return true;
+                }
+            }
+            return false;
+        });
         settings_.setAudioRouting(&routing_);
         settings_.setConfig(exosnap::MakeDefaultPreset().config);
         seedTargets(2, {QStringLiteral("Claude Design - Brave"), QStringLiteral("Task Manager")});
@@ -62,6 +74,35 @@ class RecordPickerTestDriver final : public QObject {
         return &settings_;
     }
 
+    Q_INVOKABLE void resetPickerState() {
+        adapter_.setHiddenWindowRules({});
+        adapter_.setShowHiddenWindows(false);
+        ++seed_generation_;
+    }
+    void updateWindowIdentities(const QVariantList& rows = {}) {
+        QHash<quintptr, QString> identities;
+        QHash<quintptr, QString> applications;
+        for (const auto& target : source_.targets) {
+            if (target.kind != exosnap::engine::CaptureTarget::Kind::Window)
+                continue;
+            quint64 process = 10;
+            quint64 creation = 20;
+            quint64 generation = seed_generation_;
+            for (const auto& value : rows) {
+                const auto row = value.toMap();
+                if (row.value(QStringLiteral("id")).toULongLong() != target.native_id)
+                    continue;
+                process = row.value(QStringLiteral("pid"), 10).toULongLong();
+                creation = row.value(QStringLiteral("creation"), 20).toULongLong();
+                generation = row.value(QStringLiteral("generation"), seed_generation_).toULongLong();
+            }
+            identities.insert(
+                target.native_id,
+                QStringLiteral("window:%1:%2:%3:%4").arg(target.native_id).arg(process).arg(creation).arg(generation));
+            applications.insert(target.native_id, QStringLiteral("application:%1").arg(process));
+        }
+        adapter_.setWindowIdentities(std::move(identities), std::move(applications));
+    }
     Q_INVOKABLE void seedTargets(int display_count, const QStringList& window_labels) {
         source_.targets.clear();
         for (int i = 0; i < display_count; ++i) {
@@ -75,6 +116,7 @@ class RecordPickerTestDriver final : public QObject {
         source_.selected_target_index = 0;
         source_.capture_mode = exosnap::CaptureMode::Monitor;
         ++source_.targets_revision;
+        updateWindowIdentities();
         adapter_.setSource(&source_);
     }
 
@@ -128,6 +170,7 @@ class RecordPickerTestDriver final : public QObject {
         if (source_.selected_target_index >= static_cast<int>(source_.targets.size()))
             source_.selected_target_index = source_.targets.empty() ? -1 : 0;
         ++source_.targets_revision;
+        updateWindowIdentities(windows);
         adapter_.setSource(&source_);
     }
 
@@ -153,6 +196,7 @@ class RecordPickerTestDriver final : public QObject {
                                : state == QLatin1String("completed") ? L"1:23"
                                : state == QLatin1String("failed")    ? L"0:42"
                                                                      : L"";
+        updateWindowIdentities();
         adapter_.setSource(&source_);
     }
 
@@ -167,6 +211,7 @@ class RecordPickerTestDriver final : public QObject {
     }
 
   private:
+    quint64 seed_generation_ = 1;
     RecordViewModel source_;
     RecordViewModelAdapter adapter_;
     RecordingClipAdapter clip_adapter_;

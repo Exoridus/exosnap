@@ -1064,6 +1064,13 @@ void QuickApplication::initializeRecordWorkflow() {
         &webcam_preview_feed_, &WebcamPreviewFeed::hasViewersChanged, &record_view_model_adapter_,
         [this]() { recording_coordinator_->SetWebcamSettingsPreviewActive(webcam_preview_feed_.hasViewers()); });
 
+    if (HarnessCaptureTargets()) {
+        capture_target_notifier_.setWindowIdentityObserverForTest(
+            [](const auto& target) -> std::optional<WindowCaptureIdentity> {
+                return WindowCaptureIdentity{target.native_id, static_cast<uint32_t>(target.native_id), 1, 0,
+                                             QStringLiteral("fixture-application:%1").arg(target.native_id)};
+            });
+    }
     capture_target_notifier_.setEnumerator([this]() {
         if (auto seeded = HarnessCaptureTargets())
             return CaptureTargetSnapshot{std::move(*seeded)};
@@ -1086,18 +1093,35 @@ void QuickApplication::initializeRecordWorkflow() {
                          requests.reserve(static_cast<std::size_t>(identities.size()));
                          for (const QString& identity : identities) {
                              for (const exosnap::engine::CaptureTarget& target : record_view_model_.targets) {
-                                 if (RecordViewModelAdapter::TargetIdentity(target) != identity)
+                                 if (record_view_model_adapter_.targetIdentity(target) != identity)
                                      continue;
-                                 requests.push_back({identity, target});
+                                 std::function<bool()> valid;
+                                 if (target.kind == engine::CaptureTarget::Kind::Window) {
+                                     const auto& facts = capture_target_notifier_.currentSnapshot().window_identities;
+                                     const auto witness =
+                                         std::find_if(facts.begin(), facts.end(), [&identity](const auto& entry) {
+                                             return entry.stableIdentity() == identity;
+                                         });
+                                     if (witness == facts.end())
+                                         continue;
+                                     valid = capture_target_notifier_.windowIdentityValidator(*witness);
+                                     if (!valid())
+                                         continue;
+                                 }
+                                 requests.push_back({identity, target, std::move(valid)});
                                  break;
                              }
                          }
+                         const bool has_requests = !requests.empty();
                          target_still_service_.setVisibleTargets(std::move(requests));
-                         target_still_service_.start();
+                         if (has_requests)
+                             target_still_service_.start();
+                         else
+                             target_still_service_.stop();
                      });
     QObject::connect(&target_still_service_, &CaptureTargetStillService::stillReady, &record_view_model_adapter_,
                      [this](const QString& identity, const QImage& image) {
-                         if (target_still_provider_ == nullptr)
+                         if (target_still_provider_ == nullptr || !record_view_model_adapter_.targetVisible(identity))
                              return;
                          record_view_model_adapter_.setTargetStill(
                              identity, target_still_provider_->submitStill(identity, image));
@@ -1106,7 +1130,61 @@ void QuickApplication::initializeRecordWorkflow() {
         &target_still_service_, &CaptureTargetStillService::stillUnavailable, &record_view_model_adapter_,
         [this](const QString& identity) { record_view_model_adapter_.setTargetStillUnavailable(identity); });
 
+    record_view_model_adapter_.setHiddenWindowRules(settings_.hidden_window_rules);
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::hiddenWindowRulesChanged,
+                     &record_view_model_adapter_, [this]() {
+                         settings_.hidden_window_rules.clear();
+                         for (const auto& value : record_view_model_adapter_.hiddenWindowRules()) {
+                             const auto row = value.toMap();
+                             HiddenCaptureRule rule;
+                             rule.id = row.value(QStringLiteral("id")).toString();
+                             rule.kind = row.value(QStringLiteral("kind")).toString() == QStringLiteral("application")
+                                             ? HiddenCaptureRuleKind::Application
+                                             : HiddenCaptureRuleKind::Title;
+                             rule.title_match =
+                                 row.value(QStringLiteral("match")).toString() == QStringLiteral("equals")
+                                     ? HiddenCaptureTitleMatch::Equals
+                                     : HiddenCaptureTitleMatch::Contains;
+                             rule.text = row.value(QStringLiteral("text")).toString();
+                             rule.case_sensitive = row.value(QStringLiteral("caseSensitive")).toBool();
+                             rule.application_scope = row.value(QStringLiteral("applicationScope")).toString();
+                             rule.enabled = row.value(QStringLiteral("enabled")).toBool();
+                             settings_.hidden_window_rules.push_back(std::move(rule));
+                         }
+                         persistAppSettings(SettingsWriteIntent::UserEdit);
+                         settings_adapter_.setAppSettings(settings_);
+                     });
+    record_view_model_adapter_.setTargetConfirmation([this](const QString& identity, int capture_mode) {
+        if (locksCaptureTargets(record_view_model_.state))
+            return false;
+        capture_target_notifier_.rescan();
+        const auto& snapshot = capture_target_notifier_.currentSnapshot();
+        refreshCaptureTargets(snapshot, DiscoveryReason::Rescan);
+        for (int index = 0; index < static_cast<int>(record_view_model_.targets.size()); ++index) {
+            const auto& target = record_view_model_.targets[static_cast<size_t>(index)];
+            if (record_view_model_adapter_.targetIdentity(target) != identity ||
+                (capture_mode == static_cast<int>(CaptureMode::Window)) !=
+                    (target.kind == engine::CaptureTarget::Kind::Window))
+                continue;
+            if (target.kind == engine::CaptureTarget::Kind::Window) {
+                const auto facts =
+                    std::find_if(snapshot.window_identities.begin(), snapshot.window_identities.end(),
+                                 [&identity](const auto& entry) { return entry.stableIdentity() == identity; });
+                if (facts == snapshot.window_identities.end() || !capture_target_notifier_.isCurrent(*facts))
+                    return false;
+            }
+            selectTarget(index, static_cast<CaptureMode>(capture_mode));
+            return true;
+        }
+        return false;
+    });
+    QObject::connect(&capture_target_notifier_, &CaptureTargetNotifier::windowLifetimeInvalidated,
+                     &record_view_model_adapter_, [this](qulonglong) {
+                         target_still_service_.setVisibleTargets({});
+                         target_still_service_.stop();
+                     });
     capture_target_notifier_.start();
+    synchronizeWindowIdentities(capture_target_notifier_.currentSnapshot());
     record_view_model_.targets = capture_target_notifier_.currentSnapshot().targets;
     ++record_view_model_.targets_revision;
     record_view_model_.target_display_names.reserve(record_view_model_.targets.size());
@@ -1709,6 +1787,17 @@ void QuickApplication::selectTarget(int target_index, CaptureMode mode) {
     synchronizeRecordState();
 }
 
+void QuickApplication::synchronizeWindowIdentities(const CaptureTargetSnapshot& snapshot) {
+    QHash<quintptr, QString> identities;
+    QHash<quintptr, QString> applications;
+    for (const auto& entry : snapshot.window_identities) {
+        if (!capture_target_notifier_.isCurrent(entry))
+            continue;
+        identities.insert(entry.native_id, entry.stableIdentity());
+        applications.insert(entry.native_id, entry.application_identity);
+    }
+    record_view_model_adapter_.setWindowIdentities(std::move(identities), std::move(applications));
+}
 void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapshot, DiscoveryReason reason) {
     if (locksCaptureTargets(record_view_model_.state)) {
         capture_target_refresh_pending_ = true;
@@ -1720,13 +1809,15 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
         record_view_model_.selected_target_index < static_cast<int>(record_view_model_.targets.size())) {
         previous = record_view_model_.targets[static_cast<size_t>(record_view_model_.selected_target_index)];
     }
+    const QString previous_identity = previous ? record_view_model_adapter_.targetIdentity(*previous) : QString{};
+    synchronizeWindowIdentities(snapshot);
     record_view_model_.targets = snapshot.targets;
     ++record_view_model_.targets_revision;
     if (target_still_provider_ != nullptr) {
         QSet<QString> live;
         live.reserve(static_cast<qsizetype>(record_view_model_.targets.size()));
         for (const exosnap::engine::CaptureTarget& target : record_view_model_.targets)
-            live.insert(RecordViewModelAdapter::TargetIdentity(target));
+            live.insert(record_view_model_adapter_.targetIdentity(target));
         target_still_provider_->retainOnly(live);
     }
     record_view_model_.target_display_names.clear();
@@ -1740,18 +1831,10 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
     if (previous.has_value()) {
         for (int index = 0; index < static_cast<int>(record_view_model_.targets.size()); ++index) {
             const auto& candidate = record_view_model_.targets[static_cast<size_t>(index)];
-            if (candidate.kind == previous->kind && candidate.native_id == previous->native_id) {
-                resolved_index = index;
-                break;
-            }
-        }
-    }
-    if (resolved_index < 0 && record_view_model_.capture_mode == CaptureMode::Window &&
-        !live_config_.capture.window_key.empty()) {
-        for (int index = 0; index < static_cast<int>(record_view_model_.targets.size()); ++index) {
-            const auto& candidate = record_view_model_.targets[static_cast<size_t>(index)];
-            if (candidate.kind == exosnap::engine::CaptureTarget::Kind::Window &&
-                RecordViewModel::TargetLabelFromCaptureTarget(candidate) == live_config_.capture.window_key) {
+            if (candidate.kind == previous->kind && candidate.native_id == previous->native_id &&
+                (candidate.kind != engine::CaptureTarget::Kind::Window ||
+                 (!previous_identity.isEmpty() &&
+                  record_view_model_adapter_.targetIdentity(candidate) == previous_identity))) {
                 resolved_index = index;
                 break;
             }

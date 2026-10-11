@@ -470,6 +470,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/RecoveryService.h
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingHistoryStore.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingHistoryStore.h
+        ${PROJECT_SOURCE_DIR}/app/models/HiddenCaptureTargets.cpp
         ${PROJECT_SOURCE_DIR}/app/models/CaptureTargetPresentation.cpp
         ${PROJECT_SOURCE_DIR}/app/models/CaptureTargetPresentation.h
         ${PROJECT_SOURCE_DIR}/app/viewmodels/RecordViewModel.cpp

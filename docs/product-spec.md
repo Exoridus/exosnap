@@ -48,6 +48,9 @@ Text and filled-control ink target 4.5:1 contrast; state/focus indicators target
 
 Unavailable controls retain labels/current values, drop interactive emphasis and expose the real reason. A locked-on switch preserves its on shape without looking pressable. A row dims only when all its controls are unavailable. Accent swatches show the value for the current appearance and use a separate selection ring and accessible name.
 
+The source picker groups displays, application windows and region actions in one scrollable selection. Search and section jumps change the visible choices without changing the active source. All eligible windows remain reachable; virtualization limits thumbnail work to visible rows. Confirmation resolves the pending lifetime identity against a fresh target list. A disappeared or recycled window is unavailable and never falls back to its old list index.
+
+Hiding a window until restart applies only to that window lifetime. Persistent title rules explicitly choose equals or contains, case sensitivity and application scope. The default is contains, case insensitive and scoped to the selected application. Application-wide hiding requires separate confirmation. The picker menu reviews, disables and removes global rules independently of recording presets. The hidden count deduplicates eligible windows before text search; search matches have a separate count. Hidden windows have no thumbnail demand unless the user reveals them and they are in the viewport. Hiding the selected window does not stop or retarget its recording, and does not conceal its contents in a monitor recording.
 ## 3. Recording defaults and profiles
 
 | Setting | Default |

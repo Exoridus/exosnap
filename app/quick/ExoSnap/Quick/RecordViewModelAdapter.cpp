@@ -373,6 +373,10 @@ QVariantList RecordViewModelAdapter::filteredTargetOptions(const QString& kind, 
         const QVariantMap row = value.toMap();
         if (!normalized_kind.isEmpty() && row.value(QStringLiteral("kind")).toString() != normalized_kind)
             continue;
+        if (row.value(QStringLiteral("kind")).toString() == QStringLiteral("window") &&
+            !row.value(QStringLiteral("identity")).toString().isEmpty() &&
+            !targetVisible(row.value(QStringLiteral("identity")).toString()))
+            continue;
         if (!normalized_query.isEmpty()) {
             const auto matches = [&normalized_query, &row](const char* key) {
                 return row.value(QLatin1String(key)).toString().contains(normalized_query, Qt::CaseInsensitive);
@@ -385,6 +389,119 @@ QVariantList RecordViewModelAdapter::filteredTargetOptions(const QString& kind, 
     return result;
 }
 
+QVariantList RecordViewModelAdapter::filteredWindowTargetOptions() const {
+    return filteredTargetOptions(QStringLiteral("window"), window_search_query_);
+}
+int RecordViewModelAdapter::pickerSearchMatchCount() const {
+    return windowSearchMatchCount(window_search_query_);
+}
+void RecordViewModelAdapter::setWindowSearchQuery(QString query) {
+    if (window_search_query_ == query)
+        return;
+    window_search_query_ = std::move(query);
+    emit targetOptionsChanged();
+}
+int RecordViewModelAdapter::hiddenWindowCount() const {
+    return hidden_targets_.view({}, show_hidden_windows_).hidden_count;
+}
+bool RecordViewModelAdapter::showHiddenWindows() const noexcept {
+    return show_hidden_windows_;
+}
+QVariantList RecordViewModelAdapter::hiddenWindowRules() const {
+    QVariantList result;
+    for (const auto& rule : hidden_targets_.rules())
+        result.push_back(QVariantMap{
+            {QStringLiteral("id"), rule.id},
+            {QStringLiteral("kind"),
+             rule.kind == HiddenCaptureRuleKind::Title ? QStringLiteral("title") : QStringLiteral("application")},
+            {QStringLiteral("text"), rule.text},
+            {QStringLiteral("match"), rule.title_match == HiddenCaptureTitleMatch::Equals ? QStringLiteral("equals")
+                                                                                          : QStringLiteral("contains")},
+            {QStringLiteral("caseSensitive"), rule.case_sensitive},
+            {QStringLiteral("applicationScope"), rule.application_scope},
+            {QStringLiteral("enabled"), rule.enabled},
+            {QStringLiteral("affectedCount"), hidden_targets_.affectedCount(rule.id)}});
+    return result;
+}
+void RecordViewModelAdapter::publishHiddenTargets(bool persist) {
+    emit targetOptionsChanged();
+    const auto visible = visible_target_identities_;
+    setVisibleTargetIdentities(visible);
+    if (persist)
+        emit hiddenWindowRulesChanged();
+}
+void RecordViewModelAdapter::setShowHiddenWindows(bool shown) {
+    if (show_hidden_windows_ == shown)
+        return;
+    show_hidden_windows_ = shown;
+    publishHiddenTargets(false);
+}
+void RecordViewModelAdapter::hideWindowInstance(const QString& identity) {
+    if (hidden_targets_.hideSession(identity))
+        publishHiddenTargets(false);
+}
+void RecordViewModelAdapter::addTitleRule(const QString& identity, const QString& text, const QString& match,
+                                          bool case_sensitive, bool all_applications) {
+    const auto window = hidden_targets_.resolve(identity);
+    if (!window || (match != QStringLiteral("equals") && match != QStringLiteral("contains")) ||
+        (!all_applications && window->application_identity.isEmpty()))
+        return;
+    if (!hidden_targets_
+             .addTitleRule(text,
+                           match == QStringLiteral("equals") ? HiddenCaptureTitleMatch::Equals
+                                                             : HiddenCaptureTitleMatch::Contains,
+                           case_sensitive, all_applications ? QString{} : window->application_identity)
+             .isEmpty())
+        publishHiddenTargets(true);
+}
+void RecordViewModelAdapter::addApplicationRule(const QString& identity, bool confirmed) {
+    const auto window = hidden_targets_.resolve(identity);
+    if (window && !hidden_targets_.addApplicationRule(window->application_identity, confirmed).isEmpty())
+        publishHiddenTargets(true);
+}
+void RecordViewModelAdapter::removeHiddenRule(const QString& id) {
+    if (hidden_targets_.removeRule(id))
+        publishHiddenTargets(true);
+}
+void RecordViewModelAdapter::setHiddenRuleEnabled(const QString& id, bool enabled) {
+    if (hidden_targets_.setRuleEnabled(id, enabled))
+        publishHiddenTargets(true);
+}
+int RecordViewModelAdapter::windowSearchMatchCount(const QString& query) const {
+    return hidden_targets_.view(query, show_hidden_windows_).search_match_count;
+}
+void RecordViewModelAdapter::setHiddenWindowRules(QVector<HiddenCaptureRule> rules) {
+    hidden_targets_.setRules(std::move(rules));
+    publishHiddenTargets(false);
+}
+void RecordViewModelAdapter::setWindowIdentities(QHash<quintptr, QString> identities,
+                                                 QHash<quintptr, QString> applications) {
+    if (window_identities_ == identities && window_applications_ == applications)
+        return;
+    window_identities_ = std::move(identities);
+    window_applications_ = std::move(applications);
+    target_options_revision_.reset();
+}
+void RecordViewModelAdapter::setTargetConfirmation(std::function<bool(const QString&, int)> confirm) {
+    target_confirmation_ = std::move(confirm);
+}
+QString RecordViewModelAdapter::targetIdentity(const engine::CaptureTarget& target) const {
+    return target.kind == engine::CaptureTarget::Kind::Window ? window_identities_.value(target.native_id)
+                                                              : TargetIdentity(target);
+}
+bool RecordViewModelAdapter::targetVisible(const QString& identity) const {
+    if (identity.isEmpty())
+        return false;
+    if (!identity.startsWith(QStringLiteral("window:")))
+        return true;
+    const auto window = hidden_targets_.resolve(identity);
+    return window && (show_hidden_windows_ || !hidden_targets_.isHidden(*window));
+}
+bool RecordViewModelAdapter::confirmTarget(const QString& identity, int capture_mode) {
+    if (!canSelectSource() || identity.isEmpty() || capture_mode < 0 || capture_mode > 2 || !target_confirmation_)
+        return false;
+    return target_confirmation_(identity, capture_mode);
+}
 int RecordViewModelAdapter::selectedTargetIndex() const noexcept {
     return source_ != nullptr ? source_->selected_target_index : -1;
 }
@@ -843,11 +960,11 @@ void RecordViewModelAdapter::rebuildPresentation() {
     // synchronization cadence.
     const int selected_index = source_->selected_target_index;
     if (selected_index >= 0 && selected_index < static_cast<int>(source_->targets.size()))
-        selected_target_identity_ = TargetIdentity(source_->targets[static_cast<std::size_t>(selected_index)]);
+        selected_target_identity_ = targetIdentity(source_->targets[static_cast<std::size_t>(selected_index)]);
     selected_target_available_ =
         !selected_target_identity_.isEmpty() && selected_index >= 0 &&
         selected_index < static_cast<int>(source_->targets.size()) &&
-        TargetIdentity(source_->targets[static_cast<std::size_t>(selected_index)]) == selected_target_identity_;
+        targetIdentity(source_->targets[static_cast<std::size_t>(selected_index)]) == selected_target_identity_;
 
     if (!target_options_revision_.has_value() || *target_options_revision_ != source_->targets_revision ||
         !target_options_selected_index_.has_value() || *target_options_selected_index_ != selected_index) {
@@ -859,7 +976,7 @@ void RecordViewModelAdapter::rebuildPresentation() {
         for (qsizetype index = 0; index < static_cast<qsizetype>(source_->targets.size()); ++index) {
             const auto& target = source_->targets[static_cast<std::size_t>(index)];
             const bool window = target.kind == exosnap::engine::CaptureTarget::Kind::Window;
-            const QString identity = TargetIdentity(target);
+            const QString identity = targetIdentity(target);
             const CaptureTargetPresentation presentation = ResolveCaptureTargetPresentation(
                 target, window ? CaptureTargetPresentationKind::Window : CaptureTargetPresentationKind::Display);
             // The distinguishing display suffix survives elision because the
@@ -869,6 +986,12 @@ void RecordViewModelAdapter::rebuildPresentation() {
                        : QString::fromStdString(
                              ResolveCaptureTargetPresentation(target, CaptureTargetPresentationKind::Region).label);
             const QVariantMap option{
+                {QStringLiteral("applicationIdentity"), window_applications_.value(target.native_id)},
+                {QStringLiteral("available"), !identity.isEmpty()},
+                {QStringLiteral("unavailableReason"),
+                 identity.isEmpty()
+                     ? tr("Window lifetime could not be verified. Refresh the list or choose another source.")
+                     : QString{}},
                 {QStringLiteral("targetIndex"), index},
                 {QStringLiteral("identity"), identity},
                 // What the operating system calls this target -- a monitor's
@@ -891,6 +1014,15 @@ void RecordViewModelAdapter::rebuildPresentation() {
             target_options.push_back(option);
             (window ? window_target_options : display_target_options).push_back(option);
         }
+        QVector<HiddenCaptureWindow> windows;
+        for (const auto& value : window_target_options) {
+            const auto row = value.toMap();
+            windows.push_back(
+                {row.value(QStringLiteral("identity")).toString(), row.value(QStringLiteral("label")).toString(),
+                 row.value(QStringLiteral("title")).toString(), row.value(QStringLiteral("appName")).toString(),
+                 row.value(QStringLiteral("applicationIdentity")).toString()});
+        }
+        hidden_targets_.setWindows(std::move(windows));
         // The deep compare stays: a rescan that finds the identical set of
         // windows must not republish, because targetOptionsChanged is what makes
         // the source picker rebuild its list.
@@ -994,9 +1126,13 @@ void RecordViewModelAdapter::setTargetStillUnavailable(const QString& identity) 
 }
 
 void RecordViewModelAdapter::setVisibleTargetIdentities(const QStringList& identities) {
-    if (visible_target_identities_ == identities)
+    QStringList filtered;
+    for (const auto& identity : identities)
+        if (targetVisible(identity) && !filtered.contains(identity))
+            filtered.push_back(identity);
+    if (visible_target_identities_ == filtered)
         return;
-    visible_target_identities_ = identities;
+    visible_target_identities_ = std::move(filtered);
     emit visibleTargetIdentitiesChanged(visible_target_identities_);
 }
 

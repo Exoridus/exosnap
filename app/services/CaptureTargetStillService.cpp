@@ -227,6 +227,10 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
         if (!nextRequest(request))
             continue;
 
+        if (request.valid && !request.valid()) {
+            emit stillUnavailable(request.identity);
+            continue;
+        }
         WgcSourceProducer producer(keyFor(request.target), device);
         // Asked for before Open, which is when the producer can still subscribe.
         const HANDLE frame_signal = producer.FrameSignal();
@@ -239,7 +243,7 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
         std::string error;
         QImage still;
         bool device_lost = false;
-        if (producer.Open(error)) {
+        if (producer.Open(error) && (!request.valid || request.valid())) {
             const auto deadline = std::chrono::steady_clock::now() + kFrameWait;
             for (;;) {
                 MSG message{};
@@ -249,8 +253,12 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
                 }
                 HubFrame frame;
                 const ProducerPoll poll = producer.PollFrame(frame);
+                if (request.valid && !request.valid())
+                    break;
                 if (poll == ProducerPoll::Frame) {
                     still = stillFromTexture(device.get(), producer.Context(), frame.texture.get());
+                    if (request.valid && !request.valid())
+                        still = {};
                     break;
                 }
                 if (poll == ProducerPoll::Lost)

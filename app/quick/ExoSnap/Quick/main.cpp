@@ -1591,7 +1591,8 @@ int main(int argc, char* argv[]) {
                     QMetaObject::invokeMethod(page, "openSourcePicker");
                     if (auto* picker = root_window->findChild<QObject*>(QStringLiteral("recordSourcePicker"))) {
                         if (visual_popup != QLatin1String("source-picker"))
-                            picker->setProperty("currentTab", 1);
+                            QMetaObject::invokeMethod(picker, "jumpToSection",
+                                                      Q_ARG(QString, QStringLiteral("window")));
                         if (visual_popup == QLatin1String("source-picker-search"))
                             picker->setProperty("windowQuery", QStringLiteral("Task"));
                     }

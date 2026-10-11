@@ -172,6 +172,28 @@ PersistedAppSettings AppSettingsStore::Load() const {
     persisted.developer_log_level = settings.value(QStringLiteral("log_level"), QStringLiteral("Debug")).toString();
     settings.endGroup();
 
+    const int hidden_rule_count = settings.beginReadArray(QStringLiteral("hidden_windows"));
+    for (int index = 0; index < hidden_rule_count; ++index) {
+        settings.setArrayIndex(index);
+        HiddenCaptureRule rule;
+        rule.id = settings.value(QStringLiteral("id")).toString();
+        rule.text = settings.value(QStringLiteral("text")).toString();
+        const QString kind = settings.value(QStringLiteral("kind")).toString();
+        const QString match = settings.value(QStringLiteral("match"), QStringLiteral("contains")).toString();
+        if (rule.id.isEmpty() || (kind == QStringLiteral("title") && rule.text.isEmpty()) ||
+            (kind != QStringLiteral("title") && kind != QStringLiteral("application")) ||
+            (match != QStringLiteral("contains") && match != QStringLiteral("equals")))
+            continue;
+        rule.kind =
+            kind == QStringLiteral("application") ? HiddenCaptureRuleKind::Application : HiddenCaptureRuleKind::Title;
+        rule.title_match =
+            match == QStringLiteral("equals") ? HiddenCaptureTitleMatch::Equals : HiddenCaptureTitleMatch::Contains;
+        rule.application_scope = settings.value(QStringLiteral("application_scope")).toString();
+        rule.case_sensitive = settings.value(QStringLiteral("case_sensitive"), false).toBool();
+        rule.enabled = settings.value(QStringLiteral("enabled"), true).toBool();
+        persisted.hidden_window_rules.push_back(std::move(rule));
+    }
+    settings.endArray();
     // A corrupt or otherwise unreadable settings.ini does not throw — QSettings
     // silently falls back to defaults for every key above. Surface that via the
     // status check instead of pretending the load was faithful.
@@ -307,6 +329,25 @@ bool AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.setValue(QStringLiteral("log_level"), settings_snapshot.developer_log_level);
     settings.endGroup();
 
+    settings.remove(QStringLiteral("hidden_windows"));
+    settings.beginWriteArray(QStringLiteral("hidden_windows"),
+                             static_cast<int>(settings_snapshot.hidden_window_rules.size()));
+    for (qsizetype index = 0; index < settings_snapshot.hidden_window_rules.size(); ++index) {
+        settings.setArrayIndex(static_cast<int>(index));
+        const auto& rule = settings_snapshot.hidden_window_rules[index];
+        settings.setValue(QStringLiteral("id"), rule.id);
+        settings.setValue(QStringLiteral("kind"), rule.kind == HiddenCaptureRuleKind::Title
+                                                      ? QStringLiteral("title")
+                                                      : QStringLiteral("application"));
+        settings.setValue(QStringLiteral("match"), rule.title_match == HiddenCaptureTitleMatch::Equals
+                                                       ? QStringLiteral("equals")
+                                                       : QStringLiteral("contains"));
+        settings.setValue(QStringLiteral("text"), rule.text);
+        settings.setValue(QStringLiteral("application_scope"), rule.application_scope);
+        settings.setValue(QStringLiteral("case_sensitive"), rule.case_sensitive);
+        settings.setValue(QStringLiteral("enabled"), rule.enabled);
+    }
+    settings.endArray();
     // sync() is where the buffered keys actually reach the file; the status it
     // leaves behind is the only report of a full disk, a locked file or a
     // read-only directory. Judging the write before this point (or not at all)

@@ -257,6 +257,7 @@ target_link_libraries(exosnap_observability PUBLIC
 )
 
 exosnap_add_app_test_support(exosnap_record_viewmodel_test_support
+    models/HiddenCaptureTargets.cpp
     models/CaptureTargetPresentation.cpp
     services/DisplayNumbering.cpp
     viewmodels/RecordViewModel.cpp
@@ -1277,6 +1278,8 @@ exosnap_add_gtest(
     TEST_PREFIX capture.targets.
     SOURCES
         tests/test_capture_target_notifier.cpp
+        tests/test_hidden_capture_targets.cpp
+        models/HiddenCaptureTargets.cpp
     LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability exosnap_engine)
 target_include_directories(capture_target_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(capture_target_notifier_tests PRIVATE ole32.lib user32.lib)
