@@ -11,6 +11,11 @@ Switch {
     // row it read as a decoration rather than as the control that decides
     // whether a recording captures your microphone.
     implicitHeight: ExoTheme.controlHeightCompact
+    // Without a text the switch is its track and nothing else: the label's left
+    // padding would otherwise widen it, and a right-aligned switch then stopped
+    // short of the column edge every select and field reaches.
+    implicitWidth: root.text !== "" ? root.implicitContentWidth + root.leftPadding + root.rightPadding
+                                    : root.implicitIndicatorWidth
     focusPolicy: Qt.StrongFocus
     hoverEnabled: true
     padding: 0

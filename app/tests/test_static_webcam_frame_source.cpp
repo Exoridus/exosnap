@@ -17,13 +17,13 @@ namespace {
 struct Frame {
     int width = 0;
     int height = 0;
-    std::vector<uint8_t> bgra;
+    std::vector<uint8_t> pixels;
     uint64_t generation = 0;
 };
 
 Frame Pull(WebcamFrameProvider& provider) {
     Frame f;
-    EXPECT_TRUE(provider.TryGetFrame(f.width, f.height, f.bgra, f.generation));
+    EXPECT_TRUE(provider.TryGetFrame(f.width, f.height, f.pixels, f.generation));
     return f;
 }
 
@@ -69,11 +69,11 @@ TEST(StaticWebcamFrameSource, ServesTheSamePixelsEveryTime) {
     const Frame first = Pull(source);
     ASSERT_EQ(first.width, 64);
     ASSERT_EQ(first.height, 48);
-    ASSERT_EQ(first.bgra.size(), 64u * 48u * 4u);
+    ASSERT_EQ(first.pixels.size(), 64u * 48u * 4u);
 
     for (int i = 0; i < 5; ++i) {
         const Frame again = Pull(source);
-        EXPECT_EQ(again.bgra, first.bgra);
+        EXPECT_EQ(again.pixels, first.pixels);
     }
 }
 
@@ -94,7 +94,7 @@ TEST(StaticWebcamFrameSource, ACameraLikeSourceWouldBreakTheMeasurement) {
     GenerationBumpingSource bumping;
     const Frame first = Pull(bumping);
     const Frame second = Pull(bumping);
-    EXPECT_EQ(first.bgra, second.bgra) << "identical pixels";
+    EXPECT_EQ(first.pixels, second.pixels) << "identical pixels";
     EXPECT_NE(first.generation, second.generation) << "and yet a new generation every call";
 }
 
@@ -103,14 +103,14 @@ TEST(StaticWebcamFrameSource, ASourceThatChangesUnderOneGenerationIsAlsoWrong) {
     const Frame first = Pull(changing);
     const Frame second = Pull(changing);
     EXPECT_EQ(first.generation, second.generation);
-    EXPECT_NE(first.bgra, second.bgra) << "pixels moved without saying so";
+    EXPECT_NE(first.pixels, second.pixels) << "pixels moved without saying so";
 
     // The source under test satisfies neither counter-example.
     StaticWebcamFrameSource source(64, 48);
     const Frame a = Pull(source);
     const Frame b = Pull(source);
     EXPECT_EQ(a.generation, b.generation);
-    EXPECT_EQ(a.bgra, b.bgra);
+    EXPECT_EQ(a.pixels, b.pixels);
 }
 
 TEST(StaticWebcamPattern, CarriesFourDistinctQuadrantsABorderAndOneMark) {
@@ -174,14 +174,14 @@ TEST(WebcamFrameMailbox, RetainedSnapshotsAreImmutableAndSteadyPublicationReuses
         mailbox.Publish(2, 2, pixels, generation);
         const auto current = mailbox.Snapshot();
         EXPECT_EQ(current->generation, generation);
-        EXPECT_EQ(current->bgra[0], generation);
+        EXPECT_EQ(current->pixels[0], generation);
         EXPECT_EQ(held->generation, 1u);
-        EXPECT_EQ(held->bgra[0], 1u);
+        EXPECT_EQ(held->pixels[0], 1u);
     }
     EXPECT_EQ(mailbox.ReadMetrics().buffers_created, 3u);
     EXPECT_EQ(mailbox.ReadMetrics().legacy_copies, 0u);
     EXPECT_EQ(mailbox.ReadMetrics().payload_bytes, 99u * 16);
     mailbox.Reset();
     EXPECT_FALSE(mailbox.Snapshot());
-    EXPECT_EQ(held->bgra[0], 1u);
+    EXPECT_EQ(held->pixels[0], 1u);
 }

@@ -120,7 +120,6 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Limiter ceiling")
-        hint: qsTr("Peak level the limiter holds the mix under")
         stacked: root.stacked
         visible: root.settings.expertMode && root.settings.limiterEnabled
         Layout.fillWidth: true

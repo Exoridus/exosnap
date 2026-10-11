@@ -93,6 +93,12 @@ Item {
                         cornerRadius: 0
                         anchors.fill: parent
                         visible: !root.previewAdapter.harnessTestCard && root.previewAdapter.previewFrameRate > 0
+                        // The camera is composited into the preview texture by the
+                        // recording's own compositor; the overlay below is only its
+                        // editing chrome. Bound to the draft so a drag moves the
+                        // real picture, not a stand-in.
+                        webcamVisible: webcamOverlay.visible && webcamOverlay.idlePreview
+                        webcamRect: webcamOverlay.draftRect
                     }
 
                     Label {
@@ -174,253 +180,17 @@ Item {
                         }
                     }
 
-                    FocusScope {
+                    RecordWebcamOverlay {
                         id: webcamOverlay
 
-                        property rect draftRect: Qt.rect(0, 0, 1, 1)
-                        readonly property bool idlePreview: !root.recordViewModel.recording
-                                                            && !root.recordViewModel.paused
-                                                            && !root.recordViewModel.preparing
-                                                            && !root.recordViewModel.finalizing
-
-                        x: parent.width * draftRect.x
-                        y: parent.height * draftRect.y
-                        width: parent.width * draftRect.width
-                        height: parent.height * draftRect.height
+                        stage: previewStage
                         visible: root.active && root.previewAdapter.previewFrameRate > 0 && root.recordViewModel.webcamEnabled
-                                 && (!idlePreview || root.recordViewModel.webcamFrameSource.length > 0)
-                        activeFocusOnTab: root.recordViewModel.webcamOverlayEditable
-                        Accessible.name: qsTr("Webcam overlay")
-                        Accessible.description: qsTr("Drag to move. Use arrow keys to move and Shift plus arrow keys to resize.")
-                        Keys.onPressed: event => {
-                            if (!root.recordViewModel.webcamOverlayEditable)
-                                return
-                            const step = Boolean(event.modifiers & Qt.ControlModifier) ? 0.01 : 0.02
-                            const resize = Boolean(event.modifiers & Qt.ShiftModifier)
-                            let x = webcamOverlay.draftRect.x
-                            let y = webcamOverlay.draftRect.y
-                            let w = webcamOverlay.draftRect.width
-                            let h = webcamOverlay.draftRect.height
-                            if (event.key === Qt.Key_Left)
-                                resize ? w = Math.max(0.05, w - step) : x = Math.max(0, x - step)
-                            else if (event.key === Qt.Key_Right)
-                                resize ? w = Math.min(1 - x, w + step) : x = Math.min(1 - w, x + step)
-                            else if (event.key === Qt.Key_Up)
-                                resize ? h = Math.max(0.05, h - step) : y = Math.max(0, y - step)
-                            else if (event.key === Qt.Key_Down)
-                                resize ? h = Math.min(1 - y, h + step) : y = Math.min(1 - h, y + step)
-                            else
-                                return
-                            const nextRect = Qt.rect(x, y, w, h)
-                            root.recordViewModel.requestWebcamOverlayRect(nextRect)
-                            event.accepted = true
-                        }
-
-                        Rectangle {
-                            color: ExoTheme.surface
-                            radius: ExoTheme.radiusSm
-                            visible: webcamOverlay.idlePreview
-                            anchors.fill: parent
-                        }
-
-                        Binding {
-                            target: webcamOverlay
-                            property: "draftRect"
-                            value: root.recordViewModel.webcamOverlayRect
-                            when: !webcamDrag.pressed && !webcamResize.pressed
-                            restoreMode: Binding.RestoreNone
-                        }
-
-                        Image {
-                            id: webcamImage
-
-                            anchors.fill: parent
-                            source: root.active && webcamOverlay.idlePreview
-                                    ? root.recordViewModel.webcamFrameSource : ""
-                            // sourceSize is not set here: the Binding below owns it
-                            // and is active from construction, so a literal would be
-                            // overwritten before the first frame and read as a
-                            // decode resolution that nothing honours.
-                            cache: false
-                            asynchronous: true
-                            fillMode: Image.PreserveAspectCrop
-                            mirror: root.recordViewModel.webcamMirror
-                            opacity: root.recordViewModel.webcamOpacity
-                            visible: webcamOverlay.idlePreview
-                        }
-
-                        Binding {
-                            target: webcamImage
-                            property: "sourceSize"
-                            value: Qt.size(Math.max(1, Math.ceil(webcamImage.width / 32) * 32),
-                                           Math.max(1, Math.ceil(webcamImage.height / 32) * 32))
-                            when: !webcamResize.pressed
-                            restoreMode: Binding.RestoreNone
-                        }
-
-                        Label {
-                            text: qsTr("Webcam preview unavailable")
-                            textFormat: Text.PlainText
-                            wrapMode: Text.WordWrap
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                            // The theme rung, not the overlay one: this label
-                            // only ever appears in the idle preview, where the
-                            // panel behind it is `ExoTheme.surface`.
-                            color: ExoTheme.warningText
-                            visible: webcamImage.status === Image.Error
-                            anchors.fill: parent
-                            font.family: ExoTheme.sansFamily
-                            font.pixelSize: ExoTheme.fontCaption
-                        }
-
-                        Rectangle {
-                            id: webcamFrameChrome
-
-                            color: Qt.rgba(0, 0, 0, 0)
-                            border.width: 1
-                            border.color: root.recordViewModel.webcamError ? ExoTheme.error : ExoTheme.lineStrong
-                            radius: ExoTheme.radiusSm
-                            // `pressed` as well as `containsMouse`: a drag that
-                            // leaves the frame's own bounds is still a drag, and
-                            // chrome that blinks out mid-gesture reads as a dropped
-                            // grab.
-                            visible: root.recordViewModel.webcamError || webcamOverlay.activeFocus
-                                     || webcamDrag.containsMouse || webcamResize.containsMouse
-                                     || webcamDrag.pressed || webcamResize.pressed
-                            anchors.fill: parent
-                        }
-
-                        // The four corners of the editable frame. What was here was a
-                        // single filled square at the bottom right, which reads as a
-                        // stray box rather than as a frame with corners; brackets
-                        // state all four without covering the picture.
-                        Repeater {
-                            model: 4
-
-                            delegate: Item {
-                                id: webcamCorner
-
-                                required property int index
-
-                                readonly property bool atRight: webcamCorner.index === 1 || webcamCorner.index === 2
-                                readonly property bool atBottom: webcamCorner.index >= 2
-                                // Bottom right is the resize grip, so it is the one
-                                // corner that answers the pointer.
-                                readonly property bool grip: webcamCorner.index === 2
-                                readonly property color ink:
-                                    (webcamCorner.grip && (webcamResize.containsMouse || webcamResize.pressed))
-                                    ? ExoTheme.accent
-                                    : (root.recordViewModel.webcamError ? ExoTheme.error : ExoTheme.lineStrong)
-
-                                width: 14
-                                height: 14
-                                visible: webcamFrameChrome.visible
-                                x: webcamCorner.atRight ? parent.width - width : 0
-                                y: webcamCorner.atBottom ? parent.height - height : 0
-
-                                Rectangle {
-                                    width: parent.width
-                                    height: 2
-                                    color: webcamCorner.ink
-                                    y: webcamCorner.atBottom ? parent.height - height : 0
-                                }
-
-                                Rectangle {
-                                    width: 2
-                                    height: parent.height
-                                    color: webcamCorner.ink
-                                    x: webcamCorner.atRight ? parent.width - width : 0
-                                }
-                            }
-                        }
-
-                        MouseArea {
-                            id: webcamDrag
-
-                            property point pressPoint
-                            property rect pressRect
-
-                            anchors.fill: parent
-                            enabled: root.recordViewModel.webcamOverlayEditable
-                            hoverEnabled: true
-                            cursorShape: enabled ? Qt.SizeAllCursor : Qt.ArrowCursor
-                            // Both points live in previewStage coordinates, never in
-                            // this MouseArea's: the overlay MOVES as draftRect
-                            // changes, so a delta measured against the item itself
-                            // shrinks by exactly the amount already applied. The drag
-                            // then crawls behind the pointer and stalls once it
-                            // catches up, without ever losing the grab -- which is
-                            // what makes it look like lag rather than like a bug.
-                            onPressed: mouse => {
-                                webcamOverlay.forceActiveFocus()
-                                pressPoint = webcamDrag.mapToItem(previewStage, mouse.x, mouse.y)
-                                pressRect = webcamOverlay.draftRect
-                            }
-                            onPositionChanged: mouse => {
-                                if (!pressed)
-                                    return
-                                const at = webcamDrag.mapToItem(previewStage, mouse.x, mouse.y)
-                                const dx = (at.x - pressPoint.x) / Math.max(1, previewStage.width)
-                                const dy = (at.y - pressPoint.y) / Math.max(1, previewStage.height)
-                                webcamOverlay.draftRect = Qt.rect(
-                                            Math.max(0, Math.min(1 - pressRect.width, pressRect.x + dx)),
-                                            Math.max(0, Math.min(1 - pressRect.height, pressRect.y + dy)),
-                                            pressRect.width, pressRect.height)
-                            }
-                            onReleased: root.recordViewModel.requestWebcamOverlayRect(webcamOverlay.draftRect)
-                        }
-
-                        Item {
-                            // Hit area only. The bottom-right bracket above is what
-                            // the eye reads, and it takes the accent while this is
-                            // hovered or held.
-                            width: 14
-                            height: 14
-                            anchors {
-                                right: parent.right
-                                bottom: parent.bottom
-                            }
-
-                            MouseArea {
-                                id: webcamResize
-
-                                property point pressPoint
-                                property rect pressRect
-
-                                anchors.fill: parent
-                                enabled: root.recordViewModel.webcamOverlayEditable
-                                hoverEnabled: true
-                                cursorShape: Qt.SizeFDiagCursor
-                                // previewStage coordinates for the same reason the
-                                // drag uses them: the grip is anchored to a frame
-                                // that grows under it.
-                                onPressed: mouse => {
-                                    mouse.accepted = true
-                                    pressPoint = webcamResize.mapToItem(previewStage, mouse.x, mouse.y)
-                                    pressRect = webcamOverlay.draftRect
-                                }
-                                onPositionChanged: mouse => {
-                                    if (!pressed)
-                                        return
-                                    const at = webcamResize.mapToItem(previewStage, mouse.x, mouse.y)
-                                    const dw = (at.x - pressPoint.x) / Math.max(1, previewStage.width)
-                                    const dh = (at.y - pressPoint.y) / Math.max(1, previewStage.height)
-                                    const delta = Math.max(dw, dh)
-                                    const maxDelta = Math.min(1 - pressRect.x - pressRect.width,
-                                                              1 - pressRect.y - pressRect.height)
-                                    const minDelta = 0.05 - Math.min(pressRect.width, pressRect.height)
-                                    const clamped = Math.max(minDelta, Math.min(maxDelta, delta))
-                                    webcamOverlay.draftRect = Qt.rect(pressRect.x, pressRect.y,
-                                                                      pressRect.width + clamped,
-                                                                      pressRect.height + clamped)
-                                }
-                                onReleased: mouse => {
-                                    mouse.accepted = true
-                                    root.recordViewModel.requestWebcamOverlayRect(webcamOverlay.draftRect)
-                                }
-                            }
-                        }
+                        idlePreview: !root.recordViewModel.recording && !root.recordViewModel.paused
+                                     && !root.recordViewModel.preparing && !root.recordViewModel.finalizing
+                        modelRect: root.recordViewModel.webcamOverlayRect
+                        editable: root.recordViewModel.webcamOverlayEditable
+                        error: root.recordViewModel.webcamError
+                        onRectRequested: rect => root.recordViewModel.requestWebcamOverlayRect(rect)
                     }
 
                     RecordPreviewChrome {

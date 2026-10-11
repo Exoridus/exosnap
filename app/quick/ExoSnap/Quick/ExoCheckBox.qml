@@ -68,7 +68,7 @@ CheckBox {
         verticalAlignment: Text.AlignVCenter
         visible: root.text !== ""
         color: root.enabled ? ExoTheme.textSecondary : ExoTheme.textDim
-        leftPadding: root.indicator.width + ExoTheme.spacingXs
+        leftPadding: root.indicator.width + ExoTheme.spacingSm
         font {
             family: ExoTheme.sansFamily
             pixelSize: ExoTheme.fontSecondary

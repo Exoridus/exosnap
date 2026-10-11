@@ -49,7 +49,9 @@ Rectangle {
     }
 
     implicitWidth: row.implicitWidth + 6
-    implicitHeight: 30
+    // The height of every other control in a settings row, so a segmented row
+    // lines up with the selects and fields around it.
+    implicitHeight: ExoTheme.controlHeight
     color: ExoTheme.surface
     border.width: 1
     border.color: root.activeFocus ? ExoTheme.text : ExoTheme.line
@@ -82,20 +84,23 @@ Rectangle {
                 onClicked: root.selected(segment.index)
 
                 HoverHandler {
-                    cursorShape: Qt.PointingHandCursor
+                    cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                 }
 
                 background: Rectangle {
                     color: root.currentIndex === segment.index ? ExoTheme.surfaceHover
-                         : segment.hovered ? ExoTheme.surfaceRaised
+                         : segment.hovered && root.enabled ? ExoTheme.surfaceRaised
                          : "transparent"
                     // While the group has focus the SELECTED chip is what the
                     // arrows will move, so that is where the focus treatment
                     // belongs — the group's own outer ring says which control
                     // has focus, this says where inside it.
                     border.width: root.currentIndex === segment.index ? 1 : 0
-                    border.color: root.currentIndex === segment.index && root.activeFocus
-                                  ? ExoTheme.text : ExoTheme.accent
+                    // A blocked group keeps showing its choice, without the
+                    // accent that means "live and selectable".
+                    border.color: !root.enabled ? ExoTheme.line
+                                : root.currentIndex === segment.index && root.activeFocus ? ExoTheme.text
+                                : ExoTheme.accent
                     radius: ExoTheme.radiusXs
                 }
 
@@ -106,7 +111,8 @@ Rectangle {
                     verticalAlignment: Text.AlignVCenter
                     text: segment.modelData
                     textFormat: Text.PlainText
-                    color: root.currentIndex === segment.index ? ExoTheme.text : ExoTheme.textSecondary
+                    color: !root.enabled ? (root.currentIndex === segment.index ? ExoTheme.textSecondary : ExoTheme.textDim)
+                         : root.currentIndex === segment.index ? ExoTheme.text : ExoTheme.textSecondary
                     font {
                         family: ExoTheme.sansFamily
                         pixelSize: ExoTheme.fontSecondary

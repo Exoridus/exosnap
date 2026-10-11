@@ -216,6 +216,10 @@ Item {
     // is two page implementations that drift apart.
     //
     // They start invisible; the controlling proxy makes its target visible.
+    // Declared in reading order -- the left column top to bottom, then the
+    // right one, which is also the single-column order. LayoutItemProxy places
+    // a section without reparenting it, so this order, not the columns, is the
+    // Tab order.
     SettingsPresetBar {
         id: presetSection
 
@@ -227,15 +231,6 @@ Item {
 
     SettingsFormatSection {
         id: formatSection
-
-        settings: root.settings
-        stacked: root.stackedRows
-        visible: false
-        Layout.fillWidth: true
-    }
-
-    SettingsQualitySection {
-        id: qualitySection
 
         settings: root.settings
         stacked: root.stackedRows
@@ -261,35 +256,8 @@ Item {
         Layout.fillWidth: true
     }
 
-    SettingsAudioEncodingSection {
-        id: audioEncodingSection
-
-        settings: root.settings
-        stacked: root.stackedRows
-        visible: false
-        Layout.fillWidth: true
-    }
-
     SettingsOutputSection {
         id: outputSection
-
-        settings: root.settings
-        stacked: root.stackedRows
-        visible: false
-        Layout.fillWidth: true
-    }
-
-    SettingsWebcamSection {
-        id: webcamSection
-
-        settings: root.settings
-        stacked: root.stackedRows
-        visible: false
-        Layout.fillWidth: true
-    }
-
-    SettingsOverlaysSection {
-        id: overlaysSection
 
         settings: root.settings
         stacked: root.stackedRows
@@ -315,8 +283,8 @@ Item {
         Layout.fillWidth: true
     }
 
-    SettingsUpdatesSection {
-        id: updatesSection
+    SettingsAppearanceSection {
+        id: appearanceSection
 
         settings: root.settings
         stacked: root.stackedRows
@@ -324,8 +292,44 @@ Item {
         Layout.fillWidth: true
     }
 
-    SettingsAppearanceSection {
-        id: appearanceSection
+    SettingsQualitySection {
+        id: qualitySection
+
+        settings: root.settings
+        stacked: root.stackedRows
+        visible: false
+        Layout.fillWidth: true
+    }
+
+    SettingsAudioEncodingSection {
+        id: audioEncodingSection
+
+        settings: root.settings
+        stacked: root.stackedRows
+        visible: false
+        Layout.fillWidth: true
+    }
+
+    SettingsWebcamSection {
+        id: webcamSection
+
+        settings: root.settings
+        stacked: root.stackedRows
+        visible: false
+        Layout.fillWidth: true
+    }
+
+    SettingsOverlaysSection {
+        id: overlaysSection
+
+        settings: root.settings
+        stacked: root.stackedRows
+        visible: false
+        Layout.fillWidth: true
+    }
+
+    SettingsUpdatesSection {
+        id: updatesSection
 
         settings: root.settings
         stacked: root.stackedRows

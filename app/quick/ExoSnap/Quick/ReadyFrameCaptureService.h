@@ -3,7 +3,6 @@
 #include "models/VideoSettingsModel.h"
 #include "models/WebcamSettings.h"
 
-#include <QImage>
 #include <QRect>
 #include <QRectF>
 #include <QString>
@@ -14,6 +13,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace exosnap::quick {
@@ -33,7 +33,7 @@ struct ReadyFrameComposition {
     QRectF normalized_source_rect{0.0, 0.0, 1.0, 1.0};
     VideoSettingsModel video;
     WebcamSettings webcam;
-    QImage webcam_frame;
+    std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> webcam_frame;
 };
 
 class ReadyFrameCaptureService final {

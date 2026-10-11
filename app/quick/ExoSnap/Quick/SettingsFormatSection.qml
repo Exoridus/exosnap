@@ -132,7 +132,6 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Encoding device")
-        hint: qsTr("Which GPU runs the encoder")
         warning: root.settings.encoderDeviceHint
         stacked: root.stacked
         visible: root.settings.expertMode && root.settings.encoderDeviceOptions.length > 0
@@ -150,7 +149,7 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("NVENC preset")
-        hint: qsTr("Speed versus quality on NVIDIA GPUs (P1-P7)")
+        hint: qsTr("P1 fastest · P7 best quality")
         stacked: root.stacked
         visible: root.settings.expertMode && root.settings.nvencPresetOptions.length > 0
         Layout.fillWidth: true

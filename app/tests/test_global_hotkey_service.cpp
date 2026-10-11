@@ -479,5 +479,88 @@ TEST_F(HotkeyServiceTest, SplitRecordingActionIndexStable) {
     EXPECT_EQ(GlobalHotkeyService::Win32IdForAction(HotkeyAction::SplitRecording), 5);
 }
 
+// A bare global key is taken from every application; only keys no layout
+// types with are allowed on their own.
+TEST_F(HotkeyServiceTest, BareKeysNeedAModifierExceptF13ToF24AndPause) {
+    EXPECT_EQ(GlobalHotkeyService::ValidateSequence(QKeySequence(Qt::Key_A)), RebindError::NeedsModifier);
+    EXPECT_EQ(GlobalHotkeyService::ValidateSequence(QKeySequence(Qt::Key_F5)), RebindError::NeedsModifier);
+    EXPECT_EQ(GlobalHotkeyService::ValidateSequence(QKeySequence(Qt::Key_F13)), RebindError::None);
+    EXPECT_EQ(GlobalHotkeyService::ValidateSequence(QKeySequence(Qt::Key_F24)), RebindError::None);
+    EXPECT_EQ(GlobalHotkeyService::ValidateSequence(QKeySequence(Qt::Key_Pause)), RebindError::None);
+    EXPECT_EQ(GlobalHotkeyService::ValidateSequence(QKeySequence(Qt::ShiftModifier | Qt::Key_A)), RebindError::None);
+    // The keypad flag says where a key sits, not that a modifier was held.
+    EXPECT_EQ(GlobalHotkeyService::ValidateSequence(QKeySequence(Qt::KeypadModifier | Qt::Key_5)),
+              RebindError::NeedsModifier);
+
+    GlobalHotkeyService svc;
+    const RebindResult refused = svc.TrySetBinding(HotkeyAction::AddMarker, QKeySequence(Qt::Key_A));
+    EXPECT_FALSE(refused.success);
+    EXPECT_FALSE(refused.error_message.isEmpty());
+}
+
+TEST_F(HotkeyServiceTest, SuspendReleasesEveryBindingAndResumeRestoresThem) {
+    GlobalHotkeyService svc;
+    FakeRegistrar reg;
+    (void)svc.SetRegistrar(&reg);
+    ASSERT_EQ(reg.registrations.size(), static_cast<std::size_t>(kHotkeyActionCount));
+
+    svc.SuspendRegistrations();
+    EXPECT_TRUE(reg.registrations.empty());
+    svc.SuspendRegistrations();
+    EXPECT_EQ(reg.unregister_calls, kHotkeyActionCount) << "suspending twice releases once";
+
+    EXPECT_TRUE(svc.ResumeRegistrations().empty());
+    EXPECT_EQ(reg.registrations.size(), static_cast<std::size_t>(kHotkeyActionCount));
+    EXPECT_TRUE(svc.ResumeRegistrations().empty()) << "resuming while not suspended does nothing";
+    EXPECT_EQ(reg.register_calls, 2 * kHotkeyActionCount);
+}
+
+TEST_F(HotkeyServiceTest, ResumeReportsBindingsTakenWhileSuspended) {
+    GlobalHotkeyService svc;
+    FakeRegistrar reg;
+    (void)svc.SetRegistrar(&reg);
+    svc.SuspendRegistrations();
+
+    reg.fail_next_n = 1;
+    const std::vector<HotkeyAction> failed = svc.ResumeRegistrations();
+    ASSERT_EQ(failed.size(), 1u);
+    EXPECT_EQ(failed.front(), HotkeyAction::ToggleRecording);
+}
+
+// The pressed combination reaches the capture field only while ExoSnap's own
+// registrations are released; committing it must register it for real.
+TEST_F(HotkeyServiceTest, RebindWhileSuspendedResumesAndRegistersTheNewBinding) {
+    GlobalHotkeyService svc;
+    FakeRegistrar reg;
+    (void)svc.SetRegistrar(&reg);
+    svc.SuspendRegistrations();
+
+    const QKeySequence seq(Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_K);
+    ASSERT_TRUE(svc.TrySetBinding(HotkeyAction::AddMarker, seq).success);
+    EXPECT_EQ(reg.registrations.size(), static_cast<std::size_t>(kHotkeyActionCount));
+    EXPECT_TRUE(reg.IsRegistered(GlobalHotkeyService::Win32IdForAction(HotkeyAction::AddMarker)));
+}
+
+TEST_F(HotkeyServiceTest, DisplayPartsSplitTheCombinationIntoKeyCaps) {
+    const QStringList parts =
+        GlobalHotkeyService::DisplayParts(QKeySequence(Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_R));
+    ASSERT_EQ(parts.size(), 3);
+    EXPECT_EQ(parts.back(), QStringLiteral("R"));
+    for (const QString& part : parts) {
+        EXPECT_FALSE(part.isEmpty());
+        EXPECT_FALSE(part.endsWith(QLatin1Char('+'))) << part.toStdString();
+    }
+
+    // The plus key itself is a cap, not a separator.
+    EXPECT_EQ(GlobalHotkeyService::DisplayParts(QKeySequence(Qt::ControlModifier | Qt::Key_Plus)).back(),
+              QStringLiteral("+"));
+    EXPECT_EQ(GlobalHotkeyService::DisplayParts(QKeySequence(Qt::Key_F13)), QStringList{QStringLiteral("F13")});
+    EXPECT_TRUE(GlobalHotkeyService::DisplayParts(QKeySequence()).isEmpty());
+
+    const QStringList modifiers = GlobalHotkeyService::DisplayParts(QKeySequence(QKeyCombination(
+        Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier | Qt::MetaModifier, Qt::Key_unknown)));
+    EXPECT_EQ(modifiers.size(), 4) << modifiers.join(QLatin1Char('|')).toStdString();
+}
+
 } // namespace
 } // namespace exosnap

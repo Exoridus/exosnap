@@ -14,7 +14,7 @@ ColumnLayout {
 
     ExoSettingRow {
         label: qsTr("High-pass filter")
-        hint: qsTr("Removes low-frequency rumble below the cutoff frequency")
+        hint: qsTr("Removes rumble below the cutoff")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
@@ -118,7 +118,7 @@ ColumnLayout {
 
     ExoSettingRow {
         label: qsTr("RNNoise suppression")
-        hint: qsTr("Neural background-noise suppression")
+        hint: qsTr("Neural noise suppression")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true

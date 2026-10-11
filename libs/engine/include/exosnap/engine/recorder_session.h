@@ -30,14 +30,52 @@ namespace exosnap::engine {
 // WebcamFrameProvider — injected into RecorderConfig for compositing
 // ---------------------------------------------------------------------------
 
-// Called by VideoThread to pull the latest webcam BGRA frame.
+// Called by VideoThread to pull the latest webcam frame.
 // Implementations must be thread-safe: TryGetFrame is called from VideoThread.
 // The provider must remain alive for the duration of Record().
+
+// Camera payload layouts, all tightly packed (no row padding). The YUV layouts
+// are what the camera delivers natively; they reach the GPU unconverted and are
+// turned into RGB there, once per generation.
+enum class WebcamPixelFormat : uint8_t {
+    Bgra, // width * 4 bytes per row
+    Nv12, // width * height luma bytes, then (height / 2) rows of width interleaved Cb/Cr bytes
+    Yuy2, // width * 2 bytes per row: Y0 Cb Y1 Cr per pixel pair
+};
+
+// Bytes a tightly packed frame of this layout occupies, or 0 when the
+// dimensions cannot hold it (the YUV layouts need even dimensions).
+[[nodiscard]] inline size_t WebcamFramePayloadBytes(WebcamPixelFormat format, int width, int height) noexcept {
+    if (width <= 0 || height <= 0)
+        return 0;
+    const size_t w = static_cast<size_t>(width);
+    const size_t h = static_cast<size_t>(height);
+    switch (format) {
+    case WebcamPixelFormat::Bgra:
+        return w * h * 4u;
+    case WebcamPixelFormat::Nv12:
+        return (width % 2 == 0 && height % 2 == 0) ? w * h * 3u / 2u : 0;
+    case WebcamPixelFormat::Yuy2:
+        return width % 2 == 0 ? w * h * 2u : 0;
+    }
+    return 0;
+}
+
 struct WebcamFrameSnapshot {
     int width = 0;
     int height = 0;
     uint64_t generation = 0;
-    std::vector<uint8_t> bgra;
+    std::vector<uint8_t> pixels;
+    WebcamPixelFormat format = WebcamPixelFormat::Bgra;
+    // YUV layouts only. Defaults match what UVC cameras send when the media type
+    // does not say otherwise.
+    MatrixCoefficients matrix = MatrixCoefficients::Bt601;
+    ColorRange range = ColorRange::Limited;
+
+    [[nodiscard]] bool HasCompletePayload() const noexcept {
+        const size_t required = WebcamFramePayloadBytes(format, width, height);
+        return required != 0 && pixels.size() >= required;
+    }
 };
 
 struct WebcamFrameProvider {
@@ -60,7 +98,7 @@ struct WebcamFrameProvider {
     // Providers should override this to share their immutable published frame.
     virtual std::shared_ptr<const WebcamFrameSnapshot> Snapshot() {
         auto frame = std::make_shared<WebcamFrameSnapshot>();
-        if (!TryGetFrame(frame->width, frame->height, frame->bgra, frame->generation))
+        if (!TryGetFrame(frame->width, frame->height, frame->pixels, frame->generation))
             return {};
         return frame;
     }

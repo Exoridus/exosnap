@@ -468,6 +468,18 @@ TEST(RecordingPreset, AdvancedNvencPreferencesAreDirtyAndPreservedAcrossCodecRes
     EXPECT_EQ(ConfigDirtyDifference(before, sanitized), "output.nvenc_tuning");
 }
 
+TEST(RecordingPreset, AdjustedCameraImageControlsMakeThePresetDirty) {
+    const RecordingPresetConfig before = MakeDefaultPreset().config;
+    auto after = before;
+    after.webcam.controls = {
+        {WebcamControl::PowerLineFrequency, false, static_cast<long>(WebcamPowerLineFrequency::Hz50)}};
+    const auto sanitized = SanitizePresetConfig(after);
+    EXPECT_EQ(sanitized.webcam.controls, after.webcam.controls);
+    EXPECT_FALSE(NormalizedConfigEquals(before, sanitized));
+    EXPECT_FALSE(ConfigDirtyEquivalent(before, sanitized));
+    EXPECT_EQ(ConfigDirtyDifference(before, sanitized), "webcam.controls");
+}
+
 TEST(RecordingPreset, BuiltInsKeepAdvancedNvencDefaultsConservative) {
     for (const auto& preset : MakeBuiltInPresets()) {
         const auto& tuning = preset.config.output.nvenc_tuning;

@@ -13,6 +13,11 @@ Rectangle {
 
     signal searchEdited(string query)
 
+    function clear(): void {
+        input.text = "";
+        root.searchEdited("");
+    }
+
     implicitHeight: 30
     implicitWidth: 220
     color: ExoTheme.surface
@@ -55,21 +60,43 @@ Rectangle {
                 pixelSize: ExoTheme.fontSecondary
             }
             onTextEdited: root.searchEdited(input.text)
+            // Escape empties a search before it does anything else, the way
+            // a search box behaves everywhere.
+            Keys.onEscapePressed: event => {
+                if (input.text === "") {
+                    event.accepted = false;
+                    return;
+                }
+                root.clear();
+                event.accepted = true;
+            }
         }
 
         AbstractButton {
             id: clearButton
 
-            implicitWidth: 16
-            implicitHeight: 16
+            implicitWidth: 20
+            implicitHeight: 20
             visible: input.text !== ""
             hoverEnabled: true
+            focusPolicy: Qt.StrongFocus
             Layout.alignment: Qt.AlignVCenter
             Accessible.role: Accessible.Button
             Accessible.name: qsTr("Clear search")
             onClicked: {
-                input.text = "";
-                root.searchEdited("");
+                root.clear();
+                input.forceActiveFocus();
+            }
+
+            HoverHandler {
+                cursorShape: Qt.PointingHandCursor
+            }
+
+            background: Rectangle {
+                radius: ExoTheme.radiusXs
+                color: clearButton.hovered ? ExoTheme.surfaceHover : "transparent"
+                border.width: clearButton.visualFocus ? ExoTheme.focusRingWidth : 0
+                border.color: ExoTheme.text
             }
 
             contentItem: ExoGlyph {

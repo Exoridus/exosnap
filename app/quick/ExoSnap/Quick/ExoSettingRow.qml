@@ -24,6 +24,9 @@ GridLayout {
     // the two cannot restate each other -- one is what the setting means, the
     // other is what it currently resolves to.
     property string readout: ""
+    // A caution about the current choice -- a capability limit, a side effect.
+    // Shown as a warning mark beside the label that opens the text, never as a
+    // wrapping line under the row, so it moves nothing on the page.
     property string warning: ""
     property bool stacked: false
     property int controlWidth: ExoTheme.controlSlot
@@ -102,15 +105,15 @@ GridLayout {
             Label {
                 text: root.label
                 textFormat: Text.PlainText
-                wrapMode: root.info === "" ? Text.WordWrap : Text.NoWrap
-                elide: root.info === "" ? Text.ElideNone : Text.ElideRight
+                wrapMode: root.info === "" && root.warning === "" ? Text.WordWrap : Text.NoWrap
+                elide: root.info === "" && root.warning === "" ? Text.ElideNone : Text.ElideRight
                 // The label keeps its text rung when the row is locked. What a
                 // running recording takes away is the ability to CHANGE the
                 // setting, not the user's need to read which setting it is, and
                 // a whole page of labels on the disabled rung answers nothing.
                 // Only the interaction chrome and the secondary hint recede.
                 color: ExoTheme.text
-                Layout.fillWidth: root.info === ""
+                Layout.fillWidth: root.info === "" && root.warning === ""
                 font {
                     family: ExoTheme.sansFamily
                     pixelSize: ExoTheme.fontBody
@@ -122,10 +125,31 @@ GridLayout {
                 body: root.info
                 visible: root.info !== ""
                 Layout.alignment: Qt.AlignVCenter
+                Layout.leftMargin: ExoTheme.spacingXs
+                // The label's line box carries descender space below the
+                // letters, so its geometric centre sits under the text's visual
+                // centre; lifting the glyph by that offset centres it on the word.
+                Layout.bottomMargin: 2
+            }
+
+            // Created only for a row that has a caution: almost none do, and an
+            // instantiated-but-hidden trigger per row costs a popup each.
+            Loader {
+                active: root.warning !== ""
+                visible: active
+                Layout.alignment: Qt.AlignVCenter
+                Layout.leftMargin: root.info !== "" ? 0 : ExoTheme.spacingXs
+                Layout.bottomMargin: 2
+
+                sourceComponent: ExoInfoButton {
+                    subject: root.label
+                    body: root.warning
+                    caution: true
+                }
             }
 
             Item {
-                Layout.fillWidth: root.info !== ""
+                Layout.fillWidth: root.info !== "" || root.warning !== ""
             }
         }
 
@@ -143,18 +167,6 @@ GridLayout {
             }
         }
 
-        Label {
-            text: root.warning
-            textFormat: Text.PlainText
-            wrapMode: Text.WordWrap
-            visible: root.warning !== ""
-            color: ExoTheme.warningText
-            Layout.fillWidth: true
-            font {
-                family: ExoTheme.sansFamily
-                pixelSize: ExoTheme.fontCaption
-            }
-        }
     }
 
     ColumnLayout {
@@ -163,6 +175,10 @@ GridLayout {
         spacing: ExoTheme.spacingXs
         Layout.fillWidth: root.stacked
         Layout.preferredWidth: root.stacked ? -1 : root.controlWidth
+        // A control wider than the slot takes the room from the label column,
+        // which elides its hint; with only a preferred width it was drawn across
+        // the label instead.
+        Layout.minimumWidth: root.stacked ? -1 : controlHost.implicitWidth
         Layout.alignment: root.stacked ? Qt.AlignLeft : Qt.AlignRight | Qt.AlignVCenter
     }
 }

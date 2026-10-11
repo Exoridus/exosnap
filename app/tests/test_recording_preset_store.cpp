@@ -114,6 +114,7 @@ RecordingPreset MakeWebcamPreset() {
     p.config.webcam.chroma_key.softness = 0.10f;
     p.config.webcam.chroma_key.spill_reduction = 0.25f;
     p.config.webcam.opacity = 0.35f;
+    p.config.webcam.controls = {{WebcamControl::Brightness, false, -12}, {WebcamControl::WhiteBalance, true, 4600}};
     return p;
 }
 
@@ -169,6 +170,10 @@ TEST(RecordingPresetStore, RoundTrip_3Presets_AllFieldsPreserved) {
         // Webcam PiP opacity — persisted explicitly since NormalizedConfigEquals
         // is not the target of this proof; check the round-tripped value directly.
         EXPECT_FLOAT_EQ(loaded_r3->config.webcam.opacity, 0.35f);
+        // Negative values and the automatic flag survive, and only the set
+        // controls come back.
+        EXPECT_EQ(loaded_r3->config.webcam.controls, r3.config.webcam.controls);
+        EXPECT_TRUE(loaded_r1->config.webcam.controls.empty());
     }
 
     CleanupFile(path);

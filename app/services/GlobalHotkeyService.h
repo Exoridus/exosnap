@@ -2,6 +2,7 @@
 #include <QKeySequence>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <array>
 #include <vector>
 
@@ -28,6 +29,7 @@ enum class RebindError {
     InternalConflict, // another ExoSnap action owns this binding
     ExternalConflict, // RegisterHotKey failed (Windows/other app)
     UnsupportedKey,   // key has no Win32 VK mapping
+    NeedsModifier,    // a bare key other than F13-F24 or Pause
 };
 
 struct RebindResult {
@@ -71,6 +73,14 @@ class GlobalHotkeyService : public QObject {
     // Never persists on failure.
     [[nodiscard]] RebindResult TrySetBinding(HotkeyAction action, QKeySequence seq);
 
+    // Releases every registration while a shortcut is being entered, so pressing
+    // a combination ExoSnap already owns reaches the capture field (and reports
+    // the conflict) instead of firing that action. Resuming re-registers the
+    // current bindings and returns the actions another application took in the
+    // meantime. Suspending twice or resuming while not suspended does nothing.
+    void SuspendRegistrations();
+    [[nodiscard]] std::vector<HotkeyAction> ResumeRegistrations();
+
     // Remove binding for action. Always succeeds.
     void UnsetBinding(HotkeyAction action);
 
@@ -104,6 +114,10 @@ class GlobalHotkeyService : public QObject {
     // Validate a key sequence without attempting registration.
     static RebindError ValidateSequence(QKeySequence seq);
 
+    // The combination as separate localized key caps in display order, e.g.
+    // {"Ctrl", "Shift", "R"}. Empty for an empty sequence.
+    static QStringList DisplayParts(QKeySequence seq);
+
   signals:
     // Emitted only after a successful commit (set, unset, or reset).
     void bindingChanged(exosnap::HotkeyAction action, QKeySequence seq);
@@ -115,7 +129,10 @@ class GlobalHotkeyService : public QObject {
     // comment above. No-op in release builds (matches Q_ASSERT).
     void AssertOwnerThread() const;
 
+    std::vector<HotkeyAction> RegisterAll();
+
     IHotkeyRegistrar* registrar_ = nullptr;
+    bool suspended_ = false;
     std::array<QKeySequence, static_cast<std::size_t>(kHotkeyActionCount)> bindings_{};
 };
 

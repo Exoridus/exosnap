@@ -10,7 +10,9 @@
 #include <QRectF>
 #include <QSize>
 
+#include <exosnap/engine/overlay_shader.h>
 #include <exosnap/engine/preview_tap.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include <array>
 #include <atomic>
@@ -36,6 +38,13 @@ class ExoPreviewItem : public QQuickItem {
     Q_PROPERTY(bool frameReady READ frameReady NOTIFY frameReadyChanged FINAL)
     Q_PROPERTY(QSize sourceSize READ sourceSize NOTIFY sourceSizeChanged FINAL)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged FINAL)
+    // The webcam picture-in-picture, composited into an idle source on the GPU
+    // by the recording's own compositor, so the preview shows the pre-encode
+    // picture. `webcamRect` is normalized to the source content, the rectangle
+    // `normalizedSourceRect` selects. A recording-tap source already contains
+    // the overlay and ignores both.
+    Q_PROPERTY(bool webcamVisible READ webcamVisible WRITE setWebcamVisible NOTIFY webcamVisibleChanged FINAL)
+    Q_PROPERTY(QRectF webcamRect READ webcamRect WRITE setWebcamRect NOTIFY webcamRectChanged FINAL)
 
   public:
     explicit ExoPreviewItem(QQuickItem* parent = nullptr);
@@ -58,9 +67,21 @@ class ExoPreviewItem : public QQuickItem {
     [[nodiscard]] QSize sourceSize() const;
     [[nodiscard]] const QString& errorText() const noexcept;
 
+    [[nodiscard]] bool webcamVisible() const noexcept;
+    void setWebcamVisible(bool visible);
+    [[nodiscard]] QRectF webcamRect() const noexcept;
+    void setWebcamRect(const QRectF& rect);
+    // GUI thread. The parts of the overlay that come from the configuration and
+    // the camera rather than from QML.
+    void setWebcamStyle(bool mirror, float opacity, const exosnap::engine::ChromaKeyParams& chroma);
+    void setWebcamFrame(std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> frame);
+
     // GUI-thread handoff. Ownership of nt_handle transfers to this item. The
     // handle is opened and closed on the scene-graph render thread.
-    void presentSharedTexture(void* nt_handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap);
+    // `overlays_composited` marks a source that already carries the webcam
+    // (the recording tap), which the item then does not draw a second time.
+    void presentSharedTexture(void* nt_handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap,
+                              bool overlays_composited = false);
     void clearSharedTexture();
 
     // GUI thread. One scene update because something the preview shows may have
@@ -93,6 +114,17 @@ class ExoPreviewItem : public QQuickItem {
         exosnap::engine::PreviewTapDesc tap{};
         quint64 generation = 0;
         bool clear = false;
+        bool overlays_composited = false;
+    };
+
+    // Render-thread copy of the webcam overlay, handed over at the sync point.
+    struct WebcamOverlay {
+        bool visible = false;
+        QRectF rect{0.0, 0.0, 1.0, 1.0};
+        bool mirror = false;
+        float opacity = 1.0f;
+        exosnap::engine::ChromaKeyParams chroma;
+        std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> frame;
     };
 
     static constexpr size_t kMetricWindow = 1024;
@@ -178,6 +210,8 @@ class ExoPreviewItem : public QQuickItem {
     void frameReadyChanged();
     void sourceSizeChanged();
     void errorTextChanged();
+    void webcamVisibleChanged();
+    void webcamRectChanged();
 
   protected:
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*) override;
@@ -194,6 +228,7 @@ class ExoPreviewItem : public QQuickItem {
     bool queueRetainedSource();
     void applyRenderState(bool ready, const QSize& size, const QString& error);
     void postRenderState(quint64 generation, bool ready, QSize size, QString error);
+    void webcamOverlayChanged();
     // The render-thread-owned half of this item's state. Never null.
     [[nodiscard]] Metrics& metrics() const noexcept {
         return render_link_->metrics;
@@ -232,6 +267,9 @@ class ExoPreviewItem : public QQuickItem {
     QMetaObject::Connection scene_graph_initialized_connection_;
     QMetaObject::Connection screen_changed_connection_;
     QMetaObject::Connection frame_swapped_connection_;
+
+    WebcamOverlay webcam_overlay_;
+    quint64 webcam_revision_ = 1;
 
     bool frame_ready_ = false;
     QSize source_size_;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exosnap/engine/overlay_shader.h>
+#include <exosnap/engine/recorder_session.h>
 #include <exosnap/engine/sdr_white_level.h>
 #include <exosnap/engine/webcam_placement.h>
 
@@ -15,18 +16,21 @@ namespace exosnap::engine {
 
 // D3D11 shader compositor for webcam and cursor overlays.
 //
-// Threading: all methods are VideoThread-exclusive. The class does
-// not take ownership of the device/context and must not be used from UI code.
+// Threading: single-thread. Every call comes from the thread that owns the
+// immediate context it was initialised with (the recording's VideoThread, or
+// the Quick render thread for the preview). The class does not take ownership
+// of the device/context.
 class GpuCompositor {
   public:
     // The key parameters and the shader that consumes them live in
-    // <recorder_core/overlay_shader.h>, shared with the DXGI live preview.
+    // <exosnap/engine/overlay_shader.h>.
     using ChromaKeyParams = exosnap::engine::ChromaKeyParams;
 
     // render_format: format of the composite render target. Must match the
     // capture source's frame format (BeginFrame copies the background via
     // CopyResource, which requires identical formats). BGRA8 for WGC and
-    // 8-bit SDR OD capture; R10G10B10A2 for a 10 bpc SDR desktop;
+    // 8-bit SDR OD capture; R8G8B8A8 for a preview source already in Qt's
+    // texture layout; R10G10B10A2 for a 10 bpc SDR desktop;
     // R16G16B16A16_FLOAT for the native HDR10 path, where the background is
     // linear scRGB and overlays are composited in linear light (sRGB-decoded and
     // scaled to the HDR overlay reference white). The overlay shader samples
@@ -54,6 +58,12 @@ class GpuCompositor {
     bool DrawWebcam(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, bool mirror,
                     const ChromaKeyParams& chroma, std::string& err, float opacity = 1.0f,
                     std::optional<uint64_t> generation = std::nullopt);
+    // Draws a camera frame in any WebcamPixelFormat. A YUV frame is uploaded in
+    // its own layout and converted to RGB on the GPU, once per generation; the
+    // sprite then composites exactly like a BGRA one. An incomplete payload
+    // draws nothing and is not an error, matching a provider with no frame yet.
+    bool DrawWebcam(const WebcamFrameSnapshot& frame, const WebcamPixelRect& rect, bool mirror,
+                    const ChromaKeyParams& chroma, std::string& err, float opacity = 1.0f);
     bool DrawCursor(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, std::string& err);
 
     // The inverting plane of a mask cursor, drawn after DrawCursor and over the
@@ -84,10 +94,16 @@ class GpuCompositor {
     struct TextureResource {
         winrt::com_ptr<ID3D11Texture2D> texture;
         winrt::com_ptr<ID3D11ShaderResourceView> srv;
+        winrt::com_ptr<ID3D11RenderTargetView> rtv;
         UINT width = 0;
         UINT height = 0;
+        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
     };
 
+    // Recreates `resource` only when its size or format changes.
+    bool EnsureTexture(TextureResource& resource, UINT width, UINT height, DXGI_FORMAT format, bool render_target,
+                       std::string& err);
+    bool ConvertWebcamYuv(const WebcamFrameSnapshot& frame, std::string& err);
     bool UploadTexture(TextureResource& resource, const uint8_t* bgra, int width, int height, UINT row_pitch,
                        std::string& err);
     bool DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
@@ -112,6 +128,14 @@ class GpuCompositor {
     winrt::com_ptr<ID3D11Buffer> constants_;
 
     TextureResource webcam_tex_;
+    // YUV webcam path: the raw planes as uploaded, and the shaders that turn
+    // them into webcam_tex_. Compiled on the first YUV frame, so a BGRA-only
+    // session never pays for them.
+    TextureResource webcam_luma_;   // NV12 Y (R8_UINT) or YUY2 pairs (R8G8B8A8_UINT)
+    TextureResource webcam_chroma_; // NV12 interleaved CbCr (R8G8_UINT)
+    winrt::com_ptr<ID3D11PixelShader> nv12_shader_;
+    winrt::com_ptr<ID3D11PixelShader> yuy2_shader_;
+    winrt::com_ptr<ID3D11Buffer> yuv_constants_;
     std::optional<uint64_t> webcam_generation_;
     uint64_t webcam_upload_count_ = 0;
     TextureResource cursor_tex_;

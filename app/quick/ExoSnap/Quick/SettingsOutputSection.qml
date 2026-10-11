@@ -5,7 +5,7 @@ import QtQuick.Layouts
 ExoCard {
     id: root
 
-    function focusControl(target: int): var { return target === SettingsAdapter.OutputDestination ? destinationChip : resolutionControl; }
+    function focusControl(target: int): var { return target === SettingsAdapter.OutputDestination ? destinationField : resolutionControl; }
 
     required property SettingsAdapter settings
     required property bool stacked
@@ -14,23 +14,31 @@ ExoCard {
     subtitle: root.settings.outputSummary
 
     function focusDestination(): void {
-        destinationChip.forceActiveFocus(Qt.OtherFocusReason);
+        destinationField.forceActiveFocus(Qt.OtherFocusReason);
     }
 
     ExoSettingRow {
         label: qsTr("Destination folder")
         controlWidth: ExoTheme.controlSlotWide
-        warning: root.settings.folderValidation
         stacked: root.stacked
         Layout.fillWidth: true
 
-        SettingsDestinationChip {
-            id: destinationChip
+        // Typed or picked: the adapter validates either way and states the
+        // problem in the row's warning line.
+        ExoTextField {
+            id: destinationField
 
-            path: root.settings.outputFolder
+            value: root.settings.outputFolder
             enabled: !root.settings.controlsLocked
+            errorText: root.settings.folderValidation
+            trailingGlyph: ExoGlyph.Folder
+            trailingAccessibleName: qsTr("Choose folder")
+            trailingActive: folderDialog.visible
             Layout.fillWidth: true
-            onClicked: folderDialog.open()
+            Accessible.name: qsTr("Destination folder")
+            onCommitted: value => root.settings.outputFolder = value
+            onTrailingClicked: folderDialog.open()
+            font.family: ExoTheme.monoFamily
         }
     }
 
@@ -42,49 +50,135 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Filename pattern")
-        hint: qsTr("Example: %1").arg(root.settings.exampleFilename)
-        warning: root.settings.patternValidation
         stacked: root.stacked
         Layout.fillWidth: true
 
         ExoTextField {
+            id: patternField
+
             value: root.settings.namingPattern
             enabled: !root.settings.controlsLocked
+            errorText: root.settings.patternValidation
+            trailingGlyph: ExoGlyph.Braces
+            trailingAccessibleName: qsTr("Insert placeholder")
+            trailingActive: placeholderMenu.visible
+            onTrailingClicked: placeholderMenu.visible ? placeholderMenu.close() : placeholderMenu.open()
             Layout.fillWidth: true
             Accessible.name: qsTr("Filename pattern")
             onCommitted: value => root.settings.namingPattern = value
-        }
-    }
 
-    Flow {
-        spacing: ExoTheme.spacingXs
-        Layout.fillWidth: true
+            // Inserted where the caret stood and committed at once, so a click
+            // in the list behaves like typing the placeholder there.
+            function insertPlaceholder(token: string): void {
+                const at = Math.min(patternField.cursorPosition, patternField.text.length);
+                patternField.text = patternField.text.slice(0, at) + token + patternField.text.slice(at);
+                patternField.cursorPosition = at + token.length;
+                patternField.committed(patternField.text);
+            }
 
-        Repeater {
-            model: root.settings.filenameTokens
+            Popup {
+                id: placeholderMenu
 
-            Rectangle {
-                id: tokenChip
+                // Right-aligned under the field, and wider than it: two columns
+                // of placeholder, meaning and current value need the room.
+                width: Math.max(patternField.width, 380)
+                x: patternField.width - width
+                y: patternField.height + ExoTheme.spacingXs
+                padding: ExoTheme.spacingSm
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
 
-                required property string modelData
+                background: Rectangle {
+                    color: ExoTheme.surfaceRaised
+                    border.width: 1
+                    border.color: ExoTheme.line
+                    radius: ExoTheme.radiusMd
+                }
 
-                implicitWidth: tokenLabel.implicitWidth + 2 * ExoTheme.spacingSm
-                implicitHeight: 22
-                color: ExoTheme.surfaceRaised
-                border.width: 1
-                border.color: ExoTheme.line
-                radius: ExoTheme.radiusSm
+                contentItem: GridLayout {
+                    columns: 2
+                    columnSpacing: ExoTheme.spacingXs
+                    rowSpacing: ExoTheme.spacingXs
 
-                Label {
-                    id: tokenLabel
+                    Repeater {
+                        model: root.settings.filenameTokens
 
-                    text: tokenChip.modelData
-                    textFormat: Text.PlainText
-                    anchors.centerIn: parent
-                    color: ExoTheme.textSecondary
-                    font {
-                        family: ExoTheme.monoFamily
-                        pixelSize: ExoTheme.fontCaption
+                        delegate: AbstractButton {
+                            id: placeholderEntry
+
+                            required property var modelData
+
+                            hoverEnabled: true
+                            focusPolicy: Qt.StrongFocus
+                            Layout.fillWidth: true
+                            Layout.preferredWidth: 1
+                            Accessible.role: Accessible.Button
+                            Accessible.name: qsTr("Insert %1, %2").arg(placeholderEntry.modelData.token)
+                                                                    .arg(placeholderEntry.modelData.label)
+                            onClicked: {
+                                patternField.insertPlaceholder(placeholderEntry.modelData.token);
+                                placeholderMenu.close();
+                            }
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+
+                            background: Rectangle {
+                                radius: ExoTheme.radiusSm
+                                color: placeholderEntry.hovered ? ExoTheme.surfaceHover : "transparent"
+                                border.width: placeholderEntry.visualFocus ? ExoTheme.focusRingWidth : 0
+                                border.color: ExoTheme.text
+                            }
+
+                            contentItem: ColumnLayout {
+                                spacing: 2
+
+                                RowLayout {
+                                    spacing: ExoTheme.spacingSm
+                                    Layout.fillWidth: true
+
+                                    Label {
+                                        text: placeholderEntry.modelData.token
+                                        textFormat: Text.PlainText
+                                        color: ExoTheme.text
+                                        font {
+                                            family: ExoTheme.monoFamily
+                                            pixelSize: ExoTheme.fontSecondary
+                                        }
+                                    }
+
+                                    Label {
+                                        text: placeholderEntry.modelData.label
+                                        textFormat: Text.PlainText
+                                        elide: Text.ElideRight
+                                        horizontalAlignment: Text.AlignRight
+                                        color: ExoTheme.textMuted
+                                        Layout.fillWidth: true
+                                        font {
+                                            family: ExoTheme.sansFamily
+                                            pixelSize: ExoTheme.fontCaption
+                                        }
+                                    }
+                                }
+
+                                Label {
+                                    text: placeholderEntry.modelData.preview
+                                    textFormat: Text.PlainText
+                                    elide: Text.ElideRight
+                                    color: ExoTheme.textSecondary
+                                    Layout.fillWidth: true
+                                    font {
+                                        family: ExoTheme.monoFamily
+                                        pixelSize: ExoTheme.fontCaption
+                                    }
+                                }
+                            }
+
+                            topPadding: ExoTheme.spacingXs
+                            bottomPadding: ExoTheme.spacingXs
+                            leftPadding: ExoTheme.spacingSm
+                            rightPadding: ExoTheme.spacingSm
+                        }
                     }
                 }
             }
@@ -130,8 +224,7 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Output resolution")
-        hint: qsTr("Downscale to save size · re-encodes")
-        warning: root.settings.customResolutionValidation
+        hint: qsTr("Downscaling re-encodes")
         stacked: root.stacked
         Layout.fillWidth: true
 
@@ -155,6 +248,7 @@ ExoCard {
                 to: 15360
                 stepSize: 2
                 value: root.settings.customWidth
+                errorText: root.settings.customResolutionValidation
                 enabled: !root.settings.controlsLocked
                 Layout.fillWidth: true
                 Accessible.name: qsTr("Custom width")
@@ -166,6 +260,7 @@ ExoCard {
                 to: 8640
                 stepSize: 2
                 value: root.settings.customHeight
+                errorText: root.settings.customResolutionValidation
                 enabled: !root.settings.controlsLocked
                 Layout.fillWidth: true
                 Accessible.name: qsTr("Custom height")

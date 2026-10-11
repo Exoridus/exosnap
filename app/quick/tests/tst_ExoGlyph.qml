@@ -65,7 +65,10 @@ Item {
         "CloseGap": ExoGlyph.CloseGap,
         "Magnet": ExoGlyph.Magnet,
         "JumpStart": ExoGlyph.JumpStart,
-        "StepBack": ExoGlyph.StepBack
+        "StepBack": ExoGlyph.StepBack,
+        "Braces": ExoGlyph.Braces,
+        "Hash": ExoGlyph.Hash,
+        "Swatch": ExoGlyph.Swatch
     })
 
     Component {

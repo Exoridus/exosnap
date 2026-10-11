@@ -92,6 +92,16 @@ class SessionLedgerSink {
            (recording || preparing || record_preview_active || settings_preview_active);
 }
 
+// Whether the idle Record preview asks for the camera. Deliberately independent
+// of the webcam enable flag: ShouldRunWebcamDevice already applies it, and the
+// settings sync that follows every enable toggle re-evaluates the device. Folding
+// the flag in here froze the request at whatever it was when the page last
+// became visible, so enabling the camera from Record left the preview without it
+// until the next state change.
+[[nodiscard]] constexpr bool RecordPreviewWantsWebcam(bool record_page_visible, bool idle) noexcept {
+    return record_page_visible && idle;
+}
+
 class RecordingCoordinator {
   public:
     using StateChangedCallback = std::function<void(UiRecordingState)>;
@@ -275,6 +285,9 @@ class RecordingCoordinator {
     [[nodiscard]] QString VerificationWebcamSourceName() const;
     void SetWebcamFrameCallback(WebcamService::FrameCallback cb);
     void SetWebcamFrameCallback(QObject* receiver, WebcamService::FrameCallback cb);
+    // The camera's latest frame, as the recording would composite it. Null before
+    // the first frame. Any thread.
+    [[nodiscard]] std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> WebcamSnapshot();
     // Receiver-scoped open-reader status transitions (see WebcamService::
     // SetStatusCallback): forwarded verbatim so the Record dock can flag a webcam
     // that cannot be opened. Dropped if the receiver dies.

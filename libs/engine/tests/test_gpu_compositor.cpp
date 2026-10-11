@@ -1,14 +1,15 @@
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/color_metadata.h"
 #include "exosnap/engine/overlay_shader.h"
 #include "exosnap/engine/recorder_session.h"
 #include "exosnap/engine/visual_generations.h"
 #include "exosnap/engine/webcam_placement.h"
-#include "gpu_compositor.h"
 #include "session_internal.h"
 #include "webcam_frame_observation.h"
 #include <exosnap/engine/dxgi_od_capture_src.h>
 #include <exosnap/engine/frame_pacing.h>
+#include <exosnap/engine/gpu_compositor.h>
 #include <exosnap/engine/gpu_surface_inventory.h>
 
 #include <d3d11.h>
@@ -521,7 +522,7 @@ TEST(GpuCompositorTest, InitRejectsUnsupportedRenderFormat) {
 
     GpuCompositor compositor;
     std::string err;
-    EXPECT_FALSE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 2, err, DXGI_FORMAT_R8G8B8A8_UNORM));
+    EXPECT_FALSE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 2, err, DXGI_FORMAT_R8G8_UNORM));
     EXPECT_FALSE(err.empty());
 }
 
@@ -777,8 +778,8 @@ TEST(GpuCompositorTest, StaticBackgroundWithCameraRatesAndDelayedRecoveryHasFres
                 if (exosnap::engine::ShouldRecompositeHeldScreen(false, false, changed, true)) {
                     ASSERT_TRUE(compositor.BeginFrame(background.get(), error));
                     if (const auto& frame = observation.Frame()) {
-                        ASSERT_TRUE(compositor.DrawWebcam(frame->bgra.data(), 1, 1, WebcamPixelRect{1, 1, 2, 2}, false,
-                                                          {}, error, 1.0f, frame->generation));
+                        ASSERT_TRUE(compositor.DrawWebcam(frame->pixels.data(), 1, 1, WebcamPixelRect{1, 1, 2, 2},
+                                                          false, {}, error, 1.0f, frame->generation));
                         if (generation != previousGeneration)
                             ++changes;
                         previousGeneration = generation;
@@ -815,4 +816,94 @@ TEST(GpuSurfaceInventory, TracksResourceLifetimeIncludingExternalReferences) {
     held = nullptr;
     EXPECT_EQ(ReadGpuSurfaceUsage(GpuSurfaceOwner::PacingRing).bytes, before.bytes);
     EXPECT_EQ(ReadGpuSurfaceUsage(GpuSurfaceOwner::PacingRing).surfaces, before.surfaces);
+}
+
+namespace {
+
+using exosnap::engine::ColorRange;
+using exosnap::engine::MatrixCoefficients;
+using exosnap::engine::WebcamFrameSnapshot;
+using exosnap::engine::WebcamPixelFormat;
+
+WebcamFrameSnapshot Nv12Frame(uint8_t y, uint8_t cb, uint8_t cr, uint64_t generation = 1,
+                              MatrixCoefficients matrix = MatrixCoefficients::Bt601,
+                              ColorRange range = ColorRange::Limited) {
+    WebcamFrameSnapshot frame;
+    frame.width = 2;
+    frame.height = 2;
+    frame.generation = generation;
+    frame.format = WebcamPixelFormat::Nv12;
+    frame.matrix = matrix;
+    frame.range = range;
+    frame.pixels = {y, y, y, y, cb, cr};
+    return frame;
+}
+
+std::vector<uint8_t> ComposeOnBlack(const WebcamFrameSnapshot& frame) {
+    auto d3d = CreateWarpDevice();
+    EXPECT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string err;
+    EXPECT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), static_cast<UINT>(frame.width),
+                                static_cast<UINT>(frame.height), err))
+        << err;
+    auto background =
+        CreateTexture(d3d.device.get(), frame.width, frame.height, SolidBgra(frame.width, frame.height, 0, 0, 0));
+    EXPECT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+    EXPECT_TRUE(compositor.DrawWebcam(frame, WebcamPixelRect{0, 0, frame.width, frame.height}, false, {}, err)) << err;
+    return ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+}
+
+} // namespace
+
+TEST(GpuCompositorWebcamYuv, Nv12LimitedRangeWhiteAndRedConvertOnTheGpu) {
+    ExpectPixelNear(ComposeOnBlack(Nv12Frame(235, 128, 128)), 2, 1, 1, 255, 255, 255, 255);
+    // BT.601 limited-range red.
+    ExpectPixelNear(ComposeOnBlack(Nv12Frame(81, 90, 240)), 2, 0, 0, 0, 0, 255, 255, 3);
+}
+
+TEST(GpuCompositorWebcamYuv, TheFramesMatrixAndRangeAreHonoured) {
+    // The same codes read as BT.709 keep a visible green component that BT.601 cancels.
+    ExpectPixelNear(ComposeOnBlack(Nv12Frame(81, 90, 240, 1, MatrixCoefficients::Bt709)), 2, 0, 0, 0, 24, 255, 255, 3);
+    // Full range takes the luma code at face value instead of expanding 16..235.
+    ExpectPixelNear(ComposeOnBlack(Nv12Frame(128, 128, 128, 1, MatrixCoefficients::Bt601, ColorRange::Full)), 2, 0, 0,
+                    128, 128, 128, 255);
+    ExpectPixelNear(ComposeOnBlack(Nv12Frame(128, 128, 128)), 2, 0, 0, 130, 130, 130, 255);
+}
+
+TEST(GpuCompositorWebcamYuv, Yuy2TakesEachPixelsOwnLumaFromThePair) {
+    WebcamFrameSnapshot frame;
+    frame.width = 2;
+    frame.height = 1;
+    frame.generation = 1;
+    frame.format = WebcamPixelFormat::Yuy2;
+    frame.pixels = {16, 128, 235, 128}; // Y0 Cb Y1 Cr: black, then white
+    const auto pixels = ComposeOnBlack(frame);
+    ExpectPixelNear(pixels, 2, 0, 0, 0, 0, 0, 255);
+    ExpectPixelNear(pixels, 2, 1, 0, 255, 255, 255, 255);
+}
+
+TEST(GpuCompositorWebcamYuv, AnUnchangedGenerationIsNotUploadedAgain) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 2, err)) << err;
+    auto background = CreateTexture(d3d.device.get(), 2, 2, SolidBgra(2, 2, 0, 0, 0));
+    const WebcamFrameSnapshot first = Nv12Frame(235, 128, 128, 7);
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+        ASSERT_TRUE(compositor.DrawWebcam(first, WebcamPixelRect{0, 0, 2, 2}, false, {}, err)) << err;
+    }
+    EXPECT_EQ(compositor.WebcamUploadCount(), 1u);
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+    ASSERT_TRUE(compositor.DrawWebcam(Nv12Frame(16, 128, 128, 8), WebcamPixelRect{0, 0, 2, 2}, false, {}, err)) << err;
+    EXPECT_EQ(compositor.WebcamUploadCount(), 2u);
+    ExpectPixelNear(ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result()), 2, 0, 0, 0, 0, 0, 255);
+}
+
+TEST(GpuCompositorWebcamYuv, AnIncompletePayloadDrawsNothing) {
+    WebcamFrameSnapshot truncated = Nv12Frame(235, 128, 128);
+    truncated.pixels.pop_back();
+    ExpectPixelNear(ComposeOnBlack(truncated), 2, 0, 0, 0, 0, 0, 255);
 }

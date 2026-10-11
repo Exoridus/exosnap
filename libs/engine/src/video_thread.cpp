@@ -22,7 +22,6 @@
 #include "annexb_to_hvcc.h"
 #include "av_epoch_align.h"
 #include "codec_private.h"
-#include "gpu_compositor.h"
 #include "gpu_frame_luminance.h"
 #include "gpu_hdr_pq.h"
 #include "gpu_rgb_to_ayuv.h"
@@ -33,6 +32,7 @@
 #include <exosnap/engine/display_color_recheck.h>
 #include <exosnap/engine/display_color_watch.h>
 #include <exosnap/engine/dxgi_od_capture_src.h>
+#include <exosnap/engine/gpu_compositor.h>
 
 #include "preview_publish_gate.h"
 #include "session_internal.h"
@@ -1578,14 +1578,7 @@ void VideoThread::Run() {
             return true;
         }
 
-        if (!webcamFrame) {
-            return true;
-        }
-        const int camW = webcamFrame->width;
-        const int camH = webcamFrame->height;
-        const auto& camBgra = webcamFrame->bgra;
-        const size_t required = (camW > 0 && camH > 0) ? static_cast<size_t>(camW) * camH * 4 : 0;
-        if (camW <= 0 || camH <= 0 || camBgra.size() < required) {
+        if (!webcamFrame || !webcamFrame->HasCompletePayload()) {
             return true;
         }
 
@@ -1604,8 +1597,7 @@ void VideoThread::Run() {
         chroma.spill_reduction = overlay.chroma_spill_reduction;
 
         std::string compErr;
-        if (!gpuCompositor.DrawWebcam(camBgra.data(), camW, camH, rect, overlay.mirror, chroma, compErr,
-                                      overlay.opacity, webcamFrame->generation)) {
+        if (!gpuCompositor.DrawWebcam(*webcamFrame, rect, overlay.mirror, chroma, compErr, overlay.opacity)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU webcam composite: " + compErr);
             return false;
         }
