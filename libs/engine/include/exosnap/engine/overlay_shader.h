@@ -8,12 +8,12 @@
 // ---------------------------------------------------------------------------
 // The single overlay shader used by every consumer that draws a webcam PiP or a
 // cursor sprite over a captured frame:
-//   * the recording compositor (exosnap::engine::GpuCompositor),
-//   * the DXGI live preview (app/services/DxgiPreviewRenderer).
+//   * the recording compositor (exosnap::engine::GpuCompositor), which the
+//     idle Quick preview and the Ready screenshot drive as well.
 //
-// Both compile the same HLSL and fill the same constant buffer, so the chroma
-// key, the mirror and the opacity a user sees in the preview are the exact ones
-// the encoder writes.  Do NOT re-derive the key mathematics in UI code or add a
+// Every consumer compiles the same HLSL and fills the same constant buffer, so
+// the chroma key, the mirror and the opacity a user sees in the preview are the
+// exact ones the encoder writes.  Do NOT re-derive the key mathematics in UI code or add a
 // second pixel shader — extend this one.
 //
 // D3D-free and header-only on purpose: the constant layout is plain floats, so

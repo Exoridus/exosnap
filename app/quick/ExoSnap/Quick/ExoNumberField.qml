@@ -47,6 +47,18 @@ SpinBox {
         return Number.isFinite(parsed) ? parsed : root.value;
     }
 
+    // Why the current value is not accepted, or empty when it is. Shown as a
+    // red frame and a warning mark inside the field, with the text as tooltip
+    // on hover and keyboard focus and as the accessible description -- so an
+    // error never adds a line under the row or moves the page.
+    property string errorText: ""
+    readonly property bool hasError: root.errorText !== ""
+
+    ToolTip.visible: root.hasError && (root.hovered || root.activeFocus)
+    ToolTip.text: root.errorText
+    ToolTip.delay: 200
+    Accessible.description: root.errorText
+
     contentItem: TextInput {
         text: root.displayText
         verticalAlignment: Text.AlignVCenter
@@ -61,6 +73,7 @@ SpinBox {
         selectionColor: ExoTheme.accent
         selectedTextColor: ExoTheme.accentInk
         leftPadding: ExoTheme.spacingMd
+        rightPadding: root.hasError ? 16 + ExoTheme.spacingSm : 0
         font {
             family: ExoTheme.sansFamily
             pixelSize: ExoTheme.fontBody
@@ -70,8 +83,14 @@ SpinBox {
     background: Rectangle {
         color: root.enabled ? ExoTheme.surfaceRaised : ExoTheme.surface
         border.width: 1
-        border.color: root.activeFocus ? ExoTheme.accent : ExoTheme.line
+        border.color: root.hasError ? ExoTheme.error : root.activeFocus ? ExoTheme.accent : ExoTheme.line
         radius: ExoTheme.radiusSm
+
+        ExoFieldErrorMark {
+            visible: root.hasError
+            x: parent.width - root.stepperWidth - width - ExoTheme.spacingSm
+            anchors.verticalCenter: parent.verticalCenter
+        }
 
         // The stepper column needs an edge of its own. Two 12 px glyphs on the
         // same fill as the value read as decoration next to the number rather

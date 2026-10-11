@@ -21,7 +21,6 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
-#include <QImage>
 #include <QObject>
 
 #include <atomic>
@@ -59,21 +58,17 @@ class TestableWebcamService : public WebcamService {
     using WebcamService::PostStatus;
 };
 
-QImage MakeFrame() {
-    QImage image(2, 2, QImage::Format_ARGB32);
-    image.fill(0xFF102030);
-    return image;
-}
+constexpr uint64_t kGeneration = 1;
 
 TEST(WebcamDelivery, AnUnboundCallbackReceivesTheFrame) {
     EnsureApplication();
     TestableWebcamService service;
-    int calls = 0;
-    service.SetFrameCallback([&calls](QImage) { ++calls; });
+    uint64_t delivered = 0;
+    service.SetFrameCallback([&delivered](uint64_t generation) { delivered = generation; });
 
-    service.PostFrame(MakeFrame());
+    service.PostFrame(42);
     DrainEvents();
-    EXPECT_EQ(calls, 1);
+    EXPECT_EQ(delivered, 42u);
 }
 
 TEST(WebcamDelivery, AFrameInFlightIsDroppedWhenItsReceiverDies) {
@@ -81,11 +76,11 @@ TEST(WebcamDelivery, AFrameInFlightIsDroppedWhenItsReceiverDies) {
     TestableWebcamService service;
     auto receiver = std::make_unique<QObject>();
     int calls = 0;
-    service.SetFrameCallback(receiver.get(), [&calls](QImage) { ++calls; });
+    service.SetFrameCallback(receiver.get(), [&calls](uint64_t) { ++calls; });
 
     // Posted first, receiver destroyed second, delivered third: the exact
     // ordering the receiver-bound registration exists for.
-    service.PostFrame(MakeFrame());
+    service.PostFrame(kGeneration);
     receiver.reset();
     DrainEvents();
     EXPECT_EQ(calls, 0);
@@ -123,10 +118,10 @@ TEST(WebcamDelivery, ClearingTheCallbackStopsDelivery) {
     EnsureApplication();
     TestableWebcamService service;
     int calls = 0;
-    service.SetFrameCallback([&calls](QImage) { ++calls; });
+    service.SetFrameCallback([&calls](uint64_t) { ++calls; });
     service.SetFrameCallback(WebcamService::FrameCallback{});
 
-    service.PostFrame(MakeFrame());
+    service.PostFrame(kGeneration);
     DrainEvents();
     EXPECT_EQ(calls, 0);
 }
@@ -139,11 +134,11 @@ TEST(WebcamDelivery, ReplacingTheCallbackDoesNotDestroyOneAlreadyInFlight) {
     // shared_ptr makes that observable rather than merely undefined.
     auto owned = std::make_shared<int>(7);
     int seen = 0;
-    service.SetFrameCallback([owned, &seen](QImage) { seen = *owned; });
+    service.SetFrameCallback([owned, &seen](uint64_t) { seen = *owned; });
 
-    service.PostFrame(MakeFrame());
-    owned.reset();                           // the test drops its own reference
-    service.SetFrameCallback([](QImage) {}); // and the service drops the registration
+    service.PostFrame(kGeneration);
+    owned.reset();                             // the test drops its own reference
+    service.SetFrameCallback([](uint64_t) {}); // and the service drops the registration
     DrainEvents();
 
     EXPECT_EQ(seen, 7) << "the in-flight post keeps its own registration alive";
@@ -164,7 +159,7 @@ TEST(WebcamDelivery, ConcurrentPostingAndReplacementIsRaceFree) {
     for (int t = 0; t < 2; ++t) {
         posters.emplace_back([&] {
             for (int i = 0; i < kPostsPerThread; ++i) {
-                service.PostFrame(MakeFrame());
+                service.PostFrame(kGeneration);
                 service.PostStatus(true, QStringLiteral("ok"));
                 std::this_thread::yield();
             }
@@ -174,7 +169,7 @@ TEST(WebcamDelivery, ConcurrentPostingAndReplacementIsRaceFree) {
     for (int i = 0; i < 200; ++i) {
         auto receiver = std::make_unique<QObject>();
         auto owned = std::make_shared<int>(i);
-        service.SetFrameCallback(receiver.get(), [owned, &delivered](QImage) {
+        service.SetFrameCallback(receiver.get(), [owned, &delivered](uint64_t) {
             (void)*owned; // touches the closure's state: a freed one would trap
             delivered.fetch_add(1, std::memory_order_relaxed);
         });
@@ -208,7 +203,7 @@ TEST(WebcamDelivery, StoppingWhileTheReaderIsStillOpeningIsSafe) {
     // below is replacing registrations and stopping the service.
     for (int i = 0; i < 2; ++i) {
         EXPECT_TRUE(service.Start(std::string{}, 640, 480, 30));
-        service.SetFrameCallback(&receiver, [](QImage) {});
+        service.SetFrameCallback(&receiver, [](uint64_t) {});
         DrainEvents();
         service.Stop();
         service.SetFrameCallback(WebcamService::FrameCallback{});

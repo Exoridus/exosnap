@@ -143,7 +143,7 @@ inline bool StaticWebcamFrameSource::TryGetFrame(int& out_width, int& out_height
     }
     out_width = width_;
     out_height = height_;
-    out_bgra = snapshot_->bgra;
+    out_bgra = snapshot_->pixels;
     // Not incremented. A generation that advances per call recomposites the frame
     // on the webcam's behalf, which is exactly what would mask a missing overlay
     // generation -- the defect this source exists to expose.

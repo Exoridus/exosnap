@@ -297,7 +297,8 @@ add_library(exosnap_engine STATIC
     src/hdr_bitstream_metadata.cpp
     src/ffmpeg_aac_encoder.cpp
     src/gpu_compositor.cpp
-    src/gpu_compositor.h
+    include/exosnap/engine/gpu_compositor.h
+    src/gpu_yuv_constants.h
     src/cursor_sprite.cpp
     src/device_generation.cpp
     include/exosnap/engine/cursor_sprite.h

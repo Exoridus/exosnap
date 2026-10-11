@@ -107,7 +107,6 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(bool webcamAvailable READ webcamAvailable NOTIFY changed FINAL)
     Q_PROPERTY(bool webcamError READ webcamError NOTIFY changed FINAL)
     Q_PROPERTY(QString webcamErrorText READ webcamErrorText NOTIFY changed FINAL)
-    Q_PROPERTY(QString webcamFrameSource READ webcamFrameSource NOTIFY webcamFrameChanged FINAL)
     Q_PROPERTY(QRectF webcamOverlayRect READ webcamOverlayRect NOTIFY changed FINAL)
     Q_PROPERTY(bool webcamOverlayEditable READ webcamOverlayEditable NOTIFY changed FINAL)
     Q_PROPERTY(bool webcamMirror READ webcamMirror NOTIFY changed FINAL)
@@ -210,7 +209,6 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] bool webcamAvailable() const noexcept;
     [[nodiscard]] bool webcamError() const noexcept;
     [[nodiscard]] const QString& webcamErrorText() const noexcept;
-    [[nodiscard]] const QString& webcamFrameSource() const noexcept;
     [[nodiscard]] QRectF webcamOverlayRect() const noexcept;
     [[nodiscard]] bool webcamOverlayEditable() const noexcept;
     [[nodiscard]] bool webcamMirror() const noexcept;
@@ -230,7 +228,6 @@ class RecordViewModelAdapter : public QObject {
     void setDeviceState(bool microphone_available, bool webcam_available, bool webcam_enabled,
                         QString webcam_error = {});
     void setWebcamPresentation(QRectF overlay_rect, bool mirror, double opacity);
-    void setWebcamFrameSource(QString source);
     void setCountdownState(int configured_seconds, int remaining_seconds, double progress);
     void setRegionState(QRectF normalized_rect, bool selection_needed);
     void setPreviewFrameReady(bool ready);
@@ -282,7 +279,6 @@ class RecordViewModelAdapter : public QObject {
     void elapsedTextChanged();
     void outputSizeTextChanged();
     void liveStatsAvailableChanged();
-    void webcamFrameChanged();
     void targetOptionsChanged();
     void targetStillOptionsChanged();
     void recentRecordingsChanged();
@@ -367,7 +363,6 @@ class RecordViewModelAdapter : public QObject {
     bool webcam_available_ = true;
     bool webcam_enabled_ = false;
     QString webcam_error_text_;
-    QString webcam_frame_source_;
     QRectF webcam_overlay_rect_{0.0, 0.0, 0.25, 0.25};
     bool webcam_mirror_ = false;
     double webcam_opacity_ = 1.0;

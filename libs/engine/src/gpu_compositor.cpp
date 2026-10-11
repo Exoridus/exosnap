@@ -1,10 +1,12 @@
-#include "gpu_compositor.h"
 #include <cstdint>
+#include <exosnap/engine/gpu_compositor.h>
 #include <exosnap/engine/gpu_surface_inventory.h>
 
 #include "exosnap/engine/overlay_shader.h"
+#include "exosnap/engine/recorder_session.h"
 #include "exosnap/engine/sdr_white_level.h"
 #include "exosnap/engine/webcam_placement.h"
+#include "gpu_yuv_constants.h"
 #include "measured_shader_compile.h"
 
 #include <cstdio>
@@ -28,6 +30,71 @@ void SetHResultError(std::string& err, const char* what, HRESULT hr) {
 // kDefaultSdrWhiteLevelNits.
 constexpr float kScrgbReferenceWhiteNits = 80.0f;
 
+// Camera YUV -> gamma-encoded RGB at the camera's own resolution, one output
+// pixel per input pixel: integer Load(), no filtering, so the overlay pass that
+// follows samples exactly what a CPU conversion would have produced. Chroma is
+// taken from the sample covering the pixel (no interpolation), which is what
+// the camera's own 4:2:0 / 4:2:2 siting gives a pixel without guessing.
+constexpr char kWebcamYuvConstantsHlsl[] = R"(
+cbuffer YuvToRgbConstants : register(b0) {
+    float c_rv, c_gu, c_gv, c_bu;
+    float y_scale;
+    float y_off, c_off, unused;
+};
+
+float4 YuvToRgb(float y, float u, float v) {
+    float yn = (y - y_off) * y_scale;
+    float un = u - c_off;
+    float vn = v - c_off;
+    return float4(saturate(yn + c_rv * vn), saturate(yn - c_gu * un - c_gv * vn), saturate(yn + c_bu * un), 1.0f);
+}
+)";
+
+constexpr char kWebcamNv12PixelShaderSrc[] = R"(
+Texture2D<uint> LumaPlane : register(t0);
+Texture2D<uint2> ChromaPlane : register(t1);
+
+float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
+    int2 px = int2(position.xy);
+    uint2 chroma = ChromaPlane.Load(int3(px / 2, 0));
+    return YuvToRgb(float(LumaPlane.Load(int3(px, 0))), float(chroma.x), float(chroma.y));
+}
+)";
+
+constexpr char kWebcamYuy2PixelShaderSrc[] = R"(
+Texture2D<uint4> PackedPairs : register(t0); // Y0 Cb Y1 Cr per texel
+
+float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
+    int2 px = int2(position.xy);
+    uint4 pair = PackedPairs.Load(int3(px.x / 2, px.y, 0));
+    float y = (px.x & 1) != 0 ? float(pair.z) : float(pair.x);
+    return YuvToRgb(y, float(pair.y), float(pair.w));
+}
+)";
+
+bool CompileWebcamShader(ID3D11Device* device, const char* body, const char* name,
+                         winrt::com_ptr<ID3D11PixelShader>& out, std::string& err) {
+    const std::string source = std::string(kWebcamYuvConstantsHlsl) + body;
+    winrt::com_ptr<ID3DBlob> blob;
+    winrt::com_ptr<ID3DBlob> error_blob;
+    HRESULT hr = MeasuredD3DCompile(source.c_str(), source.size(), name, nullptr, nullptr, "main", "ps_5_0",
+                                    D3DCOMPILE_ENABLE_STRICTNESS, 0, blob.put(), error_blob.put());
+    if (FAILED(hr)) {
+        SetHResultError(err, name, hr);
+        if (error_blob) {
+            err += ": ";
+            err += static_cast<const char*>(error_blob->GetBufferPointer());
+        }
+        return false;
+    }
+    hr = device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, out.put());
+    if (FAILED(hr)) {
+        SetHResultError(err, "CreatePixelShader(webcam yuv)", hr);
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
@@ -36,8 +103,8 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
         err = "GpuCompositor::Init invalid arguments";
         return false;
     }
-    if (render_format != DXGI_FORMAT_B8G8R8A8_UNORM && render_format != DXGI_FORMAT_R10G10B10A2_UNORM &&
-        render_format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
+    if (render_format != DXGI_FORMAT_B8G8R8A8_UNORM && render_format != DXGI_FORMAT_R8G8B8A8_UNORM &&
+        render_format != DXGI_FORMAT_R10G10B10A2_UNORM && render_format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
         err = "GpuCompositor::Init unsupported render format";
         return false;
     }
@@ -214,6 +281,142 @@ bool GpuCompositor::DrawWebcam(const uint8_t* bgra, int width, int height, const
     return DrawTexture(webcam_tex_.srv.get(), rect, mirror, chroma, true, opacity, err);
 }
 
+bool GpuCompositor::DrawWebcam(const WebcamFrameSnapshot& frame, const WebcamPixelRect& rect, bool mirror,
+                               const ChromaKeyParams& chroma, std::string& err, float opacity) {
+    if (!frame.HasCompletePayload())
+        return true;
+    if (frame.format == WebcamPixelFormat::Bgra) {
+        return DrawWebcam(frame.pixels.data(), frame.width, frame.height, rect, mirror, chroma, err, opacity,
+                          frame.generation);
+    }
+    const bool current = webcam_generation_ == frame.generation && webcam_tex_.rtv &&
+                         webcam_tex_.width == static_cast<UINT>(frame.width) &&
+                         webcam_tex_.height == static_cast<UINT>(frame.height);
+    if (!current) {
+        if (!ConvertWebcamYuv(frame, err))
+            return false;
+        webcam_generation_ = frame.generation;
+        ++webcam_upload_count_;
+    }
+    return DrawTexture(webcam_tex_.srv.get(), rect, mirror, chroma, true, opacity, err);
+}
+
+bool GpuCompositor::ConvertWebcamYuv(const WebcamFrameSnapshot& frame, std::string& err) {
+    const bool nv12 = frame.format == WebcamPixelFormat::Nv12;
+    winrt::com_ptr<ID3D11PixelShader>& shader = nv12 ? nv12_shader_ : yuy2_shader_;
+    if (!shader && !CompileWebcamShader(device_, nv12 ? kWebcamNv12PixelShaderSrc : kWebcamYuy2PixelShaderSrc,
+                                        nv12 ? "D3DCompile(webcam nv12)" : "D3DCompile(webcam yuy2)", shader, err)) {
+        return false;
+    }
+    if (!yuv_constants_) {
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = sizeof(GpuYuvConstants);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        const HRESULT hr = device_->CreateBuffer(&desc, nullptr, yuv_constants_.put());
+        if (FAILED(hr)) {
+            SetHResultError(err, "CreateBuffer(webcam yuv constants)", hr);
+            return false;
+        }
+    }
+
+    const UINT width = static_cast<UINT>(frame.width);
+    const UINT height = static_cast<UINT>(frame.height);
+    const uint8_t* bytes = frame.pixels.data();
+    if (nv12) {
+        if (!EnsureTexture(webcam_luma_, width, height, DXGI_FORMAT_R8_UINT, false, err) ||
+            !EnsureTexture(webcam_chroma_, width / 2, height / 2, DXGI_FORMAT_R8G8_UINT, false, err)) {
+            return false;
+        }
+        context_->UpdateSubresource(webcam_luma_.texture.get(), 0, nullptr, bytes, width, 0);
+        context_->UpdateSubresource(webcam_chroma_.texture.get(), 0, nullptr,
+                                    bytes + static_cast<size_t>(width) * height, width, 0);
+    } else {
+        if (!EnsureTexture(webcam_luma_, width / 2, height, DXGI_FORMAT_R8G8B8A8_UINT, false, err))
+            return false;
+        context_->UpdateSubresource(webcam_luma_.texture.get(), 0, nullptr, bytes, width * 2, 0);
+    }
+    if (!EnsureTexture(webcam_tex_, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, true, err))
+        return false;
+
+    const GpuYuvConstants constants = GpuYuvConstantsFor(frame.matrix, frame.range, false);
+    context_->UpdateSubresource(yuv_constants_.get(), 0, nullptr, &constants, 0, 0);
+
+    D3D11_VIEWPORT viewport{};
+    viewport.Width = static_cast<float>(width);
+    viewport.Height = static_cast<float>(height);
+    viewport.MaxDepth = 1.0f;
+    ID3D11RenderTargetView* rtv = webcam_tex_.rtv.get();
+    ID3D11Buffer* buffer = yuv_constants_.get();
+    ID3D11ShaderResourceView* planes[2] = {webcam_luma_.srv.get(), nv12 ? webcam_chroma_.srv.get() : nullptr};
+    context_->OMSetRenderTargets(1, &rtv, nullptr);
+    context_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    context_->RSSetViewports(1, &viewport);
+    context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context_->VSSetShader(vertex_shader_.get(), nullptr, 0);
+    context_->PSSetShader(shader.get(), nullptr, 0);
+    context_->PSSetConstantBuffers(0, 1, &buffer);
+    context_->PSSetShaderResources(0, 2, planes);
+    context_->Draw(3, 0);
+
+    // webcam_tex_ is sampled by the overlay pass next; leaving it bound as the
+    // render target would make D3D11 null that shader-resource slot.
+    ID3D11ShaderResourceView* null_planes[2] = {nullptr, nullptr};
+    ID3D11RenderTargetView* null_rtv = nullptr;
+    context_->PSSetShaderResources(0, 2, null_planes);
+    context_->OMSetRenderTargets(1, &null_rtv, nullptr);
+    return true;
+}
+
+bool GpuCompositor::EnsureTexture(TextureResource& resource, UINT width, UINT height, DXGI_FORMAT format,
+                                  bool render_target, std::string& err) {
+    if (resource.texture && resource.width == width && resource.height == height && resource.format == format &&
+        static_cast<bool>(resource.rtv) == render_target) {
+        return true;
+    }
+    resource = TextureResource{};
+
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = format;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (render_target ? D3D11_BIND_RENDER_TARGET : 0u);
+
+    HRESULT hr = exosnap::engine::CreateTrackedTexture2D(device_, &desc, nullptr, resource.texture.put(),
+                                                         exosnap::engine::GpuSurfaceOwner::WebcamCursor);
+    if (FAILED(hr)) {
+        SetHResultError(err, "CreateTexture2D(upload)", hr);
+        return false;
+    }
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc{};
+    srv_desc.Format = format;
+    srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srv_desc.Texture2D.MipLevels = 1;
+    hr = device_->CreateShaderResourceView(resource.texture.get(), &srv_desc, resource.srv.put());
+    if (FAILED(hr)) {
+        SetHResultError(err, "CreateShaderResourceView(upload)", hr);
+        resource = TextureResource{};
+        return false;
+    }
+    if (render_target) {
+        hr = device_->CreateRenderTargetView(resource.texture.get(), nullptr, resource.rtv.put());
+        if (FAILED(hr)) {
+            SetHResultError(err, "CreateRenderTargetView(upload)", hr);
+            resource = TextureResource{};
+            return false;
+        }
+    }
+    resource.width = width;
+    resource.height = height;
+    resource.format = format;
+    return true;
+}
+
 bool GpuCompositor::DrawCursor(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect,
                                std::string& err) {
     if (!UploadTexture(cursor_tex_, bgra, width, height, static_cast<UINT>(width * 4), err)) {
@@ -247,47 +450,10 @@ bool GpuCompositor::UploadTexture(TextureResource& resource, const uint8_t* bgra
         return false;
     }
 
-    const UINT tex_w = static_cast<UINT>(width);
-    const UINT tex_h = static_cast<UINT>(height);
-    if (!resource.texture || resource.width != tex_w || resource.height != tex_h) {
-        resource.texture = nullptr;
-        resource.srv = nullptr;
-        resource.width = 0;
-        resource.height = 0;
-
-        D3D11_TEXTURE2D_DESC desc{};
-        desc.Width = tex_w;
-        desc.Height = tex_h;
-        desc.MipLevels = 1;
-        desc.ArraySize = 1;
-        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        desc.SampleDesc.Count = 1;
-        desc.Usage = D3D11_USAGE_DEFAULT;
-        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-        HRESULT hr = exosnap::engine::CreateTrackedTexture2D(device_, &desc, nullptr, resource.texture.put(),
-                                                             exosnap::engine::GpuSurfaceOwner::WebcamCursor);
-        if (FAILED(hr)) {
-            SetHResultError(err, "CreateTexture2D(upload)", hr);
-            return false;
-        }
-
-        D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc{};
-        srv_desc.Format = desc.Format;
-        srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        srv_desc.Texture2D.MipLevels = 1;
-
-        hr = device_->CreateShaderResourceView(resource.texture.get(), &srv_desc, resource.srv.put());
-        if (FAILED(hr)) {
-            SetHResultError(err, "CreateShaderResourceView(upload)", hr);
-            resource.texture = nullptr;
-            return false;
-        }
-
-        resource.width = tex_w;
-        resource.height = tex_h;
+    if (!EnsureTexture(resource, static_cast<UINT>(width), static_cast<UINT>(height), DXGI_FORMAT_B8G8R8A8_UNORM, false,
+                       err)) {
+        return false;
     }
-
     context_->UpdateSubresource(resource.texture.get(), 0, nullptr, bgra, row_pitch, 0);
     return true;
 }

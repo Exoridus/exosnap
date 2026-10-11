@@ -61,8 +61,29 @@ Rectangle {
     radius: ExoTheme.radiusLg
     clip: !root.expanded
 
-    Accessible.role: Accessible.StaticText
+    // The card is its own expand/collapse control: one Tab stop, Space toggles,
+    // and a screen reader hears a two-state button rather than static text.
+    activeFocusOnTab: true
+    Accessible.role: Accessible.Button
     Accessible.name: ExoTheme.advisoryToneName("caution") + ". " + root.title
+    Accessible.description: root.ledgerLine
+    Accessible.checkable: true
+    Accessible.checked: root.expanded
+    Accessible.focusable: true
+    Accessible.focused: root.activeFocus
+    Accessible.onPressAction: root.expanded = !root.expanded
+    Keys.onSpacePressed: event => {
+        root.expanded = !root.expanded;
+        event.accepted = true;
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        radius: root.radius
+        color: "transparent"
+        border.width: root.activeFocus ? ExoTheme.focusRingWidth : 0
+        border.color: ExoTheme.text
+    }
 
     // Collapsed: one clickable row. Expanded: only the header toggles back, so
     // the occurrence links and the log-excerpt disclosure below stay reachable.
@@ -185,28 +206,16 @@ Rectangle {
             Repeater {
                 model: root.occurrences
 
-                Text {
+                ExoLinkButton {
                     id: occurrenceLink
 
                     required property var modelData
 
                     objectName: "ledgerOccurrenceLink"
                     text: occurrenceLink.modelData.text
-                    textFormat: Text.PlainText
-                    color: ExoTheme.accent
-                    font {
-                        family: ExoTheme.monoFamily
-                        pixelSize: ExoTheme.fontCaption
-                        underline: true
-                    }
-
-                    HoverHandler {
-                        cursorShape: Qt.PointingHandCursor
-                    }
-
-                    TapHandler {
-                        onTapped: root.openAtRequested(occurrenceLink.modelData.startMs)
-                    }
+                    mono: true
+                    underline: true
+                    onClicked: root.openAtRequested(occurrenceLink.modelData.startMs)
                 }
             }
         }
@@ -217,63 +226,63 @@ Rectangle {
             Layout.fillWidth: true
             Layout.topMargin: ExoTheme.spacingXs
 
-            ExoChevron {
-                direction: root._logExpanded ? 0 : -90
-                tone: ExoTheme.textMuted
-                Layout.preferredWidth: 10
+            AbstractButton {
+                id: logToggle
 
-                Behavior on rotation {
-                    NumberAnimation { duration: ExoTheme.animMedium; easing.type: Easing.OutCubic }
-                }
-            }
-
-            Label {
-                text: qsTr("Log excerpt")
-                textFormat: Text.PlainText
-                color: ExoTheme.textSecondary
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontSecondary
-                    weight: Font.DemiBold
-                }
-
-                TapHandler {
-                    onTapped: root._logExpanded = !root._logExpanded
-                }
-            }
-
-            Item { Layout.fillWidth: true }
-
-            Row {
-                spacing: ExoTheme.spacingXs
-
-                Text {
-                    text: qsTr("Show in log")
-                    textFormat: Text.PlainText
-                    color: ExoTheme.accent
-                    anchors.verticalCenter: parent.verticalCenter
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: ExoTheme.fontSecondary
-                        weight: Font.DemiBold
-                    }
-                }
-
-                ExoGlyph {
-                    kind: ExoGlyph.ArrowRight
-                    color: ExoTheme.accent
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: ExoTheme.fontSecondary
-                    height: ExoTheme.fontSecondary
-                }
+                hoverEnabled: true
+                focusPolicy: Qt.StrongFocus
+                padding: 2
+                Accessible.role: Accessible.Button
+                Accessible.name: qsTr("Log excerpt")
+                Accessible.checkable: true
+                Accessible.checked: root._logExpanded
+                onClicked: root._logExpanded = !root._logExpanded
 
                 HoverHandler {
                     cursorShape: Qt.PointingHandCursor
                 }
 
-                TapHandler {
-                    onTapped: root.showInLogRequested(root.entryId)
+                background: Rectangle {
+                    radius: ExoTheme.radiusXs
+                    color: "transparent"
+                    border.width: logToggle.visualFocus ? ExoTheme.focusRingWidth : 0
+                    border.color: ExoTheme.text
                 }
+
+                contentItem: Row {
+                    spacing: ExoTheme.spacingSm
+
+                    ExoChevron {
+                        direction: root._logExpanded ? 0 : -90
+                        tone: ExoTheme.textMuted
+                        width: 10
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        Behavior on rotation {
+                            NumberAnimation { duration: ExoTheme.animMedium; easing.type: Easing.OutCubic }
+                        }
+                    }
+
+                    Label {
+                        text: qsTr("Log excerpt")
+                        textFormat: Text.PlainText
+                        color: ExoTheme.textSecondary
+                        anchors.verticalCenter: parent.verticalCenter
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontSecondary
+                            weight: Font.DemiBold
+                        }
+                    }
+                }
+            }
+
+            Item { Layout.fillWidth: true }
+
+            ExoLinkButton {
+                text: qsTr("Show in log")
+                trailingGlyph: ExoGlyph.ArrowRight
+                onClicked: root.showInLogRequested(root.entryId)
             }
         }
 

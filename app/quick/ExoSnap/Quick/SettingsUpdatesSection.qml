@@ -26,15 +26,14 @@ ExoCard {
     }
 
     ExoSettingRow {
-        label: qsTr("Check for updates automatically")
-        hint: qsTr("Checks GitHub Releases when ExoSnap starts")
+        label: qsTr("Check for updates at startup")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
 
         ExoSwitch {
             checked: root.settings.autoUpdateCheck
-            Accessible.name: qsTr("Check for updates automatically")
+            Accessible.name: qsTr("Check for updates at startup")
             Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             onToggledByUser: value => root.settings.autoUpdateCheck = value
         }

@@ -393,6 +393,7 @@ void RecordPreviewAdapter::attachPreviewItem(ExoPreviewItem* item) {
         connect(item_, &ExoPreviewItem::errorTextChanged, this, &RecordPreviewAdapter::synchronizeItemState,
                 Qt::UniqueConnection);
     }
+    forwardWebcamOverlay();
     // A newly attached item has no texture, so the subscription is restarted even
     // when it was already running — hence the reset before the gate is asked.
     preview_running_ = false;
@@ -400,6 +401,26 @@ void RecordPreviewAdapter::attachPreviewItem(ExoPreviewItem* item) {
     // the announcement is never repeated.
     presentEngineSourceIfPossible();
     applyPreviewRunState();
+}
+
+void RecordPreviewAdapter::setWebcamStyle(bool mirror, float opacity, const exosnap::engine::ChromaKeyParams& chroma) {
+    webcam_mirror_ = mirror;
+    webcam_opacity_ = opacity;
+    webcam_chroma_ = chroma;
+    forwardWebcamOverlay();
+}
+
+void RecordPreviewAdapter::setWebcamFrame(std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> frame) {
+    webcam_frame_ = std::move(frame);
+    if (item_ != nullptr)
+        item_->setWebcamFrame(webcam_frame_);
+}
+
+void RecordPreviewAdapter::forwardWebcamOverlay() {
+    if (item_ == nullptr)
+        return;
+    item_->setWebcamStyle(webcam_mirror_, webcam_opacity_, webcam_chroma_);
+    item_->setWebcamFrame(webcam_frame_);
 }
 
 void RecordPreviewAdapter::detachPreviewItem(ExoPreviewItem* item) {
@@ -628,7 +649,8 @@ void RecordPreviewAdapter::presentEngineSourceIfPossible() {
         return;
     }
 
-    item_->presentSharedTexture(duplicate, engine_source_.width, engine_source_.height, engine_source_.tap);
+    item_->presentSharedTexture(duplicate, engine_source_.width, engine_source_.height, engine_source_.tap,
+                                /*overlays_composited=*/true);
     ++recording_texture_generations_;
     ++engine_source_presentations_;
     if (previewTraceEnabled()) {

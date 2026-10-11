@@ -3,6 +3,9 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <vector>
+
+#include "WebcamControls.h"
 
 namespace exosnap {
 
@@ -84,6 +87,9 @@ struct WebcamSettings {
     // Record-page preview and the recorded output.
     float opacity = 1.0f;
     WebcamChromaKeySettings chroma_key;
+    // UVC image and camera controls the user set; the rest stay as the camera
+    // has them. Applied whenever the device opens and live while it runs.
+    std::vector<WebcamControlSetting> controls;
 };
 
 inline WebcamOverlayRect SanitizeWebcamOverlayRect(WebcamOverlayRect overlay) {
@@ -148,6 +154,7 @@ inline WebcamSettings SanitizeWebcamSettings(WebcamSettings settings) {
         settings.opacity = 1.0f;
     }
     settings.opacity = std::clamp(settings.opacity, 0.0f, 1.0f);
+    settings.controls = NormalizeWebcamControlSettings(std::move(settings.controls));
     return settings;
 }
 

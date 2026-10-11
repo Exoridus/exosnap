@@ -1,6 +1,6 @@
 #include "ReadyFrameCaptureService.h"
 
-#include "../../../../libs/engine/src/gpu_compositor.h"
+#include <exosnap/engine/gpu_compositor.h>
 
 #include <exosnap/engine/cursor_sprite.h>
 #include <exosnap/engine/gpu_hdr_tonemap.h>
@@ -190,11 +190,10 @@ bool cropToBgra(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Textur
     return true;
 }
 
-bool drawWebcam(exosnap::engine::GpuCompositor& compositor, const WebcamSettings& settings, const QImage& input,
-                int width, int height, std::string& error) {
-    if (!settings.enabled || input.isNull())
+bool drawWebcam(exosnap::engine::GpuCompositor& compositor, const WebcamSettings& settings,
+                const exosnap::engine::WebcamFrameSnapshot* frame, int width, int height, std::string& error) {
+    if (!settings.enabled || frame == nullptr)
         return true;
-    const QImage frame = input.convertToFormat(QImage::Format_ARGB32);
     exosnap::engine::WebcamPlacement placement;
     placement.x = settings.overlay.x_norm;
     placement.y = settings.overlay.y_norm;
@@ -215,8 +214,7 @@ bool drawWebcam(exosnap::engine::GpuCompositor& compositor, const WebcamSettings
     chroma.tolerance = settings.chroma_key.tolerance;
     chroma.softness = settings.chroma_key.softness;
     chroma.spill_reduction = settings.chroma_key.spill_reduction;
-    return compositor.DrawWebcam(frame.constBits(), frame.width(), frame.height(), rect, settings.mirror, chroma, error,
-                                 settings.opacity);
+    return compositor.DrawWebcam(*frame, rect, settings.mirror, chroma, error, settings.opacity);
 }
 
 bool drawCursor(exosnap::engine::GpuCompositor& compositor, const ReadyFrameSource& source, const QRect& crop,
@@ -397,7 +395,8 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
     exosnap::engine::GpuCompositor compositor;
     if (!compositor.Init(device.Get(), context.Get(), crop.width(), crop.height(), error) ||
         !compositor.BeginFrame(bgra.Get(), error) ||
-        !drawWebcam(compositor, composition.webcam, composition.webcam_frame, crop.width(), crop.height(), error) ||
+        !drawWebcam(compositor, composition.webcam, composition.webcam_frame.get(), crop.width(), crop.height(),
+                    error) ||
         (composition.video.capture_cursor && !drawCursor(compositor, source, crop, error))) {
         fail(std::move(error));
         return;
@@ -418,8 +417,8 @@ void ReadyFrameCaptureService::Capture(QThreadPool& pool, const ReadyFrameSource
                                        ReadyFrameComposition composition, Callback callback) {
     // The payload is captured by copy, not moved into a mutable lambda: only a
     // const-callable closure converts to the std::function overload of
-    // QThreadPool::start. Nothing here is expensive to copy — QImage is
-    // implicitly shared and the rest is a handful of small settings structs.
+    // QThreadPool::start. Nothing here is expensive to copy: the camera frame
+    // is a shared immutable snapshot and the rest is a handful of small settings structs.
     // Ownership of source.shared_handle still reaches exactly one worker, which
     // closes it.
     pool.start([source, composition, callback]() { captureOnWorker(source, composition, callback); });

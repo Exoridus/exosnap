@@ -136,7 +136,7 @@ Screen content with small text degrades earlier than video does, so the useful r
 
     ExoSettingRow {
         label: qsTr("Preview frame rate")
-        hint: qsTr("Off hides framing and camera placement. Recording rate is unchanged.")
+        hint: qsTr("Preview only · the recording is unaffected")
         stacked: root.stacked
         Layout.fillWidth: true
 
@@ -208,10 +208,6 @@ Screen content with small text degrades earlier than video does, so the useful r
     // a diagnostic.
     ExoSettingRow {
         label: qsTr("Encoding on")
-        // An adapter name is a long value -- "NVIDIA GeForce RTX 5070 Ti" elides
-        // in the shared slot -- so this row takes the wide one, for the same
-        // reason the resolved output path does.
-        controlWidth: ExoTheme.controlSlotWide
         hint: root.settings.encodeAdapterName.length > 0
               // Short enough to survive the narrower label column this row's
               // wide value slot leaves. "Fixed by" already carries "not a
@@ -221,16 +217,13 @@ Screen content with small text degrades earlier than video does, so the useful r
         stacked: root.stacked
         Layout.fillWidth: true
 
-        // A select that is disabled by contract rather than by state. The answer
-        // is a device name that can be absent, still being probed, or one of
-        // several, and right-aligned bare text had no way to say which of those
-        // it was showing -- "Detecting..." in the same rung as a real adapter
-        // name read as an adapter called Detecting.
-        //
-        // Disabled permanently, and not a door to a future selector: the encoder
-        // opens on the device the capture already opened, so there is nothing
-        // here to choose. Offering the choice would mean offering a combination
-        // the pipeline cannot honour.
+        // A select with exactly the one device the pipeline can use: the encoder
+        // opens on the device the capture already opened. It stays an ordinary,
+        // enabled select rather than a disabled one, so it reads like every other
+        // choice on the page and can grow more entries without changing shape.
+        // The answer can be absent or still being probed, which a select states
+        // through its placeholder instead of bare text that read as a device
+        // called "Detecting".
         ExoSelect {
             options: root.settings.encodeAdapterName.length > 0
                      ? [{
@@ -242,7 +235,6 @@ Screen content with small text degrades earlier than video does, so the useful r
                      : []
             value: root.settings.encodeAdapterName
             placeholderText: qsTr("(detecting…)")
-            enabled: false
             Layout.fillWidth: true
             Accessible.name: qsTr("Encoding on")
         }

@@ -11,7 +11,6 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Log level")
-        hint: qsTr("Narrows what is recorded in the application log")
         stacked: root.stacked
         Layout.fillWidth: true
 
@@ -26,7 +25,7 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Crash reports")
-        hint: qsTr("Privacy-scrubbed, never sent without consent")
+        hint: qsTr("Sent only with your consent")
         stacked: root.stacked
         Layout.fillWidth: true
 
@@ -44,7 +43,6 @@ ExoCard {
     // a stray link under the form rather than as part of it.
     ExoSettingRow {
         label: qsTr("Diagnostics")
-        hint: qsTr("Inspect capture and system health")
         stacked: root.stacked
         Layout.fillWidth: true
 

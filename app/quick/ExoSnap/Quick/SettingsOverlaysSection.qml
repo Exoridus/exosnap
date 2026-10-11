@@ -27,21 +27,29 @@ ExoCard {
     required property SettingsAdapter settings
     required property bool stacked
 
-    // Element toggles are laid out at a fixed indent rather than as ExoSettingRow
-    // controls: they are a sub-choice of the preset above them, and giving each
-    // one a full label/hint row would read as six independent settings.
+    // Element toggles are a grid of checkboxes under their preset rather than
+    // ExoSettingRow controls: they are a sub-choice of the preset above them, and
+    // giving each one a full label/hint row would read as six independent
+    // settings. They start on the label edge and keep the card's row rhythm, so
+    // the grid reads as part of the card and not as a nested panel.
     component ElementToggle: ExoCheckBox {
-        Layout.leftMargin: ExoTheme.spacingLg
+        Layout.fillWidth: true
+    }
+
+    component ElementGrid: GridLayout {
+        columns: root.stacked ? 1 : 2
+        columnSpacing: ExoTheme.spacingLg
+        rowSpacing: ExoTheme.spacingSm
+        Layout.fillWidth: true
     }
 
     title: qsTr("Overlays")
-    subtitle: qsTr("Drawn over the recorded screen and always excluded from the recording.")
+    subtitle: qsTr("Visible while recording, never in the file.")
 
     // ── Recording HUD ────────────────────────────────────────────────────────
 
     ExoSettingRow {
         label: qsTr("Recording overlay")
-        hint: qsTr("Status pill on the recorded screen while capturing")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
@@ -56,26 +64,23 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Recording overlay content")
-        hint: qsTr("Minimal shows the state and the elapsed time")
         stacked: root.stacked
         visible: root.settings.showRecordingOverlay
         Layout.fillWidth: true
 
-        ExoSegmentedControl {
-            options: root.settings.recordingOverlayPresetOptions.map(option => option.label)
+        // A select, not a segmented control: three presets with translated
+        // names do not fit the control slot side by side.
+        ExoSelect {
+            options: root.settings.recordingOverlayPresetOptions
+            value: root.settings.recordingOverlayPreset
             Accessible.name: qsTr("Recording overlay content")
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-            currentIndex: root.settings.recordingOverlayPresetOptions
-                              .findIndex(option => option.value === root.settings.recordingOverlayPreset)
-            onSelected: index => root.settings.recordingOverlayPreset =
-                            root.settings.recordingOverlayPresetOptions[index].value
+            Layout.fillWidth: true
+            onValueActivated: value => root.settings.recordingOverlayPreset = value
         }
     }
 
-    ColumnLayout {
-        spacing: ExoTheme.spacingXs
+    ElementGrid {
         visible: root.settings.showRecordingOverlay
-        Layout.fillWidth: true
 
         ElementToggle {
             text: qsTr("Elapsed time")
@@ -100,7 +105,6 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Diagnostics overlay")
-        hint: qsTr("Live measurements on the recorded screen while capturing")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
@@ -115,26 +119,23 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Diagnostics overlay content")
-        hint: qsTr("Health shows pipeline status, problem drops and audio state")
         stacked: root.stacked
         visible: root.settings.showDiagnosticsOverlay
         Layout.fillWidth: true
 
-        ExoSegmentedControl {
-            options: root.settings.diagnosticsOverlayPresetOptions.map(option => option.label)
+        // A select, not a segmented control: three presets with translated
+        // names do not fit the control slot side by side.
+        ExoSelect {
+            options: root.settings.diagnosticsOverlayPresetOptions
+            value: root.settings.diagnosticsOverlayPreset
             Accessible.name: qsTr("Diagnostics overlay content")
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-            currentIndex: root.settings.diagnosticsOverlayPresetOptions
-                              .findIndex(option => option.value === root.settings.diagnosticsOverlayPreset)
-            onSelected: index => root.settings.diagnosticsOverlayPreset =
-                            root.settings.diagnosticsOverlayPresetOptions[index].value
+            Layout.fillWidth: true
+            onValueActivated: value => root.settings.diagnosticsOverlayPreset = value
         }
     }
 
-    ColumnLayout {
-        spacing: ExoTheme.spacingXs
+    ElementGrid {
         visible: root.settings.showDiagnosticsOverlay
-        Layout.fillWidth: true
 
         // Labels pair the overlay's own short token with what it means, so the
         // pill stays readable without the card having to invent a second
@@ -180,7 +181,7 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Quick control pill")
-        hint: qsTr("Floating pause / stop / capture controls while recording")
+        hint: qsTr("Pause, stop and still frame while recording")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true

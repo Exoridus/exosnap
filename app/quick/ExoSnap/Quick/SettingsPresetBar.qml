@@ -71,34 +71,13 @@ Rectangle {
                 Layout.preferredWidth: 200
                 Layout.fillWidth: root.stacked
                 Accessible.name: qsTr("Active preset")
+                Accessible.description: root.settings.presetDirty ? root.settings.presetStatusText : ""
+                // On the preset name itself, where the eye already is. The
+                // settings are kept either way, so this is a neutral marker and
+                // not a warning: it only says the preset no longer matches them.
+                marked: root.settings.presetDirty
+                markTip: root.settings.presetStatusText
                 onValueActivated: value => root.settings.selectPreset(value)
-            }
-
-            // Beside the selector it qualifies, not at the far end of the bar:
-            // "unsaved changes" 900 px away from the preset it is about is a
-            // statement the eye has to go looking for.
-            Rectangle {
-                visible: root.settings.presetDirty
-                implicitWidth: dirtyLabel.implicitWidth + 2 * ExoTheme.spacingSm
-                implicitHeight: 22
-                color: "transparent"
-                border.width: 1
-                border.color: ExoTheme.warningText
-                radius: ExoTheme.radiusSm
-                Layout.alignment: Qt.AlignVCenter
-
-                Label {
-                    id: dirtyLabel
-
-                    text: root.settings.presetStatusText
-                    textFormat: Text.PlainText
-                    anchors.centerIn: parent
-                    color: ExoTheme.warningText
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: ExoTheme.fontCaption
-                    }
-                }
             }
 
             ExoButton {

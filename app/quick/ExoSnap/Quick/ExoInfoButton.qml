@@ -27,13 +27,17 @@ AbstractButton {
     // rather than by reaching into the popup's internals.
     readonly property alias explaining: popover.visible
 
+    // The same trigger carries a caution about the current choice: the glyph
+    // and its resting colour change, the open/close behaviour does not.
+    property bool caution: false
+
     implicitWidth: 16
     implicitHeight: 16
     hoverEnabled: true
     // A bare AbstractButton is not focusable without this.
     focusPolicy: Qt.StrongFocus
     Accessible.role: Accessible.Button
-    Accessible.name: qsTr("About %1").arg(root.subject)
+    Accessible.name: root.caution ? qsTr("Note on %1").arg(root.subject) : qsTr("About %1").arg(root.subject)
     Accessible.description: root.body
     // Opening on focus as well as on click made the two fight: a click focuses
     // the button first, so the panel was already open by the time `clicked`
@@ -90,8 +94,9 @@ AbstractButton {
     }
 
     contentItem: ExoGlyph {
-        kind: ExoGlyph.Info
-        color: root.hovered || root.visualFocus || popover.visible ? ExoTheme.text : ExoTheme.textMuted
+        kind: root.caution ? ExoGlyph.Warning : ExoGlyph.Info
+        color: root.caution ? ExoTheme.warningText
+             : root.hovered || root.visualFocus || popover.visible ? ExoTheme.text : ExoTheme.textMuted
         width: 16
         height: 16
     }

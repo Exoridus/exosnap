@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 
 ExoCard {
@@ -65,9 +66,45 @@ ExoCard {
         }
     }
 
+    // The filled state: the camera as it will be recorded, mirror, opacity and
+    // chroma key included. Only an included camera is opened; an excluded one
+    // shows why the box is empty instead of quietly running the device.
+    Rectangle {
+        color: ExoTheme.surfaceRaised
+        border.width: 1
+        border.color: ExoTheme.line
+        radius: ExoTheme.radiusMd
+        clip: true
+        visible: root.settings.webcamAvailable
+        Layout.fillWidth: true
+        Layout.preferredHeight: Math.round(width * 9 / 16)
+        Layout.maximumHeight: 220
+
+        ExoWebcamPreviewItem {
+            id: cameraPreview
+
+            feed: root.settings.webcamPreviewFeed as WebcamPreviewFeed
+            visible: root.settings.webcamEnabled
+            anchors.fill: parent
+            anchors.margins: 1
+        }
+
+        Label {
+            text: root.settings.webcamEnabled ? qsTr("Starting camera…") : qsTr("Camera off")
+            textFormat: Text.PlainText
+            horizontalAlignment: Text.AlignHCenter
+            color: ExoTheme.textSecondary
+            visible: !root.settings.webcamEnabled || !cameraPreview.hasFrame
+            anchors.centerIn: parent
+            font {
+                family: ExoTheme.sansFamily
+                pixelSize: ExoTheme.fontSecondary
+            }
+        }
+    }
+
     ExoSettingRow {
         label: qsTr("Include webcam")
-        hint: qsTr("Adds a picture-in-picture overlay to the recording")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
@@ -100,7 +137,6 @@ ExoCard {
         label: qsTr("Capture format")
         stacked: root.stacked
         // Resolution and frame rate share this slot.
-        controlWidth: ExoTheme.controlSlotWide
         Layout.fillWidth: true
 
         RowLayout {
@@ -120,7 +156,7 @@ ExoCard {
                 options: root.settings.webcamFrameRateOptions
                 value: root.settings.webcamFrameRate
                 enabled: root.webcamEditable
-                Layout.preferredWidth: 100
+                Layout.preferredWidth: 84
                 Accessible.name: qsTr("Webcam frame rate")
                 onValueActivated: value => root.settings.webcamFrameRate = value
             }
@@ -129,7 +165,6 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Mirror image")
-        hint: qsTr("Applied to the preview and the recording alike")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
@@ -179,7 +214,7 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Chroma key")
-        hint: qsTr("Removes a solid background colour behind you")
+        hint: qsTr("Removes a solid-colour backdrop")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
@@ -193,19 +228,40 @@ ExoCard {
         }
     }
 
+    // One key colour, typed as hex or picked, shown whether or not the key is
+    // on so it can be set up first. The '#' is the field's own sigil, so only
+    // the digits are typed, and one pasted along with them is dropped at once.
     ExoSettingRow {
         label: qsTr("Key colour")
         stacked: root.stacked
-        visible: root.settings.chromaKeyEnabled
         Layout.fillWidth: true
 
-        ExoSelect {
-            options: root.settings.chromaKeyColorOptions
-            value: root.settings.chromaKeyColorMode
+        ExoTextField {
+            value: root.settings.chromaKeyHex
+            leadingGlyph: ExoGlyph.Hash
+            errorText: root.settings.chromaKeyHexError
             enabled: root.webcamEditable
+            trailingGlyph: ExoGlyph.Swatch
+            trailingGlyphColor: root.settings.chromaKeyColor
+            trailingAccessibleName: qsTr("Pick colour")
+            trailingActive: keyColorDialog.visible
             Layout.fillWidth: true
             Accessible.name: qsTr("Chroma key colour")
-            onValueActivated: value => root.settings.chromaKeyColorMode = value
+            font.family: ExoTheme.monoFamily
+            onTextEdited: {
+                if (text.startsWith("#"))
+                    text = text.slice(1);
+            }
+            onCommitted: value => root.settings.chromaKeyHex = value
+            onTrailingClicked: keyColorDialog.open()
+        }
+
+        ColorDialog {
+            id: keyColorDialog
+
+            title: qsTr("Chroma key colour")
+            selectedColor: root.settings.chromaKeyColor
+            onAccepted: root.settings.chromaKeyColor = selectedColor
         }
     }
 
@@ -237,5 +293,130 @@ ExoCard {
         visible: root.settings.chromaKeyEnabled
         Layout.fillWidth: true
         onValueEdited: value => root.settings.chromaKeySpill = value
+    }
+
+    // The camera's own image controls (UVC), only those this camera reports.
+    // Last in the card so opening it pushes nothing else down, and laid out as
+    // ordinary rows of this card rather than a nested panel. A control nobody
+    // touched keeps the camera's value; the reset hands every one back.
+    ExoSettingRow {
+        label: qsTr("Camera image")
+        hint: root.settings.webcamControlsAdjusted ? qsTr("Adjusted")
+                                                   : qsTr("Camera defaults")
+        stacked: root.stacked
+        visible: root.settings.webcamAvailable && root.settings.webcamControls.length > 0
+        controlWidth: 100
+        Layout.fillWidth: true
+
+        SettingsGroupToggle {
+            id: cameraImageToggle
+
+            accessibleName: qsTr("Camera image controls")
+        }
+    }
+
+    // Built when first opened: thirteen control rows per camera are page-load
+    // work for a group that is collapsed nearly all the time.
+    Loader {
+        active: cameraImageToggle.open && root.settings.webcamAvailable && root.settings.webcamControls.length > 0
+        visible: active
+        Layout.fillWidth: true
+
+        sourceComponent: ColumnLayout {
+            spacing: ExoTheme.rowSpacing
+
+            Repeater {
+                model: root.settings.webcamControls
+
+                delegate: ExoSettingRow {
+                    id: controlRow
+
+                    required property var modelData
+                    readonly property bool isChoice: controlRow.modelData.options !== undefined
+                    readonly property var controlState: root.settings.webcamControlStates[String(controlRow.modelData.control)]
+                                                        ?? ({ value: 0, automatic: false })
+                    readonly property bool manual: !controlRow.controlState.automatic && controlRow.modelData.canManual
+
+                    label: controlRow.modelData.label
+                    stacked: root.stacked
+                    controlWidth: ExoTheme.controlSlot + 40
+                    Layout.fillWidth: true
+
+                    ExoSelect {
+                        visible: controlRow.isChoice
+                        options: controlRow.isChoice ? controlRow.modelData.options : []
+                        value: controlRow.controlState.value
+                        enabled: root.webcamEditable
+                        // The shared select width, not this row's wider slider slot.
+                        Layout.preferredWidth: ExoTheme.controlSlot
+                        Layout.alignment: Qt.AlignRight
+                        Accessible.name: controlRow.modelData.label
+                        onValueActivated: value => root.settings.setWebcamControlValue(controlRow.modelData.control, value)
+                    }
+
+                    // Slider, value and the Auto slot share one column layout in every
+                    // row, with the slot held open where a control has no Auto, so the
+                    // sliders line up down the group.
+                    RowLayout {
+                        visible: !controlRow.isChoice
+                        spacing: ExoTheme.spacingSm
+                        Layout.fillWidth: true
+
+                        ExoSlider {
+                            from: controlRow.modelData.minimum
+                            to: controlRow.modelData.maximum
+                            stepSize: controlRow.modelData.step
+                            value: controlRow.controlState.value
+                            enabled: root.webcamEditable && controlRow.manual
+                            Layout.fillWidth: true
+                            Accessible.name: controlRow.modelData.label
+                            onMovedByUser: value => root.settings.setWebcamControlValue(controlRow.modelData.control,
+                                                                                        Math.round(value))
+                        }
+
+                        Label {
+                            // An automatic control's last manual value says nothing
+                            // about what the camera is doing now.
+                            text: controlRow.controlState.automatic ? "\u2013" : controlRow.controlState.value
+                            textFormat: Text.PlainText
+                            horizontalAlignment: Text.AlignRight
+                            color: root.webcamEditable && controlRow.manual ? ExoTheme.textSecondary : ExoTheme.textDim
+                            Layout.preferredWidth: 40
+                            font {
+                                family: ExoTheme.monoFamily
+                                pixelSize: ExoTheme.fontSecondary
+                            }
+                        }
+
+                        Item {
+                            implicitHeight: autoBox.implicitHeight
+                            Layout.preferredWidth: 56
+
+                            ExoCheckBox {
+                                id: autoBox
+
+                                text: qsTr("Auto")
+                                visible: controlRow.modelData.canAutomatic
+                                checked: controlRow.controlState.automatic
+                                enabled: root.webcamEditable
+                                anchors.verticalCenter: parent.verticalCenter
+                                Accessible.name: qsTr("Automatic %1").arg(controlRow.modelData.label)
+                                onToggledByUser: value => root.settings.setWebcamControlAutomatic(
+                                                     controlRow.modelData.control, value)
+                            }
+                        }
+                    }
+                }
+            }
+
+            ExoButton {
+                text: qsTr("Reset to camera defaults")
+                compact: true
+                quiet: true
+                enabled: root.webcamEditable && root.settings.webcamControlsAdjusted
+                Layout.alignment: Qt.AlignRight
+                onClicked: root.settings.resetWebcamControls()
+            }
+        }
     }
 }

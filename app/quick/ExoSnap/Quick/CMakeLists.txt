@@ -74,13 +74,16 @@ qt_add_qml_module(exosnap
         ExoChevron.qml
         ExoConfirmDialog.qml
         ExoDisclosure.qml
+        ExoFieldErrorMark.qml
         ExoGlyph.qml
         RecordPreviewChrome.qml
+        RecordWebcamOverlay.qml
         SourceConfidence.qml
         ExoIssueCard.qml
         ExoKeyValueTable.qml
         ExoLastSessionCard.qml
         ExoLedgerCard.qml
+        ExoLinkButton.qml
         ExoLogView.qml
         ExoMenu.qml
         ExoMenuItem.qml
@@ -138,10 +141,10 @@ qt_add_qml_module(exosnap
         SettingsAudioTrackLedger.qml
         SettingsMicrophoneSection.qml
         SettingsChromaSlider.qml
-        SettingsDestinationChip.qml
         SettingsDeveloperSection.qml
         SettingsFormatSection.qml
         SettingsHotkeysSection.qml
+        SettingsGroupToggle.qml
         SettingsMicDspGroup.qml
         SettingsOutputFolderDialog.qml
         SettingsOutputSection.qml
@@ -204,6 +207,10 @@ qt_add_qml_module(exosnap
         NotificationsAdapter.h
         ExoPreviewItem.cpp
         ExoPreviewItem.h
+        ExoWebcamPreviewItem.cpp
+        ExoWebcamPreviewItem.h
+        WebcamPreviewFeed.cpp
+        WebcamPreviewFeed.h
         QuickPreviewRgbaConverter.cpp
         QuickPreviewRgbaConverter.h
         RoundedRectClipGeometry.h
@@ -212,8 +219,6 @@ qt_add_qml_module(exosnap
         RecordPreviewAdapter.h
         ReadyFrameCaptureService.cpp
         ReadyFrameCaptureService.h
-        RecordWebcamFrameProvider.cpp
-        RecordWebcamFrameProvider.h
         CaptureTargetStillProvider.cpp
         CaptureTargetStillProvider.h
         OverlayAdapter.cpp
@@ -960,6 +965,7 @@ qt_add_qml_module(record_controls_qml_tests
         # The collapsed row's own disclosure re-uses the shared chevron rather
         # than ExoDisclosure, so it needs the chevron type resolved too.
         ExoLedgerCard.qml
+        ExoLinkButton.qml
         ExoLastSessionCard.qml
         ExoReferenceRow.qml
         ExoSessionTimeline.qml
@@ -976,8 +982,14 @@ qt_add_qml_module(record_controls_qml_tests
         # The record transport's two controls draw their icons with ExoGlyph, so
         # the test module has to carry it as well — without it qmllint resolves
         # nothing inside either component and reports the whole icon block.
+        ExoFieldErrorMark.qml
         ExoGlyph.qml
+        # The shortcut field's keyboard contract: Tab still leaves it, a held
+        # modifier shows before the combination completes, and the commit moves
+        # focus to the clear button. Input behaviour, invisible to a screenshot.
+        HotkeyCaptureField.qml
         RecordPreviewChrome.qml
+        RecordWebcamOverlay.qml
         SourceConfidence.qml
         # The log viewer, for its selection contract: a selection identifies
         # entries by sequence, so it has to survive an append, front eviction
@@ -1185,6 +1197,7 @@ qt_add_qml_module(edit_timeline_qml_tests
         ExoChevron.qml
         EditPlayer.qml
         EditTimeline.qml
+        ExoFieldErrorMark.qml
         ExoGlyph.qml
         ExoTheme.qml
 )
@@ -1267,6 +1280,7 @@ qt_add_qml_module(record_source_picker_qml_tests
     QML_FILES
         ExoButton.qml
         ExoChevron.qml
+        ExoFieldErrorMark.qml
         ExoGlyph.qml
         ExoMenu.qml
         ExoMenuItem.qml
@@ -1357,8 +1371,6 @@ exosnap_add_gtest(
         ${EXOSNAP_QUICK_TESTS_DIR}/test_record_viewmodel_adapter.cpp
         RecordViewModelAdapter.cpp
         RecordViewModelAdapter.h
-        RecordWebcamFrameProvider.cpp
-        RecordWebcamFrameProvider.h
         CaptureTargetStillProvider.cpp
         CaptureTargetStillProvider.h
     LIBRARIES
@@ -1678,29 +1690,6 @@ target_include_directories(preview_percentile_tests
 )
 
 target_compile_definitions(preview_percentile_tests PRIVATE NOMINMAX)
-
-exosnap_add_gtest(
-    NAME webcam_chroma_key_tests
-    TEST_PREFIX quick_webcam_chroma_key.
-    SOURCES
-        ${EXOSNAP_QUICK_TESTS_DIR}/test_webcam_chroma_key.cpp
-        RecordWebcamFrameProvider.cpp
-        RecordWebcamFrameProvider.h
-        CaptureTargetStillProvider.cpp
-        CaptureTargetStillProvider.h
-    LIBRARIES
-        Qt6::Core
-        Qt6::Gui
-        Qt6::Quick
-)
-
-target_include_directories(webcam_chroma_key_tests
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/app
-)
-
-target_compile_definitions(webcam_chroma_key_tests PRIVATE NOMINMAX)
 
 exosnap_add_gtest(
     NAME log_view_policy_tests

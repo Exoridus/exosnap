@@ -739,6 +739,16 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     ck_tbl.emplace("spill", static_cast<double>(wc.chroma_key.spill_reduction));
     wc_tbl.emplace("chroma_key", std::move(ck_tbl));
 
+    // Only the controls the user set; a missing key means "as the camera has it".
+    toml::table controls_tbl;
+    for (const WebcamControlSetting& control : wc.controls) {
+        toml::table control_tbl;
+        control_tbl.emplace("auto", control.automatic);
+        control_tbl.emplace("value", static_cast<int64_t>(control.value));
+        controls_tbl.emplace(std::string(WebcamControlKey(control.control)), std::move(control_tbl));
+    }
+    wc_tbl.emplace("controls", std::move(controls_tbl));
+
     tbl.emplace("webcam", std::move(wc_tbl));
 
     // --- Countdown ---
@@ -1110,6 +1120,20 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     wc.chroma_key.tolerance = static_cast<float>(TomlFloat(tbl["webcam"]["chroma_key"]["tolerance"], 0.40));
     wc.chroma_key.softness = static_cast<float>(TomlFloat(tbl["webcam"]["chroma_key"]["softness"], 0.15));
     wc.chroma_key.spill_reduction = static_cast<float>(TomlFloat(tbl["webcam"]["chroma_key"]["spill"], 0.30));
+    wc.controls.clear();
+    if (const toml::table* controls_tbl = tbl["webcam"]["controls"].as_table()) {
+        for (const auto& [key, node] : *controls_tbl) {
+            const std::optional<WebcamControl> control = WebcamControlFromKey(key.str());
+            if (!control.has_value() || !node.is_table())
+                continue;
+            WebcamControlSetting setting;
+            setting.control = *control;
+            const toml::node_view<const toml::node> entry{node};
+            setting.automatic = TomlBool(entry["auto"], false);
+            setting.value = static_cast<long>(TomlInt(entry["value"], 0));
+            wc.controls.push_back(setting);
+        }
+    }
 
     // --- Countdown ---
     config.countdown_seconds = static_cast<int>(TomlInt(tbl["countdown_seconds"], 0));

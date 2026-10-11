@@ -11,12 +11,12 @@ using namespace exosnap;
 
 namespace {
 
-// A camera exposing neither BGRA nor YUY2 (the NV12-only class) maps to a
+// A camera the reader can deliver in no usable layout maps to a
 // compatible-format sentence, regardless of the trailing HRESULT diagnostics.
 TEST(WebcamOpenFailureCopy, NoCompatibleFormatMapsToFriendly) {
-    const QString raw =
-        QStringLiteral("no_bgra_or_yuy2_output_type bgra_hr=0xC00D5212 yuy2_hr=0xC00D5212 native_matches=1/4 "
-                       "native_fourcc=NV12 native_set_hr=0x00000000");
+    const QString raw = QStringLiteral(
+        "no_usable_output_type NV12_hr=0xC00D5212 YUY2_hr=0xC00D5212 BGRA_hr=0xC00D5212 native_matches=1/4 "
+        "native_fourcc=NV12 native_set_hr=0x00000000");
     EXPECT_EQ(FriendlyWebcamOpenFailure(raw), QStringLiteral("Camera doesn't offer a compatible video format"));
 }
 

@@ -11,7 +11,7 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Notifications")
-        hint: qsTr("Toasts for saved / low disk / stops")
+        hint: qsTr("Saved, low disk space, stopped")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
@@ -26,7 +26,6 @@ ExoCard {
 
     ExoSettingRow {
         label: qsTr("Minimize ExoSnap to the system tray")
-        hint: qsTr("Minimizing hides the window; the tray icon brings it back")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true
@@ -44,7 +43,7 @@ ExoCard {
         // The reach is the part the label cannot carry: this is a Windows
         // property of the window itself, so it applies to every capture on the
         // machine, not only ExoSnap's own.
-        hint: qsTr("Applies to all capture software — calls, screen sharing, screenshots")
+        hint: qsTr("Hidden in calls, screen sharing and screenshots")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true

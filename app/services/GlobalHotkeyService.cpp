@@ -138,6 +138,33 @@ void GlobalHotkeyService::AssertOwnerThread() const {
 std::vector<HotkeyAction> GlobalHotkeyService::SetRegistrar(IHotkeyRegistrar* registrar) {
     AssertOwnerThread();
     registrar_ = registrar;
+    if (suspended_)
+        return {};
+    return RegisterAll();
+}
+
+void GlobalHotkeyService::SuspendRegistrations() {
+    AssertOwnerThread();
+    if (suspended_)
+        return;
+    suspended_ = true;
+    if (!registrar_)
+        return;
+    for (int i = 0; i < kHotkeyActionCount; ++i) {
+        if (!bindings_[static_cast<std::size_t>(i)].isEmpty())
+            registrar_->Unregister(Win32IdForAction(static_cast<HotkeyAction>(i)));
+    }
+}
+
+std::vector<HotkeyAction> GlobalHotkeyService::ResumeRegistrations() {
+    AssertOwnerThread();
+    if (!suspended_)
+        return {};
+    suspended_ = false;
+    return RegisterAll();
+}
+
+std::vector<HotkeyAction> GlobalHotkeyService::RegisterAll() {
     std::vector<HotkeyAction> failed;
     if (!registrar_)
         return failed;
@@ -161,6 +188,10 @@ std::vector<HotkeyAction> GlobalHotkeyService::SetRegistrar(IHotkeyRegistrar* re
 
 RebindResult GlobalHotkeyService::TrySetBinding(HotkeyAction action, QKeySequence seq) {
     AssertOwnerThread();
+    // Registration bookkeeping below assumes every binding is registered;
+    // a change made mid-capture ends the capture first.
+    if (suspended_)
+        (void)ResumeRegistrations();
     const int idx = static_cast<int>(action);
     if (idx < 0 || idx >= kHotkeyActionCount)
         return {false, RebindError::ExternalConflict, action, QCoreApplication::translate("Hotkeys", "Unknown action")};
@@ -177,6 +208,9 @@ RebindResult GlobalHotkeyService::TrySetBinding(HotkeyAction action, QKeySequenc
                 msg = QCoreApplication::translate("Hotkeys", "This key combination is reserved and cannot be used.");
             else if (err == RebindError::UnsupportedKey)
                 msg = QCoreApplication::translate("Hotkeys", "This key is not supported for global shortcuts.");
+            else if (err == RebindError::NeedsModifier)
+                msg = QCoreApplication::translate(
+                    "Hotkeys", "Add Ctrl, Alt, Shift or Windows. Only F13 to F24 and Pause work on their own.");
             return {false, err, action, msg};
         }
     }
@@ -209,6 +243,8 @@ RebindResult GlobalHotkeyService::TrySetBinding(HotkeyAction action, QKeySequenc
 
 void GlobalHotkeyService::UnsetBinding(HotkeyAction action) {
     AssertOwnerThread();
+    if (suspended_)
+        (void)ResumeRegistrations();
     const int idx = static_cast<int>(action);
     if (idx < 0 || idx >= kHotkeyActionCount)
         return;
@@ -362,6 +398,13 @@ RebindError GlobalHotkeyService::ValidateSequence(QKeySequence seq) {
         return RebindError::ModifierOnly;
     if (IsBlockedCombo(mods, key))
         return RebindError::BlockedCombo;
+    // A bare global key is taken from every application, so an ordinary one
+    // would stop it being typed anywhere. F13-F24 exist on no standard layout
+    // and are what foot pedals and macro keys send; Pause is otherwise unused.
+    const Qt::KeyboardModifiers chord_mods =
+        mods & (Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier | Qt::MetaModifier);
+    if (chord_mods == Qt::NoModifier && !(key >= Qt::Key_F13 && key <= Qt::Key_F24) && key != Qt::Key_Pause)
+        return RebindError::NeedsModifier;
 
 #if defined(Q_OS_WIN)
     if (QtKeyToVk(key) == 0)
@@ -369,6 +412,27 @@ RebindError GlobalHotkeyService::ValidateSequence(QKeySequence seq) {
 #endif
 
     return RebindError::None;
+}
+
+QStringList GlobalHotkeyService::DisplayParts(QKeySequence seq) {
+    QStringList parts;
+    if (seq.isEmpty())
+        return parts;
+    const QKeyCombination combo = seq[0];
+    const Qt::KeyboardModifiers mods = combo.keyboardModifiers();
+    // Named here rather than through QKeySequence::NativeText: that depends on
+    // Qt's own translations being installed and calls the Windows key "Meta".
+    if (mods & Qt::ControlModifier)
+        parts.append(QCoreApplication::translate("Hotkeys", "Ctrl"));
+    if (mods & Qt::AltModifier)
+        parts.append(QCoreApplication::translate("Hotkeys", "Alt"));
+    if (mods & Qt::ShiftModifier)
+        parts.append(QCoreApplication::translate("Hotkeys", "Shift"));
+    if (mods & Qt::MetaModifier)
+        parts.append(QCoreApplication::translate("Hotkeys", "Win"));
+    if (!IsModifierKey(combo.key()) && combo.key() != Qt::Key_unknown)
+        parts.append(QKeySequence(combo.key()).toString(QKeySequence::NativeText));
+    return parts;
 }
 
 void GlobalHotkeyService::CommitBinding(HotkeyAction action, QKeySequence seq) {

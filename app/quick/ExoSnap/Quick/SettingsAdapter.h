@@ -6,12 +6,16 @@
 #include "models/OutputPathValidator.h"
 #include "models/OverlayContentPolicy.h"
 #include "models/RecordingPreset.h"
+#include "models/WebcamControls.h"
+#include "models/WebcamFormatPolicy.h"
 #include "settings/AppSettingsStore.h"
 
 #include <capability/capability_set.h>
 #include <capability/encoder_device_resolver.h>
 #include <capability/nvenc_tuning_policy.h>
 
+#include <QColor>
+#include <QHash>
 #include <QObject>
 #include <QString>
 #include <QUrl>
@@ -171,7 +175,9 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(QString savesToText READ savesToText NOTIFY configChanged FINAL)
     Q_PROPERTY(QString folderValidation READ folderValidation NOTIFY configChanged FINAL)
     Q_PROPERTY(QString patternValidation READ patternValidation NOTIFY configChanged FINAL)
-    Q_PROPERTY(QVariantList filenameTokens READ filenameTokens CONSTANT FINAL)
+    // The filename placeholders, each {token, label, preview}: what to type,
+    // what it stands for and what it would expand to right now.
+    Q_PROPERTY(QVariantList filenameTokens READ filenameTokens NOTIFY configChanged FINAL)
     Q_PROPERTY(QVariantList resolutionOptions READ resolutionOptions NOTIFY optionsChanged FINAL)
     Q_PROPERTY(int resolutionMode READ resolutionMode WRITE setResolutionMode NOTIFY configChanged FINAL)
     Q_PROPERTY(bool customResolutionActive READ customResolutionActive NOTIFY configChanged FINAL)
@@ -343,15 +349,33 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(QVariantList webcamDeviceOptions READ webcamDeviceOptions NOTIFY webcamDevicesChanged FINAL)
     Q_PROPERTY(QString webcamDeviceId READ webcamDeviceId WRITE setWebcamDeviceId NOTIFY configChanged FINAL)
     Q_PROPERTY(QVariantList webcamResolutionOptions READ webcamResolutionOptions NOTIFY optionsChanged FINAL)
-    Q_PROPERTY(int webcamResolution READ webcamResolution WRITE setWebcamResolution NOTIFY configChanged FINAL)
+    Q_PROPERTY(QString webcamResolution READ webcamResolution WRITE setWebcamResolution NOTIFY configChanged FINAL)
+    // The live camera picture for the Webcam card (a WebcamPreviewFeed). Set
+    // once by the application before QML loads.
+    Q_PROPERTY(QObject* webcamPreviewFeed READ webcamPreviewFeed CONSTANT FINAL)
+    // The UVC controls the selected camera reports, each a map with control,
+    // label, minimum, maximum, step, canAutomatic, canManual and, for a choice
+    // rather than a range, options. Empty until the camera has been probed or
+    // when it reports none. Changes only with the camera, so a list view over
+    // it keeps its delegates while values move.
+    Q_PROPERTY(QVariantList webcamControls READ webcamControls NOTIFY webcamControlsChanged FINAL)
+    // Current state per control, keyed by the control number as a string:
+    // {value, automatic}.
+    Q_PROPERTY(QVariantMap webcamControlStates READ webcamControlStates NOTIFY configChanged FINAL)
+    // Whether any control differs from the camera's own state.
+    Q_PROPERTY(bool webcamControlsAdjusted READ webcamControlsAdjusted NOTIFY configChanged FINAL)
     Q_PROPERTY(QVariantList webcamFrameRateOptions READ webcamFrameRateOptions NOTIFY optionsChanged FINAL)
     Q_PROPERTY(int webcamFrameRate READ webcamFrameRate WRITE setWebcamFrameRate NOTIFY configChanged FINAL)
     Q_PROPERTY(bool webcamMirror READ webcamMirror WRITE setWebcamMirror NOTIFY configChanged FINAL)
     Q_PROPERTY(double webcamOpacity READ webcamOpacity WRITE setWebcamOpacity NOTIFY configChanged FINAL)
     Q_PROPERTY(bool webcamAvailable READ webcamAvailable NOTIFY webcamDevicesChanged FINAL)
     Q_PROPERTY(bool chromaKeyEnabled READ chromaKeyEnabled WRITE setChromaKeyEnabled NOTIFY configChanged FINAL)
-    Q_PROPERTY(QVariantList chromaKeyColorOptions READ chromaKeyColorOptions NOTIFY optionsChanged FINAL)
-    Q_PROPERTY(int chromaKeyColorMode READ chromaKeyColorMode WRITE setChromaKeyColorMode NOTIFY configChanged FINAL)
+    // The key colour as six hex digits without '#'. Writing accepts what
+    // ParseHexColor accepts (a leading '#', the three-digit shorthand); anything
+    // else is refused and reported through chromaKeyHexError.
+    Q_PROPERTY(QString chromaKeyHex READ chromaKeyHex WRITE setChromaKeyHex NOTIFY configChanged FINAL)
+    Q_PROPERTY(QString chromaKeyHexError READ chromaKeyHexError NOTIFY configChanged FINAL)
+    Q_PROPERTY(QColor chromaKeyColor READ chromaKeyColor WRITE setChromaKeyColor NOTIFY configChanged FINAL)
     Q_PROPERTY(int chromaKeyTolerance READ chromaKeyTolerance WRITE setChromaKeyTolerance NOTIFY configChanged FINAL)
     Q_PROPERTY(int chromaKeySoftness READ chromaKeySoftness WRITE setChromaKeySoftness NOTIFY configChanged FINAL)
     Q_PROPERTY(int chromaKeySpill READ chromaKeySpill WRITE setChromaKeySpill NOTIFY configChanged FINAL)
@@ -361,6 +385,12 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(int capturingHotkeyAction READ capturingHotkeyAction NOTIFY hotkeysChanged FINAL)
     Q_PROPERTY(QString hotkeyErrorText READ hotkeyErrorText NOTIFY hotkeysChanged FINAL)
     Q_PROPERTY(int hotkeyErrorAction READ hotkeyErrorAction NOTIFY hotkeysChanged FINAL)
+    // The rejected combination as key caps, shown in place of the binding
+    // while hotkeyErrorText explains why it was not taken.
+    Q_PROPERTY(QStringList hotkeyErrorKeys READ hotkeyErrorKeys NOTIFY hotkeysChanged FINAL)
+    // Localized Ctrl, Alt, Shift and Windows names, in that order, for showing
+    // held modifiers before the combination is complete.
+    Q_PROPERTY(QStringList hotkeyModifierNames READ hotkeyModifierNames NOTIFY hotkeysChanged FINAL)
 
     // ---- Presets ------------------------------------------------------------
     Q_PROPERTY(QVariantList presetOptions READ presetOptions NOTIFY presetsChanged FINAL)
@@ -393,7 +423,33 @@ class SettingsAdapter : public QObject {
     void setControlsLocked(bool locked);
     void setMaxFrameRate(int max_fps);
     void setMicrophoneDevices(QVariantList devices);
+    // The Windows default output device, which system audio records. Empty
+    // while unknown.
+    void setDefaultOutputDeviceName(const QString& name);
     void setWebcamDevices(QVariantList devices);
+    // The capture modes one camera offers, as enumerated off the GUI thread.
+    // Resolution and frame-rate choices list only these, and a configured mode
+    // the camera lacks is shown as the mode capture will actually get.
+    void setWebcamFormats(const QString& device_id, std::vector<WebcamFormat> formats);
+    void setWebcamControlRanges(const QString& device_id, std::vector<WebcamControlRange> ranges);
+    [[nodiscard]] const QVariantList& webcamControls() const noexcept {
+        return webcam_controls_;
+    }
+    [[nodiscard]] QVariantMap webcamControlStates() const;
+    [[nodiscard]] bool webcamControlsAdjusted() const noexcept {
+        return !config_.webcam.controls.empty();
+    }
+    // A manual value, snapped to the camera's range and step.
+    Q_INVOKABLE void setWebcamControlValue(int control, int value);
+    Q_INVOKABLE void setWebcamControlAutomatic(int control, bool automatic);
+    // Hands every control back to the camera's defaults.
+    Q_INVOKABLE void resetWebcamControls();
+    void setWebcamPreviewFeed(QObject* feed) noexcept {
+        webcam_preview_feed_ = feed;
+    }
+    [[nodiscard]] QObject* webcamPreviewFeed() const noexcept {
+        return webcam_preview_feed_;
+    }
     // Dock-level (0..1) meter values, forwarded from the same computation that
     // drives the Record page so both areas can never disagree.
     // In dBFS, not in meter positions: this adapter owns the conversion so the
@@ -404,9 +460,11 @@ class SettingsAdapter : public QObject {
     void setCaptureTargetName(const QString& name);
     void setHdrDisplayPresent(bool present);
     void setPresetState(QVariantList options, QString selected_id, bool dirty);
-    // rows: { action, label, binding, isDefault } per hotkey action.
+    // rows: { action, label, binding, keys, isDefault } per hotkey action;
+    // keys lists the binding's key caps.
     void setHotkeyRows(QVariantList rows);
-    void setHotkeyError(int action, QString message);
+    void setHotkeyError(int action, QString message, QStringList keys = {});
+    void setHotkeyModifierNames(QStringList names);
     void setDistributionContext(exosnap::update::DistributionContext distribution);
     [[nodiscard]] bool updateManaged() const noexcept;
     [[nodiscard]] QString updateManagerText() const;
@@ -649,15 +707,20 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] const QVariantList& webcamDeviceOptions() const noexcept;
     [[nodiscard]] QString webcamDeviceId() const;
     [[nodiscard]] const QVariantList& webcamResolutionOptions() const noexcept;
-    [[nodiscard]] int webcamResolution() const noexcept;
+    [[nodiscard]] QString webcamResolution() const;
     [[nodiscard]] const QVariantList& webcamFrameRateOptions() const noexcept;
-    [[nodiscard]] int webcamFrameRate() const noexcept;
+    [[nodiscard]] int webcamFrameRate() const;
     [[nodiscard]] bool webcamMirror() const noexcept;
     [[nodiscard]] double webcamOpacity() const noexcept;
     [[nodiscard]] bool webcamAvailable() const noexcept;
     [[nodiscard]] bool chromaKeyEnabled() const noexcept;
-    [[nodiscard]] const QVariantList& chromaKeyColorOptions() const noexcept;
-    [[nodiscard]] int chromaKeyColorMode() const noexcept;
+    [[nodiscard]] QString chromaKeyHex() const;
+    void setChromaKeyHex(const QString& value);
+    [[nodiscard]] const QString& chromaKeyHexError() const noexcept {
+        return chroma_key_hex_error_;
+    }
+    [[nodiscard]] QColor chromaKeyColor() const;
+    void setChromaKeyColor(const QColor& color);
     [[nodiscard]] int chromaKeyTolerance() const noexcept;
     [[nodiscard]] int chromaKeySoftness() const noexcept;
     [[nodiscard]] int chromaKeySpill() const noexcept;
@@ -665,6 +728,8 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] int capturingHotkeyAction() const noexcept;
     [[nodiscard]] const QString& hotkeyErrorText() const noexcept;
     [[nodiscard]] int hotkeyErrorAction() const noexcept;
+    [[nodiscard]] const QStringList& hotkeyErrorKeys() const noexcept;
+    [[nodiscard]] const QStringList& hotkeyModifierNames() const noexcept;
     [[nodiscard]] const QVariantList& presetOptions() const noexcept;
     [[nodiscard]] const QString& selectedPresetId() const noexcept;
     [[nodiscard]] const QString& selectedPresetName() const noexcept;
@@ -745,12 +810,11 @@ class SettingsAdapter : public QObject {
     void setMicRnnoiseEnabled(bool value);
     void setWebcamEnabled(bool value);
     void setWebcamDeviceId(const QString& value);
-    void setWebcamResolution(int value);
+    void setWebcamResolution(const QString& value);
     void setWebcamFrameRate(int value);
     void setWebcamMirror(bool value);
     void setWebcamOpacity(double value);
     void setChromaKeyEnabled(bool value);
-    void setChromaKeyColorMode(int value);
     void setChromaKeyTolerance(int value);
     void setChromaKeySoftness(int value);
     void setChromaKeySpill(int value);
@@ -788,6 +852,8 @@ class SettingsAdapter : public QObject {
     Q_INVOKABLE void cancelHotkeyCapture();
     Q_INVOKABLE void commitHotkeyCapture(int key, int modifiers);
     Q_INVOKABLE void clearHotkey(int action);
+    // Drops a rejected attempt; the action keeps the binding it had.
+    Q_INVOKABLE void dismissHotkeyError();
     Q_INVOKABLE void resetHotkey(int action);
     Q_INVOKABLE void checkForUpdates();
     Q_INVOKABLE void runUpdatePrimaryAction();
@@ -807,6 +873,7 @@ class SettingsAdapter : public QObject {
     void microphoneDevicesChanged();
     void captureTargetChanged();
     void webcamDevicesChanged();
+    void webcamControlsChanged();
     void metersChanged();
     void updateStatusChanged();
     void presetsChanged();
@@ -838,6 +905,14 @@ class SettingsAdapter : public QObject {
     void settingsFocusRequested(FocusTarget target);
 
   private:
+    // The mode capture gets for the configured webcam request on the selected
+    // camera; the request itself while that camera's formats are unknown.
+    [[nodiscard]] WebcamCaptureMode effectiveWebcamMode() const;
+    // The camera an unpinned selection captures from: the pinned id, else the
+    // first enumerated camera.
+    [[nodiscard]] QString resolvedWebcamDeviceId() const;
+    [[nodiscard]] const WebcamControlRange* selectedWebcamControlRange(int control) const;
+    void storeWebcamControl(const WebcamControlSetting& setting);
     // Re-runs shared reconciliation + sanitization over the live config, then
     // rebuilds the capability-gated option lists and derived presentation text.
     void applyConfigEdit();
@@ -920,9 +995,14 @@ class SettingsAdapter : public QObject {
     QVariantList opus_frame_duration_options_;
     QVariantList microphone_devices_;
     QVariantList webcam_devices_;
+    QString chroma_key_hex_error_;
+    QString default_output_device_name_;
+    QHash<QString, std::vector<WebcamFormat>> webcam_formats_;
+    QHash<QString, std::vector<WebcamControlRange>> webcam_control_ranges_;
+    QVariantList webcam_controls_;
+    QObject* webcam_preview_feed_ = nullptr;
     QVariantList webcam_resolution_options_;
     QVariantList webcam_frame_rate_options_;
-    QVariantList chroma_key_color_options_;
 
     bool bit_depth_relevant_ = false;
     bool chroma_relevant_ = false;
@@ -954,6 +1034,8 @@ class SettingsAdapter : public QObject {
     int capturing_hotkey_action_ = -1;
     int hotkey_error_action_ = -1;
     QString hotkey_error_text_;
+    QStringList hotkey_error_keys_;
+    QStringList hotkey_modifier_names_;
 
     QVariantList preset_options_;
     QString selected_preset_id_;

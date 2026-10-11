@@ -20,7 +20,6 @@
 #include "QuickWindowGeometry.h"
 #include "RecordPreviewAdapter.h"
 #include "RecordViewModelAdapter.h"
-#include "RecordWebcamFrameProvider.h"
 #include "RecordingErrorAdapter.h"
 #include "RecoveryAdapter.h"
 #include "SettingsAdapter.h"
@@ -29,6 +28,7 @@
 #include "ShellPresenceAdapter.h"
 #include "TaskbarPresence.h"
 #include "TrayAdapter.h"
+#include "WebcamPreviewFeed.h"
 #include "WhatsNewAdapter.h"
 
 #include "diagnostics/AudioSourceDegradation.h"
@@ -58,6 +58,7 @@
 
 #include <QAbstractNativeEventFilter>
 #include <QElapsedTimer>
+#include <QHash>
 #include <QPointer>
 #include <QQmlApplicationEngine>
 #include <QStringList>
@@ -564,6 +565,7 @@ class QuickApplication {
     // enumerated camera. Everything that opens a camera goes through this;
     // live_config_ itself keeps the unpinned value.
     [[nodiscard]] WebcamSettings webcamSettingsForCapture() const;
+    void enumerateWebcamFormats(const std::string& device_id);
     void applyThemeFromSettings();
     // The appearance the WINDOWS SHELL is drawing, for the two marks that are
     // composited onto it rather than onto an ExoSnap surface.
@@ -571,6 +573,9 @@ class QuickApplication {
     void refreshShellChromeAppearance();
     void initializeHotkeys();
     void refreshHotkeyRows();
+    // A shortcut another application took while ExoSnap's were released for
+    // capture cannot come back; it is dropped and shown as that row's error.
+    void reportResumedHotkeys(const std::vector<HotkeyAction>& failed);
     void triggerHotkeyAction(HotkeyAction action);
     void exportSelectedPreset(const QString& path);
     void importPresetsFromFile(const QString& path);
@@ -771,6 +776,8 @@ class QuickApplication {
     // recording guard reads it. Owns its own worker pool and joins it on destroy.
     std::unique_ptr<UpdateService> update_service_;
     UpdateHandoffPhase update_handoff_phase_ = UpdateHandoffPhase::Idle;
+    // An automatic check that fell into a recording; it runs once the session ends.
+    bool update_check_deferred_ = false;
     QString last_available_version_;
     // The releases page URL from the last completed check. Empty until then, and
     // the "All releases" link falls back to the product's own address.
@@ -829,7 +836,6 @@ class QuickApplication {
     // poll runs at the same cadence, so a faster pull would only re-read a value
     // that cannot have changed.
     QTimer capture_evidence_timer_;
-    QTimer webcam_frame_delivery_timer_;
     QTimer webcam_overlay_persist_timer_;
     int countdown_remaining_ = 0;
     // Unrounded companion to countdown_remaining_, updated on the same 100 ms
@@ -848,16 +854,13 @@ class QuickApplication {
     bool microphone_available_ = true;
     bool webcam_available_ = true;
     QString webcam_error_;
-    RecordWebcamFrameProvider* webcam_frame_provider_ = nullptr;
-    // Engine-owned once registered, like the two providers below.
+    // Engine-owned once registered, like the tile provider below.
     CaptureTargetStillProvider* target_still_provider_ = nullptr;
     bool target_still_provider_registered_ = false;
     // Engine-owned once registered (addImageProvider takes ownership), same
-    // lifetime rule the webcam provider above follows.
+    // lifetime rule the still provider above follows.
     EditTimelineTileProvider* edit_tile_provider_ = nullptr;
     bool edit_tile_provider_registered_ = false;
-    quint64 webcam_frame_revision_ = 0;
-    bool webcam_provider_registered_ = false;
     bool capture_target_refresh_pending_ = false;
     // What the probe was last told. synchronizeRecordState() is the single edge
     // that re-evaluates this and runs at stats cadence during a recording, so the
@@ -912,6 +915,9 @@ class QuickApplication {
     // First camera reported by the last webcam enumeration, used to resolve an
     // unpinned webcam device. Empty when no camera is attached.
     std::string default_webcam_device_id_;
+    WebcamPreviewFeed webcam_preview_feed_;
+    // Capture modes per camera id, filled by enumerateWebcamFormats().
+    QHash<QString, std::vector<WebcamFormat>> webcam_formats_;
     // The dirty field named in the last [preset] log line. refreshPresetState()
     // runs on every config mirror sync, so without this the same line would be
     // written dozens of times per edit.

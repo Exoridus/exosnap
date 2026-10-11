@@ -504,6 +504,7 @@ Popup {
 
                     objectName: "tabs"
                     options: [qsTr("Displays"), qsTr("Windows"), qsTr("Region")]
+                    Accessible.name: qsTr("Source type")
                     currentIndex: root.currentTab
                     onSelected: index => root.currentTab = index
                 }

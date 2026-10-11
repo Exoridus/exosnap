@@ -328,3 +328,112 @@ TEST(ShouldEnableWebcamToggleTest, LockedTransportWinsOverAnAttachedCamera) {
 TEST(ShouldEnableWebcamToggleTest, NoCameraAndLockedIsStillDisabled) {
     EXPECT_FALSE(ShouldEnableWebcamToggle(false, true));
 }
+
+// ---------------------------------------------------------------------------
+// Native encoding preference and the packed frame layout.
+// ---------------------------------------------------------------------------
+TEST(RankWebcamNativeFormatsTest, EquallyCloseRatesPreferTheEncodingWithoutACpuDecode) {
+    const std::vector<WebcamNativeFormat> formats = {
+        {1920, 1080, 30, 1, WebcamNativeEncoding::Other},
+        {1920, 1080, 30, 1, WebcamNativeEncoding::Yuy2},
+        {1920, 1080, 30, 1, WebcamNativeEncoding::Nv12},
+    };
+    EXPECT_EQ(RankWebcamNativeFormats(formats, 1920, 1080, 30), (std::vector<int>{2, 1, 0}));
+}
+
+TEST(RankWebcamNativeFormatsTest, TheRequestedRateOutranksTheEncoding) {
+    // A USB 2 camera reaches 1080p30 only as MJPEG; its raw formats stop at 5 fps.
+    const std::vector<WebcamNativeFormat> formats = {
+        {1920, 1080, 5, 1, WebcamNativeEncoding::Yuy2},
+        {1920, 1080, 30, 1, WebcamNativeEncoding::Other},
+    };
+    EXPECT_EQ(SelectBestWebcamNativeFormat(formats, 1920, 1080, 30), 1);
+}
+
+TEST(PackWebcamFrameTest, Nv12DropsRowPaddingFromBothPlanes) {
+    // 4x2 frame with a 6-byte pitch: two luma rows, then one chroma row.
+    const std::vector<uint8_t> padded = {1, 2, 3, 4, 0xEE, 0xEE, 5, 6, 7, 8, 0xEE, 0xEE, 9, 10, 11, 12, 0xEE, 0xEE};
+    std::vector<uint8_t> packed;
+    ASSERT_TRUE(PackWebcamFrame(exosnap::engine::WebcamPixelFormat::Nv12, 4, 2, padded.data(), 6, packed));
+    EXPECT_EQ(packed, (std::vector<uint8_t>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}));
+}
+
+TEST(PackWebcamFrameTest, ABottomUpBgraBufferIsFlippedToTopDown) {
+    const std::vector<uint8_t> bottom_up = {2, 2, 2, 2, 1, 1, 1, 1}; // 1x2, last row first in memory
+    std::vector<uint8_t> packed;
+    ASSERT_TRUE(PackWebcamFrame(exosnap::engine::WebcamPixelFormat::Bgra, 1, 2, bottom_up.data() + 4, -4, packed));
+    EXPECT_EQ(packed, (std::vector<uint8_t>{1, 1, 1, 1, 2, 2, 2, 2}));
+}
+
+TEST(PackWebcamFrameTest, RejectsLayoutsThatCannotHoldTheFrame) {
+    const std::vector<uint8_t> bytes(64, 0);
+    std::vector<uint8_t> packed;
+    EXPECT_FALSE(PackWebcamFrame(exosnap::engine::WebcamPixelFormat::Yuy2, 4, 2, bytes.data(), 6, packed))
+        << "pitch shorter than a YUY2 row";
+    EXPECT_FALSE(PackWebcamFrame(exosnap::engine::WebcamPixelFormat::Nv12, 3, 2, bytes.data(), 4, packed))
+        << "NV12 needs even dimensions";
+    EXPECT_FALSE(PackWebcamFrame(exosnap::engine::WebcamPixelFormat::Nv12, 4, 2, bytes.data() + 16, -4, packed))
+        << "bottom-up YUV is not a layout cameras deliver";
+}
+
+// ---------------------------------------------------------------------------
+// ResolveWebcamCaptureMode: what Settings shows and capture requests.
+// ---------------------------------------------------------------------------
+TEST(ResolveWebcamCaptureModeTest, AnOfferedRequestIsKept) {
+    const std::vector<WebcamFormat> offered = {{1280, 720, 30, 1}, {1920, 1080, 30, 1}, {1920, 1080, 60, 1}};
+    EXPECT_EQ(ResolveWebcamCaptureMode(offered, 1920, 1080, 60), (WebcamCaptureMode{1920, 1080, 60}));
+}
+
+TEST(ResolveWebcamCaptureModeTest, AMissingSizeTakesTheSmallestLargerSizeAndItsClosestRate) {
+    const std::vector<WebcamFormat> offered = {
+        {2560, 1440, 30, 1}, {640, 480, 30, 1}, {1920, 1080, 15, 1}, {1920, 1080, 25, 1}};
+    EXPECT_EQ(ResolveWebcamCaptureMode(offered, 1280, 720, 30), (WebcamCaptureMode{1920, 1080, 25}));
+    EXPECT_EQ(ResolveWebcamCaptureMode(offered, 3840, 2160, 30), (WebcamCaptureMode{2560, 1440, 30}))
+        << "nothing large enough: the largest offered size";
+    EXPECT_EQ(ResolveWebcamCaptureMode({{2560, 1440, 30, 1}}, 1280, 720, 60), (WebcamCaptureMode{2560, 1440, 30}));
+}
+
+TEST(ResolveWebcamCaptureModeTest, UnknownFormatsLeaveTheRequestAlone) {
+    EXPECT_EQ(ResolveWebcamCaptureMode({}, 1280, 720, 30), (WebcamCaptureMode{1280, 720, 30}));
+}
+
+TEST(ResolveWebcamCaptureModeTest, NtscRatesAreOfferedAsWholeFramesPerSecond) {
+    const std::vector<WebcamFormat> offered = {{1920, 1080, 30000, 1001}, {1920, 1080, 30, 1}};
+    EXPECT_EQ(OfferedWebcamFrameRates(offered, 1920, 1080), (std::vector<int>{30}));
+}
+
+// ---------------------------------------------------------------------------
+// UVC control values and settings.
+// ---------------------------------------------------------------------------
+TEST(WebcamControlsTest, AValueIsClampedIntoTheRangeAndOntoItsStepGrid) {
+    WebcamControlRange range;
+    range.minimum = 2800;
+    range.maximum = 6500;
+    range.step = 10;
+    EXPECT_EQ(ClampWebcamControlValue(range, 1000), 2800);
+    EXPECT_EQ(ClampWebcamControlValue(range, 9000), 6500);
+    EXPECT_EQ(ClampWebcamControlValue(range, 4604), 4600);
+    EXPECT_EQ(ClampWebcamControlValue(range, 4605), 4610);
+
+    WebcamControlRange signed_range;
+    signed_range.minimum = -64;
+    signed_range.maximum = 64;
+    EXPECT_EQ(ClampWebcamControlValue(signed_range, -12), -12);
+}
+
+TEST(WebcamControlsTest, SettingsAreOnePerControlInAFixedOrder) {
+    const auto normalized = NormalizeWebcamControlSettings(
+        {{WebcamControl::Zoom, false, 2}, {WebcamControl::Brightness, false, 1}, {WebcamControl::Zoom, false, 5}});
+    ASSERT_EQ(normalized.size(), 2u);
+    EXPECT_EQ(normalized[0].control, WebcamControl::Brightness);
+    EXPECT_EQ(normalized[1].control, WebcamControl::Zoom);
+    EXPECT_EQ(normalized[1].value, 5) << "the later edit wins";
+}
+
+TEST(WebcamControlsTest, EveryControlHasAStableKeyThatReadsBack) {
+    for (const WebcamControl control : kAllWebcamControls) {
+        ASSERT_FALSE(WebcamControlKey(control).empty());
+        EXPECT_EQ(WebcamControlFromKey(WebcamControlKey(control)), control);
+    }
+    EXPECT_FALSE(WebcamControlFromKey("not_a_control").has_value());
+}
