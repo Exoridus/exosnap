@@ -7,6 +7,32 @@ import QtQuick.Layouts
 Item {
     id: root
 
+    RecordingWorkspaceState { id: recordingWorkspaceState }
+    Binding {
+        target: root.settingsAdapter
+        property: "active"
+        value: root.displayedPage === ShellAdapter.SettingsPage
+               || (root.displayedPage === ShellAdapter.RecordPage && recordingWorkspaceState.profileState !== "Closed")
+    }
+    Connections {
+        target: root.settingsAdapter
+        function onSettingsFocusRequested(target: int): void {
+            if (target === SettingsAdapter.Presence || target === SettingsAdapter.Appearance
+                || target === SettingsAdapter.Hotkeys || target === SettingsAdapter.Updates)
+                return;
+            root.navigateTo(ShellAdapter.RecordPage);
+            recordPage.openProfile(target);
+        }
+    }
+    Connections {
+        target: settingsLoader.item
+        ignoreUnknownSignals: true
+        function onRecordingProfileRequested(target: int): void {
+            root.navigateTo(ShellAdapter.RecordPage);
+            recordPage.openProfile(target);
+        }
+    }
+
     required property AboutViewModelAdapter aboutViewModel
     required property RecordViewModelAdapter recordViewModel
     required property RecordingClipAdapter clipAdapter
@@ -687,6 +713,9 @@ Item {
             Layout.fillHeight: true
 
             RecordPage {
+                id: recordPage
+                workspaceState: recordingWorkspaceState
+                settings: root.settingsAdapter
                 recordViewModel: root.recordViewModel
                 clipAdapter: root.clipAdapter
                 previewAdapter: root.previewAdapter

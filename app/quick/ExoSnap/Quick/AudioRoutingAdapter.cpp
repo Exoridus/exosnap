@@ -686,7 +686,9 @@ bool AudioRoutingAdapter::setSourceParticipation(QString sourceId, bool particip
     });
 }
 bool AudioRoutingAdapter::setSourceMute(QString sourceId, bool muted, qulonglong expectedRevision) {
-    if (!checkRevision(expectedRevision))
+    if (active_ && (saving_ || expectedRevision != revision_))
+        return fail(tr("Audio settings changed. Review the current plan and try again."));
+    if (!active_ && !checkRevision(expectedRevision))
         return false;
     if (active_) {
         const auto source = std::find_if(active_->sources.begin(), active_->sources.end(),

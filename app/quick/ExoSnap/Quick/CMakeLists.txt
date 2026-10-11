@@ -126,11 +126,14 @@ qt_add_qml_module(exosnap
         PreviewTestCard.qml
         RecordActionButton.qml
         RecordPage.qml
+        RecordingSourcePanel.qml
+        RecordingProfileInspector.qml
         RecordingErrorOverlay.qml
         RecordSourcePicker.qml
         RecordSourceToggle.qml
         RecordSplitButton.qml
         RecordTransportDock.qml
+        RecordingWorkspaceSurface.qml
         RecordingClipPanel.qml
         RecoveryOverlay.qml
         RegionSelectionOverlay.qml
@@ -232,6 +235,8 @@ qt_add_qml_module(exosnap
         RecordViewModelAdapter.h
         RecordingClipAdapter.cpp
         RecordingClipAdapter.h
+        RecordingWorkspaceState.cpp
+        RecordingWorkspaceState.h
         RecordingErrorAdapter.cpp
         RecordingErrorAdapter.h
         RecoveryAdapter.cpp
@@ -1287,6 +1292,18 @@ qt_add_qml_module(record_source_picker_qml_tests
         # its base type and stops publishing the Kind enum.
         QtQuick.Shapes
     SOURCES
+        ExoWebcamPreviewItem.cpp
+        ExoWebcamPreviewItem.h
+        WebcamPreviewFeed.cpp
+        WebcamPreviewFeed.h
+        RecordingWorkspaceState.cpp
+        RecordingWorkspaceState.h
+        SettingsAdapter.cpp
+        SettingsAdapter.h
+        AudioRoutingAdapter.cpp
+        AudioRoutingAdapter.h
+        ${PROJECT_SOURCE_DIR}/app/models/OverlayContentPolicy.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/OverlayContentPolicy.h
         RecordViewModelAdapter.cpp
         RecordViewModelAdapter.h
         RecordingClipAdapter.cpp
@@ -1296,6 +1313,36 @@ qt_add_qml_module(record_source_picker_qml_tests
         # ExoTheme.qml resolves wheelScrollLines through this singleton.
         QuickWheelMetrics.h
     QML_FILES
+        AudioRoutingPanel.qml
+        AudioTrackCard.qml
+        ExoCard.qml
+        ExoCheckBox.qml
+        ExoConfirmDialog.qml
+        ExoInfoButton.qml
+        ExoNotice.qml
+        ExoNumberField.qml
+        ExoScrollView.qml
+        ExoSelect.qml
+        ExoSettingRow.qml
+        ExoSlider.qml
+        ExoSwitch.qml
+        ExoTextField.qml
+        RecordingProfileInspector.qml
+        RecordingSourcePanel.qml
+        SettingsAudioEncodingSection.qml
+        SettingsAudioSourcesSection.qml
+        SettingsChromaSlider.qml
+        SettingsFormatSection.qml
+        SettingsGroupToggle.qml
+        SettingsMicDspGroup.qml
+        SettingsMicrophoneSection.qml
+        SettingsOutputFolderDialog.qml
+        SettingsOutputSection.qml
+        SettingsPresetBar.qml
+        SettingsPresetFileDialog.qml
+        SettingsPresetNameDialog.qml
+        SettingsQualitySection.qml
+        SettingsWebcamSection.qml
         ExoButton.qml
         ExoChevron.qml
         ExoFieldErrorMark.qml
@@ -1311,6 +1358,7 @@ qt_add_qml_module(record_source_picker_qml_tests
         RecordSourceToggle.qml
         RecordSplitButton.qml
         RecordTransportDock.qml
+        RecordingWorkspaceSurface.qml
         RecordingClipPanel.qml
         RegionSelectionOverlay.qml
 )
@@ -1340,6 +1388,8 @@ target_link_libraries(record_source_picker_qml_tests
         Qt6::QuickControls2
         Qt6::QuickTest
         exosnap_record_viewmodel_test_support
+        exosnap_output_model_test_support
+        exosnap::update
         exosnap::capability
         exosnap_engine
 )
@@ -1470,6 +1520,9 @@ exosnap_add_gtest(
     NAME settings_qml_adapter_tests
     TEST_PREFIX quick_settings_adapter.
     SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_recording_workspace.cpp
+        RecordingWorkspaceState.cpp
+        RecordingWorkspaceState.h
         ${EXOSNAP_QUICK_TESTS_DIR}/test_settings_adapter.cpp
         AudioRoutingAdapter.cpp
         AudioRoutingAdapter.h

@@ -1511,9 +1511,18 @@ void QuickApplication::wireRecordCommands() {
 }
 
 void QuickApplication::synchronizeRecordState() {
-    record_view_model_.audio_configuration_valid = !live_config_.audio_read_only;
-    const bool mkv = live_config_.output.container == capability::Container::Matroska ||
-                     live_config_.output.container == capability::Container::WebM;
+    const bool busy = locksCaptureTargets(pending_record_visual_state_.isEmpty() ? recording_coordinator_->State()
+                                                                                 : record_view_model_.state);
+    settings_adapter_.setControlsLocked(busy);
+    if (!busy && draft_changed_during_recording_) {
+        draft_changed_during_recording_ = false;
+        applyPresetConfig(live_config_);
+        return;
+    }
+    const auto& record_config = busy ? settings_adapter_.sessionConfig() : live_config_;
+    record_view_model_.audio_configuration_valid = !record_config.audio_read_only;
+    const bool mkv = record_config.output.container == capability::Container::Matroska ||
+                     record_config.output.container == capability::Container::WebM;
     const QSize previewSize = record_preview_adapter_.sourceSize();
     engine::FrameSize sourceSize{static_cast<uint32_t>(std::max(0, previewSize.width())),
                                  static_cast<uint32_t>(std::max(0, previewSize.height()))};
@@ -1521,7 +1530,7 @@ void QuickApplication::synchronizeRecordState() {
         record_view_model_.region.IsValid())
         sourceSize = {static_cast<uint32_t>(record_view_model_.region.width),
                       static_cast<uint32_t>(record_view_model_.region.height)};
-    record_view_model_adapter_.setFormatText(formatLabel(live_config_, sourceSize));
+    record_view_model_adapter_.setFormatText(formatLabel(record_config, sourceSize));
     // The Settings audio card scopes its sources to the capture target by name:
     // "Everything except Chrome" is a different recording from "Everything the
     // computer plays", and the two are the same row.
@@ -1535,23 +1544,23 @@ void QuickApplication::synchronizeRecordState() {
                       record_view_model_.targets[static_cast<std::size_t>(target_index)]))
                 : QString());
     }
-    record_view_model_adapter_.setDeviceState(microphone_available_, webcam_available_, live_config_.webcam.enabled,
+    record_view_model_adapter_.setDeviceState(microphone_available_, webcam_available_, record_config.webcam.enabled,
                                               webcam_error_);
     record_view_model_adapter_.setWebcamPresentation(
-        QRectF(live_config_.webcam.overlay.x_norm, live_config_.webcam.overlay.y_norm,
-               live_config_.webcam.overlay.w_norm, live_config_.webcam.overlay.h_norm),
-        live_config_.webcam.mirror, live_config_.webcam.opacity);
-    const WebcamChromaKeySettings::ActiveRgb key_color = live_config_.webcam.chroma_key.active_color();
+        QRectF(record_config.webcam.overlay.x_norm, record_config.webcam.overlay.y_norm,
+               record_config.webcam.overlay.w_norm, record_config.webcam.overlay.h_norm),
+        record_config.webcam.mirror, record_config.webcam.opacity);
+    const WebcamChromaKeySettings::ActiveRgb key_color = record_config.webcam.chroma_key.active_color();
     exosnap::engine::ChromaKeyParams chroma;
-    chroma.enabled = live_config_.webcam.chroma_key.enabled;
+    chroma.enabled = record_config.webcam.chroma_key.enabled;
     chroma.r = key_color.r;
     chroma.g = key_color.g;
     chroma.b = key_color.b;
-    chroma.tolerance = live_config_.webcam.chroma_key.tolerance;
-    chroma.softness = live_config_.webcam.chroma_key.softness;
-    chroma.spill_reduction = live_config_.webcam.chroma_key.spill_reduction;
-    record_preview_adapter_.setWebcamStyle(live_config_.webcam.mirror, live_config_.webcam.opacity, chroma);
-    webcam_preview_feed_.setStyle(live_config_.webcam.mirror, live_config_.webcam.opacity, chroma);
+    chroma.tolerance = record_config.webcam.chroma_key.tolerance;
+    chroma.softness = record_config.webcam.chroma_key.softness;
+    chroma.spill_reduction = record_config.webcam.chroma_key.spill_reduction;
+    record_preview_adapter_.setWebcamStyle(record_config.webcam.mirror, record_config.webcam.opacity, chroma);
+    webcam_preview_feed_.setStyle(record_config.webcam.mirror, record_config.webcam.opacity, chroma);
     // Latched at the first live state and cleared when the session ends: it lists
     // the sources that were resolved into a track, which is what a live mute can
     // reach. Refilling it as rows change would let a source muted mid-run drop
@@ -1571,7 +1580,7 @@ void QuickApplication::synchronizeRecordState() {
         }
     }
     record_view_model_adapter_.setLiveToggleableSources(live_toggleable_sources_);
-    record_view_model_adapter_.setCountdownState(live_config_.countdown_seconds, countdown_remaining_,
+    record_view_model_adapter_.setCountdownState(record_config.countdown_seconds, countdown_remaining_,
                                                  countdown_progress_);
     record_view_model_adapter_.setPreviewFrameReady(record_preview_adapter_.frameReady());
     record_view_model_adapter_.setSplitEnabled(mkv && !recording_coordinator_->IsSplitPending());
@@ -1584,18 +1593,6 @@ void QuickApplication::synchronizeRecordState() {
     record_view_model_adapter_.setPendingEditMasterAvailable(record_view_model_.state == UiRecordingState::Saving &&
                                                              pending_edit_master_ &&
                                                              canOpenEditorForCurrentRecording());
-    // Recording configuration must not be editable while a capture is in flight:
-    // container and codec are fixed for the session once the encoder is up.
-    // Sampling this once during initialization left every Settings row unlocked
-    // for the whole run, because nothing re-evaluated it on a state change.
-    //
-    // A visual scenario has no coordinator behind it, so under one the view model
-    // is the authority. Without this, `--record-visual-state recording` rendered
-    // the Settings page in its idle arrangement -- every locked row editable and
-    // no lock banner -- which is exactly the state that decides whether a blocked
-    // control reads as blocked.
-    settings_adapter_.setControlsLocked(locksCaptureTargets(
-        pending_record_visual_state_.isEmpty() ? recording_coordinator_->State() : record_view_model_.state));
     // The single edge that re-points the exclusive-fullscreen probe: every
     // selection change and every recording-state change already lands here, and
     // the unchanged case costs one comparison.
@@ -1972,7 +1969,11 @@ void QuickApplication::toggleSource(const QString& key) {
     if (key == QStringLiteral("webcam")) {
         if (!webcam_available_)
             return;
-        live_config_.webcam.enabled = !live_config_.webcam.enabled;
+        auto webcam =
+            settings_adapter_.recordingActive() ? settings_adapter_.sessionConfig().webcam : live_config_.webcam;
+        webcam.enabled = !webcam.enabled;
+        live_config_.webcam.enabled = webcam.enabled;
+        settings_adapter_.updateActiveWebcam(webcam);
         webcam_error_.clear();
         recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
         persistLiveConfig();
@@ -2222,7 +2223,6 @@ void QuickApplication::initializeSettingsArea() {
                          recording_coordinator_->ApplyOutputFolderValidation(result);
                      });
     QObject::connect(&shell_adapter_, &ShellAdapter::currentPageChanged, &settings_adapter_, [this]() {
-        settings_adapter_.setActive(shell_adapter_.currentPage() == ShellAdapter::SettingsPage);
         if (shell_adapter_.currentPage() == ShellAdapter::SettingsPage) {
             settings_adapter_.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::OutputCardReveal);
         }
@@ -2852,10 +2852,17 @@ void QuickApplication::applyDiagnosticsFix(const QString& fix_id) {
 
 void QuickApplication::wireSettingsCommands() {
     QObject::connect(&shell_adapter_, &ShellAdapter::audioProfileRequested, &settings_adapter_, [this]() {
-        emit shell_adapter_.navigateToPageRequested(ShellAdapter::SettingsPage);
+        emit shell_adapter_.navigateToPageRequested(ShellAdapter::RecordPage);
         settings_adapter_.requestSettingsFocus(SettingsAdapter::FocusTarget::AudioSources);
     });
     settings_adapter_.setAudioRouting(&audio_routing_adapter_);
+    QObject::connect(&settings_adapter_, &SettingsAdapter::recordingContextChanged, &audio_routing_adapter_, [this]() {
+        const auto& displayed = settings_adapter_.displayedConfig();
+        audio_routing_adapter_.refresh(
+            displayed.audio_intent.value_or(engine::AudioIntent{engine::TrackGraph1Intent{}}),
+            displayed.audio_read_only || settings_adapter_.controlsLocked(),
+            QString::fromStdString(displayed.audio_validation_error));
+    });
     audio_routing_adapter_.configure(
         [this](const engine::AudioIntent& intent, QString& error) {
             auto candidate = live_config_;
@@ -2864,6 +2871,8 @@ void QuickApplication::wireSettingsCommands() {
             if (!preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), candidate, &error))
                 return false;
             live_config_ = std::move(candidate);
+            if (settings_adapter_.recordingActive())
+                draft_changed_during_recording_ = true;
             settings_adapter_.setConfig(live_config_);
             refreshPresetState();
             synchronizeRecordState();
@@ -2962,6 +2971,8 @@ void QuickApplication::syncConfigMirrors() {
     // the Settings surface at all, so applySettingsConfigEdit restores it from
     // the owner instead of relying on this push.
     settings_adapter_.setConfig(live_config_);
+    if (settings_adapter_.recordingActive())
+        return;
     // Record mirror. The audio rows are editable from BOTH surfaces (Record's
     // source toggles and the Settings audio section write the same enable/
     // separate flags), so a Settings edit has to land back in the view model or
@@ -3043,6 +3054,8 @@ void QuickApplication::applyWindowCaptureExclusion() {
 }
 
 void QuickApplication::applySettingsConfigEdit() {
+    if (settings_adapter_.controlsLocked())
+        return;
     RecordingPresetConfig edited = settings_adapter_.config();
     // The adapter mirrors the whole struct but the Settings surface exposes only
     // part of it. Capture target/region, the countdown and the webcam overlay
@@ -3068,6 +3081,12 @@ void QuickApplication::applySettingsConfigEdit() {
     audio_routing_adapter_.refresh(live_config_.audio_intent.value_or(engine::AudioIntent{engine::TrackGraph1Intent{}}),
                                    live_config_.audio_read_only,
                                    QString::fromStdString(live_config_.audio_validation_error));
+    if (settings_adapter_.recordingActive()) {
+        draft_changed_during_recording_ = true;
+        persistLiveConfig();
+        refreshPresetState();
+        return;
+    }
     // Audio rows and the webcam enable/mirror flags ARE editable here, so the
     // Record-side mirror has to follow.
     record_view_model_.audio_ui_state = live_config_.audio;
@@ -3093,6 +3112,12 @@ void QuickApplication::applyPresetConfig(RecordingPresetConfig config) {
                                    live_config_.audio_read_only,
                                    QString::fromStdString(live_config_.audio_validation_error));
     settings_adapter_.setConfig(live_config_);
+    if (settings_adapter_.recordingActive()) {
+        draft_changed_during_recording_ = true;
+        persistLiveConfig();
+        refreshPresetState();
+        return;
+    }
     recording_coordinator_->SetOutputSettings(live_config_.output);
     recording_coordinator_->SetVideoSettings(live_config_.video);
     recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
@@ -3105,7 +3130,8 @@ void QuickApplication::applyPresetConfig(RecordingPresetConfig config) {
 }
 
 WebcamSettings QuickApplication::webcamSettingsForCapture() const {
-    WebcamSettings resolved = live_config_.webcam;
+    WebcamSettings resolved =
+        settings_adapter_.recordingActive() ? settings_adapter_.sessionConfig().webcam : live_config_.webcam;
     if (resolved.device_id.empty()) {
         resolved.device_id = default_webcam_device_id_;
     }

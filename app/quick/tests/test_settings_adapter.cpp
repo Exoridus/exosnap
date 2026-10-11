@@ -77,6 +77,60 @@ class SettingsAdapterTest : public ::testing::Test {
     SettingsAdapter adapter;
 };
 
+TEST_F(SettingsAdapterTest, ActiveSnapshotRejectsEditsUntilNextRecordingIsExplicit) {
+    auto config = MakeDefaultPreset().config;
+    config.video.frame_rate_num = 30;
+    adapter.setConfig(config);
+    SignalCounter edits(adapter, &SettingsAdapter::configEdited);
+    SignalCounter presets(adapter, &SettingsAdapter::presetSelected);
+    adapter.setControlsLocked(true);
+    adapter.setFrameRate(60);
+    adapter.selectPreset(QStringLiteral("other"));
+    EXPECT_EQ(adapter.frameRate(), 30);
+    EXPECT_EQ(edits.count(), 0);
+    EXPECT_EQ(presets.count(), 0);
+    adapter.editNextRecording();
+    EXPECT_TRUE(adapter.recordingActive());
+    EXPECT_TRUE(adapter.editingNextRecording());
+    EXPECT_FALSE(adapter.controlsLocked());
+    adapter.setFrameRate(60);
+    adapter.selectPreset(QStringLiteral("other"));
+    EXPECT_EQ(adapter.frameRate(), 60);
+    EXPECT_EQ(adapter.sessionConfig().video.frame_rate_num, 30);
+    EXPECT_EQ(edits.count(), 1);
+    EXPECT_EQ(presets.count(), 1);
+    adapter.showActiveRecording();
+    EXPECT_TRUE(adapter.controlsLocked());
+    EXPECT_EQ(adapter.frameRate(), 30);
+    EXPECT_EQ(adapter.config().video.frame_rate_num, 60);
+    adapter.setControlsLocked(false);
+    EXPECT_FALSE(adapter.recordingActive());
+    EXPECT_EQ(adapter.frameRate(), 60);
+}
+
+TEST_F(SettingsAdapterTest, PresetApplyDoesNotReplaceTheRunningSnapshot) {
+    auto active = MakeDefaultPreset().config;
+    active.video.frame_rate_num = 30;
+    adapter.setConfig(active);
+    adapter.setControlsLocked(true);
+    adapter.editNextRecording();
+    auto next = active;
+    next.video.frame_rate_num = 60;
+    next.output.hdr_mode = engine::HdrMode::TonemapSdr;
+    const auto applied = WithEnvironmentFields(next, active);
+    adapter.setConfig(applied);
+    EXPECT_EQ(adapter.frameRate(), 60);
+    EXPECT_EQ(adapter.sessionConfig().video.frame_rate_num, 30);
+    EXPECT_EQ(adapter.config().output.hdr_mode, active.output.hdr_mode);
+    adapter.showActiveRecording();
+    EXPECT_EQ(adapter.frameRate(), 30);
+    adapter.setMaxFrameRate(15);
+    EXPECT_EQ(adapter.frameRate(), 30);
+    EXPECT_EQ(adapter.sessionConfig().video.frame_rate_num, 30);
+    adapter.editNextRecording();
+    EXPECT_EQ(adapter.frameRate(), 60);
+}
+
 QVariantMap optionFor(const QVariantList& options, int value) {
     for (const QVariant& entry : options) {
         const QVariantMap map = entry.toMap();
@@ -1622,6 +1676,27 @@ TEST_F(SettingsAdapterTest, AdvancedNvencWishesSurviveAnUnavailableBackend) {
 } // namespace exosnap::quick
 
 namespace exosnap::quick {
+TEST_F(SettingsAdapterTest, FrozenPresetCommandsRequireExplicitNextRecordingEditing) {
+    SignalCounter save(adapter, &SettingsAdapter::savePresetAsRequested);
+    SignalCounter rename(adapter, &SettingsAdapter::renamePresetRequested);
+    SignalCounter remove(adapter, &SettingsAdapter::deletePresetRequested);
+    SignalCounter reset(adapter, &SettingsAdapter::resetChangesRequested);
+    adapter.setControlsLocked(true);
+    adapter.savePresetAs("Next");
+    adapter.renamePreset("Next");
+    adapter.deletePreset();
+    adapter.resetChanges();
+    EXPECT_EQ(save.count() + rename.count() + remove.count() + reset.count(), 0);
+    adapter.editNextRecording();
+    adapter.savePresetAs("Next");
+    adapter.renamePreset("Next");
+    adapter.deletePreset();
+    adapter.resetChanges();
+    EXPECT_EQ(save.count(), 1);
+    EXPECT_EQ(rename.count(), 1);
+    EXPECT_EQ(remove.count(), 1);
+    EXPECT_EQ(reset.count(), 1);
+}
 TEST_F(SettingsAdapterTest, LanguagePreferenceIsRestartOnlyAndUsesStableTokens) {
     PersistedAppSettings settings;
     adapter.setAppSettings(settings);

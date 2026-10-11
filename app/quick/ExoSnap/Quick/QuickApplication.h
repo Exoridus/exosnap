@@ -706,6 +706,7 @@ class QuickApplication {
     const exosnap::update::DistributionContext distribution_;
     RecordingPresetStore preset_store_;
     RecordingPresetConfig live_config_;
+    bool draft_changed_during_recording_ = false;
     // True until the first capability probe has had its say on a first start
     // (no persisted live config): the built-in default names a codec this GPU
     // may not have, and the probe is the first moment that can be known.

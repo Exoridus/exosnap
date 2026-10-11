@@ -152,6 +152,7 @@ bool isSysKind(exosnap::engine::AudioSourceKind kind) noexcept {
 } // namespace
 
 SettingsAdapter::SettingsAdapter(QObject* parent) : QObject(parent) {
+    next_config_ = config_;
     rebuildOptions();
     rebuildDerivedText();
 }
@@ -206,7 +207,8 @@ void SettingsAdapter::requestSettingsFocus(FocusTarget target) {
 // ---------------------------------------------------------------------------
 
 void SettingsAdapter::setConfig(RecordingPresetConfig config) {
-    config_ = SanitizePresetConfig(std::move(config));
+    next_config_ = SanitizePresetConfig(std::move(config));
+    config_ = controlsLocked() && active_config_ ? *active_config_ : next_config_;
     custom_resolution_pending_ = config_.output.resolution.mode == OutputResolutionMode::Custom;
     pending_custom_width_ = config_.output.resolution.custom_width;
     pending_custom_height_ = config_.output.resolution.custom_height;
@@ -217,7 +219,7 @@ void SettingsAdapter::setConfig(RecordingPresetConfig config) {
 }
 
 const RecordingPresetConfig& SettingsAdapter::config() const noexcept {
-    return config_;
+    return controlsLocked() ? next_config_ : config_;
 }
 
 void SettingsAdapter::setCapabilities(const capability::CapabilitySet& caps) {
@@ -228,7 +230,8 @@ void SettingsAdapter::setCapabilities(const capability::CapabilitySet& caps) {
     // by the static baseline (4:4:4 on a GPU without YUV444). Re-running the
     // shared sanitizer is what corrects it -- the adapter never rewrites a
     // field itself.
-    config_ = SanitizePresetConfig(std::move(config_));
+    if (!controlsLocked())
+        config_ = SanitizePresetConfig(std::move(config_));
     rebuildOptions();
     rebuildDerivedText();
     emit optionsChanged();
@@ -360,8 +363,19 @@ void SettingsAdapter::setControlsLocked(bool locked) {
     if (controls_locked_ == locked) {
         return;
     }
+    if (locked) {
+        next_config_ = config_;
+        active_config_ = config_;
+        active_preset_name_ = selected_preset_name_;
+    }
     controls_locked_ = locked;
+    editing_next_recording_ = false;
+    if (!locked) {
+        active_config_.reset();
+        setConfig(next_config_);
+    }
     emit controlsLockedChanged();
+    emit recordingContextChanged();
     // updateActionEnabled reads this flag but is notified by updateStatusChanged,
     // so without this the Updates card's button keeps whatever value it had when
     // the last status arrived. Startup locks the controls before the first
@@ -370,12 +384,39 @@ void SettingsAdapter::setControlsLocked(bool locked) {
     emit updateStatusChanged();
 }
 
+void SettingsAdapter::editNextRecording() {
+    if (!controls_locked_ || editing_next_recording_)
+        return;
+    editing_next_recording_ = true;
+    setConfig(next_config_);
+    emit controlsLockedChanged();
+    emit recordingContextChanged();
+}
+
+void SettingsAdapter::showActiveRecording() {
+    if (!controls_locked_ || !editing_next_recording_)
+        return;
+    next_config_ = config_;
+    editing_next_recording_ = false;
+    setConfig(next_config_);
+    emit controlsLockedChanged();
+    emit recordingContextChanged();
+}
+
+void SettingsAdapter::updateActiveWebcam(const WebcamSettings& settings) {
+    if (!active_config_)
+        return;
+    active_config_->webcam = settings;
+    if (controlsLocked())
+        setConfig(next_config_);
+}
+
 void SettingsAdapter::setMaxFrameRate(int max_fps) {
     if (max_frame_rate_ == max_fps) {
         return;
     }
     max_frame_rate_ = max_fps;
-    if (max_fps > 0 && config_.video.frame_rate_num > static_cast<uint32_t>(max_fps)) {
+    if (!controlsLocked() && max_fps > 0 && config_.video.frame_rate_num > static_cast<uint32_t>(max_fps)) {
         config_.video.frame_rate_num = static_cast<uint32_t>(max_fps);
         config_.video.frame_rate_den = 1;
         emit configEdited();
@@ -995,11 +1036,16 @@ void SettingsAdapter::setUpdateStatus(const QString& requested_state, const QStr
 // ---------------------------------------------------------------------------
 
 void SettingsAdapter::applyConfigEdit() {
+    if (controlsLocked()) {
+        setConfig(next_config_);
+        return;
+    }
     // Container/codec reconciliation and per-field clamping are engine-side
     // rules; running them here means a QML edit can never persist a
     // combination the recording side would reject.
     ReconcileContainerCodecs(config_.output);
     config_ = SanitizePresetConfig(std::move(config_));
+    next_config_ = config_;
     rebuildOptions();
     rebuildDerivedText();
     emit optionsChanged();
@@ -1542,7 +1588,7 @@ bool SettingsAdapter::expertMode() const noexcept {
     return app_settings_.expert_mode_enabled;
 }
 bool SettingsAdapter::controlsLocked() const noexcept {
-    return controls_locked_;
+    return controls_locked_ && !editing_next_recording_;
 }
 QString SettingsAdapter::encodeAdapterName() const {
     // Straight from the capability set the probe already produced at startup --
@@ -1677,7 +1723,7 @@ int SettingsAdapter::nvencLookaheadMode() const noexcept {
     return config_.output.nvenc_tuning.lookahead ? 2 : 1;
 }
 void SettingsAdapter::setNvencLookaheadMode(int value) {
-    if (controls_locked_ || !nvencAdvancedRelevant() || value < 0 || value > 2 ||
+    if (controlsLocked() || !nvencAdvancedRelevant() || value < 0 || value > 2 ||
         (value == 2 && !nvencLookaheadSupported()) || nvencLookaheadMode() == value)
         return;
     config_.output.nvenc_lookahead_policy =
@@ -2543,7 +2589,7 @@ void SettingsAdapter::setNvencPreset(int value) {
 }
 
 void SettingsAdapter::setNvencBframes(int value) {
-    if (controls_locked_ || !nvencAdvancedRelevant() || value < 0 || value > nvenc_tuning_resolution_.max_bframes ||
+    if (controlsLocked() || !nvencAdvancedRelevant() || value < 0 || value > nvenc_tuning_resolution_.max_bframes ||
         config_.output.nvenc_tuning.bframes == static_cast<uint32_t>(value))
         return;
     config_.output.nvenc_tuning.bframes = static_cast<uint32_t>(value);
@@ -2552,39 +2598,39 @@ void SettingsAdapter::setNvencBframes(int value) {
 void SettingsAdapter::setNvencBRef(int value) {
     const auto mode = static_cast<exosnap::engine::NvencBRefMode>(value);
     const auto& modes = nvenc_tuning_resolution_.b_ref_modes;
-    if (controls_locked_ || !nvencBRefRelevant() || std::find(modes.begin(), modes.end(), mode) == modes.end() ||
+    if (controlsLocked() || !nvencBRefRelevant() || std::find(modes.begin(), modes.end(), mode) == modes.end() ||
         config_.output.nvenc_tuning.b_ref_mode == mode)
         return;
     config_.output.nvenc_tuning.b_ref_mode = mode;
     applyConfigEdit();
 }
 void SettingsAdapter::setNvencLookahead(bool value) {
-    if (controls_locked_ || !nvencLookaheadSupported())
+    if (controlsLocked() || !nvencLookaheadSupported())
         return;
     setNvencLookaheadMode(value ? 2 : 1);
 }
 void SettingsAdapter::setNvencLookaheadDepth(int value) {
-    if (controls_locked_ || nvencLookaheadMode() != 2 || !nvencLookahead() || value < nvencLookaheadMinDepth() ||
+    if (controlsLocked() || nvencLookaheadMode() != 2 || !nvencLookahead() || value < nvencLookaheadMinDepth() ||
         value > nvencLookaheadMaxDepth() || config_.output.nvenc_tuning.lookahead_depth == static_cast<uint32_t>(value))
         return;
     config_.output.nvenc_tuning.lookahead_depth = static_cast<uint32_t>(value);
     applyConfigEdit();
 }
 void SettingsAdapter::setNvencSpatialAq(bool value) {
-    if (controls_locked_ || !nvencSpatialAqSupported() || config_.output.nvenc_tuning.spatial_aq == value)
+    if (controlsLocked() || !nvencSpatialAqSupported() || config_.output.nvenc_tuning.spatial_aq == value)
         return;
     config_.output.nvenc_tuning.spatial_aq = value;
     applyConfigEdit();
 }
 void SettingsAdapter::setNvencTemporalAq(bool value) {
-    if (controls_locked_ || !nvencTemporalAqSupported() || config_.output.nvenc_tuning.temporal_aq == value)
+    if (controlsLocked() || !nvencTemporalAqSupported() || config_.output.nvenc_tuning.temporal_aq == value)
         return;
     config_.output.nvenc_tuning.temporal_aq = value;
     applyConfigEdit();
 }
 void SettingsAdapter::setNvencMultipass(int value) {
     const auto mode = static_cast<exosnap::engine::NvencMultipass>(value);
-    if (controls_locked_ || !nvencMultipassRelevant() ||
+    if (controlsLocked() || !nvencMultipassRelevant() ||
         (mode != exosnap::engine::NvencMultipass::SinglePass &&
          mode != exosnap::engine::NvencMultipass::QuarterResolution &&
          mode != exosnap::engine::NvencMultipass::FullResolution) ||
@@ -3201,18 +3247,28 @@ void SettingsAdapter::setAutoUpdateCheck(bool value) {
 // ---------------------------------------------------------------------------
 
 void SettingsAdapter::selectPreset(const QString& id) {
+    if (controlsLocked())
+        return;
     emit presetSelected(id);
 }
 void SettingsAdapter::savePresetAs(const QString& name) {
+    if (controlsLocked())
+        return;
     emit savePresetAsRequested(name);
 }
 void SettingsAdapter::renamePreset(const QString& name) {
+    if (controlsLocked())
+        return;
     emit renamePresetRequested(name);
 }
 void SettingsAdapter::deletePreset() {
+    if (controlsLocked())
+        return;
     emit deletePresetRequested();
 }
 void SettingsAdapter::resetChanges() {
+    if (controlsLocked())
+        return;
     emit resetChangesRequested();
 }
 void SettingsAdapter::exportPresetToUrl(const QUrl& url) {
@@ -3222,6 +3278,8 @@ void SettingsAdapter::exportPresetToUrl(const QUrl& url) {
     emit exportPresetRequested(url.toLocalFile());
 }
 void SettingsAdapter::importPresetsFromUrl(const QUrl& url) {
+    if (controlsLocked())
+        return;
     if (!url.isLocalFile()) {
         return;
     }

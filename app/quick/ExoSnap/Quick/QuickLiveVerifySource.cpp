@@ -1650,13 +1650,28 @@ live_verify::LiveVerifySource::RevealOutcome QuickLiveVerifySource::Reveal(const
         *error = QStringLiteral("The %1 page is not loaded").arg(surface);
         return RevealOutcome::Failed;
     }
+    const char* reveal_method = "revealAutomationTarget";
+    if (surface == QLatin1String("settings")) {
+        int profile_target = -1;
+        if (QMetaObject::invokeMethod(page, "recordingTarget", Q_RETURN_ARG(int, profile_target),
+                                      Q_ARG(QString, target)) &&
+            profile_target >= 0) {
+            if (!Navigate(QStringLiteral("record"), error))
+                return RevealOutcome::Failed;
+            page = pageObjectFor(QStringLiteral("record"));
+            if (page == nullptr) {
+                *error = QStringLiteral("The recording workspace is not loaded");
+                return RevealOutcome::Failed;
+            }
+            reveal_method = "revealProfileTarget";
+        }
+    }
     // -1 no such target, 0 a real target that did not reach the viewport,
     // 1 revealed. The middle case is why this is not a bool: it is an
     // operational failure, and reporting it as "no such target" would send a
     // runner looking for a typo in a name that is correct.
     int outcome = -1;
-    if (!QMetaObject::invokeMethod(page, "revealAutomationTarget", Q_RETURN_ARG(int, outcome),
-                                   Q_ARG(QString, target))) {
+    if (!QMetaObject::invokeMethod(page, reveal_method, Q_RETURN_ARG(int, outcome), Q_ARG(QString, target))) {
         *error = QStringLiteral("The %1 page exposes no reveal targets").arg(surface);
         return RevealOutcome::Failed;
     }

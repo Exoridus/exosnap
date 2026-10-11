@@ -233,6 +233,34 @@ TEST(AudioRoutingAdapter, MetersStaySeparateAndActiveMuteCannotIntroduceSource) 
     EXPECT_FALSE(adapter.setSourceMute(Id(source.source_id), false, revision));
 }
 
+TEST(AudioRoutingAdapter, FrozenConfigurationStillAllowsMuteOnTheRunningPlan) {
+    const auto graph = ExampleGraph();
+    AudioRoutingAdapter adapter;
+    int saves = 0;
+    int live_mutes = 0;
+    adapter.configure(
+        [&](const AudioIntent&, QString&) {
+            ++saves;
+            return true;
+        },
+        Environment,
+        [&](AudioSourceId, bool) {
+            ++live_mutes;
+            return true;
+        });
+    adapter.refresh(graph, true);
+    const auto resolved = ResolveAudioIntent(graph, Environment());
+    ASSERT_TRUE(resolved.succeeded());
+    adapter.setActivePlan(*resolved.value());
+    const auto revision = adapter.revision();
+    EXPECT_FALSE(adapter.setTrackName(Id(graph.tracks.front().id), "Changed", revision));
+    EXPECT_EQ(saves, 0);
+    ASSERT_TRUE(adapter.setSourceMute(Id(graph.sources.front().id), true, revision));
+    EXPECT_EQ(live_mutes, 1);
+    EXPECT_TRUE(adapter.activeSources().front().toMap().value("muted").toBool());
+    EXPECT_FALSE(adapter.sources().front().toMap().value("muted").toBool());
+    EXPECT_EQ(saves, 0);
+}
 TEST(AudioRoutingAdapter, UnknownFutureConfigurationRejectsEditsWithVisibleError) {
     AudioRoutingAdapter adapter;
     adapter.configure([](const AudioIntent&, QString&) { return true; }, Environment);

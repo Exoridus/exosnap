@@ -8,6 +8,7 @@ ExoCard {
     id: root
 
     required property AudioRoutingAdapter routing
+    property bool editingNext: true
     title: qsTr("Audio routing")
     subtitle: root.routing.planLabel
     property var selectedTrackBySource: ({})
@@ -67,7 +68,7 @@ ExoCard {
 
     Label {
         Layout.fillWidth: true
-        text: qsTr("Next plan")
+        text: root.editingNext ? qsTr("Next recording plan") : qsTr("Active recording plan")
         color: ExoTheme.text
         font.weight: Font.DemiBold
     }
@@ -95,11 +96,12 @@ ExoCard {
     Label {
         Layout.fillWidth: true
         text: qsTr("Active output")
+        visible: root.editingNext && root.routing.recordingActive
         color: ExoTheme.text
         font.weight: Font.DemiBold
     }
     Repeater {
-        model: root.routing.activeTracks
+        model: root.editingNext && root.routing.recordingActive ? root.routing.activeTracks : []
         delegate: Label {
             required property var modelData
             Layout.fillWidth: true
@@ -107,6 +109,13 @@ ExoCard {
             wrapMode: Text.WordWrap
             color: ExoTheme.textMuted
         }
+    }
+    Label {
+        Layout.fillWidth: true
+        visible: root.routing.recordingActive
+        text: qsTr("Live source mute")
+        color: ExoTheme.text
+        font.weight: Font.DemiBold
     }
     Repeater {
         model: root.routing.activeSources
@@ -122,7 +131,7 @@ ExoCard {
             ExoCheckBox {
                 text: qsTr("Live mute")
                 checked: modelData.muted
-                enabled: !root.routing.readOnly
+                enabled: root.routing.recordingActive
                 Accessible.name: qsTr("Mute active source %1").arg(modelData.name)
                 onToggledByUser: value => root.routing.setSourceMute(modelData.id, value, root.routing.revision)
             }

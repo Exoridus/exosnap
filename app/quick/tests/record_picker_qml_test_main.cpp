@@ -8,8 +8,11 @@
 // over a seeded RecordViewModel and exposes it, plus a seed entry point that
 // rebuilds the target list through the same revision bump a rescan uses.
 
+#include "AudioRoutingAdapter.h"
 #include "RecordViewModelAdapter.h"
 #include "RecordingClipAdapter.h"
+#include "RecordingWorkspaceState.h"
+#include "SettingsAdapter.h"
 
 #include "viewmodels/RecordViewModel.h"
 
@@ -35,9 +38,13 @@ class RecordPickerTestDriver final : public QObject {
 
     Q_PROPERTY(exosnap::quick::RecordViewModelAdapter* adapter READ adapter CONSTANT)
     Q_PROPERTY(exosnap::quick::RecordingClipAdapter* clipAdapter READ clipAdapter CONSTANT)
+    Q_PROPERTY(exosnap::quick::RecordingWorkspaceState* workspaceState READ workspaceState CONSTANT)
+    Q_PROPERTY(exosnap::quick::SettingsAdapter* settings READ settings CONSTANT)
 
   public:
     explicit RecordPickerTestDriver(QObject* parent = nullptr) : QObject(parent) {
+        settings_.setAudioRouting(&routing_);
+        settings_.setConfig(exosnap::MakeDefaultPreset().config);
         seedTargets(2, {QStringLiteral("Claude Design - Brave"), QStringLiteral("Task Manager")});
     }
 
@@ -47,6 +54,12 @@ class RecordPickerTestDriver final : public QObject {
 
     [[nodiscard]] RecordingClipAdapter* clipAdapter() {
         return &clip_adapter_;
+    }
+    exosnap::quick::RecordingWorkspaceState* workspaceState() {
+        return &workspace_state_;
+    }
+    exosnap::quick::SettingsAdapter* settings() {
+        return &settings_;
     }
 
     Q_INVOKABLE void seedTargets(int display_count, const QStringList& window_labels) {
@@ -68,6 +81,42 @@ class RecordPickerTestDriver final : public QObject {
     // A rescan that keeps the native handles of the windows the caller names,
     // so a test can prove the pending selection follows its identity through an
     // insert or a reorder instead of the index it happened to have.
+    Q_INVOKABLE void setRecordingContext(bool active) {
+        settings_.setControlsLocked(active);
+    }
+
+    Q_INVOKABLE void seedAudioSources(int count, const QString& prefix) {
+        using namespace exosnap::engine;
+        TrackGraph1Intent graph;
+        AudioTrackSpec track;
+        track.id = NewId<AudioTrackId>();
+        graph.tracks.push_back(track);
+        for (int index = 0; index < count; ++index) {
+            AudioSourceSpec source;
+            source.id = NewId<AudioSourceId>();
+            source.name = (prefix + QString::number(index)).toStdString();
+            source.binding.follow_default = false;
+            source.binding.endpoint_id = "endpoint";
+            graph.sources.push_back(source);
+            AudioRouteSpec route;
+            route.id = NewId<AudioRouteId>();
+            route.source_id = source.id;
+            route.track_id = track.id;
+            graph.routes.push_back(route);
+        }
+        AudioEnvironmentSnapshot environment;
+        environment.playback_endpoints = {"endpoint"};
+        environment.default_playback_endpoint = "endpoint";
+        routing_.configure([](const AudioIntent&, QString&) { return true; }, [environment] { return environment; },
+                           [](AudioSourceId, bool) { return true; });
+        routing_.setActivePlan(std::nullopt);
+        routing_.refresh(graph);
+        if (count > 0) {
+            const auto resolved = ResolveAudioIntent(graph, environment);
+            if (resolved.succeeded())
+                routing_.setActivePlan(*resolved.value());
+        }
+    }
     Q_INVOKABLE void seedWindowTargets(const QVariantList& windows) {
         source_.targets.clear();
         for (const QVariant& value : windows) {
@@ -121,6 +170,9 @@ class RecordPickerTestDriver final : public QObject {
     RecordViewModel source_;
     RecordViewModelAdapter adapter_;
     RecordingClipAdapter clip_adapter_;
+    exosnap::quick::RecordingWorkspaceState workspace_state_;
+    exosnap::quick::SettingsAdapter settings_;
+    exosnap::quick::AudioRoutingAdapter routing_;
 };
 
 class Setup final : public QObject {

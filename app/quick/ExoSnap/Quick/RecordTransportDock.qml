@@ -3,46 +3,28 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQml.Models
 
 Rectangle {
     id: root
 
     required property RecordViewModelAdapter recordViewModel
     required property RecordingClipAdapter clipAdapter
+    property AudioRoutingAdapter routing: null
+    readonly property bool useRoutedSources: root.routing !== null && !root.routing.legacy
+    readonly property var displayedSources: !root.useRoutedSources ? []
+                                            : root.routing.recordingActive ? root.routing.activeSources : root.routing.sources
+    readonly property int visibleSourceCount: root.width < 1100 ? 2 : 3
 
-    // Three groups, three weights. Left: which sources feed the recording, as
-    // round peers. Centre: the elapsed time, the largest thing on the page.
-    // Right: the secondary per-recording actions as round icons, then the one
-    // recommended action as a filled pill. The previous dock put all eight
-    // controls on the same rounded rectangle at the same size, which is why it
-    // read as a developer toolbar rather than as a recorder's transport.
-    //
-    // Anchored, not laid out. The timer used to sit in a RowLayout between two
-    // fill-spacers, which centres it between the two CLUSTERS rather than in the
-    // bar — so it slid sideways every time a state change made one cluster wider
-    // (Ready → Recording moved it by ~40 px). Anchoring it to the bar's own
-    // horizontal centre makes the position a property of the bar instead of a
-    // by-product of what is currently visible.
-    //
-    // At the minimum width, Paused adds both Resume and Stop. The clock stays
-    // centered until that action cluster reaches it, then shifts just enough
-    // to leave one compact gap rather than drawing beneath a button.
+    // Equal lanes on either side leave the timer at the bar's geometric centre.
+    // Secondary actions enter the More menu before they can overlap that lane.
     readonly property bool compactControls: !ExoTheme.isRegular(root.width)
 
-    // Three gaps, three roles, and at the regular rung they are 16 / 12 / 16:
-    // from a cluster to the bar's edge, between round peers inside a cluster,
-    // and between the secondary cluster and the one recommended action. The edge
-    // used to be the widest of the three at 24, on the theory that a round end
-    // needs more air than a straight one — side by side that read as the
-    // clusters having been pushed inwards, with the peers sitting tighter than
-    // their own distance to nothing.
+    // Keep outer, peer, and primary-action gaps independent as controls enter overflow.
     readonly property int contentInsetX: ExoTheme.spacingLg
     readonly property int contentInsetY: ExoTheme.spacingMd
     readonly property int clusterSpacing: root.compactControls ? ExoTheme.spacingSm : ExoTheme.spacingMd
-    // Between the secondary cluster and the recommended action, so that action
-    // reads as its own tier rather than as a fifth icon. Expressed as the
-    // difference, because the RowLayout has already applied `clusterSpacing` by
-    // the time this margin is added.
+    // RowLayout already accounts for clusterSpacing before this additional gap.
     readonly property int actionGap: (root.compactControls ? ExoTheme.spacingMd : ExoTheme.spacingLg)
                                      - root.clusterSpacing
 
@@ -62,7 +44,7 @@ Rectangle {
     color: ExoTheme.surface
     border.width: 1
     border.color: ExoTheme.line
-    radius: height / 2
+    radius: ExoTheme.radiusSm
 
     // Why a source cannot be toggled right now, in the order the conditions are
     // actually evaluated below. Composed from the same state the `available`
@@ -76,6 +58,7 @@ Rectangle {
 
     // ── Left: the sources ────────────────────────────────────────────────────
     RowLayout {
+        id: sourceActions
         spacing: root.clusterSpacing
         anchors {
             left: parent.left
@@ -84,6 +67,7 @@ Rectangle {
         }
 
         RecordSourceToggle {
+            visible: !root.useRoutedSources
             compact: root.compactControls
             shortLabel: qsTr("SYS")
             glyph: ExoGlyph.Speaker
@@ -112,7 +96,7 @@ Rectangle {
                         || root.recordViewModel.liveToggleableSources.includes("app"))
                        && !root.recordViewModel.blocked && !root.recordViewModel.failed
             unavailableReason: root.sourceLockReason
-            visible: root.recordViewModel.appAudioVisible
+            visible: !root.useRoutedSources && root.recordViewModel.appAudioVisible
             onClicked: root.recordViewModel.requestToggleSource("app")
         }
 
@@ -134,8 +118,41 @@ Rectangle {
             // No microphone attached at all: the control has nothing to offer and
             // no reason worth reading, so it is not shown -- the same rule the
             // application-audio toggle already follows.
-            visible: root.recordViewModel.microphoneAvailable
+            visible: !root.useRoutedSources && root.recordViewModel.microphoneAvailable
             onClicked: root.recordViewModel.requestToggleSource("microphone")
+        }
+
+        Repeater {
+            model: root.displayedSources
+            delegate: RecordSourceToggle {
+                required property var modelData
+                required property int index
+                readonly property var liveMeter: root.routing.sourceMeters[modelData.id]
+                visible: index < root.visibleSourceCount
+                compact: root.compactControls
+                shortLabel: modelData.name.length > 0 ? modelData.name.slice(0, 3).toUpperCase() : qsTr("AUD")
+                glyph: ExoGlyph.Speaker
+                accessibleLabel: qsTr("%1, %2, %3").arg(modelData.name)
+                                 .arg(modelData.muted ? qsTr("muted") : qsTr("unmuted"))
+                                 .arg(liveMeter && liveMeter.available ? qsTr("level available") : qsTr("level unavailable"))
+                checkedState: modelData.participation && !modelData.muted
+                meterLevel: liveMeter && liveMeter.available ? Math.pow(10, liveMeter.rmsDbfs / 20) : 0
+                available: modelData.available && modelData.participation
+                unavailableReason: !modelData.available ? modelData.availabilityText
+                                   : !modelData.participation ? qsTr("Source is not participating")
+                                   : !liveMeter || !liveMeter.available ? qsTr("Signal level unavailable") : ""
+                onClicked: root.routing.setSourceMute(modelData.id, !modelData.muted, root.routing.revision)
+            }
+        }
+
+        RecordActionButton {
+            id: sourceOverflowAction
+            compact: root.compactControls
+            accessibleLabel: qsTr("More audio sources")
+            text: qsTr("Sources")
+            glyph: ExoGlyph.Overflow
+            visible: root.useRoutedSources && root.displayedSources.length > root.visibleSourceCount
+            onClicked: sourceOverflow.open()
         }
 
         RecordSourceToggle {
@@ -169,6 +186,28 @@ Rectangle {
         }
     }
 
+    Menu {
+        id: sourceOverflow
+        x: sourceActions.x + sourceOverflowAction.x
+        y: -height - ExoTheme.spacingSm
+
+        Instantiator {
+            model: root.displayedSources.length > root.visibleSourceCount
+                   ? root.displayedSources.slice(root.visibleSourceCount) : []
+            delegate: MenuItem {
+                required property var modelData
+                text: qsTr("%1: %2").arg(modelData.name)
+                      .arg(!modelData.available ? modelData.availabilityText
+                           : !modelData.participation ? qsTr("Not participating")
+                           : modelData.muted ? qsTr("Muted") : qsTr("Unmuted"))
+                enabled: modelData.available && modelData.participation
+                onTriggered: root.routing.setSourceMute(modelData.id, !modelData.muted, root.routing.revision)
+            }
+            onObjectAdded: (index, object) => sourceOverflow.insertItem(index, object)
+            onObjectRemoved: (index, object) => sourceOverflow.removeItem(object)
+        }
+    }
+
     // ── Centre: the elapsed time ─────────────────────────────────────────────
     //
     // On the value rung with tabular figures: this is what the user looks at
@@ -179,9 +218,10 @@ Rectangle {
         objectName: "recordTransportClock"
         text: root.recordViewModel.countdownActive
               ? root.recordViewModel.countdownRemaining.toString()
-              : root.recordViewModel.elapsedText.length > 0 ? root.recordViewModel.elapsedText : qsTr("0:00")
+              : root.recordViewModel.elapsedText.length > 0 ? root.recordViewModel.elapsedText : qsTr("00:00:00")
         textFormat: Text.PlainText
         horizontalAlignment: Text.AlignHCenter
+        width: Math.max(implicitWidth, 112)
         // Red while a recording is running, because that is the one state the
         // clock is counting something irreversible in. Paused used to be amber
         // here, which put caution on a number that is simply not advancing —
@@ -190,8 +230,6 @@ Rectangle {
                                               : root.recordViewModel.paused ? ExoTheme.paused : ExoTheme.text
         anchors {
             horizontalCenter: parent.horizontalCenter
-            horizontalCenterOffset: Math.min(0, rightActions.x - root.width / 2
-                                             - elapsedTimer.implicitWidth / 2 - ExoTheme.spacingSm)
             verticalCenter: parent.verticalCenter
         }
         font {
@@ -218,6 +256,7 @@ Rectangle {
         }
 
         RecordActionButton {
+            id: frameAction
             compact: root.compactControls
             accessibleLabel: qsTr("Capture frame")
             text: qsTr("Frame")
@@ -229,7 +268,7 @@ Rectangle {
             unavailableReason: qsTr("Unavailable — the preview has not produced a frame yet.")
             // Not beside a failed run: its preview is not what the user is being
             // asked to look at, and the bar's one question is the failure.
-            visible: !root.recordViewModel.preparing && !root.recordViewModel.finalizing &&
+            visible: root.width >= 1100 && !root.recordViewModel.preparing && !root.recordViewModel.finalizing &&
                      !root.recordViewModel.failed
             onClicked: root.recordViewModel.requestCaptureFrame()
         }
@@ -239,7 +278,7 @@ Rectangle {
             accessibleLabel: qsTr("Add marker")
             text: qsTr("Mark")
             glyph: ExoGlyph.Flag
-            visible: root.recordViewModel.recording || root.recordViewModel.paused
+            visible: root.width >= 1600 && (root.recordViewModel.recording || root.recordViewModel.paused)
             onClicked: root.recordViewModel.requestAddMarker()
         }
 
@@ -253,7 +292,7 @@ Rectangle {
             // split needs a Matroska container, or one is already in flight. The
             // second clears itself within a segment boundary.
             unavailableReason: qsTr("Unavailable — a manual split needs an MKV or WebM container.")
-            visible: root.recordViewModel.recording || root.recordViewModel.paused
+            visible: root.width >= 1600 && (root.recordViewModel.recording || root.recordViewModel.paused)
             onClicked: root.recordViewModel.requestSplit()
         }
 
@@ -263,7 +302,7 @@ Rectangle {
             accessibleLabel: qsTr("Save clip, %1 seconds selected").arg(root.clipAdapter.preferredDurationSeconds)
             text: qsTr("Clip · %1 s").arg(root.clipAdapter.preferredDurationSeconds)
             glyph: ExoGlyph.Scissors
-            visible: root.recordViewModel.recording || root.recordViewModel.paused || root.clipAdapter.jobs.length > 0
+            visible: root.width >= 1100 && (root.recordViewModel.recording || root.recordViewModel.paused || root.clipAdapter.jobs.length > 0)
             available: root.clipAdapter.canRequest || root.clipAdapter.jobs.length > 0
             unavailableReason: root.clipAdapter.unavailableReason
             onClicked: clipPanel.open()
@@ -274,7 +313,7 @@ Rectangle {
             accessibleLabel: qsTr("Edit finalized recording")
             text: qsTr("Edit")
             glyph: ExoGlyph.ExternalLink
-            visible: root.recordViewModel.pendingEditMasterAvailable
+            visible: root.width >= 1600 && root.recordViewModel.pendingEditMasterAvailable
             onClicked: root.recordViewModel.requestEditMaster()
         }
 
@@ -286,8 +325,20 @@ Rectangle {
             accessibleLabel: qsTr("Pause recording")
             text: qsTr("Pause")
             glyph: ExoGlyph.Pause
-            visible: root.recordViewModel.recording
+            visible: root.width >= 1100 && root.recordViewModel.recording
             onClicked: root.recordViewModel.requestPause()
+        }
+
+        RecordActionButton {
+            id: moreAction
+            compact: root.compactControls
+            accessibleLabel: qsTr("More recording actions")
+            text: qsTr("More")
+            glyph: ExoGlyph.Overflow
+            visible: !root.recordViewModel.failed && (root.width < 1100 ||
+                     (root.width < 1600 && (root.recordViewModel.recording || root.recordViewModel.paused ||
+                                            root.recordViewModel.pendingEditMasterAvailable)))
+            onClicked: moreMenu.open()
         }
 
         RecordActionButton {
@@ -351,6 +402,46 @@ Rectangle {
             visible: !root.recordViewModel.recording && !root.recordViewModel.paused &&
                      !root.recordViewModel.failed
             Layout.leftMargin: root.actionGap
+        }
+    }
+
+    Menu {
+        id: moreMenu
+        x: Math.max(8, rightActions.x + moreAction.x - width + moreAction.width)
+        y: -height - ExoTheme.spacingSm
+
+        MenuItem {
+            text: qsTr("Capture frame")
+            visible: root.width < 1100 && !root.recordViewModel.preparing && !root.recordViewModel.finalizing
+            enabled: root.recordViewModel.captureFrameEnabled
+            onTriggered: root.recordViewModel.requestCaptureFrame()
+        }
+        MenuItem {
+            text: qsTr("Add marker")
+            visible: root.width < 1600 && (root.recordViewModel.recording || root.recordViewModel.paused)
+            onTriggered: root.recordViewModel.requestAddMarker()
+        }
+        MenuItem {
+            text: qsTr("Split recording")
+            visible: root.width < 1600 && (root.recordViewModel.recording || root.recordViewModel.paused)
+            enabled: root.recordViewModel.splitEnabled
+            onTriggered: root.recordViewModel.requestSplit()
+        }
+        MenuItem {
+            text: qsTr("Save clip")
+            visible: root.width < 1100 && (root.recordViewModel.recording || root.recordViewModel.paused || root.clipAdapter.jobs.length > 0)
+            enabled: root.clipAdapter.canRequest || root.clipAdapter.jobs.length > 0
+            onTriggered: clipPanel.open()
+        }
+        MenuItem {
+            text: qsTr("Edit finalized recording")
+            visible: root.width < 1600 && root.recordViewModel.pendingEditMasterAvailable
+            onTriggered: root.recordViewModel.requestEditMaster()
+        }
+        MenuItem {
+            text: qsTr("Pause recording")
+            visible: root.width < 1100 && root.recordViewModel.recording
+            onTriggered: root.recordViewModel.requestPause()
         }
     }
 

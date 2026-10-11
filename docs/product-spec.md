@@ -14,7 +14,7 @@ Configuration and compatibility have one C++ owner. Presentation consumes resolv
 
 The title band provides five direct destinations in this order: **Record, Edit, Settings, Diagnostics, About**. Logs is not a top-level destination: it is the full log view inside Diagnostics, reached from the Reference section, a failed recording's View log action or a Show in log action, and it keeps Diagnostics selected. Hotkeys is a Settings card. Hardware inspection is a collapsed Diagnostics reference, not a Device destination or an encoder selector.
 
-Settings owns user choices. Diagnostics owns observations and hosts both its overview and the internal Logs view. Record owns capture setup, preview and transport. Edit owns the in-memory recording-edit workspace. About owns application identity and project links.
+The Recording profile inspector owns recording choices. Settings owns global application preferences. Diagnostics owns observations and hosts both its overview and the internal Logs view. Record owns capture setup, preview and transport. Edit owns the in-memory recording-edit workspace. About owns application identity and project links.
 
 ### Shell and window
 
@@ -218,7 +218,7 @@ The Record preview canvas fills the available page area with the same inset and 
 
 Idle display preview uses the selected capture hub and holds through transient loss. Window/region idle preview uses WGC. Preview stops when Record is no longer actually displayed. During recording it normally switches to the engine's composited image and stops independent capture, without a black flash during handoff. Cross-adapter sharing failure and the already-PQ path are explicit exceptions, so WYSIWYG is not unconditional on every configuration.
 
-Preview frame rate is a global preference under Video quality & timing: Off, 15, 30, 60 or 120 fps, default 60. Unsupported display-derived choices remain visible but disabled. It caps idle acquisition/publication and preview presentation independently of recording cadence. Off releases the idle capture subscription and shows Preview off; framing and webcam placement cannot be checked there while disabled. Recording and its composited tap continue. The preference is not part of a recording preset.
+Preview frame rate is a global preference under Settings / App behaviour: Off, 15, 30, 60 or 120 fps, default 60. Unsupported display-derived choices remain visible but disabled. It caps idle acquisition/publication and preview presentation independently of recording cadence. Off releases the idle capture subscription and shows Preview off; framing and webcam placement cannot be checked there while disabled. Recording and its composited tap continue. The preference is not part of a recording preset.
 
 Preview redraw is producer-driven. A published frame missed during screen movement/exposure/scene reconstruction is presented when rendering is usable again without another frame or mouse event. Ready screenshots remain disabled until a usable preview frame exists.
 
@@ -258,7 +258,7 @@ The Record layout has a full preview canvas with persistent context chrome and a
 
 | State | Recommended action and behavior |
 |---|---|
-| Ready | Outlined Record; source and countdown controls available as applicable |
+| Ready | Filled primary Record; source and countdown controls available as applicable |
 | Countdown | Filled Cancel, neutral progress state |
 | Preparing | Preparing feedback; pending start can be canceled cooperatively |
 | Recording | Filled Stop, secondary pause/screenshot/marker/split where supported |
@@ -268,6 +268,14 @@ The Record layout has a full preview canvas with persistent context chrome and a
 | Failed | Modal failure explanation and report action; Back acknowledges the failure before Record returns; no success result |
 
 A successful recording is confirmed by the Saved notification, whose Edit and folder actions open that recording, and by the shell's brief Saved indication. Record keeps no persistent success layout; the recording remains reachable from Edit History. A split recording can open in Edit as ordered segment clips. Missing/failed media is represented honestly rather than silently omitted. Capture frame is not shown beside a failed run. Icon-only controls have descriptive tooltips, and unavailable reasons remain hover-readable.
+
+### Recording workspace and profile
+
+Sources on the left and Recording profile on the right start closed. Opening an overlay leaves the preview geometry unchanged. Below 1200 logical pixels of workspace width, opening one overlay closes the other. Pinning is an explicit action and requires at least 480 by 280 logical pixels for the preview. A resize that violates this minimum closes the most recently opened panel with a visible explanation. Growing the window does not reopen it. Escape closes the active panel, and focus returns to its opening control without stopping a recording.
+
+The source overview uses the configured source identities and shows availability, participation and measured levels. The profile inspector owns format, quality, output, audio routing, microphone, audio encoding and webcam configuration. It reuses the shared preset draft and the single track routing editor. Named preset apply retains environment-owned capture and HDR fields. During recording, Active recording is a frozen read-only view. Edit next recording explicitly exposes the separate next draft, whose changes take effect at the next start. Operational mute and webcam participation remain session actions.
+
+The transport uses compact source meters and a geometrically centered timer with reserved width for hours. Stop remains directly reachable while secondary actions use a named overflow at narrow widths. Creating a recording clip and opening the editor retain their existing availability rules.
 
 ### Runtime health and duration
 
@@ -388,7 +396,7 @@ The top bar retains three noninteractive source-health indicators across every p
 
 ## 11. Diagnostics and fix actions
 
-Diagnostics keeps four main live tiles: Frame pacing, Encoder, Storage and Audio sync. The recording verdict and ledger describe measured impact. Raw timing, presentation, GPU/memory and kernel evidence stays in grouped In-depth details; missing PresentMon is neutral. Compensated condition periods stay in In-depth/reports. Diagnostics is state-ordered, not a separate Simple/Expert mode. The Expert toggle belongs only to Settings.
+Diagnostics keeps four main live tiles: Frame pacing, Encoder, Storage and Audio sync. The recording verdict and ledger describe measured impact. Raw timing, presentation, GPU/memory and kernel evidence stays in grouped In-depth details; missing PresentMon is neutral. Compensated condition periods stay in In-depth/reports. Diagnostics is state-ordered, not a separate Simple/Expert mode. The shared Expert preference is edited in the recording profile inspector.
 
 | State | Main contents |
 |---|---|
@@ -414,9 +422,9 @@ Logs provides a virtualized structured list with Time, Level, Category and Messa
 
 ## 12. Settings model (Default / Expert)
 
-Settings serves technically inclined users without assuming video/audio specialization. Default exposes practical format, source, quality, output and recovery choices. Expert reveals raw or compatibility-sensitive mechanics **within** existing cards; it never hides an entire section.
+Settings retains card-based global application preferences: App behaviour, Hotkeys, Appearance, Overlays, Updates and Support & diagnostics. Recording choices are edited in the Recording profile inspector. A Settings shortcut opens that inspector rather than providing another editable copy. Expert reveals raw or compatibility-sensitive mechanics within the recording cards; it never hides an entire section.
 
-At desktop width the left column is Recording format, Audio routing, Output, App behaviour, Hotkeys and Appearance. Legacy configurations additionally retain the shared Microphone card; native source details sit in Audio routing. The right is Video quality & timing, Audio encoding, Webcam, Overlays, Updates and Support & diagnostics. Narrow layout retains the same operability. Preset actions and Expert share the first toolbar.
+Global Settings adapts its card columns to the available width. The inspector uses one scrollable column and retains preset actions and the shared Expert preference.
 
 Expert owns numeric rate control/CQ/bitrate, custom frame-rate entry, pacing, NVENC preset and advanced tuning, keyframe interval, color range/depth/chroma, specialized Opus/sample-rate/clock controls and relevant raw gain/limiter/float choices. Relevance can narrow these further: no H.264 10-bit row, no unsupported 4:4:4 row, and no lossy-codec bit-depth field. HDR handling is Default-visible on a relevant HDR display. Automatic splitting, microphone processing and ordinary audio controls are not hidden just for sounding technical.
 
