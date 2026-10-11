@@ -1,4 +1,5 @@
 #include "RecordingCoordinator.h"
+#include "diagnostics/DiskSpaceThresholds.h"
 
 #include <QCoreApplication>
 #include <QMetaObject>
@@ -72,6 +73,10 @@ bool RecordingCoordinator::CancelRecordingClip(engine::JobId job_id, uint64_t ge
 
 std::vector<RecordingClipJobSnapshot> RecordingCoordinator::RecordingClipSnapshots() const {
     return clip_jobs_->Snapshots();
+}
+uint64_t RecordingCoordinator::RecordingStorageReserveBytes() const noexcept {
+    const auto extra = primary_clip_reserve_bytes_.load();
+    return extra > UINT64_MAX - diagnostics::kHardStopFreeBytes ? UINT64_MAX : diagnostics::kHardStopFreeBytes + extra;
 }
 
 void RecordingCoordinator::PostClipJobsChanged() {

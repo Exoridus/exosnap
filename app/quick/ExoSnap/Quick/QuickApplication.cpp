@@ -883,7 +883,8 @@ void QuickApplication::initializeRecordWorkflow() {
     recording_coordinator_->SetClipJobsChangedCallback([this] {
         const auto jobs = recording_coordinator_->RecordingClipSnapshots();
         recording_clip_adapter_.setJobs(jobs);
-        diagnostics_adapter_.setClipResources(recording_clip_adapter_.diagnosticResources());
+        diagnostics_adapter_.setClipResources(
+            recording_clip_adapter_.diagnosticResources(recording_coordinator_->RecordingStorageReserveBytes()));
         for (const auto& job : jobs)
             if (job.phase == RecordingClipPhase::Completed && job.asset_id && job.completed &&
                 published_clip_assets_.insert(*job.asset_id).second)
@@ -2985,6 +2986,8 @@ void QuickApplication::wireSettingsCommands() {
         const auto meters = recording_coordinator_->LatestAudioRoutingMeters();
         audio_routing_adapter_.setMeters(meters.sources, meters.tracks, meters.physical);
         diagnostics_adapter_.setAudioResources(audio_routing_adapter_.resourceDiagnostics());
+        diagnostics_adapter_.setClipResources(
+            recording_clip_adapter_.diagnosticResources(recording_coordinator_->RecordingStorageReserveBytes()));
     });
     audio_routing_meter_timer_.start();
     QObject::connect(&settings_adapter_, &SettingsAdapter::configEdited, &settings_adapter_,

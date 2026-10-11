@@ -179,9 +179,32 @@ TEST(RecordingClipAdapterTest, DiagnosticResourcesExposeExactCountersWithoutPriv
     EXPECT_EQ(metrics[1].toMap().value("value").toString(), "9007199254740993");
     EXPECT_EQ(metrics[2].toMap().value("value").toString(), "123");
     EXPECT_EQ(metrics[3].toMap().value("value").toString(), "456");
+    EXPECT_EQ(metrics[3].toMap().value("label").toString(), RecordingClipAdapter::tr("Clip staging reserve (bytes)"));
     for (const auto& metric : metrics) {
         EXPECT_TRUE(metric.toMap().value("available").toBool());
         EXPECT_FALSE(metric.toMap().value("value").toString().contains("private"));
     }
+}
+TEST(RecordingClipAdapterTest, RecordingReserveIsExactAndSharedOnceAcrossJobs) {
+    RecordingClipAdapter adapter;
+    RecordingClipJobSnapshot first;
+    first.job_id = engine::NewId<engine::JobId>();
+    first.reserved_bytes = 111;
+    RecordingClipJobSnapshot second;
+    second.job_id = engine::NewId<engine::JobId>();
+    second.reserved_bytes = 222;
+    adapter.setJobs({first, second});
+    const auto resources = adapter.diagnosticResources(9'007'199'254'740'993ULL);
+    ASSERT_EQ(resources.size(), 3);
+    const auto shared = resources.first().toMap();
+    EXPECT_EQ(shared.value("identity").toString(), RecordingClipAdapter::tr("Recording storage"));
+    const auto shared_metrics = shared.value("metrics").toList();
+    ASSERT_EQ(shared_metrics.size(), 1);
+    EXPECT_EQ(shared_metrics.first().toMap().value("label").toString(),
+              RecordingClipAdapter::tr("Enforced recording reserve (bytes)"));
+    EXPECT_EQ(shared_metrics.first().toMap().value("value").toString(), "9007199254740993");
+    EXPECT_TRUE(shared_metrics.first().toMap().value("available").toBool());
+    EXPECT_EQ(resources[1].toMap().value("metrics").toList().last().toMap().value("value").toString(), "111");
+    EXPECT_EQ(resources[2].toMap().value("metrics").toList().last().toMap().value("value").toString(), "222");
 }
 } // namespace exosnap::quick

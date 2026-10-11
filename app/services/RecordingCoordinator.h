@@ -441,6 +441,8 @@ class RecordingCoordinator {
     [[nodiscard]] bool ConfirmRecordingClip(engine::JobId job_id, uint64_t generation);
     [[nodiscard]] bool CancelRecordingClip(engine::JobId job_id, uint64_t generation);
     [[nodiscard]] std::vector<RecordingClipJobSnapshot> RecordingClipSnapshots() const;
+    // Disk floor plus the current recording/remux allowance, excluding clip staging.
+    [[nodiscard]] uint64_t RecordingStorageReserveBytes() const noexcept;
 
     // Register a callback fired (from the engine's video thread) once the shared
     // WYSIWYG preview texture is ready. nt_handle is a Windows HANDLE passed as

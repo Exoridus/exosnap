@@ -8,6 +8,7 @@
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace exosnap::quick {
@@ -24,7 +25,7 @@ class RecordingClipAdapter : public QObject {
     Q_PROPERTY(QString preferredDurationSeconds READ preferredDurationSeconds NOTIFY preferredDurationChanged FINAL)
 
   public:
-    [[nodiscard]] QVariantList diagnosticResources() const;
+    [[nodiscard]] QVariantList diagnosticResources(std::optional<uint64_t> recording_reserve = std::nullopt) const;
     explicit RecordingClipAdapter(QObject* parent = nullptr);
 
     [[nodiscard]] bool canRequest() const noexcept;

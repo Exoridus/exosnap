@@ -216,8 +216,17 @@ void RecordingClipAdapter::openCompleted(const QString& asset_id) {
         emit openCompletedRequested(*id);
 }
 
-QVariantList RecordingClipAdapter::diagnosticResources() const {
+QVariantList RecordingClipAdapter::diagnosticResources(std::optional<uint64_t> recording_reserve) const {
     QVariantList resources;
+    if (recording_reserve) {
+        resources.push_back(
+            QVariantMap{{QStringLiteral("identity"), tr("Recording storage")},
+                        {QStringLiteral("metrics"),
+                         QVariantList{QVariantMap{{QStringLiteral("label"), tr("Enforced recording reserve (bytes)")},
+                                                  {QStringLiteral("value"), QString::number(*recording_reserve)},
+                                                  {QStringLiteral("available"), true},
+                                                  {QStringLiteral("reason"), QString()}}}}});
+    }
     for (const auto& value : jobs_) {
         const auto job = value.toMap();
         const auto metric = [&](QString label, const QString& key) {
@@ -232,7 +241,7 @@ QVariantList RecordingClipAdapter::diagnosticResources() const {
                          QVariantList{metric(tr("Job state"), QStringLiteral("phaseText")),
                                       metric(tr("Source bytes read"), QStringLiteral("sourceBytesRead")),
                                       metric(tr("Staging bytes written"), QStringLiteral("stagingBytesWritten")),
-                                      metric(tr("Master reserve (bytes)"), QStringLiteral("reservedBytes"))}}});
+                                      metric(tr("Clip staging reserve (bytes)"), QStringLiteral("reservedBytes"))}}});
     }
     return resources;
 }

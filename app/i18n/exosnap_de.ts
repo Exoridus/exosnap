@@ -4379,7 +4379,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Win</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3400"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3403"/>
         <location filename="../services/GlobalHotkeyService.cpp" line="+52"/>
         <source>This shortcut is already used by Windows or another application.</source>
         <translation>Dieser Hotkey wird bereits von Windows oder einer anderen Anwendung verwendet.</translation>
@@ -5128,12 +5128,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>QuickApplication</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-2649"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-2652"/>
         <source>Recording is blocked</source>
         <translation>Aufnahme blockiert</translation>
     </message>
     <message>
-        <location line="+148"/>
+        <location line="+149"/>
         <source>Clip unavailable</source>
         <translation>Clip nicht verfügbar</translation>
     </message>
@@ -5198,7 +5198,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Wählen Sie einen Bereich mit mindestens 64 × 64 Pixeln.</translation>
     </message>
     <message>
-        <location line="+1187"/>
+        <location line="+1189"/>
         <location line="+386"/>
         <location line="+69"/>
         <source>Settings could not be saved</source>
@@ -5379,12 +5379,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-4456"/>
+        <location line="-4459"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+3824"/>
+        <location line="+3827"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -10388,7 +10388,17 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Die Aufnahme hat sich beim Speichern des Clips geändert.</translation>
     </message>
     <message>
-        <location line="+168"/>
+        <location line="+159"/>
+        <source>Recording storage</source>
+        <translation>Aufnahmespeicher</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Enforced recording reserve (bytes)</source>
+        <translation>Für die Aufnahme vorgeschriebene Reserve (Bytes)</translation>
+    </message>
+    <message>
+        <location line="+16"/>
         <source>Job state</source>
         <translation>Auftragsstatus</translation>
     </message>
@@ -10404,11 +10414,11 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+1"/>
-        <source>Master reserve (bytes)</source>
-        <translation>Master-Reserve (Bytes)</translation>
+        <source>Clip staging reserve (bytes)</source>
+        <translation>Clip-Stagingreserve (Bytes)</translation>
     </message>
     <message>
-        <location line="-177"/>
+        <location line="-186"/>
         <location line="+8"/>
         <source>The clip could not be saved.</source>
         <translation>Der Clip konnte nicht gespeichert werden.</translation>
