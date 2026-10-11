@@ -187,14 +187,26 @@ void SessionStatsCollector::Run() {
                     }
                 }
             }
-            if (m_state.audio_runtime_graph)
+            if (m_state.audio_runtime_graph) {
+                meter.tracks = m_state.audio_runtime_graph->TrackMeters();
+                meter.physical = m_state.audio_runtime_graph->PhysicalMeters();
                 for (const auto& source : m_state.audio_runtime_graph->SourceMeters())
                     meter.sources.push_back({source.source_id,
                                              {source.source_generation},
                                              source.has_measurement,
                                              source.rms,
                                              source.peak,
-                                             source.muted});
+                                             source.muted,
+                                             source.clock_id,
+                                             source.reader_count,
+                                             source.processed_blocks,
+                                             source.processed_frames,
+                                             source.missing_frames,
+                                             source.reader_overflow_frames,
+                                             source.history_reset_count,
+                                             source.processing_time_available,
+                                             source.processing_ms});
+            }
             m_state.meter_callback(meter);
         }
 

@@ -8,6 +8,7 @@
 #include <exosnap/engine/audio_routing_model.h>
 #include <exosnap/engine/interfaces/IAudioCaptureSource.h>
 #include <exosnap/engine/recording_media_types.h>
+#include <exosnap/engine/session_stats.h>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -37,6 +38,21 @@
 #endif
 
 namespace exosnap::engine {
+
+namespace {
+struct PhysicalProcessingTimer {
+    PhysicalAudioStatistics& statistics;
+    std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+    bool measured = false;
+    ~PhysicalProcessingTimer() {
+        if (!measured)
+            return;
+        statistics.processing_time_available = true;
+        statistics.processing_ms +=
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    }
+};
+} // namespace
 
 struct PhysicalAudioClockSource::Impl {
     Impl(std::unique_ptr<IAudioCaptureSource> native, AudioCaptureDescriptor envelope, bool enabled)
@@ -115,14 +131,17 @@ bool PhysicalAudioClockSource::Reinit(std::string& error) {
         return false;
     ++impl_->descriptor.source_generation;
     ++impl_->descriptor.format_generation;
+    ++impl_->statistics.reinit_count;
     return true;
 }
 uint32_t PhysicalAudioClockSource::PendingFrameCount() {
     return impl_->conversion.PendingFrameCount();
 }
 bool PhysicalAudioClockSource::AcquireBuffer(RawAudioBuffer& buffer, std::string& error) {
+    PhysicalProcessingTimer timer{impl_->statistics};
     if (!impl_->conversion.AcquireBuffer(buffer, error))
         return false;
+    timer.measured = true;
     impl_->output_qpc_ns = impl_->conversion.LastBufferQpcNs();
     impl_->next_output_qpc_ns = impl_->output_qpc_ns + DeviceFramesToNs(buffer.num_frames, SampleRate());
     ++impl_->statistics.input_blocks;
@@ -380,6 +399,36 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     PhysicalAudioStatistics Statistics() const {
         std::lock_guard lock(mutex_);
         return statistics_;
+    }
+    PhysicalMeterSnapshot MeterSnapshot() const {
+        std::lock_guard lock(mutex_);
+        PhysicalMeterSnapshot result;
+        result.clock_id = prepared_descriptor_.clock_id;
+        result.reader_count = tee_ ? tee_->ReaderCount() : 0;
+        result.available = ready_ && !degraded_ && !stopping_;
+        switch (statistics_.clock_quality) {
+        case PhysicalClockQuality::Measured:
+            result.clock_quality = AudioMeterClockQuality::Measured;
+            break;
+        case PhysicalClockQuality::Degraded:
+            result.clock_quality = AudioMeterClockQuality::Degraded;
+            break;
+        default:
+            result.clock_quality = AudioMeterClockQuality::Unknown;
+            break;
+        }
+        result.capture_opens = statistics_.capture_opens;
+        result.input_blocks = statistics_.input_blocks;
+        result.input_frames = statistics_.input_frames;
+        result.output_frames = statistics_.output_frames;
+        result.reinit_count = statistics_.reinit_count;
+        result.drift_ms = statistics_.drift_ms;
+        result.residual_ms = statistics_.residual_ms;
+        result.compensation_ms = statistics_.applied_compensation_ms;
+        result.compensation_ppm = statistics_.compensation_ppm;
+        result.processing_time_available = statistics_.processing_time_available;
+        result.processing_ms = statistics_.processing_ms;
+        return result;
     }
     void RequestReinit(uint64_t generation) {
         if (generation == generation_) {
@@ -949,6 +998,17 @@ PhysicalAudioStatistics SharedAudioCaptureRegistry::Statistics() const {
             result.output_frames += statistics.output_frames;
             result.compensation_updates += statistics.compensation_updates;
         }
+    }
+    return result;
+}
+std::vector<PhysicalMeterSnapshot> SharedAudioCaptureRegistry::MeterSnapshots() const {
+    std::lock_guard lock(impl_->mutex);
+    std::vector<PhysicalMeterSnapshot> result;
+    result.reserve(impl_->owners.size());
+    for (const auto& [key, weak] : impl_->owners) {
+        (void)key;
+        if (const auto owner = weak.lock())
+            result.push_back(owner->MeterSnapshot());
     }
     return result;
 }

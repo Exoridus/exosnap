@@ -49,7 +49,9 @@ class AudioRoutingAdapter : public QObject {
     void configure(SaveCallback save, EnvironmentProvider environment, LiveMuteCallback liveMute = {});
     void refresh(const engine::AudioIntent& intent, bool readOnly = false, QString validationError = {});
     void setActivePlan(std::optional<engine::ResolvedAudioPlan> plan);
-    void setMeters(std::vector<engine::SourceMeterSnapshot> sources, std::vector<engine::TrackMeterSnapshot> tracks);
+    void setMeters(std::vector<engine::SourceMeterSnapshot> sources, std::vector<engine::TrackMeterSnapshot> tracks,
+                   std::vector<engine::PhysicalMeterSnapshot> physical = {});
+    [[nodiscard]] QVariantMap resourceDiagnostics() const;
 
     QVariantList tracks() const;
     QVariantList sources() const;
@@ -134,6 +136,7 @@ class AudioRoutingAdapter : public QObject {
     std::deque<engine::AudioIntent> undo_;
     std::vector<engine::SourceMeterSnapshot> source_meters_;
     std::vector<engine::TrackMeterSnapshot> track_meters_;
+    std::vector<engine::PhysicalMeterSnapshot> physical_meters_;
     qulonglong revision_ = 0;
     bool read_only_ = false;
     bool saving_ = false;

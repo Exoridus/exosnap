@@ -677,6 +677,11 @@ Item {
                     }
                 }
 
+                DiagnosticsResourcesCard {
+                    resources: root.diagnostics.audioResources
+                    Layout.fillWidth: true
+                }
+
                 // ── Reference ───────────────────────────────────────────────────
                 //
                 // The same four collapsed rows in every state, each stating its

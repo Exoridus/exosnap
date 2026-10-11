@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio_tee.h"
+#include <exosnap/engine/session_stats.h>
 
 #include <exosnap/engine/audio_routing_model.h>
 
@@ -26,6 +27,9 @@ struct PhysicalAudioStatistics {
     double residual_ms = 0;
     double compensation_ppm = 0;
     PhysicalClockQuality clock_quality = PhysicalClockQuality::Unknown;
+    uint64_t reinit_count = 0;
+    bool processing_time_available = false;
+    double processing_ms = 0;
 };
 
 class PhysicalAudioClockSource final : public IAudioCaptureSource {
@@ -83,6 +87,7 @@ class SharedAudioCaptureRegistry {
     [[nodiscard]] std::shared_ptr<void> ReservePayload(size_t bytes, std::string& error);
     [[nodiscard]] size_t ReservedPayloadBytes() const;
     [[nodiscard]] PhysicalAudioStatistics Statistics() const;
+    [[nodiscard]] std::vector<PhysicalMeterSnapshot> MeterSnapshots() const;
 
   private:
     struct Impl;

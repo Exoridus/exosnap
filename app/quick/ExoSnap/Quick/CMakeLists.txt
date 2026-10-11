@@ -56,6 +56,7 @@ qt_add_qml_module(exosnap
         DeviceCapabilityRow.qml
         DeviceCodecChip.qml
         DiagnosticsPage.qml
+        DiagnosticsResourcesCard.qml
         DiagnosticsWorkspace.qml
         DiagnosticsSectionHeader.qml
         DiagnosticsSelfTestRow.qml
@@ -1042,6 +1043,8 @@ qt_add_qml_module(record_controls_qml_tests
         # contract is the whole fix, and it is one property write away from
         # being undone.
         ExoTextField.qml
+        DiagnosticsResourcesCard.qml
+        DiagnosticsSectionHeader.qml
         ExoTheme.qml
         # QCR-604: the pipeline cards are delegates over a model with a stable
         # per-stage identity now, so what has to be asserted is that a value

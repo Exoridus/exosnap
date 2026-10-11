@@ -165,6 +165,8 @@ quick.qml.german_text_geometry_* runs the German resource at 100%, 125%, 150%
 and 200%. The existing pseudo-localization tests remain independent and keep
 their geometry stress role.
 
+The German geometry fixtures also render the production audio resource card at 860, 1100 and 1600 logical pixels with long opaque IDs and unavailable reasons. Adapter fixtures check exact clip counters, redacted resource rows, shared-owner deduplication and independence from editable next-recording drafts. Runtime fixtures check source gap/overflow counters and track telemetry after mixer ownership transfer. These fixtures do not qualify physical device recovery, GPU capture or audible synchronization.
+
 Use natural German around established technical vocabulary. Keep Encoder,
 Decoder, Codec, Bitrate, B-Frames, Lookahead, Spatial AQ, Temporal AQ, Multipass,
 Preset, HDR/HDR10, SDR, NVENC, AMF, QSV, oneVPL, CQ, VBR, CBR, CFR, VFR, GOP,

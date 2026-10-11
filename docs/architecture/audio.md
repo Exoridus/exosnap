@@ -20,6 +20,12 @@ A track has one audio worker and encoder. A merged track has per-source FIFOs, g
 
 The output-format decorator owns rate/channel conversion using libswresample. Mono output averages stereo channels rather than summing to a clipping level. Its 48 kHz/stereo identity route avoids conversion until compensation requires it. Encoding integer PCM/FLAC performs the final sample-depth conversion in the encoder. AAC additionally converts the interleaved float input into the native encoder's planar sample layout; that codec-local layout conversion is not a second independent clock controller.
 
+## Runtime measurement ownership
+
+The physical registry publishes one snapshot per live capture owner using its opaque clock ID. The logical source retains its own processed-block/frame, missing-frame and reader-overflow counters before route fanout. The track mixer publishes measured pre/post-limiter peaks, post-limiter RMS and current limiter gain through a mutex-protected shared snapshot. The graph retains that snapshot rather than a pointer to a mixer transferred to an audio worker, so readback remains safe through shutdown and ownership transfer.
+
+The meter callback carries all three owner groups. The frontend coalesces delivery at 10 Hz and projects the frozen active plan independently of the editable next plan. Cumulative steady-clock elapsed processing time is measured at the physical conversion, logical processing and track mix/limiter boundaries. Upstream capture and DSP work is not assigned again to each track. These timings include work at the declared boundary and are not thread CPU time, encoder cost or an aggregate utilization percentage. Unmeasured clock quality, limiter detail and processing cost remain unavailable.
+
 ## Gain, mute and limiter
 
 Source gain is represented in decibels and converted using `10^(dB/20)`. Mute emits equal-duration silence instead of deleting samples. The configured source plan and track layout do not change mid-recording when a source is muted.

@@ -23,6 +23,7 @@ extern "C" {
 }
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <deque>
 #include <limits>
@@ -137,6 +138,21 @@ bool BuildResampler(SwrContext*& context, uint32_t rate_in, uint32_t rate_out, u
     }
     return true;
 }
+struct LogicalProcessingTimer {
+    LogicalProcessingTimer(std::mutex& meter_mutex, LogicalAudioMeter& source_meter)
+        : mutex(meter_mutex), meter(source_meter) {
+    }
+    std::mutex& mutex;
+    LogicalAudioMeter& meter;
+    std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+    ~LogicalProcessingTimer() {
+        const double elapsed =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        std::lock_guard lock(mutex);
+        meter.processing_time_available = true;
+        meter.processing_ms += elapsed;
+    }
+};
 } // namespace
 struct LogicalAudioSource::Impl {
     ResolvedAudioSource source;
@@ -303,6 +319,7 @@ struct LogicalAudioSource::Impl {
     }
     bool ProcessPcm(std::span<const float> samples, const AudioBlockMetadata& metadata, bool synthetic_gap,
                     std::string& error) {
+        LogicalProcessingTimer timer{meter_mutex, meter};
         input_frames += metadata.frames;
         mapped.assign(static_cast<size_t>(metadata.frames) * descriptor.channels, 0.f);
         if (!metadata.silence) {
@@ -402,6 +419,7 @@ LogicalAudioSource::Create(ResolvedAudioSource source, const AudioCaptureDescrip
     impl->muted = impl->source.spec.muted;
     impl->meter.source_id = impl->source.spec.id;
     impl->meter.source_generation = descriptor.source_generation;
+    impl->meter.clock_id = descriptor.clock_id;
     impl->tee = AudioTee::Create(impl->descriptor, error);
     if (!impl->tee || !impl->Configure(error))
         return {};
@@ -455,6 +473,7 @@ bool LogicalAudioSource::Process(const AudioBlockView& input, std::string& error
             return false;
         }
         p.meter.missing_frames += gap;
+        p.meter.reader_overflow_frames += input.reader_overflow_frames;
     }
     auto metadata = input.metadata;
     if (gap && p.input_frames) {
@@ -533,9 +552,11 @@ void LogicalAudioSource::SetMuted(bool muted) noexcept {
     impl_->muted.store(muted, std::memory_order_relaxed);
 }
 LogicalAudioMeter LogicalAudioSource::Meter() const {
+    const auto reader_count = impl_->tee->ReaderCount();
     std::lock_guard lock(impl_->meter_mutex);
     auto result = impl_->meter;
     result.muted = impl_->muted.load(std::memory_order_relaxed);
+    result.reader_count = reader_count;
     return result;
 }
 AudioCaptureDescriptor LogicalAudioSource::Descriptor() const {
@@ -583,6 +604,7 @@ bool LogicalAudioSource::Reconfigure(const AudioCaptureDescriptor& descriptor, s
         std::lock_guard lock(p.meter_mutex);
         p.meter.has_measurement = false;
         p.meter.source_generation = descriptor.source_generation;
+        p.meter.clock_id = descriptor.clock_id;
     }
     return true;
 }
@@ -596,6 +618,7 @@ bool LogicalAudioSource::Drain(std::string& error) {
         return false;
     }
     if (p.source.spec.dsp.rnnoise_enabled && p.input_frames) {
+        LogicalProcessingTimer timer{p.meter_mutex, p.meter};
         if (p.to_neural) {
             for (int i = 0; i < 16; ++i) {
                 if (!p.Convert(p.to_neural, nullptr, 0, p.neural, error))

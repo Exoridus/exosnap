@@ -9,6 +9,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace exosnap::engine {
 
@@ -141,18 +142,54 @@ struct SourceMeterSnapshot {
     float rms = 0;
     float peak = 0;
     bool muted = false;
+    PhysicalClockId clock_id;
+    uint64_t reader_count = 0;
+    uint64_t processed_blocks = 0;
+    uint64_t processed_frames = 0;
+    uint64_t missing_frames = 0;
+    uint64_t reader_overflow_frames = 0;
+    uint64_t history_reset_count = 0;
+    bool processing_time_available = false;
+    double processing_ms = 0;
+};
+
+enum class AudioMeterClockQuality { Unknown, Measured, Degraded };
+
+struct PhysicalMeterSnapshot {
+    PhysicalClockId clock_id;
+    uint64_t reader_count = 0;
+    bool available = false;
+    AudioMeterClockQuality clock_quality = AudioMeterClockQuality::Unknown;
+    uint64_t capture_opens = 0;
+    uint64_t input_blocks = 0;
+    uint64_t input_frames = 0;
+    uint64_t output_frames = 0;
+    uint64_t reinit_count = 0;
+    double drift_ms = 0;
+    double residual_ms = 0;
+    double compensation_ms = 0;
+    double compensation_ppm = 0;
+    bool processing_time_available = false;
+    double processing_ms = 0;
 };
 
 struct TrackMeterSnapshot {
     AudioTrackId track_id;
     bool has_measurement = false;
     float rms = 0;
+    float pre_limiter_peak = 0;
+    float post_limiter_peak = 0;
+    bool limiter_enabled = false;
+    float limiter_gain = 1;
+    bool processing_time_available = false;
+    double processing_ms = 0;
 };
 
 struct MeterSnapshot {
     std::array<float, exosnap::engine::kMaxAudioTracks> per_track_rms{};
     std::vector<SourceMeterSnapshot> sources;
     std::vector<TrackMeterSnapshot> tracks;
+    std::vector<PhysicalMeterSnapshot> physical;
 };
 
 // Callback invoked approximately every 264 ms while recording is active.

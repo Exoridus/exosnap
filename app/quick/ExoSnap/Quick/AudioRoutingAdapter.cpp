@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <set>
 
 namespace exosnap::quick {
 namespace {
@@ -199,14 +200,17 @@ void AudioRoutingAdapter::setActivePlan(std::optional<engine::ResolvedAudioPlan>
     active_ = std::move(plan);
     source_meters_.clear();
     track_meters_.clear();
+    physical_meters_.clear();
     ++revision_;
     emit changed();
     emit metersChanged();
 }
 void AudioRoutingAdapter::setMeters(std::vector<engine::SourceMeterSnapshot> sources,
-                                    std::vector<engine::TrackMeterSnapshot> tracks) {
+                                    std::vector<engine::TrackMeterSnapshot> tracks,
+                                    std::vector<engine::PhysicalMeterSnapshot> physical) {
     source_meters_ = std::move(sources);
     track_meters_ = std::move(tracks);
+    physical_meters_ = std::move(physical);
     emit metersChanged();
 }
 engine::AudioEnvironmentSnapshot AudioRoutingAdapter::environment() const {
@@ -893,5 +897,109 @@ bool AudioRoutingAdapter::addSource(int bindingKind, const QString& name, qulong
         graph.sources.push_back(source);
         return true;
     });
+}
+QVariantMap AudioRoutingAdapter::resourceDiagnostics() const {
+    const auto count = [](uint64_t value) { return QString::number(value); };
+    const auto number = [](double value) { return QString::number(value, 'f', 3); };
+    const QString missing = tr("No measurement from the active runtime.");
+    const auto metric = [&](QString label, QString value, bool available = true, QString reason = {}) {
+        return QVariantMap{{QStringLiteral("label"), std::move(label)},
+                           {QStringLiteral("value"), available ? std::move(value) : tr("n/a")},
+                           {QStringLiteral("available"), available},
+                           {QStringLiteral("reason"), available ? QString() : (reason.isEmpty() ? missing : reason)}};
+    };
+    const auto row = [](QString identity, QVariantList metrics) {
+        return QVariantMap{{QStringLiteral("identity"), std::move(identity)},
+                           {QStringLiteral("metrics"), std::move(metrics)}};
+    };
+    QVariantList physical, sources, tracks;
+    std::set<PhysicalClockId> clocks;
+    std::set<AudioSourceId> source_ids;
+    std::set<AudioTrackId> track_ids;
+    if (active_) {
+        for (const auto& meter : physical_meters_) {
+            if (meter.clock_id == PhysicalClockId{} || !clocks.insert(meter.clock_id).second)
+                continue;
+            const bool measured = meter.available && meter.clock_quality == AudioMeterClockQuality::Measured;
+            const QString quality = measured                                                  ? tr("Measured")
+                                    : meter.clock_quality == AudioMeterClockQuality::Degraded ? tr("Degraded")
+                                                                                              : tr("Unknown");
+            physical.push_back(row(
+                IdText(meter.clock_id),
+                {metric(tr("Capture key / clock"), IdText(meter.clock_id)),
+                 metric(tr("Readers"), count(meter.reader_count)),
+                 metric(tr("Device status"), meter.available ? tr("Available") : tr("Unavailable")),
+                 metric(tr("Clock quality"), quality), metric(tr("Raw drift (ms)"), number(meter.drift_ms), measured),
+                 metric(tr("Residual drift (ms)"), number(meter.residual_ms), measured),
+                 metric(tr("Compensation (ms)"), number(meter.compensation_ms), measured),
+                 metric(tr("Compensation (ppm)"), number(meter.compensation_ppm), measured),
+                 metric(tr("Capture opens"), count(meter.capture_opens)),
+                 metric(tr("Reinitializations"), count(meter.reinit_count)),
+                 metric(tr("Input blocks / frames"),
+                        count(meter.input_blocks) + QStringLiteral(" / ") + count(meter.input_frames)),
+                 metric(tr("Output frames"), count(meter.output_frames)),
+                 metric(tr("Capture / clock elapsed (ms)"), number(meter.processing_ms),
+                        meter.processing_time_available)}));
+        }
+        for (const auto& source : active_->sources) {
+            if (!source_ids.insert(source.spec.id).second)
+                continue;
+            const auto found = std::find_if(source_meters_.begin(), source_meters_.end(),
+                                            [&](const auto& meter) { return meter.source_id == source.spec.id; });
+            const bool sampled = found != source_meters_.end();
+            const SourceMeterSnapshot empty;
+            const auto& meter = sampled ? *found : empty;
+            const auto capture = std::find_if(physical_meters_.begin(), physical_meters_.end(),
+                                              [&](const auto& item) { return item.clock_id == meter.clock_id; });
+            const bool status_available = capture != physical_meters_.end() && meter.clock_id != PhysicalClockId{};
+            sources.push_back(row(
+                IdText(source.spec.id),
+                {metric(tr("Capture key / clock"), IdText(meter.clock_id),
+                        sampled && meter.clock_id != PhysicalClockId{}),
+                 metric(tr("Source generation"), count(meter.generation.value), sampled),
+                 metric(tr("Device status"),
+                        status_available && capture->available ? tr("Available") : tr("Unavailable"), status_available),
+                 metric(tr("Readers"), count(meter.reader_count), sampled),
+                 metric(tr("Source RMS (dBFS)"), number(Dbfs(meter.rms)), sampled && meter.has_measurement),
+                 metric(tr("Source peak (dBFS)"), number(Dbfs(meter.peak)), sampled && meter.has_measurement),
+                 metric(tr("Live mute"), meter.muted ? tr("Muted") : tr("Unmuted"), sampled),
+                 metric(tr("Processed blocks / frames"),
+                        count(meter.processed_blocks) + QStringLiteral(" / ") + count(meter.processed_frames), sampled),
+                 metric(tr("Gap frames"), count(meter.missing_frames), sampled),
+                 metric(tr("Reader overflow frames"), count(meter.reader_overflow_frames), sampled),
+                 metric(tr("History resets"), count(meter.history_reset_count), sampled),
+                 metric(tr("Source DSP elapsed (ms)"), number(meter.processing_ms),
+                        sampled && meter.processing_time_available)}));
+        }
+        for (const auto& track : active_->tracks) {
+            if (!track_ids.insert(track.id).second)
+                continue;
+            const auto found = std::find_if(track_meters_.begin(), track_meters_.end(),
+                                            [&](const auto& meter) { return meter.track_id == track.id; });
+            const bool sampled = found != track_meters_.end();
+            const TrackMeterSnapshot empty;
+            const auto& meter = sampled ? *found : empty;
+            const bool measured = sampled && meter.has_measurement;
+            tracks.push_back(
+                row(IdText(track.id), {metric(tr("Track RMS (dBFS)"), number(Dbfs(meter.rms)), measured),
+                                       metric(tr("Pre-limiter peak (dBFS)"), number(Dbfs(meter.pre_limiter_peak)),
+                                              measured && meter.processing_time_available),
+                                       metric(tr("Post-limiter peak (dBFS)"), number(Dbfs(meter.post_limiter_peak)),
+                                              measured && meter.processing_time_available),
+                                       metric(tr("Limiter"), meter.limiter_enabled ? tr("Enabled") : tr("Disabled"),
+                                              measured && meter.processing_time_available),
+                                       metric(tr("Current gain reduction (dB)"), number(-Dbfs(meter.limiter_gain)),
+                                              measured && meter.processing_time_available),
+                                       metric(tr("Track mix / limiter elapsed (ms)"), number(meter.processing_ms),
+                                              sampled && meter.processing_time_available)}));
+        }
+    }
+    const QVariantList unavailable{
+        metric(tr("Index commit lag"), {}, false, tr("Writer commit timing is not exposed by this runtime.")),
+        metric(tr("CPU utilization"), {}, false, tr("Elapsed processing time is measured; CPU utilization is not."))};
+    return {{QStringLiteral("physical"), physical},
+            {QStringLiteral("sources"), sources},
+            {QStringLiteral("tracks"), tracks},
+            {QStringLiteral("unavailable"), unavailable}};
 }
 } // namespace exosnap::quick

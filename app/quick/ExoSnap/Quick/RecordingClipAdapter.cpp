@@ -94,6 +94,7 @@ QVariantMap Row(const RecordingClipJobSnapshot& snapshot) {
         {QStringLiteral("reviewReason"), RecordingClipAdapter::tr(snapshot.review_reason.c_str())},
         {QStringLiteral("sourceBytesRead"), QString::number(snapshot.source_bytes_read)},
         {QStringLiteral("stagingBytesWritten"), QString::number(snapshot.staging_bytes_written)},
+        {QStringLiteral("reservedBytes"), QString::number(snapshot.reserved_bytes)},
         {QStringLiteral("canConfirm"), snapshot.phase == RecordingClipPhase::Review && has_actual},
         {QStringLiteral("canCancel"), CanCancel(snapshot.phase)},
         {QStringLiteral("canOpen"), completed},
@@ -215,4 +216,24 @@ void RecordingClipAdapter::openCompleted(const QString& asset_id) {
         emit openCompletedRequested(*id);
 }
 
+QVariantList RecordingClipAdapter::diagnosticResources() const {
+    QVariantList resources;
+    for (const auto& value : jobs_) {
+        const auto job = value.toMap();
+        const auto metric = [&](QString label, const QString& key) {
+            return QVariantMap{{QStringLiteral("label"), std::move(label)},
+                               {QStringLiteral("value"), job.value(key)},
+                               {QStringLiteral("available"), true},
+                               {QStringLiteral("reason"), QString()}};
+        };
+        resources.push_back(
+            QVariantMap{{QStringLiteral("identity"), job.value(QStringLiteral("jobId"))},
+                        {QStringLiteral("metrics"),
+                         QVariantList{metric(tr("Job state"), QStringLiteral("phaseText")),
+                                      metric(tr("Source bytes read"), QStringLiteral("sourceBytesRead")),
+                                      metric(tr("Staging bytes written"), QStringLiteral("stagingBytesWritten")),
+                                      metric(tr("Master reserve (bytes)"), QStringLiteral("reservedBytes"))}}});
+    }
+    return resources;
+}
 } // namespace exosnap::quick

@@ -16,6 +16,7 @@
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/interfaces/IAudioCaptureSource.h>
 #include <exosnap/engine/recording_media_types.h>
+#include <exosnap/engine/session_stats.h>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -196,6 +197,7 @@ std::shared_ptr<AudioRuntimeGraph> AudioRuntimeGraph::Prepare(const ResolvedAudi
                 return false;
             auto mixer = std::make_unique<TrackAudioMixer>(track, std::move(inputs), rate, channels,
                                                            std::function<uint64_t()>{}, start);
+            graph->track_telemetry_.push_back(mixer->Telemetry());
             graph->tracks_.push_back({std::move(reservation), std::move(mixer)});
         }
         return true;
@@ -317,6 +319,17 @@ std::vector<LogicalAudioMeter> AudioRuntimeGraph::SourceMeters() const {
     for (const auto& node : nodes_)
         result.push_back(node.logical->Meter());
     return result;
+}
+std::vector<TrackMeterSnapshot> AudioRuntimeGraph::TrackMeters() const {
+    std::vector<TrackMeterSnapshot> result;
+    for (const auto& telemetry : track_telemetry_) {
+        std::lock_guard lock(telemetry->mutex);
+        result.push_back(telemetry->snapshot);
+    }
+    return result;
+}
+std::vector<PhysicalMeterSnapshot> AudioRuntimeGraph::PhysicalMeters() const {
+    return registry_->MeterSnapshots();
 }
 AudioRuntimeTrackSource::AudioRuntimeTrackSource(std::shared_ptr<AudioRuntimeGraph> graph,
                                                  std::shared_ptr<void> reservation,

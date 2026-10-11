@@ -50,6 +50,31 @@ TestCase {
         OverlayQuickControlPill { overlayActive: false }
     }
 
+    readonly property var audioResources: ({
+        physical: [{
+            identity: "capture-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            metrics: [{label: "Readers", value: "2", available: true, reason: ""}]
+        }],
+        sources: [{
+            identity: "source-1",
+            metrics: [{label: "Processing", value: "1234567890123456789012345678901234567890 ms", available: true, reason: ""}]
+        }],
+        tracks: [{
+            identity: "track-1",
+            metrics: [{label: "Limiter", value: "", available: false, reason: "No measured limiter activity is available."}]
+        }],
+        clipJobs: [{
+            identity: "clip-1",
+            metrics: [{label: "Copy budget", value: "17 ms", available: true, reason: ""}]
+        }],
+        unavailable: [{label: "Index commit lag", value: "", available: false, reason: "No committed index has been observed."}]
+    })
+
+    Component {
+        id: audioResourcesComponent
+        DiagnosticsResourcesCard { resources: testCase.audioResources }
+    }
+
     function checkText(item) {
         for (let i = 0; i < item.children.length; ++i) {
             const child = item.children[i];
@@ -61,6 +86,24 @@ TestCase {
             }
             checkText(child);
         }
+    }
+
+    function namedDescendants(item, name, found) {
+        if (item.objectName === name)
+            found.push(item);
+        for (let i = 0; i < item.children.length; ++i)
+            namedDescendants(item.children[i], name, found);
+    }
+
+    function visibleTextHasGeometry(item) {
+        if (item.visible && item.contentWidth !== undefined && item.text !== undefined
+                && String(item.text).length > 0 && (item.width <= 0 || item.height <= 0))
+            return false;
+        for (let i = 0; i < item.children.length; ++i) {
+            if (!visibleTextHasGeometry(item.children[i]))
+                return false;
+        }
+        return true;
     }
 
     function test_german_resource_is_active() {
@@ -92,5 +135,45 @@ TestCase {
         verify(grip !== null);
         verify(grip.Accessible.name.indexOf("Schnellsteuerung") >= 0);
         verify(grip.Accessible.description.indexOf("Ziehen") >= 0);
+    }
+
+    function test_audio_resources_geometry_and_unavailable_reasons() {
+        const widths = [860, 1100, 1600];
+        for (let i = 0; i < widths.length; ++i) {
+            const card = createTemporaryObject(audioResourcesComponent, testCase, {width: widths[i]});
+            verify(card !== null);
+            verify(card.visible);
+            tryVerify(function () { return visibleTextHasGeometry(card); }, 1000,
+                      "audio resource labels did not settle at " + widths[i]);
+            checkText(card);
+
+            const rows = [];
+            namedDescendants(card, "diagnosticsAudioResourceRow", rows);
+            compare(rows.length, 4);
+            for (let j = 0; j < rows.length; ++j)
+                verify(rows[j].width <= widths[i], "resource row exceeds " + widths[i]);
+
+            const categories = [];
+            namedDescendants(card, "diagnosticsAudioResourceCategory", categories);
+            compare(categories.length, 4);
+
+            const identities = [];
+            namedDescendants(card, "diagnosticsAudioResourceIdentity", identities);
+            compare(identities.length, 4);
+            verify(identities.some(function (identity) {
+                return identity.text === testCase.audioResources.physical[0].identity;
+            }));
+
+            const values = [];
+            namedDescendants(card, "diagnosticsAudioResourceValue", values);
+            compare(values.length, 5);
+            compare(values.filter(function (value) { return value.text === "n/a"; }).length, 2);
+
+            const reasons = [];
+            namedDescendants(card, "diagnosticsAudioResourceReason", reasons);
+            compare(reasons.filter(function (reason) { return reason.visible; }).length, 2);
+            verify(reasons.some(function (reason) { return reason.text === "No measured limiter activity is available."; }));
+            verify(reasons.some(function (reason) { return reason.text === "No committed index has been observed."; }));
+        }
     }
 }

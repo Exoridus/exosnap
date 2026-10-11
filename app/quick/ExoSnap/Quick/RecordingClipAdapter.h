@@ -24,6 +24,7 @@ class RecordingClipAdapter : public QObject {
     Q_PROPERTY(QString preferredDurationSeconds READ preferredDurationSeconds NOTIFY preferredDurationChanged FINAL)
 
   public:
+    [[nodiscard]] QVariantList diagnosticResources() const;
     explicit RecordingClipAdapter(QObject* parent = nullptr);
 
     [[nodiscard]] bool canRequest() const noexcept;

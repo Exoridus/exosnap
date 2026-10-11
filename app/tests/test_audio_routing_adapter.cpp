@@ -2,6 +2,8 @@
 #include "quick/ExoSnap/Quick/AudioRoutingAdapter.h"
 #include "settings/RecordingPresetStore.h"
 
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <gtest/gtest.h>
 
@@ -629,5 +631,96 @@ TEST(AudioRoutingAdapter, SourceAddRejectsInvalidNamesKindsBudgetsStaleRevisionA
     EXPECT_EQ(adapter.revision(), full_revision);
 }
 
+TEST(AudioRoutingAdapter, ResourceDiagnosticsDeduplicatesOwnersAndNeverUsesNextDraftOrPrivateBindings) {
+    AudioRoutingAdapter adapter;
+    ResolvedAudioPlan active;
+    ResolvedAudioSource source;
+    source.spec.id = NewId<AudioSourceId>();
+    source.spec.name = "private source title";
+    source.spec.binding.endpoint_id = "private endpoint path";
+    active.sources.push_back(source);
+    active.sources.push_back(source);
+    ResolvedRoutingTrack track;
+    track.id = NewId<AudioTrackId>();
+    active.tracks.push_back(track);
+    active.tracks.push_back(track);
+    adapter.setActivePlan(active);
+    PhysicalMeterSnapshot physical;
+    physical.clock_id = NewId<PhysicalClockId>();
+    physical.reader_count = 2;
+    physical.available = true;
+    physical.processing_time_available = true;
+    physical.processing_ms = 12.25;
+    SourceMeterSnapshot meter;
+    meter.source_id = source.spec.id;
+    meter.clock_id = physical.clock_id;
+    meter.has_measurement = true;
+    meter.rms = 0;
+    meter.peak = 0;
+    meter.processing_time_available = true;
+    meter.processing_ms = 4.5;
+    TrackMeterSnapshot output;
+    output.track_id = track.id;
+    output.has_measurement = true;
+    adapter.setMeters({meter}, {output}, {physical, physical});
+    const auto resources = adapter.resourceDiagnostics();
+    EXPECT_EQ(resources.value("physical").toList().size(), 1);
+    EXPECT_EQ(resources.value("sources").toList().size(), 1);
+    EXPECT_EQ(resources.value("tracks").toList().size(), 1);
+    const auto logical = resources.value("sources").toList().first().toMap();
+    EXPECT_EQ(logical.value("identity").toString(), Id(source.spec.id));
+    const auto metrics = logical.value("metrics").toList();
+    bool measured_silence = false;
+    for (const auto& value : metrics) {
+        const auto item = value.toMap();
+        if (item.value("label").toString() == AudioRoutingAdapter::tr("Source RMS (dBFS)")) {
+            EXPECT_TRUE(item.value("available").toBool());
+            EXPECT_TRUE(item.value("value").toString().contains("inf"));
+            measured_silence = true;
+        }
+    }
+    EXPECT_TRUE(measured_silence);
+    auto next = ExampleGraph();
+    adapter.refresh(next, true);
+    EXPECT_EQ(adapter.resourceDiagnostics(), resources);
+    const auto serialized = QJsonDocument(QJsonObject::fromVariantMap(resources)).toJson();
+    EXPECT_FALSE(serialized.contains("private source title"));
+    EXPECT_FALSE(serialized.contains("private endpoint path"));
+    adapter.setActivePlan(std::nullopt);
+    EXPECT_TRUE(adapter.resourceDiagnostics().value("sources").toList().isEmpty());
+    EXPECT_TRUE(adapter.resourceDiagnostics().value("physical").toList().isEmpty());
+}
+
+TEST(AudioRoutingAdapter, ResourceDiagnosticsDistinguishesNoSampleAndUnmeasuredCostFromZero) {
+    AudioRoutingAdapter adapter;
+    ResolvedAudioPlan active;
+    ResolvedAudioSource source;
+    source.spec.id = NewId<AudioSourceId>();
+    active.sources.push_back(source);
+    adapter.setActivePlan(active);
+    auto resources = adapter.resourceDiagnostics();
+    const auto absent = resources.value("sources").toList().first().toMap().value("metrics").toList();
+    for (const auto& value : absent) {
+        const auto metric = value.toMap();
+        EXPECT_FALSE(metric.value("available").toBool());
+        EXPECT_EQ(metric.value("value").toString(), AudioRoutingAdapter::tr("n/a"));
+        EXPECT_FALSE(metric.value("reason").toString().isEmpty());
+    }
+    SourceMeterSnapshot silent;
+    silent.source_id = source.spec.id;
+    silent.has_measurement = true;
+    adapter.setMeters({silent}, {});
+    const auto measured =
+        adapter.resourceDiagnostics().value("sources").toList().first().toMap().value("metrics").toList();
+    for (const auto& value : measured) {
+        const auto metric = value.toMap();
+        if (metric.value("label").toString() == AudioRoutingAdapter::tr("Source DSP elapsed (ms)"))
+            EXPECT_FALSE(metric.value("available").toBool());
+        if (metric.value("label").toString() == AudioRoutingAdapter::tr("Gap frames")) {
+            EXPECT_TRUE(metric.value("available").toBool());
+            EXPECT_EQ(metric.value("value").toString(), "0");
+        }
+    }
+}
 } // namespace
 } // namespace exosnap::quick

@@ -18,6 +18,11 @@ struct LogicalAudioMeter {
     float rms = 0;
     float peak = 0;
     bool muted = false;
+    PhysicalClockId clock_id;
+    uint64_t reader_count = 0;
+    uint64_t reader_overflow_frames = 0;
+    bool processing_time_available = false;
+    double processing_ms = 0;
 };
 
 // One runtime-owned DSP chain; reader attachment does not reset its history.

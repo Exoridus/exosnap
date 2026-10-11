@@ -1,8 +1,15 @@
 #pragma once
 #include "logical_audio_source.h"
+#include <exosnap/engine/session_stats.h>
 #include <functional>
+#include <mutex>
 
 namespace exosnap::engine {
+struct TrackAudioTelemetry {
+    // Readback survives mixer transfer and destruction. Access snapshot under mutex.
+    mutable std::mutex mutex;
+    TrackMeterSnapshot snapshot;
+};
 // Null inputs retain their fixed-divisor slot and contribute silence.
 class TrackAudioMixer final : public IAudioCaptureSource {
   public:
@@ -10,6 +17,7 @@ class TrackAudioMixer final : public IAudioCaptureSource {
     static size_t RequiredPayloadBytes(uint32_t sample_rate, uint32_t channels,
                                        std::span<const AudioCaptureDescriptor> inputs);
     [[nodiscard]] size_t ReservedPayloadBytes() const;
+    [[nodiscard]] std::shared_ptr<TrackAudioTelemetry> Telemetry() const;
     // The copied failure remains valid after the mixer is destroyed.
     // cppcheck-suppress returnByReference
     [[nodiscard]] std::string Failure() const;

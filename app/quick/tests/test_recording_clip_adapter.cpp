@@ -158,4 +158,30 @@ TEST(RecordingClipAdapterTest, CancelRequiresCurrentGenerationAndAnActiveJob) {
 }
 
 } // namespace
+TEST(RecordingClipAdapterTest, DiagnosticResourcesExposeExactCountersWithoutPrivatePathsOrTitles) {
+    RecordingClipAdapter adapter;
+    RecordingClipJobSnapshot job;
+    job.job_id = engine::NewId<engine::JobId>();
+    job.phase = RecordingClipPhase::Reading;
+    job.source_bytes_read = 9'007'199'254'740'993ULL;
+    job.staging_bytes_written = 123;
+    job.reserved_bytes = 456;
+    job.track_names = {"private track"};
+    job.error = engine::EngineError{};
+    job.error->context = "C:/private/path";
+    adapter.setJobs({job});
+    const auto resources = adapter.diagnosticResources();
+    ASSERT_EQ(resources.size(), 1);
+    const auto row = resources.first().toMap();
+    EXPECT_EQ(row.value("identity").toString(), QString::fromStdString(engine::ToUuid(job.job_id)));
+    const auto metrics = row.value("metrics").toList();
+    ASSERT_EQ(metrics.size(), 4);
+    EXPECT_EQ(metrics[1].toMap().value("value").toString(), "9007199254740993");
+    EXPECT_EQ(metrics[2].toMap().value("value").toString(), "123");
+    EXPECT_EQ(metrics[3].toMap().value("value").toString(), "456");
+    for (const auto& metric : metrics) {
+        EXPECT_TRUE(metric.toMap().value("available").toBool());
+        EXPECT_FALSE(metric.toMap().value("value").toString().contains("private"));
+    }
+}
 } // namespace exosnap::quick

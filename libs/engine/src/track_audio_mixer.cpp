@@ -4,23 +4,21 @@
 #include "logical_audio_source.h"
 #include "output_format_audio_src.h"
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exosnap/engine/audio_limits.h>
 #include <exosnap/engine/audio_routing_model.h>
 #include <exosnap/engine/interfaces/IAudioCaptureSource.h>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
-#include <vector>
-#ifndef _WIN32
-#include <chrono>
-#endif
-#include <cmath>
-#include <limits>
 #include <utility>
+#include <vector>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -62,6 +60,7 @@ struct TrackAudioMixer::Impl {
     uint32_t rate, channels, block_frames, capacity;
     std::function<uint64_t()> now;
     BrickwallLimiter limiter;
+    std::shared_ptr<TrackAudioTelemetry> telemetry = std::make_shared<TrackAudioTelemetry>();
     std::vector<float> output;
     int64_t cursor = 0, latest = 0, finite_end = 0;
     uint64_t output_qpc = 0;
@@ -78,6 +77,8 @@ struct TrackAudioMixer::Impl {
          uint32_t channel_count, std::function<uint64_t()> clock)
         : track(std::move(spec)), pending(std::move(readers)), rate(sample_rate), channels(channel_count),
           block_frames(sample_rate / 100), capacity(sample_rate / 2), now(clock ? std::move(clock) : ClockNowNs) {
+        telemetry->snapshot.track_id = track.id;
+        telemetry->snapshot.limiter_enabled = track.limiter.enabled;
     }
 
     void Queue(size_t index, const RawAudioBuffer& packet, uint64_t qpc) {
@@ -166,6 +167,9 @@ TrackAudioMixer::TrackAudioMixer(ResolvedRoutingTrack track, std::vector<std::un
 }
 TrackAudioMixer::~TrackAudioMixer() {
     Shutdown();
+}
+std::shared_ptr<TrackAudioTelemetry> TrackAudioMixer::Telemetry() const {
+    return impl_->telemetry;
 }
 size_t TrackAudioMixer::RequiredPayloadBytes(uint32_t rate, uint32_t channels, uint32_t count) {
     if (!count || count > kMaxAudioSources)
@@ -268,6 +272,10 @@ bool TrackAudioMixer::Init(std::string& error) {
     lc.ceiling_linear = LimiterCeilingDbToLinear(p.track.limiter.ceiling_db);
     p.limiter.Configure(lc);
     p.limiter.Reset();
+    {
+        std::lock_guard lock(p.telemetry->mutex);
+        p.telemetry->snapshot.limiter_gain = p.limiter.CurrentGain();
+    }
     p.output.resize(static_cast<size_t>(p.block_frames) * p.channels);
     p.initialized = true;
     return true;
@@ -309,6 +317,7 @@ bool TrackAudioMixer::AcquireBuffer(RawAudioBuffer& buffer, std::string& error) 
         error = "Track mixer has no pending frames";
         return false;
     }
+    const auto started = std::chrono::steady_clock::now();
     std::fill(p.output.begin(), p.output.end(), 0.0f);
     for (size_t i = 0; i < p.inputs.size(); ++i) {
         const auto& input = p.inputs[i];
@@ -322,12 +331,35 @@ bool TrackAudioMixer::AcquireBuffer(RawAudioBuffer& buffer, std::string& error) 
                 p.output[static_cast<size_t>(f) * p.channels + c] += input.samples[slot * p.channels + c] * gain;
         }
     }
+    const size_t sample_count = static_cast<size_t>(frames) * p.channels;
+    float pre_limiter_peak = 0;
+    for (size_t i = 0; i < sample_count; ++i)
+        pre_limiter_peak = (std::max)(pre_limiter_peak, std::abs(p.output[i]));
     if (p.track.limiter.enabled)
         p.limiter.Process(p.output.data(), frames);
+    double energy = 0;
+    float post_limiter_peak = 0;
+    for (size_t i = 0; i < sample_count; ++i) {
+        const float sample = p.output[i];
+        energy += static_cast<double>(sample) * sample;
+        post_limiter_peak = (std::max)(post_limiter_peak, std::abs(sample));
+    }
+    const double elapsed =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    {
+        std::lock_guard lock(p.telemetry->mutex);
+        auto& snapshot = p.telemetry->snapshot;
+        snapshot.has_measurement = true;
+        snapshot.rms = static_cast<float>(std::sqrt(energy / sample_count));
+        snapshot.pre_limiter_peak = pre_limiter_peak;
+        snapshot.post_limiter_peak = post_limiter_peak;
+        snapshot.limiter_gain = p.track.limiter.enabled ? p.limiter.CurrentGain() : 1.f;
+        snapshot.processing_time_available = true;
+        snapshot.processing_ms += elapsed;
+    }
     buffer.bytes = reinterpret_cast<const uint8_t*>(p.output.data());
     buffer.num_frames = frames;
-    buffer.silent = std::all_of(p.output.begin(), p.output.begin() + static_cast<size_t>(frames) * p.channels,
-                                [](float x) { return x == 0; });
+    buffer.silent = post_limiter_peak == 0;
     buffer.data_discontinuity = p.discontinuity;
     p.discontinuity = false;
     p.output_qpc = DeviceFramesToNs(static_cast<uint64_t>(p.cursor), p.rate);

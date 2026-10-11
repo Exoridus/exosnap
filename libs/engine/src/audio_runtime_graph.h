@@ -56,6 +56,8 @@ class AudioRuntimeGraph : public std::enable_shared_from_this<AudioRuntimeGraph>
     bool WaitDrained(uint32_t timeout_ms, std::string& error);
     bool SetSourceMuted(const AudioSourceId& id, bool muted);
     [[nodiscard]] std::vector<LogicalAudioMeter> SourceMeters() const;
+    [[nodiscard]] std::vector<TrackMeterSnapshot> TrackMeters() const;
+    [[nodiscard]] std::vector<PhysicalMeterSnapshot> PhysicalMeters() const;
 
   private:
     friend class AudioRuntimeTrackSource;
@@ -74,6 +76,7 @@ class AudioRuntimeGraph : public std::enable_shared_from_this<AudioRuntimeGraph>
         std::unique_ptr<TrackAudioMixer> mixer;
     };
     std::vector<TrackEntry> tracks_;
+    std::vector<std::shared_ptr<TrackAudioTelemetry>> track_telemetry_;
     std::atomic<uint64_t> end_qpc_ns_{0};
     std::atomic<bool> started_{false};
     std::function<void(std::string)> on_error_;
