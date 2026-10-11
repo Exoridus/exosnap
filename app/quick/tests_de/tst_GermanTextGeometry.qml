@@ -72,7 +72,7 @@ TestCase {
 
     Component {
         id: audioResourcesComponent
-        DiagnosticsResourcesCard { resources: testCase.audioResources }
+        DiagnosticsResourcesCard { resourceSnapshot: testCase.audioResources }
     }
 
     function checkText(item) {

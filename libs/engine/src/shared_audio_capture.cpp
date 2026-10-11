@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <ratio>
 #include <span>
 #include <string>
 #include <vector>

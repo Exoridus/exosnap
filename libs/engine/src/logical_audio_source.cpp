@@ -28,6 +28,7 @@ extern "C" {
 #include <deque>
 #include <limits>
 #include <mutex>
+#include <ratio>
 #include <utility>
 
 namespace exosnap::engine {

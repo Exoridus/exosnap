@@ -7,9 +7,9 @@ import QtQuick.Layouts
 ColumnLayout {
     id: root
 
-    required property var resources
+    required property var resourceSnapshot
 
-    readonly property var audioResourceSnapshot: root.resources || ({})
+    readonly property var audioResourceSnapshot: root.resourceSnapshot || ({})
     readonly property var audioResourceGroups: [
         {title: qsTr("Physical capture"), rows: root.audioResourceSnapshot.physical || []},
         {title: qsTr("Logical sources"), rows: root.audioResourceSnapshot.sources || []},

@@ -678,7 +678,7 @@ Item {
                 }
 
                 DiagnosticsResourcesCard {
-                    resources: root.diagnostics.audioResources
+                    resourceSnapshot: root.diagnostics.audioResources
                     Layout.fillWidth: true
                 }
 

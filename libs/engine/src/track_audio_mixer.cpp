@@ -16,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <ratio>
 #include <span>
 #include <string>
 #include <utility>
