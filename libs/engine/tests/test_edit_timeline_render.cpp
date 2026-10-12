@@ -78,7 +78,18 @@ TEST(EditTimelineMedia, SharedReaderSeeksAudioAndRealExportReopens) {
     wchar_t directory[32768]{};
     if (!GetEnvironmentVariableW(L"EXOSNAP_EDIT_RENDER_FIXTURES", directory, 32768))
         GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
-    const auto snapshot = Fixture(std::filesystem::path(directory));
+    auto snapshot = Fixture(std::filesystem::path(directory));
+    for (auto& source : snapshot.sources) {
+        ASSERT_TRUE(source.metadata.error.empty()) << source.metadata.error;
+        const auto& audio = source.metadata.audio_metadata;
+        ASSERT_EQ(audio.actual_tracks.size(), 1u);
+        ASSERT_TRUE(audio.unverified_asset_binding);
+        const auto& track = audio.actual_tracks.front();
+        ASSERT_EQ(track.stream_index.value, 0u);
+        ASSERT_NE(track.track_id, AudioTrackId{});
+        source.monitor_selection = MonitorSelectionSnapshot{
+            audio.selection_media_id, {1}, {{track.track_id, 1.0f, false}}, true, audio.unverified_asset_binding};
+    }
     const auto plan = ClassifyEditExport(snapshot, {TimelineExportEligibility::RenderRequired, {}}, false);
     ASSERT_EQ(plan.path, EditExportPath::Render) << plan.reason;
     EditTimelineReader reader;
