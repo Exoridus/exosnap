@@ -87,7 +87,7 @@ struct TrackAudioMixer::Impl {
         telemetry->snapshot.limiter_enabled = track.limiter.enabled;
     }
 
-    void Hold(Input& input, RawAudioBuffer packet, uint64_t qpc, bool owns_lease) {
+    void Hold(Input& input, const RawAudioBuffer& packet, uint64_t qpc, bool owns_lease) {
         input.packet = packet;
         input.packet_offset = 0;
         input.packet_start = qpc ? Position(qpc, rate) : (input.end ? input.end : cursor);
