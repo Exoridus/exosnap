@@ -46,6 +46,27 @@ TEST(SharedAudioCaptureBudget, TicketsShareCapacityAndReleaseAfterTheLastReferen
     EXPECT_EQ(registry.ReservedPayloadBytes(), 0u);
 }
 
+TEST(SharedAudioCaptureBudget, RuntimeCeilingRejectsNinthGroupUntilLastLeaseIsReleased) {
+    SharedAudioCaptureRegistry registry;
+    std::string error;
+    std::vector<std::shared_ptr<void>> tickets;
+    for (size_t group = 0; group < 8; ++group) {
+        auto ticket = registry.ReservePayload(32u * 1024 * 1024, error);
+        ASSERT_NE(ticket, nullptr) << error;
+        tickets.push_back(std::move(ticket));
+    }
+    EXPECT_EQ(registry.ReservedPayloadBytes(), 256u * 1024 * 1024);
+    EXPECT_EQ(registry.ReservePayload(1, error), nullptr);
+    auto held = tickets.back();
+    tickets.pop_back();
+    EXPECT_EQ(registry.ReservePayload(1, error), nullptr);
+    held.reset();
+    EXPECT_EQ(registry.ReservedPayloadBytes(), 224u * 1024 * 1024);
+    EXPECT_NE(registry.ReservePayload(32u * 1024 * 1024, error), nullptr);
+    tickets.clear();
+    EXPECT_EQ(registry.ReservedPayloadBytes(), 0u);
+}
+
 TEST(SharedAudioCaptureBudget, InvalidComponentAdmissionDoesNotReserveCapacity) {
     SharedAudioCaptureRegistry registry;
     std::string error;
@@ -628,7 +649,7 @@ TEST_P(PhysicalAudioClock, TwoHoursRealPcmCorrectionAndMarkerErrorWithin15MsAfte
 }
 
 INSTANTIATE_TEST_SUITE_P(IndependentNativeClocks, PhysicalAudioClock,
-                         testing::Values(-250.0, -100.0, -50.0, 50.0, 100.0, 250.0));
+                         testing::Values(-500.0, -250.0, -100.0, -50.0, 50.0, 100.0, 250.0, 500.0));
 
 TEST(PhysicalAudioClock, Native96kSixChannelsRemainNativeAndOptOutDoesNotCorrect) {
     PhysicalAudioClockSource source(std::make_unique<VirtualNative>(250, 96000, 6), Admission(96000, 6), false);

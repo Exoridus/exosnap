@@ -29,7 +29,7 @@ class MuxAudioHold {
     }
 
     bool Push(EncodedAudioPacket packet) {
-        const size_t packet_bytes = packet.bytes.size();
+        const size_t packet_bytes = packet.bytes.capacity();
         if (packets_.size() >= limits_.packets || packet_bytes > limits_.bytes - bytes_)
             return false;
         uint64_t earliest = packet.pts_ns;
@@ -67,7 +67,7 @@ class MuxAudioHold {
             return std::nullopt;
         auto packet = std::move(packets_.front());
         packets_.pop_front();
-        bytes_ -= packet.bytes.size();
+        bytes_ -= packet.bytes.capacity();
         return packet;
     }
 

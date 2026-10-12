@@ -137,6 +137,18 @@ TEST(RecordingClipJobsTest, MarkerMemoryIsRejectedBeforeQueueAdmission) {
     clips.Shutdown();
 }
 
+TEST(RecordingClipJobsTest, RetainedSealCapacityIsRejectedBeforeQueueAdmission) {
+    RecordingArtifactRegistry registry;
+    RecordingClipJobs clips(registry, {}, [] { return true; }, {});
+    auto request = MissingSourceRequest(1000000000);
+    request.closed_segments.reserve(2 * 1024 * 1024 / sizeof(engine::RecordingSegmentSeal) + 1);
+    const auto rejected = clips.RequestPlan(std::move(request));
+    ASSERT_FALSE(rejected.succeeded());
+    EXPECT_EQ(rejected.error()->code, engine::EngineErrorCode::ResourceBudgetExceeded);
+    EXPECT_TRUE(clips.Snapshots().empty());
+    clips.Shutdown();
+}
+
 TEST(RecordingClipJobsTest, MarkerCountIsRejectedBeforeQueueAdmission) {
     RecordingArtifactRegistry registry;
     RecordingClipJobs clips(registry, {}, [] { return true; }, {});

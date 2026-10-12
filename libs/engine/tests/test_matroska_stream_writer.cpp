@@ -1100,6 +1100,25 @@ TEST_F(StreamWriterTest, ReorderPayloadBudgetRejectsAnOversizedPacket) {
     EXPECT_TRUE(writer.failed());
 }
 
+TEST_F(StreamWriterTest, ReorderAdmissionCountsRetainedCapacity) {
+    auto config = MakeConfig(tmp_, true, false);
+    config.reorder_window_max_bytes = 6u * 1024 * 1024;
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config));
+    MuxPacket packet;
+    packet.track_num = 1;
+    packet.is_key = true;
+    packet.bytes.reserve(6u * 1024 * 1024);
+    packet.bytes.push_back(1);
+    ASSERT_TRUE(writer.Push(std::move(packet)));
+    EXPECT_EQ(writer.current_window_bytes(), 6u * 1024 * 1024);
+    MuxPacket extra;
+    extra.track_num = 1;
+    extra.bytes = {2};
+    EXPECT_FALSE(writer.Push(std::move(extra)));
+    EXPECT_TRUE(writer.failed());
+}
+
 TEST_F(StreamWriterTest, ThrottledClipWritesAdmitAndReportPhysicalChunks) {
     auto config = MakeConfig(tmp_, true, false);
     bool armed = false;

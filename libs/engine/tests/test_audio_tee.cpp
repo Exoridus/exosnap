@@ -107,6 +107,47 @@ TEST(AudioTee, AdmissionCountsRingAllHeldReadersAndCorrectionScratch) {
     EXPECT_LT(16u * AudioTee::RequiredPayloadBytes(descriptor), kAudioRuntimePayloadBytes);
 }
 
+TEST(AudioTee, NearBudgetEnvelopeHoldsAllSixteenLeasesThroughWrapAndOwnerStop) {
+    AudioCaptureDescriptor descriptor;
+    descriptor.sample_rate = 192000;
+    descriptor.channels = 8;
+    descriptor.maximum_packet_frames = 30161;
+    std::string error;
+    EXPECT_EQ(AudioTee::RequiredPayloadBytes(descriptor), 33554112u);
+    auto rejected = descriptor;
+    ++rejected.maximum_packet_frames;
+    EXPECT_EQ(AudioTee::RequiredPayloadBytes(rejected), 33554816u);
+    EXPECT_EQ(AudioTee::Create(rejected, error), nullptr);
+    auto tee = AudioTee::Create(descriptor, error);
+    ASSERT_NE(tee, nullptr) << error;
+    auto readers = tee->AttachReaders(16, 0, error);
+    ASSERT_EQ(readers.size(), 16u) << error;
+    EXPECT_TRUE(tee->AttachReaders(1, 0, error).empty());
+    std::vector<float> samples(30161u * 8u, 0.25f);
+    AudioBlockMetadata metadata;
+    metadata.frames = 30161;
+    ASSERT_TRUE(tee->Publish(samples, metadata, error)) << error;
+    std::array<AudioBlockView, 16> held;
+    for (size_t index = 0; index < readers.size(); ++index)
+        ASSERT_TRUE(readers[index]->Acquire(held[index], error)) << error;
+    std::fill(samples.begin(), samples.end(), 0.75f);
+    for (int packet = 0; packet < 40; ++packet)
+        ASSERT_TRUE(tee->Publish(samples, metadata, error)) << error;
+    EXPECT_EQ(tee->ReservedPayloadBytes(), 33554112u);
+    tee->Stop();
+    tee.reset();
+    for (size_t index = 0; index < readers.size(); ++index) {
+        EXPECT_TRUE(std::all_of(held[index].samples.begin(), held[index].samples.end(),
+                                [](float value) { return value == 0.25f; }));
+        AudioBlockView duplicate;
+        EXPECT_FALSE(readers[index]->Acquire(duplicate, error));
+        readers[index]->Release();
+        ASSERT_TRUE(readers[index]->Acquire(duplicate, error)) << error;
+        EXPECT_GT(duplicate.reader_overflow_frames, 0u);
+        readers[index]->Release();
+    }
+}
+
 TEST(AudioTee, AttachIsAtomicAndSealDrainsFinitePrefixWithContinuingProducer) {
     std::string error;
     auto tee = AudioTee::Create(Descriptor(), error);

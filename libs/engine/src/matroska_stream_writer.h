@@ -303,8 +303,8 @@ class MatroskaStreamWriter {
         return m_error;
     }
 
-    // Diagnostics for tests / logging: peak number of packets and bytes held in
-    // the reorder window at any instant. Proves constant-RAM behavior.
+    // Reorder bytes count retained payload capacity, including unused space.
+    // Container nodes and cluster storage are separate from this counter.
     [[nodiscard]] size_t peak_window_packets() const noexcept {
         return m_peak_window_packets;
     }

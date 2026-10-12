@@ -133,12 +133,12 @@ class PremuxState {
         const uint64_t last = audio_last_pts_ ? (std::max)(packet.pts_ns, *audio_last_pts_) : packet.pts_ns;
         if (tracks > kMaxAudioTracks || packet.track_id >= tracks || last - first > kAudioHoldHorizonNs ||
             pending_.audio.size() >= AudioHoldPacketLimit(tracks) ||
-            packet.bytes.size() > kAudioPremuxPayloadBytes - audio_payload_bytes_) {
+            packet.bytes.capacity() > kAudioPremuxPayloadBytes - audio_payload_bytes_) {
             return PremuxRoute::Full;
         }
         audio_first_pts_ = first;
         audio_last_pts_ = last;
-        audio_payload_bytes_ += packet.bytes.size();
+        audio_payload_bytes_ += packet.bytes.capacity();
         pending_.audio.push_back(std::move(packet));
         buffered_depth = static_cast<uint32_t>(pending_.audio.size());
         return PremuxRoute::Buffered;

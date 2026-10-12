@@ -558,6 +558,9 @@ engine::Outcome<engine::JobId> RecordingClipJobs::RequestPlan(RecordingClipReque
         request.requested_end_r_ns <= request.requested_begin_r_ns || request.destination.empty())
         return ClipFailure(engine::EngineErrorCode::InvalidConfig, "Invalid recording clip request");
     constexpr size_t marker_budget_bytes = 2 * 1024 * 1024;
+    constexpr size_t seal_budget_bytes = 2 * 1024 * 1024;
+    if (request.closed_segments.capacity() > seal_budget_bytes / sizeof(engine::RecordingSegmentSeal))
+        return ClipFailure(engine::EngineErrorCode::ResourceBudgetExceeded, "Clip seal memory budget exceeded");
     if (request.markers.size() > kMaxRecordingMarkers)
         return ClipFailure(engine::EngineErrorCode::ResourceBudgetExceeded, "Clip marker count budget exceeded");
     if (request.markers.capacity() > marker_budget_bytes / sizeof(RecordingMarker))

@@ -277,7 +277,7 @@ TEST(RecordingClipTest, FiniteJournalClipScalesFromThirtySecondsToFullRecording)
     std::filesystem::remove(journal, ignored);
 }
 
-TEST(RecordingClipTest, OversizedCommittedBlockIsRejectedBeforeItsPayloadIsRead) {
+void CheckCommittedPacketBudget(size_t packet_limit) {
     const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
     const auto source_path = exosnap_test::UniqueTempPath("clip_oversized_source.mkv");
     const auto journal = exosnap_test::UniqueTempPath("clip_oversized.index");
@@ -320,14 +320,15 @@ TEST(RecordingClipTest, OversizedCommittedBlockIsRejectedBeforeItsPayloadIsRead)
     ASSERT_NE(descriptor, nullptr);
     ASSERT_EQ(index.RegisterDescriptor(descriptor), ReceiptAcceptance::Accepted);
 
-    constexpr uint32_t filler_length = 4 * 1024 * 1024 + 1;
+    const auto filler_length = static_cast<uint32_t>(packet_limit - key_sample.size() - 4);
     auto oversized = key_sample;
     oversized.push_back(static_cast<uint8_t>(filler_length >> 24));
     oversized.push_back(static_cast<uint8_t>(filler_length >> 16));
     oversized.push_back(static_cast<uint8_t>(filler_length >> 8));
     oversized.push_back(static_cast<uint8_t>(filler_length));
-    oversized.push_back(0x06);
-    oversized.resize(oversized.size() + filler_length - 1);
+    oversized.push_back(0x0c);
+    oversized.resize(packet_limit, 0xff);
+    oversized.back() = 0x80;
     ASSERT_EQ(QualifyClosedRandomAccess(config.video_codec_id, config.video_codec_private, oversized, true),
               RandomAccessKind::ClosedGop);
     for (uint64_t second : {0ULL, 2ULL, 4ULL}) {
@@ -362,7 +363,7 @@ TEST(RecordingClipTest, OversizedCommittedBlockIsRejectedBeforeItsPayloadIsRead)
     control.before_io = [&](ClipJobIoPhase phase, uint64_t bytes) {
         if (phase != ClipJobIoPhase::Reading)
             return true;
-        if (bytes > 256 * 1024 - admitted_read_bytes)
+        if (packet_limit > 4u * 1024 * 1024 && bytes > 256 * 1024 - admitted_read_bytes)
             return false;
         admitted_read_bytes += bytes;
         return true;
@@ -370,14 +371,29 @@ TEST(RecordingClipTest, OversizedCommittedBlockIsRejectedBeforeItsPayloadIsRead)
     const auto output = exosnap_test::UniqueTempPath("clip_oversized_output.mkv");
     const auto result = RunRecordingClipJob(*plan.value(), *frozen.value(),
                                             std::span<const ClipPinnedSource>(&source, 1), output, nullptr, &control);
-    ASSERT_FALSE(result.succeeded());
-    EXPECT_EQ(result.error()->code, EngineErrorCode::ResourceBudgetExceeded);
-    EXPECT_LT(admitted_read_bytes, 256ULL * 1024);
+    if (packet_limit == 4u * 1024 * 1024) {
+        ASSERT_TRUE(result.succeeded()) << result.error()->context;
+        EXPECT_EQ(result.value()->peak_packet_bytes, 4u * 1024 * 1024);
+        EXPECT_LE(result.value()->peak_cluster_payload_bytes, 6u * 1024 * 1024);
+        EXPECT_GE(admitted_read_bytes, 4u * 1024 * 1024);
+    } else {
+        ASSERT_FALSE(result.succeeded());
+        EXPECT_EQ(result.error()->code, EngineErrorCode::ResourceBudgetExceeded);
+        EXPECT_LT(admitted_read_bytes, 256ULL * 1024);
+    }
     CloseHandle(pinned);
     std::error_code ignored;
     std::filesystem::remove(output, ignored);
     std::filesystem::remove(source_path, ignored);
     std::filesystem::remove(journal, ignored);
+}
+
+TEST(RecordingClipTest, ExactPacketLimitIsCopied) {
+    CheckCommittedPacketBudget(4u * 1024 * 1024);
+}
+
+TEST(RecordingClipTest, ExcessPacketIsRejectedBeforePayloadRead) {
+    CheckCommittedPacketBudget(4u * 1024 * 1024 + 1);
 }
 
 TEST(RecordingClipTest, FrozenPlanUsesClosedRapAndRequiresMatchingSealForEos) {

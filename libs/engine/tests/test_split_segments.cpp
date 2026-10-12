@@ -78,6 +78,21 @@ TEST(MuxAudioHoldTest, BytesAndMediaTimeFailClosedWithoutLosingHeldPackets) {
     EXPECT_EQ(hold.bytes(), 0u);
 }
 
+TEST(MuxAudioHoldTest, AdmissionCountsRetainedCapacityAndPopReleasesTheCharge) {
+    exosnap::engine::MuxAudioHold hold;
+    exosnap::engine::EncodedAudioPacket packet;
+    packet.bytes.reserve(32u * 1024 * 1024);
+    packet.bytes.push_back(7);
+    ASSERT_TRUE(hold.Push(std::move(packet)));
+    EXPECT_EQ(hold.bytes(), 32u * 1024 * 1024);
+    EXPECT_FALSE(hold.Push({{8}, 0, 0}));
+    const auto popped = hold.Pop();
+    ASSERT_TRUE(popped.has_value());
+    EXPECT_EQ(popped->bytes.front(), 7);
+    EXPECT_EQ(hold.bytes(), 0u);
+    EXPECT_TRUE(hold.Push({{8}, 0, 0}));
+}
+
 TEST(MuxAudioHoldTest, PacketLimitRejectsPressureWithoutDiscardingEarlierAudio) {
     exosnap::engine::MuxAudioHold hold;
     for (uint32_t frame = 0; frame < 1200; ++frame) {

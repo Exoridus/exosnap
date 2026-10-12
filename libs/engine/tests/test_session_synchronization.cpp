@@ -113,6 +113,27 @@ TEST(PremuxState, AudioByteOverflowPreservesTheRejectedPacket) {
     EXPECT_TRUE(state.PendingSnapshot().audio.empty());
 }
 
+TEST(PremuxState, AudioAdmissionCountsRetainedCapacityAndResetsAfterTransfer) {
+    PremuxState state;
+    uint32_t depth = 0;
+    EncodedAudioPacket packet;
+    packet.bytes.reserve(32u * 1024 * 1024);
+    packet.bytes.push_back(7);
+    ASSERT_EQ(state.Route(packet, VideoCodec::Av1, 1, depth), PremuxRoute::Buffered);
+    EncodedAudioPacket extra{{8}, 0, 0};
+    EXPECT_EQ(state.Route(extra, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
+    EXPECT_EQ(extra.bytes, (std::vector<uint8_t>{8}));
+    auto pending = state.TakePending();
+    ASSERT_EQ(pending.audio.size(), 1u);
+    EXPECT_EQ(pending.audio.front().bytes.capacity(), 32u * 1024 * 1024);
+    EXPECT_EQ(state.Route(extra, VideoCodec::Av1, 1, depth), PremuxRoute::Buffered);
+    state.Reset();
+    packet.bytes.reserve(32u * 1024 * 1024 + 1);
+    packet.bytes.push_back(9);
+    EXPECT_EQ(state.Route(packet, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
+    EXPECT_EQ(packet.bytes.front(), 9);
+}
+
 TEST(PremuxState, MediaTimeLimitRejectsLongGapsEvenWithOnlyTwoPackets) {
     PremuxState state;
     uint32_t depth = 0;

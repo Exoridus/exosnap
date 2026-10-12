@@ -970,7 +970,7 @@ bool MatroskaStreamWriter::Push(MuxPacket packet) {
     if (packet.bytes.empty())
         return true; // skip empties silently (matches old muxer)
 
-    if (packet.bytes.size() > m_config.reorder_window_max_bytes - m_cur_window_bytes) {
+    if (packet.bytes.capacity() > m_config.reorder_window_max_bytes - m_cur_window_bytes) {
         Fail("Reorder payload budget exceeded before a safe interleave boundary");
         return false;
     }
@@ -995,7 +995,7 @@ bool MatroskaStreamWriter::Push(MuxPacket packet) {
             break;
         it = prev;
     }
-    m_cur_window_bytes += e.bytes.size();
+    m_cur_window_bytes += e.bytes.capacity();
     m_window.insert(it, std::move(e));
 
     if (m_window.size() > m_peak_window_packets)
@@ -1027,7 +1027,7 @@ bool MatroskaStreamWriter::DrainWindow(bool force) {
 
         if (!EmitPacket(front))
             return false;
-        m_cur_window_bytes -= front.bytes.size();
+        m_cur_window_bytes -= front.bytes.capacity();
         m_window.pop_front();
     }
     return true;
