@@ -213,7 +213,7 @@ Outcome<ClipCommittedPacket> ReadGroup(CommittedMatroskaView& view, const Elemen
         return *read_packet.error();
     if (*read_packet.value() != payload_size)
         return ReaderError(EngineErrorCode::SourceIntegrityFailure, "Short committed clip packet");
-    return std::move(packet);
+    return Outcome<ClipCommittedPacket>{std::move(packet)};
 }
 
 } // namespace

@@ -158,7 +158,7 @@ template <typename T> class MetadataJsonAllocator {
   private:
     struct AllocationHeader {
         std::shared_ptr<MetadataJsonBudget> owner;
-        size_t bytes;
+        size_t bytes = 0;
     };
     template <typename U> friend class MetadataJsonAllocator;
     std::shared_ptr<MetadataJsonBudget> budget_;
