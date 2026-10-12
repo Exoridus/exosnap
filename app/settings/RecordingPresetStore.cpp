@@ -687,6 +687,8 @@ engine::AudioSourceBinding BindingFromToml(const toml::node_view<const toml::nod
     }
     if (binding.kind == engine::AudioBindingKind::IndependentProcess && !binding.process)
         throw std::invalid_argument("Independent audio source process identity is missing");
+    if (binding.kind == engine::AudioBindingKind::IndependentProcess)
+        binding.process_selection_confirmed = false;
     return binding;
 }
 

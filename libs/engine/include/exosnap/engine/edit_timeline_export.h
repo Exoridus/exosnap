@@ -4,6 +4,7 @@
 #include "exosnap/engine/mp4_remuxer.h"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -50,7 +51,8 @@ struct TimelineExportAssessment {
 // must reject independent audio edits, compositing and transitions before calling.
 // Single-source trims retain TrimRange's keyframe accuracy contract. Multiple
 // sources currently require complete, compatible streams without gaps.
-TimelineExportAssessment AssessTimelineExport(const std::vector<TimelineExportClip>& clips, bool to_mp4);
+TimelineExportAssessment AssessTimelineExport(const std::vector<TimelineExportClip>& clips, bool to_mp4,
+                                              const std::atomic<bool>* cancelled = nullptr);
 
 // Synchronous and independent of mutable workspace state. Output must be a new
 // staging path, never a source. Failed/cancelled exports remove that staging file.

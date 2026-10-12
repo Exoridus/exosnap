@@ -216,6 +216,22 @@ TEST(EditPlayerEngine, OpenNonexistentFileFails) {
     EXPECT_FALSE(err.empty());
 }
 
+TEST(EditPlayerEngine, OpeningCancellationDoesNotSurviveIntoPlayback) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    EditPlayerEngine engine;
+    std::string error;
+    {
+        std::atomic<bool> cancelled{true};
+        EXPECT_FALSE(engine.Open(fixture, error, &cancelled));
+        EXPECT_FALSE(engine.HasVideoStream());
+        cancelled.store(false);
+        ASSERT_TRUE(engine.Open(fixture, error, &cancelled)) << error;
+        cancelled.store(true);
+    }
+    EXPECT_TRUE(engine.DecodeFrameAt(0));
+    EXPECT_TRUE(engine.DecodeFrameAt(1000000));
+}
+
 TEST(EditPlayerEngine, OpenGarbageFileFails) {
     // A file that exists but is not a container libavformat can probe.
     const auto path = std::filesystem::temp_directory_path() / "edit_player_engine_garbage_test.bin";

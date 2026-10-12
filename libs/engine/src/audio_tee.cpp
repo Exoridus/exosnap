@@ -64,6 +64,7 @@ struct AudioTeeState {
     std::vector<ReaderSlot> readers;
     uint64_t next_sequence = 0;
     uint64_t oldest_sequence = 0;
+    uint64_t reader_overflow_frames = 0;
     uint64_t payload_position = 0;
     uint64_t media_position_ns = 0;
     size_t reserved_payload_bytes = 0;
@@ -121,6 +122,7 @@ struct AudioTeeState {
                 if (oldest_sequence < reader.end_sequence) {
                     const auto [begin, end] = Range(reader, block);
                     reader.overflow_frames += end - begin;
+                    reader_overflow_frames += end - begin;
                 }
                 reader.cursor = oldest_sequence + 1;
             }
@@ -315,6 +317,10 @@ uint32_t AudioTee::ReaderCount() const {
     for (const auto& reader : state_->readers)
         count += reader.attached;
     return count;
+}
+uint64_t AudioTee::ReaderOverflowFrames() const {
+    std::lock_guard lock(state_->mutex);
+    return state_->reader_overflow_frames;
 }
 
 AudioTeeReader::AudioTeeReader(std::shared_ptr<AudioTeeState> state, uint32_t index)

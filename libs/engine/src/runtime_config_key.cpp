@@ -87,7 +87,7 @@ class Digest {
         Fields(v.process_id, v.creation_time, v.identity_hint);
     }
     void Add(const AudioSourceBinding& v) {
-        Fields(v.kind, v.follow_default, v.endpoint_role, v.endpoint_id, v.process);
+        Fields(v.kind, v.follow_default, v.endpoint_role, v.endpoint_id, v.process, v.process_selection_confirmed);
     }
     void Add(const AudioSourceSpec& v) {
         Fields(v.id, v.legacy_row_id, v.name, v.binding, v.channel_mode, v.dsp, v.post_dsp_gain_linear, v.participation,

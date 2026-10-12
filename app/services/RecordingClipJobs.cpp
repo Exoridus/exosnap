@@ -205,7 +205,6 @@ struct RecordingClipJobs::State {
             Fail(job, *visited.error());
             return;
         }
-        uint64_t reservation = 32ULL * 1024 * 1024;
         for (size_t index = 0; index < descriptors.size(); ++index) {
             const auto& descriptor = descriptors[index];
             const auto& segment = job.plan->segments[index];
@@ -241,9 +240,15 @@ struct RecordingClipJobs::State {
                 {descriptor, lease->handle(),
                  descriptor->audio_manifest ? std::optional(*descriptor->audio_manifest) : std::nullopt});
             job.leases.push_back(std::move(*lease));
-            reservation = SaturatingAdd(reservation,
-                                        SaturatingAdd(segment.readable_end_offset, segment.readable_end_offset / 10));
         }
+        const auto estimated = engine::EstimateRecordingClipStorageBytes(
+            *job.plan, job.request.snapshot, [&](uint64_t bytes) { return Budget(job, bytes); });
+        if (!estimated.succeeded()) {
+            Fail(job, *estimated.error());
+            return;
+        }
+        const uint64_t reservation = *estimated.value();
+        std::vector<engine::RecordingSegmentSeal>{}.swap(job.request.closed_segments);
         Update(
             job,
             [&](auto& view) {
@@ -337,19 +342,20 @@ struct RecordingClipJobs::State {
             manifest.media_id = engine::NewId<engine::MediaId>();
             manifest.recording_id = job.view.recording_id;
             manifest.segment_id = engine::NewId<engine::SegmentId>();
-            for (const auto& source : job.sources)
-                manifest.derived_from_media_ids.push_back(source.descriptor->media_id);
+            for (size_t index = 0; index < job.sources.size(); ++index)
+                if (!job.plan->segments[index].boundary_only)
+                    manifest.derived_from_media_ids.push_back(job.sources[index].descriptor->media_id);
         }
-        std::vector<RecordingMarker> markers;
-        for (const auto& marker : job.request.markers) {
+        auto markers = std::move(job.request.markers);
+        std::erase_if(markers, [&](const auto& marker) {
             if (marker.time_ms > static_cast<uint64_t>(INT64_MAX) / 1000000)
-                continue;
+                return true;
             const auto marker_r_ns = static_cast<int64_t>(marker.time_ms * 1000000);
-            if (marker_r_ns >= job.plan->actual_begin_r_ns && marker_r_ns < job.plan->actual_end_r_ns) {
-                auto rebased = marker;
-                rebased.time_ms = static_cast<uint64_t>(marker_r_ns - job.plan->actual_begin_r_ns) / 1000000;
-                markers.push_back(std::move(rebased));
-            }
+            return marker_r_ns < job.plan->actual_begin_r_ns || marker_r_ns >= job.plan->actual_end_r_ns;
+        });
+        for (auto& marker : markers) {
+            const auto marker_r_ns = static_cast<int64_t>(marker.time_ms * 1000000);
+            marker.time_ms = static_cast<uint64_t>(marker_r_ns - job.plan->actual_begin_r_ns) / 1000000;
         }
         engine::MediaIdentitySidecarReferences references;
         if (!markers.empty()) {
@@ -413,20 +419,26 @@ struct RecordingClipJobs::State {
             Fail(job, *metadata_written.error());
             return;
         }
-        const auto verified = engine::ReadMediaIdentitySidecar(job.staging, continue_hash, metadata_io, &job.cancelled);
-        const auto expected_manifest = engine::SerializeAudioManifest1(manifest);
-        const auto observed_manifest =
-            verified.manifest ? engine::SerializeAudioManifest1(*verified.manifest)
-                              : engine::Outcome<std::string>{ClipFailure(engine::EngineErrorCode::MetadataIncomplete,
-                                                                         "Staged clip manifest is missing")};
-        if (verified.status != engine::AudioMetadataStatus::Verified || !verified.manifest ||
-            !expected_manifest.succeeded() || !observed_manifest.succeeded() ||
-            *expected_manifest.value() != *observed_manifest.value() ||
-            verified.references.source_ranges_json != references.source_ranges_json ||
-            verified.references.marker_refs != references.marker_refs) {
-            Fail(job, ClipFailure(engine::EngineErrorCode::MetadataIncomplete, "Staged clip metadata did not verify"));
-            return;
+        {
+            const auto verified =
+                engine::ReadMediaIdentitySidecar(job.staging, continue_hash, metadata_io, &job.cancelled);
+            const auto expected_manifest = engine::SerializeAudioManifest1(manifest);
+            const auto observed_manifest =
+                verified.manifest
+                    ? engine::SerializeAudioManifest1(*verified.manifest)
+                    : engine::Outcome<std::string>{
+                          ClipFailure(engine::EngineErrorCode::MetadataIncomplete, "Staged clip manifest is missing")};
+            if (verified.status != engine::AudioMetadataStatus::Verified || !verified.manifest ||
+                !expected_manifest.succeeded() || !observed_manifest.succeeded() ||
+                *expected_manifest.value() != *observed_manifest.value() ||
+                verified.references.source_ranges_json != references.source_ranges_json ||
+                verified.references.marker_refs != references.marker_refs) {
+                Fail(job,
+                     ClipFailure(engine::EngineErrorCode::MetadataIncomplete, "Staged clip metadata did not verify"));
+                return;
+            }
         }
+        references = {};
         std::error_code size_error;
         const auto final_size = std::filesystem::file_size(job.staging, size_error);
         if (size_error || final_size > static_cast<uint64_t>((std::numeric_limits<qint64>::max)())) {

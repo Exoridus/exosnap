@@ -34,6 +34,8 @@ struct AudioSourceBinding {
     AudioEndpointRole endpoint_role = AudioEndpointRole::Multimedia;
     std::string endpoint_id;
     std::optional<ProcessInstanceIdentity> process;
+    // Runtime-only authority from explicit selection. Preset loading clears it.
+    bool process_selection_confirmed = true;
     bool operator==(const AudioSourceBinding&) const = default;
 };
 

@@ -32,6 +32,8 @@ struct SegmentSummary {
     uint64_t max_audio_preroll_ns = 0;
     size_t track_count = 0;
     bool audio_authority_complete = true;
+    std::array<uint64_t, 9> opus_start_gap_ns{};
+    std::array<uint64_t, 9> opus_packet_duration_ns{};
     std::array<std::optional<int64_t>, 9> first_covered_r;
     std::array<std::optional<int64_t>, 9> last_covered_r;
 };
@@ -47,13 +49,33 @@ EngineError PlanError(EngineErrorCode code, const char* message) {
     return error;
 }
 
+// Whole priming packets can precede the first audible packet at the source origin.
+// A gap is admissible only when indexed coverage agrees with decoder priming authority.
+bool IsProvenOpusStartupGap(const SegmentSummary& segment, size_t track, int64_t r_ns) {
+    return r_ns == segment.origin_r_ns && segment.first_covered_r[track] && *segment.first_covered_r[track] > r_ns &&
+           segment.opus_packet_duration_ns[track] != 0 &&
+           static_cast<uint64_t>(*segment.first_covered_r[track]) - static_cast<uint64_t>(r_ns) ==
+               segment.opus_start_gap_ns[track];
+}
+
 bool Covers(const SegmentSummary& segment, int64_t r_ns) {
     for (size_t track = 0; track < segment.track_count; ++track) {
-        if (!segment.first_covered_r[track] || !segment.last_covered_r[track] ||
-            *segment.first_covered_r[track] > r_ns || *segment.last_covered_r[track] < r_ns)
+        if (!segment.first_covered_r[track] || !segment.last_covered_r[track] || *segment.last_covered_r[track] < r_ns)
+            return false;
+        if (*segment.first_covered_r[track] > r_ns &&
+            (!IsProvenOpusStartupGap(segment, track, r_ns) ||
+             segment.opus_start_gap_ns[track] > segment.opus_packet_duration_ns[track]))
             return false;
     }
     return true;
+}
+
+bool HasUnsupportedOpusStartupGap(const SegmentSummary& segment, int64_t r_ns) {
+    for (size_t track = 1; track < segment.track_count; ++track)
+        if (IsProvenOpusStartupGap(segment, track, r_ns) &&
+            segment.opus_start_gap_ns[track] > segment.opus_packet_duration_ns[track])
+            return true;
+    return false;
 }
 
 bool CoversThrough(const SegmentSummary& segment, int64_t r_ns) {
@@ -103,8 +125,21 @@ Outcome<ClipBoundaryPlan> PlanClipBoundaries(const MediaIndexSnapshot& snapshot,
             segment.origin_r_ns = descriptor.segment_origin_r_ns;
             segment.continuity_group = descriptor.continuity_group;
             segment.track_count = descriptor.audio_tracks.size() + 1;
-            for (const auto& track : descriptor.audio_tracks) {
+            for (size_t index = 0; index < descriptor.audio_tracks.size(); ++index) {
+                const auto& track = descriptor.audio_tracks[index];
                 if (track.codec.codec_id == "A_OPUS") {
+                    if (track.encoder_reset && track.codec.sample_rate == 48000 && track.packet_duration_ns &&
+                        *track.packet_duration_ns <= (std::numeric_limits<uint64_t>::max)() / 48000 &&
+                        track.codec.codec_private.size() >= 19) {
+                        const uint64_t samples = *track.packet_duration_ns * 48000 / 1000000000ULL;
+                        const uint32_t delay = static_cast<uint32_t>(track.codec.codec_private[10]) |
+                                               (static_cast<uint32_t>(track.codec.codec_private[11]) << 8);
+                        if (samples != 0 && delay == track.codec.codec_delay_samples &&
+                            samples * 1000000000ULL / 48000 == *track.packet_duration_ns) {
+                            segment.opus_packet_duration_ns[index + 1] = *track.packet_duration_ns;
+                            segment.opus_start_gap_ns[index + 1] = delay / samples * *track.packet_duration_ns;
+                        }
+                    }
                     if (!track.preroll_ns || !track.packet_duration_ns ||
                         (!track.encoder_reset && !track.first_decoded_sample_r))
                         segment.audio_authority_complete = false;
@@ -175,6 +210,7 @@ Outcome<ClipBoundaryPlan> PlanClipBoundaries(const MediaIndexSnapshot& snapshot,
         return PlanError(EngineErrorCode::SourceIntegrityFailure, "Invalid segment identity or coverage in snapshot");
 
     std::optional<std::pair<ClipRapBoundary, size_t>> start;
+    bool unsupported_start_gap = false;
     std::optional<std::pair<ClipRapBoundary, size_t>> end;
     current.reset();
     invalid = false;
@@ -207,6 +243,8 @@ Outcome<ClipBoundaryPlan> PlanClipBoundaries(const MediaIndexSnapshot& snapshot,
                         return false;
                     }
                     const auto boundary = Boundary(segment, rap, *pts, *dts);
+                    if (*pts <= requested_begin_r_ns && HasUnsupportedOpusStartupGap(segment, *pts))
+                        unsupported_start_gap = true;
                     if (*pts <= requested_begin_r_ns && Covers(segment, *pts) &&
                         (!start || start->first.pts_r_ns <= *pts))
                         start = std::pair{boundary, *current};
@@ -222,6 +260,9 @@ Outcome<ClipBoundaryPlan> PlanClipBoundaries(const MediaIndexSnapshot& snapshot,
         return *scanned.error();
     if (invalid)
         return PlanError(EngineErrorCode::SourceIntegrityFailure, "Invalid random-access timestamp in snapshot");
+    if (!start && unsupported_start_gap)
+        return PlanError(EngineErrorCode::UnsupportedFormat,
+                         "Opus startup gap exceeds one packet at the first video access");
     if (!start)
         return PlanError(EngineErrorCode::IndexNotReady, "No proven closed access at or before requested start");
 
@@ -278,10 +319,9 @@ Outcome<ClipBoundaryPlan> PlanClipBoundaries(const MediaIndexSnapshot& snapshot,
     if (!sealed_eos)
         plan.end_rap = end->first;
 
-    size_t last_included = end->second;
-    if (!sealed_eos && last_included > start->second && segments[last_included].first_covered_r[0] &&
-        *segments[last_included].first_covered_r[0] == actual_end)
-        --last_included;
+    const size_t last_included = end->second;
+    const bool boundary_only =
+        !sealed_eos && last_included > start->second && segments[last_included].first_covered_r[0] == actual_end;
     try {
         plan.segments.reserve(last_included - start->second + 1);
     } catch (const std::bad_alloc&) {
@@ -297,7 +337,8 @@ Outcome<ClipBoundaryPlan> PlanClipBoundaries(const MediaIndexSnapshot& snapshot,
             return PlanError(EngineErrorCode::IndexNotReady,
                              "A selected track has no committed coverage to the GOP end");
         plan.segments.push_back({std::get<0>(segment.key), std::get<1>(segment.key), std::get<2>(segment.key),
-                                 segment.identity, segment.origin_r_ns, segment.readable_end});
+                                 segment.identity, segment.origin_r_ns, segment.readable_end,
+                                 boundary_only && index == last_included});
     }
     return plan;
 }

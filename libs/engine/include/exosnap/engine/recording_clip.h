@@ -37,6 +37,8 @@ struct ClipPlannedSegment {
     FileIdentity file_identity;
     int64_t origin_r_ns = 0;
     uint64_t readable_end_offset = 0;
+    // Retains the exclusive end access for verification without copying its media.
+    bool boundary_only = false;
 };
 
 struct ClipBoundaryPlan {
@@ -60,6 +62,11 @@ struct ClipBoundaryPlan {
                                                            int64_t requested_begin_r_ns, int64_t requested_end_r_ns,
                                                            std::span<const RecordingSegmentSeal> closed_segments = {},
                                                            const std::function<bool(uint64_t)>& before_index_read = {});
+
+// Includes selected cluster bytes, remux overhead and the disk extent spool, independent of source file offsets.
+[[nodiscard]] Outcome<uint64_t>
+EstimateRecordingClipStorageBytes(const ClipBoundaryPlan& plan, const MediaIndexSnapshot& snapshot,
+                                  const std::function<bool(uint64_t)>& before_index_read = {});
 
 // Estimates retained descriptor storage, including allocated container capacity.
 // Saturates on overflow so callers can reject before copying metadata.

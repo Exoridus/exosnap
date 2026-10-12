@@ -93,6 +93,23 @@ bool IsCancelled(const std::atomic<bool>* cancelled) {
     return cancelled && cancelled->load(std::memory_order_acquire);
 }
 
+Outcome<bool> SelectClipExtent(const ClipBoundaryPlan& plan, SegmentId segment_id, int64_t origin_r_ns,
+                               const ClusterExtent& extent) {
+    bool selected = false;
+    if (plan.end_rap && segment_id == plan.end_rap->segment_id)
+        for (const auto& rap : extent.random_access_points)
+            selected |=
+                rap.cluster_offset == plan.end_rap->cluster_offset && rap.block_offset == plan.end_rap->block_offset;
+    for (const auto& coverage : extent.coverage) {
+        const auto begin = SegmentLocalToRecordingNs(origin_r_ns, coverage.begin_pts_ns);
+        const auto end = SegmentLocalToRecordingNs(origin_r_ns, coverage.end_pts_ns);
+        if (!begin || !end)
+            return ClipError(EngineErrorCode::SourceIntegrityFailure, "Cluster coverage overflows");
+        selected |= *end > plan.read_begin_r_ns && *begin < plan.actual_end_r_ns;
+    }
+    return selected;
+}
+
 struct SpoolExtent {
     uint64_t file_begin = 0;
     uint64_t file_end = 0;
@@ -348,8 +365,9 @@ struct JobState {
             manifest.segment_id = NewId<SegmentId>();
             manifest.segment_origin_r_ns = 0;
             manifest.derived_from_media_ids.clear();
-            for (const auto& source : sources)
-                manifest.derived_from_media_ids.push_back(source.descriptor->media_id);
+            for (size_t index = 0; index < sources.size(); ++index)
+                if (!plan.segments[index].boundary_only)
+                    manifest.derived_from_media_ids.push_back(sources[index].descriptor->media_id);
             for (size_t index = 0; index < manifest.tracks.size(); ++index) {
                 auto& track = manifest.tracks[index].container;
                 if (track.track_id != descriptor.audio_tracks[index].track_id || track.stream_index.value != index)
@@ -386,7 +404,7 @@ struct JobState {
     }
 
     bool ConsumePage(const ClipPinnedSource& source, std::vector<ClusterExtent> page, uint64_t readable_end,
-                     ClipCopiedSourceRange& range) {
+                     ClipCopiedSourceRange& range, bool boundary_only) {
         if (IsCancelled(cancelled))
             return Fail(ClipError(EngineErrorCode::Cancelled, "Clip cancelled"));
         auto opened_view = CommittedMatroskaView::OpenFromPinnedHandle(source.descriptor, std::move(page), readable_end,
@@ -436,6 +454,8 @@ struct JobState {
             const auto dts_r = SegmentLocalToRecordingNs(source.descriptor->segment_origin_r_ns, effective_dts);
             if (!pts_r || !dts_r)
                 return Fail(ClipError(EngineErrorCode::SourceIntegrityFailure, "Source timeline overflows"));
+            if (!video && boundary_only)
+                continue;
             if (video) {
                 if (saw_end) {
                     continue;
@@ -494,7 +514,14 @@ struct JobState {
                             output_delay_ns[audio] > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()))
                             return Fail(
                                 ClipError(EngineErrorCode::MetadataIncomplete, "Opus clip discard is not measurable"));
-                        const uint64_t whole_packets = (static_cast<uint64_t>(*boundary.decoder_discard_samples) / 960);
+                        if (*track.packet_duration_ns > (std::numeric_limits<uint64_t>::max)() / 48000)
+                            return Fail(
+                                ClipError(EngineErrorCode::UnsupportedFormat, "Opus packet duration overflows"));
+                        const uint64_t packet_samples = *track.packet_duration_ns * 48000 / 1000000000ULL;
+                        if (packet_samples == 0)
+                            return Fail(
+                                ClipError(EngineErrorCode::UnsupportedFormat, "Opus packet duration is invalid"));
+                        const uint64_t whole_packets = *boundary.decoder_discard_samples / packet_samples;
                         const uint64_t offset = whole_packets * *track.packet_duration_ns;
                         if (offset > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)() - *pts_r))
                             return Fail(
@@ -583,6 +610,74 @@ Outcome<size_t> VisitRecordingClipDescriptors(const MediaIndexSnapshot& snapshot
     return RecordingMediaIndex::Visit(snapshot, visitor, {}, before_index_read);
 }
 
+Outcome<uint64_t> EstimateRecordingClipStorageBytes(const ClipBoundaryPlan& plan, const MediaIndexSnapshot& snapshot,
+                                                    const std::function<bool(uint64_t)>& before_index_read) {
+    if (snapshot.token.recording_id != plan.recording_id ||
+        snapshot.token.committed_through != plan.snapshot.committed_through || plan.segments.empty())
+        return ClipError(EngineErrorCode::InvalidConfig, "Clip storage estimate does not match its frozen plan");
+    if (plan.segments.size() > kClipSegmentLimit)
+        return ClipError(EngineErrorCode::ResourceBudgetExceeded, "Clip storage segment budget exceeded");
+    std::vector<uint64_t> last_ends(plan.segments.size());
+    std::vector<uint64_t> last_begins(plan.segments.size());
+    uint64_t selected_bytes = 0;
+    uint64_t spool_bytes = ArrayBytes(plan.segments.size(), sizeof(SpoolExtent));
+    size_t current = plan.segments.size();
+    std::optional<EngineError> failure;
+    const auto visited = RecordingMediaIndex::Visit(
+        snapshot,
+        [&](const RecordingMediaDescriptor& descriptor) {
+            current = plan.segments.size();
+            for (size_t index = 0; index < plan.segments.size(); ++index) {
+                const auto& segment = plan.segments[index];
+                if (descriptor.segment_id == segment.segment_id &&
+                    descriptor.writer_generation == segment.writer_generation &&
+                    descriptor.descriptor_revision == segment.descriptor_revision) {
+                    current = index;
+                    break;
+                }
+            }
+            return true;
+        },
+        [&](const CommittedMediaReceipt& receipt) {
+            if (current == plan.segments.size())
+                return true;
+            const auto& segment = plan.segments[current];
+            if (receipt.commit_sequence > plan.snapshot.committed_through ||
+                receipt.readable_end_offset > segment.readable_end_offset) {
+                failure = ClipError(EngineErrorCode::SourceIntegrityFailure, "Receipt exceeds frozen storage extent");
+                return false;
+            }
+            for (const auto& extent : receipt.clusters) {
+                const auto selected = SelectClipExtent(plan, segment.segment_id, segment.origin_r_ns, extent);
+                if (!selected.succeeded()) {
+                    failure = *selected.error();
+                    return false;
+                }
+                if (!*selected.value())
+                    continue;
+                if (extent.file_end <= extent.file_begin || extent.file_end > receipt.readable_end_offset ||
+                    extent.file_begin < last_begins[current]) {
+                    failure =
+                        ClipError(EngineErrorCode::SourceIntegrityFailure, "Selected storage extents are out of order");
+                    return false;
+                }
+                const uint64_t begin = (std::max)(extent.file_begin, last_ends[current]);
+                if (extent.file_end > begin)
+                    selected_bytes = AddBytes(selected_bytes, extent.file_end - begin);
+                spool_bytes = AddBytes(spool_bytes, sizeof(SpoolExtent));
+                last_begins[current] = extent.file_begin;
+                last_ends[current] = (std::max)(last_ends[current], extent.file_end);
+            }
+            return true;
+        },
+        before_index_read);
+    if (!visited.succeeded())
+        return *visited.error();
+    if (failure)
+        return *failure;
+    return AddBytes(AddBytes(32ULL * 1024 * 1024, AddBytes(selected_bytes, selected_bytes / 10)), spool_bytes);
+}
+
 Outcome<RecordingClipDraft> RunRecordingClipJob(const ClipBoundaryPlan& plan, const MediaIndexSnapshot& snapshot,
                                                 std::span<const ClipPinnedSource> sources,
                                                 const std::filesystem::path& staging_path,
@@ -613,6 +708,10 @@ Outcome<RecordingClipDraft> RunRecordingClipJob(const ClipBoundaryPlan& plan, co
             source.descriptor->file_identity != planned.file_identity ||
             IdentityOf(source.borrowed_handle) != planned.file_identity)
             return ClipError(EngineErrorCode::SourceIntegrityFailure, "Pinned clip source identity changed");
+        if (planned.boundary_only &&
+            (index + 1 != sources.size() || !plan.end_rap || planned.segment_id != plan.end_rap->segment_id ||
+             plan.end_rap->pts_r_ns != plan.actual_end_r_ns))
+            return ClipError(EngineErrorCode::InvalidConfig, "Boundary-only source does not match the clip end");
         if (index && !SameTrackPlan(*sources.front().descriptor, *source.descriptor))
             return ClipError(EngineErrorCode::UnsupportedFormat, "Segment track layout changed within clip");
         if (!source.descriptor->audio_tracks.empty() &&
@@ -663,24 +762,14 @@ Outcome<RecordingClipDraft> RunRecordingClipJob(const ClipBoundaryPlan& plan, co
                     return false;
                 }
                 for (const auto& extent : receipt.clusters) {
-                    bool selected = false;
-                    for (const auto& coverage : extent.coverage) {
-                        const auto begin =
-                            SegmentLocalToRecordingNs(source.descriptor->segment_origin_r_ns, coverage.begin_pts_ns);
-                        const auto end =
-                            SegmentLocalToRecordingNs(source.descriptor->segment_origin_r_ns, coverage.end_pts_ns);
-                        if (!begin || !end) {
-                            stopped = true;
-                            job.Fail(ClipError(EngineErrorCode::SourceIntegrityFailure, "Cluster coverage overflows"));
-                            return false;
-                        }
-                        selected |= *end > plan.read_begin_r_ns && *begin < plan.actual_end_r_ns;
+                    const auto selected = SelectClipExtent(plan, source.descriptor->segment_id,
+                                                           source.descriptor->segment_origin_r_ns, extent);
+                    if (!selected.succeeded()) {
+                        stopped = true;
+                        job.Fail(*selected.error());
+                        return false;
                     }
-                    if (plan.end_rap && source.descriptor->segment_id == plan.end_rap->segment_id)
-                        for (const auto& rap : extent.random_access_points)
-                            selected |= rap.cluster_offset == plan.end_rap->cluster_offset &&
-                                        rap.block_offset == plan.end_rap->block_offset;
-                    if (!selected)
+                    if (!*selected.value())
                         continue;
                     if (!write_extent({extent.file_begin, extent.file_end, receipt.readable_end_offset})) {
                         stopped = true;
@@ -714,7 +803,7 @@ Outcome<RecordingClipDraft> RunRecordingClipJob(const ClipBoundaryPlan& plan, co
             if (page.empty())
                 return true;
             auto selected = std::move(page);
-            if (!job.ConsumePage(source, std::move(selected), readable_end, range))
+            if (!job.ConsumePage(source, std::move(selected), readable_end, range, plan.segments[index].boundary_only))
                 return false;
             page.clear();
             page.reserve(kExtentPage);
@@ -738,6 +827,12 @@ Outcome<RecordingClipDraft> RunRecordingClipJob(const ClipBoundaryPlan& plan, co
         }
         if (!flush())
             return *job.failure;
+        if (plan.segments[index].boundary_only) {
+            if (!job.saw_end || range.begin_r_ns < range.end_r_ns)
+                return ClipError(EngineErrorCode::SourceIntegrityFailure,
+                                 "Boundary-only source did not prove the clip end");
+            continue;
+        }
         if (range.begin_r_ns >= range.end_r_ns)
             return ClipError(EngineErrorCode::SourceIntegrityFailure,
                              "Planned source contributed no copied video interval");
@@ -761,7 +856,7 @@ Outcome<RecordingClipDraft> RunRecordingClipJob(const ClipBoundaryPlan& plan, co
         return ClipError(IsCancelled(cancelled) ? EngineErrorCode::Cancelled : EngineErrorCode::StorageInsufficient,
                          "Clip staging finalize failed: " + job.writer.error());
     job.draft.peak_cluster_payload_bytes = job.writer.peak_cluster_payload_bytes();
-    return job.draft;
+    return std::move(job.draft);
 }
 
 } // namespace exosnap::engine

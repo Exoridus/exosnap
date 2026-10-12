@@ -409,21 +409,29 @@ TEST(RecordingClipTest, FrozenPlanUsesClosedRapAndRequiresMatchingSealForEos) {
     descriptor.video.codec_id = "V_MPEG4/ISO/AVC";
     descriptor.immutable_header = {0x1a};
     descriptor.continuity_group = 1;
+    constexpr uint64_t offset = 50ULL * 1024 * 1024 * 1024;
     CommittedMediaReceipt receipt;
     receipt.recording_id = descriptor.recording_id;
     receipt.segment_id = descriptor.segment_id;
     receipt.writer_generation = 1;
     receipt.descriptor_revision = 1;
     receipt.commit_sequence = 1;
-    receipt.readable_end_offset = 100;
-    receipt.durable_end_offset = 100;
+    receipt.readable_end_offset = offset + 100;
+    receipt.durable_end_offset = offset + 100;
     ClusterExtent extent;
-    extent.file_begin = 1;
-    extent.file_end = 100;
-    extent.coverage.push_back({1, 0, 6'000'000'000, -5'000'000, 4'000'000'000});
-    extent.random_access_points.push_back({1, 1, 2, 0, -5'000'000, RandomAccessKind::ClosedGop});
-    extent.random_access_points.push_back({1, 1, 3, 2'000'000'000, 1'995'000'000, RandomAccessKind::ClosedGop});
-    extent.random_access_points.push_back({1, 1, 4, 4'000'000'000, 3'995'000'000, RandomAccessKind::ClosedGop});
+    extent.file_begin = offset + 1;
+    extent.file_end = offset + 100;
+    extent.coverage.push_back({1, 2'000'000'000, 6'000'000'000, 1'995'000'000, 4'000'000'000});
+    ClusterExtent prefix;
+    prefix.file_begin = 1;
+    prefix.file_end = offset + 1;
+    prefix.coverage.push_back({1, 0, 2'000'000'000, -5'000'000, 1'995'000'000});
+    prefix.random_access_points.push_back({1, 1, 2, 0, -5'000'000, RandomAccessKind::ClosedGop});
+    receipt.clusters.push_back(std::move(prefix));
+    extent.random_access_points.push_back(
+        {1, offset + 1, offset + 3, 2'000'000'000, 1'995'000'000, RandomAccessKind::ClosedGop});
+    extent.random_access_points.push_back(
+        {1, offset + 1, offset + 4, 4'000'000'000, 3'995'000'000, RandomAccessKind::ClosedGop});
     receipt.clusters.push_back(std::move(extent));
     {
         RecordingMediaIndex index(journal);
@@ -445,15 +453,22 @@ TEST(RecordingClipTest, FrozenPlanUsesClosedRapAndRequiresMatchingSealForEos) {
         EXPECT_EQ(planned.value()->start_rap.dts_r_ns, 1'995'000'000);
         EXPECT_FALSE(planned.value()->end_at_sealed_eos);
         EXPECT_EQ(planned.value()->segments.size(), 1u);
+        const auto storage = EstimateRecordingClipStorageBytes(*planned.value(), *frozen.value());
+        ASSERT_TRUE(storage.succeeded()) << storage.error()->context;
+        EXPECT_EQ(*storage.value(), 32ULL * 1024 * 1024 + 99 + 9 + 2 * 24);
+        const auto cancelled_storage =
+            EstimateRecordingClipStorageBytes(*planned.value(), *frozen.value(), [](uint64_t) { return false; });
+        ASSERT_FALSE(cancelled_storage.succeeded());
+        EXPECT_EQ(cancelled_storage.error()->code, EngineErrorCode::Cancelled);
         const RecordingSegmentSeal valid_seal{
-            descriptor.recording_id, descriptor.segment_id, 1, 1, 1, 100, 6'000'000'000};
+            descriptor.recording_id, descriptor.segment_id, 1, 1, 1, offset + 100, 6'000'000'000};
         const auto sealed = PlanClipBoundaries(*frozen.value(), descriptor.recording_id, 2'500'000'000, 7'000'000'000,
                                                std::span<const RecordingSegmentSeal>(&valid_seal, 1));
         ASSERT_TRUE(sealed.succeeded()) << sealed.error()->context;
         EXPECT_TRUE(sealed.value()->end_at_sealed_eos);
         EXPECT_EQ(sealed.value()->actual_end_r_ns, 6'000'000'000);
         auto forged_seal = valid_seal;
-        forged_seal.final_readable_end = 99;
+        forged_seal.final_readable_end = offset + 99;
         const auto unsealed = PlanClipBoundaries(*frozen.value(), descriptor.recording_id, 2'500'000'000, 7'000'000'000,
                                                  std::span<const RecordingSegmentSeal>(&forged_seal, 1));
         ASSERT_TRUE(unsealed.succeeded()) << unsealed.error()->context;
@@ -800,7 +815,7 @@ OpusDecodeReference DecodeOpusReference(const std::filesystem::path& path) {
     return result;
 }
 
-TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
+void CheckOpusClipDuration(OpusFrameDuration frame_duration) {
     const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
     const auto source_path = exosnap_test::UniqueTempPath("clip_opus_source.mkv");
     const auto clip_path = exosnap_test::UniqueTempPath("clip_opus_draft.mkv");
@@ -829,6 +844,7 @@ TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
     }
     ASSERT_FALSE(video_packets.empty());
     OpusAudioEncoder encoder;
+    encoder.SetEncodingParams(0, frame_duration);
     std::string encoder_error;
     ASSERT_TRUE(encoder.Init(48000, 2, encoder_error)) << encoder_error;
     constexpr size_t frames = 48000 * 9;
@@ -852,6 +868,8 @@ TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
     config.frame_rate_num = 30;
     config.frame_rate_den = 1;
     config.audio_codec = StreamAudioCodec::Opus;
+    config.opus_frame_samples = static_cast<uint32_t>(encoder.FrameSizeSamples());
+    const uint64_t packet_duration_ns = static_cast<uint64_t>(encoder.FrameSizeSamples()) * 1000000000ULL / 48000;
     config.audio_track_count = 1;
     config.audio_sample_rate = 48000;
     config.audio_channels = 2;
@@ -877,7 +895,7 @@ TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
     audio.container.codec.channel_layout = "stereo";
     audio.container.encoder_instance_id = NewId<AudioEncoderInstanceId>();
     audio.container.encoder_reset = true;
-    audio.container.packet_duration_ns = 20'000'000;
+    audio.container.packet_duration_ns = packet_duration_ns;
     audio.container.preroll_ns = 80'000'000;
     manifest.tracks.push_back(audio);
     manifest.default_monitor_track_ids.push_back(audio.container.track_id);
@@ -938,10 +956,11 @@ TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
                                            std::span<const ClipPinnedSource>(&source, 1), clip_path);
     CloseHandle(pinned);
     ASSERT_TRUE(draft.succeeded()) << draft.error()->context;
+    EXPECT_EQ(draft.value()->audio_boundaries[0].first_audible_r_ns, draft.value()->actual_begin_r_ns);
     ASSERT_TRUE(draft.value()->output_manifest.has_value());
     EXPECT_EQ(draft.value()->output_manifest->tracks[0].container.codec.codec_delay_samples, 3840u);
     ASSERT_EQ(draft.value()->audio_packets.size(), 1u);
-    EXPECT_EQ(draft.value()->audio_packets[0], 204u);
+    EXPECT_EQ(draft.value()->audio_packets[0], 4'080'000'000ULL / packet_duration_ns);
     ASSERT_EQ(draft.value()->audio_boundaries.size(), 1u);
     EXPECT_EQ(draft.value()->audio_boundaries[0].first_copied_packet_r_ns, 3'920'000'000);
     EXPECT_EQ(draft.value()->audio_boundaries[0].first_audible_r_ns, 4'000'000'000);
@@ -950,6 +969,9 @@ TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
     const auto source_audio = DecodeOpusReference(source_path);
     const auto clip_audio = DecodeOpusReference(clip_path);
     ASSERT_TRUE(source_audio.first_pts_ns.has_value());
+    const int64_t expected_start_ns =
+        frame_duration == OpusFrameDuration::Ms5 || frame_duration == OpusFrameDuration::Ms2_5 ? 5'000'000 : 0;
+    EXPECT_EQ(*source_audio.first_pts_ns, expected_start_ns);
     ASSERT_TRUE(clip_audio.first_pts_ns.has_value());
     EXPECT_EQ(*clip_audio.first_pts_ns, 0);
     const auto reference = std::find_if(source_audio.frame_offsets.begin(), source_audio.frame_offsets.end(),
@@ -982,7 +1004,7 @@ TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
     std::vector<MuxPacket> first_packets;
     for (auto item : video_packets)
         first_packets.push_back(std::move(item));
-    for (size_t packet_index = 0; packet_index < 200; ++packet_index) {
+    for (size_t packet_index = 0; packet_index < 4'000'000'000ULL / packet_duration_ns; ++packet_index) {
         MuxPacket item;
         item.track_num = 2;
         item.pts_ns = encoded[packet_index].pts_ns + delay_ns;
@@ -1027,7 +1049,7 @@ TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
             *item.dts_ns += static_cast<int64_t>(cycle * 4'000'000'000ULL - 3'920'000'000ULL);
             second_packets.push_back(std::move(item));
         }
-    for (size_t packet_index = 196; packet_index < encoded.size(); ++packet_index) {
+    for (size_t packet_index = 3'920'000'000ULL / packet_duration_ns; packet_index < encoded.size(); ++packet_index) {
         MuxPacket item;
         item.track_num = 2;
         item.pts_ns = encoded[packet_index].pts_ns - 3'920'000'000ULL + 80'000'000ULL;
@@ -1051,6 +1073,43 @@ TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
     ASSERT_TRUE(split_snapshot.succeeded()) << split_snapshot.error()->context;
     const auto split_plan =
         PlanClipBoundaries(*split_snapshot.value(), first_descriptor->recording_id, 500'000'000, 8'100'000'000);
+    if (frame_duration == OpusFrameDuration::Ms2_5) {
+        ASSERT_FALSE(split_plan.succeeded());
+        EXPECT_EQ(split_plan.error()->code, EngineErrorCode::UnsupportedFormat);
+        const auto later_plan =
+            PlanClipBoundaries(*split_snapshot.value(), first_descriptor->recording_id, 4'200'000'000, 8'100'000'000);
+        ASSERT_TRUE(later_plan.succeeded()) << later_plan.error()->context;
+        ASSERT_EQ(later_plan.value()->segments.size(), 1u);
+        HANDLE later_handle =
+            CreateFileW(second_path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+        ASSERT_NE(later_handle, INVALID_HANDLE_VALUE);
+        const std::array<ClipPinnedSource, 1> later_sources{
+            {{second_descriptor, later_handle, *second_config.audio_manifest}}};
+        const auto later =
+            RunRecordingClipJob(*later_plan.value(), *split_snapshot.value(), later_sources, joined_path);
+        CloseHandle(later_handle);
+        ASSERT_TRUE(later.succeeded()) << later.error()->context;
+        const auto later_audio = DecodeOpusReference(joined_path);
+        EXPECT_EQ(later_audio.first_pts_ns, clip_audio.first_pts_ns);
+        ASSERT_EQ(later_audio.samples.size(), clip_audio.samples.size());
+        double later_error = 0;
+        for (size_t sample = 0; sample < later_audio.samples.size(); ++sample) {
+            const double difference = later_audio.samples[sample] - clip_audio.samples[sample];
+            later_error += difference * difference;
+        }
+        EXPECT_LT(std::sqrt(later_error / later_audio.samples.size()), 0.02);
+        EXPECT_EQ(DecodeVideoReference(joined_path, 4'000'000'000), DecodeVideoReference(clip_path, 4'000'000'000));
+        std::error_code ignored;
+        std::filesystem::remove(source_path, ignored);
+        std::filesystem::remove(clip_path, ignored);
+        std::filesystem::remove(journal, ignored);
+        std::filesystem::remove(first_path, ignored);
+        std::filesystem::remove(second_path, ignored);
+        std::filesystem::remove(joined_path, ignored);
+        std::filesystem::remove(split_journal, ignored);
+        return;
+    }
     ASSERT_TRUE(split_plan.succeeded()) << split_plan.error()->context;
     ASSERT_EQ(split_plan.value()->segments.size(), 2u);
     EXPECT_EQ(split_plan.value()->actual_begin_r_ns, 0);
@@ -1066,6 +1125,23 @@ TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
     const std::array<ClipPinnedSource, 2> split_sources{
         {{first_descriptor, first_handle, *first_config.audio_manifest},
          {second_descriptor, second_handle, *second_config.audio_manifest}}};
+    const auto boundary_plan =
+        PlanClipBoundaries(*split_snapshot.value(), first_descriptor->recording_id, 500'000'000, 4'100'000'000);
+    ASSERT_TRUE(boundary_plan.succeeded()) << boundary_plan.error()->context;
+    EXPECT_EQ(boundary_plan.value()->actual_end_r_ns, 4'000'000'000);
+    const auto boundary_path = exosnap_test::UniqueTempPath("clip_opus_split_boundary.mkv");
+    const auto boundary =
+        RunRecordingClipJob(*boundary_plan.value(), *split_snapshot.value(),
+                            std::span(split_sources).first(boundary_plan.value()->segments.size()), boundary_path);
+    ASSERT_TRUE(boundary.succeeded()) << boundary.error()->context;
+    ASSERT_EQ(boundary.value()->source_ranges.size(), 1u);
+    ASSERT_TRUE(boundary.value()->output_manifest.has_value());
+    EXPECT_EQ(boundary.value()->output_manifest->derived_from_media_ids.size(), 1u);
+    EXPECT_EQ(boundary.value()->audio_packets[0], 4'000'000'000ULL / packet_duration_ns);
+    EXPECT_EQ(boundary.value()->source_ranges[0].end_r_ns, 4'000'000'000);
+    EXPECT_EQ(DecodeVideoReference(boundary_path, 5'000'000'000), DecodeVideoReference(source_path, 4'000'000'000));
+    std::error_code boundary_remove_error;
+    std::filesystem::remove(boundary_path, boundary_remove_error);
     const auto joined = RunRecordingClipJob(*split_plan.value(), *split_snapshot.value(), split_sources, joined_path);
     CloseHandle(first_handle);
     CloseHandle(second_handle);
@@ -1081,12 +1157,12 @@ TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
     EXPECT_EQ(joined.value()->source_ranges[1].begin_r_ns, 4'000'000'000);
     EXPECT_EQ(joined.value()->source_ranges[1].end_r_ns, 8'000'000'000);
     ASSERT_EQ(joined.value()->audio_packets.size(), 1u);
-    EXPECT_EQ(joined.value()->audio_packets[0], 400u);
+    EXPECT_EQ(joined.value()->audio_packets[0], 8'000'000'000ULL / packet_duration_ns);
     ASSERT_TRUE(joined.value()->output_manifest.has_value());
     EXPECT_EQ(joined.value()->output_manifest->derived_from_media_ids.size(), 2u);
     const auto joined_audio = DecodeOpusReference(joined_path);
     ASSERT_TRUE(joined_audio.first_pts_ns.has_value());
-    EXPECT_EQ(*joined_audio.first_pts_ns, 0);
+    EXPECT_EQ(*joined_audio.first_pts_ns, expected_start_ns);
     ASSERT_GE(source_audio.samples.size(), joined_audio.samples.size());
     EXPECT_EQ(joined_audio.samples.size(), 383688u);
     double split_error = 0;
@@ -1107,6 +1183,19 @@ TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
     std::filesystem::remove(second_path, ignored);
     std::filesystem::remove(joined_path, ignored);
     std::filesystem::remove(split_journal, ignored);
+}
+
+TEST(RecordingClipTest, MidRecordingOpusClipConsumesDecoderPrerollOnce) {
+    CheckOpusClipDuration(OpusFrameDuration::Ms20);
+}
+TEST(RecordingClipTest, TenMillisecondOpusClipPreservesAudibleBoundary) {
+    CheckOpusClipDuration(OpusFrameDuration::Ms10);
+}
+TEST(RecordingClipTest, FiveMillisecondOpusClipPreservesAudibleBoundary) {
+    CheckOpusClipDuration(OpusFrameDuration::Ms5);
+}
+TEST(RecordingClipTest, TwoPointFiveMillisecondOpusClipPreservesAudibleBoundary) {
+    CheckOpusClipDuration(OpusFrameDuration::Ms2_5);
 }
 
 void CheckPcmTrackCount(unsigned track_count) {

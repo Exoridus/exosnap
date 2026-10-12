@@ -24,11 +24,48 @@
 
 #include "services/AtomicFileOps.h"
 #include "services/MediaMetadataPublication.h"
+#include "settings/ConfigPaths.h"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QTemporaryDir>
 #include <filesystem>
+
+namespace {
+class ScopedPublicationConfig {
+  public:
+    explicit ScopedPublicationConfig(const QString& folder) : previous_(qgetenv("EXOSNAP_CONFIG_DIR")) {
+        qputenv("EXOSNAP_CONFIG_DIR", folder.toUtf8());
+    }
+    ~ScopedPublicationConfig() {
+        qputenv("EXOSNAP_CONFIG_DIR", previous_);
+    }
+
+  private:
+    QByteArray previous_;
+};
+} // namespace
+TEST(MediaIdentityPublication, PersistsRecoveryRecordBeforeFirstCompanionRename) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    ScopedPublicationConfig config(directory.path());
+    const auto source = std::filesystem::path(directory.path().toStdWString()) / L"staged.mp4.tmp";
+    const auto target = std::filesystem::path(directory.path().toStdWString()) / L"final.mp4";
+    const auto write = [](const std::filesystem::path& path) {
+        QFile file(QString::fromStdWString(path.wstring()));
+        return file.open(QIODevice::WriteOnly) && file.write("bytes") == 5;
+    };
+    ASSERT_TRUE(write(source));
+    ASSERT_TRUE(write(std::filesystem::path(source.wstring() + L".exosnap.json")));
+    bool observed = false;
+    const auto error = exosnap::PublishMediaAndIdentitySidecar(source, target, false, [&] {
+        observed = true;
+        const QDir journals(QDir(directory.path()).filePath(QStringLiteral("publications")));
+        EXPECT_FALSE(journals.entryList({QStringLiteral("*.json")}, QDir::Files).isEmpty());
+    });
+    EXPECT_EQ(error, ERROR_SUCCESS);
+    EXPECT_TRUE(observed);
+}
 
 TEST(MediaIdentityPublication, CancellationWithoutIdentityDoesNotStageMarkers) {
     QTemporaryDir directory;
@@ -574,4 +611,168 @@ TEST(StagingCleanup, AStagingFileHeldOpenIsReportedAndNamed) {
     // And the file really is still there -- the report is not describing a
     // removal that happened anyway.
     EXPECT_TRUE(std::filesystem::exists(staging));
+}
+
+#include <QProcess>
+#include <QProcessEnvironment>
+
+TEST(MediaIdentityPublication, PublicationCrashChild) {
+    const auto folder = qEnvironmentVariable("EXOSNAP_PUBLICATION_CHILD_DIR");
+    if (folder.isEmpty())
+        return;
+    const auto source = std::filesystem::path(folder.toStdWString()) / L"staged.mp4.tmp";
+    const auto target = std::filesystem::path(folder.toStdWString()) / L"final.mp4";
+    const auto checkpoint = qEnvironmentVariableIntValue("EXOSNAP_PUBLICATION_CHILD_PHASE");
+    int observed = 0;
+    const auto result = exosnap::PublishMediaAndIdentitySidecar(source, target, true, [&] {
+        if (++observed == checkpoint)
+            TerminateProcess(GetCurrentProcess(), 77);
+    });
+    FAIL() << "Child publication returned without expected termination: " << result;
+}
+
+TEST(MediaIdentityPublication, ProcessKillAtEachRenameRestoresConsistentOutput) {
+    wchar_t executable[32768]{};
+    ASSERT_NE(GetModuleFileNameW(nullptr, executable, 32768), 0UL);
+    const auto write = [](const std::filesystem::path& path, const QByteArray& bytes) {
+        QFile file(QString::fromStdWString(path.wstring()));
+        return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+    };
+    const auto read = [](const std::filesystem::path& path) {
+        QFile file(QString::fromStdWString(path.wstring()));
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
+    };
+    for (int layout : {0, 1, 2}) {
+        const bool overwrite = layout != 0;
+        const bool new_markers = layout != 2;
+        const int rename_count = overwrite ? (new_markers ? 5 : 4) : 3;
+        for (int checkpoint = 1; checkpoint <= rename_count; ++checkpoint) {
+            SCOPED_TRACE(::testing::Message() << "overwrite=" << overwrite << " checkpoint=" << checkpoint);
+            QTemporaryDir directory;
+            ASSERT_TRUE(directory.isValid());
+            const auto folder = std::filesystem::path(directory.path().toStdWString());
+            const auto source = folder / L"staged.mp4.tmp";
+            const auto target = folder / L"final.mp4";
+            const auto source_identity = std::filesystem::path(source.wstring() + L".exosnap.json");
+            const auto target_identity = std::filesystem::path(target.wstring() + L".exosnap.json");
+            const auto source_markers = exosnap::DeriveMarkerSidecarPath(source);
+            const auto target_markers = exosnap::DeriveMarkerSidecarPath(target);
+            ASSERT_TRUE(write(source, "new media"));
+            ASSERT_TRUE(write(source_identity, "new identity"));
+            if (new_markers)
+                ASSERT_TRUE(write(source_markers, "new markers"));
+            if (overwrite) {
+                ASSERT_TRUE(write(target, "old media"));
+                ASSERT_TRUE(write(target_identity, "old identity"));
+                ASSERT_TRUE(write(target_markers, "old markers"));
+            }
+            QProcess child;
+            auto environment = QProcessEnvironment::systemEnvironment();
+            environment.insert(QStringLiteral("EXOSNAP_CONFIG_DIR"), directory.path());
+            environment.insert(QStringLiteral("EXOSNAP_PUBLICATION_CHILD_DIR"), directory.path());
+            environment.insert(QStringLiteral("EXOSNAP_PUBLICATION_CHILD_PHASE"), QString::number(checkpoint));
+            child.setProcessEnvironment(environment);
+            child.start(QString::fromWCharArray(executable),
+                        {QStringLiteral("--gtest_filter=MediaIdentityPublication.PublicationCrashChild")});
+            ASSERT_TRUE(child.waitForFinished(30000)) << child.errorString().toStdString();
+            ASSERT_EQ(child.exitCode(), 77) << child.readAllStandardOutput().toStdString();
+            ScopedPublicationConfig config(directory.path());
+            exosnap::RecoveryManifestStore store(QDir(directory.path()).filePath(QStringLiteral("recovery.json")));
+            exosnap::RecoveryService recovery(store);
+            EXPECT_TRUE(recovery.Scan().isEmpty());
+            EXPECT_TRUE(QDir(QDir(directory.path()).filePath(QStringLiteral("publications")))
+                            .entryList({QStringLiteral("*.json")}, QDir::Files)
+                            .isEmpty());
+            const auto error = exosnap::RecoverInterruptedMediaPublications();
+            EXPECT_TRUE(error.empty()) << error;
+            const bool committed = checkpoint == rename_count;
+            EXPECT_EQ(read(target), committed ? "new media" : overwrite ? "old media" : "");
+            EXPECT_EQ(read(target_identity), committed ? "new identity" : overwrite ? "old identity" : "");
+            EXPECT_EQ(read(target_markers), committed   ? (new_markers ? "new markers" : "")
+                                            : overwrite ? "old markers"
+                                                        : "");
+            EXPECT_EQ(read(source), committed ? "" : "new media");
+            EXPECT_TRUE(QDir(QDir(directory.path()).filePath(QStringLiteral("publications")))
+                            .entryList({QStringLiteral("*.json")}, QDir::Files)
+                            .isEmpty());
+        }
+    }
+}
+
+TEST(MediaIdentityPublication, RecoveryRetainsCorruptJournalAndChangedUserFiles) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    ScopedPublicationConfig config(directory.path());
+    const auto folder = std::filesystem::path(directory.path().toStdWString());
+    const auto source = folder / L"staged.mp4.tmp";
+    const auto target = folder / L"final.mp4";
+    const auto target_identity = std::filesystem::path(target.wstring() + L".exosnap.json");
+    const auto write = [](const std::filesystem::path& path, const QByteArray& bytes) {
+        QFile file(QString::fromStdWString(path.wstring()));
+        return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+    };
+    ASSERT_TRUE(write(source, "new media"));
+    ASSERT_TRUE(write(std::filesystem::path(source.wstring() + L".exosnap.json"), "new identity"));
+    struct Interrupted {};
+    try {
+        (void)exosnap::PublishMediaAndIdentitySidecar(source, target, false, [] { throw Interrupted{}; });
+        ADD_FAILURE() << "Publication did not reach companion rename";
+    } catch (const Interrupted&) {
+    }
+    ASSERT_TRUE(write(target_identity, "user changed identity after interruption"));
+    EXPECT_FALSE(exosnap::RecoverInterruptedMediaPublications().empty());
+    QFile identity(QString::fromStdWString(target_identity.wstring()));
+    ASSERT_TRUE(identity.open(QIODevice::ReadOnly));
+    EXPECT_EQ(identity.readAll(), "user changed identity after interruption");
+    EXPECT_TRUE(std::filesystem::exists(source));
+    EXPECT_FALSE(exosnap::DescribeFailedStagingRemoval(source).empty());
+    EXPECT_TRUE(std::filesystem::exists(source));
+    const QDir journals(QDir(directory.path()).filePath(QStringLiteral("publications")));
+    EXPECT_EQ(journals.entryList({QStringLiteral("*.json")}, QDir::Files).size(), 1);
+    ASSERT_TRUE(write(std::filesystem::path(journals.filePath(QStringLiteral("corrupt.json")).toStdWString()),
+                      "not a journal"));
+    EXPECT_FALSE(exosnap::RecoverInterruptedMediaPublications().empty());
+    EXPECT_EQ(journals.entryList({QStringLiteral("*.json")}, QDir::Files).size(), 2);
+}
+
+#include <QLockFile>
+
+TEST(MediaIdentityPublication, InterruptedRollbackAndActivePublisherRetainRecoveryState) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    ScopedPublicationConfig config(directory.path());
+    const auto folder = std::filesystem::path(directory.path().toStdWString());
+    const auto source = folder / L"staged.mp4.tmp";
+    const auto target = folder / L"final.mp4";
+    const auto staged_identity = std::filesystem::path(source.wstring() + L".exosnap.json");
+    const auto final_identity = std::filesystem::path(target.wstring() + L".exosnap.json");
+    const auto write = [](const std::filesystem::path& path, const QByteArray& bytes) {
+        QFile file(QString::fromStdWString(path.wstring()));
+        return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+    };
+    ASSERT_TRUE(write(source, "new media"));
+    ASSERT_TRUE(write(target, "old media"));
+    ASSERT_TRUE(write(staged_identity, "new identity"));
+    ASSERT_TRUE(write(final_identity, "old identity"));
+    struct Interrupted {};
+    int renamed = 0;
+    try {
+        (void)exosnap::PublishMediaAndIdentitySidecar(source, target, true, [&] {
+            if (++renamed == 2)
+                throw Interrupted{};
+        });
+        ADD_FAILURE() << "Publication did not reach companion rename";
+    } catch (const Interrupted&) {
+    }
+    QLockFile active(QDir(directory.path()).filePath(QStringLiteral("publications/active.lock")));
+    ASSERT_TRUE(active.tryLock(0));
+    EXPECT_FALSE(exosnap::RecoverInterruptedMediaPublications().empty());
+    active.unlock();
+    ASSERT_EQ(exosnap::AtomicReplaceInPlace(final_identity, staged_identity), ERROR_SUCCESS);
+    EXPECT_TRUE(exosnap::RecoverInterruptedMediaPublications().empty());
+    EXPECT_TRUE(exosnap::RecoverInterruptedMediaPublications().empty());
+    QFile identity(QString::fromStdWString(final_identity.wstring()));
+    ASSERT_TRUE(identity.open(QIODevice::ReadOnly));
+    EXPECT_EQ(identity.readAll(), "old identity");
+    EXPECT_TRUE(std::filesystem::exists(source));
 }

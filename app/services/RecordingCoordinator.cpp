@@ -161,7 +161,8 @@ static FilenameTargetContext BuildFilenameContextFromTarget(const exosnap::engin
 }
 
 exosnap::engine::AudioEnvironmentSnapshot ObserveRecordingAudioEnvironment(const exosnap::engine::CaptureTarget& target,
-                                                                           uint32_t os_build) {
+                                                                           uint32_t os_build,
+                                                                           const exosnap::engine::AudioIntent* intent) {
     using namespace exosnap::engine;
     AudioEnvironmentSnapshot environment;
     environment.window_target = target.kind == CaptureTarget::Kind::Window;
@@ -181,21 +182,47 @@ exosnap::engine::AudioEnvironmentSnapshot ObserveRecordingAudioEnvironment(const
                       environment.default_microphone_by_role);
     environment.default_playback_endpoint = environment.default_playback_by_role[0];
     environment.default_microphone_endpoint = environment.default_microphone_by_role[0];
+    const auto observe_process = [](uint32_t pid) -> std::optional<ProcessInstanceIdentity> {
+        const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (process == nullptr)
+            return std::nullopt;
+        FILETIME creation{}, exit_time{}, kernel{}, user{};
+        DWORD exit_code = 0;
+        std::wstring executable(32768, L'\0');
+        DWORD executable_size = static_cast<DWORD>(executable.size());
+        std::optional<ProcessInstanceIdentity> identity;
+        if (GetProcessTimes(process, &creation, &exit_time, &kernel, &user) &&
+            QueryFullProcessImageNameW(process, 0, executable.data(), &executable_size) &&
+            GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE) {
+            identity = ProcessInstanceIdentity{
+                pid, (uint64_t{creation.dwHighDateTime} << 32) | creation.dwLowDateTime,
+                QString::fromWCharArray(executable.data(), static_cast<int>(executable_size)).toStdString()};
+        }
+        CloseHandle(process);
+        return identity;
+    };
     if (environment.window_target && target.native_id != 0) {
         DWORD pid = 0;
         GetWindowThreadProcessId(reinterpret_cast<HWND>(target.native_id), &pid);
         if (pid != 0) {
-            const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-            if (process != nullptr) {
-                FILETIME creation{}, exit_time{}, kernel{}, user{};
-                DWORD exit_code = 0;
-                if (GetProcessTimes(process, &creation, &exit_time, &kernel, &user) &&
-                    GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE) {
-                    environment.capture_target_process = ProcessInstanceIdentity{
-                        pid, (uint64_t{creation.dwHighDateTime} << 32) | creation.dwLowDateTime, {}};
-                }
-                CloseHandle(process);
-            }
+            environment.capture_target_process = observe_process(pid);
+            if (environment.capture_target_process)
+                environment.confirmed_processes.push_back(*environment.capture_target_process);
+        }
+    }
+    if (const auto* graph = intent ? std::get_if<TrackGraph1Intent>(intent) : nullptr;
+        graph && graph->sources.size() <= kMaxAudioSources) {
+        for (const auto& source : graph->sources) {
+            const auto& binding = source.binding;
+            if (binding.kind != AudioBindingKind::IndependentProcess || !binding.process_selection_confirmed ||
+                !binding.process || binding.process->process_id == 0)
+                continue;
+            const auto pid = binding.process->process_id;
+            if (std::any_of(environment.confirmed_processes.begin(), environment.confirmed_processes.end(),
+                            [pid](const auto& identity) { return identity.process_id == pid; }))
+                continue;
+            if (const auto observed = observe_process(pid))
+                environment.confirmed_processes.push_back(*observed);
         }
     }
     return environment;
@@ -1397,7 +1424,8 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     config.flac_compression_level = plan.flac_compression_level;
 
     if (ctx.audio_intent) {
-        auto environment = ObserveRecordingAudioEnvironment(target, ctx.caps.runtime.os.build_number);
+        auto environment =
+            ObserveRecordingAudioEnvironment(target, ctx.caps.runtime.os.build_number, &*ctx.audio_intent);
         auto resolved = exosnap::engine::ResolveAudioIntent(*ctx.audio_intent, environment, ctx.audio_revision);
         if (!resolved.succeeded()) {
             PostStateChange(UiRecordingState::Failed);

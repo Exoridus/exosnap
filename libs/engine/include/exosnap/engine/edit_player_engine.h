@@ -31,6 +31,7 @@
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/color_metadata.h>
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -142,7 +143,8 @@ class EditPlayerEngine {
     // Opens `path` (the MKV edit master) and locates its video/audio streams.
     // Returns false with a human-readable message in out_error on failure
     // (missing file, unreadable container, no decodable video stream).
-    bool Open(const std::filesystem::path& path, std::string& out_error);
+    // Cancellation applies to opening. Playback is stopped separately.
+    bool Open(const std::filesystem::path& path, std::string& out_error, const std::atomic<bool>* cancelled = nullptr);
 
     // Closes the file and stops any running playback decode (see Task 6).
     void Close();

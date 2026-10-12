@@ -72,6 +72,8 @@ std::filesystem::path RecoveryService::ResolveDestinationFolder(const RecoveryMa
 }
 
 QVector<RecoveryCandidate> RecoveryService::Scan() {
+    if (const auto error = RecoverInterruptedMediaPublications(); !error.empty())
+        diagnostics::AppLog::warning(QStringLiteral("recovery.publication"), QString::fromStdString(error));
     auto entries = store_.Load();
     QVector<RecoveryManifestEntry> surviving;
     surviving.reserve(entries.size());

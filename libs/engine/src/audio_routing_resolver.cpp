@@ -151,6 +151,8 @@ ResolvedAudioSource ResolveSource(const AudioSourceSpec& spec, const AudioEnviro
     } else {
         if (!environment.process_loopback_supported) {
             result.availability = AudioSourceAvailability::UnsupportedPlatform;
+        } else if (binding.kind == AudioBindingKind::IndependentProcess && !binding.process_selection_confirmed) {
+            result.availability = AudioSourceAvailability::UnconfirmedProcess;
         } else {
             key.process = binding.kind == AudioBindingKind::IndependentProcess ? binding.process
                                                                                : environment.capture_target_process;

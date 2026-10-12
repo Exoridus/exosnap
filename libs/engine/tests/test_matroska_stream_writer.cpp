@@ -1132,6 +1132,83 @@ TEST_F(StreamWriterTest, OrdinaryRecordingDoesNotRetainUnusedPacketCapacity) {
     EXPECT_EQ(writer.peak_cluster_payload_bytes(), 1u);
     EXPECT_EQ(writer.current_window_bytes(), 0u);
 }
+TEST_F(StreamWriterTest, ClipTinyPcmPacketsFlushAt512AndRetainEverySampleTimestamp) {
+    auto config = MakeConfig(tmp_, true, false);
+    config.audio_codec = StreamAudioCodec::Pcm;
+    config.audio_channels = 1;
+    config.audio_bit_depth = 16;
+    config.audio_tracks[0].codec_private.clear();
+    config.audio_tracks[0].name = "PCM";
+    config.collect_media_index = false;
+    config.stream_cues_to_disk = true;
+    config.max_cluster_payload_bytes = 6u * 1024 * 1024;
+    exosnap::engine::AudioManifest1 manifest;
+    manifest.media_id = exosnap::engine::NewId<exosnap::engine::MediaId>();
+    manifest.recording_id = exosnap::engine::NewId<exosnap::engine::RecordingId>();
+    manifest.segment_id = exosnap::engine::NewId<exosnap::engine::SegmentId>();
+    exosnap::engine::AudioManifestTrack track;
+    track.container.track_id = exosnap::engine::NewId<exosnap::engine::AudioTrackId>();
+    track.container.track_uid = 2;
+    track.container.name = "PCM";
+    track.container.role = "standard";
+    track.container.codec = {"A_PCM/INT/LIT", {}, 48000, 1, 16, 0, "mono"};
+    manifest.tracks.push_back(track);
+    manifest.default_monitor_track_ids.push_back(track.container.track_id);
+    ASSERT_TRUE(exosnap::engine::ValidateAudioManifest1(manifest).succeeded());
+    config.audio_manifest = manifest;
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config)) << writer.error();
+    constexpr size_t packets = 1025;
+    for (size_t index = 0; index < packets; ++index) {
+        MuxPacket packet;
+        packet.track_num = 2;
+        packet.is_key = true;
+        packet.pts_ns = static_cast<uint64_t>(index) * 1000000000ULL / 48000;
+        packet.dts_ns = static_cast<int64_t>(packet.pts_ns);
+        packet.bytes = {static_cast<uint8_t>(index), static_cast<uint8_t>(index >> 8)};
+        ASSERT_TRUE(writer.Push(std::move(packet))) << writer.error();
+    }
+    ASSERT_TRUE(writer.Finalize()) << writer.error();
+    const auto file = ReadFile(tmp_);
+    EXPECT_EQ(CountClusters(file), 3);
+    size_t observed = 0;
+    for (const auto& cluster : SegmentChildren(file)) {
+        if (cluster.id != kIdCluster)
+            continue;
+        size_t cluster_packets = 0;
+        for (const auto& child : ParseChildren(file, cluster.data_off, cluster.data_off + cluster.data_size)) {
+            if (child.id != 0xA0)
+                continue;
+            const auto group = ParseChildren(file, child.data_off, child.data_off + child.data_size);
+            const auto block = std::find_if(group.begin(), group.end(), [](const EbmlNode& n) { return n.id == 0xA1; });
+            ASSERT_NE(block, group.end());
+            ASSERT_EQ(block->data_size, 6u);
+            EXPECT_EQ(file[block->data_off], 0x82);
+            ASSERT_LT(observed, packets);
+            EXPECT_EQ(file[block->data_off + 4], static_cast<uint8_t>(observed));
+            EXPECT_EQ(file[block->data_off + 5], static_cast<uint8_t>(observed >> 8));
+            const auto additions =
+                std::find_if(group.begin(), group.end(), [](const EbmlNode& n) { return n.id == 0x75A1; });
+            ASSERT_NE(additions, group.end());
+            const auto more = ParseChildren(file, additions->data_off, additions->data_off + additions->data_size);
+            ASSERT_EQ(more.size(), 1u);
+            const auto fields = ParseChildren(file, more[0].data_off, more[0].data_off + more[0].data_size);
+            const auto timestamps =
+                std::find_if(fields.begin(), fields.end(), [](const EbmlNode& n) { return n.id == 0xA5; });
+            ASSERT_NE(timestamps, fields.end());
+            const auto exact = exosnap::engine::DecodeMatroskaPacketTimestamps(
+                {file.data() + timestamps->data_off, timestamps->data_size});
+            ASSERT_TRUE(exact);
+            EXPECT_EQ(exact->pts_ns, static_cast<uint64_t>(observed) * 1000000000ULL / 48000);
+            EXPECT_EQ(exact->dts_ns, static_cast<int64_t>(exact->pts_ns));
+            ++observed;
+            ++cluster_packets;
+        }
+        EXPECT_LE(cluster_packets, 512u);
+    }
+    EXPECT_EQ(observed, packets);
+}
+
 TEST_F(StreamWriterTest, ClusterAdmissionCountsTransferredCapacity) {
     auto config = MakeConfig(tmp_, true, false);
     config.reorder_window_max_bytes = 6u * 1024 * 1024;

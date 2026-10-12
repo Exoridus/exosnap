@@ -16,10 +16,12 @@
 #include <QDir>
 #include <QFile>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -240,6 +242,209 @@ void MakeReadyCoordinator(RecordingCoordinator& coordinator, const std::filesyst
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     caps.probed = true;
     coordinator.OnCapabilitiesReady(caps);
+}
+
+class ProcessAudioWindow {
+  public:
+    ProcessAudioWindow()
+        : window_(CreateWindowExW(0, L"STATIC", L"Audio identity", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
+                                  GetModuleHandleW(nullptr), nullptr)) {
+    }
+    ~ProcessAudioWindow() {
+        if (window_)
+            DestroyWindow(window_);
+    }
+    exosnap::engine::CaptureTarget Target() const {
+        exosnap::engine::CaptureTarget target;
+        target.kind = exosnap::engine::CaptureTarget::Kind::Window;
+        target.native_id = reinterpret_cast<uint64_t>(window_);
+        return target;
+    }
+
+  private:
+    HWND window_ = nullptr;
+};
+
+exosnap::engine::TrackGraph1Intent ProcessAudioGraph(exosnap::engine::AudioBindingKind kind) {
+    using namespace exosnap::engine;
+    TrackGraph1Intent graph;
+    AudioSourceSpec source;
+    source.id = NewId<AudioSourceId>();
+    source.binding.kind = kind;
+    graph.sources.push_back(source);
+    AudioTrackSpec track;
+    track.id = NewId<AudioTrackId>();
+    graph.tracks.push_back(track);
+    graph.routes.push_back({NewId<AudioRouteId>(), source.id, track.id});
+    return graph;
+}
+
+TEST(RecordingProcessAudio, NativeObserverConfirmsTheSelectedProcessInstance) {
+    ProcessAudioWindow window;
+    ASSERT_NE(window.Target().native_id, 0u);
+    const auto environment = ObserveRecordingAudioEnvironment(window.Target(), 20348);
+    ASSERT_TRUE(environment.capture_target_process);
+    EXPECT_EQ(environment.capture_target_process->process_id, GetCurrentProcessId());
+    EXPECT_NE(environment.capture_target_process->creation_time, 0u);
+    EXPECT_NE(std::find(environment.confirmed_processes.begin(), environment.confirmed_processes.end(),
+                        *environment.capture_target_process),
+              environment.confirmed_processes.end());
+}
+
+TEST(RecordingProcessAudio, NativeObserverAllowsTargetProcessInStartResolution) {
+    using namespace exosnap::engine;
+    ProcessAudioWindow window;
+    ASSERT_NE(window.Target().native_id, 0u);
+    const auto environment = ObserveRecordingAudioEnvironment(window.Target(), 20348);
+    for (const auto kind : {AudioBindingKind::CaptureTargetProcess, AudioBindingKind::LegacyExcludeTarget}) {
+        const auto result = ResolveAudioIntent(ProcessAudioGraph(kind), environment);
+        ASSERT_TRUE(result.succeeded()) << result.error()->context;
+        ASSERT_EQ(result.value()->sources.size(), 1u);
+        ASSERT_TRUE(result.value()->sources[0].capture_key);
+        EXPECT_EQ(result.value()->sources[0].capture_key->process->process_id, GetCurrentProcessId());
+    }
+}
+
+TEST(RecordingProcessAudio, IndependentProcessIsConfirmedWithoutAWindowCaptureTarget) {
+    using namespace exosnap::engine;
+    ProcessAudioWindow window;
+    const auto selected = ObserveRecordingAudioEnvironment(window.Target(), 20348);
+    ASSERT_TRUE(selected.capture_target_process);
+    EXPECT_FALSE(selected.capture_target_process->identity_hint.empty());
+    auto graph = ProcessAudioGraph(AudioBindingKind::IndependentProcess);
+    graph.sources[0].binding.process = selected.capture_target_process;
+    const AudioIntent intent = graph;
+    const auto environment = ObserveRecordingAudioEnvironment({}, 20348, &intent);
+    EXPECT_FALSE(environment.capture_target_process);
+    const auto result = ResolveAudioIntent(intent, environment);
+    ASSERT_TRUE(result.succeeded()) << result.error()->context;
+    EXPECT_EQ(result.value()->sources[0].capture_key->process->process_id, GetCurrentProcessId());
+}
+
+TEST(RecordingProcessAudio, NativeConfirmationDoesNotRebindAChangedProcessInstanceOrExecutable) {
+    using namespace exosnap::engine;
+    ProcessAudioWindow window;
+    const auto selected = ObserveRecordingAudioEnvironment(window.Target(), 20348);
+    ASSERT_TRUE(selected.capture_target_process);
+    auto graph = ProcessAudioGraph(AudioBindingKind::IndependentProcess);
+    graph.sources[0].binding.process = selected.capture_target_process;
+    for (const bool change_executable : {false, true}) {
+        auto changed = graph;
+        if (change_executable)
+            changed.sources[0].binding.process->identity_hint += ".changed";
+        else
+            ++changed.sources[0].binding.process->creation_time;
+        const AudioIntent intent = changed;
+        const auto environment = ObserveRecordingAudioEnvironment({}, 20348, &intent);
+        ASSERT_EQ(environment.confirmed_processes.size(), 1u);
+        EXPECT_EQ(environment.confirmed_processes[0], *selected.capture_target_process);
+        EXPECT_FALSE(ResolveAudioIntent(intent, environment).succeeded());
+    }
+}
+
+TEST(RecordingProcessAudio, NativeObservationCannotConfirmAPersistedIndependentBinding) {
+    using namespace exosnap::engine;
+    ProcessAudioWindow window;
+    const auto selected = ObserveRecordingAudioEnvironment(window.Target(), 20348);
+    ASSERT_TRUE(selected.capture_target_process);
+    auto graph = ProcessAudioGraph(AudioBindingKind::IndependentProcess);
+    graph.sources[0].binding.process = selected.capture_target_process;
+    graph.sources[0].binding.process_selection_confirmed = false;
+    const AudioIntent intent = graph;
+    const auto without_target = ObserveRecordingAudioEnvironment({}, 20348, &intent);
+    EXPECT_TRUE(without_target.confirmed_processes.empty());
+    EXPECT_FALSE(ResolveAudioIntent(intent, without_target).succeeded());
+    const auto same_video_process = ObserveRecordingAudioEnvironment(window.Target(), 20348, &intent);
+    ASSERT_EQ(same_video_process.confirmed_processes.size(), 1u);
+    EXPECT_FALSE(ResolveAudioIntent(intent, same_video_process).succeeded());
+}
+
+TEST(RecordingProcessAudio, ExitedIndependentProcessCannotBeConfirmed) {
+    using namespace exosnap::engine;
+    std::wstring executable(MAX_PATH, L'\0');
+    const UINT count = GetSystemDirectoryW(executable.data(), static_cast<UINT>(executable.size()));
+    ASSERT_GT(count, 0u);
+    ASSERT_LT(count, executable.size());
+    executable.resize(count);
+    executable += L"\\cmd.exe";
+    std::wstring arguments = L"cmd.exe /d /c exit 0";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION child{};
+    ASSERT_TRUE(CreateProcessW(executable.c_str(), arguments.data(), nullptr, nullptr, FALSE,
+                               CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &startup, &child));
+    FILETIME creation{}, exit_time{}, kernel{}, user{};
+    const bool queried = GetProcessTimes(child.hProcess, &creation, &exit_time, &kernel, &user);
+    ResumeThread(child.hThread);
+    const DWORD completion = WaitForSingleObject(child.hProcess, 10000);
+    if (completion != WAIT_OBJECT_0) {
+        TerminateProcess(child.hProcess, 1);
+        WaitForSingleObject(child.hProcess, 10000);
+    }
+    CloseHandle(child.hThread);
+    CloseHandle(child.hProcess);
+    ASSERT_TRUE(queried);
+    ASSERT_EQ(completion, WAIT_OBJECT_0);
+    auto graph = ProcessAudioGraph(AudioBindingKind::IndependentProcess);
+    graph.sources[0].binding.process = ProcessInstanceIdentity{
+        child.dwProcessId, (uint64_t{creation.dwHighDateTime} << 32) | creation.dwLowDateTime, {}};
+    const AudioIntent intent = graph;
+    const auto environment = ObserveRecordingAudioEnvironment({}, 20348, &intent);
+    EXPECT_FALSE(ResolveAudioIntent(intent, environment).succeeded());
+}
+
+TEST(RecordingProcessAudio, ProcessIntentsReachTheCommittedStartConfiguration) {
+    using namespace exosnap::engine;
+    int argc = 0;
+    QCoreApplication app(argc, nullptr);
+    for (const auto kind : {AudioBindingKind::CaptureTargetProcess, AudioBindingKind::IndependentProcess}) {
+        const auto folder = UniqueTempDir(L"process_audio_start");
+        {
+            RecordingCoordinator coordinator;
+            OutputSettingsModel settings;
+            settings.output_folder = folder;
+            settings.container = capability::Container::Matroska;
+            settings.video_codec = capability::VideoCodec::H264;
+            settings.audio_codec = capability::AudioCodec::Opus;
+            coordinator.SetOutputSettings(settings);
+            auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+            caps.probed = true;
+            caps.runtime.os.build_number = 20348;
+            coordinator.OnCapabilitiesReady(caps);
+            StubFreeSpace plenty(500ULL * 1024 * 1024 * 1024);
+            coordinator.SetDiskSpaceProvider(&plenty);
+            coordinator.SetDisplayFactsProvider([] { return std::vector<capability::DisplayHdrFacts>{}; });
+            ProcessAudioWindow window;
+            ASSERT_NE(window.Target().native_id, 0u);
+            auto graph = ProcessAudioGraph(kind);
+            auto target = window.Target();
+            if (kind == AudioBindingKind::IndependentProcess) {
+                const auto selected = ObserveRecordingAudioEnvironment(target, 20348);
+                ASSERT_TRUE(selected.capture_target_process);
+                graph.sources[0].binding.process = selected.capture_target_process;
+                target.kind = CaptureTarget::Kind::Monitor;
+                target.native_id = 1;
+            }
+            const auto result = std::make_shared<std::optional<UiRecordingResult>>();
+            coordinator.SetResultReadyCallback([result](const UiRecordingResult& completed) { *result = completed; });
+            ASSERT_TRUE(coordinator.StartRecording(target, {}, std::nullopt, CaptureBackend::Default, graph, {7}));
+            RecorderConfig committed;
+            ASSERT_TRUE(
+                PumpUntil([&] { return coordinator.LastCommittedRecorderConfig(&committed) || result->has_value(); }));
+            ASSERT_TRUE(coordinator.LastCommittedRecorderConfig(&committed))
+                << static_cast<int>(kind) << ": "
+                << (result->has_value() ? QString::fromStdWString((*result)->error_detail).toStdString()
+                                        : "No terminal result");
+            ASSERT_TRUE(committed.resolved_audio_plan);
+            EXPECT_EQ(committed.resolved_audio_plan->revision.value, 7u);
+            ASSERT_EQ(committed.resolved_audio_plan->sources.size(), 1u);
+            EXPECT_EQ(committed.resolved_audio_plan->sources[0].capture_key->process->process_id,
+                      GetCurrentProcessId());
+            coordinator.StopRecording();
+        }
+        std::error_code ignored;
+        std::filesystem::remove_all(folder, ignored);
+    }
 }
 
 // HDR10 + H.264 on an HDR-active display: the start must not reach the engine.

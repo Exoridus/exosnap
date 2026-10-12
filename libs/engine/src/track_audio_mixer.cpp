@@ -54,6 +54,10 @@ struct TrackAudioMixer::Impl {
         std::vector<int64_t> tags;
         int64_t end = 0;
         bool degraded = false;
+        RawAudioBuffer packet;
+        uint32_t packet_offset = 0;
+        int64_t packet_start = 0;
+        bool packet_leased = false, reinitialize = false, flushed = false;
         std::optional<AudioCaptureDescriptor> descriptor;
     };
     ResolvedRoutingTrack track;
@@ -83,26 +87,53 @@ struct TrackAudioMixer::Impl {
         telemetry->snapshot.limiter_enabled = track.limiter.enabled;
     }
 
-    void Queue(size_t index, const RawAudioBuffer& packet, uint64_t qpc) {
-        auto& input = inputs[index];
-        int64_t start = qpc ? Position(qpc, rate) : (input.end ? input.end : cursor);
-        if (!start_qpc && !emitted && qpc && (latest == 0 || start < cursor))
-            cursor = start;
-        latest = (std::max)(latest, start + packet.num_frames);
-        input.end = start + packet.num_frames;
-        const float* pcm = reinterpret_cast<const float*>(packet.bytes);
+    void Hold(Input& input, RawAudioBuffer packet, uint64_t qpc, bool owns_lease) {
+        input.packet = packet;
+        input.packet_offset = 0;
+        input.packet_start = qpc ? Position(qpc, rate) : (input.end ? input.end : cursor);
+        if (!start_qpc && !emitted && qpc && (latest == 0 || input.packet_start < cursor))
+            cursor = input.packet_start;
+        input.end = input.packet_start + packet.num_frames;
+        latest = (std::max)(latest, input.end);
+        input.packet_leased = owns_lease;
         discontinuity |= packet.data_discontinuity;
-        const uint32_t skip = packet.num_frames > capacity ? packet.num_frames - capacity : 0;
-        for (uint32_t f = skip; f < packet.num_frames; ++f) {
-            const int64_t position = start + f;
+    }
+    bool QueuePending(Input& input) {
+        const float* pcm = reinterpret_cast<const float*>(input.packet.bytes);
+        // Keep the normalized lease until every sample fits ahead of the unread cursor.
+        // A large packet or consumer backlog must not wrap onto live ring positions.
+        while (input.packet_offset < input.packet.num_frames) {
+            const uint32_t f = input.packet_offset;
+            const int64_t position = input.packet_start + f;
+            if (position >= cursor + capacity)
+                return false;
+            ++input.packet_offset;
             if (position < cursor)
                 continue;
             const size_t slot = static_cast<size_t>(position % capacity);
             input.tags[slot] = position;
             for (uint32_t c = 0; c < channels; ++c)
                 input.samples[slot * channels + c] =
-                    packet.silent || !pcm ? 0 : pcm[static_cast<size_t>(f) * channels + c];
+                    input.packet.silent || !pcm ? 0 : pcm[static_cast<size_t>(f) * channels + c];
         }
+        if (input.packet_leased)
+            input.normalized->ReleaseBuffer();
+        input.packet = {};
+        input.packet_leased = false;
+        return true;
+    }
+    bool Flush(Input& input, std::string& error) {
+        RawAudioBuffer tail;
+        int64_t undrained = 0;
+        if (input.normalized->DrainResampler(tail, &undrained))
+            Hold(input, tail, 0, false);
+        if (undrained > 0) {
+            undrained_frames = undrained_frames.value_or(0) + static_cast<uint64_t>(undrained);
+            drain_failed = true;
+            error = "Track normalization drain exceeded finite flush bound";
+            return false;
+        }
+        return true;
     }
     bool Collect(std::string& error) {
         for (size_t i = 0; i < inputs.size(); ++i) {
@@ -110,7 +141,27 @@ struct TrackAudioMixer::Impl {
             if (!input.normalized)
                 continue;
             constexpr uint64_t packet_bound = kAudioTeeHorizonNs / kMinimumAudioPacketDurationNs + 16;
-            for (uint64_t packets = 0; packets < packet_bound && input.normalized->PendingFrameCount(); ++packets) {
+            for (uint64_t packets = 0; packets < packet_bound; ++packets) {
+                if (!QueuePending(input))
+                    break;
+                if (input.reinitialize) {
+                    if (!input.normalized->Reinit(error)) {
+                        input.degraded = true;
+                        error = "Track format-generation adaptation failed";
+                        return false;
+                    }
+                    input.reinitialize = false;
+                    discontinuity = true;
+                }
+                if (!input.normalized->PendingFrameCount()) {
+                    if (draining && !input.flushed) {
+                        input.flushed = true;
+                        if (!Flush(input, error))
+                            return false;
+                        QueuePending(input);
+                    }
+                    break;
+                }
                 const auto descriptor = LogicalAudioReaderDescriptor(*input.reader);
                 if (descriptor && input.descriptor &&
                     (descriptor->source_generation != input.descriptor->source_generation ||
@@ -123,16 +174,11 @@ struct TrackAudioMixer::Impl {
                         error = "Track generation needs a larger normalization reservation; reprepare required";
                         return false;
                     }
-                    RawAudioBuffer tail;
-                    int64_t undrained = 0;
-                    if (input.normalized->DrainResampler(tail, &undrained))
-                        Queue(i, tail, 0);
-                    if (undrained || !input.normalized->Reinit(error)) {
-                        input.degraded = true;
-                        error = "Track format-generation adaptation failed";
+                    input.descriptor = descriptor;
+                    input.reinitialize = true;
+                    if (!Flush(input, error))
                         return false;
-                    }
-                    discontinuity = true;
+                    continue;
                 }
                 input.descriptor = descriptor;
                 RawAudioBuffer packet;
@@ -140,8 +186,7 @@ struct TrackAudioMixer::Impl {
                     input.degraded = true;
                     return false;
                 }
-                Queue(i, packet, input.normalized->LastBufferQpcNs());
-                input.normalized->ReleaseBuffer();
+                Hold(input, packet, input.normalized->LastBufferQpcNs(), true);
             }
         }
         return true;
@@ -421,21 +466,6 @@ bool TrackAudioMixer::BeginDrain(uint64_t end, std::string& error) {
         p.drain_failed = true;
         return false;
     }
-    for (size_t i = 0; i < p.inputs.size(); ++i) {
-        auto& input = p.inputs[i];
-        if (!input.normalized)
-            continue;
-        RawAudioBuffer tail;
-        int64_t undrained = 0;
-        if (input.normalized->DrainResampler(tail, &undrained))
-            p.Queue(i, tail, 0);
-        if (undrained > 0) {
-            p.undrained_frames = p.undrained_frames.value_or(0) + static_cast<uint64_t>(undrained);
-            p.drain_failed = true;
-        }
-    }
-    if (p.drain_failed)
-        error = "Track normalization drain exceeded finite flush bound";
     return !p.drain_failed;
 }
 bool TrackAudioMixer::Ended() const {

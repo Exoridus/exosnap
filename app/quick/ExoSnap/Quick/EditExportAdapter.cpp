@@ -143,8 +143,8 @@ struct EditExportAdapter::PreparedExport {
         return true;
     }
 
-    bool Prepare(std::string& error) {
-        copy_assessment = engine::AssessTimelineExport(recipe, to_mp4);
+    bool Prepare(std::string& error, const std::atomic<bool>& cancelled) {
+        copy_assessment = engine::AssessTimelineExport(recipe, to_mp4, &cancelled);
         std::set<uint64_t> referenced;
         std::set<uint64_t> audio_assets;
         for (const auto& clip : snapshot.timeline.clips) {
@@ -155,7 +155,7 @@ struct EditExportAdapter::PreparedExport {
         for (auto& source : snapshot.sources) {
             if (!referenced.contains(source.id))
                 continue;
-            source.metadata = engine::ProbeEditMedia(source.path);
+            source.metadata = engine::ProbeEditMedia(source.path, {}, {}, &cancelled);
             if (!source.metadata.error.empty()) {
                 error = source.metadata.error;
                 return false;
@@ -209,7 +209,8 @@ struct EditExportAdapter::PreparedExport {
                     return false;
                 }
                 engine::EditPlayerEngine player;
-                if (!player.Open(source.path, error) || !player.SetMonitorSelection(*source.monitor_selection, error))
+                if (!player.Open(source.path, error, &cancelled) ||
+                    !player.SetMonitorSelection(*source.monitor_selection, error))
                     return false;
                 if (!audio_assets.contains(source.id) && !source.monitor_selection->tracks.empty()) {
                     error = "Video-only render requires an empty frozen monitoring selection.";
@@ -257,11 +258,11 @@ struct EditExportAdapter::PreparedExport {
         return true;
     }
 
-    bool SourcesUnchanged(std::string& error) const {
+    bool SourcesUnchanged(std::string& error, const std::atomic<bool>& cancelled) const {
         for (const auto& source : snapshot.sources) {
             if (source.metadata.duration_us == 0)
                 continue;
-            if (!SameMediaIdentity(source.metadata, engine::ProbeEditMedia(source.path))) {
+            if (!SameMediaIdentity(source.metadata, engine::ProbeEditMedia(source.path, {}, {}, &cancelled))) {
                 error = "A source changed after export review. Review the export outcome again.";
                 return false;
             }
@@ -687,7 +688,7 @@ void EditExportAdapter::startExport() {
     setState(State::Preparing);
     export_thread_ = QThread::create([run = run_] {
         if (!run->cancel.load())
-            run->ok = run->prepared->Prepare(run->error);
+            run->ok = run->prepared->Prepare(run->error, run->cancel);
     });
     export_thread_->setParent(this);
     connect(export_thread_, &QThread::finished, this, [this, run = run_] {
@@ -749,9 +750,9 @@ void EditExportAdapter::beginPreparedExport() {
         const bool to_mp4 = prepared->to_mp4;
         const bool replace_existing = prepared->replace_existing;
         const auto& marker_plan = prepared->marker_plan;
-        if (!prepared->SourcesUnchanged(run->error))
+        if (!prepared->SourcesUnchanged(run->error, run->cancel))
             return;
-        const auto reassessed = engine::AssessTimelineExport(recipe, to_mp4);
+        const auto reassessed = engine::AssessTimelineExport(recipe, to_mp4, &run->cancel);
         if (reassessed.eligibility != prepared->copy_assessment.eligibility ||
             engine::ClassifyEditExport(render_snapshot, reassessed, to_mp4).path != prepared->plan.path) {
             run->error = "Export eligibility changed after review. Review the export outcome again.";

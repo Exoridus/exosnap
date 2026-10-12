@@ -74,7 +74,7 @@ Low-disk protection depends on a usable free-space reading. A reachable/writable
 
 ## Recording clips
 
-Recording clips currently offer MKV stream copy with PCM or Opus audio. AAC, FLAC and MP4 clip output have no qualified decoder-start/priming contract and are rejected. HEVC/AV1 clip profiles, long split-spanning compressed multitrack clips and concurrent recording/export/storage pressure still require qualification. The inclusive 32 MiB per-job working-buffer limit is not yet proven by the existing component capacity guards.
+Recording clips currently offer MKV stream copy with PCM or Opus audio. AAC, FLAC and MP4 clip output have no qualified decoder-start/priming contract and are rejected. HEVC/AV1 clip profiles, long split-spanning compressed multitrack clips and concurrent recording/export/storage pressure still require qualification. The inclusive 32 MiB per-job working-buffer limit is not yet proven by the existing component capacity guards. Opus clips use packet-duration-specific priming metadata. The initial GOP of a 2.5 ms Opus recording with a measured 5 ms startup gap is rejected because the gap exceeds one packet; later eligible GOPs remain available. A 5 ms packet profile can retain its measured one-packet startup gap.
 
 ## Editor
 

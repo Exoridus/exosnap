@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <string>
 #include <system_error>
 #include <vector>
 
@@ -141,6 +143,14 @@ TEST_F(TimelineExportTest, ProbeReadsRealMediaAndReportsMissingSource) {
     EXPECT_GT(metadata.height, 0);
     EXPECT_GT(metadata.fps, 0);
     EXPECT_FALSE(ProbeEditMedia(output).error.empty());
+}
+
+TEST_F(TimelineExportTest, CancelledAssessmentRejectsAnOtherwiseValidSource) {
+    const auto clip = FullClip();
+    std::atomic<bool> cancelled{true};
+    const auto result = AssessTimelineExport({clip}, true, &cancelled);
+    EXPECT_EQ(result.eligibility, TimelineExportEligibility::Invalid);
+    EXPECT_NE(result.reason.find("cancelled"), std::string::npos);
 }
 
 TEST_F(TimelineExportTest, InvalidRecipesAreRejectedBeforeOpeningMedia) {

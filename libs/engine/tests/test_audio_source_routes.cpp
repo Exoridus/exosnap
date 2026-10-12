@@ -314,6 +314,174 @@ TEST(AudioSourceRoutes, ReservationsPrecedeAllocationAndRejectInvalidAdmission) 
     EXPECT_EQ(TrackAudioMixer::RequiredPayloadBytes(48000, 2, 0), (std::numeric_limits<size_t>::max)());
 }
 
+TEST(AudioSourceRoutes, DelayedTrackConsumersPreserveBacklogWithinTeeHorizon) {
+    for (uint32_t source_count : {1u, 2u}) {
+        for (uint32_t track_count : {1u, 3u}) {
+            for (uint32_t packet_frames : {480u, 48000u}) {
+                SCOPED_TRACE(::testing::Message()
+                             << source_count << " sources, " << track_count << " tracks, packet " << packet_frames);
+                std::string error;
+                auto descriptor = Descriptor();
+                descriptor.maximum_packet_frames = 48000;
+                uint64_t now = 1000000000ULL;
+                std::vector<std::unique_ptr<LogicalAudioSource>> sources;
+                std::vector<std::vector<std::shared_ptr<AudioTeeReader>>> readers;
+                for (uint32_t i = 0; i < source_count; ++i) {
+                    sources.push_back(LogicalAudioSource::Create(Source(), descriptor, error));
+                    ASSERT_NE(sources.back(), nullptr) << error;
+                    readers.push_back(sources.back()->AttachReaders(track_count, now, error));
+                    ASSERT_EQ(readers.back().size(), track_count);
+                }
+                std::vector<std::unique_ptr<TrackAudioMixer>> mixers;
+                for (uint32_t t = 0; t < track_count; ++t) {
+                    ResolvedRoutingTrack track;
+                    track.routes.resize(source_count);
+                    track.fixed_average_divisor = source_count;
+                    std::vector<std::unique_ptr<IAudioCaptureSource>> inputs;
+                    for (uint32_t i = 0; i < source_count; ++i)
+                        inputs.push_back(MakeLogicalAudioReader(readers[i][t]));
+                    mixers.push_back(std::make_unique<TrackAudioMixer>(
+                        track, std::move(inputs), 48000, 2, [&] { return now; }, now));
+                    ASSERT_TRUE(mixers.back()->Init(error)) << error;
+                }
+                auto publish = [&](uint32_t first, uint32_t frames) {
+                    std::vector<float> samples(static_cast<size_t>(frames) * 2);
+                    for (uint32_t f = 0; f < frames; ++f)
+                        samples[2 * f] = samples[2 * f + 1] = .1f + static_cast<float>((first + f) % 97) / 1000;
+                    for (auto& source : sources) {
+                        auto block = Block(descriptor, samples, first / 480);
+                        block.metadata.output_qpc_ns = block.metadata.capture_qpc_ns =
+                            1000000000ULL + DeviceFramesToNs(first, 48000);
+                        ASSERT_TRUE(source->Process(block, error)) << error;
+                    }
+                };
+                publish(0, 480);
+                now += 40000000ULL;
+                for (auto& mixer : mixers) {
+                    RawAudioBuffer out;
+                    ASSERT_TRUE(mixer->AcquireBuffer(out, error)) << error;
+                    ASSERT_EQ(out.num_frames, 480u);
+                    mixer->ReleaseBuffer();
+                }
+                for (uint32_t first = 480; first < 48480; first += packet_frames)
+                    publish(first, packet_frames);
+                now = 2010000000ULL;
+                for (auto& source : sources)
+                    ASSERT_TRUE(source->Drain(error)) << error;
+                for (auto& mixer : mixers) {
+                    ASSERT_TRUE(mixer->BeginDrain(now, error)) << error;
+                    uint32_t emitted = 0;
+                    bool matching = true;
+                    while (!mixer->Ended() && emitted < 48000) {
+                        ASSERT_GT(mixer->PendingFrameCount(), 0u) << mixer->Failure();
+                        RawAudioBuffer out;
+                        ASSERT_TRUE(mixer->AcquireBuffer(out, error)) << error;
+                        const auto* pcm = reinterpret_cast<const float*>(out.bytes);
+                        for (uint32_t f = 0; f < out.num_frames; ++f) {
+                            const float expected = .1f + static_cast<float>((480 + emitted + f) % 97) / 1000;
+                            matching &=
+                                std::abs(pcm[2 * f] - expected) < 1e-6f && std::abs(pcm[2 * f + 1] - expected) < 1e-6f;
+                        }
+                        emitted += out.num_frames;
+                        mixer->ReleaseBuffer();
+                    }
+                    EXPECT_EQ(emitted, 48000u);
+                    EXPECT_TRUE(matching);
+                    EXPECT_TRUE(mixer->Ended());
+                }
+            }
+        }
+    }
+}
+
+TEST(AudioSourceRoutes, TrackReportsExactSourceLossBeyondTeeHorizon) {
+    std::string error;
+    const auto descriptor = Descriptor();
+    auto source = LogicalAudioSource::Create(Source(), descriptor, error);
+    ASSERT_NE(source, nullptr) << error;
+    auto readers = source->AttachReaders(1, 1000000000ULL, error);
+    ASSERT_EQ(readers.size(), 1u);
+    ResolvedRoutingTrack track;
+    track.routes.resize(1);
+    track.fixed_average_divisor = 1;
+    std::vector<std::unique_ptr<IAudioCaptureSource>> inputs;
+    inputs.push_back(MakeLogicalAudioReader(readers[0]));
+    TrackAudioMixer mixer(track, std::move(inputs), 48000, 2, [] { return 4040000000ULL; }, 1000000000ULL);
+    ASSERT_TRUE(mixer.Init(error)) << error;
+    std::vector<float> samples(960, .25f);
+    for (uint32_t i = 0; i < 300; ++i) {
+        auto block = Block(descriptor, samples, i);
+        block.metadata.output_qpc_ns = block.metadata.capture_qpc_ns = 1000000000ULL + i * 10000000ULL;
+        ASSERT_TRUE(source->Process(block, error)) << error;
+    }
+    // Three seconds were published into a two-second Tee without consumption.
+    // The missing second must remain on the output timeline and be reported.
+    EXPECT_EQ(source->Meter().reader_overflow_frames, 48000u);
+    ASSERT_TRUE(source->Drain(error)) << error;
+    ASSERT_TRUE(mixer.BeginDrain(4000000000ULL, error)) << error;
+    uint32_t emitted = 0;
+    bool matching = true;
+    bool discontinuity = false;
+    while (!mixer.Ended() && emitted < 144000) {
+        ASSERT_GT(mixer.PendingFrameCount(), 0u) << mixer.Failure();
+        RawAudioBuffer out;
+        ASSERT_TRUE(mixer.AcquireBuffer(out, error)) << error;
+        discontinuity |= out.data_discontinuity;
+        const auto* pcm = reinterpret_cast<const float*>(out.bytes);
+        for (uint32_t f = 0; f < out.num_frames; ++f) {
+            const float expected = emitted + f < 48000 ? 0.f : .25f;
+            matching &= pcm[2 * f] == expected && pcm[2 * f + 1] == expected;
+        }
+        EXPECT_EQ(out.gap_frames, 0u);
+        emitted += out.num_frames;
+        mixer.ReleaseBuffer();
+    }
+    EXPECT_EQ(emitted, 144000u);
+    EXPECT_TRUE(matching);
+    EXPECT_TRUE(discontinuity);
+    EXPECT_TRUE(mixer.Ended());
+    EXPECT_TRUE(mixer.Failure().empty());
+    EXPECT_EQ(source->Meter().reader_overflow_frames, 48000u);
+}
+
+TEST(AudioSourceRoutes, ShutdownReleasesPartiallyQueuedPacketWithoutStoppingOtherReaders) {
+    std::string error;
+    auto descriptor = Descriptor();
+    descriptor.maximum_packet_frames = 48000;
+    auto source = LogicalAudioSource::Create(Source(), descriptor, error);
+    ASSERT_NE(source, nullptr) << error;
+    auto readers = source->AttachReaders(2, 1000000000ULL, error);
+    ASSERT_EQ(readers.size(), 2u);
+    ResolvedRoutingTrack track;
+    track.routes.resize(1);
+    track.fixed_average_divisor = 1;
+    std::vector<std::unique_ptr<IAudioCaptureSource>> inputs;
+    inputs.push_back(MakeLogicalAudioReader(readers[0]));
+    TrackAudioMixer mixer(track, std::move(inputs), 48000, 2, [] { return 2040000000ULL; }, 1000000000ULL);
+    ASSERT_TRUE(mixer.Init(error)) << error;
+    std::vector<float> samples(96000, .25f);
+    ASSERT_TRUE(source->Process(Block(descriptor, samples), error)) << error;
+    RawAudioBuffer out;
+    ASSERT_TRUE(mixer.AcquireBuffer(out, error)) << error;
+    mixer.ReleaseBuffer();
+    EXPECT_EQ(readers[0]->PendingFrames(), 0u);
+    AudioBlockView held;
+    ASSERT_TRUE(readers[1]->Acquire(held, error)) << error;
+    samples.assign(960, .75f);
+    auto next = Block(descriptor, samples, 1);
+    next.metadata.output_qpc_ns = next.metadata.capture_qpc_ns = 2000000000ULL;
+    ASSERT_TRUE(source->Process(next, error)) << error;
+    mixer.Shutdown();
+    EXPECT_EQ(readers[0]->PendingFrames(), 480u);
+    AudioBlockView remaining;
+    ASSERT_TRUE(readers[0]->Acquire(remaining, error)) << error;
+    EXPECT_FLOAT_EQ(remaining.samples[0], .75f);
+    EXPECT_FLOAT_EQ(held.samples[0], .25f);
+    EXPECT_FLOAT_EQ(held.samples.back(), .25f);
+    readers[0]->Release();
+    readers[1]->Release();
+}
+
 TEST(AudioSourceRoutes, NeuralRecoveryKeepsGapOnSourceQpcTimeline) {
     std::string error;
     auto spec = Source();

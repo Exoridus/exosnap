@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <windows.h>
+
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -2252,6 +2254,58 @@ TEST(RecordingPresetStore, ConversionKeepsUndoAndRejectsDanglingRoute) {
     EXPECT_EQ(std::get<LegacyRows25Intent>(success.value()->before), legacy);
     EXPECT_EQ(std::get<TrackGraph1Intent>(success.value()->after).tracks.size(), 2u);
 }
+TEST(RecordingPresetStore, LoadedIndependentProcessNeedsFreshSelectionDespiteMatchingNativeInstance) {
+    using namespace engine;
+    FILETIME creation{}, exit_time{}, kernel{}, user{};
+    ASSERT_TRUE(GetProcessTimes(GetCurrentProcess(), &creation, &exit_time, &kernel, &user));
+    std::wstring executable(32768, L'\0');
+    DWORD size = static_cast<DWORD>(executable.size());
+    ASSERT_TRUE(QueryFullProcessImageNameW(GetCurrentProcess(), 0, executable.data(), &size));
+    const ProcessInstanceIdentity process{
+        GetCurrentProcessId(), (uint64_t{creation.dwHighDateTime} << 32) | creation.dwLowDateTime,
+        QString::fromWCharArray(executable.data(), static_cast<int>(size)).toStdString()};
+    TrackGraph1Intent graph;
+    AudioSourceSpec source;
+    source.id = NewId<AudioSourceId>();
+    source.binding.kind = AudioBindingKind::IndependentProcess;
+    source.binding.process = process;
+    graph.sources.push_back(source);
+    AudioTrackSpec track;
+    track.id = NewId<AudioTrackId>();
+    graph.tracks.push_back(track);
+    graph.routes.push_back({NewId<AudioRouteId>(), source.id, track.id});
+    auto live = MakeDefaultPreset().config;
+    live.audio_intent = graph;
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+    ASSERT_TRUE(store.Save({}, std::string(kDefaultPresetId), live));
+    auto loaded = store.Load();
+    ASSERT_TRUE(loaded.live && loaded.live->audio_intent);
+    auto& restored = std::get<TrackGraph1Intent>(*loaded.live->audio_intent);
+    ASSERT_EQ(restored.sources.size(), 1u);
+    EXPECT_EQ(restored.sources[0].id, source.id);
+    EXPECT_EQ(restored.sources[0].binding.process, source.binding.process);
+    EXPECT_FALSE(restored.sources[0].binding.process_selection_confirmed);
+    EXPECT_EQ(restored.tracks, graph.tracks);
+    EXPECT_EQ(restored.routes, graph.routes);
+    AudioEnvironmentSnapshot environment;
+    environment.process_loopback_supported = true;
+    environment.window_target = true;
+    environment.capture_target_process = process;
+    environment.confirmed_processes = {process};
+    EXPECT_FALSE(ResolveAudioIntent(*loaded.live->audio_intent, environment).succeeded());
+    restored.sources[0].binding = source.binding;
+    EXPECT_TRUE(restored.sources[0].binding.process_selection_confirmed);
+    EXPECT_TRUE(ResolveAudioIntent(*loaded.live->audio_intent, environment).succeeded());
+    ASSERT_TRUE(store.Save({}, std::string(kDefaultPresetId), *loaded.live));
+    const auto reloaded = store.Load();
+    ASSERT_TRUE(reloaded.live && reloaded.live->audio_intent);
+    EXPECT_FALSE(ResolveAudioIntent(*reloaded.live->audio_intent, environment).succeeded());
+    EXPECT_EQ(std::get<TrackGraph1Intent>(*reloaded.live->audio_intent).sources[0].binding.process,
+              source.binding.process);
+    CleanupFile(path);
+}
+
 TEST(RecordingPresetStore, BackupFailureLeavesOriginalBytesUnchanged) {
     const QString path = UniqueTempPath();
     ASSERT_TRUE(WriteTomlString(path, QStringLiteral("schema_version = 25\n[live.video]\ncq=27\n")));

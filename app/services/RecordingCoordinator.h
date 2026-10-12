@@ -54,8 +54,9 @@ class LoopbackMeterService;
 } // namespace exosnap::engine
 
 namespace exosnap {
-exosnap::engine::AudioEnvironmentSnapshot ObserveRecordingAudioEnvironment(const exosnap::engine::CaptureTarget& target,
-                                                                           uint32_t os_build);
+exosnap::engine::AudioEnvironmentSnapshot
+ObserveRecordingAudioEnvironment(const exosnap::engine::CaptureTarget& target, uint32_t os_build,
+                                 const exosnap::engine::AudioIntent* intent = nullptr);
 
 // One recording's frozen session ledger, on its way from the Qt main thread that
 // closes it to the session report that carries it.

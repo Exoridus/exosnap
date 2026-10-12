@@ -554,10 +554,12 @@ void LogicalAudioSource::SetMuted(bool muted) noexcept {
 }
 LogicalAudioMeter LogicalAudioSource::Meter() const {
     const auto reader_count = impl_->tee->ReaderCount();
+    const auto reader_overflow_frames = impl_->tee->ReaderOverflowFrames();
     std::lock_guard lock(impl_->meter_mutex);
     auto result = impl_->meter;
     result.muted = impl_->muted.load(std::memory_order_relaxed);
     result.reader_count = reader_count;
+    result.reader_overflow_frames += reader_overflow_frames;
     return result;
 }
 AudioCaptureDescriptor LogicalAudioSource::Descriptor() const {

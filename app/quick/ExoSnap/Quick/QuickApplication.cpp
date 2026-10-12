@@ -2974,7 +2974,8 @@ void QuickApplication::wireSettingsCommands() {
         },
         [this]() {
             return ObserveRecordingAudioEnvironment(selectedCaptureTarget().value_or(engine::CaptureTarget{}),
-                                                    capabilities_.runtime.os.build_number);
+                                                    capabilities_.runtime.os.build_number,
+                                                    live_config_.audio_intent ? &*live_config_.audio_intent : nullptr);
         },
         [this](engine::AudioSourceId id, bool muted) {
             return recording_coordinator_->SetAudioSourceMuted(id, muted);

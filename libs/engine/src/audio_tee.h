@@ -97,6 +97,8 @@ class AudioTee {
     [[nodiscard]] size_t ReservedPayloadBytes() const;
     [[nodiscard]] size_t MetadataBytes() const;
     [[nodiscard]] uint32_t ReaderCount() const;
+    // Cumulative evicted frames, counted separately for each attached reader.
+    [[nodiscard]] uint64_t ReaderOverflowFrames() const;
 
   private:
     explicit AudioTee(std::shared_ptr<AudioTeeState> state);

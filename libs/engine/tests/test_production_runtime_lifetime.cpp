@@ -76,6 +76,21 @@ TEST(RuntimeCommand, ContentIdentityTracksResolvedAudioAndWebcamWithoutObjectAdd
     EXPECT_NE(original, RuntimeConfigContentKey(changed));
 }
 
+TEST(RuntimeCommand, ContentIdentityTracksIndependentProcessSelectionAuthority) {
+    RecorderConfig config;
+    config.resolved_audio_plan = ResolvedAudioPlan{};
+    ResolvedAudioSource source;
+    source.spec.id = NewId<AudioSourceId>();
+    source.spec.binding.kind = AudioBindingKind::IndependentProcess;
+    source.spec.binding.process = ProcessInstanceIdentity{23, 456, "player"};
+    config.resolved_audio_plan->sources.push_back(source);
+    const auto confirmed_key = RuntimeConfigContentKey(config);
+    auto unconfirmed = config;
+    unconfirmed.resolved_audio_plan->sources[0].spec.binding.process_selection_confirmed = false;
+    EXPECT_NE(confirmed_key, RuntimeConfigContentKey(unconfirmed));
+    EXPECT_EQ(confirmed_key, RuntimeConfigContentKey(RecorderConfig(config)));
+}
+
 TEST(RuntimeFrameLease, CpuReleaseDoesNotCompleteGpuWrite) {
     RuntimeFramePool pool(1, 7, {1});
     const auto slot = pool.Reserve();

@@ -520,6 +520,7 @@ bool TryAttachD3D11VA(AVCodecContext* vctx) {
 } // namespace
 
 struct EditPlayerEngine::Impl {
+    std::atomic<const std::atomic<bool>*> opening_cancelled{nullptr};
     std::shared_ptr<void> media_read_lease;
     InputCtxGuard fmt;
     CodecCtxGuard video_codec;
@@ -636,8 +637,20 @@ EditPlayerEngine::~EditPlayerEngine() {
     Close();
 }
 
-bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_error) {
-    Close(); // tear down any previous session first
+bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_error,
+                            const std::atomic<bool>* cancelled) {
+    Close();
+    struct ResetOpeningCancellation {
+        std::atomic<const std::atomic<bool>*>& token;
+        ~ResetOpeningCancellation() {
+            token.store(nullptr, std::memory_order_relaxed);
+        }
+    } reset{impl_->opening_cancelled};
+    impl_->opening_cancelled.store(cancelled, std::memory_order_relaxed);
+    if (cancelled && cancelled->load(std::memory_order_relaxed)) {
+        out_error = "Media opening cancelled.";
+        return false;
+    }
 
     auto lease = AcquireMediaReadLease(path);
     if (!lease.succeeded()) {
@@ -648,7 +661,20 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
 
     const std::string path_str = path.string();
 
-    AVFormatContext* fmt_ctx = nullptr;
+    AVFormatContext* fmt_ctx = avformat_alloc_context();
+    if (!fmt_ctx) {
+        out_error = "Cannot allocate the media input context.";
+        Close();
+        return false;
+    }
+    // Protocol I/O retains a copy of this callback after Open returns.
+    // The owned indirection is cleared before the borrowed opening token expires.
+    fmt_ctx->interrupt_callback = {[](void* opaque) {
+                                       const auto* token = static_cast<Impl*>(opaque)->opening_cancelled.load(
+                                           std::memory_order_relaxed);
+                                       return token && token->load(std::memory_order_relaxed) ? 1 : 0;
+                                   },
+                                   impl_.get()};
     int ret = avformat_open_input(&fmt_ctx, path_str.c_str(), nullptr, nullptr);
     if (ret < 0) {
         out_error = std::string("avformat_open_input failed: ") + av_err2str(ret);
@@ -744,7 +770,12 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
                               ? std::make_unique<P010PqMonitorConverter>(HdrPeakScale(false, 0.0f, 0.0f))
                               : nullptr;
 
-    impl_->audio_metadata = ReadAudioMediaMetadata(path, fmt_ctx);
+    impl_->audio_metadata = ReadAudioMediaMetadata(path, fmt_ctx, {}, {}, cancelled);
+    if (cancelled && cancelled->load(std::memory_order_relaxed)) {
+        out_error = "Media opening cancelled.";
+        Close();
+        return false;
+    }
     impl_->monitor_selection.media_id = impl_->audio_metadata.selection_media_id;
     if (impl_->audio_metadata.manifest && !impl_->audio_metadata.monitoring_confirmation_required)
         for (const auto& id : impl_->audio_metadata.manifest->default_monitor_track_ids)

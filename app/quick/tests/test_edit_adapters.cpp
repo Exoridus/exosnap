@@ -30,6 +30,9 @@
 
 #include <gtest/gtest.h>
 
+#include <windows.h>
+#include <winioctl.h>
+
 #include <chrono>
 #include <string>
 #include <thread>
@@ -784,6 +787,68 @@ TEST(EditExportAdapterRun, CancellingPreparationAndDestroyingAdapterLeavesNoOutp
     EXPECT_EQ(exporter->state(), EditExportAdapter::Cancelling);
     exporter.reset();
     EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+}
+
+TEST(EditExportAdapterRun, DestructionCancelsAnActiveSourceProbeBeforeTheWholeHashCompletes) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString fixture =
+        QFileInfo(QString::fromUtf8(__FILE__))
+            .dir()
+            .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const QString source_path = QDir(directory.path()).filePath(QStringLiteral("large-source.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture, source_path));
+    {
+        const HANDLE file = CreateFileW(reinterpret_cast<const wchar_t*>(source_path.utf16()), GENERIC_WRITE,
+                                        FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ASSERT_NE(file, INVALID_HANDLE_VALUE);
+        DWORD returned = 0;
+        const bool sparse = DeviceIoControl(file, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &returned, nullptr);
+        LARGE_INTEGER end{};
+        end.QuadPart = 2LL * 1024 * 1024 * 1024;
+        const bool extended = sparse && SetFilePointerEx(file, end, nullptr, FILE_BEGIN) && SetEndOfFile(file);
+        CloseHandle(file);
+        ASSERT_TRUE(extended);
+    }
+    QTemporaryDir output;
+    ASSERT_TRUE(output.isValid());
+    {
+        EditSessionAdapter session;
+        QEventLoop imported;
+        QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
+        QTimer::singleShot(60000, &imported, &QEventLoop::quit);
+        session.importMedia(QUrl::fromLocalFile(source_path), true);
+        imported.exec();
+        ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+        ASSERT_EQ(session.workspace().clips().size(), 1u);
+        auto exporter = std::make_unique<EditExportAdapter>();
+        exporter->setSession(&session);
+        exporter->setOutputDirectoryProvider([&] { return output.path(); });
+        IO_COUNTERS before{}, current{};
+        ASSERT_TRUE(GetProcessIoCounters(GetCurrentProcess(), &before));
+        exporter->startExport();
+        ASSERT_EQ(exporter->state(), EditExportAdapter::Preparing);
+        QPointer<QThread> worker = EditExportAdapterTestPeer::worker(*exporter);
+        ASSERT_NE(worker, nullptr);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        do {
+            ASSERT_TRUE(GetProcessIoCounters(GetCurrentProcess(), &current));
+            if (current.ReadTransferCount - before.ReadTransferCount >= 4 * 1024 * 1024)
+                break;
+            std::this_thread::yield();
+        } while (worker->isRunning() && std::chrono::steady_clock::now() < deadline);
+        ASSERT_GE(current.ReadTransferCount - before.ReadTransferCount, 4u * 1024 * 1024);
+        ASSERT_TRUE(worker->isRunning());
+        const auto cancelled = std::chrono::steady_clock::now();
+        exporter->cancel();
+        exporter.reset();
+        EXPECT_LT(std::chrono::steady_clock::now() - cancelled, std::chrono::seconds(1));
+        EXPECT_TRUE(worker.isNull());
+        EXPECT_TRUE(QDir(output.path()).entryList(QDir::Files).isEmpty());
+    }
+    QFile writable(source_path);
+    EXPECT_TRUE(writable.open(QIODevice::WriteOnly));
 }
 
 TEST(EditExportAdapterRun, DestructionJoinsActiveRenderAndRemovesStagingWithoutEventDelivery) {

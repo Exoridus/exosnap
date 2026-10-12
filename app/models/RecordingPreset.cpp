@@ -72,15 +72,29 @@ EnabledSourceKinds(const std::vector<exosnap::engine::AudioSourceRow>& rows) {
     return result;
 }
 
+engine::AudioIntent WithoutProcessSelectionAuthority(engine::AudioIntent intent) {
+    if (auto* graph = std::get_if<engine::TrackGraph1Intent>(&intent)) {
+        for (auto& source : graph->sources)
+            source.binding.process_selection_confirmed = false;
+    } else {
+        std::get<engine::LegacyRows25Intent>(intent).microphone_binding.process_selection_confirmed = false;
+    }
+    return intent;
+}
+
 [[nodiscard]] bool AudioIntentsEquivalent(const RecordingPresetConfig& a, const RecordingPresetConfig& b) {
     if (!a.audio_intent && !b.audio_intent)
         return true;
-    if (a.audio_intent && b.audio_intent)
-        return a.audio_intent == b.audio_intent;
+    if (a.audio_intent && b.audio_intent) {
+        if (a.audio_intent == b.audio_intent)
+            return true;
+        return WithoutProcessSelectionAuthority(*a.audio_intent) == WithoutProcessSelectionAuthority(*b.audio_intent);
+    }
     const auto& explicit_config = a.audio_intent ? a : b;
     const auto& projected_config = a.audio_intent ? b : a;
     if (const auto* legacy = std::get_if<engine::LegacyRows25Intent>(&*explicit_config.audio_intent))
-        return *legacy == CreateLegacyAudioIntent(projected_config.audio, legacy->id_namespace);
+        return WithoutProcessSelectionAuthority(*legacy) ==
+               WithoutProcessSelectionAuthority(CreateLegacyAudioIntent(projected_config.audio, legacy->id_namespace));
     return false;
 }
 } // namespace

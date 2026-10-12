@@ -83,7 +83,7 @@ struct Input {
             return AVERROR(EACCES);
         media_read_lease = std::move(*lease.value());
         if (before_io || cancelled) {
-            metered_admission = [&, cancelled](uint64_t bytes, const std::atomic<bool>*) {
+            metered_admission = [this, before_io, cancelled](uint64_t bytes, const std::atomic<bool>*) {
                 if ((!cancelled || !cancelled->load(std::memory_order_relaxed)) &&
                     (!before_io || before_io(bytes, cancelled)))
                     return true;
@@ -375,7 +375,10 @@ EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source, const std:
     return result;
 }
 
-TimelineExportAssessment AssessTimelineExport(const std::vector<TimelineExportClip>& clips, bool to_mp4) {
+TimelineExportAssessment AssessTimelineExport(const std::vector<TimelineExportClip>& clips, bool to_mp4,
+                                              const std::atomic<bool>* cancelled) {
+    if (cancelled && cancelled->load(std::memory_order_relaxed))
+        return Invalid("Export preparation cancelled.");
     const auto validity = ValidateRecipe(clips);
     if (validity.eligibility != TimelineExportEligibility::StreamCopy)
         return validity;
@@ -386,7 +389,7 @@ TimelineExportAssessment AssessTimelineExport(const std::vector<TimelineExportCl
     std::unique_ptr<Input> reference;
     for (const auto& clip : recipe) {
         auto input = std::make_unique<Input>();
-        const int status = input->Open(clip.source);
+        const int status = input->Open(clip.source, {}, {}, cancelled);
         if (status < 0)
             return Invalid("Cannot open source media: " + AvError(status));
         const auto duration = input->context->duration;
