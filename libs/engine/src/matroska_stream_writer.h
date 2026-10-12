@@ -222,7 +222,7 @@ struct MatroskaStreamConfig {
     size_t reorder_window_max_packets = 4096;
     size_t reorder_window_max_bytes = kMuxReorderPayloadBytes;
     // Zero preserves the recorder's time-based clusters. Clip jobs may cap an
-    // in-memory cluster and start a new one before admitting the next packet.
+    // in-memory cluster by retained capacity and start a new one before admission.
     size_t max_cluster_payload_bytes = 0;
     // Clip length must not determine retained cue metadata or cluster object count.
     bool stream_cues_to_disk = false;
@@ -383,7 +383,7 @@ class MatroskaStreamWriter {
     // Emit window entries whose decode time is behind the horizon (force=true drains all).
     bool DrainWindow(bool force);
     // Write a single resolved packet into the current/next cluster.
-    bool EmitPacket(const WindowEntry& e);
+    bool EmitPacket(WindowEntry& e);
     bool FlushCluster();
     // Publish the current file position (clamped to a running max, so a
     // transient backward seek/restore inside a back-patch never regresses the

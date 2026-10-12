@@ -1012,7 +1012,7 @@ bool MatroskaStreamWriter::DrainWindow(bool force) {
     // arrive within the reorder horizon. Also enforce the hard count ceiling so a
     // stalled track can never blow RAM.
     while (!m_window.empty()) {
-        const WindowEntry& front = m_window.front();
+        WindowEntry& front = m_window.front();
         const bool behind_horizon =
             m_max_pushed_ordering_ns >= front.ordering_ns &&
             static_cast<uint64_t>(m_max_pushed_ordering_ns - front.ordering_ns) >= m_config.reorder_window_ns;
@@ -1025,15 +1025,16 @@ bool MatroskaStreamWriter::DrainWindow(bool force) {
         if (!force && !behind_horizon)
             break;
 
+        const size_t retained_bytes = front.bytes.capacity();
         if (!EmitPacket(front))
             return false;
-        m_cur_window_bytes -= front.bytes.capacity();
+        m_cur_window_bytes -= retained_bytes;
         m_window.pop_front();
     }
     return true;
 }
 
-bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
+bool MatroskaStreamWriter::EmitPacket(WindowEntry& e) {
     if (e.track_num == 0)
         return true;
 
@@ -1050,7 +1051,7 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
 
     const uint64_t pkt_tick = e.pts_ns / kTimecodeScaleNs;
 
-    if (m_config.max_cluster_payload_bytes && e.bytes.size() > m_config.max_cluster_payload_bytes) {
+    if (m_config.max_cluster_payload_bytes && e.bytes.capacity() > m_config.max_cluster_payload_bytes) {
         Fail("Encoded packet exceeds clip cluster payload budget");
         return false;
     }
@@ -1060,7 +1061,7 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
         if (m_config.stream_cues_to_disk && m_cluster_bytes.size() >= kClipClusterPacketLimit)
             need_new_cluster = true;
         if (m_config.max_cluster_payload_bytes && m_cluster_payload_bytes &&
-            e.bytes.size() > m_config.max_cluster_payload_bytes - m_cluster_payload_bytes)
+            e.bytes.capacity() > m_config.max_cluster_payload_bytes - m_cluster_payload_bytes)
             need_new_cluster = true;
         const int64_t rel_ticks = static_cast<int64_t>(pkt_tick) - static_cast<int64_t>(m_cluster_start_ticks);
         if (rel_ticks > kMaxClusterRelativeTicks || rel_ticks < -kMaxClusterRelativeTicks) {
@@ -1085,8 +1086,8 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
 
         // Backing bytes must outlive FlushCluster()/Render(). Keep them in a
         // per-cluster store that is cleared only after the cluster is rendered.
-        m_cluster_bytes.push_back(e.bytes);
-        m_cluster_payload_bytes += e.bytes.size();
+        m_cluster_bytes.push_back(std::move(e.bytes));
+        m_cluster_payload_bytes += m_cluster_bytes.back().capacity();
         m_peak_cluster_payload_bytes = (std::max)(m_peak_cluster_payload_bytes, m_cluster_payload_bytes);
         std::vector<uint8_t>& stored = m_cluster_bytes.back();
 
@@ -1133,7 +1134,7 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
                     uint64_t samples = 0;
                     if (m_config.audio_codec == StreamAudioCodec::Pcm && m_config.audio_channels &&
                         m_config.audio_bit_depth >= 8)
-                        samples = e.bytes.size() /
+                        samples = stored.size() /
                                   (static_cast<size_t>(m_config.audio_channels) * (m_config.audio_bit_depth / 8));
                     else if (m_config.audio_codec == StreamAudioCodec::Opus)
                         samples = m_config.opus_frame_samples;
@@ -1194,7 +1195,7 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
                     const size_t index = m_active_cluster_extent.random_access_points.size();
                     m_active_cluster_extent.random_access_points.push_back(
                         {1, 0, 0, pts, e.ordering_ns,
-                         QualifyClosedRandomAccess(m_config.video_codec_id, m_config.video_codec_private, e.bytes,
+                         QualifyClosedRandomAccess(m_config.video_codec_id, m_config.video_codec_private, stored,
                                                    e.is_key)});
                     m_pending_rap_blocks.emplace_back(rendered_block, index);
                 }

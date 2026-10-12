@@ -1119,6 +1119,37 @@ TEST_F(StreamWriterTest, ReorderAdmissionCountsRetainedCapacity) {
     EXPECT_TRUE(writer.failed());
 }
 
+TEST_F(StreamWriterTest, ClusterAdmissionCountsTransferredCapacity) {
+    auto config = MakeConfig(tmp_, true, false);
+    config.reorder_window_max_bytes = 6u * 1024 * 1024;
+    config.max_cluster_payload_bytes = 6u * 1024 * 1024;
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config));
+    MuxPacket packet;
+    packet.track_num = 1;
+    packet.is_key = true;
+    packet.bytes.reserve(6u * 1024 * 1024);
+    packet.bytes.push_back(1);
+    ASSERT_TRUE(writer.Push(std::move(packet)));
+    ASSERT_TRUE(writer.Finalize()) << writer.error();
+    EXPECT_EQ(writer.peak_cluster_payload_bytes(), 6u * 1024 * 1024);
+    EXPECT_EQ(writer.current_window_bytes(), 0u);
+}
+
+TEST_F(StreamWriterTest, ClusterRejectsTransferredCapacityOverItsBudget) {
+    auto config = MakeConfig(tmp_, true, false);
+    config.max_cluster_payload_bytes = 1024 * 1024;
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config));
+    MuxPacket packet;
+    packet.track_num = 1;
+    packet.is_key = true;
+    packet.bytes.reserve(1024 * 1024 + 1);
+    packet.bytes.push_back(1);
+    ASSERT_TRUE(writer.Push(std::move(packet)));
+    EXPECT_FALSE(writer.Finalize());
+    EXPECT_TRUE(writer.failed());
+}
 TEST_F(StreamWriterTest, ThrottledClipWritesAdmitAndReportPhysicalChunks) {
     auto config = MakeConfig(tmp_, true, false);
     bool armed = false;
