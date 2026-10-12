@@ -134,6 +134,15 @@ PreconditionVerdict CanSplit(const AutomationState& state) {
                   QStringLiteral("splitEnabled"), true, false);
 }
 
+PreconditionVerdict CanRequestClip(const AutomationState& state) {
+    if (const PreconditionVerdict blocked = RefuseUnderBlockingSurface(state); !blocked.allowed())
+        return blocked;
+    if (state.can_request_clip)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("Recording clips are not available"),
+                  QStringLiteral("canRequestClip"), true, false);
+}
+
 PreconditionVerdict CanCaptureFrame(const AutomationState& state) {
     if (state.can_capture_frame)
         return Allowed();
@@ -633,6 +642,29 @@ const QVector<CommandDescriptor>& AllCommands() {
           Param("action", "string", false), Param("actionPayload", "string", false)},
          &NoPrecondition},
 
+        {QStringLiteral("clip.snapshot"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("clip.request"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("durationSeconds", "string", true)},
+         &CanRequestClip},
+        {QStringLiteral("clip.confirm"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("jobId", "string", true), Param("generation", "string", true)},
+         &CanNavigate},
+        {QStringLiteral("clip.open"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("assetId", "string", true)},
+         &CanNavigate},
+
         // --- Settings and profiles ---------------------------------------------
         // describe/get are unconditional observations; every write is refused
         // while a recording is in flight, exactly as the Settings controls are.
@@ -650,6 +682,29 @@ const QVector<CommandDescriptor>& AllCommands() {
          true,
          Settle::Synchronous,
          {Param("key", "string", true), Param("value", "any", true)},
+         &CanWriteSettings},
+        {QStringLiteral("audio.routing.snapshot"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("audio.routing.addTrack"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("expectedRevision", "int", true)},
+         &CanWriteSettings},
+        {QStringLiteral("audio.routing.assignSource"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("sourceId", "string", true), Param("trackId", "string", true), Param("mode", "int", true),
+          Param("expectedRevision", "int", true)},
+         &CanWriteSettings},
+        {QStringLiteral("audio.routing.setTrackRecordEnabled"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("trackId", "string", true), Param("enabled", "bool", true), Param("expectedRevision", "int", true)},
          &CanWriteSettings},
         {QStringLiteral("settings.reset"), 2, true, true, Settle::Synchronous, {}, &CanWriteSettings},
 
@@ -778,6 +833,7 @@ QJsonObject StateToJson(const AutomationState& state, std::uint64_t state_revisi
     json.insert(QStringLiteral("canExport"), state.can_export);
     json.insert(QStringLiteral("countdownActive"), state.countdown_active);
     json.insert(QStringLiteral("canAddMarker"), state.can_add_marker);
+    json.insert(QStringLiteral("canRequestClip"), state.can_request_clip);
     json.insert(QStringLiteral("diagnosticsChecking"), state.diagnostics_checking);
     json.insert(QStringLiteral("blockingSurface"), BlockingSurfaceValue(state.blocking_surface));
     json.insert(QStringLiteral("sourcePicker"),

@@ -8,6 +8,8 @@
 #include <QQuickStyle>
 #include <QString>
 #include <QStringList>
+#include <QVariantList>
+#include <QVariantMap>
 #include <QVector>
 #include <QtQuickTest>
 
@@ -124,6 +126,72 @@ class WhatsNewTestDriver final : public QObject {
     bool last_suppressed_ = false;
 };
 
+class AudioResourcesTestDriver final : public QObject {
+    Q_OBJECT
+
+    Q_PROPERTY(QVariantMap snapshot READ snapshot NOTIFY snapshotChanged FINAL)
+
+  public:
+    [[nodiscard]] const QVariantMap& snapshot() const noexcept {
+        return snapshot_;
+    }
+
+    Q_INVOKABLE void publish(int step) {
+        const auto row = [step](const QString& name, int metric_count) {
+            QVariantList metrics;
+            for (int index = 0; index < metric_count; ++index) {
+                const bool available = index % 4 != 0;
+                metrics.push_back(
+                    QVariantMap{{QStringLiteral("label"), QStringLiteral("Metric %1").arg(index)},
+                                {QStringLiteral("value"), available ? QString::number(step) : QStringLiteral("n/a")},
+                                {QStringLiteral("available"), available},
+                                {QStringLiteral("reason"),
+                                 available ? QString() : QStringLiteral("No measurement from the active runtime.")}});
+            }
+            return QVariantMap{{QStringLiteral("identity"), name + QLatin1Char('-') + QString::number(step)},
+                               {QStringLiteral("metrics"), metrics}};
+        };
+
+        QVariantList physical, sources, tracks, clip_jobs;
+        switch (step % 4) {
+        case 1:
+            physical.push_back(row(QStringLiteral("capture-a"), 13));
+            sources.push_back(row(QStringLiteral("source-a"), 12));
+            tracks.push_back(row(QStringLiteral("track-a"), 6));
+            clip_jobs.push_back(row(QStringLiteral("clip-a"), 4));
+            break;
+        case 2:
+            sources.push_back(row(QStringLiteral("source-a"), 12));
+            break;
+        case 3:
+            tracks.push_back(row(QStringLiteral("track-a"), 6));
+            clip_jobs.push_back(row(QStringLiteral("clip-a"), 4));
+            break;
+        default:
+            break;
+        }
+
+        snapshot_ = {
+            {QStringLiteral("physical"), physical},
+            {QStringLiteral("sources"), sources},
+            {QStringLiteral("tracks"), tracks},
+            {QStringLiteral("clipJobs"), clip_jobs},
+            {QStringLiteral("unavailable"),
+             QVariantList{QVariantMap{
+                 {QStringLiteral("label"), QStringLiteral("Index commit lag")},
+                 {QStringLiteral("value"), QStringLiteral("n/a")},
+                 {QStringLiteral("available"), false},
+                 {QStringLiteral("reason"), QStringLiteral("Writer commit timing is not exposed by this runtime.")}}}}};
+        emit snapshotChanged();
+    }
+
+  signals:
+    void snapshotChanged();
+
+  private:
+    QVariantMap snapshot_;
+};
+
 class Setup final : public QObject {
     Q_OBJECT
 
@@ -145,14 +213,18 @@ class Setup final : public QObject {
         // After the application exists, so the adapter is built in a live object
         // system rather than during static construction.
         whats_new_driver_ = std::make_unique<WhatsNewTestDriver>();
+        audio_resources_driver_ = std::make_unique<AudioResourcesTestDriver>();
     }
 
     void qmlEngineAvailable(QQmlEngine* engine) {
         engine->rootContext()->setContextProperty(QStringLiteral("whatsNewDriver"), whats_new_driver_.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("audioResourcesDriver"),
+                                                  audio_resources_driver_.get());
     }
 
   private:
     std::unique_ptr<WhatsNewTestDriver> whats_new_driver_;
+    std::unique_ptr<AudioResourcesTestDriver> audio_resources_driver_;
 };
 
 QUICK_TEST_MAIN_WITH_SETUP(record_controls, Setup)

@@ -5,6 +5,7 @@ pub mod audio;
 pub mod capture;
 mod chocolatey_worker;
 pub mod clean;
+pub mod clips;
 #[cfg(test)]
 mod command_names;
 pub mod common;
@@ -93,6 +94,7 @@ pub fn registry() -> Vec<Scenario> {
     all.extend(present::scenarios());
     all.extend(preview::scenarios());
     all.extend(record::scenarios());
+    all.extend(clips::scenarios());
     all.extend(schema::scenarios());
     all.extend(update::scenarios());
     all.extend(handoff::scenarios());

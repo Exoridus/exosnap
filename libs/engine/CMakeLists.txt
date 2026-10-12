@@ -15,6 +15,7 @@ if(NOT EXISTS "${_nvenc_header}")
         src/recording_media_index.cpp
     src/clip_boundary_plan.cpp
     src/recording_clip_job.cpp
+    src/clip_committed_packet_reader.cpp
         src/audio_routing_model.cpp
         src/audio_routing_resolver.cpp
         src/audio_tee.cpp
@@ -388,6 +389,7 @@ add_library(exosnap_engine STATIC
     src/recording_media_index.cpp
     src/clip_boundary_plan.cpp
     src/recording_clip_job.cpp
+    src/clip_committed_packet_reader.cpp
     src/audio_routing_model.cpp
     src/audio_routing_resolver.cpp
     src/runtime_config_key.cpp

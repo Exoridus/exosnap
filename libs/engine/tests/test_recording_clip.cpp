@@ -226,7 +226,6 @@ TEST(RecordingClipTest, FiniteJournalClipScalesFromThirtySecondsToFullRecording)
         MuxPacket item;
         item.track_num = 1;
         item.pts_ns = second * 1'000'000'000ULL;
-        item.dts_ns = static_cast<int64_t>(item.pts_ns);
         item.is_key = true;
         item.bytes = key_sample;
         ASSERT_TRUE(writer.Push(std::move(item))) << writer.error();
@@ -274,6 +273,109 @@ TEST(RecordingClipTest, FiniteJournalClipScalesFromThirtySecondsToFullRecording)
     }
     CloseHandle(pinned);
     std::error_code ignored;
+    std::filesystem::remove(source_path, ignored);
+    std::filesystem::remove(journal, ignored);
+}
+
+TEST(RecordingClipTest, OversizedCommittedBlockIsRejectedBeforeItsPayloadIsRead) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    const auto source_path = exosnap_test::UniqueTempPath("clip_oversized_source.mkv");
+    const auto journal = exosnap_test::UniqueTempPath("clip_oversized.index");
+    AVFormatContext* raw = nullptr;
+    ASSERT_GE(avformat_open_input(&raw, fixture.string().c_str(), nullptr, nullptr), 0);
+    const auto close_input = [](AVFormatContext* value) { avformat_close_input(&value); };
+    std::unique_ptr<AVFormatContext, decltype(close_input)> input(raw, close_input);
+    ASSERT_GE(avformat_find_stream_info(raw, nullptr), 0);
+    const auto* codec = raw->streams[0]->codecpar;
+    ASSERT_GT(codec->extradata_size, 4);
+    ASSERT_EQ(codec->extradata[4] & 3, 3);
+    const auto free_packet = [](AVPacket* value) { av_packet_free(&value); };
+    std::unique_ptr<AVPacket, decltype(free_packet)> packet(av_packet_alloc(), free_packet);
+    ASSERT_NE(packet, nullptr);
+    std::vector<uint8_t> key_sample;
+    while (av_read_frame(raw, packet.get()) >= 0) {
+        if (packet->stream_index == 0 && (packet->flags & AV_PKT_FLAG_KEY)) {
+            key_sample.assign(packet->data, packet->data + packet->size);
+            break;
+        }
+        av_packet_unref(packet.get());
+    }
+    ASSERT_FALSE(key_sample.empty());
+
+    MatroskaStreamConfig config;
+    config.output_path = source_path.string();
+    config.video_codec_id = "V_MPEG4/ISO/AVC";
+    config.video_codec_private.assign(codec->extradata, codec->extradata + codec->extradata_size);
+    config.encode_width = static_cast<uint32_t>(codec->width);
+    config.encode_height = static_cast<uint32_t>(codec->height);
+    config.frame_rate_num = 1;
+    config.frame_rate_den = 2;
+    RecordingMediaIndex index(journal);
+    config.publish_committed = [&](CommittedMediaReceipt receipt) {
+        return index.PublishCommitted(std::move(receipt));
+    };
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config)) << writer.error();
+    const auto descriptor = writer.media_descriptor();
+    ASSERT_NE(descriptor, nullptr);
+    ASSERT_EQ(index.RegisterDescriptor(descriptor), ReceiptAcceptance::Accepted);
+
+    constexpr uint32_t filler_length = 4 * 1024 * 1024 + 1;
+    auto oversized = key_sample;
+    oversized.push_back(static_cast<uint8_t>(filler_length >> 24));
+    oversized.push_back(static_cast<uint8_t>(filler_length >> 16));
+    oversized.push_back(static_cast<uint8_t>(filler_length >> 8));
+    oversized.push_back(static_cast<uint8_t>(filler_length));
+    oversized.push_back(0x06);
+    oversized.resize(oversized.size() + filler_length - 1);
+    ASSERT_EQ(QualifyClosedRandomAccess(config.video_codec_id, config.video_codec_private, oversized, true),
+              RandomAccessKind::ClosedGop);
+    for (uint64_t second : {0ULL, 2ULL, 4ULL}) {
+        MuxPacket item;
+        item.track_num = 1;
+        item.pts_ns = second * 1'000'000'000ULL;
+        item.dts_ns = static_cast<int64_t>(item.pts_ns);
+        item.is_key = true;
+        item.bytes = second == 0 ? oversized : key_sample;
+        ASSERT_TRUE(writer.Push(std::move(item))) << writer.error();
+    }
+    ASSERT_TRUE(writer.Finalize()) << writer.error();
+    const auto seal = writer.finalized_segment_seal();
+    ASSERT_TRUE(seal);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (index.journal_committed_through() < seal->final_commit_sequence && !index.needs_rebuild() &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    ASSERT_FALSE(index.needs_rebuild());
+    ASSERT_GE(index.journal_committed_through(), seal->final_commit_sequence);
+    const auto frozen = index.Freeze();
+    ASSERT_TRUE(frozen.succeeded()) << frozen.error()->context;
+    const auto plan = PlanClipBoundaries(*frozen.value(), descriptor->recording_id, 0, 5'000'000'000);
+    ASSERT_TRUE(plan.succeeded()) << plan.error()->context;
+    HANDLE pinned =
+        CreateFileW(source_path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                    OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+    ASSERT_NE(pinned, INVALID_HANDLE_VALUE);
+    const ClipPinnedSource source{descriptor, pinned, std::nullopt};
+    uint64_t admitted_read_bytes = 0;
+    ClipJobIoControl control;
+    control.before_io = [&](ClipJobIoPhase phase, uint64_t bytes) {
+        if (phase != ClipJobIoPhase::Reading)
+            return true;
+        if (bytes > 256 * 1024 - admitted_read_bytes)
+            return false;
+        admitted_read_bytes += bytes;
+        return true;
+    };
+    const auto output = exosnap_test::UniqueTempPath("clip_oversized_output.mkv");
+    const auto result = RunRecordingClipJob(*plan.value(), *frozen.value(),
+                                            std::span<const ClipPinnedSource>(&source, 1), output, nullptr, &control);
+    ASSERT_FALSE(result.succeeded());
+    EXPECT_EQ(result.error()->code, EngineErrorCode::ResourceBudgetExceeded);
+    EXPECT_LT(admitted_read_bytes, 256ULL * 1024);
+    CloseHandle(pinned);
+    std::error_code ignored;
+    std::filesystem::remove(output, ignored);
     std::filesystem::remove(source_path, ignored);
     std::filesystem::remove(journal, ignored);
 }

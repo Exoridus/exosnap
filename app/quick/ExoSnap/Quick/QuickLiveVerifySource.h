@@ -90,6 +90,16 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     [[nodiscard]] QJsonObject SettingsDescribe() const override;
     [[nodiscard]] QJsonObject SettingsGet(const QString& key, QString* error) const override;
     bool SettingsSet(const QString& key, const QJsonValue& value, QString* error) override;
+    [[nodiscard]] QJsonObject AudioRoutingSnapshot() const override;
+    bool AddAudioTrack(quint64 expected_revision, QString* error) override;
+    bool AssignAudioSource(const QString& source_id, const QString& track_id, int mode, quint64 expected_revision,
+                           QString* error) override;
+    bool SetAudioTrackRecordEnabled(const QString& track_id, bool enabled, quint64 expected_revision,
+                                    QString* error) override;
+    [[nodiscard]] QJsonObject ClipSnapshot() const override;
+    bool ClipRequest(const QString& duration_seconds, QString* error) override;
+    bool ClipConfirm(const QString& job_id, const QString& generation, QString* error) override;
+    bool ClipOpen(const QString& asset_id, QString* error) override;
     bool WebcamOverlaySet(const QJsonObject& fields, QJsonObject* applied, QString* error) override;
     bool SettingsReset(QString* error) override;
 

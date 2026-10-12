@@ -1,4 +1,5 @@
 #include "audio_media_manifest_adapter.h"
+#include "bounded_metadata_json.h"
 #include "budgeted_media_avio.h"
 #include "media_identity_sidecar.h"
 #include <exosnap/engine/audio_limits.h>
@@ -50,7 +51,7 @@ extern "C" {
 
 namespace exosnap::engine {
 namespace {
-using Json = nlohmann::json;
+using Json = MetadataJson;
 constexpr size_t kManifestBytes = 1024 * 1024;
 constexpr size_t kCodecPrivateBytes = 64 * 1024;
 constexpr size_t kDerivationIds = 64;
@@ -176,7 +177,7 @@ std::string Hex(std::span<const uint8_t> bytes) {
 std::vector<uint8_t> Unhex(const Json& value) {
     if (!value.is_string())
         throw std::invalid_argument("Expected hexadecimal codec bytes");
-    const auto& text = value.get_ref<const std::string&>();
+    const auto& text = value.get_ref<const Json::string_t&>();
     if (text.size() % 2 || text.size() > kCodecPrivateBytes * 2)
         throw std::invalid_argument("Codec bytes exceed budget");
     const auto digit = [](char character) -> uint8_t {
@@ -192,6 +193,12 @@ std::vector<uint8_t> Unhex(const Json& value) {
         result.push_back(static_cast<uint8_t>((digit(text[index]) << 4) | digit(text[index + 1])));
     return result;
 }
+std::string StringValue(const Json& value) {
+    if (!value.is_string())
+        throw std::invalid_argument("Expected metadata string");
+    const auto& text = value.get_ref<const Json::string_t&>();
+    return std::string(text.data(), text.size());
+}
 Json CodecJson(const MediaCodecDescriptor& codec) {
     return {{"codec_id", codec.codec_id},
             {"codec_private", Hex(codec.codec_private)},
@@ -202,6 +209,7 @@ Json CodecJson(const MediaCodecDescriptor& codec) {
             {"channel_layout", codec.channel_layout}};
 }
 std::string Fingerprint(const MediaCodecDescriptor& codec) {
+    MetadataJsonQuotaScope json_quota;
     const auto bytes = CodecJson(codec).dump();
     std::unique_ptr<AVSHA, decltype(&av_free)> sha(av_sha_alloc(), av_free);
     if (!sha || av_sha_init(sha.get(), 256) < 0)
@@ -265,7 +273,8 @@ bool Boolean(const Json& value) {
 template <typename Id> Id IdValue(const Json& value) {
     if (!value.is_string())
         throw std::invalid_argument("Expected metadata identity");
-    const auto id = FromUuid<Id>(value.get_ref<const std::string&>());
+    const auto& text = value.get_ref<const Json::string_t&>();
+    const auto id = FromUuid<Id>(std::string_view(text.data(), text.size()));
     if (!id || !ValidId(*id))
         throw std::invalid_argument("Invalid metadata identity");
     return *id;
@@ -378,16 +387,16 @@ AudioManifest1 ManifestValue(const Json& value) {
         track.container.track_id = IdValue<AudioTrackId>(item["track_id"]);
         track.container.stream_index = {Checked<uint32_t>(item["stream_index"])};
         track.container.track_uid = Checked<uint64_t>(item["track_uid"]);
-        track.container.name = item["name"].get<std::string>();
-        track.container.role = item["role"].get<std::string>();
+        track.container.name = StringValue(item["name"]);
+        track.container.role = StringValue(item["role"]);
         const auto& codec = item["codec"];
         Keys(codec, {"codec_id", "codec_private", "sample_rate", "channels", "bit_depth", "codec_delay_samples",
                      "channel_layout"});
         track.container.codec = {
-            codec["codec_id"].get<std::string>(),      Unhex(codec["codec_private"]),
-            Checked<uint32_t>(codec["sample_rate"]),   Checked<uint32_t>(codec["channels"]),
-            Checked<uint32_t>(codec["bit_depth"]),     Checked<uint32_t>(codec["codec_delay_samples"]),
-            codec["channel_layout"].get<std::string>()};
+            StringValue(codec["codec_id"]),          Unhex(codec["codec_private"]),
+            Checked<uint32_t>(codec["sample_rate"]), Checked<uint32_t>(codec["channels"]),
+            Checked<uint32_t>(codec["bit_depth"]),   Checked<uint32_t>(codec["codec_delay_samples"]),
+            StringValue(codec["channel_layout"])};
         if (item["format_fingerprint"] != Fingerprint(track.container.codec))
             throw std::invalid_argument("Audio fingerprint mismatch");
         track.container.source_ids = Ids<AudioSourceId>(item["source_ids"], kMaxAudioSources);
@@ -415,7 +424,7 @@ AudioManifest1 ManifestValue(const Json& value) {
         result.tracks.push_back(std::move(track));
     }
     result.default_monitor_track_ids = Ids<AudioTrackId>(value["default_monitor_track_ids"], kMaxAudioTracks);
-    const auto origin = value["monitor_selection_origin"].get<std::string>();
+    const auto origin = StringValue(value["monitor_selection_origin"]);
     if (origin != "default" && origin != "user")
         throw std::invalid_argument("Unknown monitor selection origin");
     result.monitor_selection_origin =
@@ -484,10 +493,13 @@ Outcome<std::string> SerializeAudioManifest1(const AudioManifest1& manifest) {
     if (!valid.succeeded())
         return *valid.error();
     try {
+        MetadataJsonQuotaScope json_quota;
         auto json = ManifestJson(manifest).dump();
         if (json.size() > kManifestBytes)
             return MetadataError("Audio manifest exceeds serialization budget");
-        return json;
+        return std::string(json.data(), json.size());
+    } catch (const MetadataJsonBudgetExceeded&) {
+        return MetadataError("Audio manifest JSON memory budget exceeded", EngineErrorCode::ResourceBudgetExceeded);
     } catch (...) {
         return MetadataError("Cannot serialize audio manifest");
     }
@@ -496,7 +508,8 @@ Outcome<AudioManifest1> ParseAudioManifest1(std::string_view text) {
     if (text.empty() || text.size() > kManifestBytes)
         return MetadataError("Audio manifest exceeds parse budget");
     try {
-        std::vector<std::set<std::string>> keys;
+        MetadataJsonQuotaScope json_quota;
+        MetadataJsonKeyStack keys;
         const auto callback = [&](int depth, Json::parse_event_t event, Json& value) {
             if (depth > 16)
                 throw std::invalid_argument("Audio manifest nesting budget exceeded");
@@ -504,7 +517,7 @@ Outcome<AudioManifest1> ParseAudioManifest1(std::string_view text) {
                 keys.emplace_back();
             else if (event == Json::parse_event_t::object_end)
                 keys.pop_back();
-            else if (event == Json::parse_event_t::key && !keys.back().insert(value.get<std::string>()).second)
+            else if (event == Json::parse_event_t::key && !keys.back().insert(value.get<MetadataJsonString>()).second)
                 throw std::invalid_argument("Duplicate audio manifest key");
             return true;
         };
@@ -513,6 +526,8 @@ Outcome<AudioManifest1> ParseAudioManifest1(std::string_view text) {
         if (!valid.succeeded())
             return *valid.error();
         return manifest;
+    } catch (const MetadataJsonBudgetExceeded&) {
+        return MetadataError("Audio manifest JSON memory budget exceeded", EngineErrorCode::ResourceBudgetExceeded);
     } catch (...) {
         return MetadataError("Invalid bounded audio manifest");
     }
@@ -818,6 +833,7 @@ Outcome<std::string> SerializeAudioTrackProvenance(const AudioManifest1& manifes
     if (!valid.succeeded())
         return *valid.error();
     try {
+        MetadataJsonQuotaScope json_quota;
         const auto json = ManifestJson(manifest);
         for (const auto& track : json["tracks"])
             if (track["track_id"] == ToUuid(track_id)) {
@@ -826,9 +842,12 @@ Outcome<std::string> SerializeAudioTrackProvenance(const AudioManifest1& manifes
                     for (const auto& id : track["source_ids"])
                         if (source["id"] == id)
                             sources.push_back(source);
-                return Json{{"version", 1}, {"track", track}, {"sources", std::move(sources)}}.dump();
+                const auto serialized = Json{{"version", 1}, {"track", track}, {"sources", std::move(sources)}}.dump();
+                return std::string(serialized.data(), serialized.size());
             }
         return MetadataError("Audio provenance track is missing");
+    } catch (const MetadataJsonBudgetExceeded&) {
+        return MetadataError("Audio provenance JSON memory budget exceeded", EngineErrorCode::ResourceBudgetExceeded);
     } catch (...) {
         return MetadataError("Cannot serialize audio provenance");
     }

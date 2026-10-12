@@ -366,7 +366,8 @@ pub fn tone_onsets(samples: &[f32], rate: u32, freq: f64, gap_s: f64) -> Vec<f64
     let k = 2.0 * (2.0 * std::f64::consts::PI * freq / rate as f64).cos();
     let mut onsets = Vec::new();
     let mut quiet_since = 0.0f64;
-    let mut active = false;
+    // Decoding can begin mid-tone. An onset requires observed silence first.
+    let mut active = true;
     for (i, chunk) in samples.chunks(window).enumerate() {
         let (mut s1, mut s2) = (0.0f64, 0.0f64);
         for &x in chunk {
@@ -377,7 +378,7 @@ pub fn tone_onsets(samples: &[f32], rate: u32, freq: f64, gap_s: f64) -> Vec<f64
         let power = (s1 * s1 + s2 * s2 - k * s1 * s2).max(0.0).sqrt() * 2.0 / chunk.len() as f64;
         let t = (i * window) as f64 / rate as f64;
         if power > 0.05 {
-            if !active && t - quiet_since >= gap_s {
+            if !active && (onsets.is_empty() || t - quiet_since >= gap_s) {
                 onsets.push(t);
             }
             active = true;
@@ -538,6 +539,61 @@ pub mod tests {
         for (o, e) in onsets.iter().zip([0.5, 1.5, 2.5]) {
             assert!((o - e).abs() < 0.006, "{o} vs {e}");
         }
+    }
+
+    #[test]
+    fn tone_onsets_keep_first_early_beep_and_pair_every_one_hertz_marker() {
+        let rate = 48_000;
+        let mut samples = vec![0f32; rate as usize * 20];
+        let expected: Vec<_> = (0..20).map(|index| 0.44 + index as f64).collect();
+        for start in &expected {
+            let first = (start * rate as f64) as usize;
+            for index in 0..rate as usize / 20 {
+                samples[first + index] =
+                    0.5 * (2.0 * std::f32::consts::PI * 1000.0 * index as f32 / rate as f32).sin();
+            }
+        }
+        let onsets = tone_onsets(&samples, rate, 1000.0, 0.5);
+        assert_eq!(onsets.len(), 20, "{onsets:?}");
+        for (index, expected) in expected.iter().enumerate() {
+            assert!((onsets[index] - expected).abs() < 0.006);
+            let flash = expected + 0.00975;
+            let nearest = onsets
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| (*a - flash).abs().total_cmp(&(*b - flash).abs()))
+                .unwrap()
+                .0;
+            assert_eq!(nearest, index, "a beep was reused for a different flash");
+        }
+    }
+
+    #[test]
+    fn tone_onsets_reject_a_sustained_tone_already_present_at_decode_start() {
+        let rate = 48_000;
+        let samples: Vec<_> = (0..rate * 3)
+            .map(|index| {
+                0.5 * (2.0 * std::f32::consts::PI * 1000.0 * index as f32 / rate as f32).sin()
+            })
+            .collect();
+        assert!(tone_onsets(&samples, rate, 1000.0, 0.5).is_empty());
+    }
+
+    #[test]
+    fn tone_onsets_preserve_refractory_silence_after_the_first_marker() {
+        let rate = 48_000;
+        let mut samples = vec![0f32; rate as usize * 2];
+        for start in [0.1, 0.2, 1.0] {
+            let first = (start * rate as f64) as usize;
+            for index in 0..rate as usize / 20 {
+                samples[first + index] =
+                    0.5 * (2.0 * std::f32::consts::PI * 1000.0 * index as f32 / rate as f32).sin();
+            }
+        }
+        let onsets = tone_onsets(&samples, rate, 1000.0, 0.5);
+        assert_eq!(onsets.len(), 2, "{onsets:?}");
+        assert!((onsets[0] - 0.1).abs() < 0.006);
+        assert!((onsets[1] - 1.0).abs() < 0.006);
     }
 
     #[test]

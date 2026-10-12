@@ -166,11 +166,9 @@ fn capture_overlays(ctx: &mut Context) -> Step {
             ("app.showRecordingOverlay", json!(true)),
             ("app.showDiagnosticsOverlay", json!(true)),
             ("app.showQuickControls", json!(true)),
-            ("audio.systemEnabled", json!(false)),
-            ("audio.appEnabled", json!(false)),
-            ("audio.microphoneEnabled", json!(false)),
         ],
     )?;
+    common::disable_recording_audio(&mut app)?;
     let environment = app.call("environment.snapshot", json!({}))?;
     let primary = common::primary_screen(&environment, false)
         .ok_or_else(|| Stop::unavailable("the product reports no primary monitor"))?;

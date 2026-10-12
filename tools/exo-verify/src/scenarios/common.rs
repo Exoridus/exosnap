@@ -298,6 +298,57 @@ pub fn configure_exact(app: &mut App, settings: &[(&str, Value)]) -> Step {
     Ok(())
 }
 
+/// Disables recording on every observed audio track through the routing surface.
+pub fn disable_recording_audio(app: &mut App) -> Step {
+    let mut snapshot = app.call("audio.routing.snapshot", json!({}))?;
+    infra_ensure!(
+        snapshot["readOnly"].as_bool() == Some(false),
+        "audio routing is not writable: {}",
+        snapshot["lastError"]
+    );
+    let tracks = snapshot["tracks"]
+        .as_array()
+        .ok_or_else(|| Stop::infra("audio routing snapshot has no track array"))?;
+    let mut enabled_ids = Vec::new();
+    for track in tracks {
+        let id = track["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| Stop::infra("audio routing track has no stable id"))?;
+        let enabled = track["recordEnabled"]
+            .as_bool()
+            .ok_or_else(|| Stop::infra("audio routing track has no recording flag"))?;
+        if enabled {
+            enabled_ids.push(id.to_string());
+        }
+    }
+    for id in enabled_ids {
+        let revision = snapshot["revision"]
+            .as_u64()
+            .ok_or_else(|| Stop::infra("audio routing snapshot has no revision"))?;
+        snapshot = app.call(
+            "audio.routing.setTrackRecordEnabled",
+            json!({ "trackId": id, "enabled": false, "expectedRevision": revision }),
+        )?;
+        product_ensure!(
+            snapshot["tracks"]
+                .as_array()
+                .is_some_and(|tracks| tracks.iter().any(|track| {
+                    track["id"].as_str() == Some(id.as_str())
+                        && track["recordEnabled"].as_bool() == Some(false)
+                })),
+            "audio routing did not disable recording for track {id}"
+        );
+    }
+    product_ensure!(
+        snapshot["tracks"].as_array().is_some_and(|tracks| tracks
+            .iter()
+            .all(|track| track["recordEnabled"].as_bool() == Some(false))),
+        "audio routing still has recording enabled on a track"
+    );
+    Ok(())
+}
+
 /// Whether `value` is a Windows display device name (`\\.\DISPLAYn`), the
 /// identity `record.selectTarget` matches monitor targets by.
 pub fn is_display_device(value: &str) -> bool {

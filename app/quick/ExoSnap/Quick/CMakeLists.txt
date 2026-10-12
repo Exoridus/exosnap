@@ -273,6 +273,19 @@ qt_add_qml_module(exosnap
         Brand.h
 )
 
+# A compiled lookup can reference another local QML type's property layout.
+# Qt's per-file cache rules do not track these dependencies, so an incremental
+# build must invalidate the module's compiled lookups together.
+get_target_property(exosnap_qml_files exosnap QT_QML_MODULE_QML_FILES)
+get_target_property(exosnap_qml_sources exosnap SOURCES)
+foreach(exosnap_qml_source IN LISTS exosnap_qml_sources)
+    if(exosnap_qml_source MATCHES "/qmlcache/.*_(qml|js|mjs)\\.cpp$")
+        add_custom_command(OUTPUT "${exosnap_qml_source}" APPEND
+            DEPENDS ${exosnap_qml_files}
+        )
+    endif()
+endforeach()
+
 target_sources(exosnap
     PRIVATE
         QuickApplication.cpp

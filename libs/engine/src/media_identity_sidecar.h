@@ -35,10 +35,6 @@ Outcome<MediaIdentitySnapshot> HashFinalMedia(const std::filesystem::path& media
                                               const std::function<bool()>& continue_io = {},
                                               const BackgroundIoAdmission& before_io = {},
                                               const std::atomic<bool>* cancelled = nullptr);
-AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& media,
-                                                 const std::function<bool()>& continue_io = {},
-                                                 const BackgroundIoAdmission& before_io = {},
-                                                 const std::atomic<bool>* cancelled = nullptr);
 Outcome<std::monostate> CopyMediaIdentityReferenceFiles(const std::filesystem::path& source,
                                                         const std::filesystem::path& output,
                                                         const MediaIdentitySidecarReferences& references,

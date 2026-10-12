@@ -1,4 +1,5 @@
 #include "media_identity_sidecar.h"
+#include "bounded_metadata_json.h"
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/background_io.h>
 #include <exosnap/engine/recording_media_types.h>
@@ -18,6 +19,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <variant>
@@ -31,7 +33,7 @@ extern "C" {
 
 namespace exosnap::engine {
 namespace {
-using Json = nlohmann::json;
+using Json = MetadataJson;
 constexpr size_t kSidecarBytes = 2 * 1024 * 1024;
 bool ValidMarkerReference(const std::string& name) {
     if (name.empty() || name.size() > 4096 || name == "." || name == ".." ||
@@ -42,13 +44,14 @@ bool ValidMarkerReference(const std::string& name) {
            0;
 }
 Json ReferenceRanges(const MediaIdentitySidecarReferences& references) {
+    MetadataJsonQuotaScope json_quota;
     if (references.marker_refs.size() > 4096 || references.source_ranges_json.size() > kSidecarBytes)
         throw std::invalid_argument("Reference budget exceeded");
-    std::set<std::string> names;
+    MetadataJsonNameSet names;
     for (const auto& name : references.marker_refs)
-        if (!ValidMarkerReference(name) || !names.insert(name).second)
+        if (!ValidMarkerReference(name) || !names.insert(std::string_view(name)).second)
             throw std::invalid_argument("Invalid marker reference");
-    std::vector<std::set<std::string>> keys;
+    MetadataJsonKeyStack keys;
     const auto callback = [&](int depth, Json::parse_event_t event, Json& value) {
         if (depth > 18)
             throw std::invalid_argument("Reference nesting budget exceeded");
@@ -56,7 +59,7 @@ Json ReferenceRanges(const MediaIdentitySidecarReferences& references) {
             keys.emplace_back();
         else if (event == Json::parse_event_t::object_end)
             keys.pop_back();
-        else if (event == Json::parse_event_t::key && !keys.back().insert(value.get<std::string>()).second)
+        else if (event == Json::parse_event_t::key && !keys.back().insert(value.get<MetadataJsonString>()).second)
             throw std::invalid_argument("Duplicate reference key");
         return true;
     };
@@ -188,6 +191,7 @@ Outcome<std::monostate> WriteMediaIdentitySidecar(const std::filesystem::path& m
     auto staging = final_path;
     staging += L"." + std::filesystem::path(ToUuid(NewId<MediaId>())).wstring() + L".tmp";
     try {
+        MetadataJsonQuotaScope json_quota;
         MediaIdentitySidecarReferences retained;
         if (references) {
             retained = *references;
@@ -203,18 +207,39 @@ Outcome<std::monostate> WriteMediaIdentitySidecar(const std::filesystem::path& m
                 return IdentityError("Cannot inspect existing identity references");
             }
         }
-        const auto ranges = ReferenceRanges(retained);
-        const auto payload = Json{
-            {"manifest_version", 1},
-            {"media_id", ToUuid(manifest.media_id)},
-            {"file_size", hash.value()->file_size},
-            {"sha256", Hex(hash.value()->sha256)},
-            {"audio_manifest", Json::parse(*serialized.value())},
-            {"marker_refs", retained.marker_refs},
-            {"source_ranges",
-             ranges}}.dump();
-        if (payload.size() > kSidecarBytes)
-            return IdentityError("Identity sidecar exceeds byte budget");
+        std::string ranges_text;
+        {
+            const auto ranges = ReferenceRanges(retained);
+            const auto compact = ranges.dump();
+            ranges_text.assign(compact.data(), compact.size());
+        }
+        std::string payload;
+        payload.reserve(kSidecarBytes);
+        const auto append = [&](std::string_view part) {
+            if (part.size() > kSidecarBytes - payload.size())
+                throw std::length_error("Identity sidecar exceeds byte budget");
+            payload.append(part);
+        };
+        append("{\"audio_manifest\":");
+        append(*serialized.value());
+        append(",\"file_size\":");
+        append(std::to_string(hash.value()->file_size));
+        append(",\"manifest_version\":1,\"marker_refs\":[");
+        for (size_t index = 0; index < retained.marker_refs.size(); ++index) {
+            if (index != 0)
+                append(",");
+            const auto quoted = Json(retained.marker_refs[index]).dump();
+            append(std::string_view(quoted.data(), quoted.size()));
+        }
+        append("],\"media_id\":");
+        const auto quoted_id = Json(ToUuid(manifest.media_id)).dump();
+        append(std::string_view(quoted_id.data(), quoted_id.size()));
+        append(",\"sha256\":");
+        const auto quoted_hash = Json(Hex(hash.value()->sha256)).dump();
+        append(std::string_view(quoted_hash.data(), quoted_hash.size()));
+        append(",\"source_ranges\":");
+        append(ranges_text);
+        append("}");
         HANDLE file =
             CreateFileW(staging.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file == INVALID_HANDLE_VALUE)
@@ -232,6 +257,12 @@ Outcome<std::monostate> WriteMediaIdentitySidecar(const std::filesystem::path& m
             return IdentityError("Cannot publish complete identity sidecar");
         }
         return std::monostate{};
+    } catch (const MetadataJsonBudgetExceeded&) {
+        DeleteFileW(staging.c_str());
+        return IdentityError("Identity sidecar JSON memory budget exceeded", EngineErrorCode::ResourceBudgetExceeded);
+    } catch (const std::length_error&) {
+        DeleteFileW(staging.c_str());
+        return IdentityError("Identity sidecar exceeds byte budget");
     } catch (...) {
         DeleteFileW(staging.c_str());
         return IdentityError("Cannot serialize identity sidecar");
@@ -251,6 +282,7 @@ AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& me
     if (size == 0 || size > kSidecarBytes)
         return Status(AudioMetadataStatus::Invalid, "Audio identity sidecar exceeds byte budget");
     try {
+        MetadataJsonQuotaScope json_quota;
         HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                     nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (handle == INVALID_HANDLE_VALUE)
@@ -263,7 +295,7 @@ AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& me
             !ReadFile(handle, bytes.data(), static_cast<DWORD>(size), &read, nullptr) || read != size ||
             !GetFileSizeEx(handle, &final_size) || final_size.QuadPart != static_cast<int64_t>(size))
             return Status(AudioMetadataStatus::Invalid, "Audio identity sidecar changed during read");
-        std::vector<std::set<std::string>> keys;
+        MetadataJsonKeyStack keys;
         const auto callback = [&](int depth, Json::parse_event_t event, Json& value) {
             if (depth > 18)
                 throw std::invalid_argument("Sidecar nesting budget exceeded");
@@ -271,7 +303,7 @@ AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& me
                 keys.emplace_back();
             else if (event == Json::parse_event_t::object_end)
                 keys.pop_back();
-            else if (event == Json::parse_event_t::key && !keys.back().insert(value.get<std::string>()).second)
+            else if (event == Json::parse_event_t::key && !keys.back().insert(value.get<MetadataJsonString>()).second)
                 throw std::invalid_argument("Duplicate sidecar key");
             return true;
         };
@@ -280,10 +312,14 @@ AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& me
             !json.at("marker_refs").is_array() || !json.at("source_ranges").is_array() ||
             json.at("marker_refs").size() > 4096 || json.at("source_ranges").size() > 4096)
             return Status(AudioMetadataStatus::Invalid, "Invalid identity sidecar structure");
-        auto manifest = ParseAudioManifest1(json.at("audio_manifest").dump());
+        const auto serialized_manifest = json.at("audio_manifest").dump();
+        auto manifest = ParseAudioManifest1(std::string_view(serialized_manifest.data(), serialized_manifest.size()));
+        if (!manifest.succeeded() && manifest.error()->code == EngineErrorCode::ResourceBudgetExceeded)
+            return Status(AudioMetadataStatus::Invalid, "Identity sidecar JSON memory budget exceeded");
         if (!manifest.succeeded() || json.at("media_id") != ToUuid(manifest.value()->media_id))
             return Status(AudioMetadataStatus::Invalid, "Identity sidecar manifest is invalid");
-        const auto expected_hash = json.at("sha256").get<std::string>();
+        const auto& hash_text = json.at("sha256").get_ref<const Json::string_t&>();
+        const std::string expected_hash(hash_text.data(), hash_text.size());
         if (expected_hash.size() != 64 || expected_hash.find_first_not_of("0123456789abcdef") != std::string::npos)
             return Status(AudioMetadataStatus::Invalid, "Identity sidecar hash is invalid");
         const auto hash = HashFinalMedia(media, continue_io, before_io, cancelled);
@@ -291,8 +327,12 @@ AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& me
             expected_hash != Hex(hash.value()->sha256))
             return Status(AudioMetadataStatus::Stale, "Audio identity sidecar does not match final media bytes");
         AudioMetadataReadResult result;
-        result.references.marker_refs = json.at("marker_refs").get<std::vector<std::string>>();
-        result.references.source_ranges_json = json.at("source_ranges").dump();
+        for (const auto& marker : json.at("marker_refs")) {
+            const auto& name = marker.get_ref<const Json::string_t&>();
+            result.references.marker_refs.emplace_back(name.data(), name.size());
+        }
+        const auto serialized_ranges = json.at("source_ranges").dump();
+        result.references.source_ranges_json.assign(serialized_ranges.data(), serialized_ranges.size());
         (void)ReferenceRanges(result.references);
         result.status = AudioMetadataStatus::Verified;
         result.selection_media_id = manifest.value()->media_id;
@@ -300,6 +340,8 @@ AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& me
         for (const auto& track : result.manifest->tracks)
             result.actual_tracks.push_back(track.container);
         return result;
+    } catch (const MetadataJsonBudgetExceeded&) {
+        return Status(AudioMetadataStatus::Invalid, "Identity sidecar JSON memory budget exceeded");
     } catch (...) {
         return Status(AudioMetadataStatus::Invalid, "Invalid bounded identity sidecar");
     }
@@ -354,6 +396,7 @@ Outcome<std::monostate> CopyMediaIdentityReferenceFiles(const std::filesystem::p
                (!before_io || before_io(bytes, cancelled));
     };
     try {
+        MetadataJsonQuotaScope json_quota;
         (void)ReferenceRanges(references);
         owner->created_paths.reserve(owner->created_paths.size() + references.marker_refs.size());
         uint64_t total_bytes = 0;
@@ -423,6 +466,8 @@ Outcome<std::monostate> CopyMediaIdentityReferenceFiles(const std::filesystem::p
         if (!guard)
             (void)local_guard.Commit();
         return std::monostate{};
+    } catch (const MetadataJsonBudgetExceeded&) {
+        return IdentityError("Marker association JSON memory budget exceeded", EngineErrorCode::ResourceBudgetExceeded);
     } catch (...) {
         return IdentityError("Invalid marker companion association");
     }

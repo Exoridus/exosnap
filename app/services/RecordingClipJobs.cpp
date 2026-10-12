@@ -6,7 +6,7 @@
 #include "../models/MarkerSidecar.h"
 #include "AtomicFileOps.h"
 
-#include <exosnap/engine/edit_timeline_export.h>
+#include <exosnap/engine/audio_media_manifest.h>
 
 #include <QCoreApplication>
 #include <QJsonArray>
@@ -21,6 +21,7 @@
 #include <limits>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -330,7 +331,7 @@ struct RecordingClipJobs::State {
         };
         engine::AudioManifest1 manifest;
         if (draft.value()->output_manifest)
-            manifest = *draft.value()->output_manifest;
+            manifest = std::move(*draft.value()->output_manifest);
         else {
             manifest.media_id = engine::NewId<engine::MediaId>();
             manifest.recording_id = job.view.recording_id;
@@ -367,32 +368,51 @@ struct RecordingClipJobs::State {
             }
             references.marker_refs.push_back(DeriveMarkerSidecarPath(job.request.destination).filename().string());
         }
-        QJsonArray ranges;
-        for (const auto& source_range : draft.value()->source_ranges) {
-            QJsonObject range;
-            range.insert(QStringLiteral("recording_id"),
-                         QString::fromStdString(engine::ToUuid(source_range.recording_id)));
-            range.insert(QStringLiteral("segment_id"), QString::fromStdString(engine::ToUuid(source_range.segment_id)));
-            range.insert(QStringLiteral("media_id"), QString::fromStdString(engine::ToUuid(source_range.media_id)));
-            range.insert(QStringLiteral("begin_r_ns"), QString::number(source_range.begin_r_ns));
-            range.insert(QStringLiteral("end_r_ns"), QString::number(source_range.end_r_ns));
-            ranges.append(range);
+        if (draft.value()->source_ranges.size() > 4096) {
+            Fail(job, ClipFailure(engine::EngineErrorCode::ResourceBudgetExceeded,
+                                  "Clip source range metadata exceeds its element budget"));
+            return;
         }
-        references.source_ranges_json = QJsonDocument(ranges).toJson(QJsonDocument::Compact).toStdString();
+        {
+            QJsonArray ranges;
+            for (const auto& source_range : draft.value()->source_ranges) {
+                QJsonObject range;
+                range.insert(QStringLiteral("recording_id"),
+                             QString::fromStdString(engine::ToUuid(source_range.recording_id)));
+                range.insert(QStringLiteral("segment_id"),
+                             QString::fromStdString(engine::ToUuid(source_range.segment_id)));
+                range.insert(QStringLiteral("media_id"), QString::fromStdString(engine::ToUuid(source_range.media_id)));
+                range.insert(QStringLiteral("begin_r_ns"), QString::number(source_range.begin_r_ns));
+                range.insert(QStringLiteral("end_r_ns"), QString::number(source_range.end_r_ns));
+                ranges.append(range);
+            }
+            references.source_ranges_json = QJsonDocument(ranges).toJson(QJsonDocument::Compact).toStdString();
+        }
         const auto metadata_written = engine::WriteMediaIdentitySidecar(job.staging, manifest, continue_hash,
                                                                         references, metadata_io, &job.cancelled);
         if (!metadata_written.succeeded()) {
             Fail(job, *metadata_written.error());
             return;
         }
-        const auto verified = engine::ProbeEditMedia(job.staging, continue_hash, metadata_io, &job.cancelled);
-        if (!verified.error.empty() || !verified.content_identity_valid ||
-            verified.audio_metadata.status != engine::AudioMetadataStatus::Verified ||
-            !verified.audio_metadata.manifest || verified.audio_metadata.manifest->media_id != manifest.media_id ||
-            verified.audio_metadata.actual_tracks.size() != manifest.tracks.size() ||
-            verified.audio_metadata.references.source_ranges_json != references.source_ranges_json ||
-            verified.audio_metadata.references.marker_refs != references.marker_refs) {
+        const auto verified = engine::ReadMediaIdentitySidecar(job.staging, continue_hash, metadata_io, &job.cancelled);
+        const auto expected_manifest = engine::SerializeAudioManifest1(manifest);
+        const auto observed_manifest =
+            verified.manifest ? engine::SerializeAudioManifest1(*verified.manifest)
+                              : engine::Outcome<std::string>{ClipFailure(engine::EngineErrorCode::MetadataIncomplete,
+                                                                         "Staged clip manifest is missing")};
+        if (verified.status != engine::AudioMetadataStatus::Verified || !verified.manifest ||
+            !expected_manifest.succeeded() || !observed_manifest.succeeded() ||
+            *expected_manifest.value() != *observed_manifest.value() ||
+            verified.references.source_ranges_json != references.source_ranges_json ||
+            verified.references.marker_refs != references.marker_refs) {
             Fail(job, ClipFailure(engine::EngineErrorCode::MetadataIncomplete, "Staged clip metadata did not verify"));
+            return;
+        }
+        std::error_code size_error;
+        const auto final_size = std::filesystem::file_size(job.staging, size_error);
+        if (size_error || final_size > static_cast<uint64_t>((std::numeric_limits<qint64>::max)())) {
+            Fail(job,
+                 ClipFailure(engine::EngineErrorCode::SourceIntegrityFailure, "Staged clip file size is unavailable"));
             return;
         }
         if (job.cancelled.load() || !SpaceAvailable(job)) {
@@ -422,7 +442,7 @@ struct RecordingClipJobs::State {
         CompletedRecording completed;
         completed.file_path = QString::fromStdWString(job.request.destination.wstring());
         completed.display_name = QString::fromStdWString(job.request.destination.filename().wstring());
-        completed.file_size_bytes = static_cast<qint64>(verified.file_size);
+        completed.file_size_bytes = static_cast<qint64>(final_size);
         completed.duration_seconds = static_cast<double>(job.plan->actual_end_r_ns - job.plan->actual_begin_r_ns) / 1e9;
         completed.output_width = job.sources.front().descriptor->video_width;
         completed.output_height = job.sources.front().descriptor->video_height;
@@ -518,6 +538,15 @@ engine::Outcome<engine::JobId> RecordingClipJobs::RequestPlan(RecordingClipReque
     if (request.snapshot.token.recording_id == engine::RecordingId{} || request.requested_begin_r_ns < 0 ||
         request.requested_end_r_ns <= request.requested_begin_r_ns || request.destination.empty())
         return ClipFailure(engine::EngineErrorCode::InvalidConfig, "Invalid recording clip request");
+    constexpr size_t marker_budget_bytes = 2 * 1024 * 1024;
+    if (request.markers.capacity() > marker_budget_bytes / sizeof(RecordingMarker))
+        return ClipFailure(engine::EngineErrorCode::ResourceBudgetExceeded, "Clip marker memory budget exceeded");
+    size_t marker_bytes = request.markers.capacity() * sizeof(RecordingMarker);
+    for (const auto& marker : request.markers) {
+        if (marker.label.capacity() >= marker_budget_bytes - marker_bytes)
+            return ClipFailure(engine::EngineErrorCode::ResourceBudgetExceeded, "Clip marker memory budget exceeded");
+        marker_bytes += marker.label.capacity() + 1;
+    }
     auto job = std::make_shared<State::Job>();
     RecordingClipJobSnapshot view;
     {

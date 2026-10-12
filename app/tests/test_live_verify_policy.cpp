@@ -257,6 +257,7 @@ TEST(LiveVerifyPolicy, SettingsAndProfilesAreLockedWhileARecordingIsInFlight) {
     AutomationState ready = Ready();
     ready.profile_id = QStringLiteral("preset.mine");
     EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("settings.set")), ready).allowed());
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("audio.routing.setTrackRecordEnabled")), ready).allowed());
     EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("profiles.select")), ready).allowed());
 
     for (const char* live : {"Countdown", "Preparing", "Recording", "Paused", "Stopping", "Saving"}) {
@@ -269,6 +270,7 @@ TEST(LiveVerifyPolicy, SettingsAndProfilesAreLockedWhileARecordingIsInFlight) {
         // controls do while the transport is live.
         EXPECT_EQ(verdict.code, QString::fromLatin1(error_code::kBlocked)) << live;
         EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("settings.set"))) << live;
+        EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("audio.routing.setTrackRecordEnabled"))) << live;
     }
 
     // Reading is never refused. An observation a product state can turn off is
@@ -571,4 +573,17 @@ TEST(LiveVerifyUpdatePolicy, TheStateSnapshotCarriesTheUpdateFacts) {
     const QJsonObject empty = StateToJson(none, 1).value(QStringLiteral("update")).toObject();
     EXPECT_TRUE(empty.value(QStringLiteral("availableVersion")).isNull())
         << "an empty string is a value; null is \"there is none\"";
+}
+
+TEST(LiveVerifyPolicy, ClipRequestsUseMeasuredAvailabilityAndRespectBlockingSurfaces) {
+    const auto* command = FindCommand(QStringLiteral("clip.request"));
+    ASSERT_NE(command, nullptr);
+    auto state = Ready();
+    state.can_request_clip = false;
+    EXPECT_FALSE(Evaluate(*command, state).allowed());
+    state.can_request_clip = true;
+    EXPECT_TRUE(Evaluate(*command, state).allowed());
+    state.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecovery);
+    EXPECT_FALSE(Evaluate(*command, state).allowed());
+    EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("clip.confirm")), state).allowed());
 }

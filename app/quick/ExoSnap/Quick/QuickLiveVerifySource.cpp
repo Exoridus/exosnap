@@ -44,6 +44,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QMetaObject>
@@ -54,6 +55,9 @@
 #include <QVariant>
 #include <QtGui/qscreen_platform.h>
 
+#include "RecordingClipAdapter.h"
+
+#include <algorithm>
 #include <optional>
 #include <utility>
 
@@ -255,6 +259,7 @@ QuickLiveVerifySource::QuickLiveVerifySource(QuickApplication& application, QQui
     const auto refresh = [this]() { refreshObservableState(); };
     if (auto* record = application_.recordViewModelAdapter())
         connect(record, &RecordViewModelAdapter::changed, this, refresh);
+    connect(application_.recordingClipAdapter(), &RecordingClipAdapter::availabilityChanged, this, refresh);
     if (auto* session = application_.editSessionAdapter()) {
         connect(session, &EditSessionAdapter::openChanged, this, refresh);
         connect(session, &EditSessionAdapter::clipChanged, this, refresh);
@@ -344,6 +349,7 @@ live_verify::AutomationState QuickLiveVerifySource::State() const {
         state.can_pause = record->canPause();
         state.can_resume = record->canResume();
         state.can_split = record->splitEnabled();
+        state.can_request_clip = application_.recordingClipAdapter()->canRequest();
         state.can_capture_frame = record->captureFrameEnabled();
         state.can_select_source = record->canSelectSource();
         state.countdown_active = record->countdownActive();
@@ -588,6 +594,7 @@ QJsonObject QuickLiveVerifySource::RecordSnapshot() const {
     json.insert(QStringLiteral("canPause"), record->canPause());
     json.insert(QStringLiteral("canResume"), record->canResume());
     json.insert(QStringLiteral("sourceName"), record->sourceName());
+    json.insert(QStringLiteral("captureMode"), record->captureMode());
     json.insert(QStringLiteral("sourceKindText"), record->sourceKindText());
     json.insert(QStringLiteral("formatText"), record->formatText());
     json.insert(QStringLiteral("elapsedText"), record->elapsedText());
@@ -718,6 +725,7 @@ QJsonObject QuickLiveVerifySource::DiagnosticsSnapshot() const {
     }
     json.insert(QStringLiteral("available"), true);
     json.insert(QStringLiteral("dataReady"), diagnostics->dataReady());
+    json.insert(QStringLiteral("audioResources"), QJsonObject::fromVariantMap(diagnostics->audioResources()));
     json.insert(QStringLiteral("checking"), diagnostics->checking());
     json.insert(QStringLiteral("verdictState"), diagnostics->verdictState());
     json.insert(QStringLiteral("verdictHeadline"), diagnostics->verdictHeadline());
@@ -1148,6 +1156,125 @@ bool QuickLiveVerifySource::SettingsSet(const QString& key, const QJsonValue& va
         return false;
     }
     return settings_automation::WriteKey(*settings, key, value, error);
+}
+
+QJsonObject QuickLiveVerifySource::AudioRoutingSnapshot() const {
+    const auto* routing = application_.audioRoutingAdapter();
+    return {{QStringLiteral("revision"), static_cast<qint64>(routing->revision())},
+            {QStringLiteral("readOnly"), routing->readOnly()},
+            {QStringLiteral("lastError"), routing->lastError()},
+            {QStringLiteral("tracks"), QJsonArray::fromVariantList(routing->tracks())},
+            {QStringLiteral("sources"), QJsonArray::fromVariantList(routing->sources())}};
+}
+
+bool QuickLiveVerifySource::AddAudioTrack(quint64 expected_revision, QString* error) {
+    auto* routing = application_.audioRoutingAdapter();
+    if (routing->addEmptyTrack(expected_revision))
+        return true;
+    *error = routing->lastError();
+    return false;
+}
+
+bool QuickLiveVerifySource::AssignAudioSource(const QString& source_id, const QString& track_id, int mode,
+                                              quint64 expected_revision, QString* error) {
+    auto* routing = application_.audioRoutingAdapter();
+    if (routing->assignSource(source_id, track_id, mode, expected_revision))
+        return true;
+    *error = routing->lastError();
+    return false;
+}
+
+bool QuickLiveVerifySource::SetAudioTrackRecordEnabled(const QString& track_id, bool enabled, quint64 expected_revision,
+                                                       QString* error) {
+    auto* routing = application_.audioRoutingAdapter();
+    if (routing->setTrackRecordEnabled(track_id, enabled, expected_revision))
+        return true;
+    *error = routing->lastError();
+    return false;
+}
+
+QJsonObject QuickLiveVerifySource::ClipSnapshot() const {
+    const auto* clips = application_.recordingClipAdapter();
+    QJsonArray jobs;
+    const auto completed = application_.recordingCoordinator()->RecordingClipSnapshots();
+    for (const auto& value : clips->jobs()) {
+        auto row = QJsonObject::fromVariantMap(value.toMap());
+        for (const auto& job : completed) {
+            if (job.phase == RecordingClipPhase::Completed && job.completed && job.completed->succeeded &&
+                row.value(QStringLiteral("jobId")).toString() == QString::fromStdString(engine::ToUuid(job.job_id)))
+                row.insert(QStringLiteral("assetPath"), job.completed->file_path);
+        }
+        jobs.append(row);
+    }
+    return {{QStringLiteral("canRequest"), clips->canRequest()},
+            {QStringLiteral("unavailableReason"), clips->unavailableReason()},
+            {QStringLiteral("jobs"), jobs}};
+}
+
+bool QuickLiveVerifySource::ClipRequest(const QString& duration_seconds, QString* error) {
+    auto* clips = application_.recordingClipAdapter();
+    bool parsed = false;
+    const auto seconds = duration_seconds.toLongLong(&parsed);
+    if (!clips->canRequest() || !parsed || seconds <= 0) {
+        *error = clips->canRequest() ? QStringLiteral("The clip duration must be a positive integer")
+                                     : clips->unavailableReason();
+        return false;
+    }
+    const auto before = application_.recordingCoordinator()->RecordingClipSnapshots();
+    clips->requestPlan(duration_seconds);
+    const auto after = application_.recordingCoordinator()->RecordingClipSnapshots();
+    for (const auto& job : after) {
+        if (std::none_of(before.begin(), before.end(),
+                         [&](const auto& previous) { return previous.job_id == job.job_id; }))
+            return true;
+    }
+    *error = QStringLiteral("The recording did not admit a new clip job");
+    return false;
+}
+
+bool QuickLiveVerifySource::ClipConfirm(const QString& job_id, const QString& generation, QString* error) {
+    auto* clips = application_.recordingClipAdapter();
+    for (const auto& value : clips->jobs()) {
+        const auto row = value.toMap();
+        if (row.value(QStringLiteral("jobId")).toString() == job_id &&
+            row.value(QStringLiteral("generation")).toString() == generation &&
+            row.value(QStringLiteral("canConfirm")).toBool()) {
+            clips->confirmPlan(job_id, generation);
+            return true;
+        }
+    }
+    *error = QStringLiteral("The clip review or its generation is no longer current");
+    return false;
+}
+
+bool QuickLiveVerifySource::ClipOpen(const QString& asset_id, QString* error) {
+    auto* clips = application_.recordingClipAdapter();
+    for (const auto& value : clips->jobs()) {
+        const auto row = value.toMap();
+        if (!asset_id.isEmpty() && row.value(QStringLiteral("assetId")).toString() == asset_id &&
+            row.value(QStringLiteral("canOpen")).toBool()) {
+            const auto completed = application_.recordingCoordinator()->RecordingClipSnapshots();
+            for (const auto& job : completed) {
+                if (job.phase != RecordingClipPhase::Completed || !job.asset_id || !job.completed ||
+                    !job.completed->succeeded || QString::fromStdString(engine::ToUuid(*job.asset_id)) != asset_id)
+                    continue;
+                if (!QFileInfo::exists(job.completed->file_path)) {
+                    *error = QStringLiteral("The completed clip file no longer exists");
+                    return false;
+                }
+                clips->openCompleted(asset_id);
+                if (application_.editSessionAdapter()->open() &&
+                    application_.editSessionAdapter()->clipPath() == job.completed->file_path)
+                    return true;
+                *error = QStringLiteral("The editor did not open the completed clip");
+                return false;
+            }
+            *error = QStringLiteral("The completed clip is no longer available");
+            return false;
+        }
+    }
+    *error = QStringLiteral("There is no completed clip with this asset identity");
+    return false;
 }
 
 bool QuickLiveVerifySource::WebcamOverlaySet(const QJsonObject& fields, QJsonObject* applied, QString* error) {

@@ -53,6 +53,7 @@ AutomationState PermissiveState() {
     state.can_pause = true;
     state.can_resume = true;
     state.can_split = true;
+    state.can_request_clip = true;
     state.can_capture_frame = true;
     state.can_select_source = true;
     state.can_open_edit = true;
@@ -183,6 +184,42 @@ class FakeSource final : public LiveVerifySource {
         calls.append(QStringLiteral("settings.set:%1").arg(key));
         last_settings_key = key;
         last_settings_value = value;
+        return Outcome(error);
+    }
+    [[nodiscard]] QJsonObject AudioRoutingSnapshot() const override {
+        return Marker(QStringLiteral("audio.routing.snapshot"));
+    }
+    bool AddAudioTrack(quint64 expected_revision, QString* error) override {
+        calls.append(QStringLiteral("audio.routing.addTrack:%1").arg(expected_revision));
+        return Outcome(error);
+    }
+    bool AssignAudioSource(const QString& source_id, const QString& track_id, int mode, quint64 expected_revision,
+                           QString* error) override {
+        calls.append(QStringLiteral("audio.routing.assignSource:%1:%2:%3:%4")
+                         .arg(source_id)
+                         .arg(track_id)
+                         .arg(mode)
+                         .arg(expected_revision));
+        return Outcome(error);
+    }
+    bool SetAudioTrackRecordEnabled(const QString& track_id, bool enabled, quint64 expected_revision,
+                                    QString* error) override {
+        calls.append(QStringLiteral("audio.routing.setTrackRecordEnabled:%1:%2:%3")
+                         .arg(track_id)
+                         .arg(enabled)
+                         .arg(expected_revision));
+        return Outcome(error);
+    }
+    [[nodiscard]] QJsonObject ClipSnapshot() const override {
+        return Marker(QStringLiteral("clip.snapshot"));
+    }
+    bool ClipRequest(const QString&, QString* error) override {
+        return Outcome(error);
+    }
+    bool ClipConfirm(const QString&, const QString&, QString* error) override {
+        return Outcome(error);
+    }
+    bool ClipOpen(const QString&, QString* error) override {
         return Outcome(error);
     }
     bool WebcamOverlaySet(const QJsonObject& fields, QJsonObject* applied, QString* error) override {
@@ -836,6 +873,7 @@ TEST(LiveVerifyDispatcher, EveryListedCommandIsActuallyImplemented) {
         // Settings, profiles and the in-depth switch are locked while a recording
         // is in flight, the way the Settings controls are.
         if (command.name.startsWith(QStringLiteral("settings.")) ||
+            command.name.startsWith(QStringLiteral("audio.routing.")) ||
             command.name.startsWith(QStringLiteral("profiles.")) ||
             command.name == QStringLiteral("diagnostics.setInDepth")) {
             source.state.recording_state = QStringLiteral("Ready");
@@ -2097,4 +2135,36 @@ TEST(LiveVerifyDispatcher, UpdateCommandsAreProtocolTwoOnly) {
         EXPECT_FALSE(Ok(response)) << name.toStdString();
         EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kUnknownCommand)) << name.toStdString();
     }
+}
+
+TEST(LiveVerifyDispatcher, AudioRoutingEditsRequireNonnegativeObservedRevision) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Idle");
+    source.state.countdown_active = false;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+    for (const auto& command :
+         {QStringLiteral("audio.routing.addTrack"), QStringLiteral("audio.routing.assignSource")}) {
+        QJsonObject params{{QStringLiteral("sourceId"), QStringLiteral("source")},
+                           {QStringLiteral("trackId"), QStringLiteral("track")},
+                           {QStringLiteral("mode"), 1},
+                           {QStringLiteral("expectedRevision"), -1}};
+        if (command == QStringLiteral("audio.routing.addTrack"))
+            params = {{QStringLiteral("expectedRevision"), -1}};
+        const auto response = dispatcher.Dispatch(RequestV2(command, params));
+        EXPECT_FALSE(Ok(response));
+        EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidParams));
+    }
+    EXPECT_FALSE(source.calls.contains(QStringLiteral("audio.routing.addTrack:-1")));
+    const auto added = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("audio.routing.addTrack"), {{QStringLiteral("expectedRevision"), 17}}));
+    ASSERT_TRUE(Ok(added));
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("audio.routing.addTrack:17")));
+    const auto assigned = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("audio.routing.assignSource"), {{QStringLiteral("sourceId"), QStringLiteral("source")},
+                                                                 {QStringLiteral("trackId"), QStringLiteral("track")},
+                                                                 {QStringLiteral("mode"), 1},
+                                                                 {QStringLiteral("expectedRevision"), 18}}));
+    ASSERT_TRUE(Ok(assigned));
+    EXPECT_TRUE(source.calls.contains(QStringLiteral("audio.routing.assignSource:source:track:1:18")));
 }

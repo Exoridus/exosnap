@@ -66,6 +66,7 @@ namespace exosnap::engine {
 // dragging <cstdio>/<windows.h> into every translation unit that only needs the
 // writer's interface.
 class DurableFileIo;
+class DiskCueSpool;
 
 // Decides when a periodic durability flush (fflush + OS-level FlushFileBuffers)
 // is due, based on wall-clock time elapsed since the previous one. This is pure
@@ -223,6 +224,9 @@ struct MatroskaStreamConfig {
     // Zero preserves the recorder's time-based clusters. Clip jobs may cap an
     // in-memory cluster and start a new one before admitting the next packet.
     size_t max_cluster_payload_bytes = 0;
+    // Clip length must not determine retained cue metadata or cluster object count.
+    bool stream_cues_to_disk = false;
+    bool collect_media_index = true;
 };
 
 class MatroskaStreamWriter {
@@ -259,6 +263,8 @@ class MatroskaStreamWriter {
     // Returns false if a write error occurred (state then becomes failed; further
     // Push/Finalize calls are no-ops returning false).
     bool Push(MuxPacket packet);
+
+    [[nodiscard]] size_t retained_cue_count() const noexcept;
 
     // Hand over the stream's measured content light levels, in cd/m^2. Only has
     // an effect on an HDR session opened with reserve_content_light_level, where
@@ -396,6 +402,7 @@ class MatroskaStreamWriter {
     std::unique_ptr<libmatroska::KaxInfo> m_info;
     std::unique_ptr<libmatroska::KaxTracks> m_tracks;
     std::unique_ptr<libmatroska::KaxCues> m_cues;
+    std::unique_ptr<DiskCueSpool> m_cue_spool;
     std::vector<libmatroska::KaxTrackEntry*> m_track_entries; // owned by m_tracks
     // The two reserved content-light leaves inside the video track's Colour
     // element, owned by m_tracks. Non-null only for a session that reserved them.
@@ -428,6 +435,7 @@ class MatroskaStreamWriter {
     bool m_has_covered_end = false;
     uint64_t m_max_video_covered_end_ns = 0;
     bool m_has_video_covered_end = false;
+    bool m_emit_exact_audio_timestamps = false;
     bool m_opened = false;
     bool m_finalized = false;
     bool m_finalize_succeeded = false;

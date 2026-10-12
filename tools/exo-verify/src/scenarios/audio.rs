@@ -14,12 +14,33 @@ use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::tools;
 use crate::{infra_ensure, product_ensure};
 
-use super::common::{self, secs};
+use super::common::{self, Stimulus, StimulusOptions, VideoExpectation, secs};
 
 const SOAK_SECONDS: f64 = 1800.0;
 
 pub fn scenarios() -> Vec<Scenario> {
     vec![
+        Scenario {
+            id: "audio.eight-track-fanout",
+            revision: 1,
+            title: "One system source records eight identical Opus tracks",
+            class: ScenarioClass::Hardware,
+            contract: "the production routing adapter fans one default playback source out to eight recorded tracks, preserving native identities and producing aligned, identical decoded audio without extra physical clocks or sampled logical sources",
+            lane: Lane::Preflight,
+            also: &[],
+            tier: Tier::Recommended,
+            requires: &[
+                Capability::InteractiveDesktop,
+                Capability::Wgc,
+                Capability::Nvenc,
+                Capability::AudioRender,
+                Capability::AudioCapture,
+                Capability::Ffprobe,
+                Capability::Ffmpeg,
+            ],
+            timeout: secs(240.0),
+            run: eight_track_fanout,
+        },
         Scenario {
             id: "audio.mixed-clock-soak",
             revision: 1,
@@ -96,6 +117,337 @@ pub fn scenarios() -> Vec<Scenario> {
             run: endpoint_44100,
         },
     ]
+}
+
+fn routing_command(app: &mut App, command: &str, params: Value) -> Step<Value> {
+    app.client
+        .request(command, params, secs(30.0))?
+        .map_err(|refusal| Stop::fail(format!("{command} refused: {refusal}")))
+}
+
+fn routing_revision(snapshot: &Value) -> Step<u64> {
+    snapshot["revision"]
+        .as_u64()
+        .ok_or_else(|| Stop::infra("audio routing snapshot has no revision"))
+}
+
+fn routing_track_ids(snapshot: &Value) -> Step<Vec<String>> {
+    snapshot["tracks"]
+        .as_array()
+        .ok_or_else(|| Stop::infra("audio routing snapshot has no tracks"))?
+        .iter()
+        .map(|track| {
+            track["id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| Stop::infra("audio routing track has no stable id"))
+        })
+        .collect()
+}
+
+fn audio_frame_hashes(file: &Path, tracks: usize) -> Step<Vec<Vec<String>>> {
+    let output = tools::run(
+        Command::new(tools::require("ffmpeg")?)
+            .args(["-v", "error", "-i"])
+            .arg(file)
+            .args(["-map", "0:a", "-c:a", "pcm_s16le", "-f", "framemd5", "-"]),
+        secs(120.0),
+    )?;
+    product_ensure!(
+        output.success(),
+        "eight-track audio decode failed: {}",
+        output.stderr.trim()
+    );
+    let mut hashes = vec![Vec::new(); tracks];
+    for line in output
+        .stdout
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+    {
+        let fields: Vec<_> = line.split(',').map(str::trim).collect();
+        infra_ensure!(
+            fields.len() == 6,
+            "ffmpeg emitted a malformed frame hash row"
+        );
+        let stream = fields[0]
+            .parse::<usize>()
+            .map_err(|error| Stop::infra(format!("invalid frame hash stream: {error}")))?;
+        infra_ensure!(
+            stream < tracks,
+            "ffmpeg emitted an unexpected frame hash stream"
+        );
+        hashes[stream].push(fields[1..].join(","));
+    }
+    product_ensure!(
+        hashes.iter().all(|frames| !frames.is_empty()),
+        "an audio track decoded no samples"
+    );
+    Ok(hashes)
+}
+
+fn judge_fanout_source_identity(manifest: &Value, routing: &Value, source_id: &str) -> Step {
+    let authored = routing["sources"]
+        .as_array()
+        .ok_or_else(|| Stop::infra("routing snapshot has no authored sources"))?;
+    let recorded = manifest["sources"]
+        .as_array()
+        .ok_or_else(|| Stop::fail("audio manifest has no authored sources"))?;
+    let ids = |sources: &[Value]| -> Step<Vec<String>> {
+        let mut ids = sources
+            .iter()
+            .map(|source| {
+                source["id"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| Stop::fail("an authored source has no stable id"))
+            })
+            .collect::<Step<Vec<_>>>()?;
+        ids.sort();
+        Ok(ids)
+    };
+    let expected_ids = ids(authored)?;
+    let recorded_ids = ids(recorded)?;
+    product_ensure!(
+        expected_ids == recorded_ids && expected_ids.windows(2).all(|pair| pair[0] != pair[1]),
+        "the audio manifest did not preserve every authored source identity"
+    );
+    let participating: Vec<_> = authored
+        .iter()
+        .filter(|source| source["participation"] == true)
+        .collect();
+    product_ensure!(
+        participating.len() == 1 && participating[0]["id"] == source_id,
+        "fanout changed its single participating source"
+    );
+    let tracks = manifest["tracks"]
+        .as_array()
+        .ok_or_else(|| Stop::fail("audio manifest has no tracks"))?;
+    product_ensure!(
+        tracks.iter().all(|track| {
+            track["source_ids"] == json!([source_id])
+                && track["routes"]
+                    .as_array()
+                    .is_some_and(|routes| routes.len() == 1 && routes[0]["source_id"] == source_id)
+        }),
+        "fanout recorded a different or nonparticipating authored source"
+    );
+    Ok(())
+}
+
+fn eight_track_fanout(ctx: &mut Context) -> Step {
+    let mut app = ctx.launch(&[])?;
+    common::configure_exact(
+        &mut app,
+        &[
+            ("video.container", json!("MKV")),
+            ("video.videoCodec", json!("H.264")),
+            ("video.audioCodec", json!("Opus")),
+            ("video.frameRate", json!(30)),
+            ("video.cfr", json!(true)),
+        ],
+    )?;
+    let mut routing = app.call("audio.routing.snapshot", json!({}))?;
+    product_ensure!(
+        routing["readOnly"] == false,
+        "the default routing graph is not writable"
+    );
+    let sources = routing["sources"]
+        .as_array()
+        .ok_or_else(|| Stop::infra("routing snapshot has no sources"))?;
+    let participating: Vec<_> = sources
+        .iter()
+        .filter(|source| source["participation"] == true)
+        .collect();
+    product_ensure!(
+        participating.len() == 1
+            && participating[0]["bindingKind"] == 0
+            && participating[0]["followDefault"] == true
+            && participating[0]["muted"] == false,
+        "the isolated routing graph has no unique default system source"
+    );
+    let source_id = participating[0]["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| Stop::infra("default system source has no stable id"))?
+        .to_owned();
+    let initial_ids = routing_track_ids(&routing)?;
+    product_ensure!(
+        initial_ids.len() == 1,
+        "the isolated routing graph does not have its one default track"
+    );
+    while routing_track_ids(&routing)?.len() < 8 {
+        let before = routing_track_ids(&routing)?;
+        routing = routing_command(
+            &mut app,
+            "audio.routing.addTrack",
+            json!({ "expectedRevision": routing_revision(&routing)? }),
+        )?;
+        let after = routing_track_ids(&routing)?;
+        let added: Vec<_> = after.iter().filter(|id| !before.contains(id)).collect();
+        product_ensure!(
+            after.len() == before.len() + 1 && added.len() == 1,
+            "addTrack did not publish exactly one new stable track id"
+        );
+        let track_id = added[0].to_owned();
+        routing = routing_command(
+            &mut app,
+            "audio.routing.assignSource",
+            json!({ "sourceId": source_id, "trackId": track_id, "mode": 1, "expectedRevision": routing_revision(&routing)? }),
+        )?;
+    }
+    let track_ids = routing_track_ids(&routing)?;
+    let tracks = routing["tracks"].as_array().unwrap();
+    let mut route_ids = Vec::new();
+    for (index, track) in tracks.iter().enumerate() {
+        product_ensure!(
+            !track_ids[..index].contains(&track_ids[index]),
+            "fanout reused a logical track id"
+        );
+        let routes = track["routes"]
+            .as_array()
+            .ok_or_else(|| Stop::infra("routing track has no routes"))?;
+        product_ensure!(
+            track["recordEnabled"] == true
+                && routes.len() == 1
+                && routes[0]["sourceId"] == source_id
+                && routes[0]["enabled"] == true,
+            "fanout changed a track's source or recording participation"
+        );
+        route_ids.push(
+            routes[0]["id"]
+                .as_str()
+                .ok_or_else(|| Stop::infra("fanout route has no id"))?
+                .to_owned(),
+        );
+    }
+    ctx.evidence.put("eightTrackRouting", routing.clone());
+    let mut stimulus = Stimulus::start(
+        ctx,
+        StimulusOptions {
+            marker_interval: Some(1.0),
+            ..Default::default()
+        },
+    )?;
+    if !stimulus.audio_available()? {
+        return Err(Stop::unavailable(
+            "the stimulus could not schedule WASAPI beeps",
+        ));
+    }
+    common::select_window(&mut app, &stimulus.title)?;
+    let started = common::start_recording(&mut app)?;
+    std::thread::sleep(secs(20.0));
+    let diagnostics = app.call("diagnostics.snapshot", json!({}))?;
+    if let Some(resources) = diagnostics.get("audioResources") {
+        ctx.evidence.put("audioResources", resources.clone());
+        if let (Some(physical), Some(sources), Some(tracks)) = (
+            resources["physical"].as_array(),
+            resources["sources"].as_array(),
+            resources["tracks"].as_array(),
+        ) {
+            let sampled_sources: Vec<_> = sources
+                .iter()
+                .filter(|source| {
+                    source["metrics"]
+                        .as_array()
+                        .and_then(|metrics| metrics.first())
+                        .is_some_and(|metric| metric["available"] == true)
+                })
+                .collect();
+            let measured = !physical.is_empty() && !sampled_sources.is_empty();
+            ctx.evidence.put("audioResourceCountsMeasured", measured);
+            if measured {
+                product_ensure!(
+                    physical.len() == 1 && sampled_sources.len() == 1 && tracks.len() == 8,
+                    "one-source fanout duplicated its physical clock or sampled logical source"
+                );
+                product_ensure!(
+                    sampled_sources[0]["identity"] == source_id,
+                    "the sampled source identity differs from the routed source"
+                );
+            }
+        } else {
+            ctx.evidence.put("audioResourceCountsMeasured", false);
+        }
+    } else {
+        ctx.evidence.put("audioResourceCountsMeasured", false);
+    }
+    let result = common::stop_recording(&mut app)?;
+    let wall = started.elapsed().as_secs_f64();
+    let file = common::output_path(&result)?;
+    stimulus.stop();
+    let video = common::judge_video(
+        ctx,
+        &file,
+        &stimulus,
+        &VideoExpectation {
+            codec: "h264",
+            fps: 30.0,
+            max_hold_s: 0.25,
+            min_fresh_fraction: 0.5,
+        },
+    )?;
+    let streams = media::streams(&video.probe, "audio");
+    product_ensure!(
+        streams.len() == 8
+            && streams.iter().all(|stream| stream["codec_name"] == "opus"
+                && stream["sample_rate"] == streams[0]["sample_rate"]
+                && stream["channels"] == streams[0]["channels"]
+                && stream["time_base"] == streams[0]["time_base"])
+            && video.probe["format"]["format_name"]
+                .as_str()
+                .is_some_and(|name| name.contains("matroska")),
+        "fanout did not write video plus eight Opus tracks in Matroska"
+    );
+    common::judge_av_sync(ctx, &file, 0, &video)?;
+    let hashes = audio_frame_hashes(&file, 8)?;
+    for (track, frames) in hashes.iter().enumerate().skip(1) {
+        product_ensure!(
+            frames == &hashes[0],
+            "track {track} decoded different PCM frames or timestamps from the shared source"
+        );
+    }
+    let text = video.probe["format"]["tags"]
+        .as_object()
+        .and_then(|tags| {
+            tags.iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("EXOSNAP_AUDIO_MANIFEST"))
+        })
+        .and_then(|(_, value)| value.as_str())
+        .ok_or_else(|| Stop::fail("eight-track recording has no audio manifest"))?;
+    let manifest: Value = serde_json::from_str(text)
+        .map_err(|error| Stop::fail(format!("invalid recorded audio manifest: {error}")))?;
+    let manifest_tracks = manifest["tracks"]
+        .as_array()
+        .ok_or_else(|| Stop::fail("audio manifest has no track list"))?;
+    product_ensure!(
+        manifest_tracks.len() == 8,
+        "the audio manifest changed its recorded track count"
+    );
+    judge_fanout_source_identity(&manifest, &routing, &source_id)?;
+    for (index, track) in manifest_tracks.iter().enumerate() {
+        product_ensure!(
+            track["track_id"] == track_ids[index]
+                && track["stream_index"].as_u64() == Some(index as u64)
+                && track["source_ids"] == json!([source_id])
+                && track["routes"]
+                    .as_array()
+                    .is_some_and(|routes| routes.len() == 1
+                        && routes[0]["id"] == route_ids[index]
+                        && routes[0]["source_id"] == source_id),
+            "persisted fanout identity differs at track {index}"
+        );
+    }
+    ctx.evidence.put(
+        "audioFrameHashRows",
+        json!(hashes.iter().map(Vec::len).collect::<Vec<_>>()),
+    );
+    ctx.evidence.put("audioFrameHashesEqual", true);
+    ctx.evidence.put("audioManifest", manifest);
+    ctx.evidence.put("recordResult", result);
+    ctx.evidence.put("recordWallSeconds", wall);
+    Ok(())
 }
 
 fn envctl_path() -> Step<std::path::PathBuf> {
@@ -693,6 +1045,45 @@ fn judge_soak(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn fanout_manifest_preserves_disabled_authored_sources_without_routing_them() {
+        let routing = json!({"sources": [
+            {"id": "system", "participation": true},
+            {"id": "microphone", "participation": false}
+        ]});
+        let manifest = json!({"sources": [{"id": "system"}, {"id": "microphone"}],
+            "tracks": [{"source_ids": ["system"], "routes": [{"source_id": "system"}]}]});
+        assert!(judge_fanout_source_identity(&manifest, &routing, "system").is_ok());
+        let mut missing = manifest.clone();
+        missing["sources"].as_array_mut().unwrap().pop();
+        assert!(matches!(
+            judge_fanout_source_identity(&missing, &routing, "system"),
+            Err(Stop::Fail(_))
+        ));
+        let mut extra = manifest.clone();
+        extra["sources"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": "unexpected"}));
+        assert!(matches!(
+            judge_fanout_source_identity(&extra, &routing, "system"),
+            Err(Stop::Fail(_))
+        ));
+        let mut duplicate = manifest.clone();
+        duplicate["sources"][1]["id"] = json!("system");
+        assert!(matches!(
+            judge_fanout_source_identity(&duplicate, &routing, "system"),
+            Err(Stop::Fail(_))
+        ));
+        let mut wrong_route = manifest.clone();
+        wrong_route["tracks"][0]["source_ids"] = json!(["microphone"]);
+        wrong_route["tracks"][0]["routes"][0]["source_id"] = json!("microphone");
+        assert!(matches!(
+            judge_fanout_source_identity(&wrong_route, &routing, "system"),
+            Err(Stop::Fail(_))
+        ));
+    }
 
     fn report() -> Value {
         json!({"report":{"counters":{

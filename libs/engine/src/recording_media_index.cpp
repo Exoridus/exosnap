@@ -1,4 +1,5 @@
 #include "recording_media_index.h"
+#include <exosnap/engine/audio_limits.h>
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/background_io.h>
 #include <exosnap/engine/color_metadata.h>
@@ -7,7 +8,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -17,11 +20,13 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -52,6 +57,15 @@ constexpr size_t kQueueBytes = 4ULL * 1024 * 1024;
 constexpr size_t kCacheBytes = 16ULL * 1024 * 1024;
 constexpr size_t kRecordHeader = 28;
 constexpr uint32_t kMagic = 0x58494d45;
+constexpr size_t kTypedManifestBytes = 1024 * 1024;
+constexpr size_t kManifestSchemaStorageBound =
+    sizeof(AudioManifest1) +
+    2 * (64 * sizeof(MediaId) + kMaxAudioSources * sizeof(AudioManifestSource) +
+         kMaxAudioTracks * sizeof(AudioManifestTrack) + kMaxAudioTracks * sizeof(AudioTrackId)) +
+    kMaxAudioTracks * (64 * 1024 + 513 + 65 + 256 + 16 +
+                       2 * (kMaxAudioRoutes * sizeof(AudioManifestRoute) + 64 * sizeof(AudioTrackId) +
+                            kMaxAudioSources * sizeof(AudioSourceId)));
+static_assert(kManifestSchemaStorageBound < kTypedManifestBytes);
 
 EngineError IndexError(const char* context, EngineErrorCode code = EngineErrorCode::IndexNotReady) {
     EngineError error;
@@ -125,50 +139,163 @@ std::vector<uint8_t> Bytes(const Json& value) {
     return {bytes.begin(), bytes.end()};
 }
 
-bool CheckCborItem(std::span<const uint8_t> bytes, size_t& cursor, unsigned depth) {
-    if (cursor >= bytes.size() || depth > 32)
-        return false;
-    const uint8_t initial = bytes[cursor++];
-    const unsigned major = initial >> 5;
-    const unsigned additional = initial & 31;
-    uint64_t argument = additional;
-    if (additional >= 24) {
-        if (additional > 27)
-            return false;
-        const size_t count = size_t{1} << (additional - 24);
-        if (count > bytes.size() - cursor)
-            return false;
-        argument = 0;
-        for (size_t byte = 0; byte < count; ++byte)
-            argument = (argument << 8) | bytes[cursor++];
+struct IndexDecodeBudgetExceeded : std::runtime_error {
+    IndexDecodeBudgetExceeded() : std::runtime_error("Index typed payload budget exceeded") {
     }
-    if (major < 2)
-        return major != 1 || argument <= static_cast<uint64_t>((std::numeric_limits<int64_t>::max)());
-    if (major == 2 || major == 3) {
-        if (argument > bytes.size() - cursor)
-            return false;
-        cursor += static_cast<size_t>(argument);
-        return true;
-    }
-    if (major == 4 || major == 5) {
-        const size_t factor = major == 5 ? 2 : 1;
-        if (argument > (bytes.size() - cursor) / factor)
-            return false;
-        for (uint64_t index = 0; index < argument * factor; ++index)
-            if (!CheckCborItem(bytes, cursor, depth + 1))
-                return false;
-        return true;
-    }
-    return major == 7 && (additional == 20 || additional == 21 || additional == 22 || additional == 25 ||
-                          additional == 26 || additional == 27);
-}
+};
 
-Json ParsePayload(std::span<const uint8_t> payload) {
-    size_t cursor = 0;
-    if (!CheckCborItem(payload, cursor, 0) || cursor != payload.size())
-        throw std::runtime_error("Index CBOR bounds or depth exceeded");
-    return Json::from_cbor(payload.begin(), payload.end(), true, true);
-}
+class CborReader {
+  public:
+    explicit CborReader(std::span<const uint8_t> bytes) : bytes_(bytes) {
+    }
+
+    void Charge(uint64_t bytes) {
+        if (bytes > kQueueBytes - allocated_)
+            throw IndexDecodeBudgetExceeded();
+        allocated_ += static_cast<size_t>(bytes);
+    }
+
+    size_t Array(size_t maximum) {
+        const auto item = Head();
+        if (item.major != 4)
+            throw std::runtime_error("Index field is not an array");
+        if (item.argument > maximum)
+            throw IndexDecodeBudgetExceeded();
+        return static_cast<size_t>(item.argument);
+    }
+
+    std::string Text(size_t maximum) {
+        const auto item = Head();
+        if (item.major != 3)
+            throw std::runtime_error("Index field is not text");
+        if (item.argument > maximum)
+            throw IndexDecodeBudgetExceeded();
+        if (item.argument > bytes_.size() - cursor_)
+            throw std::runtime_error("Truncated index text");
+        Charge(item.argument);
+        std::string result(reinterpret_cast<const char*>(bytes_.data() + cursor_), static_cast<size_t>(item.argument));
+        cursor_ += static_cast<size_t>(item.argument);
+        return result;
+    }
+
+    std::vector<uint8_t> Binary(size_t maximum) {
+        const auto item = Head();
+        if (item.major != 2)
+            throw std::runtime_error("Index field is not binary");
+        if (item.argument > maximum)
+            throw IndexDecodeBudgetExceeded();
+        if (item.argument > bytes_.size() - cursor_)
+            throw std::runtime_error("Truncated index binary field");
+        Charge(item.argument);
+        std::vector<uint8_t> result(bytes_.begin() + static_cast<ptrdiff_t>(cursor_),
+                                    bytes_.begin() + static_cast<ptrdiff_t>(cursor_ + item.argument));
+        cursor_ += static_cast<size_t>(item.argument);
+        return result;
+    }
+
+    template <typename T> T Number() {
+        static_assert(std::is_integral_v<T> && !std::is_same_v<T, bool>);
+        const auto item = Head();
+        if (item.major != 0 && item.major != 1)
+            throw std::runtime_error("Index counter is not an integer");
+        if (item.major == 1) {
+            if (item.argument > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()))
+                throw std::overflow_error("Index negative integer exceeds its range");
+            const int64_t negative = -1 - static_cast<int64_t>(item.argument);
+            if constexpr (std::is_unsigned_v<T>) {
+                throw std::overflow_error("Index unsigned counter is negative");
+            } else {
+                if (negative < (std::numeric_limits<T>::min)())
+                    throw std::overflow_error("Index timestamp exceeds its range");
+                return static_cast<T>(negative);
+            }
+        }
+        if (item.argument > static_cast<uint64_t>((std::numeric_limits<T>::max)()))
+            throw std::overflow_error("Index counter exceeds its range");
+        return static_cast<T>(item.argument);
+    }
+
+    bool Boolean() {
+        const auto item = Head();
+        if (item.major != 7 || (item.additional != 20 && item.additional != 21))
+            throw std::runtime_error("Index field is not Boolean");
+        return item.additional == 21;
+    }
+
+    bool IsNull() const {
+        return cursor_ < bytes_.size() && bytes_[cursor_] == 0xf6;
+    }
+
+    void Null() {
+        const auto item = Head();
+        if (item.major != 7 || item.additional != 22)
+            throw std::runtime_error("Index field is not null");
+    }
+
+    float Real() {
+        const auto item = Head();
+        if (item.major == 0)
+            return static_cast<float>(item.argument);
+        if (item.major == 1) {
+            if (item.argument > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()))
+                throw std::overflow_error("Index real exceeds signed range");
+            return static_cast<float>(-1 - static_cast<int64_t>(item.argument));
+        }
+        if (item.major != 7)
+            throw std::runtime_error("Index field is not a real number");
+        if (item.additional == 26)
+            return std::bit_cast<float>(static_cast<uint32_t>(item.argument));
+        if (item.additional == 27)
+            return static_cast<float>(std::bit_cast<double>(item.argument));
+        if (item.additional == 25) {
+            const uint16_t bits = static_cast<uint16_t>(item.argument);
+            const float sign = (bits & 0x8000) ? -1.0f : 1.0f;
+            const unsigned exponent = (bits >> 10) & 31;
+            const unsigned fraction = bits & 1023;
+            if (exponent == 31)
+                return fraction ? std::numeric_limits<float>::quiet_NaN()
+                                : sign * std::numeric_limits<float>::infinity();
+            return sign * std::ldexp(static_cast<float>(fraction + (exponent ? 1024 : 0)),
+                                     static_cast<int>(exponent ? exponent : 1) - 25);
+        }
+        throw std::runtime_error("Unsupported index real encoding");
+    }
+
+    void Finish() const {
+        if (cursor_ != bytes_.size())
+            throw std::runtime_error("Trailing index CBOR bytes");
+    }
+
+  private:
+    struct Item {
+        unsigned major = 0;
+        unsigned additional = 0;
+        uint64_t argument = 0;
+    };
+
+    Item Head() {
+        if (cursor_ == bytes_.size())
+            throw std::runtime_error("Truncated index CBOR item");
+        const uint8_t initial = bytes_[cursor_++];
+        const unsigned additional = initial & 31;
+        if (additional > 27)
+            throw std::runtime_error("Unsupported index CBOR length");
+        uint64_t argument = additional;
+        if (additional >= 24) {
+            const size_t width = size_t{1} << (additional - 24);
+            if (width > bytes_.size() - cursor_)
+                throw std::runtime_error("Truncated index CBOR argument");
+            argument = 0;
+            for (size_t index = 0; index < width; ++index)
+                argument = (argument << 8) | bytes_[cursor_++];
+        }
+        return {static_cast<unsigned>(initial >> 5), additional, argument};
+    }
+
+    std::span<const uint8_t> bytes_;
+    size_t cursor_ = 0;
+    size_t allocated_ = 0;
+};
 
 Json Codec(const MediaCodecDescriptor& codec) {
     return Json::array({codec.codec_id, Json::binary(codec.codec_private), codec.sample_rate, codec.channels,
@@ -442,6 +569,239 @@ CommittedMediaReceipt ReadReceipt(const Json& value) {
     return result;
 }
 
+template <typename Id> Id ReadTypedId(CborReader& reader) {
+    const auto result = FromUuid<Id>(reader.Text(36));
+    if (!result || *result == Id{})
+        throw std::runtime_error("Invalid media identity");
+    return *result;
+}
+
+MediaCodecDescriptor ReadTypedCodec(CborReader& reader) {
+    const size_t fields = reader.Array(7);
+    if (fields != 6 && fields != 7)
+        throw std::runtime_error("Invalid codec descriptor");
+    MediaCodecDescriptor codec;
+    codec.codec_id = reader.Text(kQueueBytes);
+    codec.codec_private = reader.Binary(kQueueBytes);
+    codec.sample_rate = reader.Number<uint32_t>();
+    codec.channels = reader.Number<uint32_t>();
+    codec.bit_depth = reader.Number<uint32_t>();
+    codec.codec_delay_samples = reader.Number<uint32_t>();
+    if (fields == 7)
+        codec.channel_layout = reader.Text(kQueueBytes);
+    return codec;
+}
+
+struct PendingTypedDescriptor {
+    RecordingMediaDescriptor descriptor;
+    std::string serialized_manifest;
+    bool has_manifest = false;
+};
+
+size_t TypedManifestBytes(const AudioManifest1& manifest) {
+    size_t bytes = sizeof(manifest) + manifest.derived_from_media_ids.capacity() * sizeof(MediaId) +
+                   manifest.sources.capacity() * sizeof(AudioManifestSource) +
+                   manifest.tracks.capacity() * sizeof(AudioManifestTrack) +
+                   manifest.default_monitor_track_ids.capacity() * sizeof(AudioTrackId);
+    for (const auto& track : manifest.tracks) {
+        const auto& container = track.container;
+        bytes += container.name.capacity() + 1 + container.role.capacity() + 1 + container.codec.codec_id.capacity() +
+                 1 + container.codec.codec_private.capacity() + container.codec.channel_layout.capacity() + 1 +
+                 container.source_ids.capacity() * sizeof(AudioSourceId) +
+                 track.routes.capacity() * sizeof(AudioManifestRoute) +
+                 track.derived_from_track_ids.capacity() * sizeof(AudioTrackId);
+    }
+    return bytes;
+}
+
+PendingTypedDescriptor ReadTypedDescriptor(CborReader& reader) {
+    const size_t fields = reader.Array(21);
+    if (fields != 16 && fields != 20 && fields != 21)
+        throw std::runtime_error("Invalid media descriptor");
+    PendingTypedDescriptor pending;
+    auto& result = pending.descriptor;
+    result.recording_id = ReadTypedId<RecordingId>(reader);
+    result.media_id = ReadTypedId<MediaId>(reader);
+    result.segment_id = ReadTypedId<SegmentId>(reader);
+    result.source_timeline_revision = reader.Number<uint64_t>();
+    result.writer_generation = reader.Number<uint64_t>();
+    result.descriptor_revision = reader.Number<uint64_t>();
+    result.file_identity.volume_serial = reader.Number<uint64_t>();
+    const auto file_id = reader.Binary(result.file_identity.file_id.size());
+    if (file_id.size() != result.file_identity.file_id.size())
+        throw std::runtime_error("Invalid file identity");
+    std::copy(file_id.begin(), file_id.end(), result.file_identity.file_id.begin());
+    result.path = reader.Text(kQueueBytes);
+    result.video = ReadTypedCodec(reader);
+    const size_t tracks = reader.Array(8);
+    reader.Charge(static_cast<uint64_t>(tracks) * sizeof(ContainerAudioTrack));
+    result.audio_tracks.reserve(tracks);
+    for (size_t index = 0; index < tracks; ++index) {
+        const size_t track_fields = reader.Array(12);
+        if (track_fields != 7 && track_fields != 12)
+            throw std::runtime_error("Invalid audio track descriptor");
+        ContainerAudioTrack track;
+        track.track_id = ReadTypedId<AudioTrackId>(reader);
+        track.stream_index.value = reader.Number<uint32_t>();
+        track.track_uid = reader.Number<uint64_t>();
+        track.name = reader.Text(kQueueBytes);
+        track.role = reader.Text(kQueueBytes);
+        track.codec = ReadTypedCodec(reader);
+        const size_t source_count = reader.Array(1024);
+        reader.Charge(static_cast<uint64_t>(source_count) * sizeof(AudioSourceId));
+        track.source_ids.reserve(source_count);
+        for (size_t source = 0; source < source_count; ++source)
+            track.source_ids.push_back(ReadTypedId<AudioSourceId>(reader));
+        if (track_fields == 12) {
+            if (reader.IsNull())
+                reader.Null();
+            else
+                track.encoder_instance_id = ReadTypedId<AudioEncoderInstanceId>(reader);
+            track.encoder_reset = reader.Boolean();
+            if (reader.IsNull())
+                reader.Null();
+            else
+                track.first_decoded_sample_r = reader.Number<int64_t>();
+            if (reader.IsNull())
+                reader.Null();
+            else
+                track.packet_duration_ns = reader.Number<uint64_t>();
+            if (reader.IsNull())
+                reader.Null();
+            else
+                track.preroll_ns = reader.Number<uint64_t>();
+            if (track.encoder_reset && track.encoder_instance_id == AudioEncoderInstanceId{})
+                throw std::runtime_error("Encoder reset has no instance identity");
+            if (track.packet_duration_ns && *track.packet_duration_ns == 0)
+                throw std::runtime_error("Invalid audio packet duration");
+        }
+        result.audio_tracks.push_back(std::move(track));
+    }
+    const size_t monitor_count = reader.Array(8);
+    reader.Charge(static_cast<uint64_t>(monitor_count) * sizeof(AudioTrackId));
+    result.default_monitor_track_ids.reserve(monitor_count);
+    for (size_t index = 0; index < monitor_count; ++index)
+        result.default_monitor_track_ids.push_back(ReadTypedId<AudioTrackId>(reader));
+    if (reader.Array(19) != 19)
+        throw std::runtime_error("Invalid media color metadata");
+    auto& color = result.color;
+    color.primaries = static_cast<ColorPrimaries>(reader.Number<uint8_t>());
+    color.transfer = static_cast<TransferCharacteristics>(reader.Number<uint8_t>());
+    color.matrix = static_cast<MatrixCoefficients>(reader.Number<uint8_t>());
+    color.range = static_cast<ColorRange>(reader.Number<uint8_t>());
+    color.bits_per_channel = reader.Number<uint32_t>();
+    color.hdr = reader.Boolean();
+    color.max_content_light_level = reader.Number<uint32_t>();
+    color.max_frame_average_light_level = reader.Number<uint32_t>();
+    color.has_mastering_display = reader.Boolean();
+    float* values[] = {&color.mastering_display_primary_r_x,   &color.mastering_display_primary_r_y,
+                       &color.mastering_display_primary_g_x,   &color.mastering_display_primary_g_y,
+                       &color.mastering_display_primary_b_x,   &color.mastering_display_primary_b_y,
+                       &color.mastering_display_white_point_x, &color.mastering_display_white_point_y,
+                       &color.mastering_display_max_luminance, &color.mastering_display_min_luminance};
+    for (float* value : values)
+        *value = reader.Real();
+    result.segment_origin_r_ns = reader.Number<int64_t>();
+    result.continuity_group = reader.Number<uint64_t>();
+    result.immutable_header = reader.Binary(kQueueBytes);
+    if (fields >= 20) {
+        result.video_width = reader.Number<uint32_t>();
+        result.video_height = reader.Number<uint32_t>();
+        result.frame_rate_num = reader.Number<uint32_t>();
+        result.frame_rate_den = reader.Number<uint32_t>();
+        if ((result.video_width == 0) != (result.video_height == 0) ||
+            (result.frame_rate_num != 0 && result.frame_rate_den == 0))
+            throw std::runtime_error("Invalid video geometry or frame rate");
+    }
+    if (result.writer_generation == 0 || result.descriptor_revision == 0 || result.file_identity == FileIdentity{} ||
+        result.immutable_header.empty())
+        throw std::runtime_error("Incomplete media descriptor");
+    for (size_t index = 0; index < result.audio_tracks.size(); ++index) {
+        const auto& track = result.audio_tracks[index];
+        if (track.stream_index.value != index || track.track_uid != index + 2)
+            throw std::runtime_error("Inconsistent audio track mapping");
+        for (size_t prior = 0; prior < index; ++prior)
+            if (track.track_id == result.audio_tracks[prior].track_id)
+                throw std::runtime_error("Duplicate audio track identity");
+    }
+    if (fields == 21) {
+        pending.has_manifest = true;
+        pending.serialized_manifest = reader.Text(1024 * 1024);
+    }
+    return pending;
+}
+
+CommittedMediaReceipt ReadTypedReceipt(CborReader& reader) {
+    if (reader.Array(8) != 8)
+        throw std::runtime_error("Invalid media receipt");
+    CommittedMediaReceipt result;
+    result.recording_id = ReadTypedId<RecordingId>(reader);
+    result.segment_id = ReadTypedId<SegmentId>(reader);
+    result.writer_generation = reader.Number<uint64_t>();
+    result.commit_sequence = reader.Number<uint64_t>();
+    result.descriptor_revision = reader.Number<uint64_t>();
+    result.readable_end_offset = reader.Number<uint64_t>();
+    result.durable_end_offset = reader.Number<uint64_t>();
+    const size_t cluster_count = reader.Array(1024);
+    if (result.durable_end_offset > result.readable_end_offset || result.commit_sequence == 0 ||
+        result.writer_generation == 0 || result.descriptor_revision == 0 || cluster_count == 0)
+        throw std::runtime_error("Invalid durable boundary");
+    reader.Charge(static_cast<uint64_t>(cluster_count) * sizeof(ClusterExtent));
+    result.clusters.reserve(cluster_count);
+    uint64_t previous = 0;
+    for (size_t index = 0; index < cluster_count; ++index) {
+        if (reader.Array(4) != 4)
+            throw std::runtime_error("Invalid cluster record");
+        ClusterExtent extent;
+        extent.file_begin = reader.Number<uint64_t>();
+        extent.file_end = reader.Number<uint64_t>();
+        if ((index && extent.file_begin != previous) || extent.file_end <= extent.file_begin ||
+            extent.file_end > result.readable_end_offset)
+            throw std::runtime_error("Invalid cluster boundary");
+        const size_t coverage_count = reader.Array(9);
+        reader.Charge(static_cast<uint64_t>(coverage_count) * sizeof(MediaTrackCoverage));
+        extent.coverage.reserve(coverage_count);
+        for (size_t coverage_index = 0; coverage_index < coverage_count; ++coverage_index) {
+            if (reader.Array(5) != 5)
+                throw std::runtime_error("Invalid coverage record");
+            MediaTrackCoverage coverage;
+            coverage.track_number = reader.Number<uint64_t>();
+            coverage.begin_pts_ns = reader.Number<int64_t>();
+            coverage.end_pts_ns = reader.Number<int64_t>();
+            coverage.min_dts_ns = reader.Number<int64_t>();
+            coverage.max_dts_ns = reader.Number<int64_t>();
+            if (coverage.track_number < 1 || coverage.track_number > 9 || coverage.end_pts_ns < coverage.begin_pts_ns ||
+                coverage.max_dts_ns < coverage.min_dts_ns)
+                throw std::runtime_error("Invalid track coverage");
+            extent.coverage.push_back(coverage);
+        }
+        const size_t rap_count = reader.Array(65536);
+        reader.Charge(static_cast<uint64_t>(rap_count) * sizeof(MediaRandomAccessPoint));
+        extent.random_access_points.reserve(rap_count);
+        for (size_t rap_index = 0; rap_index < rap_count; ++rap_index) {
+            if (reader.Array(6) != 6)
+                throw std::runtime_error("Invalid random-access record");
+            MediaRandomAccessPoint rap;
+            rap.track_number = reader.Number<uint64_t>();
+            rap.cluster_offset = reader.Number<uint64_t>();
+            rap.block_offset = reader.Number<uint64_t>();
+            rap.pts_ns = reader.Number<int64_t>();
+            rap.dts_ns = reader.Number<int64_t>();
+            rap.kind = static_cast<RandomAccessKind>(reader.Number<unsigned>());
+            if (rap.track_number < 1 || rap.track_number > 9 || rap.cluster_offset != extent.file_begin ||
+                rap.block_offset < extent.file_begin || rap.block_offset >= extent.file_end ||
+                static_cast<unsigned>(rap.kind) > static_cast<unsigned>(RandomAccessKind::CodecQualified))
+                throw std::runtime_error("Invalid random-access offset");
+            extent.random_access_points.push_back(rap);
+        }
+        previous = extent.file_end;
+        result.clusters.push_back(std::move(extent));
+    }
+    if (previous != result.readable_end_offset)
+        throw std::runtime_error("Receipt readable prefix exceeds complete clusters");
+    return result;
+}
+
 void ValidateReceipt(const CommittedMediaReceipt& receipt, const RecordingMediaDescriptor& descriptor,
                      uint64_t last_commit, uint64_t last_readable, uint64_t last_durable) {
     const uint64_t expected_begin = last_readable == 0 ? descriptor.immutable_header.size() : last_readable;
@@ -517,6 +877,11 @@ Outcome<size_t> ReadJournal(const std::filesystem::path& path, uint64_t end, boo
                 return IndexError("Invalid journal record header", EngineErrorCode::SourceIntegrityFailure);
             if (payload_size > end - cursor - kRecordHeader)
                 return recover ? Outcome<size_t>{count} : Outcome<size_t>{IndexError("Truncated journal payload")};
+            std::optional<RecordingId> previous_recording_id;
+            if (type == 1 && descriptor) {
+                previous_recording_id = descriptor->recording_id;
+                descriptor.reset();
+            }
             std::vector<uint8_t> payload(static_cast<size_t>(payload_size));
             if (before_read && !before_read(payload.size()))
                 return IndexError("Index journal read cancelled", EngineErrorCode::Cancelled);
@@ -525,11 +890,28 @@ Outcome<size_t> ReadJournal(const std::filesystem::path& path, uint64_t end, boo
                 return IndexError("Cannot read journal payload");
             if (Crc(payload) != Get(header, 24, 4))
                 return IndexError("Index journal CRC mismatch", EngineErrorCode::SourceIntegrityFailure);
-            auto value = ParsePayload(payload);
+            CborReader reader(payload);
             bool keep = true;
             if (type == 1) {
-                auto next = ReadDescriptor(value);
-                if (descriptor && descriptor->recording_id != next.recording_id)
+                auto pending = ReadTypedDescriptor(reader);
+                reader.Finish();
+                std::vector<uint8_t>().swap(payload);
+                if (pending.has_manifest) {
+                    const auto parsed = ParseAudioManifest1(pending.serialized_manifest);
+                    if (!parsed.succeeded()) {
+                        if (parsed.error()->code == EngineErrorCode::ResourceBudgetExceeded)
+                            throw IndexDecodeBudgetExceeded();
+                        throw std::runtime_error("Invalid media descriptor audio manifest");
+                    }
+                    if (!ManifestMatchesDescriptor(*parsed.value(), pending.descriptor))
+                        throw std::runtime_error("Invalid media descriptor audio manifest");
+                    if (TypedManifestBytes(*parsed.value()) > kTypedManifestBytes)
+                        throw IndexDecodeBudgetExceeded();
+                    pending.descriptor.audio_manifest = std::make_shared<const AudioManifest1>(*parsed.value());
+                    std::string().swap(pending.serialized_manifest);
+                }
+                auto next = std::move(pending.descriptor);
+                if (previous_recording_id && *previous_recording_id != next.recording_id)
                     throw std::runtime_error("Journal recording identity changed");
                 descriptor = std::move(next);
                 last_readable = 0;
@@ -537,7 +919,9 @@ Outcome<size_t> ReadJournal(const std::filesystem::path& path, uint64_t end, boo
                 if (descriptor_visitor)
                     keep = descriptor_visitor(*descriptor);
             } else {
-                auto receipt = ReadReceipt(value);
+                auto receipt = ReadTypedReceipt(reader);
+                reader.Finish();
+                std::vector<uint8_t>().swap(payload);
                 if (!descriptor)
                     throw std::runtime_error("Missing journal media descriptor");
                 ValidateReceipt(receipt, *descriptor, last_commit, last_readable, last_durable);
@@ -553,6 +937,10 @@ Outcome<size_t> ReadJournal(const std::filesystem::path& path, uint64_t end, boo
             sequence = next_sequence;
             cursor += kRecordHeader + payload_size;
         }
+    } catch (const IndexDecodeBudgetExceeded&) {
+        return IndexError("Index typed payload budget exceeded", EngineErrorCode::ResourceBudgetExceeded);
+    } catch (const std::bad_alloc&) {
+        return IndexError("Index typed payload allocation failed", EngineErrorCode::ResourceBudgetExceeded);
     } catch (...) {
         return IndexError("Invalid journal payload", EngineErrorCode::SourceIntegrityFailure);
     }

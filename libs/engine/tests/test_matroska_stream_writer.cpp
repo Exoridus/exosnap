@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/audio_media_manifest.h"
 #include "exosnap/engine/color_metadata.h"
 #include "matroska_packet_timestamps.h"
 #include "matroska_stream_writer.h"
@@ -586,6 +587,83 @@ TEST_F(StreamWriterTest, ReorderedVideoRetainsDecodeOrderAndPresentationTimestam
     EXPECT_GE(ReadDurationMs(file), 3000);
 }
 
+TEST_F(StreamWriterTest, NonIndexedOutputPreservesExactAudioTiming) {
+    auto config = MakeConfig(tmp_, /*h264=*/true, /*opus=*/false);
+    config.audio_tracks[0].name = "System";
+    config.collect_media_index = false;
+    config.stream_cues_to_disk = true;
+    exosnap::engine::AudioManifest1 manifest;
+    manifest.media_id = exosnap::engine::NewId<exosnap::engine::MediaId>();
+    manifest.recording_id = exosnap::engine::NewId<exosnap::engine::RecordingId>();
+    manifest.segment_id = exosnap::engine::NewId<exosnap::engine::SegmentId>();
+    exosnap::engine::AudioManifestTrack track;
+    track.container.track_id = exosnap::engine::NewId<exosnap::engine::AudioTrackId>();
+    track.container.stream_index.value = 0;
+    track.container.track_uid = 2;
+    track.container.name = config.audio_tracks[0].name;
+    track.container.role = "standard";
+    track.container.codec = {"A_AAC", config.audio_tracks[0].codec_private, 48000, 2, 0, 0, "stereo"};
+    manifest.tracks.push_back(track);
+    manifest.default_monitor_track_ids.push_back(track.container.track_id);
+    ASSERT_TRUE(exosnap::engine::ValidateAudioManifest1(manifest).succeeded());
+    config.audio_manifest = manifest;
+
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config)) << writer.error();
+    MuxPacket video;
+    video.track_num = 1;
+    video.is_key = true;
+    video.bytes = {0x65};
+    ASSERT_TRUE(writer.Push(std::move(video))) << writer.error();
+    constexpr uint64_t kExactAudioNs = 123456789;
+    MuxPacket audio;
+    audio.track_num = 2;
+    audio.is_key = true;
+    audio.pts_ns = kExactAudioNs;
+    audio.dts_ns = static_cast<int64_t>(kExactAudioNs);
+    audio.bytes = {0x11, 0x22};
+    ASSERT_TRUE(writer.Push(std::move(audio))) << writer.error();
+    ASSERT_TRUE(writer.Finalize()) << writer.error();
+
+    const auto file = ReadFile(tmp_);
+    bool found_audio = false;
+    for (const auto& cluster : SegmentChildren(file)) {
+        if (cluster.id != kIdCluster)
+            continue;
+        for (const auto& element : ParseChildren(file, cluster.data_off, cluster.data_off + cluster.data_size)) {
+            if (element.id != 0xA0)
+                continue;
+            const auto group = ParseChildren(file, element.data_off, element.data_off + element.data_size);
+            const auto block =
+                std::find_if(group.begin(), group.end(), [](const EbmlNode& node) { return node.id == 0xA1; });
+            ASSERT_NE(block, group.end());
+            ASSERT_GE(block->data_size, 5u);
+            if (file[block->data_off] != 0x82)
+                continue;
+            found_audio = true;
+            const auto additions =
+                std::find_if(group.begin(), group.end(), [](const EbmlNode& node) { return node.id == 0x75A1; });
+            ASSERT_NE(additions, group.end());
+            const auto more = ParseChildren(file, additions->data_off, additions->data_off + additions->data_size);
+            ASSERT_EQ(more.size(), 1u);
+            const auto fields = ParseChildren(file, more[0].data_off, more[0].data_off + more[0].data_size);
+            const auto id =
+                std::find_if(fields.begin(), fields.end(), [](const EbmlNode& node) { return node.id == 0xEE; });
+            ASSERT_NE(id, fields.end());
+            EXPECT_EQ(ReadUInt(file, *id), exosnap::engine::kPacketTimestampBlockId);
+            const auto payload =
+                std::find_if(fields.begin(), fields.end(), [](const EbmlNode& node) { return node.id == 0xA5; });
+            ASSERT_NE(payload, fields.end());
+            const auto timestamps =
+                exosnap::engine::DecodeMatroskaPacketTimestamps({file.data() + payload->data_off, payload->data_size});
+            ASSERT_TRUE(timestamps);
+            EXPECT_EQ(timestamps->pts_ns, kExactAudioNs);
+            EXPECT_EQ(timestamps->dts_ns, static_cast<int64_t>(kExactAudioNs));
+        }
+    }
+    EXPECT_TRUE(found_audio);
+}
+
 TEST_F(StreamWriterTest, WebmTimestampMappingDeclaresVersionFourButPlaybackNeedsOnlyTwo) {
     auto config = MakeConfig(tmp_, false, true);
     config.webm = true;
@@ -910,6 +988,35 @@ TEST_F(StreamWriterTest, ShortOpusCodecPrivate_Rejected) {
 // 4. One cue point per video keyframe (parity with batch muxer). The expected
 //    count is derived from the same frame walk FeedSeconds uses so the test
 //    cannot drift from the feeder's exact boundary arithmetic.
+TEST_F(StreamWriterTest, DiskSpooledCuesRemainBoundedAndPreserveEveryKeyframe) {
+    auto config = MakeConfig(tmp_, true, false);
+    config.stream_cues_to_disk = true;
+    config.max_cluster_payload_bytes = 256;
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config));
+    for (uint64_t frame = 0; frame < 3000; ++frame) {
+        MuxPacket packet;
+        packet.pts_ns = frame * 2000000000ULL;
+        packet.track_num = 1;
+        packet.is_key = true;
+        packet.bytes.resize(16, 0x11);
+        ASSERT_TRUE(writer.Push(std::move(packet))) << writer.error();
+        EXPECT_LE(writer.retained_cue_count(), 1);
+    }
+    ASSERT_TRUE(writer.Finalize()) << writer.error();
+    EXPECT_EQ(writer.retained_cue_count(), 0);
+    const auto bytes = ReadFile(tmp_);
+    EXPECT_EQ(CountCuePoints(bytes), 3000);
+    const auto layout = ReadSegmentLayout(bytes);
+    std::vector<size_t> cluster_starts;
+    for (const auto& child : layout.children)
+        if (child.id == kIdCluster)
+            cluster_starts.push_back(child.element_off);
+    for (const auto position : CueClusterPositions(bytes))
+        EXPECT_NE(std::find(cluster_starts.begin(), cluster_starts.end(), position + layout.data_off),
+                  cluster_starts.end());
+}
+
 TEST_F(StreamWriterTest, CuePointPerVideoKeyframe) {
     const double seconds = 10.0;
     const int gop = 60;

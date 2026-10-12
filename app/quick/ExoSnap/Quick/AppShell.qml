@@ -94,6 +94,7 @@ Item {
 
     property int displayedPage: ShellAdapter.RecordPage
     readonly property int stackIndex: root.stackIndexForPage(root.displayedPage)
+    property bool componentReady: false
 
     // Advances `displayedPage` to `currentPage` once its content exists.
     // Called after every navigation and again whenever a loader's status
@@ -130,6 +131,8 @@ Item {
     // Idempotent by status: a second navigation to the same page finds it loaded
     // and does nothing, which is the resident-page contract QCR-602 established.
     function loadDestination(page: int): void {
+        if (!root.componentReady)
+            return;
         switch (page) {
         case ShellAdapter.EditPage:
             if (editLoader.status === Loader.Null)
@@ -844,6 +847,7 @@ Item {
     Component.onCompleted: {
         if (root.editSession.durationMs > 0)
             root.currentPage = ShellAdapter.EditPage;
+        root.componentReady = true;
         root.loadDestination(root.currentPage);
         root.refreshDisplayedPage();
     }

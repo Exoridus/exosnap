@@ -75,6 +75,7 @@ struct AutomationState {
     bool can_pause = false;
     bool can_resume = false;
     bool can_split = false;
+    bool can_request_clip = false;
     bool can_capture_frame = false;
     bool can_select_source = false;
 

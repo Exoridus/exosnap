@@ -642,6 +642,27 @@ TEST_F(CommittedMediaReadTest, JournalRejectsMalformedContainerLengthsAndExcessi
     EXPECT_TRUE(std::filesystem::remove(journal));
 }
 
+TEST_F(CommittedMediaReadTest, JournalRejectsTinyNodeAmplificationBeforeMaterializingIt) {
+    const auto journal = exosnap_test::UniqueTempPath("amplified.index");
+    std::vector<uint8_t> payload{0x9a, 0, 1, 0x11, 0x70};
+    payload.resize(payload.size() + 70'000, 0);
+    std::vector<uint8_t> bytes(28, 0);
+    const uint32_t fields[] = {0x58494d45u, 2, 1, static_cast<uint32_t>(payload.size())};
+    for (size_t field = 0; field < 4; ++field)
+        for (size_t byte = 0; byte < 4; ++byte)
+            bytes[field * 4 + byte] = static_cast<uint8_t>(fields[field] >> (byte * 8));
+    bytes[16] = 1;
+    const auto crc = FixtureCrc(payload.data(), payload.size());
+    for (size_t byte = 0; byte < 4; ++byte)
+        bytes[24 + byte] = static_cast<uint8_t>(crc >> (byte * 8));
+    bytes.insert(bytes.end(), payload.begin(), payload.end());
+    WriteJournalBytes(journal, bytes);
+    const auto result = RecordingMediaIndex::InspectJournal(journal);
+    ASSERT_FALSE(result.succeeded());
+    EXPECT_EQ(result.error()->code, EngineErrorCode::ResourceBudgetExceeded);
+    EXPECT_TRUE(std::filesystem::remove(journal));
+}
+
 TEST_F(CommittedMediaReadTest, SequenceExhaustionDegradesClipsWithoutInvalidatingRecording) {
     config.initial_commit_sequence = UINT64_MAX;
     MatroskaStreamWriter writer;

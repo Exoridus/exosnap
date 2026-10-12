@@ -1,7 +1,7 @@
 #include "audio_media_manifest_adapter.h"
+#include "clip_committed_packet_reader.h"
 #include "codec_random_access.h"
 #include "committed_matroska_view.h"
-#include "matroska_packet_timestamps.h"
 #include "matroska_stream_writer.h"
 #include "recording_media_index.h"
 #include <exosnap/engine/audio_media_manifest.h>
@@ -25,20 +25,17 @@
 #include <tuple>
 #include <utility>
 #include <vector>
-
-extern "C" {
-#include <libavcodec/packet.h>
-#include <libavformat/avformat.h>
-#include <libavutil/avutil.h>
-#include <libavutil/error.h>
-}
+#include <windows.h>
 
 namespace exosnap::engine {
 namespace {
 
 constexpr size_t kExtentPage = 256;
+constexpr size_t kClipSegmentLimit = 4096;
 constexpr size_t kMaxPacketBytes = 4 * 1024 * 1024;
 constexpr uint64_t kStartupMetadataBudgetBytes = 2 * 1024 * 1024;
+static_assert(kExtentPage * (2 * sizeof(ClusterExtent) + 2 * sizeof(uint64_t) + 64) < 128 * 1024);
+static_assert(3 * kClipSegmentLimit * sizeof(ClipCopiedSourceRange) < 1024 * 1024);
 
 uint64_t AddBytes(uint64_t left, uint64_t right) noexcept {
     return right > (std::numeric_limits<uint64_t>::max)() - left ? (std::numeric_limits<uint64_t>::max)()
@@ -96,6 +93,53 @@ bool IsCancelled(const std::atomic<bool>* cancelled) {
     return cancelled && cancelled->load(std::memory_order_acquire);
 }
 
+struct SpoolExtent {
+    uint64_t file_begin = 0;
+    uint64_t file_end = 0;
+    uint64_t readable_end = 0;
+};
+static_assert(sizeof(SpoolExtent) == 24);
+
+class ExtentSpool {
+  public:
+    explicit ExtentSpool(const std::filesystem::path& staging_path) {
+        auto path = staging_path;
+        path += L"." + std::filesystem::path(ToUuid(NewId<MediaId>())).wstring() + L".extents.tmp";
+        file_ = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW,
+                            FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    }
+
+    ~ExtentSpool() {
+        if (file_ != INVALID_HANDLE_VALUE)
+            CloseHandle(file_);
+    }
+
+    ExtentSpool(const ExtentSpool&) = delete;
+    ExtentSpool& operator=(const ExtentSpool&) = delete;
+
+    bool opened() const noexcept {
+        return file_ != INVALID_HANDLE_VALUE;
+    }
+
+    bool Write(const SpoolExtent& extent) {
+        DWORD written = 0;
+        return WriteFile(file_, &extent, sizeof(extent), &written, nullptr) && written == sizeof(extent);
+    }
+
+    bool Rewind() {
+        LARGE_INTEGER start{};
+        return SetFilePointerEx(file_, start, nullptr, FILE_BEGIN) != FALSE;
+    }
+
+    bool Read(SpoolExtent& extent) {
+        DWORD read = 0;
+        return ReadFile(file_, &extent, sizeof(extent), &read, nullptr) && read == sizeof(extent);
+    }
+
+  private:
+    HANDLE file_ = INVALID_HANDLE_VALUE;
+};
+
 std::optional<FileIdentity> IdentityOf(HANDLE handle) {
     FILE_ID_INFO info{};
     if (handle == nullptr || handle == INVALID_HANDLE_VALUE ||
@@ -141,19 +185,6 @@ bool SameTrackPlan(const RecordingMediaDescriptor& first, const RecordingMediaDe
             return false;
     }
     return true;
-}
-
-std::optional<MatroskaPacketTimestamps> ExactTimestamps(const AVPacket& packet) {
-    size_t size = 0;
-    const auto* additional = av_packet_get_side_data(&packet, AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL, &size);
-    if (!additional || size < 8)
-        return std::nullopt;
-    uint64_t type = 0;
-    for (size_t index = 0; index < 8; ++index)
-        type = (type << 8) | additional[index];
-    if (type != kPacketTimestampMappingType)
-        return std::nullopt;
-    return DecodeMatroskaPacketTimestamps({additional + 8, size - 8});
 }
 
 struct JobState {
@@ -208,23 +239,48 @@ struct JobState {
             }
     }
 
-    bool PrepareWriter(const AVFormatContext& input, const RecordingMediaDescriptor& descriptor) {
+    bool PrepareWriter(const RecordingMediaDescriptor& descriptor) {
         MatroskaStreamConfig config;
-        std::vector<uint64_t> mapping;
-        if (!ConfigureMatroskaStreamCopy(&input, staging_path.string(), config, mapping) ||
-            mapping.size() != descriptor.audio_tracks.size() + 1 || mapping.front() != 1 ||
-            config.audio_track_count != descriptor.audio_tracks.size())
+        if ((descriptor.video.codec_id != "V_MPEG4/ISO/AVC" && descriptor.video.codec_id != "V_MPEGH/ISO/HEVC" &&
+             descriptor.video.codec_id != "V_AV1") ||
+            descriptor.video_width == 0 || descriptor.video_height == 0 ||
+            descriptor.audio_tracks.size() > config.audio_tracks.size())
             return Fail(ClipError(EngineErrorCode::UnsupportedFormat, "Source track layout cannot be copied"));
-        if (config.video_codec_id != descriptor.video.codec_id ||
-            config.video_codec_private != descriptor.video.codec_private)
-            return Fail(
-                ClipError(EngineErrorCode::SourceIntegrityFailure, "Demuxed video differs from frozen descriptor"));
+        config.output_path = staging_path.string();
+        config.video_codec_id = descriptor.video.codec_id;
+        config.video_codec_private = descriptor.video.codec_private;
+        config.encode_width = descriptor.video_width;
+        config.encode_height = descriptor.video_height;
+        config.color = descriptor.color;
+        config.audio_track_count = static_cast<uint32_t>(descriptor.audio_tracks.size());
+        for (size_t index = 0; index < descriptor.audio_tracks.size(); ++index) {
+            const auto& track = descriptor.audio_tracks[index];
+            if (index && (track.codec.codec_id != descriptor.audio_tracks[0].codec.codec_id ||
+                          track.codec.sample_rate != descriptor.audio_tracks[0].codec.sample_rate ||
+                          track.codec.channels != descriptor.audio_tracks[0].codec.channels ||
+                          track.codec.bit_depth != descriptor.audio_tracks[0].codec.bit_depth))
+                return Fail(ClipError(EngineErrorCode::UnsupportedFormat, "Source audio tracks have mixed formats"));
+            if (track.codec.codec_id == "A_OPUS")
+                config.audio_codec = StreamAudioCodec::Opus;
+            else if (track.codec.codec_id == "A_PCM/INT/LIT" || track.codec.codec_id == "A_PCM/FLOAT/IEEE")
+                config.audio_codec = StreamAudioCodec::Pcm;
+            else
+                return Fail(ClipError(EngineErrorCode::UnsupportedFormat, "Source audio codec cannot be copied"));
+            config.audio_sample_rate = track.codec.sample_rate;
+            config.audio_channels = track.codec.channels;
+            config.audio_bit_depth = track.codec.bit_depth;
+            config.audio_float = track.codec.codec_id == "A_PCM/FLOAT/IEEE";
+            config.audio_tracks[index].codec_private = track.codec.codec_private;
+            config.audio_tracks[index].codec_delay_samples = track.codec.codec_delay_samples;
+        }
         config.frame_rate_num = descriptor.frame_rate_num;
         config.frame_rate_den = descriptor.frame_rate_den;
         config.path_pre_reserved = false;
-        config.reorder_window_max_bytes = 8 * 1024 * 1024;
+        config.stream_cues_to_disk = true;
+        config.collect_media_index = false;
+        config.reorder_window_max_bytes = 6 * 1024 * 1024;
         config.reorder_window_max_packets = 4096;
-        config.max_cluster_payload_bytes = 8 * 1024 * 1024;
+        config.max_cluster_payload_bytes = 6 * 1024 * 1024;
         config.before_write = [this](OutputIoOperation operation, uint64_t bytes) {
             const auto phase =
                 operation == OutputIoOperation::TrailerWrite ? ClipJobIoPhase::Finalizing : ClipJobIoPhase::Remuxing;
@@ -239,10 +295,6 @@ struct JobState {
         output_delay_ns.resize(descriptor.audio_tracks.size());
         for (size_t index = 0; index < descriptor.audio_tracks.size(); ++index) {
             const auto& track = descriptor.audio_tracks[index];
-            if (mapping[index + 1] != index + 2 ||
-                config.audio_tracks[index].codec_private != track.codec.codec_private)
-                return Fail(
-                    ClipError(EngineErrorCode::SourceIntegrityFailure, "Demuxed audio differs from frozen descriptor"));
             config.audio_tracks[index].name = track.name;
             if (track.codec.codec_id == "A_OPUS") {
                 if (track.codec.sample_rate != 48000 || config.audio_tracks[index].codec_private.size() < 19 ||
@@ -261,6 +313,16 @@ struct JobState {
                 if (samples > (std::numeric_limits<uint16_t>::max)() || samples * 1000000000ULL / 48000 != delay)
                     return Fail(ClipError(EngineErrorCode::UnsupportedFormat, "Opus discard is not sample-exact"));
                 auto& output = config.audio_tracks[index];
+                if (*track.packet_duration_ns > (std::numeric_limits<uint64_t>::max)() / 48000)
+                    return Fail(ClipError(EngineErrorCode::UnsupportedFormat, "Opus packet duration overflows"));
+                const uint64_t packet_samples = *track.packet_duration_ns * 48000 / 1000000000ULL;
+                if (packet_samples == 0 || packet_samples > (std::numeric_limits<uint32_t>::max)())
+                    return Fail(ClipError(EngineErrorCode::UnsupportedFormat, "Opus packet duration is invalid"));
+                config.opus_frame_samples = static_cast<uint32_t>(packet_samples);
+                if (static_cast<uint64_t>(config.opus_frame_samples) * 1000000000ULL / 48000 !=
+                    *track.packet_duration_ns)
+                    return Fail(
+                        ClipError(EngineErrorCode::UnsupportedFormat, "Opus packet duration is not sample-exact"));
                 output.codec_private[10] = static_cast<uint8_t>(samples);
                 output.codec_private[11] = static_cast<uint8_t>(samples >> 8);
                 output.codec_delay_samples = static_cast<uint32_t>(samples);
@@ -335,55 +397,26 @@ struct JobState {
         view->SetIoControl(
             cancelled, [this](uint64_t bytes) { return BeforeIo(ClipJobIoPhase::Reading, bytes); },
             [this](uint64_t bytes) { AfterIo(ClipJobIoPhase::Reading, bytes); });
-        AVFormatContext* raw = avformat_alloc_context();
-        if (!raw)
-            return Fail(ClipError(EngineErrorCode::ResourceBudgetExceeded, "Cannot allocate clip demuxer"));
-        raw->pb = view->avio();
-        raw->flags |= AVFMT_FLAG_CUSTOM_IO;
-        raw->probesize = 2 * 1024 * 1024;
-        raw->max_analyze_duration = 5 * AV_TIME_BASE;
-        const int opened_input = avformat_open_input(&raw, nullptr, nullptr, nullptr);
-        if (opened_input < 0) {
-            if (raw)
-                avformat_free_context(raw);
-            if (view->last_error())
-                return Fail(*view->last_error());
-            return Fail(
-                ClipError(EngineErrorCode::SourceIntegrityFailure, "Cannot demux committed clusters", opened_input));
-        }
-        auto close_input = [](AVFormatContext* input) { avformat_close_input(&input); };
-        std::unique_ptr<AVFormatContext, decltype(close_input)> input(raw, close_input);
-        const int discovered = avformat_find_stream_info(raw, nullptr);
-        if (discovered < 0) {
-            if (view->last_error())
-                return Fail(*view->last_error());
-            return Fail(
-                ClipError(EngineErrorCode::SourceIntegrityFailure, "Cannot identify committed tracks", discovered));
-        }
-        if (!opened && !PrepareWriter(*raw, *source.descriptor))
+        if (!opened && !PrepareWriter(*source.descriptor))
             return false;
-        if (raw->nb_streams != source.descriptor->audio_tracks.size() + 1)
-            return Fail(ClipError(EngineErrorCode::SourceIntegrityFailure, "Committed track count changed"));
-        auto free_packet = [](AVPacket* packet) { av_packet_free(&packet); };
-        std::unique_ptr<AVPacket, decltype(free_packet)> packet(av_packet_alloc(), free_packet);
-        if (!packet)
-            return Fail(ClipError(EngineErrorCode::ResourceBudgetExceeded, "Cannot allocate clip packet"));
-        int read = 0;
-        while ((read = av_read_frame(raw, packet.get())) >= 0) {
+        ClipCommittedPacketReader reader(*view, source.descriptor->immutable_header.size(), kMaxPacketBytes);
+        for (;;) {
+            auto next = reader.Next();
+            if (!next.succeeded())
+                return Fail(*next.error());
+            if (!next.value()->has_value())
+                break;
+            auto packet = std::move(**next.value());
             if (IsCancelled(cancelled)) {
                 view->Cancel();
                 return Fail(ClipError(EngineErrorCode::Cancelled, "Clip cancelled"));
             }
-            const int stream = packet->stream_index;
-            if (stream < 0 || static_cast<unsigned>(stream) >= raw->nb_streams || packet->size <= 0)
+            if (packet.track_number == 0 || packet.track_number > source.descriptor->audio_tracks.size() + 1 ||
+                packet.bytes.empty())
                 return Fail(ClipError(EngineErrorCode::SourceIntegrityFailure, "Invalid committed packet"));
-            if (static_cast<size_t>(packet->size) > kMaxPacketBytes)
-                return Fail(ClipError(EngineErrorCode::ResourceBudgetExceeded,
-                                      "Encoded clip packet exceeds the worker memory budget"));
-            draft.peak_packet_bytes = (std::max)(draft.peak_packet_bytes, static_cast<uint64_t>(packet->size));
-            const auto exact = ExactTimestamps(*packet);
-            if (!exact)
-                return Fail(ClipError(EngineErrorCode::MetadataIncomplete, "Exact packet timestamps are missing"));
+            const size_t stream = static_cast<size_t>(packet.track_number - 1);
+            draft.peak_packet_bytes = (std::max)(draft.peak_packet_bytes, static_cast<uint64_t>(packet.bytes.size()));
+            const auto& exact = packet.timestamps;
             const bool video = stream == 0;
             if (!video && source.descriptor->audio_tracks[stream - 1].codec.sample_rate == 0)
                 return Fail(ClipError(EngineErrorCode::SourceIntegrityFailure, "Invalid source audio rate"));
@@ -391,42 +424,37 @@ struct JobState {
                 video ? 0
                       : static_cast<uint64_t>(source.descriptor->audio_tracks[stream - 1].codec.codec_delay_samples) *
                             1000000000ULL / source.descriptor->audio_tracks[stream - 1].codec.sample_rate;
-            if (exact->pts_ns > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()) ||
-                source_delay_ns > exact->pts_ns)
+            if (exact.pts_ns > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()) ||
+                source_delay_ns > exact.pts_ns)
                 return Fail(ClipError(EngineErrorCode::SourceIntegrityFailure, "Invalid source codec delay"));
-            const auto effective_pts = static_cast<int64_t>(exact->pts_ns - source_delay_ns);
+            const auto effective_pts = static_cast<int64_t>(exact.pts_ns - source_delay_ns);
             if (source_delay_ns > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()) ||
-                exact->dts_ns < (std::numeric_limits<int64_t>::min)() + static_cast<int64_t>(source_delay_ns))
+                exact.dts_ns < (std::numeric_limits<int64_t>::min)() + static_cast<int64_t>(source_delay_ns))
                 return Fail(ClipError(EngineErrorCode::SourceIntegrityFailure, "Source decode time underflows"));
-            const auto effective_dts = exact->dts_ns - static_cast<int64_t>(source_delay_ns);
+            const auto effective_dts = exact.dts_ns - static_cast<int64_t>(source_delay_ns);
             const auto pts_r = SegmentLocalToRecordingNs(source.descriptor->segment_origin_r_ns, effective_pts);
             const auto dts_r = SegmentLocalToRecordingNs(source.descriptor->segment_origin_r_ns, effective_dts);
             if (!pts_r || !dts_r)
                 return Fail(ClipError(EngineErrorCode::SourceIntegrityFailure, "Source timeline overflows"));
             if (video) {
                 if (saw_end) {
-                    av_packet_unref(packet.get());
                     continue;
                 }
                 if (plan.end_rap && source.descriptor->segment_id == plan.end_rap->segment_id &&
                     *pts_r == plan.end_rap->pts_r_ns &&
                     QualifyClosedRandomAccess(source.descriptor->video.codec_id, source.descriptor->video.codec_private,
-                                              {packet->data, static_cast<size_t>(packet->size)},
-                                              (packet->flags & AV_PKT_FLAG_KEY) != 0) == RandomAccessKind::ClosedGop)
+                                              packet.bytes, packet.is_key) == RandomAccessKind::ClosedGop)
                     saw_end = true;
                 if (saw_end) {
-                    av_packet_unref(packet.get());
                     continue;
                 }
                 if (!saw_start) {
                     if (*pts_r != plan.start_rap.pts_r_ns) {
-                        av_packet_unref(packet.get());
                         continue;
                     }
-                    if (QualifyClosedRandomAccess(
-                            source.descriptor->video.codec_id, source.descriptor->video.codec_private,
-                            {packet->data, static_cast<size_t>(packet->size)},
-                            (packet->flags & AV_PKT_FLAG_KEY) != 0) != RandomAccessKind::ClosedGop)
+                    if (QualifyClosedRandomAccess(source.descriptor->video.codec_id,
+                                                  source.descriptor->video.codec_private, packet.bytes,
+                                                  packet.is_key) != RandomAccessKind::ClosedGop)
                         return Fail(ClipError(EngineErrorCode::SourceIntegrityFailure,
                                               "Clip does not begin at the planned closed access"));
                     saw_start = true;
@@ -438,7 +466,6 @@ struct JobState {
                 const size_t audio = static_cast<size_t>(stream - 1);
                 if (*pts_r < plan.read_begin_r_ns || *pts_r >= plan.actual_end_r_ns ||
                     *pts_r < last_audio_end_r_ns[audio]) {
-                    av_packet_unref(packet.get());
                     continue;
                 }
                 const auto& track = source.descriptor->audio_tracks[audio];
@@ -448,9 +475,9 @@ struct JobState {
                     track.codec.sample_rate && track.codec.channels && track.codec.bit_depth % 8 == 0) {
                     const uint64_t frame_bytes =
                         static_cast<uint64_t>(track.codec.channels) * (track.codec.bit_depth / 8);
-                    if (frame_bytes && static_cast<uint64_t>(packet->size) % frame_bytes == 0)
-                        duration =
-                            static_cast<uint64_t>(packet->size) / frame_bytes * 1000000000ULL / track.codec.sample_rate;
+                    if (frame_bytes && static_cast<uint64_t>(packet.bytes.size()) % frame_bytes == 0)
+                        duration = static_cast<uint64_t>(packet.bytes.size()) / frame_bytes * 1000000000ULL /
+                                   track.codec.sample_rate;
                 }
                 if (*pts_r < 0 || !duration ||
                     duration > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)() - *pts_r))
@@ -484,8 +511,8 @@ struct JobState {
             }
             MuxPacket output;
             output.track_num = static_cast<uint64_t>(stream + 1);
-            output.is_key = video ? (packet->flags & AV_PKT_FLAG_KEY) != 0 : true;
-            output.bytes.assign(packet->data, packet->data + packet->size);
+            output.is_key = video ? packet.is_key : true;
+            output.bytes = std::move(packet.bytes);
             const int64_t local_pts = *pts_r - plan.actual_begin_r_ns;
             const int64_t local_dts = *dts_r - plan.actual_begin_r_ns;
             if (video) {
@@ -527,12 +554,9 @@ struct JobState {
                 ++draft.video_packets;
             else
                 ++draft.audio_packets[static_cast<size_t>(stream - 1)];
-            av_packet_unref(packet.get());
         }
         if (view->last_error())
             return Fail(*view->last_error());
-        if (read != AVERROR_EOF)
-            return Fail(ClipError(EngineErrorCode::SourceIntegrityFailure, "Committed packet read failed", read));
         return true;
     }
 };
@@ -567,6 +591,8 @@ Outcome<RecordingClipDraft> RunRecordingClipJob(const ClipBoundaryPlan& plan, co
         snapshot.token.committed_through != plan.snapshot.committed_through || sources.size() != plan.segments.size() ||
         sources.empty() || staging_path.empty())
         return ClipError(EngineErrorCode::InvalidConfig, "Clip job does not match its frozen plan");
+    if (sources.size() > kClipSegmentLimit)
+        return ClipError(EngineErrorCode::ResourceBudgetExceeded, "Clip segment count exceeds resource budget");
     uint64_t metadata_bytes = 0;
     for (const auto& source : sources) {
         if (!source.descriptor)
@@ -600,28 +626,26 @@ Outcome<RecordingClipDraft> RunRecordingClipJob(const ClipBoundaryPlan& plan, co
     job.draft.staging_path = staging_path;
     job.draft.actual_begin_r_ns = plan.actual_begin_r_ns;
     job.draft.actual_end_r_ns = plan.actual_end_r_ns;
+    ExtentSpool spool(staging_path);
+    if (!spool.opened())
+        return ClipError(EngineErrorCode::StorageInsufficient, "Cannot create clip extent spool");
+    const auto write_extent = [&](const SpoolExtent& extent) {
+        if (!job.BeforeIo(ClipJobIoPhase::Reading, sizeof(extent)))
+            return job.Fail(ClipError(EngineErrorCode::Cancelled, "Clip extent spool write cancelled"));
+        if (!spool.Write(extent))
+            return job.Fail(ClipError(EngineErrorCode::StorageInsufficient, "Cannot write clip extent spool"));
+        return true;
+    };
     for (size_t index = 0; index < sources.size(); ++index) {
         const auto& source = sources[index];
-        ClipCopiedSourceRange range{plan.recording_id, source.descriptor->segment_id, source.descriptor->media_id,
-                                    (std::numeric_limits<int64_t>::max)(), (std::numeric_limits<int64_t>::min)()};
-        std::vector<ClusterExtent> page;
-        page.reserve(kExtentPage);
-        uint64_t readable_end = 0;
         bool current = false;
         bool stopped = false;
-        const auto flush = [&] {
-            if (page.empty())
-                return true;
-            auto selected = std::move(page);
-            page.clear();
-            page.reserve(kExtentPage);
-            return job.ConsumePage(source, std::move(selected), readable_end, range);
-        };
         const auto visited = RecordingMediaIndex::Visit(
             snapshot,
             [&](const RecordingMediaDescriptor& descriptor) {
-                if (!flush()) {
+                if (IsCancelled(cancelled)) {
                     stopped = true;
+                    job.Fail(ClipError(EngineErrorCode::Cancelled, "Clip extent selection cancelled"));
                     return false;
                 }
                 current = descriptor.segment_id == source.descriptor->segment_id &&
@@ -638,7 +662,6 @@ Outcome<RecordingClipDraft> RunRecordingClipJob(const ClipBoundaryPlan& plan, co
                     job.Fail(ClipError(EngineErrorCode::SourceIntegrityFailure, "Receipt exceeds frozen clip extent"));
                     return false;
                 }
-                readable_end = receipt.readable_end_offset;
                 for (const auto& extent : receipt.clusters) {
                     bool selected = false;
                     for (const auto& coverage : extent.coverage) {
@@ -659,8 +682,7 @@ Outcome<RecordingClipDraft> RunRecordingClipJob(const ClipBoundaryPlan& plan, co
                                         rap.block_offset == plan.end_rap->block_offset;
                     if (!selected)
                         continue;
-                    page.push_back({extent.file_begin, extent.file_end, {}, {}});
-                    if (page.size() == kExtentPage && !flush()) {
+                    if (!write_extent({extent.file_begin, extent.file_end, receipt.readable_end_offset})) {
                         stopped = true;
                         return false;
                     }
@@ -676,6 +698,44 @@ Outcome<RecordingClipDraft> RunRecordingClipJob(const ClipBoundaryPlan& plan, co
         if (stopped)
             return job.failure.value_or(
                 ClipError(EngineErrorCode::SourceIntegrityFailure, "Clip index traversal stopped"));
+        if (!write_extent({(std::numeric_limits<uint64_t>::max)(), 0, 0}))
+            return *job.failure;
+    }
+    if (!spool.Rewind())
+        return ClipError(EngineErrorCode::SourceIntegrityFailure, "Cannot rewind clip extent spool");
+    for (size_t index = 0; index < sources.size(); ++index) {
+        const auto& source = sources[index];
+        ClipCopiedSourceRange range{plan.recording_id, source.descriptor->segment_id, source.descriptor->media_id,
+                                    (std::numeric_limits<int64_t>::max)(), (std::numeric_limits<int64_t>::min)()};
+        std::vector<ClusterExtent> page;
+        page.reserve(kExtentPage);
+        uint64_t readable_end = 0;
+        const auto flush = [&] {
+            if (page.empty())
+                return true;
+            auto selected = std::move(page);
+            if (!job.ConsumePage(source, std::move(selected), readable_end, range))
+                return false;
+            page.clear();
+            page.reserve(kExtentPage);
+            return true;
+        };
+        for (;;) {
+            SpoolExtent extent;
+            if (!job.BeforeIo(ClipJobIoPhase::Reading, sizeof(extent)))
+                return ClipError(EngineErrorCode::Cancelled, "Clip extent spool read cancelled");
+            if (!spool.Read(extent))
+                return ClipError(EngineErrorCode::SourceIntegrityFailure, "Cannot read clip extent spool");
+            if (extent.file_begin == (std::numeric_limits<uint64_t>::max)())
+                break;
+            if (extent.file_end <= extent.file_begin || extent.file_end > extent.readable_end ||
+                extent.readable_end > plan.segments[index].readable_end_offset)
+                return ClipError(EngineErrorCode::SourceIntegrityFailure, "Invalid spooled clip extent");
+            readable_end = extent.readable_end;
+            page.push_back({extent.file_begin, extent.file_end, {}, {}});
+            if (page.size() == kExtentPage && !flush())
+                return *job.failure;
+        }
         if (!flush())
             return *job.failure;
         if (range.begin_r_ns >= range.end_r_ns)

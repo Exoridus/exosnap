@@ -98,6 +98,8 @@ class QuickApplication {
     [[nodiscard]] RecordViewModelAdapter* recordViewModelAdapter() noexcept;
     [[nodiscard]] OverlayTelemetryAdapter* overlayTelemetryAdapter() noexcept;
     [[nodiscard]] SettingsAdapter* settingsAdapter() noexcept;
+    [[nodiscard]] AudioRoutingAdapter* audioRoutingAdapter() noexcept;
+    [[nodiscard]] RecordingClipAdapter* recordingClipAdapter() noexcept;
     [[nodiscard]] DeviceAdapter* deviceAdapter() noexcept;
     [[nodiscard]] DiagnosticsAdapter* diagnosticsAdapter() noexcept;
     [[nodiscard]] LogsAdapter* logsAdapter() noexcept;

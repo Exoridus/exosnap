@@ -102,6 +102,12 @@ WriteMediaIdentitySidecar(const std::filesystem::path& media, const AudioManifes
                           const std::function<bool()>& continue_io = {},
                           const std::optional<MediaIdentitySidecarReferences>& references = std::nullopt,
                           const BackgroundIoAdmission& before_io = {}, const std::atomic<bool>* cancelled = nullptr);
+// Verifies the envelope against final file identity, size and a streaming hash.
+// Returned track metadata is authored provenance, not a demux or decode result.
+[[nodiscard]] AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& media,
+                                                               const std::function<bool()>& continue_io = {},
+                                                               const BackgroundIoAdmission& before_io = {},
+                                                               const std::atomic<bool>* cancelled = nullptr);
 // Updates an existing final-byte-verified envelope. Missing semantic metadata
 // remains missing and is never synthesized from marker files. Only the supplied
 // owned reference is replaced. Other verified associations are preserved.

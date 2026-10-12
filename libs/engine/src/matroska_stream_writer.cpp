@@ -2,6 +2,7 @@
 #include "audio_media_manifest_adapter.h"
 #include "codec_random_access.h"
 #include "matroska_packet_timestamps.h"
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <exosnap/engine/audio_limits.h>
@@ -76,6 +77,35 @@ constexpr int64_t kMaxClusterRelativeTicks = 32767LL;
 constexpr uint64_t kSeekHeadReservedBytes = 150ULL;
 constexpr size_t kReceiptPayloadLimit = 4ULL * 1024 * 1024;
 constexpr size_t kPendingClusterLimit = 1024;
+constexpr size_t kClipClusterPacketLimit = 512;
+constexpr size_t kClipGroupObjectBytes =
+    sizeof(libmatroska::KaxBlockGroup) + sizeof(libmatroska::KaxBlock) + sizeof(libmatroska::KaxReferencePriority) +
+    sizeof(libmatroska::KaxReferenceBlock) + sizeof(libmatroska::KaxBlockDuration) +
+    sizeof(libmatroska::KaxBlockAdditions) + sizeof(libmatroska::KaxBlockMore) + sizeof(libmatroska::KaxBlockAddID) +
+    sizeof(libmatroska::KaxBlockAdditional) + sizeof(libmatroska::DataBuffer);
+constexpr size_t kClipSimpleObjectBytes = sizeof(libmatroska::KaxSimpleBlock) + sizeof(libmatroska::DataBuffer);
+constexpr size_t kClipBlockGraphBytes = (std::max)(kClipGroupObjectBytes + 10 * 64 + 16 * sizeof(void*) + 24,
+                                                   kClipSimpleObjectBytes + 2 * 64 + 4 * sizeof(void*));
+constexpr size_t kClipClusterGraphBytes =
+    kClipClusterPacketLimit * (kClipBlockGraphBytes + 3 * sizeof(libebml::EbmlElement*) +
+                               3 * sizeof(std::vector<uint8_t>) + 3 * sizeof(uint64_t)) +
+    sizeof(libmatroska::KaxCluster) + 64;
+static_assert(kClipClusterGraphBytes < 2 * 1024 * 1024);
+
+class StreamedCues final : public libmatroska::KaxCues {
+  public:
+    uint64_t payload_bytes = 0;
+
+    void RenderHeader(libebml::IOCallback& output, uint64_t bytes) {
+        payload_bytes = bytes;
+        RenderHead(output, true);
+    }
+
+    uint64_t UpdateSize(bool = false, bool = false) override {
+        SetSize_(payload_bytes);
+        return payload_bytes;
+    }
+};
 
 // Width of each reserved MaxCLL / MaxFALL leaf. CTA-861.3 codes both as u(16),
 // so two bytes hold every representable level and the back-patch at Finalize()
@@ -304,7 +334,83 @@ class DurableFileIo final : public libebml::IOCallback {
     std::vector<uint8_t> m_header;
 };
 
+class DiskCueSpool final : public libebml::IOCallback {
+  public:
+    explicit DiskCueSpool(const MatroskaStreamConfig& config) : config_(config) {
+        int descriptor = -1;
+        const auto path = config.output_path + ".cues";
+        if (_sopen_s(&descriptor, path.c_str(), _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY | _O_TEMPORARY, _SH_DENYRW,
+                     _S_IREAD | _S_IWRITE) != 0)
+            throw std::runtime_error("Cannot create clip cue spool");
+        file_ = _fdopen(descriptor, "wb+");
+        if (!file_) {
+            _close(descriptor);
+            throw std::runtime_error("Cannot open clip cue spool stream");
+        }
+    }
+
+    ~DiskCueSpool() override {
+        close();
+    }
+
+    uint32 read(void* buffer, size_t size) override {
+        return static_cast<uint32>(std::fread(buffer, 1, size, file_));
+    }
+
+    void setFilePointer(int64 offset, libebml::seek_mode mode = libebml::seek_beginning) override {
+        if (Fseek64(file_, offset, static_cast<int>(mode)) != 0)
+            throw std::runtime_error("Cannot seek clip cue spool");
+    }
+
+    size_t write(const void* buffer, size_t size) override {
+        if (config_.fail_io && config_.fail_io(OutputIoOperation::ClusterWrite))
+            throw std::runtime_error("Injected clip cue spool write failure");
+        if (config_.before_write && !config_.before_write(OutputIoOperation::ClusterWrite, size))
+            throw std::runtime_error("Clip output I/O was cancelled");
+        const auto written = std::fwrite(buffer, 1, size, file_);
+        if (config_.after_write)
+            config_.after_write(OutputIoOperation::ClusterWrite, written);
+        if (written != size)
+            throw std::runtime_error("Cannot write clip cue spool");
+        return written;
+    }
+
+    uint64 getFilePointer() override {
+        const auto position = Ftell64(file_);
+        if (position < 0)
+            throw std::runtime_error("Cannot measure clip cue spool");
+        return static_cast<uint64>(position);
+    }
+
+    void close() override {
+        if (file_) {
+            std::fclose(file_);
+            file_ = nullptr;
+        }
+    }
+
+    void CopyTo(libebml::IOCallback& output, uint64_t bytes) {
+        setFilePointer(0);
+        std::array<uint8_t, 32768> buffer{};
+        while (bytes) {
+            const auto chunk = static_cast<size_t>((std::min)(bytes, static_cast<uint64_t>(buffer.size())));
+            if (read(buffer.data(), chunk) != chunk)
+                throw std::runtime_error("Cannot read clip cue spool");
+            output.writeFully(buffer.data(), chunk);
+            bytes -= chunk;
+        }
+    }
+
+  private:
+    const MatroskaStreamConfig& config_;
+    FILE* file_ = nullptr;
+};
+
 bool MatroskaStreamWriter::InitializeMediaDescriptor() {
+    if (!m_config.collect_media_index) {
+        (void)m_io->TakeHeader();
+        return true;
+    }
     m_commit_sequence = m_config.initial_commit_sequence;
     try {
         auto descriptor =
@@ -450,6 +556,7 @@ void MatroskaStreamWriter::Fail(const std::string& reason) {
 }
 
 void MatroskaStreamWriter::CloseIo() {
+    m_cue_spool.reset();
     if (m_io != nullptr) {
         try {
             m_io->close();
@@ -469,6 +576,7 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
         return false;
     }
     m_config = config;
+    m_emit_exact_audio_timestamps = config.audio_manifest.has_value() && !config.webm;
     m_opened = true;
 
     if (config.audio_track_count > kMaxAudioTracks || config.reorder_window_max_packets == 0 ||
@@ -825,7 +933,12 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
         }
 
         // --- Cues accumulator (entries added incrementally per keyframe). ---
-        m_cues = std::make_unique<libmatroska::KaxCues>();
+        if (m_config.stream_cues_to_disk) {
+            m_cues = std::make_unique<StreamedCues>();
+            m_cue_spool = std::make_unique<DiskCueSpool>(m_config);
+        } else {
+            m_cues = std::make_unique<libmatroska::KaxCues>();
+        }
         m_cues->SetGlobalTimecodeScale(kTimecodeScaleNs);
     } catch (const std::exception& ex) {
         Fail(std::string("MatroskaStreamWriter::Open render failed: ") + ex.what());
@@ -834,10 +947,24 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
     }
 
     InitializeMediaDescriptor();
+    if (!m_config.collect_media_index) {
+        // Track initialization and tags already own the bytes they need. Without
+        // an index, retaining a second configuration copy only increases the
+        // memory held alongside packet payloads.
+        std::vector<uint8_t>().swap(m_config.video_codec_private);
+        for (auto& track : m_config.audio_tracks)
+            std::vector<uint8_t>().swap(track.codec_private);
+        m_config.audio_manifest.reset();
+    }
     return true;
 }
 
+size_t MatroskaStreamWriter::retained_cue_count() const noexcept {
+    return m_cues ? m_cues->ListSize() : 0;
+}
+
 bool MatroskaStreamWriter::Push(MuxPacket packet) {
+    static_assert((2 * sizeof(WindowEntry) + 4 * sizeof(void*) + 64) * 4097 < 3 * 1024 * 1024 / 2);
     if (m_failed || !m_opened || m_finalized)
         return false;
     if (packet.bytes.empty())
@@ -930,6 +1057,8 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
 
     bool need_new_cluster = m_first_cluster;
     if (!m_first_cluster && m_cluster != nullptr) {
+        if (m_config.stream_cues_to_disk && m_cluster_bytes.size() >= kClipClusterPacketLimit)
+            need_new_cluster = true;
         if (m_config.max_cluster_payload_bytes && m_cluster_payload_bytes &&
             e.bytes.size() > m_config.max_cluster_payload_bytes - m_cluster_payload_bytes)
             need_new_cluster = true;
@@ -963,10 +1092,11 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
 
         auto* data_buf = new libmatroska::DataBuffer(stored.data(), static_cast<uint32_t>(stored.size()));
         libebml::EbmlElement* rendered_block = nullptr;
-        const bool exact_audio = e.track_num > 1 && m_config.audio_manifest && !m_config.webm;
-        if (exact_audio && e.pts_ns > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()))
-            throw std::overflow_error("Audio timestamp exceeds the signed timestamp domain");
-        if ((e.track_num == 1 && e.dts_ns) || exact_audio) {
+        const bool exact_audio = e.track_num > 1 && m_emit_exact_audio_timestamps;
+        if ((e.track_num == 1 || exact_audio) &&
+            e.pts_ns > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()))
+            throw std::overflow_error("Packet timestamp exceeds the signed timestamp domain");
+        if ((e.track_num == 1 && (e.dts_ns || !m_config.webm)) || exact_audio) {
             auto& group = libebml::AddNewChild<libmatroska::KaxBlockGroup>(*m_cluster);
             rendered_block = &group;
             group.SetParent(*m_cluster);
@@ -994,7 +1124,7 @@ bool MatroskaStreamWriter::EmitPacket(const WindowEntry& e) {
             sb.SetKeyframe(e.is_key);
         }
 
-        if (!m_media_index_degraded) {
+        if (m_config.collect_media_index && !m_media_index_degraded) {
             try {
                 uint64_t duration = 0;
                 if (e.track_num == 1 && m_config.frame_rate_num != 0)
@@ -1101,7 +1231,7 @@ bool MatroskaStreamWriter::FlushCluster() {
         m_last_flush_ms = std::chrono::duration<double, std::milli>(flush_t1 - flush_t0).count();
         ++m_flush_count;
         const uint64_t pos_after = static_cast<uint64_t>(m_io->getFilePointer());
-        if (!m_media_index_degraded) {
+        if (m_config.collect_media_index && !m_media_index_degraded) {
             try {
                 m_active_cluster_extent.file_begin = pos_before;
                 m_active_cluster_extent.file_end = pos_after;
@@ -1140,11 +1270,14 @@ bool MatroskaStreamWriter::FlushCluster() {
         // point every cue that many bytes short of its cluster.
         const uint64_t cluster_rel = m_cluster->GetPosition();
         for (const uint64_t cue_tick : m_pending_cue_ticks) {
-            auto& point = libebml::AddNewChild<libmatroska::KaxCuePoint>(*m_cues);
+            libmatroska::KaxCuePoint streamed_point;
+            auto& point = m_cue_spool ? streamed_point : libebml::AddNewChild<libmatroska::KaxCuePoint>(*m_cues);
             libebml::GetChild<libmatroska::KaxCueTime>(point).SetValue(cue_tick);
             auto& tp = libebml::AddNewChild<libmatroska::KaxCueTrackPositions>(point);
             libebml::GetChild<libmatroska::KaxCueTrack>(tp).SetValue(1);
             libebml::GetChild<libmatroska::KaxCueClusterPosition>(tp).SetValue(cluster_rel);
+            if (m_cue_spool)
+                point.Render(*m_cue_spool);
         }
         m_pending_cue_ticks.clear();
     } catch (const std::exception& ex) {
@@ -1245,7 +1378,13 @@ bool MatroskaStreamWriter::Finalize() {
             // on a slow/networked target — exactly the phase the finalize
             // shutdown wait (FinalizeProgressTracker) must see advancing, so
             // publish a checkpoint immediately after.
-            m_cues->Render(*m_io);
+            if (m_cue_spool) {
+                const auto bytes = m_cue_spool->getFilePointer();
+                static_cast<StreamedCues&>(*m_cues).RenderHeader(*m_io, bytes);
+                m_cue_spool->CopyTo(*m_io, bytes);
+            } else {
+                m_cues->Render(*m_io);
+            }
             PublishProgress();
 
             // --- SeekHead into the reserved placeholder ---

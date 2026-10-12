@@ -1,4 +1,5 @@
 #include "audio_media_manifest_adapter.h"
+#include "bounded_metadata_json.h"
 #include "ffmpeg_aac_encoder.h"
 #include "matroska_stream_writer.h"
 #include "media_identity_sidecar.h"
@@ -276,6 +277,22 @@ TEST_F(AudioMetadataRoundtrip, FinalByteReferencesSurviveRewriteAndRejectUnsafeN
               std::vector<std::string>{"unrelated.markers.json"});
 }
 
+TEST_F(AudioMetadataRoundtrip, SidecarAcceptsMaximumReferencesNearWireLimit) {
+    ASSERT_NO_FATAL_FAILURE(WriteFixture(false));
+    MediaIdentitySidecarReferences references;
+    references.source_ranges_json = "[]";
+    for (size_t index = 0; index < 4096; ++index)
+        references.marker_refs.push_back("marker_" + std::to_string(index) + "_" + std::string(450, 'a') + ".json");
+    const auto written = WriteMediaIdentitySidecar(path, manifest, {}, references);
+    ASSERT_TRUE(written.succeeded()) << (written.error() ? written.error()->context : "");
+    const auto size = std::filesystem::file_size(MediaIdentitySidecarPath(path));
+    EXPECT_GT(size, 1800u * 1024u);
+    EXPECT_LT(size, 2u * 1024u * 1024u);
+    const auto read = ReadMediaIdentitySidecar(path);
+    ASSERT_EQ(read.status, AudioMetadataStatus::Verified) << testing::PrintToString(read.warnings);
+    EXPECT_EQ(read.references.marker_refs, references.marker_refs);
+}
+
 TEST_F(AudioMetadataRoundtrip, MarkerReferenceCancellationRejectsMissingIdentitySidecar) {
     ASSERT_NO_FATAL_FAILURE(WriteFixture(false));
     ASSERT_FALSE(std::filesystem::exists(MediaIdentitySidecarPath(path)));
@@ -443,6 +460,44 @@ TEST(AudioManifest, RejectsDuplicateKeysMappingAndMalformedLengths) {
     manifest = Manifest();
     manifest.tracks[0].container.name = std::string("bad\xC0\xAF");
     EXPECT_FALSE(ValidateAudioManifest1(manifest).succeeded());
+}
+
+TEST(AudioManifest, RejectsTinyJsonNodesAtTheLiveAllocationQuota) {
+    const auto serialized = SerializeAudioManifest1(Manifest());
+    ASSERT_TRUE(serialized.succeeded());
+    std::string amplified = serialized.value()->substr(0, serialized.value()->size() - 1);
+    amplified += ",\"amplification\":[";
+    for (size_t index = 0; index < 500'000; ++index)
+        amplified += "0,";
+    amplified.back() = ']';
+    amplified += '}';
+    ASSERT_LT(amplified.size(), 1024u * 1024u);
+    const auto result = ParseAudioManifest1(amplified);
+    ASSERT_FALSE(result.succeeded());
+    EXPECT_EQ(result.error()->code, EngineErrorCode::ResourceBudgetExceeded);
+}
+
+TEST(AudioManifest, JsonQuotaRefundsOriginalOwnerAfterScopeEnds) {
+    MetadataJson escaped;
+    std::shared_ptr<MetadataJsonBudget> original_budget;
+    {
+        MetadataJsonQuotaScope scope(64 * 1024);
+        original_budget = scope.budget_handle();
+        escaped = MetadataJson{{"payload", std::string(2048, 'x')}, {"items", MetadataJson::array()}};
+        for (size_t index = 0; index < 100; ++index)
+            escaped["items"].push_back(index);
+        EXPECT_GT(original_budget->live_bytes(), 0u);
+        {
+            MetadataJsonQuotaScope nested(64);
+            EXPECT_EQ(nested.budget_handle(), original_budget);
+        }
+    }
+    {
+        MetadataJsonQuotaScope separate(64);
+        escaped = nullptr;
+        EXPECT_EQ(original_budget->live_bytes(), 0u);
+        EXPECT_EQ(separate.budget_handle()->live_bytes(), 0u);
+    }
 }
 
 TEST(AudioManifest, OverlapIsConfirmedExplicitlyInEitherTrackOrder) {

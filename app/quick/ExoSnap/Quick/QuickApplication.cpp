@@ -2163,6 +2163,12 @@ std::optional<exosnap::engine::AppliedWebcamOverlay> QuickApplication::applyLive
     if (fields.value(QStringLiteral("mirror")).isBool())
         live_config_.webcam.mirror = fields.value(QStringLiteral("mirror")).toBool();
 
+    auto webcam = webcamSettingsForCapture();
+    webcam.overlay = live_config_.webcam.overlay;
+    webcam.opacity = live_config_.webcam.opacity;
+    webcam.mirror = live_config_.webcam.mirror;
+    settings_adapter_.updateActiveWebcam(webcam);
+
     // The production path, not a second one: the same call the drag makes.
     const std::optional<exosnap::engine::AppliedWebcamOverlay> applied =
         recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
@@ -2182,6 +2188,9 @@ void QuickApplication::updateWebcamOverlay(const QRectF& normalized_rect) {
     overlay.w_norm = static_cast<float>(normalized_rect.width());
     overlay.h_norm = static_cast<float>(normalized_rect.height());
     live_config_.webcam.overlay = SanitizeWebcamOverlayRect(overlay);
+    auto webcam = webcamSettingsForCapture();
+    webcam.overlay = live_config_.webcam.overlay;
+    settings_adapter_.updateActiveWebcam(webcam);
     recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
     webcam_overlay_persist_timer_.start();
     synchronizeRecordState();
@@ -6024,6 +6033,12 @@ OverlayTelemetryAdapter* QuickApplication::overlayTelemetryAdapter() noexcept {
 }
 SettingsAdapter* QuickApplication::settingsAdapter() noexcept {
     return &settings_adapter_;
+}
+AudioRoutingAdapter* QuickApplication::audioRoutingAdapter() noexcept {
+    return &audio_routing_adapter_;
+}
+RecordingClipAdapter* QuickApplication::recordingClipAdapter() noexcept {
+    return &recording_clip_adapter_;
 }
 DeviceAdapter* QuickApplication::deviceAdapter() noexcept {
     return &device_adapter_;

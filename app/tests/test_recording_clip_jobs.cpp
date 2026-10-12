@@ -125,6 +125,18 @@ TEST(RecordingClipJobsTest, PlanningFailurePublishesNeitherMediaNorCompletedAsse
     EXPECT_FALSE(std::filesystem::exists(request.destination));
 }
 
+TEST(RecordingClipJobsTest, MarkerMemoryIsRejectedBeforeQueueAdmission) {
+    RecordingArtifactRegistry registry;
+    RecordingClipJobs clips(registry, {}, [] { return true; }, {});
+    auto request = MissingSourceRequest(1000000000);
+    request.markers.push_back({0, RecordingMarkerType::General, std::string(2 * 1024 * 1024, 'x')});
+    const auto rejected = clips.RequestPlan(std::move(request));
+    ASSERT_FALSE(rejected.succeeded());
+    EXPECT_EQ(rejected.error()->code, engine::EngineErrorCode::ResourceBudgetExceeded);
+    EXPECT_TRUE(clips.Snapshots().empty());
+    clips.Shutdown();
+}
+
 TEST(RecordingClipJobsTest, ShutdownClosesAdmissionWithoutWaitingForPausedRecording) {
     RecordingArtifactRegistry registry;
     RecordingClipJobs clips(registry, {}, [] { return true; }, {});
