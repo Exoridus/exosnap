@@ -1,3 +1,4 @@
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/backend_tuning.h>
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/edit_player_engine.h>
@@ -7,6 +8,7 @@
 #include <exosnap/engine/edit_timeline_render.h>
 #include <exosnap/engine/mp4_remuxer.h>
 #include <exosnap/engine/recorder_session.h>
+#include <exosnap/engine/recording_media_types.h>
 #include <exosnap/engine/sdr_transfer.h>
 
 #include <gtest/gtest.h>
