@@ -1086,7 +1086,11 @@ bool MatroskaStreamWriter::EmitPacket(WindowEntry& e) {
 
         // Backing bytes must outlive FlushCluster()/Render(). Keep them in a
         // per-cluster store that is cleared only after the cluster is rendered.
-        m_cluster_bytes.push_back(std::move(e.bytes));
+        if (m_config.max_cluster_payload_bytes)
+            m_cluster_bytes.push_back(std::move(e.bytes));
+        else
+            // Time-based recorder clusters must not accumulate unused packet capacity.
+            m_cluster_bytes.push_back(e.bytes);
         m_cluster_payload_bytes += m_cluster_bytes.back().capacity();
         m_peak_cluster_payload_bytes = (std::max)(m_peak_cluster_payload_bytes, m_cluster_payload_bytes);
         std::vector<uint8_t>& stored = m_cluster_bytes.back();
