@@ -16,7 +16,7 @@ use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 pub fn scenarios() -> Vec<Scenario> {
     vec![Scenario {
         id: "clip.recording-live",
-        revision: 2,
+        revision: 3,
         title: "A live recording saves an offered last-30-seconds clip while capture continues",
         class: ScenarioClass::Hardware,
         contract: "after 35 seconds of recording, the production clip adapter plans the offered last-30-seconds request, confirms its available range, and creates a decodable H.264/Opus MKV with relative timestamps and preserved audio identity while primary capture continues; the completed clip matches the reviewed range and opens and seeks in Edit",
@@ -81,6 +81,32 @@ fn range_seconds(job: &Value, key: &str) -> Step<f64> {
         return Err(Stop::infra(format!("clip {key} time is invalid: {text}")));
     }
     Ok((values[0] * 3600 + values[1] * 60 + values[2]) as f64)
+}
+
+fn judge_clip_marker(primary: &Value, clip: &Value, begin_ns: u64) -> Step {
+    let primary_markers = primary["markers"]
+        .as_array()
+        .ok_or_else(|| Stop::fail("primary marker sidecar has no markers"))?;
+    let clip_markers = clip["markers"]
+        .as_array()
+        .ok_or_else(|| Stop::fail("clip marker sidecar has no markers"))?;
+    product_ensure!(
+        primary_markers.len() == 1 && clip_markers.len() == 1,
+        "the recording or clip lost its authored marker"
+    );
+    let primary_time = primary_markers[0]["timeMs"]
+        .as_u64()
+        .ok_or_else(|| Stop::fail("primary marker has no timestamp"))?;
+    let clip_time = clip_markers[0]["timeMs"]
+        .as_u64()
+        .ok_or_else(|| Stop::fail("clip marker has no timestamp"))?;
+    product_ensure!(
+        primary_time.checked_sub(begin_ns.div_ceil(1_000_000)) == Some(clip_time)
+            && primary_markers[0]["label"] == clip_markers[0]["label"]
+            && primary_markers[0]["type"] == clip_markers[0]["type"],
+        "clip marker timestamp or identity changed"
+    );
+    Ok(())
 }
 
 fn recording_live(ctx: &mut Context) -> Step {
@@ -152,6 +178,10 @@ fn recording_live(ctx: &mut Context) -> Step {
         app.call("ui.getState", json!({}))?["page"] == "record",
         "Record did not become the active page"
     );
+    if started.elapsed() < secs(20.0) {
+        std::thread::sleep(secs(20.0) - started.elapsed());
+    }
+    accepted(&mut app, "record.addMarker", json!({}))?;
     if started.elapsed() < secs(35.0) {
         std::thread::sleep(secs(35.0) - started.elapsed());
     }
@@ -269,6 +299,34 @@ fn recording_live(ctx: &mut Context) -> Step {
         clip_path.is_file() && clip_path != primary_path,
         "the completed clip has no distinct existing file"
     );
+    let primary_markers: Value =
+        serde_json::from_slice(&std::fs::read(primary_path.with_extension("markers.json"))?)?;
+    let clip_markers: Value =
+        serde_json::from_slice(&std::fs::read(clip_path.with_extension("markers.json"))?)?;
+    let mut identity_path = clip_path.as_os_str().to_owned();
+    identity_path.push(".exosnap.json");
+    let clip_identity: Value =
+        serde_json::from_slice(&std::fs::read(PathBuf::from(identity_path))?)?;
+    let begin_ns = clip_identity["source_ranges"][0]["begin_r_ns"]
+        .as_str()
+        .ok_or_else(|| Stop::fail("clip identity has no source origin"))?
+        .parse::<u64>()
+        .map_err(|error| Stop::fail(format!("invalid clip origin: {error}")))?;
+    judge_clip_marker(&primary_markers, &clip_markers, begin_ns)?;
+    product_ensure!(
+        clip_identity["marker_refs"]
+            .as_array()
+            .is_some_and(|refs| refs.len() == 1
+                && refs[0].as_str()
+                    == clip_path
+                        .with_extension("markers.json")
+                        .file_name()
+                        .and_then(|name| name.to_str())),
+        "clip identity lost its marker reference"
+    );
+    ctx.evidence.put("clipMarkers", clip_markers);
+    ctx.evidence.put("primaryMarkers", primary_markers);
+    ctx.evidence.put("clipSourceOriginNs", begin_ns);
     stimulus.stop();
     let expect = VideoExpectation {
         codec: "h264",
@@ -414,4 +472,23 @@ fn recording_live(ctx: &mut Context) -> Step {
     ctx.evidence.put("clipManifest", clip_manifest);
     ctx.evidence.put("clipEditor", sought);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authored_marker_requires_exact_rebase_and_identity() {
+        let primary = json!({"markers":[{"timeMs":20000,"type":"general","label":"Marker"}]});
+        let clip = json!({"markers":[{"timeMs":16000,"type":"general","label":"Marker"}]});
+        assert!(judge_clip_marker(&primary, &clip, 3_999_996_000).is_ok());
+        let mut changed = clip.clone();
+        changed["markers"][0]["timeMs"] = json!(15999);
+        assert!(judge_clip_marker(&primary, &changed, 3_999_996_000).is_err());
+        changed = clip.clone();
+        changed["markers"][0]["label"] = json!("Other");
+        assert!(judge_clip_marker(&primary, &changed, 3_999_996_000).is_err());
+        assert!(judge_clip_marker(&primary, &json!({"markers":[]}), 3_999_996_000).is_err());
+    }
 }

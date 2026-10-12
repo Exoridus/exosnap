@@ -9,9 +9,10 @@
 #include <exosnap/engine/audio_media_manifest.h>
 
 #include <QCoreApplication>
-#include <QJsonArray>
+#include <QIODevice>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSaveFile>
 
 #include <algorithm>
 #include <atomic>
@@ -361,12 +362,15 @@ struct RecordingClipJobs::State {
                                       "Clip marker metadata exceeds its I/O budget"));
                 return;
             }
-            if (!WriteMarkerSidecar(marker_path, markers,
-                                    QString::fromStdWString(job.request.destination.filename().wstring()))) {
+            QSaveFile marker_file(QString::fromStdWString(marker_path.wstring()));
+            if (!marker_file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+                marker_file.write(marker_bytes) != marker_bytes.size() || !marker_file.commit()) {
                 Fail(job, ClipFailure(engine::EngineErrorCode::MetadataIncomplete, "Clip markers could not be staged"));
                 return;
             }
-            references.marker_refs.push_back(DeriveMarkerSidecarPath(job.request.destination).filename().string());
+            references.marker_refs.push_back(
+                QString::fromStdWString(DeriveMarkerSidecarPath(job.request.destination).filename().wstring())
+                    .toStdString());
         }
         if (draft.value()->source_ranges.size() > 4096) {
             Fail(job, ClipFailure(engine::EngineErrorCode::ResourceBudgetExceeded,
@@ -374,7 +378,10 @@ struct RecordingClipJobs::State {
             return;
         }
         {
-            QJsonArray ranges;
+            constexpr size_t range_budget_bytes = 2 * 1024 * 1024;
+            std::string ranges_json;
+            ranges_json.reserve(std::min(range_budget_bytes, 2 + draft.value()->source_ranges.size() * 256));
+            ranges_json.push_back('[');
             for (const auto& source_range : draft.value()->source_ranges) {
                 QJsonObject range;
                 range.insert(QStringLiteral("recording_id"),
@@ -384,9 +391,21 @@ struct RecordingClipJobs::State {
                 range.insert(QStringLiteral("media_id"), QString::fromStdString(engine::ToUuid(source_range.media_id)));
                 range.insert(QStringLiteral("begin_r_ns"), QString::number(source_range.begin_r_ns));
                 range.insert(QStringLiteral("end_r_ns"), QString::number(source_range.end_r_ns));
-                ranges.append(range);
+                const auto range_bytes = QJsonDocument(range).toJson(QJsonDocument::Compact);
+                const size_t separator_bytes = ranges_json.size() > 1 ? 1 : 0;
+                const size_t remaining_bytes = range_budget_bytes - ranges_json.size() - 1;
+                if (separator_bytes > remaining_bytes ||
+                    static_cast<size_t>(range_bytes.size()) > remaining_bytes - separator_bytes) {
+                    Fail(job, ClipFailure(engine::EngineErrorCode::ResourceBudgetExceeded,
+                                          "Clip source range metadata exceeds its byte budget"));
+                    return;
+                }
+                if (separator_bytes != 0)
+                    ranges_json.push_back(',');
+                ranges_json.append(range_bytes.constData(), static_cast<size_t>(range_bytes.size()));
             }
-            references.source_ranges_json = QJsonDocument(ranges).toJson(QJsonDocument::Compact).toStdString();
+            ranges_json.push_back(']');
+            references.source_ranges_json = std::move(ranges_json);
         }
         const auto metadata_written = engine::WriteMediaIdentitySidecar(job.staging, manifest, continue_hash,
                                                                         references, metadata_io, &job.cancelled);
@@ -539,13 +558,32 @@ engine::Outcome<engine::JobId> RecordingClipJobs::RequestPlan(RecordingClipReque
         request.requested_end_r_ns <= request.requested_begin_r_ns || request.destination.empty())
         return ClipFailure(engine::EngineErrorCode::InvalidConfig, "Invalid recording clip request");
     constexpr size_t marker_budget_bytes = 2 * 1024 * 1024;
+    if (request.markers.size() > kMaxRecordingMarkers)
+        return ClipFailure(engine::EngineErrorCode::ResourceBudgetExceeded, "Clip marker count budget exceeded");
     if (request.markers.capacity() > marker_budget_bytes / sizeof(RecordingMarker))
         return ClipFailure(engine::EngineErrorCode::ResourceBudgetExceeded, "Clip marker memory budget exceeded");
     size_t marker_bytes = request.markers.capacity() * sizeof(RecordingMarker);
+    size_t escaped_ascii_bytes = 0;
     for (const auto& marker : request.markers) {
         if (marker.label.capacity() >= marker_budget_bytes - marker_bytes)
             return ClipFailure(engine::EngineErrorCode::ResourceBudgetExceeded, "Clip marker memory budget exceeded");
         marker_bytes += marker.label.capacity() + 1;
+        // Only ASCII contributes to this lower bound; Qt may replace invalid UTF-8 before JSON escaping.
+        for (const unsigned char value : marker.label) {
+            size_t escaped_bytes = 0;
+            if (value < 0x20) {
+                escaped_bytes =
+                    value == '\b' || value == '\f' || value == '\n' || value == '\r' || value == '\t' ? 2 : 6;
+            } else if (value == '"' || value == '\\') {
+                escaped_bytes = 2;
+            } else if (value < 0x80) {
+                escaped_bytes = 1;
+            }
+            if (escaped_bytes > marker_budget_bytes - escaped_ascii_bytes)
+                return ClipFailure(engine::EngineErrorCode::ResourceBudgetExceeded,
+                                   "Clip marker JSON byte budget exceeded");
+            escaped_ascii_bytes += escaped_bytes;
+        }
     }
     auto job = std::make_shared<State::Job>();
     RecordingClipJobSnapshot view;

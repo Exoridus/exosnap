@@ -1,9 +1,14 @@
 #include "clip_committed_packet_reader.h"
+#include "committed_matroska_view.h"
+#include "matroska_packet_timestamps.h"
+#include <exosnap/engine/recording_media_types.h>
 
 #include <algorithm>
 #include <array>
-#include <limits>
+#include <cstddef>
+#include <cstdint>
 #include <new>
+#include <optional>
 #include <span>
 #include <utility>
 

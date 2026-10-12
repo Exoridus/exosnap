@@ -137,6 +137,41 @@ TEST(RecordingClipJobsTest, MarkerMemoryIsRejectedBeforeQueueAdmission) {
     clips.Shutdown();
 }
 
+TEST(RecordingClipJobsTest, MarkerCountIsRejectedBeforeQueueAdmission) {
+    RecordingArtifactRegistry registry;
+    RecordingClipJobs clips(registry, {}, [] { return true; }, {});
+    auto request = MissingSourceRequest(1000000000);
+    request.markers.resize(kMaxRecordingMarkers + 1);
+    const auto rejected = clips.RequestPlan(std::move(request));
+    ASSERT_FALSE(rejected.succeeded());
+    EXPECT_EQ(rejected.error()->code, engine::EngineErrorCode::ResourceBudgetExceeded);
+    EXPECT_TRUE(clips.Snapshots().empty());
+    clips.Shutdown();
+}
+
+TEST(RecordingClipJobsTest, EscapedMarkerWireBytesAreRejectedBeforeQueueAdmission) {
+    RecordingArtifactRegistry registry;
+    RecordingClipJobs clips(registry, {}, [] { return true; }, {});
+    auto request = MissingSourceRequest(1000000000);
+    request.markers.push_back({0, RecordingMarkerType::General, std::string(350000, '\x01')});
+    const auto rejected = clips.RequestPlan(std::move(request));
+    ASSERT_FALSE(rejected.succeeded());
+    EXPECT_EQ(rejected.error()->code, engine::EngineErrorCode::ResourceBudgetExceeded);
+    EXPECT_TRUE(clips.Snapshots().empty());
+    clips.Shutdown();
+}
+
+TEST(RecordingClipJobsTest, NearBudgetAsciiMarkerIsAdmitted) {
+    RecordingArtifactRegistry registry;
+    RecordingClipJobs clips(registry, {}, [] { return true; }, {});
+    auto request = MissingSourceRequest(1000000000);
+    request.markers.push_back({0, RecordingMarkerType::General, std::string(2 * 1024 * 1024 - 1024, 'x')});
+    const auto accepted = clips.RequestPlan(std::move(request));
+    ASSERT_TRUE(accepted.succeeded());
+    EXPECT_EQ(clips.Snapshots().size(), 1u);
+    clips.Shutdown();
+}
+
 TEST(RecordingClipJobsTest, ShutdownClosesAdmissionWithoutWaitingForPausedRecording) {
     RecordingArtifactRegistry registry;
     RecordingClipJobs clips(registry, {}, [] { return true; }, {});

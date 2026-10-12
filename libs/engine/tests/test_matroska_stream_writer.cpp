@@ -2,6 +2,7 @@
 
 #include "exosnap/engine/audio_media_manifest.h"
 #include "exosnap/engine/color_metadata.h"
+#include "exosnap/engine/recording_media_types.h"
 #include "matroska_packet_timestamps.h"
 #include "matroska_stream_writer.h"
 #include "test_unique_temp.h"
