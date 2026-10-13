@@ -34,7 +34,12 @@
 #pragma warning(push)
 #pragma warning(disable : 4267 4245)
 #endif
+#include <ebml/EbmlElement.h>
+#include <ebml/EbmlHead.h>
+#include <ebml/EbmlMaster.h>
+#include <ebml/EbmlSubHead.h>
 #include <matroska/KaxBlock.h>
+#include <matroska/KaxSemantic.h>
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
@@ -48,9 +53,18 @@ struct NativeBlockFrames : libmatroska::KaxInternalBlock {
         return block.*frames;
     }
 };
+template <typename Element> inline constexpr char native_type_key = 0;
+
 struct Probe;
 thread_local Probe* active = nullptr;
 thread_local bool inspecting = false;
+
+void UnlockNativeTree(libebml::EbmlElement& element) {
+    if (auto* master = dynamic_cast<libebml::EbmlMaster*>(&element))
+        for (auto* child : master->GetElementList())
+            UnlockNativeTree(*child);
+    element.Lock(false);
+}
 
 struct Probe {
     struct Allocation {
@@ -58,8 +72,20 @@ struct Probe {
         size_t size = 0;
         bool live = true;
         bool data_buffer = false;
+        size_t attempt = 0;
+        size_t native_type = (std::numeric_limits<size_t>::max)();
+    };
+    struct NativeType {
+        const void* key = nullptr;
+        void* vtable = nullptr;
+        size_t size = 0;
+        void (*destroy)(void*) = nullptr;
     };
     std::array<Allocation, 1024> allocations{};
+    std::array<NativeType, 24> native_types{};
+    size_t native_type_count = 0;
+    size_t allocation_attempts = 0;
+    size_t fail_nth_allocation = 0;
     size_t count = 0;
     size_t buffers_created = 0;
     bool exhausted = false;
@@ -78,6 +104,24 @@ struct Probe {
         libmatroska::KaxSimpleBlock simple;
         std::memcpy(&block_vtable, &block, sizeof(block_vtable));
         std::memcpy(&simple_block_vtable, &simple, sizeof(simple_block_vtable));
+        RegisterNativeType<libebml::EVersion>();
+        RegisterNativeType<libebml::EReadVersion>();
+        RegisterNativeType<libebml::EMaxIdLength>();
+        RegisterNativeType<libebml::EMaxSizeLength>();
+        RegisterNativeType<libebml::EDocType>();
+        RegisterNativeType<libebml::EDocTypeVersion>();
+        RegisterNativeType<libebml::EDocTypeReadVersion>();
+        RegisterNativeType<libmatroska::KaxTagTargetTypeValue>();
+        RegisterNativeType<libmatroska::KaxTagTrackUID>();
+        RegisterNativeType<libmatroska::KaxTagTargets>();
+        RegisterNativeType<libmatroska::KaxBlockGroup>();
+        RegisterNativeType<libmatroska::KaxBlock>();
+        RegisterNativeType<libmatroska::KaxReferencePriority>();
+        RegisterNativeType<libmatroska::KaxBlockAdditions>();
+        RegisterNativeType<libmatroska::KaxBlockMore>();
+        RegisterNativeType<libmatroska::KaxBlockAddID>();
+        RegisterNativeType<libmatroska::KaxBlockAdditional>();
+        RegisterNativeType<libmatroska::KaxSimpleBlock>();
         active = this;
     }
     ~Probe() {
@@ -90,6 +134,74 @@ struct Probe {
                 allocation.live = false;
                 delete buffer;
             }
+    }
+    template <typename Element> void RegisterNativeType() {
+        Element sample;
+        auto& type = native_types[native_type_count++];
+        type.key = &native_type_key<Element>;
+        std::memcpy(&type.vtable, &sample, sizeof(type.vtable));
+        type.size = sizeof(Element);
+        type.destroy = [](void* pointer) {
+            auto* element = static_cast<Element*>(pointer);
+            UnlockNativeTree(*element);
+            delete element;
+        };
+    }
+    void IdentifyNative(Allocation& allocation) {
+        if (!allocation.live || allocation.native_type < native_type_count)
+            return;
+        for (size_t type = 0; type < native_type_count; ++type) {
+            if (allocation.size != native_types[type].size)
+                continue;
+            void* vtable = nullptr;
+            std::memcpy(&vtable, allocation.pointer, sizeof(vtable));
+            if (vtable == native_types[type].vtable) {
+                allocation.native_type = type;
+                return;
+            }
+        }
+    }
+    void ObserveNativeAllocations() {
+        for (size_t index = 0; index < count; ++index) {
+            Identify(allocations[index]);
+            IdentifyNative(allocations[index]);
+        }
+    }
+    template <typename Element> size_t FirstNativeAttempt() const {
+        for (size_t index = 0; index < count; ++index)
+            if (allocations[index].native_type < native_type_count &&
+                native_types[allocations[index].native_type].key == &native_type_key<Element>)
+                return allocations[index].attempt;
+        return 0;
+    }
+    template <typename Element> size_t LastNativeAttempt() const {
+        size_t attempt = 0;
+        for (size_t index = 0; index < count; ++index)
+            if (allocations[index].native_type < native_type_count &&
+                native_types[allocations[index].native_type].key == &native_type_key<Element>)
+                attempt = allocations[index].attempt;
+        return attempt;
+    }
+    size_t UnreleasedAllocations() const {
+        size_t live = 0;
+        for (size_t index = 0; index < count; ++index)
+            live += allocations[index].live;
+        return live;
+    }
+    void ReclaimNativeOrphans() {
+        auto* previous = active;
+        active = this;
+        // Only completed native elements are reclaimed. Retiring their own record
+        // first lets normal destruction retire owned children without a second delete.
+        for (size_t index = 0; index < count; ++index) {
+            auto& allocation = allocations[index];
+            if (!allocation.live || allocation.native_type >= native_type_count)
+                continue;
+            auto* pointer = std::exchange(allocation.pointer, nullptr);
+            allocation.live = false;
+            native_types[allocation.native_type].destroy(pointer);
+        }
+        active = previous;
     }
     void Identify(Allocation& allocation) {
         if (!allocation.live || allocation.data_buffer || allocation.size != sizeof(libmatroska::DataBuffer))
@@ -117,12 +229,16 @@ struct Probe {
         return nullptr;
     }
     bool BeforeAllocation(size_t size) {
+        ++allocation_attempts;
         bool has_buffer = false;
         bool frame_allocation = false;
         bool transferred = false;
         for (size_t index = 0; index < count; ++index) {
             Identify(allocations[index]);
+            IdentifyNative(allocations[index]);
             has_buffer |= allocations[index].live && allocations[index].data_buffer;
+            if (failure == Failure::None)
+                continue;
             const auto* block = NativeBlock(allocations[index]);
             // AddFrame marks the completed block before growing myBuffers.
             // Constructor allocations must not expose a vector still being initialized.
@@ -134,6 +250,10 @@ struct Probe {
                 for (size_t candidate = 0; candidate < count; ++candidate)
                     transferred |= allocations[candidate].live && allocations[candidate].data_buffer &&
                                    allocations[candidate].pointer == frame;
+        }
+        if (!injected && fail_nth_allocation && allocation_attempts == fail_nth_allocation) {
+            injected = true;
+            return true;
         }
         if (injected || !has_buffer)
             return false;
@@ -149,7 +269,7 @@ struct Probe {
             exhausted = true;
             return;
         }
-        allocations[count++] = {pointer, size, true, false};
+        allocations[count++] = {pointer, size, true, false, allocation_attempts};
     }
     void Freed(void* pointer) {
         // Deallocation follows destruction, so native objects can no longer be inspected.
@@ -665,6 +785,357 @@ MatroskaStreamConfig OwnershipConfig(const std::string& path, bool clip) {
     return config;
 }
 
+enum class NativeLeafOperation { Add, First, Next };
+
+std::unique_ptr<libmatroska::KaxTagTargets> LeafParent(NativeLeafOperation operation) {
+    auto parent = std::make_unique<libmatroska::KaxTagTargets>();
+    if (operation == NativeLeafOperation::Next)
+        libebml::AddNewChild<libmatroska::KaxTagTrackUID>(*parent).SetValue(31);
+    return parent;
+}
+
+libmatroska::KaxTagTrackUID& CreateLeaf(libmatroska::KaxTagTargets& parent, NativeLeafOperation operation) {
+    if (operation == NativeLeafOperation::Add)
+        return libebml::AddNewChild<libmatroska::KaxTagTrackUID>(parent);
+    if (operation == NativeLeafOperation::First)
+        return libebml::GetChild<libmatroska::KaxTagTrackUID>(parent);
+    auto* previous = libebml::FindChild<libmatroska::KaxTagTrackUID>(parent);
+    return static_cast<libmatroska::KaxTagTrackUID&>(*parent.FindNextElt(*previous, true));
+}
+
+TEST_F(StreamWriterTest, NativeLeafAdoptionFailureReclaimsUnpublishedChildAndPreservesParent) {
+    for (auto operation : {NativeLeafOperation::Add, NativeLeafOperation::First, NativeLeafOperation::Next}) {
+        size_t parent_growth = 0;
+        {
+            auto parent = LeafParent(operation);
+            writer_allocations::Probe baseline;
+            CreateLeaf(*parent, operation);
+            baseline.ObserveNativeAllocations();
+            parent_growth = baseline.LastNativeAttempt<libmatroska::KaxTagTrackUID>() + 1;
+            parent.reset();
+            const auto live = baseline.UnreleasedAllocations();
+            baseline.Stop();
+            EXPECT_EQ(live, 0u);
+            EXPECT_FALSE(baseline.exhausted);
+        }
+        ASSERT_GT(parent_growth, 1u);
+        for (int repetition = 0; repetition < 3; ++repetition) {
+            SCOPED_TRACE(::testing::Message() << "operation=" << int(operation) << " repetition=" << repetition);
+            auto parent = LeafParent(operation);
+            const auto original_children = parent->ListSize();
+            writer_allocations::Probe probe;
+            probe.fail_nth_allocation = parent_growth;
+            bool threw = false;
+            try {
+                CreateLeaf(*parent, operation);
+            } catch (const std::bad_alloc&) {
+                threw = true;
+            }
+            const bool unchanged = parent->ListSize() == original_children;
+            auto& recovered = CreateLeaf(*parent, operation);
+            recovered.SetValue(73);
+            const bool usable = static_cast<uint64_t>(recovered) == 73;
+            parent.reset();
+            const auto live = probe.UnreleasedAllocations();
+            probe.Stop();
+            probe.ReclaimNativeOrphans();
+            const auto cleanup_live = probe.UnreleasedAllocations();
+            EXPECT_TRUE(probe.injected);
+            EXPECT_TRUE(threw);
+            EXPECT_TRUE(unchanged);
+            EXPECT_TRUE(usable);
+            EXPECT_FALSE(probe.exhausted);
+            EXPECT_EQ(live, 0u);
+            EXPECT_EQ(cleanup_live, 0u);
+        }
+    }
+}
+
+TEST_F(StreamWriterTest, NativeMandatoryConstructionFailureReclaimsEarlierChildren) {
+    std::array<size_t, 2> failpoints{};
+    {
+        writer_allocations::Probe baseline;
+        auto head = std::make_unique<libebml::EbmlHead>();
+        baseline.ObserveNativeAllocations();
+        failpoints = {baseline.LastNativeAttempt<libebml::EVersion>() + 1,
+                      baseline.LastNativeAttempt<libebml::EReadVersion>()};
+        head.reset();
+        const auto live = baseline.UnreleasedAllocations();
+        baseline.Stop();
+        EXPECT_EQ(live, 0u);
+        EXPECT_FALSE(baseline.exhausted);
+    }
+    for (auto failpoint : failpoints) {
+        ASSERT_GT(failpoint, 0u);
+        for (int repetition = 0; repetition < 3; ++repetition) {
+            SCOPED_TRACE(::testing::Message() << "allocation=" << failpoint << " repetition=" << repetition);
+            writer_allocations::Probe probe;
+            probe.fail_nth_allocation = failpoint;
+            bool threw = false;
+            try {
+                auto head = std::make_unique<libebml::EbmlHead>();
+            } catch (const std::bad_alloc&) {
+                threw = true;
+            }
+            auto recovered = std::make_unique<libebml::EbmlHead>();
+            const bool usable = recovered->CheckMandatory();
+            recovered.reset();
+            const auto live = probe.UnreleasedAllocations();
+            probe.Stop();
+            probe.ReclaimNativeOrphans();
+            const auto cleanup_live = probe.UnreleasedAllocations();
+            EXPECT_TRUE(probe.injected);
+            EXPECT_TRUE(threw);
+            EXPECT_TRUE(usable);
+            EXPECT_FALSE(probe.exhausted);
+            EXPECT_EQ(live, 0u);
+            EXPECT_EQ(cleanup_live, 0u);
+        }
+    }
+}
+
+TEST_F(StreamWriterTest, NativeMasterCopyFailureReclaimsClonesAndPreservesSourceLock) {
+    for (bool locked : {false, true}) {
+        auto source = std::make_unique<libmatroska::KaxTagTargets>();
+        auto& first = libebml::AddNewChild<libmatroska::KaxTagTrackUID>(*source);
+        first.SetValue(31);
+        libebml::AddNewChild<libmatroska::KaxTagTrackUID>(*source).SetValue(41);
+        size_t failpoint = 0;
+        {
+            writer_allocations::Probe baseline;
+            auto copy = std::make_unique<libmatroska::KaxTagTargets>(*source);
+            baseline.ObserveNativeAllocations();
+            failpoint = baseline.LastNativeAttempt<libmatroska::KaxTagTrackUID>();
+            copy.reset();
+            const auto live = baseline.UnreleasedAllocations();
+            baseline.Stop();
+            EXPECT_EQ(live, 0u);
+            EXPECT_FALSE(baseline.exhausted);
+        }
+        ASSERT_GT(failpoint, 0u);
+        for (int repetition = 0; repetition < 3; ++repetition) {
+            SCOPED_TRACE(::testing::Message() << "locked=" << locked << " repetition=" << repetition);
+            first.Lock(locked);
+            writer_allocations::Probe probe;
+            probe.fail_nth_allocation = failpoint;
+            bool threw = false;
+            try {
+                auto copy = std::make_unique<libmatroska::KaxTagTargets>(*source);
+            } catch (const std::bad_alloc&) {
+                threw = true;
+            }
+            const bool unchanged =
+                source->ListSize() == 3 && first.IsLocked() == locked && static_cast<uint64_t>(first) == 31;
+            auto recovered = std::make_unique<libmatroska::KaxTagTargets>(*source);
+            const bool usable =
+                recovered->ListSize() == 3 &&
+                static_cast<uint64_t>(*libebml::FindChild<libmatroska::KaxTagTrackUID>(*recovered)) == 31;
+            writer_allocations::UnlockNativeTree(*recovered);
+            recovered.reset();
+            const auto live = probe.UnreleasedAllocations();
+            probe.Stop();
+            probe.ReclaimNativeOrphans();
+            const auto cleanup_live = probe.UnreleasedAllocations();
+            EXPECT_TRUE(probe.injected);
+            EXPECT_TRUE(threw);
+            EXPECT_TRUE(unchanged);
+            EXPECT_TRUE(usable);
+            EXPECT_FALSE(probe.exhausted);
+            EXPECT_EQ(live, 0u);
+            EXPECT_EQ(cleanup_live, 0u);
+        }
+        first.Lock(false);
+    }
+    for (bool locked : {false, true}) {
+        auto source = std::make_unique<libmatroska::KaxTag>();
+        auto& first = libebml::GetChild<libmatroska::KaxTagTargets>(*source);
+        auto& nested = libebml::AddNewChild<libmatroska::KaxTagTrackUID>(first);
+        nested.SetValue(31);
+        auto& second = libebml::AddNewChild<libmatroska::KaxTagTargets>(*source);
+        libebml::AddNewChild<libmatroska::KaxTagTrackUID>(second).SetValue(41);
+        std::array<size_t, 3> failpoints{};
+        {
+            writer_allocations::Probe baseline;
+            auto copy = std::make_unique<libmatroska::KaxTag>(*source);
+            baseline.ObserveNativeAllocations();
+            // The pre-sized child list allocates immediately before the first child clone.
+            failpoints = {baseline.FirstNativeAttempt<libmatroska::KaxTagTargetTypeValue>() - 1,
+                          baseline.FirstNativeAttempt<libmatroska::KaxTagTrackUID>(),
+                          baseline.LastNativeAttempt<libmatroska::KaxTagTrackUID>()};
+            copy.reset();
+            const auto live = baseline.UnreleasedAllocations();
+            baseline.Stop();
+            EXPECT_EQ(live, 0u);
+            EXPECT_FALSE(baseline.exhausted);
+        }
+        for (auto failpoint : failpoints) {
+            ASSERT_GT(failpoint, 0u);
+            for (int repetition = 0; repetition < 3; ++repetition) {
+                SCOPED_TRACE(::testing::Message() << "nested locked=" << locked << " allocation=" << failpoint
+                                                  << " repetition=" << repetition);
+                first.Lock(locked);
+                nested.Lock(locked);
+                writer_allocations::Probe probe;
+                probe.fail_nth_allocation = failpoint;
+                bool threw = false;
+                try {
+                    auto copy = std::make_unique<libmatroska::KaxTag>(*source);
+                } catch (const std::bad_alloc&) {
+                    threw = true;
+                }
+                const bool unchanged = source->ListSize() == 2 && first.ListSize() == 2 && first.IsLocked() == locked &&
+                                       nested.IsLocked() == locked && static_cast<uint64_t>(nested) == 31;
+                auto recovered = std::make_unique<libmatroska::KaxTag>(*source);
+                auto* recovered_targets = libebml::FindChild<libmatroska::KaxTagTargets>(*recovered);
+                const auto* recovered_uid =
+                    recovered_targets ? libebml::FindChild<libmatroska::KaxTagTrackUID>(*recovered_targets) : nullptr;
+                const bool usable = recovered->ListSize() == 2 && recovered_targets && recovered_uid &&
+                                    recovered_targets->IsLocked() == locked && recovered_uid->IsLocked() == locked &&
+                                    static_cast<uint64_t>(*recovered_uid) == 31;
+                // Only unpublished cloned trees may clear inherited locks for rollback.
+                writer_allocations::UnlockNativeTree(*recovered);
+                recovered.reset();
+                const auto live = probe.UnreleasedAllocations();
+                probe.Stop();
+                probe.ReclaimNativeOrphans();
+                const auto cleanup_live = probe.UnreleasedAllocations();
+                EXPECT_TRUE(probe.injected);
+                EXPECT_TRUE(threw);
+                EXPECT_TRUE(unchanged);
+                EXPECT_TRUE(usable);
+                EXPECT_FALSE(probe.exhausted);
+                EXPECT_EQ(live, 0u);
+                EXPECT_EQ(cleanup_live, 0u);
+            }
+        }
+        first.Lock(false);
+        nested.Lock(false);
+    }
+}
+
+TEST_F(StreamWriterTest, NativeWriterOpenFailureReclaimsScopedAllocationsAndAllowsFreshWriter) {
+    for (bool clip : {false, true}) {
+        auto config = OwnershipConfig(tmp_, clip);
+        std::array<size_t, 3> failpoints{};
+        {
+            auto writer = std::make_unique<MatroskaStreamWriter>();
+            writer_allocations::Probe baseline;
+            const bool opened = writer->Open(config);
+            baseline.ObserveNativeAllocations();
+            failpoints = {baseline.LastNativeAttempt<libebml::EVersion>() + 1,
+                          baseline.LastNativeAttempt<libebml::EReadVersion>(),
+                          baseline.LastNativeAttempt<libebml::EMaxIdLength>()};
+            writer.reset();
+            const auto live = baseline.UnreleasedAllocations();
+            baseline.Stop();
+            EXPECT_TRUE(opened);
+            EXPECT_EQ(live, 0u);
+            EXPECT_FALSE(baseline.exhausted);
+        }
+        for (auto failpoint : failpoints) {
+            ASSERT_GT(failpoint, 0u);
+            for (int repetition = 0; repetition < 3; ++repetition) {
+                SCOPED_TRACE(::testing::Message()
+                             << "clip=" << clip << " allocation=" << failpoint << " repetition=" << repetition);
+                std::remove(tmp_.c_str());
+                auto writer = std::make_unique<MatroskaStreamWriter>();
+                writer_allocations::Probe probe;
+                probe.fail_nth_allocation = failpoint;
+                const bool opened = writer->Open(config);
+                writer.reset();
+                const auto live = probe.UnreleasedAllocations();
+                probe.Stop();
+                probe.ReclaimNativeOrphans();
+                const auto cleanup_live = probe.UnreleasedAllocations();
+                EXPECT_TRUE(probe.injected);
+                EXPECT_FALSE(opened);
+                EXPECT_FALSE(probe.exhausted);
+                EXPECT_EQ(live, 0u);
+                EXPECT_EQ(cleanup_live, 0u);
+                std::remove(tmp_.c_str());
+                MatroskaStreamWriter recovered;
+                ASSERT_TRUE(recovered.Open(config)) << recovered.error();
+                EXPECT_TRUE(recovered.Finalize()) << recovered.error();
+            }
+        }
+        std::remove(tmp_.c_str());
+    }
+}
+
+TEST_F(StreamWriterTest, NativeWriterPushFailureReclaimsScopedAllocationsAndAllowsFreshWriter) {
+    for (bool clip : {false, true}) {
+        auto config = OwnershipConfig(tmp_, clip);
+        std::array<size_t, 3> failpoints{};
+        {
+            auto writer = std::make_unique<MatroskaStreamWriter>();
+            ASSERT_TRUE(writer->Open(config));
+            auto packet = std::make_unique<MuxPacket>();
+            packet->track_num = 1;
+            packet->dts_ns = 0;
+            packet->is_key = true;
+            packet->bytes.assign(32, 0xab);
+            writer_allocations::Probe baseline;
+            const bool accepted = writer->Push(std::move(*packet));
+            baseline.ObserveNativeAllocations();
+            const auto priority = baseline.LastNativeAttempt<libmatroska::KaxReferencePriority>();
+            // The next mandatory child's factory follows adoption of the completed block.
+            // Default vector constructors can allocate Debug proxies inside noexcept paths.
+            failpoints = {priority - 1, priority + 1, priority + 2};
+            // Moving into the by-value parameter creates a proxy for the caller's
+            // moved-from vector in Debug STL builds. Its owner must retire before counting.
+            packet.reset();
+            writer.reset();
+            const auto live = baseline.UnreleasedAllocations();
+            baseline.Stop();
+            ASSERT_GT(priority, 1u);
+            EXPECT_TRUE(accepted);
+            EXPECT_EQ(live, 0u);
+            EXPECT_FALSE(baseline.exhausted);
+        }
+        for (auto failpoint : failpoints) {
+            ASSERT_GT(failpoint, 0u);
+            for (int repetition = 0; repetition < 3; ++repetition) {
+                SCOPED_TRACE(::testing::Message()
+                             << "clip=" << clip << " allocation=" << failpoint << " repetition=" << repetition);
+                std::remove(tmp_.c_str());
+                auto writer = std::make_unique<MatroskaStreamWriter>();
+                ASSERT_TRUE(writer->Open(config));
+                auto packet = std::make_unique<MuxPacket>();
+                packet->track_num = 1;
+                packet->dts_ns = 0;
+                packet->is_key = true;
+                packet->bytes.assign(32, 0xab);
+                writer_allocations::Probe probe;
+                probe.fail_nth_allocation = failpoint;
+                bool threw = false;
+                bool accepted = false;
+                try {
+                    accepted = writer->Push(std::move(*packet));
+                } catch (const std::bad_alloc&) {
+                    threw = true;
+                }
+                const bool failed = threw || writer->failed();
+                packet.reset();
+                writer.reset();
+                const auto live = probe.UnreleasedAllocations();
+                probe.Stop();
+                probe.ReclaimNativeOrphans();
+                const auto cleanup_live = probe.UnreleasedAllocations();
+                EXPECT_TRUE(probe.injected);
+                EXPECT_FALSE(accepted);
+                EXPECT_TRUE(failed);
+                EXPECT_FALSE(probe.exhausted);
+                EXPECT_EQ(live, 0u);
+                EXPECT_EQ(cleanup_live, 0u);
+                std::remove(tmp_.c_str());
+                MatroskaStreamWriter recovered;
+                ASSERT_TRUE(recovered.Open(config)) << recovered.error();
+                EXPECT_TRUE(recovered.Finalize()) << recovered.error();
+            }
+        }
+        std::remove(tmp_.c_str());
+    }
+}
 TEST_F(StreamWriterTest, RuntimeSizedDeallocationRetiresTrackedNativeStorage) {
     for (bool array : {false, true}) {
         for (int repetition = 0; repetition < 3; ++repetition) {

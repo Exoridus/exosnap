@@ -249,11 +249,18 @@ _exosnap_install_license("RNNoise ${_rnnoise_model_hash}"
 # --- libebml release-1.4.5 (LGPL 2.1) ---
 # OVERRIDE_FIND_PACKAGE redirects libmatroska's find_package(EBML) here so
 # it uses the FetchContent-built target rather than a system installation.
+set(ebml_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/libebml-ownership.patch")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ebml_patch}")
+file(SHA256 "${ebml_patch}" ebml_patch_sha256)
 FetchContent_Declare(
   EBML
   GIT_REPOSITORY https://github.com/Matroska-Org/libebml.git
   GIT_TAG        1878e784321673561039a6a37076b2736f4dc98f # tag release-1.4.5
   OVERRIDE_FIND_PACKAGE
+  PATCH_COMMAND cargo run --quiet --locked
+      --manifest-path "${PROJECT_SOURCE_DIR}/tools/Cargo.toml" -p exo-dev --
+      apply-dependency-patch --source <SOURCE_DIR> --patch "${ebml_patch}"
+      --patch-sha256 "${ebml_patch_sha256}"
 )
 set(EBML_BUILD_SHARED_LIBS OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(EBML)

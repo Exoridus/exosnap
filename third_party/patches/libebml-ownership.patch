@@ -1,0 +1,155 @@
+diff --git a/src/EbmlMaster.cpp b/src/EbmlMaster.cpp
+index 071eb5d..a306103 100644
+--- a/src/EbmlMaster.cpp
++++ b/src/EbmlMaster.cpp
+@@ -36,6 +36,7 @@
+ 
+ #include <cassert>
+ #include <algorithm>
++#include <memory>
+ 
+ #include "ebml/EbmlMaster.h"
+ #include "ebml/EbmlStream.h"
+@@ -44,29 +45,61 @@
+ 
+ namespace libebml {
+ 
++namespace {
++
++void UnlockClonedTree(EbmlElement &element)
++{
++  element.Lock(false);
++  if (auto *master = dynamic_cast<EbmlMaster *>(&element)) {
++    for (auto *child : *master)
++      UnlockClonedTree(*child);
++  }
++}
++
++}
++
+ EbmlMaster::EbmlMaster(const EbmlSemanticContext & aContext, bool bSizeIsknown)
+  :EbmlElement(0), Context(aContext), bChecksumUsed(bChecksumUsedByDefault)
+ {
+   SetSizeIsFinite(bSizeIsknown);
+   SetValueIsSet();
+-  ProcessMandatory();
++  try {
++    ProcessMandatory();
++  } catch (...) {
++    // A failed constructor never runs the owning master's destructor.
++    for (auto *element : ElementList)
++      delete element;
++    throw;
++  }
+ }
+ 
+ EbmlMaster::EbmlMaster(const EbmlMaster & ElementToClone)
+  :EbmlElement(ElementToClone)
+- ,ElementList(ElementToClone.ListSize())
++ // The unpublished clone must remain unlocked if any member construction throws.
++ ,ElementList((Lock(false), ElementToClone.ListSize()))
+  ,Context(ElementToClone.Context)
+  ,bChecksumUsed(ElementToClone.bChecksumUsed)
+  ,Checksum(ElementToClone.Checksum)
+ {
+-  // add a clone of the list
+-  auto Itr = ElementToClone.ElementList.begin();
+-  auto myItr = ElementList.begin();
+-  while (Itr != ElementToClone.ElementList.end())
+-  {
+-    *myItr = (*Itr)->Clone();
+-    ++Itr; ++myItr;
++  try {
++    auto Itr = ElementToClone.ElementList.begin();
++    auto myItr = ElementList.begin();
++    while (Itr != ElementToClone.ElementList.end())
++    {
++      *myItr = (*Itr)->Clone();
++      ++Itr; ++myItr;
++    }
++  } catch (...) {
++    // Locks on unpublished clones do not transfer ownership to the source.
++    for (auto *element : ElementList) {
++      if (element) {
++        UnlockClonedTree(*element);
++        delete element;
++      }
++    }
++    throw;
+   }
++  Lock(ElementToClone.IsLocked());
+ 
+ }
+ 
+@@ -185,7 +218,10 @@ bool EbmlMaster::ProcessMandatory()
+   for (EltIdx = 0; EltIdx < EBML_CTX_SIZE(Context); EltIdx++) {
+     if (EBML_CTX_IDX(Context,EltIdx).IsMandatory() && EBML_CTX_IDX(Context,EltIdx).IsUnique()) {
+ //      assert(EBML_CTX_IDX(Context,EltIdx).Create != NULL);
+-            PushElement(EBML_SEM_CREATE(EBML_CTX_IDX(Context,EltIdx)));
++      std::unique_ptr<EbmlElement> element(&EBML_SEM_CREATE(EBML_CTX_IDX(Context,EltIdx)));
++      if (!PushElement(*element))
++        return false;
++      element.release();
+     }
+   }
+   return true;
+@@ -276,15 +312,13 @@ EbmlElement *EbmlMaster::FindFirstElt(const EbmlCallbacks & Callbacks, bool bCre
+ 
+   if (bCreateIfNull) {
+     // add the element
+-    EbmlElement *NewElt = &EBML_INFO_CREATE(Callbacks);
++    std::unique_ptr<EbmlElement> NewElt(&EBML_INFO_CREATE(Callbacks));
+     if (NewElt == nullptr)
+       return nullptr;
+ 
+-    if (!PushElement(*NewElt)) {
+-      delete NewElt;
+-      NewElt = nullptr;
+-    }
+-    return NewElt;
++    if (!PushElement(*NewElt))
++      return nullptr;
++    return NewElt.release();
+   }
+ 
+   return nullptr;
+@@ -316,15 +350,13 @@ EbmlElement *EbmlMaster::FindNextElt(const EbmlElement & PastElt, bool bCreateIf
+ 
+   if (bCreateIfNull) {
+     // add the element
+-    EbmlElement *NewElt = &(PastElt.CreateElement());
++    std::unique_ptr<EbmlElement> NewElt(&(PastElt.CreateElement()));
+     if (NewElt == nullptr)
+       return nullptr;
+ 
+-    if (!PushElement(*NewElt)) {
+-      delete NewElt;
+-      NewElt = nullptr;
+-    }
+-    return NewElt;
++    if (!PushElement(*NewElt))
++      return nullptr;
++    return NewElt.release();
+   }
+ 
+   return nullptr;
+@@ -354,15 +386,13 @@ EbmlElement *EbmlMaster::FindNextElt(const EbmlElement & PastElt) const
+ EbmlElement *EbmlMaster::AddNewElt(const EbmlCallbacks & Callbacks)
+ {
+   // add the element
+-  EbmlElement *NewElt = &EBML_INFO_CREATE(Callbacks);
++  std::unique_ptr<EbmlElement> NewElt(&EBML_INFO_CREATE(Callbacks));
+   if (NewElt == nullptr)
+     return nullptr;
+ 
+-  if (!PushElement(*NewElt)) {
+-    delete NewElt;
+-    NewElt = nullptr;
+-  }
+-  return NewElt;
++  if (!PushElement(*NewElt))
++    return nullptr;
++  return NewElt.release();
+ }
+ 
+ void EbmlMaster::Sort()
