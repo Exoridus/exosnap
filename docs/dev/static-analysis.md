@@ -45,7 +45,68 @@ Both CI analysis workflows provision cppcheck through `cargo exo-dev setup cppch
 
 A requested but missing analysis tool yields exit 3 from the quality runner. `cargo exo-dev verify` reports `TOOL_MISSING`; `--full` fails, `--fast` can report the gap and continue. Install the missing tool rather than interpreting absence as success.
 
-clang-tidy caches by the translation unit's recorded input set. cppcheck uses its build-directory cache. Shared tool caches live under `%LOCALAPPDATA%\ExoSnap\tool-cache`, outside source/build trees. Delete that directory for a deliberate cold run. Full runs the whole tree; Fast scopes the pass to affected translation units where supported.
+clang-tidy caches successful analysis output by the translation unit's complete recorded input set.
+The key includes every compile-command variant, source/header content, analyzer configuration,
+tool version and cache schema. Ninja records must have valid status, exact dependency counts,
+all object variants and current object commands before they can support reuse.
+Missing input coverage causes fresh analysis. Header membership is part of the global identity,
+including repository vendor include directories, so a newly available conditional header cannot
+reuse a verdict from the previous include search. Dependency paths that ambiguously belong to
+another checkout are rejected rather than remapped.
+
+Ninja omits installed MSVC/SDK headers from its MSVC dependency records.
+Their content trees, compiler identity and include environment therefore contribute one global
+fingerprint per run. Use a matching Developer PowerShell for direct lint invocations.
+Without an explicit INCLUDE environment or readable supported toolchain inputs, verdicts are
+not reused. The CI job initializes that environment before building and analysing. Header scoping includes consumers with incomplete
+coverage rather than reporting an empty successful scope. CMake/preset changes select the full tree.
+Added, removed or renamed headers select the full tree without cached verdicts because include search
+and conditional inclusion can change outside the previous dependency graph.
+
+Cached entries carry their schema, source, key, exit status and output digest.
+Old, malformed or damaged entries are misses. The digest detects corruption, not forgery by someone
+already able to write a trusted cache scope. GitHub cache ref isolation remains the trust boundary.
+cppcheck keeps its separate build-directory cache.
+
+Shared tool caches live under %LOCALAPPDATA%\ExoSnap\tool-cache, outside source/build trees.
+Use a new --cache-dir for an isolated cold clang-tidy measurement.
+Full runs the whole tree. Fast scopes the pass to affected translation units where supported.
+
+### Measure blocking analysis costs
+
+The --profile-path option to cargo exo-dev lint clang-tidy writes a JSON profile
+with HEAD/dirty state, tool version, compilation-database SHA-256, selected-source count,
+cache counts, worker limit and pipeline wall times.
+Each fresh translation unit records wall time and, on Windows when available, process CPU time
+and peak working-set bytes. Missing resource measurements are null.
+The verification runner also retains clang-tidy-profile.json beside its step logs.
+The Debug CI job uploads that profile on successful and failing runs when analysis produced it.
+
+Discovery, version detection, database parsing, configuration/toolchain identity, git scope, header expansion, Ninja extraction/parsing,
+freshness checks, hashing, cache lookup, fresh subprocess execution, validation/storage and reporting
+are distinct measurements. Scope/dependency totals include their detailed subphases, so do not sum
+nested counters. Per-process CPU time is additive. Per-process memory peaks are not a simultaneous
+aggregate memory peak. GitHub restore/save durations come from workflow logs, outside this profile.
+
+Compare warm, source-change, header-change and cold-cache runs with the same toolchain and declared
+input set. Preserve all compilation variants when making a representative sample.
+Alternate worker counts and repeat measurements on an idle host before changing defaults.
+A high hit rate alone does not identify which phase consumes wall time.
+
+For a large selection of at least 1,000 current objects, dependency extraction reads the
+whole Ninja dependency log once. Smaller selections retain batches of at most 100 objects.
+The parser still admits only selected source/object variants with complete valid records.
+Large freshness selections share the default Ninja command plan, with targeted fallback for
+objects outside that plan. Counted dry-run frames must describe the entire scheduled plan.
+Debug Rust builds optimize the sha2 dependency while retaining the same SHA-256 algorithm.
+The threshold is conservative for the measured large workload, not a claim of universal optimality.
+
+The ignored compare_ninja_dependency_strategies Rust test compares both extraction strategies
+in seven alternating pairs and requires identical parsed dependency coverage.
+Set EXO_DEV_DEPENDENCY_BUILD_DIR to a configured Ninja tree and EXO_DEV_DEPENDENCY_REPORT
+to a JSON output path, then run cargo test --locked --manifest-path tools/Cargo.toml
+-p exo-dev --lib compare_ninja_dependency_strategies -- --ignored --nocapture.
+This measures extraction/parsing, not analysis correctness or reusable cache verdicts.
 
 Compiler caching is distinct. Use `sccache --show-stats` after a build to inspect the active server. Size its cache for the number of build configurations and worktrees in use; a fixed historical hit rate is not a guarantee. A changed absolute source path can change cache identity. Do not enable path rewriting merely for hits until crash symbolication against the resulting PDB has been verified.
 

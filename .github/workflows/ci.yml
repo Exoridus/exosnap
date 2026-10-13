@@ -544,6 +544,15 @@ jobs:
         if: always()
         run: sccache --show-stats
 
+      - name: Retain clang-tidy performance profile
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clang-tidy-performance
+          path: .workspace/verify/**/clang-tidy-profile.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+
       - name: Upload test logs (windows-x64-ninja-debug)
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

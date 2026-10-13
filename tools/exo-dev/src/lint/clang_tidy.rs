@@ -23,11 +23,8 @@
 //! which is why CI runs the change-scoped form and the full form is a local /
 //! on-demand operation.
 //!
-//! What `base` does NOT cover: a change that alters how the code is compiled
-//! without touching a source file, a header, or a canary trigger below (new
-//! compiler flags in a `CMakeLists.txt`, a different toolchain, a preset
-//! edit). Those can move findings in units this run never looks at. Re-run
-//! the full pass by hand after such a change.
+//! CMake and preset changes select the full tree because compiler definitions,
+//! options and include paths can change findings without changing sources.
 //!
 //! Analyser note. clang-tidy registers the entire clang-analyzer core package
 //! as soon as any `clang-analyzer-*` check is requested;
@@ -38,6 +35,15 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Instant;
+
+mod freshness;
+mod input_identity;
+#[cfg(test)]
+mod measurement;
+mod timing;
+mod toolchain_identity;
+pub use timing::{CompilerPolicySummary, TidyTiming, UnitTiming};
 
 use anyhow::Context as _;
 use regex::Regex;
@@ -58,7 +64,7 @@ use crate::lint::{
 /// Scoping (which translation units get analysed) does not affect what a
 /// stored entry means and is not a reason to bump this. Nothing else
 /// enforces the bump.
-pub const CACHE_SCHEMA: u32 = 2;
+pub const CACHE_SCHEMA: u32 = 3;
 
 /// Canary translation units, analysed whenever the analysis configuration
 /// itself changes rather than the code it inspects. A change to `.clang-tidy`
@@ -96,6 +102,8 @@ pub struct ClangTidyReport {
     pub cache_dir: PathBuf,
     pub replayed: usize,
     pub violations: Vec<String>,
+    pub timing: TidyTiming,
+    pub compiler_policy: Option<CompilerPolicySummary>,
 }
 
 impl ClangTidyReport {
@@ -114,6 +122,8 @@ impl ClangTidyReport {
             cache_dir: cache_dir.to_path_buf(),
             replayed: 0,
             violations: Vec::new(),
+            timing: TidyTiming::default(),
+            compiler_policy: None,
         }
     }
 }
@@ -127,11 +137,10 @@ impl ClangTidyReport {
 /// A translation unit whose recorded inputs hash to an entry already in
 /// `cache_dir` is not analysed again; its stored diagnostics are replayed
 /// instead. The cache key covers every input that can change a verdict: the
-/// translation unit and each header the build recorded for it, the entry's
-/// own compile command, `.clang-tidy`, [`CACHE_SCHEMA`], the resolved check
-/// list, and the clang-tidy binary's version banner. Anything that cannot be
-/// hashed with certainty, or a missing dependency graph, makes the unit a
-/// miss, never a false hit.
+/// translation unit, the union of headers recorded for every compile command,
+/// the complete command identities, `.clang-tidy`, [`CACHE_SCHEMA`], the check
+/// list and the tool version banner. Reuse requires complete, current Ninja
+/// records from the configured build. Unhashable inputs are cache misses.
 #[allow(clippy::too_many_arguments)]
 pub fn run_blocking(
     repo_root: &Path,
@@ -150,6 +159,9 @@ pub fn run_blocking(
         return Ok(ClangTidyReport::skipped("list-checks", cache_dir));
     }
 
+    let started = Instant::now();
+    let mut timing = TidyTiming::default();
+    let phase = Instant::now();
     let compile_db_path = build_dir.join("compile_commands.json");
     let compile_db_text = std::fs::read_to_string(&compile_db_path).with_context(|| {
         format!(
@@ -170,6 +182,8 @@ pub fn run_blocking(
         );
     }
 
+    timing.compile_database_seconds = phase.elapsed().as_secs_f64();
+    let phase = Instant::now();
     let tool = clang_tidy_path
         .map(Path::to_path_buf)
         .or_else(|| build_toolchain_clang_tidy(&entries))
@@ -188,6 +202,8 @@ pub fn run_blocking(
         .into());
     }
 
+    timing.tool_discovery_seconds = phase.elapsed().as_secs_f64();
+    let phase = Instant::now();
     let banner = clang_tidy_version_banner(&tool)?;
     let version = parse_version(&banner).unwrap_or_else(|| "unknown".to_string());
     if let Some(expected) = require_version {
@@ -200,9 +216,14 @@ pub fn run_blocking(
         }
     }
 
+    timing.tool_version_seconds = phase.elapsed().as_secs_f64();
+    let phase = Instant::now();
     let (obj_to_source, source_to_obj) = object_maps(&entries, &build_dir_norm);
     let ninja = RealNinja {
         build_dir: build_dir.to_path_buf(),
+        extraction_seconds: std::cell::Cell::new(0.0),
+        parse_metrics: std::cell::Cell::new((0.0, 0, 0, 0)),
+        freshness_seconds: std::cell::Cell::new(0.0),
     };
 
     let mut already_read_graph: Option<HashMap<String, Vec<String>>> = None;
@@ -217,9 +238,14 @@ pub fn run_blocking(
                 &all_sources,
                 &obj_to_source,
                 &ninja,
+                &mut timing,
             )? {
                 BaseScope::Nothing(message) => {
-                    return Ok(ClangTidyReport::skipped(&message, cache_dir));
+                    timing.scope_seconds = phase.elapsed().as_secs_f64();
+                    timing.wall_seconds = started.elapsed().as_secs_f64();
+                    let mut report = ClangTidyReport::skipped(&message, cache_dir);
+                    report.timing = timing;
+                    return Ok(report);
                 }
                 BaseScope::Scoped {
                     sources,
@@ -233,6 +259,7 @@ pub fn run_blocking(
         }
     };
 
+    timing.scope_seconds = phase.elapsed().as_secs_f64();
     let jobs = if jobs == 0 {
         std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
@@ -244,14 +271,30 @@ pub fn run_blocking(
     let checks_arg = format!("-*,{}", BLOCKING_CHECKS.join(","));
     let flags = invocation_flags(&checks_arg, HEADER_FILTER);
 
-    let commands: HashMap<String, String> = entries
-        .iter()
-        .map(|entry| (entry.file.clone(), entry.command_line.clone()))
-        .collect();
+    let configuration_started = Instant::now();
+    let commands = command_identities(&entries);
+    let foreign_roots = input_identity::foreign_roots(repo_root);
+    let inventory = input_identity::HeaderInventory::read(repo_root, build_dir);
 
-    let clang_tidy_config_hash = hash_file(&repo_root.join(".clang-tidy").to_string_lossy());
-    let salt = compute_salt(&banner, &flags, clang_tidy_config_hash.as_deref());
+    let configuration_hash = inventory
+        .as_ref()
+        .and_then(|inventory| inventory.configuration_hash(repo_root));
+    let toolchain_started = Instant::now();
+    let toolchain_hash = toolchain_identity::hash(build_dir);
+    timing.toolchain_identity_seconds = toolchain_started.elapsed().as_secs_f64();
+    let configuration_hash =
+        configuration_hash
+            .zip(toolchain_hash)
+            .map(|(configuration, toolchain)| {
+                sha256_hex(
+                    format!("configuration={configuration}\ntoolchain={toolchain}").as_bytes(),
+                )
+            });
+    let salt = compute_salt(&banner, &flags, configuration_hash.as_deref());
+    timing.configuration_identity_seconds = configuration_started.elapsed().as_secs_f64();
 
+    timing.workers = jobs.min(sources.len());
+    let phase = Instant::now();
     let (cache_enabled, cache_keys) = if salt.is_none() {
         (false, HashMap::new())
     } else {
@@ -264,10 +307,18 @@ pub fn run_blocking(
             already_read_graph.as_ref(),
         ) {
             None => (false, HashMap::new()),
-            Some(dep_graph) => {
+            Some(mut dep_graph) => {
+                input_identity::retain_dependencies(
+                    &mut dep_graph,
+                    foreign_roots.as_deref(),
+                    inventory.as_ref(),
+                );
+                timing.dependencies_seconds = phase.elapsed().as_secs_f64();
+                let hashing = Instant::now();
                 let keys =
                     build_cache_keys(&sources, &dep_graph, &commands, salt.as_deref().unwrap());
-                (true, keys)
+                timing.hashing_seconds = hashing.elapsed().as_secs_f64();
+                (!keys.is_empty(), keys)
             }
         }
     };
@@ -277,13 +328,21 @@ pub fn run_blocking(
             .with_context(|| format!("could not create {}", cache_dir.display()))?;
     }
 
+    timing.ninja_extraction_seconds = ninja.extraction_seconds.get();
+    let (seconds, objects, inputs, sources_count) = ninja.parse_metrics.get();
+    timing.dependency_parse_seconds = seconds;
+    timing.dependency_objects = objects;
+    timing.dependency_inputs = inputs;
+    timing.dependency_sources = sources_count;
+    timing.freshness_seconds = ninja.freshness_seconds.get();
+    let phase = Instant::now();
     let mut results: Vec<(String, String)> = Vec::new();
     let mut pending: Vec<String> = Vec::new();
     let mut replayed = 0;
     for src in &sources {
         if let Some(key) = cache_keys.get(src) {
             let entry_path = cache_entry_path(cache_dir, key);
-            if let Ok(text) = std::fs::read_to_string(&entry_path) {
+            if let Some(text) = read_cache_entry(&entry_path, key, src) {
                 results.push((src.clone(), text));
                 replayed += 1;
                 continue;
@@ -292,8 +351,13 @@ pub fn run_blocking(
         pending.push(src.clone());
     }
 
+    timing.cache_lookup_seconds = phase.elapsed().as_secs_f64();
+    let phase = Instant::now();
     let fresh = analyze_pending(&tool, build_dir, &flags, &pending, jobs);
-    for (src, output, code) in &fresh {
+    timing.analysis_wall_seconds = phase.elapsed().as_secs_f64();
+    let phase = Instant::now();
+    for (src, output, code, unit_timing) in &fresh {
+        timing.units.push(unit_timing.clone());
         require_analysis(src, output, *code)?;
         results.push((src.clone(), output.clone()));
         if !cache_enabled {
@@ -302,10 +366,14 @@ pub fn run_blocking(
         let Some(key) = cache_keys.get(src) else {
             continue;
         };
-        store_cache_entry(cache_dir, key, output);
+        store_cache_entry(cache_dir, key, src, output, *code);
     }
 
+    timing.validation_and_storage_seconds = phase.elapsed().as_secs_f64();
+    let phase = Instant::now();
     let violations = extract_violations(&results, &repo_root_norm, &build_dir_norm);
+    timing.reporting_seconds = phase.elapsed().as_secs_f64();
+    timing.wall_seconds = started.elapsed().as_secs_f64();
 
     Ok(ClangTidyReport {
         tool_path: tool,
@@ -317,6 +385,12 @@ pub fn run_blocking(
         cache_dir: cache_dir.to_path_buf(),
         replayed,
         violations: violations.into_iter().collect(),
+        timing,
+        compiler_policy: Some(timing::compiler_policy(
+            &entries,
+            &repo_root_norm,
+            &build_dir_norm,
+        )),
     })
 }
 
@@ -328,7 +402,7 @@ pub fn run_blocking(
 struct CompileEntry {
     /// Absolute source path, forward slashes.
     file: String,
-    /// Object output path relative to the build directory, forward slashes.
+    /// Absolute object output path, forward slashes.
     /// `None` when the entry carries no `output` field.
     output: Option<String>,
     /// `directory|command arguments`, the entry's contribution to the cache
@@ -337,49 +411,85 @@ struct CompileEntry {
     command_line: String,
 }
 
+fn command_identities(entries: &[CompileEntry]) -> HashMap<String, String> {
+    let mut grouped: HashMap<String, Vec<&str>> = HashMap::new();
+    for entry in entries {
+        grouped
+            .entry(entry.file.clone())
+            .or_default()
+            .push(&entry.command_line);
+    }
+    grouped
+        .into_iter()
+        .map(|(source, mut commands)| {
+            commands.sort_unstable();
+            (
+                source,
+                serde_json::to_string(&commands).expect("compile commands"),
+            )
+        })
+        .collect()
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCompileEntry {
+    file: String,
+    directory: String,
+    #[serde(default, deserialize_with = "present_value")]
+    command: Option<String>,
+    #[serde(default, deserialize_with = "present_value")]
+    arguments: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "present_value")]
+    output: Option<String>,
+}
+
+fn present_value<'de, T: serde::Deserialize<'de>, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
+}
+
 fn parse_compile_db(text: &str) -> anyhow::Result<Vec<CompileEntry>> {
-    let value: serde_json::Value =
-        serde_json::from_str(text).context("compile_commands.json is not valid JSON")?;
-    let array = value
-        .as_array()
-        .context("compile_commands.json is not a JSON array")?;
-    let mut entries = Vec::with_capacity(array.len());
-    for entry in array {
-        let file = entry
-            .get("file")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .replace('\\', "/");
-        if file.is_empty() {
-            continue;
-        }
-        let directory = entry
-            .get("directory")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let command = entry
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let arguments = entry
-            .get("arguments")
-            .and_then(|v| v.as_array())
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .unwrap_or_default();
-        let output = entry
-            .get("output")
-            .and_then(|v| v.as_str())
-            .map(|s| s.replace('\\', "/"));
+    let records: Vec<RawCompileEntry> = serde_json::from_str(text)
+        .context("compile_commands.json is not a valid compilation database")?;
+    let mut entries = Vec::with_capacity(records.len());
+    for (index, entry) in records.into_iter().enumerate() {
+        anyhow::ensure!(
+            !entry.file.is_empty(),
+            "compile command {index} has no file"
+        );
+        anyhow::ensure!(
+            is_rooted(&entry.directory),
+            "compile command {index} requires an absolute directory"
+        );
+        let directory = normalize_segments(&entry.directory.replace('\\', "/"));
+        let file = resolve_against_build_dir(&entry.file, &directory);
+        let command = entry.command.unwrap_or_default();
+        let arguments = entry.arguments.unwrap_or_default();
+        anyhow::ensure!(
+            !command.is_empty() || !arguments.is_empty(),
+            "compile command {index} has no command or arguments"
+        );
+        let output = match entry.output {
+            Some(output) => {
+                anyhow::ensure!(
+                    !output.is_empty(),
+                    "compile command {index} has an empty output"
+                );
+                Some(resolve_against_build_dir(&output, &directory))
+            }
+            None => None,
+        };
         entries.push(CompileEntry {
             file,
             output,
-            command_line: format!("{directory}|{command}{arguments}"),
+            command_line: format!(
+                "{directory}|{command}{}\nidentity={}",
+                arguments.join(" "),
+                serde_json::to_string(&(&directory, &command, &arguments))
+                    .expect("compile command")
+            ),
         });
     }
     Ok(entries)
@@ -444,9 +554,9 @@ fn is_source_or_header(path: &str) -> bool {
 fn object_maps(
     entries: &[CompileEntry],
     build_dir_norm: &str,
-) -> (HashMap<String, String>, HashMap<String, String>) {
+) -> (HashMap<String, String>, HashMap<String, Vec<String>>) {
     let mut obj_to_source = HashMap::new();
-    let mut source_to_obj = HashMap::new();
+    let mut source_to_obj: HashMap<String, Vec<String>> = HashMap::new();
     let prefix = format!("{}/", build_dir_norm.to_ascii_lowercase());
     for entry in entries {
         let Some(out) = &entry.output else { continue };
@@ -456,8 +566,22 @@ fn object_maps(
             out.clone()
         };
         obj_to_source.insert(stripped.clone(), entry.file.clone());
-        source_to_obj.insert(entry.file.clone(), stripped);
+        source_to_obj
+            .entry(entry.file.clone())
+            .or_default()
+            .push(stripped);
     }
+    for objects in source_to_obj.values_mut() {
+        objects.sort_unstable();
+        objects.dedup();
+    }
+    let uncovered: HashSet<&str> = entries
+        .iter()
+        .filter(|entry| entry.output.is_none())
+        .map(|entry| entry.file.as_str())
+        .collect();
+    obj_to_source.retain(|_, source| !uncovered.contains(source.as_str()));
+    source_to_obj.retain(|source, _| !uncovered.contains(source.as_str()));
     (obj_to_source, source_to_obj)
 }
 
@@ -531,19 +655,65 @@ trait NinjaDeps {
     /// The graph for a batch of object files by name, or `None` when it could
     /// not be read.
     fn for_objects(&self, objects: &[String]) -> Option<Vec<String>>;
+    fn objects_current(&self, objects: &[String]) -> bool;
+    fn current_objects(&self, objects: &[String]) -> HashSet<String> {
+        if self.objects_current(objects) {
+            objects.iter().cloned().collect()
+        } else {
+            HashSet::new()
+        }
+    }
+    fn record_parse(&self, _seconds: f64, _objects: usize, _inputs: usize, _sources: usize) {}
 }
 
 struct RealNinja {
     build_dir: PathBuf,
+    extraction_seconds: std::cell::Cell<f64>,
+    parse_metrics: std::cell::Cell<(f64, usize, usize, usize)>,
+    freshness_seconds: std::cell::Cell<f64>,
 }
 
 impl NinjaDeps for RealNinja {
     fn whole_graph(&self) -> Option<Vec<String>> {
-        invoke_ninja_deps(&self.build_dir, &[])
+        let started = Instant::now();
+        let result = invoke_ninja_deps(&self.build_dir, &[]);
+        self.extraction_seconds
+            .set(self.extraction_seconds.get() + started.elapsed().as_secs_f64());
+        result
     }
 
     fn for_objects(&self, objects: &[String]) -> Option<Vec<String>> {
-        invoke_ninja_deps(&self.build_dir, objects)
+        let started = Instant::now();
+        let result = invoke_ninja_deps(&self.build_dir, objects);
+        self.extraction_seconds
+            .set(self.extraction_seconds.get() + started.elapsed().as_secs_f64());
+        result
+    }
+
+    fn objects_current(&self, objects: &[String]) -> bool {
+        let started = Instant::now();
+        let current = freshness::objects_current(&self.build_dir, objects);
+        self.freshness_seconds
+            .set(self.freshness_seconds.get() + started.elapsed().as_secs_f64());
+        current
+    }
+
+    fn current_objects(&self, objects: &[String]) -> HashSet<String> {
+        let started = Instant::now();
+        let current = freshness::current_objects(&self.build_dir, objects);
+        self.freshness_seconds
+            .set(self.freshness_seconds.get() + started.elapsed().as_secs_f64());
+        current
+    }
+
+    fn record_parse(&self, seconds: f64, objects: usize, inputs: usize, sources: usize) {
+        let old = self.parse_metrics.get();
+        self.parse_metrics.set((
+            old.0 + seconds,
+            old.1 + objects,
+            old.2 + inputs,
+            old.3 + sources,
+        ));
     }
 }
 
@@ -552,14 +722,19 @@ fn invoke_ninja_deps(build_dir: &Path, args: &[String]) -> Option<Vec<String>> {
     command.current_dir(build_dir);
     command.arg("-t").arg("deps");
     command.args(args);
-    let (_, stdout) = crate::process::query(command).ok()?;
+    let (code, stdout) = crate::process::query(command).ok()?;
+    if code != 0 {
+        return None;
+    }
     let lines: Vec<String> = stdout.lines().map(str::to_string).collect();
     if lines.is_empty() { None } else { Some(lines) }
 }
 
 fn deps_header_regex() -> &'static Regex {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^(\S.*?):\s+#deps ").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r"^(\S.*?):\s+#deps (\d+), deps mtime -?\d+ \((VALID|STALE)\)$").unwrap()
+    })
 }
 
 /// Parses `ninja -t deps` output into a source-keyed dependency graph.
@@ -571,32 +746,77 @@ fn parse_ninja_deps(
     obj_to_source: &HashMap<String, String>,
     build_dir_norm: &str,
 ) -> HashMap<String, Vec<String>> {
-    let mut graph: HashMap<String, Vec<String>> = HashMap::new();
-    let mut current: Option<String> = None;
-    for line in lines {
+    let mut records: HashMap<String, Option<Vec<String>>> = HashMap::new();
+    let mut current: Option<(String, usize, bool, Vec<String>)> = None;
+    for line in lines.iter().map(String::as_str).chain(std::iter::once("")) {
         if line.starts_with(' ') || line.starts_with('\t') {
-            if let Some(src) = &current {
+            if let Some((_, _, _, deps)) = &mut current {
                 let dep = resolve_against_build_dir(line.trim(), build_dir_norm);
-                graph.entry(src.clone()).or_default().push(dep);
+                deps.push(dep);
             }
             continue;
         }
-        current = None;
+        if let Some((object, count, valid, deps)) = current.take() {
+            let complete = (valid && deps.len() == count).then_some(deps);
+            records
+                .entry(object)
+                .and_modify(|value| *value = None)
+                .or_insert(complete);
+        }
         if let Some(caps) = deps_header_regex().captures(line) {
             let obj = caps[1].replace('\\', "/");
-            if let Some(src) = obj_to_source.get(&obj) {
-                current = Some(src.clone());
-                graph.entry(src.clone()).or_default();
+            if obj_to_source.contains_key(&obj) {
+                if let Ok(count) = caps[2].parse() {
+                    current = Some((obj, count, &caps[3] == "VALID", Vec::new()));
+                }
             }
         }
     }
+    let mut graph: HashMap<String, BTreeSet<String>> = HashMap::new();
+    let mut incomplete = HashSet::new();
+    for (object, source) in obj_to_source {
+        match records.get(object).and_then(Option::as_ref) {
+            Some(deps) => graph
+                .entry(source.clone())
+                .or_default()
+                .extend(deps.iter().cloned()),
+            None => {
+                incomplete.insert(source.clone());
+            }
+        }
+    }
+    graph
+        .into_iter()
+        .filter(|(source, _)| !incomplete.contains(source))
+        .map(|(source, deps)| (source, deps.into_iter().collect()))
+        .collect()
+}
+
+fn timed_parse_ninja_deps(
+    ninja: &dyn NinjaDeps,
+    lines: &[String],
+    objects: &HashMap<String, String>,
+    build_dir_norm: &str,
+) -> HashMap<String, Vec<String>> {
+    let started = Instant::now();
+    let graph = parse_ninja_deps(lines, objects, build_dir_norm);
+    let object_count = objects
+        .values()
+        .filter(|source| graph.contains_key(*source))
+        .count();
+    ninja.record_parse(
+        started.elapsed().as_secs_f64(),
+        object_count,
+        graph.values().map(Vec::len).sum(),
+        graph.len(),
+    );
     graph
 }
 
 fn deps_for_sources(
     ninja: &dyn NinjaDeps,
     sources: &[String],
-    source_to_obj: &HashMap<String, String>,
+    source_to_obj: &HashMap<String, Vec<String>>,
     obj_to_source: &HashMap<String, String>,
     build_dir_norm: &str,
     already: Option<&HashMap<String, Vec<String>>>,
@@ -606,7 +826,9 @@ fn deps_for_sources(
     }
     let objects: Vec<String> = sources
         .iter()
-        .filter_map(|s| source_to_obj.get(s).cloned())
+        .filter_map(|s| source_to_obj.get(s))
+        .flatten()
+        .cloned()
         .collect();
     if objects.is_empty() {
         return Some(HashMap::new());
@@ -614,11 +836,40 @@ fn deps_for_sources(
     // Batched: a whole-tree selection would otherwise build a command line
     // past the Windows limit and fail as a malformed invocation rather than
     // as a missing graph.
-    let mut graph = HashMap::new();
-    for chunk in objects.chunks(100) {
-        let lines = ninja.for_objects(chunk)?;
-        graph.extend(parse_ninja_deps(&lines, obj_to_source, build_dir_norm));
+    let current = ninja.current_objects(&objects);
+    if current.is_empty() {
+        return None;
     }
+    let selected_objects: HashMap<String, String> = objects
+        .iter()
+        .filter_map(|object| {
+            obj_to_source
+                .get(object)
+                .map(|source| (object.clone(), source.clone()))
+        })
+        .collect();
+    let stale_sources: HashSet<&str> = selected_objects
+        .iter()
+        .filter(|(object, _)| !current.contains(*object))
+        .map(|(_, source)| source.as_str())
+        .collect();
+    let current: Vec<String> = objects
+        .into_iter()
+        .filter(|object| current.contains(object))
+        .collect();
+    // Ninja reloads the manifest and dependency log for every invocation.
+    // The conservative switch point matches the measured large workload.
+    let lines = if current.len() >= 1000 {
+        ninja.whole_graph()?
+    } else {
+        let mut lines = Vec::new();
+        for chunk in current.chunks(100) {
+            lines.extend(ninja.for_objects(chunk)?);
+        }
+        lines
+    };
+    let mut graph = timed_parse_ninja_deps(ninja, &lines, &selected_objects, build_dir_norm);
+    graph.retain(|source, _| !stale_sources.contains(source.as_str()));
     Some(graph)
 }
 
@@ -648,18 +899,59 @@ fn scope_for_base(
     all_sources: &[String],
     obj_to_source: &HashMap<String, String>,
     ninja: &dyn NinjaDeps,
+    timing: &mut TidyTiming,
 ) -> anyhow::Result<BaseScope> {
+    let git_started = Instant::now();
     let git = crate::git::Git::new(repo_root);
-    let (code, stdout) = git.run(&["diff", "--name-only", "--diff-filter=ACMR", base, "--", "."]);
+    let (code, stdout) = git.run(&[
+        "diff",
+        "--name-status",
+        "--diff-filter=ACMRD",
+        base,
+        "--",
+        ".",
+    ]);
     anyhow::ensure!(
         code == 0,
         "git diff against '{base}' failed - is the base revision fetched?"
     );
-    let changed_all: Vec<String> = stdout
+    let changes: Vec<(String, String)> = stdout
         .lines()
-        .map(|line| line.trim().replace('\\', "/"))
-        .filter(|line| !line.is_empty())
+        .flat_map(|line| {
+            line.split_once('\t')
+                .into_iter()
+                .flat_map(|(status, paths)| {
+                    paths
+                        .split('\t')
+                        .map(move |path| (status.to_string(), path.replace('\\', "/")))
+                })
+        })
         .collect();
+    let changed_all: Vec<String> = changes.iter().map(|(_, path)| path.clone()).collect();
+    timing.git_scope_seconds = git_started.elapsed().as_secs_f64();
+    let compile_configuration_changed = changed_all.iter().any(|path| {
+        path.ends_with("CMakeLists.txt")
+            || path.ends_with(".cmake")
+            || matches!(path.as_str(), "CMakePresets.json" | "CMakeUserPresets.json")
+    });
+    // File appearance can change include search or __has_include without
+    // being represented in the prior compiler dependency list.
+    if changes.iter().any(|(status, path)| {
+        is_header(path) && (matches!(status.as_str(), "A" | "D") || status.starts_with('R'))
+    }) {
+        return Ok(BaseScope::Scoped {
+            sources: all_sources.to_vec(),
+            description: format!("full tree: header added or removed since {base}"),
+            dep_graph: Some(HashMap::new()),
+        });
+    }
+    if compile_configuration_changed {
+        return Ok(BaseScope::Scoped {
+            sources: all_sources.to_vec(),
+            description: format!("full tree: compile configuration changed since {base}"),
+            dep_graph: None,
+        });
+    }
     let changed: Vec<String> = changed_all
         .iter()
         .filter(|f| is_source_or_header(f))
@@ -667,7 +959,10 @@ fn scope_for_base(
         .collect();
     let canary_hit: Vec<String> = changed_all
         .iter()
-        .filter(|f| CANARY_TRIGGERS.contains(&f.as_str()))
+        .filter(|f| {
+            CANARY_TRIGGERS.contains(&f.as_str())
+                || f.starts_with("tools/exo-dev/src/lint/clang_tidy/")
+        })
         .cloned()
         .collect();
 
@@ -707,6 +1002,7 @@ fn scope_for_base(
     let changed_headers: Vec<&String> = changed.iter().filter(|f| is_header(f)).collect();
     let mut dep_graph_read: Option<HashMap<String, Vec<String>>> = None;
     if !changed_headers.is_empty() {
+        let expansion_started = Instant::now();
         // Fail closed. Without the dependency graph the consumers of a
         // changed header are unknown, and a header-only change would then
         // analyse nothing and report green: the gate would be silently
@@ -720,7 +1016,34 @@ fn scope_for_base(
                 changed_headers.len()
             );
         };
-        let graph = parse_ninja_deps(&lines, obj_to_source, build_dir_norm);
+        let mut graph = timed_parse_ninja_deps(ninja, &lines, obj_to_source, build_dir_norm);
+        let foreign_roots = input_identity::foreign_roots(repo_root);
+        let inventory = input_identity::HeaderInventory::read(repo_root, Path::new(build_dir_norm));
+        input_identity::retain_dependencies(
+            &mut graph,
+            foreign_roots.as_deref(),
+            inventory.as_ref(),
+        );
+        let objects: Vec<String> = obj_to_source
+            .iter()
+            .filter(|(_, source)| graph.contains_key(*source))
+            .map(|(object, _)| object.clone())
+            .collect();
+        // Ninja's VALID marker only compares the dependency record with the
+        // object mtime. A dry run also checks source changes and compiler flags.
+        let current = ninja.current_objects(&objects);
+        let stale_sources: HashSet<&str> = obj_to_source
+            .iter()
+            .filter(|(object, _)| !current.contains(*object))
+            .map(|(_, source)| source.as_str())
+            .collect();
+        graph.retain(|source, _| !stale_sources.contains(source.as_str()));
+        affected.extend(
+            all_sources
+                .iter()
+                .filter(|source| !graph.contains_key(*source))
+                .cloned(),
+        );
         for (src, deps) in &graph {
             if !is_project_source(src, repo_root_norm, build_dir_norm) {
                 continue;
@@ -733,6 +1056,7 @@ fn scope_for_base(
             }
         }
         dep_graph_read = Some(graph);
+        timing.header_expansion_seconds = expansion_started.elapsed().as_secs_f64();
     }
 
     if affected.is_empty() {
@@ -758,17 +1082,16 @@ fn scope_for_base(
 /// unchanged replays its stored diagnostics instead of being analysed again.
 ///
 /// The danger of a cache in front of a blocking gate is a stale hit
-/// reporting a green that was never established, so the key covers every
-/// input that can change the verdict and anything unhashable degrades to a
-/// miss.
+/// reporting a green that was never established. Reuse requires complete,
+/// current recorded inputs and compiler commands. Unhashable files are misses.
 fn compute_salt(
     clang_tidy_banner: &str,
     invocation_flags: &[String],
-    clang_tidy_config_hash: Option<&str>,
+    configuration_hash: Option<&str>,
 ) -> Option<String> {
-    let config_hash = clang_tidy_config_hash?;
+    let config_hash = configuration_hash?;
     Some(format!(
-        "{clang_tidy_banner}\n{}\nCACHE_SCHEMA={CACHE_SCHEMA}\n.clang-tidy={config_hash}",
+        "{clang_tidy_banner}\n{}\nCACHE_SCHEMA={CACHE_SCHEMA}\nconfiguration={config_hash}",
         invocation_flags.join("\n")
     ))
 }
@@ -787,8 +1110,10 @@ fn build_cache_keys(
         let Some(deps) = dep_graph.get(src) else {
             continue;
         };
-        let command_line = commands.get(src).cloned().unwrap_or_default();
-        let mut parts = vec![salt.to_string(), command_line];
+        let Some(command_line) = commands.get(src) else {
+            continue;
+        };
+        let mut parts = vec![salt.to_string(), command_line.clone()];
         let mut usable = true;
         for input in std::iter::once(src.clone()).chain(deps.iter().cloned()) {
             let hash = hash_cache
@@ -825,16 +1150,55 @@ fn cache_entry_path(cache_dir: &Path, key: &str) -> PathBuf {
     cache_dir.join(&key[..2]).join(format!("{key}.txt"))
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CacheEntry {
+    schema: u32,
+    key: String,
+    source: String,
+    exit_code: i32,
+    output: String,
+    output_sha256: String,
+}
+
+fn read_cache_entry(path: &Path, key: &str, source: &str) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let entry: CacheEntry = serde_json::from_slice(&bytes).ok()?;
+    if entry.schema != CACHE_SCHEMA
+        || entry.key != key
+        || entry.source != source
+        || entry.output_sha256 != sha256_hex(entry.output.as_bytes())
+        || require_analysis(source, &entry.output, entry.exit_code).is_err()
+    {
+        return None;
+    }
+    Some(entry.output)
+}
+
 /// Written aside and moved into place: a run cancelled mid-write would
 /// otherwise leave a truncated entry that later reads as a complete verdict.
-fn store_cache_entry(cache_dir: &Path, key: &str, output: &str) {
+fn store_cache_entry(cache_dir: &Path, key: &str, source: &str, output: &str, exit_code: i32) {
+    if require_analysis(source, output, exit_code).is_err() {
+        return;
+    }
+    let record = CacheEntry {
+        schema: CACHE_SCHEMA,
+        key: key.to_string(),
+        source: source.to_string(),
+        exit_code,
+        output: output.to_string(),
+        output_sha256: sha256_hex(output.as_bytes()),
+    };
+    let Ok(bytes) = serde_json::to_vec(&record) else {
+        return;
+    };
     let entry = cache_entry_path(cache_dir, key);
     let Some(parent) = entry.parent() else { return };
     if std::fs::create_dir_all(parent).is_err() {
         return;
     }
     let temp = entry.with_extension(format!("{}.tmp", std::process::id()));
-    if std::fs::write(&temp, output).is_err() {
+    if std::fs::write(&temp, bytes).is_err() {
         return;
     }
     let _ = std::fs::rename(&temp, &entry);
@@ -896,8 +1260,17 @@ fn compiler_installation(command_line: &str) -> Option<PathBuf> {
 fn clang_tidy_version_banner(tool: &Path) -> anyhow::Result<String> {
     let mut command = crate::process::command(&tool.to_string_lossy());
     command.arg("--version");
-    let (_, stdout) = crate::process::query(command)
+    let (code, stdout) = crate::process::query(command)
         .with_context(|| format!("could not run {}", tool.display()))?;
+    version_query_result(tool, code, stdout)
+}
+
+fn version_query_result(tool: &Path, code: i32, stdout: String) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        code == 0,
+        "{} --version failed (exit {code})",
+        tool.display()
+    );
     Ok(stdout)
 }
 
@@ -932,19 +1305,12 @@ fn invoke_clang_tidy(
     build_dir: &Path,
     flags: &[String],
     source: &str,
-) -> (String, i32) {
+) -> (String, i32, UnitTiming) {
     let mut command = crate::process::command(&tool.to_string_lossy());
     command.arg("-p").arg(build_dir);
     command.args(flags);
     command.arg(source);
-    match command.output() {
-        Ok(output) => {
-            let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-            combined.push_str(&String::from_utf8_lossy(&output.stderr));
-            (combined, output.status.code().unwrap_or(-1))
-        }
-        Err(_) => (String::new(), -1),
-    }
+    timing::invoke(&mut command, source)
 }
 
 /// Runs clang-tidy over `pending` with up to `jobs` processes in flight at
@@ -955,21 +1321,25 @@ fn analyze_pending(
     flags: &[String],
     pending: &[String],
     jobs: usize,
-) -> Vec<(String, String, i32)> {
+) -> Vec<(String, String, i32, UnitTiming)> {
     if pending.is_empty() {
         return Vec::new();
     }
     let jobs = jobs.max(1).min(pending.len());
     let queue: Mutex<VecDeque<String>> = Mutex::new(pending.iter().cloned().collect());
-    let results: Mutex<Vec<(String, String, i32)>> = Mutex::new(Vec::new());
+    let results = Mutex::new(Vec::new());
     std::thread::scope(|scope| {
         for _ in 0..jobs {
             scope.spawn(|| {
                 loop {
                     let next = queue.lock().unwrap().pop_front();
                     let Some(src) = next else { break };
-                    let (output, code) = invoke_clang_tidy(tool, build_dir, flags, &src);
-                    results.lock().unwrap().push((src, output, code));
+                    let (output, code, unit_timing) =
+                        invoke_clang_tidy(tool, build_dir, flags, &src);
+                    results
+                        .lock()
+                        .unwrap()
+                        .push((src, output, code, unit_timing));
                 }
             });
         }
@@ -1053,6 +1423,17 @@ fn require_analysis(source: &str, output: &str, code: i32) -> anyhow::Result<()>
         "clang-tidy could not parse {source}: {}",
         failed_parse.unwrap_or_default()
     );
+    static LOCATED_DIAGNOSTIC: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let located = LOCATED_DIAGNOSTIC
+        .get_or_init(|| Regex::new(r"^.*?:\d+:\d+:\s+(?:warning|error|fatal error):").unwrap());
+    let malformed = output
+        .lines()
+        .find(|line| located.is_match(line) && !diagnostic_regex().is_match(line));
+    anyhow::ensure!(
+        malformed.is_none(),
+        "clang-tidy reported an incomplete diagnostic for {source}: {}",
+        malformed.unwrap_or_default()
+    );
     anyhow::ensure!(
         code == 0 || output.lines().any(|line| diagnostic_regex().is_match(line)),
         "clang-tidy failed without diagnostic evidence for {source}: {output}"
@@ -1063,6 +1444,617 @@ fn require_analysis(source: &str, output: &str, code: i32) -> anyhow::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsupported_or_duplicate_compile_database_fields_are_rejected() {
+        for text in [
+            r#"[{"directory":"C:/repo","file":"C:/repo/a.cpp","command":"cl a.cpp","output":"a.obj","unexpected":"x"}]"#,
+            r#"[{"directory":"C:/repo","file":{},"file":"C:/repo/a.cpp","command":"cl a.cpp","output":"a.obj"}]"#,
+        ] {
+            assert!(parse_compile_db(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn relative_source_and_object_paths_are_resolved_against_each_command_directory() {
+        let entries = parse_compile_db(r#"[{"directory":"C:/repo/build/child","file":"../../libs/a.cpp","command":"cl ../../libs/a.cpp","output":"a.obj"}]"#).unwrap();
+        assert_eq!(entries[0].file, "C:/repo/libs/a.cpp");
+        assert_eq!(
+            entries[0].output.as_deref(),
+            Some("C:/repo/build/child/a.obj")
+        );
+    }
+
+    #[test]
+    fn malformed_compile_entries_are_rejected_without_a_partial_census() {
+        let valid = serde_json::json!({"file":"C:/repo/a.cpp", "directory":"C:/repo/build", "command":"cl.exe a.cpp"});
+        for (field, value) in [
+            ("arguments", serde_json::json!([null])),
+            ("arguments", serde_json::json!("bad")),
+            ("file", serde_json::Value::Null),
+            ("directory", serde_json::Value::Null),
+            ("command", serde_json::Value::Null),
+            ("output", serde_json::json!(1)),
+        ] {
+            let mut malformed = valid.clone();
+            malformed[field] = value;
+            assert!(
+                parse_compile_db(&serde_json::to_string(&vec![valid.clone(), malformed]).unwrap())
+                    .is_err(),
+                "{field}"
+            );
+        }
+        for entry in [
+            serde_json::json!({"file":"a.cpp","command":"cl.exe a.cpp"}),
+            serde_json::json!({"file":"a.cpp","directory":"C:/repo","arguments":[]}),
+        ] {
+            assert!(parse_compile_db(&serde_json::to_string(&vec![entry]).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn extracted_analysis_modules_trigger_the_existing_canary_scope() {
+        let module = "tools/exo-dev/src/lint/clang_tidy/input_identity.rs";
+        let dir = crate::test_support::fixture_repo_committed(&[(module, "old\n")]);
+        crate::test_support::write_files(dir.path(), &[(module, "changed\n")]);
+        let root = normalize_root(dir.path());
+        let sources: Vec<String> = CANARY_SOURCES
+            .iter()
+            .map(|source| format!("{root}/{source}"))
+            .collect();
+        let scope = scope_for_base(
+            dir.path(),
+            &root,
+            &format!("{root}/build"),
+            "HEAD",
+            &sources,
+            &HashMap::new(),
+            &FakeNinja {
+                whole: None,
+                batched: None,
+            },
+            &mut TidyTiming::default(),
+        )
+        .unwrap();
+        assert!(
+            matches!(scope, BaseScope::Scoped { sources: selected, .. } if selected.len() == CANARY_SOURCES.len())
+        );
+    }
+
+    #[test]
+    fn mixed_compile_configuration_and_header_membership_changes_disable_replay() {
+        let dir = crate::test_support::fixture_repo_committed(&[("CMakeLists.txt", "old\n")]);
+        crate::test_support::write_files(
+            dir.path(),
+            &[
+                ("CMakeLists.txt", "changed\n"),
+                ("libs/shadow.h", "int shadow;\n"),
+            ],
+        );
+        assert_eq!(
+            crate::git::Git::new(dir.path())
+                .run(&["add", "libs/shadow.h"])
+                .0,
+            0
+        );
+        let root = normalize_root(dir.path());
+        let sources = vec![format!("{root}/libs/a.cpp")];
+        let scope = scope_for_base(
+            dir.path(),
+            &root,
+            &format!("{root}/build"),
+            "HEAD",
+            &sources,
+            &HashMap::new(),
+            &FakeNinja {
+                whole: None,
+                batched: None,
+            },
+            &mut TidyTiming::default(),
+        )
+        .unwrap();
+        assert!(
+            matches!(scope, BaseScope::Scoped { dep_graph: Some(graph), .. } if graph.is_empty())
+        );
+    }
+
+    #[test]
+    fn foreign_checkout_dependency_records_cannot_hide_changed_header_consumers() {
+        let dir = crate::test_support::fixture_repo_committed(&[("libs/a.h", "old\n")]);
+        let foreign = dir.path().join("other");
+        assert_eq!(
+            crate::git::Git::new(dir.path())
+                .run(&[
+                    "worktree",
+                    "add",
+                    "--detach",
+                    foreign.to_str().unwrap(),
+                    "HEAD"
+                ])
+                .0,
+            0
+        );
+        crate::test_support::write_files(dir.path(), &[("libs/a.h", "changed\n")]);
+        let root = normalize_root(dir.path());
+        let source = format!("{root}/libs/a.cpp");
+        let objects = HashMap::from([("a.obj".into(), source.clone())]);
+        let ninja = FakeNinja {
+            whole: Some(vec![
+                "a.obj: #deps 1, deps mtime 1 (VALID)".into(),
+                format!("    {}", foreign.join("libs/a.h").display()),
+            ]),
+            batched: None,
+        };
+        let scope = scope_for_base(
+            dir.path(),
+            &root,
+            &format!("{root}/build"),
+            "HEAD",
+            std::slice::from_ref(&source),
+            &objects,
+            &ninja,
+            &mut TidyTiming::default(),
+        )
+        .unwrap();
+        assert!(
+            matches!(scope, BaseScope::Scoped { sources, dep_graph: Some(graph), .. } if sources == vec![source] && graph.is_empty())
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_failing_version_query_is_not_a_cache_identity() {
+        let tool = std::env::var_os("COMSPEC").expect("Windows command processor");
+        let mut command = crate::process::command(&tool.to_string_lossy());
+        command.args(["/d", "/c", "echo version 1.2.3 & exit /b 1"]);
+        let (code, stdout) = crate::process::query(command).unwrap();
+        assert_ne!(code, 0);
+        assert!(version_query_result(Path::new(&tool), code, stdout).is_err());
+    }
+
+    #[test]
+    fn incomplete_verdict_evidence_cannot_be_cached_or_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = normalize_root(&dir.path().join("a.cpp"));
+        std::fs::write(&source, "int a();\n").unwrap();
+        assert!(
+            build_cache_keys(
+                std::slice::from_ref(&source),
+                &HashMap::from([(source.clone(), vec![])]),
+                &HashMap::new(),
+                "salt"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn incomplete_diagnostic_evidence_fails_analysis() {
+        for output in [
+            "a.cpp:1:1: warning: incomplete diagnostic",
+            "a.cpp:1:1: warning: moved [bugprone-use-after-move",
+            "a.cpp:1:1: fatal error: incomplete diagnostic",
+        ] {
+            assert!(require_analysis("a.cpp", output, 0).is_err(), "{output}");
+        }
+    }
+
+    #[test]
+    fn renamed_headers_disable_the_prior_dependency_cache() {
+        let dir = crate::test_support::fixture_repo_committed(&[("libs/a.h", "old\n")]);
+        assert_eq!(
+            crate::git::Git::new(dir.path())
+                .run(&["mv", "libs/a.h", "libs/b.h"])
+                .0,
+            0
+        );
+        let root = normalize_root(dir.path());
+        let sources = vec![format!("{root}/libs/a.cpp")];
+        let objects = HashMap::from([("a.obj".into(), sources[0].clone())]);
+        let scope = scope_for_base(
+            dir.path(),
+            &root,
+            &format!("{root}/build"),
+            "HEAD",
+            &sources,
+            &objects,
+            &FakeNinja {
+                whole: Some(vec![
+                    "a.obj: #deps 1, deps mtime 1 (VALID)".into(),
+                    format!("    {root}/libs/a.h"),
+                ]),
+                batched: None,
+            },
+            &mut TidyTiming::default(),
+        )
+        .unwrap();
+        assert!(
+            matches!(scope, BaseScope::Scoped { sources: selected, dep_graph: Some(graph), .. } if selected == sources && graph.is_empty())
+        );
+    }
+
+    #[test]
+    fn cache_replay_rejects_unverified_and_truncated_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("entry.txt");
+        for invalid in [
+            "",
+            "cached output\n",
+            "{\"schema\":",
+            "error: invalid argument\n",
+        ] {
+            std::fs::write(&path, invalid).unwrap();
+            assert!(
+                read_cache_entry(&path, "abcdef", "source.cpp").is_none(),
+                "{invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ninja_dependencies_reject_truncated_and_stale_records() {
+        let map = HashMap::from([("a.obj".into(), "C:/repo/a.cpp".into())]);
+        for header in [
+            "a.obj: #deps 2, deps mtime 1 (VALID)",
+            "a.obj: #deps 1, deps mtime 1 (STALE)",
+            "a.obj: #deps 0, deps mtime 1 (VALID)",
+        ] {
+            let lines = vec![header.into(), "    a.h".into()];
+            assert!(
+                parse_ninja_deps(&lines, &map, "C:/repo").is_empty(),
+                "{header}"
+            );
+        }
+    }
+
+    #[test]
+    fn ninja_dependencies_require_every_command_variant() {
+        let map = HashMap::from([
+            ("a.obj".into(), "C:/repo/a.cpp".into()),
+            ("other.obj".into(), "C:/repo/a.cpp".into()),
+        ]);
+        let lines = vec![
+            "a.obj: #deps 1, deps mtime 1 (VALID)".into(),
+            "    a.h".into(),
+        ];
+        assert!(parse_ninja_deps(&lines, &map, "C:/repo").is_empty());
+    }
+
+    #[test]
+    fn compile_arguments_preserve_argument_boundaries() {
+        let one = parse_compile_db(
+            r#"[{"file":"a.cpp","directory":"C:/repo","arguments":["cl.exe","-DVALUE=a b"]}]"#,
+        )
+        .unwrap();
+        let two = parse_compile_db(
+            r#"[{"file":"a.cpp","directory":"C:/repo","arguments":["cl.exe","-DVALUE=a","b"]}]"#,
+        )
+        .unwrap();
+        assert_ne!(one[0].command_line, two[0].command_line);
+    }
+
+    #[test]
+    fn every_compile_command_contributes_to_the_identity() {
+        let mut entries = vec![
+            entry("C:/repo/a.cpp", "a.obj", "first"),
+            entry("C:/repo/a.cpp", "b.obj", "last"),
+        ];
+        let before = command_identities(&entries);
+        entries[0].command_line = "changed first command".into();
+        assert_ne!(before, command_identities(&entries));
+        let (_, objects) = object_maps(&entries, "C:/repo/build");
+        assert_eq!(objects["C:/repo/a.cpp"].len(), 2);
+    }
+
+    #[test]
+    fn a_missing_output_in_one_command_leaves_the_source_uncovered() {
+        let entries = parse_compile_db(
+            r#"[
+            {"file":"C:/repo/a.cpp","directory":"C:/repo/build","output":"a.obj","command":"cl.exe a.cpp"},
+            {"file":"C:/repo/a.cpp","directory":"C:/repo/build","command":"cl.exe /DOTHER a.cpp"}
+        ]"#,
+        )
+        .unwrap();
+        let (objects, sources) = object_maps(&entries, "C:/repo/build");
+        assert!(!sources.contains_key("C:/repo/a.cpp"));
+        assert!(objects.is_empty());
+    }
+
+    #[test]
+    fn cache_replay_checks_identity_integrity_and_analysis_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "abcdef0123456789";
+        let source = "source.cpp";
+        store_cache_entry(dir.path(), key, source, "", 0);
+        let path = cache_entry_path(dir.path(), key);
+        assert_eq!(read_cache_entry(&path, key, source), Some(String::new()));
+        let original: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for (field, value) in [
+            ("schema", serde_json::json!(CACHE_SCHEMA - 1)),
+            ("key", serde_json::json!("other")),
+            ("source", serde_json::json!("other.cpp")),
+            ("exit_code", serde_json::json!(-1)),
+            ("exit_code", serde_json::json!(1)),
+            ("output", serde_json::json!("truncated")),
+            ("output_sha256", serde_json::json!("wrong")),
+        ] {
+            let mut damaged = original.clone();
+            damaged[field] = value;
+            std::fs::write(&path, serde_json::to_vec(&damaged).unwrap()).unwrap();
+            assert!(read_cache_entry(&path, key, source).is_none(), "{field}");
+        }
+        let mut failed_parse = original;
+        let output = "source.cpp:1:1: error: cannot parse [clang-diagnostic-error]";
+        failed_parse["output"] = serde_json::json!(output);
+        failed_parse["output_sha256"] = serde_json::json!(sha256_hex(output.as_bytes()));
+        std::fs::write(&path, serde_json::to_vec(&failed_parse).unwrap()).unwrap();
+        assert!(read_cache_entry(&path, key, source).is_none());
+    }
+
+    #[test]
+    fn cached_blocking_findings_preserve_their_verdict() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "abcdef0123456789";
+        let source = "C:/repo/libs/engine/a.cpp";
+        let output =
+            format!("{source}:1:1: error: moved [bugprone-use-after-move,-warnings-as-errors]");
+        store_cache_entry(dir.path(), key, source, &output, 1);
+        let replayed = read_cache_entry(&cache_entry_path(dir.path(), key), key, source).unwrap();
+        assert_eq!(
+            extract_violations(&[(source.into(), replayed)], "C:/repo", "C:/repo/build").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn header_appearance_changes_select_all_sources_without_cache_keys() {
+        for added in [true, false] {
+            let dir = crate::test_support::fixture_repo_committed(&[("libs/a.h", "old\n")]);
+            if added {
+                crate::test_support::write_files(dir.path(), &[("libs/feature.h", "new\n")]);
+                assert_eq!(
+                    crate::git::Git::new(dir.path())
+                        .run(&["add", "libs/feature.h"])
+                        .0,
+                    0
+                );
+            } else {
+                std::fs::remove_file(dir.path().join("libs/a.h")).unwrap();
+            }
+            let root = normalize_root(dir.path());
+            let sources = vec![format!("{root}/libs/a.cpp"), format!("{root}/app/b.cpp")];
+            let scope = scope_for_base(
+                dir.path(),
+                &root,
+                &format!("{root}/build"),
+                "HEAD",
+                &sources,
+                &HashMap::new(),
+                &FakeNinja {
+                    whole: None,
+                    batched: None,
+                },
+                &mut TidyTiming::default(),
+            )
+            .unwrap();
+            assert!(
+                matches!(scope, BaseScope::Scoped { sources: selected, dep_graph: Some(graph), .. } if selected == sources && graph.is_empty())
+            );
+        }
+    }
+
+    struct BatchNinja {
+        current: bool,
+    }
+
+    impl NinjaDeps for BatchNinja {
+        fn whole_graph(&self) -> Option<Vec<String>> {
+            self.for_objects(
+                &(0..101)
+                    .map(|index| format!("a{index}.obj"))
+                    .collect::<Vec<_>>(),
+            )
+        }
+        fn objects_current(&self, _objects: &[String]) -> bool {
+            self.current
+        }
+        fn for_objects(&self, objects: &[String]) -> Option<Vec<String>> {
+            Some(
+                objects
+                    .iter()
+                    .flat_map(|object| {
+                        [
+                            format!("{object}: #deps 1, deps mtime 1 (VALID)"),
+                            format!("    {object}.h"),
+                        ]
+                    })
+                    .collect(),
+            )
+        }
+    }
+
+    #[test]
+    fn every_object_variant_survives_dependency_batches() {
+        let source = "C:/repo/a.cpp".to_string();
+        let objects: Vec<String> = (0..101).map(|index| format!("a{index}.obj")).collect();
+        let source_to_obj = HashMap::from([(source.clone(), objects.clone())]);
+        let obj_to_source = objects
+            .into_iter()
+            .map(|object| (object, source.clone()))
+            .collect();
+        let graph = deps_for_sources(
+            &BatchNinja { current: true },
+            std::slice::from_ref(&source),
+            &source_to_obj,
+            &obj_to_source,
+            "C:/repo/build",
+            None,
+        )
+        .unwrap();
+        assert_eq!(graph[&source].len(), 101);
+        assert!(
+            deps_for_sources(
+                &BatchNinja { current: false },
+                &[source],
+                &source_to_obj,
+                &obj_to_source,
+                "C:/repo/build",
+                None
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn large_selections_read_the_whole_graph_once_with_equal_dependencies() {
+        struct CountingNinja {
+            whole: std::cell::Cell<usize>,
+            batches: std::cell::Cell<usize>,
+            objects: Vec<String>,
+        }
+        impl NinjaDeps for CountingNinja {
+            fn objects_current(&self, _objects: &[String]) -> bool {
+                true
+            }
+            fn whole_graph(&self) -> Option<Vec<String>> {
+                self.whole.set(self.whole.get() + 1);
+                BatchNinja { current: true }.for_objects(&self.objects)
+            }
+            fn for_objects(&self, objects: &[String]) -> Option<Vec<String>> {
+                self.batches.set(self.batches.get() + 1);
+                BatchNinja { current: true }.for_objects(objects)
+            }
+        }
+        for count in [999, 1000] {
+            let source = "C:/repo/a.cpp".to_string();
+            let objects: Vec<String> = (0..count).map(|index| format!("a{index}.obj")).collect();
+            let source_to_obj = HashMap::from([(source.clone(), objects.clone())]);
+            let obj_to_source = objects
+                .iter()
+                .cloned()
+                .map(|object| (object, source.clone()))
+                .collect();
+            let expected = parse_ninja_deps(
+                &BatchNinja { current: true }.for_objects(&objects).unwrap(),
+                &obj_to_source,
+                "C:/repo/build",
+            );
+            let ninja = CountingNinja {
+                whole: std::cell::Cell::new(0),
+                batches: std::cell::Cell::new(0),
+                objects,
+            };
+            let actual = deps_for_sources(
+                &ninja,
+                &[source],
+                &source_to_obj,
+                &obj_to_source,
+                "C:/repo/build",
+                None,
+            )
+            .unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(ninja.whole.get(), usize::from(count >= 1000));
+            assert_eq!(ninja.batches.get(), if count < 1000 { 10 } else { 0 });
+        }
+    }
+
+    #[test]
+    fn every_object_variants_headers_contribute_to_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let source_path = dir.path().join("a.cpp");
+        let first_header = dir.path().join("first.h");
+        let other_header = dir.path().join("other.h");
+        for path in [&source_path, &first_header, &other_header] {
+            std::fs::write(path, "old\n").unwrap();
+        }
+        let source = normalize_root(&source_path);
+        let map = HashMap::from([
+            ("first.obj".into(), source.clone()),
+            ("other.obj".into(), source.clone()),
+        ]);
+        let graph = parse_ninja_deps(
+            &[
+                "first.obj: #deps 1, deps mtime 1 (VALID)".into(),
+                format!("    {}", first_header.display()),
+                "other.obj: #deps 1, deps mtime 1 (VALID)".into(),
+                format!("    {}", other_header.display()),
+            ],
+            &map,
+            &normalize_root(dir.path()),
+        );
+        let commands = HashMap::from([(source.clone(), "commands".into())]);
+        let before = build_cache_keys(std::slice::from_ref(&source), &graph, &commands, "salt");
+        std::fs::write(first_header, "changed\n").unwrap();
+        assert_ne!(
+            before,
+            build_cache_keys(&[source], &graph, &commands, "salt")
+        );
+    }
+
+    #[test]
+    fn a_compile_configuration_change_analyzes_the_full_tree() {
+        for config in [
+            "CMakeLists.txt",
+            "libs/foo/CMakeLists.txt",
+            "cmake/toolchain.cmake",
+            "CMakePresets.json",
+        ] {
+            let dir = crate::test_support::fixture_repo_committed(&[(config, "old\n")]);
+            crate::test_support::write_files(dir.path(), &[(config, "changed\n")]);
+            let root = normalize_root(dir.path());
+            let sources = vec![format!("{root}/libs/a.cpp"), format!("{root}/app/b.cpp")];
+            let scope = scope_for_base(
+                dir.path(),
+                &root,
+                &format!("{root}/build"),
+                "HEAD",
+                &sources,
+                &HashMap::new(),
+                &FakeNinja {
+                    whole: None,
+                    batched: None,
+                },
+                &mut TidyTiming::default(),
+            )
+            .unwrap();
+            assert!(
+                matches!(scope, BaseScope::Scoped { sources: selected, .. } if selected == sources),
+                "{config}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_partial_dependency_graph_cannot_skip_header_consumers() {
+        let dir = crate::test_support::fixture_repo_committed(&[("libs/a.h", "old\n")]);
+        crate::test_support::write_files(dir.path(), &[("libs/a.h", "changed\n")]);
+        let root = normalize_root(dir.path());
+        let sources = vec![format!("{root}/libs/a.cpp"), format!("{root}/libs/b.cpp")];
+        let map = HashMap::from([
+            ("a.obj".into(), sources[0].clone()),
+            ("b.obj".into(), sources[1].clone()),
+        ]);
+        let ninja = FakeNinja {
+            whole: Some(vec!["a.obj: #deps 0, deps mtime 1 (VALID)".into()]),
+            batched: None,
+        };
+        let scope = scope_for_base(
+            dir.path(),
+            &root,
+            &format!("{root}/build"),
+            "HEAD",
+            &sources,
+            &map,
+            &ninja,
+            &mut TidyTiming::default(),
+        )
+        .unwrap();
+        assert!(
+            matches!(scope, BaseScope::Scoped { sources: selected, .. } if selected == vec![sources[1].clone()])
+        );
+    }
 
     #[test]
     fn scoped_findings_survive_windows_path_case_changes() {
@@ -1307,6 +2299,9 @@ mod tests {
         fn for_objects(&self, _objects: &[String]) -> Option<Vec<String>> {
             self.batched.clone()
         }
+        fn objects_current(&self, _objects: &[String]) -> bool {
+            true
+        }
     }
 
     #[test]
@@ -1338,7 +2333,7 @@ mod tests {
             batched: None,
         };
         let mut source_to_obj = HashMap::new();
-        source_to_obj.insert("src.cpp".to_string(), "src.obj".to_string());
+        source_to_obj.insert("src.cpp".to_string(), vec!["src.obj".to_string()]);
         let obj_to_source = HashMap::new();
         let graph = deps_for_sources(
             &ninja,
@@ -1417,6 +2412,7 @@ mod tests {
             &all_sources,
             &obj_to_source,
             &ninja,
+            &mut TidyTiming::default(),
         )
         .unwrap();
 
@@ -1470,6 +2466,7 @@ mod tests {
             &all_sources,
             &obj_to_source,
             &ninja,
+            &mut TidyTiming::default(),
         )
         .unwrap();
 
@@ -1513,6 +2510,7 @@ mod tests {
             &all_sources,
             &obj_to_source,
             &ninja,
+            &mut TidyTiming::default(),
         )
         .unwrap_err();
         assert!(error.to_string().contains("is not in the compile database"));
@@ -1582,10 +2580,19 @@ mod tests {
     #[test]
     fn cache_entry_round_trips_through_a_hit() {
         let dir = tempfile::tempdir().unwrap();
-        store_cache_entry(dir.path(), "abcdef0123456789", "cached output\n");
+        store_cache_entry(
+            dir.path(),
+            "abcdef0123456789",
+            "source.cpp",
+            "cached output\n",
+            0,
+        );
         let path = cache_entry_path(dir.path(), "abcdef0123456789");
         assert!(path.is_file());
-        assert_eq!(std::fs::read_to_string(path).unwrap(), "cached output\n");
+        assert_eq!(
+            read_cache_entry(&path, "abcdef0123456789", "source.cpp").unwrap(),
+            "cached output\n"
+        );
     }
 
     #[test]
@@ -1639,6 +2646,9 @@ mod tests {
         let obj_to_source = fixture.obj_to_source.clone();
         let ninja = RealNinja {
             build_dir: fixture.build_dir.clone(),
+            extraction_seconds: std::cell::Cell::new(0.0),
+            parse_metrics: std::cell::Cell::new((0.0, 0, 0, 0)),
+            freshness_seconds: std::cell::Cell::new(0.0),
         };
         let lines = ninja
             .whole_graph()
@@ -1656,6 +2666,133 @@ mod tests {
                 .iter()
                 .any(|dep| dep.eq_ignore_ascii_case(&fixture.shared_header)),
             "consumer.cpp's real recorded deps {consumer_deps:?} do not include the header it includes"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires cmake, ninja and a working C++ toolchain"]
+    fn configure_depends_freshness_checks_real_objects_without_build_mutations() {
+        let fixture = build_ninja_fixture().expect("working Ninja fixture");
+        let ninja = RealNinja {
+            build_dir: fixture.build_dir.clone(),
+            extraction_seconds: std::cell::Cell::new(0.0),
+            parse_metrics: std::cell::Cell::new((0.0, 0, 0, 0)),
+            freshness_seconds: std::cell::Cell::new(0.0),
+        };
+        let objects: Vec<String> = fixture.obj_to_source.keys().cloned().collect();
+        let preserved: Vec<_> = [
+            "build.ninja",
+            ".ninja_log",
+            ".ninja_deps",
+            "CMakeFiles/cmake.verify_globs",
+        ]
+        .into_iter()
+        .map(|name| {
+            let path = fixture.build_dir.join(name);
+            let bytes = std::fs::read(&path).unwrap();
+            let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+            (path, bytes, modified)
+        })
+        .collect();
+        assert!(
+            ninja.objects_current(&objects),
+            "unchanged complete CONFIGURE_DEPENDS tree must be reusable"
+        );
+        let root = fixture.build_dir.parent().unwrap();
+        for name in ["consumer.cpp", "shared.h", "leaf.h", "CMakeLists.txt"] {
+            let path = root.join(name);
+            let bytes = std::fs::read(&path).unwrap();
+            let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+            let mut changed = bytes.clone();
+            changed.extend_from_slice(b"\n");
+            std::fs::write(&path, changed).unwrap();
+            assert!(!ninja.objects_current(&objects), "{name}");
+            std::fs::write(&path, bytes).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+            assert!(ninja.objects_current(&objects), "restored {name}");
+        }
+        let manifest = fixture.build_dir.join("build.ninja");
+        let bytes = std::fs::read(&manifest).unwrap();
+        let modified = std::fs::metadata(&manifest).unwrap().modified().unwrap();
+        let changed = String::from_utf8(bytes.clone()).unwrap().replacen(
+            "FLAGS =",
+            "FLAGS = -DFRESHNESS_COMMAND=1 ",
+            1,
+        );
+        assert_ne!(changed.as_bytes(), bytes);
+        std::fs::write(&manifest, changed).unwrap();
+        assert!(!ninja.objects_current(&objects), "compiler command changed");
+        std::fs::write(&manifest, bytes).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(manifest)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        let added = root.join("glob_added.cpp");
+        std::fs::write(&added, "int added() { return 0; }\n").unwrap();
+        assert!(!ninja.objects_current(&objects), "glob membership changed");
+        std::fs::remove_file(added).unwrap();
+        assert!(ninja.objects_current(&objects));
+        for (path, bytes, modified) in preserved {
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "{}", path.display());
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().modified().unwrap(),
+                modified,
+                "{}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires cmake, ninja and a working C++ toolchain"]
+    fn an_always_generated_header_only_disables_its_own_consumers() {
+        let fixture = build_ninja_fixture_with_metadata(true).expect("working Ninja fixture");
+        let ninja = RealNinja {
+            build_dir: fixture.build_dir.clone(),
+            extraction_seconds: std::cell::Cell::new(0.0),
+            parse_metrics: std::cell::Cell::new((0.0, 0, 0, 0)),
+            freshness_seconds: std::cell::Cell::new(0.0),
+        };
+        let entries = parse_compile_db(
+            &std::fs::read_to_string(fixture.build_dir.join("compile_commands.json")).unwrap(),
+        )
+        .unwrap();
+        let build = normalize_root(&fixture.build_dir);
+        let (objects, sources) = object_maps(&entries, &build);
+        let selected: Vec<String> = sources.keys().cloned().collect();
+        let header = fixture.build_dir.parent().unwrap().join("metadata.h");
+        let modified = std::fs::metadata(&header).unwrap().modified().unwrap();
+        let recorded = parse_ninja_deps(
+            &ninja
+                .for_objects(&objects.keys().cloned().collect::<Vec<_>>())
+                .unwrap(),
+            &objects,
+            &build,
+        );
+        assert!(
+            recorded[&fixture.consumer_source]
+                .iter()
+                .any(|dependency| dependency.eq_ignore_ascii_case(&normalize_root(&header))),
+            "generated header must be an actual recorded include"
+        );
+        let graph = deps_for_sources(&ninja, &selected, &sources, &objects, &build, None)
+            .expect("unaffected objects remain reusable");
+        assert!(!graph.contains_key(&fixture.consumer_source));
+        let other = normalize_root(&fixture.build_dir.parent().unwrap().join("other.cpp"));
+        assert!(graph.contains_key(&other));
+        let keys = build_cache_keys(&selected, &graph, &command_identities(&entries), "salt");
+        assert_eq!(keys.len(), 1);
+        assert!(keys.contains_key(&other));
+        assert_eq!(
+            std::fs::metadata(header).unwrap().modified().unwrap(),
+            modified
         );
     }
 
@@ -1690,6 +2827,10 @@ mod tests {
     /// `cmake`, `ninja` or a C++ compiler are not usable here, unless
     /// `EXO_DEV_REQUIRE_NINJA` says that is not an acceptable outcome.
     fn build_ninja_fixture() -> Option<NinjaFixture> {
+        build_ninja_fixture_with_metadata(false)
+    }
+
+    fn build_ninja_fixture_with_metadata(always_metadata: bool) -> Option<NinjaFixture> {
         if !tool_on_path("cmake") || !tool_on_path("ninja") {
             if std::env::var_os("EXO_DEV_REQUIRE_NINJA").is_some() {
                 panic!("EXO_DEV_REQUIRE_NINJA is set but cmake and/or ninja are not on PATH");
@@ -1706,7 +2847,16 @@ mod tests {
         let consumer = root.join("consumer.cpp");
         let other = root.join("other.cpp");
         let cmake_lists = root.join("CMakeLists.txt");
-        std::fs::write(&header, "inline int shared_value() { return 1; }\n").unwrap();
+        std::fs::write(
+            root.join("leaf.h"),
+            "inline int leaf_value() { return 1; }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &header,
+            "#include \"leaf.h\"\ninline int shared_value() { return leaf_value(); }\n",
+        )
+        .unwrap();
         std::fs::write(
             &consumer,
             "#include \"shared.h\"\nint consumer() { return shared_value(); }\n",
@@ -1718,9 +2868,21 @@ mod tests {
             "cmake_minimum_required(VERSION 3.20)\n\
              project(exo_dev_ninja_fixture CXX)\n\
              set(CMAKE_EXPORT_COMPILE_COMMANDS ON)\n\
-             add_library(fixture OBJECT consumer.cpp other.cpp)\n",
+             file(GLOB fixture_sources CONFIGURE_DEPENDS \"${CMAKE_CURRENT_SOURCE_DIR}/*.cpp\")\n\
+             add_library(fixture OBJECT ${fixture_sources})\n",
         )
         .unwrap();
+        if always_metadata {
+            std::fs::write(
+                root.join("metadata.h"),
+                "inline int metadata_value() { return 0; }\n",
+            )
+            .unwrap();
+            std::fs::write(&consumer, "#include \"shared.h\"\n#include \"metadata.h\"\nint consumer() { return shared_value() + metadata_value(); }\n").unwrap();
+            let mut contents = std::fs::read_to_string(&cmake_lists).unwrap();
+            contents.push_str("add_custom_target(always_metadata\n COMMAND \"${CMAKE_COMMAND}\" -E touch \"${CMAKE_CURRENT_SOURCE_DIR}/metadata.h\"\n BYPRODUCTS \"${CMAKE_CURRENT_SOURCE_DIR}/metadata.h\"\n VERBATIM)\nadd_dependencies(fixture always_metadata)\nset_source_files_properties(consumer.cpp PROPERTIES OBJECT_DEPENDS \"${CMAKE_CURRENT_SOURCE_DIR}/metadata.h\")\n");
+            std::fs::write(&cmake_lists, contents).unwrap();
+        }
 
         let build_dir = root.join("build");
         std::fs::create_dir_all(&build_dir).ok()?;
@@ -1731,11 +2893,26 @@ mod tests {
             .arg(&root)
             .arg("-B")
             .arg(&build_dir);
+        let compiler_environment = crate::msvc::environment()
+            .ok()
+            .flatten()
+            .map(|(_, values)| values)
+            .unwrap_or_default();
+        configure.envs(
+            compiler_environment
+                .iter()
+                .map(|(name, value)| (name, value)),
+        );
         let configured = configure.status().ok()?;
         require_or_none(configured.success(), "cmake configure failed")?;
 
         let mut build = std::process::Command::new("cmake");
         build.args(["--build"]).arg(&build_dir);
+        build.envs(
+            compiler_environment
+                .iter()
+                .map(|(name, value)| (name, value)),
+        );
         let built = build.status().ok()?;
         require_or_none(built.success(), "ninja build failed")?;
 

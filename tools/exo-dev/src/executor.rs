@@ -739,6 +739,11 @@ impl RealExecutor {
                         // the human-readable reason.
                         return Ok((format!("{}\n", report.scope), Outcome::pass("")));
                     }
+                    report.write_profile(
+                        &ctx.runner.log_dir.join("clang-tidy-profile.json"),
+                        ctx.head.as_deref(),
+                        ctx.dirty,
+                    )?;
                     let mut log = format!(
                         "clang-tidy      : {}\n",
                         report.tool_path.display()
