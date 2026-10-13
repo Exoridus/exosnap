@@ -549,6 +549,7 @@ TEST(RecoveryDrill, LiveRemuxMp4_CancelLeavesTargetUntouchedAndRemovesTemp) {
 TEST(StagingCleanup, ARemovableStagingFileReportsNothing) {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
+    ScopedPublicationConfig config(dir.path());
     const std::filesystem::path staging = std::filesystem::path(dir.path().toStdWString()) / L"out.mp4.tmp";
     {
         QFile f(QString::fromStdWString(staging.wstring()));
@@ -566,6 +567,7 @@ TEST(StagingCleanup, AStagingFileThatWasNeverCreatedReportsNothing) {
     // is not a problem to report.
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
+    ScopedPublicationConfig config(dir.path());
     const std::filesystem::path absent = std::filesystem::path(dir.path().toStdWString()) / L"never-written.tmp";
     EXPECT_TRUE(exosnap::DescribeFailedStagingRemoval(absent).empty());
 }
@@ -573,6 +575,7 @@ TEST(StagingCleanup, AStagingFileThatWasNeverCreatedReportsNothing) {
 TEST(StagingCleanup, IdentitySidecarIsRemovedEvenWhenMediaIsAbsent) {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
+    ScopedPublicationConfig config(dir.path());
     const auto staging = std::filesystem::path(dir.path().toStdWString()) / L"out.mp4.tmp";
     const auto sidecar = std::filesystem::path(staging.wstring() + L".exosnap.json");
     {
@@ -587,6 +590,7 @@ TEST(StagingCleanup, IdentitySidecarIsRemovedEvenWhenMediaIsAbsent) {
 TEST(StagingCleanup, AStagingFileHeldOpenIsReportedAndNamed) {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
+    ScopedPublicationConfig config(dir.path());
     const std::filesystem::path staging = std::filesystem::path(dir.path().toStdWString()) / L"locked.mp4.tmp";
     {
         QFile f(QString::fromStdWString(staging.wstring()));
@@ -766,6 +770,10 @@ TEST(MediaIdentityPublication, InterruptedRollbackAndActivePublisherRetainRecove
     }
     QLockFile active(QDir(directory.path()).filePath(QStringLiteral("publications/active.lock")));
     ASSERT_TRUE(active.tryLock(0));
+    EXPECT_NE(exosnap::DescribeFailedStagingRemoval(source).find("active"), std::string::npos);
+    EXPECT_TRUE(std::filesystem::exists(source));
+    EXPECT_FALSE(std::filesystem::exists(staged_identity));
+    EXPECT_TRUE(std::filesystem::exists(final_identity));
     EXPECT_FALSE(exosnap::RecoverInterruptedMediaPublications().empty());
     active.unlock();
     ASSERT_EQ(exosnap::AtomicReplaceInPlace(final_identity, staged_identity), ERROR_SUCCESS);
