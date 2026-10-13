@@ -1073,6 +1073,10 @@ bool MatroskaStreamWriter::EmitPacket(WindowEntry& e) {
     }
 
     try {
+        const bool exact_audio = e.track_num > 1 && m_emit_exact_audio_timestamps;
+        if ((e.track_num == 1 || exact_audio) &&
+            e.pts_ns > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()))
+            throw std::overflow_error("Packet timestamp exceeds the signed timestamp domain");
         if (need_new_cluster) {
             if (!FlushCluster())
                 return false;
@@ -1095,17 +1099,15 @@ bool MatroskaStreamWriter::EmitPacket(WindowEntry& e) {
         m_peak_cluster_payload_bytes = (std::max)(m_peak_cluster_payload_bytes, m_cluster_payload_bytes);
         std::vector<uint8_t>& stored = m_cluster_bytes.back();
 
-        auto* data_buf = new libmatroska::DataBuffer(stored.data(), static_cast<uint32_t>(stored.size()));
+        // AddFrame owns the wrapper on normal return, including false with LACING_NONE.
+        auto data_buf = std::make_unique<libmatroska::DataBuffer>(stored.data(), static_cast<uint32_t>(stored.size()));
         libebml::EbmlElement* rendered_block = nullptr;
-        const bool exact_audio = e.track_num > 1 && m_emit_exact_audio_timestamps;
-        if ((e.track_num == 1 || exact_audio) &&
-            e.pts_ns > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()))
-            throw std::overflow_error("Packet timestamp exceeds the signed timestamp domain");
         if ((e.track_num == 1 && (e.dts_ns || !m_config.webm)) || exact_audio) {
             auto& group = libebml::AddNewChild<libmatroska::KaxBlockGroup>(*m_cluster);
             rendered_block = &group;
             group.SetParent(*m_cluster);
             group.AddFrame(*track_entry, e.pts_ns, *data_buf, libmatroska::LACING_NONE);
+            data_buf.release();
             if (!e.is_key) {
                 // Zero denotes a dependency whose exact reference picture is
                 // unknown. Omitting ReferenceBlock would mark this as a keyframe.
@@ -1126,6 +1128,7 @@ bool MatroskaStreamWriter::EmitPacket(WindowEntry& e) {
             rendered_block = &sb;
             sb.SetParent(*m_cluster);
             sb.AddFrame(*track_entry, e.pts_ns, *data_buf, libmatroska::LACING_NONE);
+            data_buf.release();
             sb.SetKeyframe(e.is_key);
         }
 

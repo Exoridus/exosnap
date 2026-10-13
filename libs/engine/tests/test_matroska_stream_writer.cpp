@@ -13,16 +13,204 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <ios>
+#include <limits>
+#include <memory>
+#include <new>
 #include <numeric>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4267 4245)
+#endif
+#include <matroska/KaxBlock.h>
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
+namespace writer_allocations {
+enum class Failure { None, BlockGroup, SimpleBlock, AddFrame, AfterTransfer };
+
+struct NativeBlockFrames : libmatroska::KaxInternalBlock {
+    static const auto& Of(const libmatroska::KaxInternalBlock& block) {
+        const auto frames = &NativeBlockFrames::myBuffers;
+        return block.*frames;
+    }
+};
+struct Probe;
+thread_local Probe* active = nullptr;
+thread_local bool inspecting = false;
+
+struct Probe {
+    struct Allocation {
+        void* pointer = nullptr;
+        size_t size = 0;
+        bool live = true;
+        bool data_buffer = false;
+    };
+    std::array<Allocation, 1024> allocations{};
+    size_t count = 0;
+    size_t buffers_created = 0;
+    bool exhausted = false;
+    bool injected = false;
+    Failure failure;
+    void* data_buffer_vtable = nullptr;
+    void* block_vtable = nullptr;
+    void* simple_block_vtable = nullptr;
+    const uint8_t* last_buffer_bytes = nullptr;
+
+    explicit Probe(Failure selected = Failure::None) : failure(selected) {
+        uint8_t byte = 0;
+        libmatroska::DataBuffer buffer(&byte, 1);
+        std::memcpy(&data_buffer_vtable, &buffer, sizeof(data_buffer_vtable));
+        libmatroska::KaxBlock block;
+        libmatroska::KaxSimpleBlock simple;
+        std::memcpy(&block_vtable, &block, sizeof(block_vtable));
+        std::memcpy(&simple_block_vtable, &simple, sizeof(simple_block_vtable));
+        active = this;
+    }
+    ~Probe() {
+        active = nullptr;
+        // Reclaim only orphaned native wrappers after the writer has been destroyed.
+        // Other native objects have separate ownership and are not this probe's claim.
+        for (auto& allocation : allocations)
+            if (allocation.live && allocation.data_buffer)
+                delete static_cast<libmatroska::DataBuffer*>(allocation.pointer);
+    }
+    void Identify(Allocation& allocation) {
+        if (!allocation.live || allocation.data_buffer || allocation.size != sizeof(libmatroska::DataBuffer))
+            return;
+        // Allocation size alone cannot distinguish a wrapper from an unrelated object.
+        // The pinned polymorphic type's vtable identifies the completed native object.
+        void* vtable = nullptr;
+        std::memcpy(&vtable, allocation.pointer, sizeof(vtable));
+        if (vtable == data_buffer_vtable) {
+            allocation.data_buffer = true;
+            last_buffer_bytes = static_cast<libmatroska::DataBuffer*>(allocation.pointer)->Buffer();
+            ++buffers_created;
+        }
+    }
+    const libmatroska::KaxInternalBlock* NativeBlock(const Allocation& allocation) const {
+        if (!allocation.live || (allocation.size != sizeof(libmatroska::KaxBlock) &&
+                                 allocation.size != sizeof(libmatroska::KaxSimpleBlock)))
+            return nullptr;
+        void* vtable = nullptr;
+        std::memcpy(&vtable, allocation.pointer, sizeof(vtable));
+        if (vtable == block_vtable)
+            return static_cast<const libmatroska::KaxBlock*>(allocation.pointer);
+        if (vtable == simple_block_vtable)
+            return static_cast<const libmatroska::KaxSimpleBlock*>(allocation.pointer);
+        return nullptr;
+    }
+    bool BeforeAllocation(size_t size) {
+        bool has_buffer = false;
+        bool frame_allocation = false;
+        bool transferred = false;
+        for (size_t index = 0; index < count; ++index) {
+            Identify(allocations[index]);
+            has_buffer |= allocations[index].live && allocations[index].data_buffer;
+            const auto* block = NativeBlock(allocations[index]);
+            // AddFrame marks the completed block before growing myBuffers.
+            // Constructor allocations must not expose a vector still being initialized.
+            if (!block || !block->ValueIsSet())
+                continue;
+            const auto& frames = NativeBlockFrames::Of(*block);
+            frame_allocation |= frames.empty() && frames.capacity() == 0 && size == sizeof(libmatroska::DataBuffer*);
+            for (const auto* frame : frames)
+                for (size_t candidate = 0; candidate < count; ++candidate)
+                    transferred |= allocations[candidate].live && allocations[candidate].data_buffer &&
+                                   allocations[candidate].pointer == frame;
+        }
+        if (injected || !has_buffer)
+            return false;
+        const bool matches = (failure == Failure::BlockGroup && size == sizeof(libmatroska::KaxBlockGroup)) ||
+                             (failure == Failure::SimpleBlock && size == sizeof(libmatroska::KaxSimpleBlock)) ||
+                             (failure == Failure::AddFrame && frame_allocation) ||
+                             (failure == Failure::AfterTransfer && transferred);
+        injected = matches;
+        return matches;
+    }
+    void Allocated(void* pointer, size_t size) {
+        if (count == allocations.size()) {
+            exhausted = true;
+            return;
+        }
+        allocations[count++] = {pointer, size, true, false};
+    }
+    void Freed(void* pointer) {
+        for (size_t index = count; index-- > 0;)
+            if (allocations[index].live && allocations[index].pointer == pointer) {
+                Identify(allocations[index]);
+                allocations[index].live = false;
+                return;
+            }
+    }
+    size_t UnreleasedBuffers() {
+        size_t live = 0;
+        for (size_t index = 0; index < count; ++index) {
+            Identify(allocations[index]);
+            live += allocations[index].live && allocations[index].data_buffer;
+        }
+        return live;
+    }
+    void Stop() {
+        active = nullptr;
+    }
+};
+
+void* Allocate(size_t size) {
+    if (active && !inspecting) {
+        inspecting = true;
+        const bool fail = active->BeforeAllocation(size);
+        inspecting = false;
+        if (fail)
+            throw std::bad_alloc();
+    }
+    void* pointer = nullptr;
+    while (!(pointer = std::malloc(size ? size : 1))) {
+        const auto handler = std::get_new_handler();
+        if (!handler)
+            throw std::bad_alloc();
+        handler();
+    }
+    if (active && !inspecting)
+        active->Allocated(pointer, size);
+    return pointer;
+}
+
+void Free(void* pointer) noexcept {
+    if (active && !inspecting)
+        active->Freed(pointer);
+    std::free(pointer);
+}
+} // namespace writer_allocations
+
+void* operator new(size_t size) {
+    return writer_allocations::Allocate(size);
+}
+void* operator new[](size_t size) {
+    return writer_allocations::Allocate(size);
+}
+void operator delete(void* pointer) noexcept {
+    writer_allocations::Free(pointer);
+}
+void operator delete[](void* pointer) noexcept {
+    writer_allocations::Free(pointer);
+}
+void operator delete(void* pointer, size_t) noexcept {
+    writer_allocations::Free(pointer);
+}
+void operator delete[](void* pointer, size_t) noexcept {
+    writer_allocations::Free(pointer);
+}
 extern "C" {
 #include <libavcodec/codec_id.h>
 #include <libavcodec/packet.h>
@@ -465,6 +653,149 @@ class StreamWriterTest : public ::testing::Test {
     std::string tmp_;
 };
 
+MatroskaStreamConfig OwnershipConfig(const std::string& path, bool clip) {
+    auto config = MakeConfig(path, true, false);
+    config.reorder_window_ns = 0;
+    if (clip) {
+        config.max_cluster_payload_bytes = 4096;
+        config.stream_cues_to_disk = true;
+        config.collect_media_index = false;
+    }
+    return config;
+}
+
+TEST_F(StreamWriterTest, SignedTimestampRejectionDoesNotLeakNativeDataBuffer) {
+    for (bool clip : {false, true}) {
+        for (int repetition = 0; repetition < 3; ++repetition) {
+            SCOPED_TRACE(::testing::Message() << "clip=" << clip << " repetition=" << repetition);
+            std::remove(tmp_.c_str());
+            auto writer = std::make_unique<MatroskaStreamWriter>();
+            ASSERT_TRUE(writer->Open(OwnershipConfig(tmp_, clip))) << writer->error();
+            MuxPacket packet;
+            packet.track_num = 1;
+            packet.pts_ns = static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()) + 1;
+            packet.dts_ns = 0;
+            packet.is_key = true;
+            packet.bytes.assign(32, 0xab);
+            writer_allocations::Probe probe;
+            const bool accepted = writer->Push(std::move(packet));
+            const bool failed = writer->failed();
+            writer.reset();
+            const auto leaked = probe.UnreleasedBuffers();
+            probe.Stop();
+            EXPECT_FALSE(accepted);
+            EXPECT_TRUE(failed);
+            EXPECT_FALSE(probe.exhausted);
+            EXPECT_EQ(leaked, 0u);
+        }
+    }
+}
+
+TEST_F(StreamWriterTest, NativePreTransferAllocationFailuresReleaseDataBuffer) {
+    using writer_allocations::Failure;
+    for (bool clip : {false, true}) {
+        for (bool group : {false, true}) {
+            for (const auto failure : {group ? Failure::BlockGroup : Failure::SimpleBlock, Failure::AddFrame}) {
+                for (int repetition = 0; repetition < 3; ++repetition) {
+                    SCOPED_TRACE(::testing::Message() << "clip=" << clip << " group=" << group
+                                                      << " failure=" << int(failure) << " repetition=" << repetition);
+                    std::remove(tmp_.c_str());
+                    auto writer = std::make_unique<MatroskaStreamWriter>();
+                    ASSERT_TRUE(writer->Open(OwnershipConfig(tmp_, clip))) << writer->error();
+                    MuxPacket packet;
+                    packet.track_num = group ? 1 : 2;
+                    packet.dts_ns = 0;
+                    packet.is_key = true;
+                    packet.bytes.assign(32, 0xab);
+                    writer_allocations::Probe probe(failure);
+                    const bool accepted = writer->Push(std::move(packet));
+                    const bool failed = writer->failed();
+                    writer.reset();
+                    const auto leaked = probe.UnreleasedBuffers();
+                    probe.Stop();
+                    EXPECT_TRUE(probe.injected) << "The actual selected native allocation must be reached.";
+                    EXPECT_FALSE(probe.exhausted);
+                    EXPECT_GE(probe.buffers_created, 1u);
+                    EXPECT_FALSE(accepted);
+                    EXPECT_TRUE(failed);
+                    EXPECT_EQ(leaked, 0u);
+                }
+            }
+        }
+    }
+}
+
+TEST_F(StreamWriterTest, NativePostTransferAllocationFailureLeavesDataBufferWithBlock) {
+    for (bool clip : {false, true}) {
+        for (int repetition = 0; repetition < 3; ++repetition) {
+            SCOPED_TRACE(::testing::Message() << "clip=" << clip << " repetition=" << repetition);
+            std::remove(tmp_.c_str());
+            auto writer = std::make_unique<MatroskaStreamWriter>();
+            ASSERT_TRUE(writer->Open(OwnershipConfig(tmp_, clip))) << writer->error();
+            MuxPacket packet;
+            packet.track_num = 1;
+            packet.dts_ns = 0;
+            packet.is_key = true;
+            packet.bytes.assign(32, 0xab);
+            writer_allocations::Probe probe(writer_allocations::Failure::AfterTransfer);
+            const bool accepted = writer->Push(std::move(packet));
+            const bool failed = writer->failed();
+            writer.reset();
+            const auto leaked = probe.UnreleasedBuffers();
+            probe.Stop();
+            EXPECT_TRUE(probe.injected);
+            EXPECT_FALSE(probe.exhausted);
+            EXPECT_GE(probe.buffers_created, 1u);
+            EXPECT_FALSE(accepted);
+            EXPECT_TRUE(failed);
+            EXPECT_EQ(leaked, 0u);
+        }
+    }
+}
+TEST_F(StreamWriterTest, NativeNoLacingTransferIsAcceptedAndReleasedForBothBlockKinds) {
+    for (bool clip : {false, true}) {
+        for (bool group : {false, true}) {
+            for (bool finalize : {false, true}) {
+                for (int repetition = 0; repetition < 3; ++repetition) {
+                    SCOPED_TRACE(::testing::Message() << "clip=" << clip << " group=" << group
+                                                      << " finalize=" << finalize << " repetition=" << repetition);
+                    std::remove(tmp_.c_str());
+                    auto writer = std::make_unique<MatroskaStreamWriter>();
+                    ASSERT_TRUE(writer->Open(OwnershipConfig(tmp_, clip))) << writer->error();
+                    MuxPacket packet;
+                    packet.track_num = group ? 1 : 2;
+                    packet.dts_ns = 0;
+                    packet.is_key = true;
+                    packet.bytes.assign(32, 0xab);
+                    const auto* packet_bytes = packet.bytes.data();
+                    writer_allocations::Probe probe;
+                    const bool accepted = writer->Push(std::move(packet));
+                    const bool completed = !finalize || writer->Finalize();
+                    writer.reset();
+                    const auto leaked = probe.UnreleasedBuffers();
+                    probe.Stop();
+                    EXPECT_TRUE(accepted);
+                    EXPECT_TRUE(completed);
+                    if (clip)
+                        EXPECT_EQ(probe.last_buffer_bytes, packet_bytes);
+                    EXPECT_FALSE(probe.exhausted);
+                    EXPECT_GE(probe.buffers_created, 1u);
+                    EXPECT_EQ(leaked, 0u);
+                    if (finalize) {
+                        const auto bytes = ReadFile(tmp_);
+                        size_t packets = 0;
+                        for (const auto& element : SegmentChildren(bytes))
+                            if (element.id == kIdCluster)
+                                for (const auto& block :
+                                     ParseChildren(bytes, element.data_off, element.data_off + element.data_size))
+                                    packets += block.id == (group ? 0xa0ULL : 0xa3ULL);
+                        EXPECT_EQ(packets, 1u);
+                    }
+                }
+            }
+        }
+    }
+}
 // 1. Basic H.264+AAC produces a structurally complete file.
 TEST_F(StreamWriterTest, H264Aac_ProducesCompleteContainer) {
     MatroskaStreamWriter w;
