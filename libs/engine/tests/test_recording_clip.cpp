@@ -5,6 +5,7 @@
 #include "test_unique_temp.h"
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/packet_types.h>
+#include <exosnap/engine/recorder_session.h>
 #include <exosnap/engine/recording_clip.h>
 #include <exosnap/engine/recording_media_types.h>
 
