@@ -16,6 +16,22 @@ Apply the [delta and evidence reuse policy](architecture/verification-boundaries
 
 A reused observation retains its original binary and environment identity. A short current recording can complement it but does not retroactively prove an unmeasured longer duration. Do not assert a previous long-duration baseline unless its evidence exists. Selection and measured verdict are separate: an unselected scenario is not a new PASS. The [release runbook](dev/release-verify.md#select-regression-qualification-from-the-delta) explains the current registry and explicit decisions for any required hardware scenario not rerun.
 
+## Mandatory v0.11 hardware acceptance
+
+**G-AUDIO and G-RUNTIME: v0.11 RELEASE-BLOCKING - NOT YET QUALIFIED.** Their remaining physical hardware qualification is scheduled for v0.11 release acceptance. It does not block merging the implementation when code-level correctness, memory safety/lifetime, regressions and required CI pass. This scheduling decision records no hardware PASS and removes no offered Recording, Audio or Runtime capability.
+
+| Gate | Required qualification before v0.11 publication | Evidence and current status |
+|---|---|---|
+| G-AUDIO | Independent physical SYS/MIC clocks in a 2-3-hour recording, separate tracks and clock slaving. Apply the long-duration gate below, including the 20 ms fitted-drift and qualified reference, discontinuity duration/longest gap, no source degradation/loss, complete resampler drain and mux integrity. Select physical recovery, non-default endpoint, overlap and sample-rate variants from the implementation delta and retained audio contracts. | Reuse `audio.mixed-clock-soak`, `exosnap-soak`, `av-sync-check` and release verification. The current 30-minute scenario alone is insufficient. Simulated clocks and one-source eight-track fan-out qualify only those respective contracts. Independent-clock hardware evidence remains absent. |
+| G-RUNTIME | Controlled baseline versus supported concurrent background work, including ordinary MP4 segment remux where appropriate. Match capture content, resolution, encoder settings and environment. Collect recording drops, GPU/CPU/NVENC behavior, queue depth/latency, memory/handles, storage pressure, completed-media integrity and pipeline health. Preserve existing acceptance criteria. | Comparative runtime/background-load evidence remains absent. Do not invent numerical thresholds or infer qualification from short functional runs. A shipping profile with disabled Recording Clip creation requires no background ClipJob. |
+
+- [ ] Close G-AUDIO with reviewed, retained physical/reference evidence bound to the exact binary, source, devices, OS, drivers, tools and media identities.
+- [ ] Close G-RUNTIME with reviewed, retained comparable baseline/workload evidence and the same identity discipline.
+
+Both obligations are mandatory for the v0.11 publication approval, even where individual reusable registry scenarios are currently Recommended. The source-registry readiness calculation alone does not close these checklist gates. The release approver must verify the retained evidence for both before authorizing publication. Missing, unavailable or unqualified observations remain release-blocking; merging code or approving a PR cannot satisfy them. Reuse must follow the existing change-triggered evidence policy and retain its original identity. Do not automatically start the multi-hour campaigns during merge work.
+
+Recording Clip creation remains outside the offered product scope. Its inclusive 33,554,432-byte per-active-job memory contract remains unresolved, and full codec/long-duration/isolation qualification is required before a separate future reactivation decision. Reactivation is not assigned to v0.11. Existing clip files remain ordinary supported media.
+
 ## 1. Prepare the source
 
 - Start from a reviewed, integrated commit. Confirm repository protection against the intended [rulesets](../.github/rulesets/README.md); local hooks are not server-side protection.
@@ -117,7 +133,7 @@ A scene-graph screenshot does not prove desktop composition of a capture-exclude
 
 ### Long-duration audio/capture gate
 
-This is change-triggered qualification, not a requirement for every candidate. Select the long-duration test when changes affect A/V clock slaving or attribution, resampling/compensation, CFR scheduling, audio FIFO/threading, the mix timeline, capture clocks, mux timestamps or broader pipeline scheduling, or when a concrete finding warrants it. UI, text, Source Picker presentation, updater UI and documentation changes alone do not trigger it.
+The unqualified independent-clock obligation above makes this qualification mandatory before v0.11 publication. After a valid baseline exists, this is change-triggered qualification rather than a requirement to repeat it for every candidate. Select the long-duration test when changes affect A/V clock slaving or attribution, resampling/compensation, CFR scheduling, audio FIFO/threading, the mix timeline, capture clocks, mux timestamps or broader pipeline scheduling, or when a concrete finding warrants it. UI, text, Source Picker presentation, updater UI and documentation changes alone do not trigger it.
 
 When selected, run a 2-3 hour default-profile monitor recording with SYS and MIC as separate tracks, slaving on, sustained audio, no sleep and stable display settings. Select the 30-60 minute physical 44.1 kHz variant only when WASAPI capture, format/rate negotiation, resampling, mixing, output conversion, clock slaving, rate-sensitive encoding or device recovery is affected, or a relevant failure requires investigation. Neither test is repeated solely because a new candidate was built. The [soak runbook](dev/soak-and-recovery-drills.md) explains stimulus and analysis. The following acceptance budgets apply when that qualification is selected.
 
