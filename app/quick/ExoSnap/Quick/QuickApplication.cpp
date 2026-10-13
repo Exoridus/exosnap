@@ -898,7 +898,10 @@ void QuickApplication::initializeRecordWorkflow() {
                              notifications::NotificationEvent event;
                              event.type = notifications::NotificationType::CaptureActionFailed;
                              event.title = QCoreApplication::translate("QuickApplication", "Clip unavailable");
-                             event.body = QString::fromStdString(requested.error()->context);
+                             event.body =
+                                 requested.error()->code == engine::EngineErrorCode::ProductCapabilityUnavailable
+                                     ? recording_clip_adapter_.unavailableReason()
+                                     : QString::fromStdString(requested.error()->context);
                              notifications_adapter_.manager().Enqueue(std::move(event));
                          }
                      });
@@ -1667,9 +1670,10 @@ void QuickApplication::synchronizeRecordState() {
     const bool clip_available = recording_coordinator_->CanRequestRecordingClip();
     recording_clip_adapter_.setAvailability(
         clip_available,
-        clip_available ? QString()
-                       : QCoreApplication::translate("QuickApplication",
-                                                     "Start recording and wait for committed media to create a clip."));
+        (!RecordingClipAdapter::productAvailable() || clip_available)
+            ? QString()
+            : QCoreApplication::translate("QuickApplication",
+                                          "Start recording and wait for committed media to create a clip."));
     record_view_model_adapter_.setPendingEditMasterAvailable(record_view_model_.state == UiRecordingState::Saving &&
                                                              pending_edit_master_ &&
                                                              canOpenEditorForCurrentRecording());

@@ -6,6 +6,7 @@
 
 #include "models/EditTimelineModel.h"
 #include "models/OutputSettingsModel.h"
+#include "models/RecordingCapabilities.h"
 #include "models/VideoSettingsModel.h"
 
 #include <capability/capability_builder.h>
@@ -595,6 +596,37 @@ TEST(EditWorkspaceAdapter, LocalMediaBatchPreservesInputOrderAndUndoesAsOneOpera
     EXPECT_EQ(session.media().size(), 2);
     session.redo();
     EXPECT_EQ(session.workspace().clips(), imported);
+}
+
+TEST(EditWorkspaceAdapter, SavedStandaloneClipRemainsImportableAndEditableWhenCreationIsUnavailable) {
+    EnsureApplication();
+    EXPECT_FALSE(product::kRecordingClipsAvailable);
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto fixture =
+        QFileInfo(QString::fromUtf8(__FILE__))
+            .dir()
+            .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const auto saved = directory.filePath(QStringLiteral("saved.clip.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture, saved));
+    EditSessionAdapter session;
+    QEventLoop loop;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &loop, &QEventLoop::quit);
+    QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+    session.importMedia(QUrl::fromLocalFile(saved), true);
+    loop.exec();
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    ASSERT_EQ(session.workspace().assets().size(), 1u);
+    EXPECT_EQ(session.workspace().assets().front().path, saved.toStdWString());
+    ASSERT_EQ(session.workspace().clips().size(), 1u);
+    const auto clip = session.workspace().clips().front();
+    ASSERT_GT(clip.duration(), 200'000);
+    session.trimClip(clip.id, 100, (clip.source_out / 1000) - 100);
+    EXPECT_TRUE(session.workspaceError().isEmpty());
+    EXPECT_LT(session.workspace().clips().front().duration(), clip.duration());
+    session.undo();
+    EXPECT_EQ(session.workspace().clips().front(), clip);
+    EXPECT_TRUE(QFileInfo::exists(saved));
 }
 
 TEST(EditWorkspaceAdapter, UnknownSegmentDurationIsResolvedBeforeOrderedPositionedInsertion) {

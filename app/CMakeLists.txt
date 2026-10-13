@@ -714,6 +714,8 @@ exosnap_add_gtest(
     TEST_PREFIX admission.
     SOURCES
         tests/test_recording_admission.cpp
+        quick/ExoSnap/Quick/RecordingClipAdapter.cpp
+        quick/ExoSnap/Quick/RecordingClipAdapter.h
         services/RecordingCoordinator.cpp
         services/RecordingCoordinatorClips.cpp
         services/RecordingClipJobs.cpp
@@ -727,7 +729,7 @@ exosnap_add_gtest(
         exosnap_output_model_test_support
         exosnap_device_service_test_support
         exosnap_diagnostics_test_support
-        Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
+        Qt6::Core Qt6::Gui Qt6::Qml exosnap_capability exosnap_engine
 )
 target_include_directories(recording_admission_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_admission_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib)

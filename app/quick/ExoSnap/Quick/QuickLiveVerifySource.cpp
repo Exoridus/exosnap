@@ -1206,7 +1206,8 @@ QJsonObject QuickLiveVerifySource::ClipSnapshot() const {
         }
         jobs.append(row);
     }
-    return {{QStringLiteral("canRequest"), clips->canRequest()},
+    return {{QStringLiteral("productAvailable"), clips->productAvailable()},
+            {QStringLiteral("canRequest"), clips->canRequest()},
             {QStringLiteral("unavailableReason"), clips->unavailableReason()},
             {QStringLiteral("jobs"), jobs}};
 }
@@ -1233,6 +1234,10 @@ bool QuickLiveVerifySource::ClipRequest(const QString& duration_seconds, QString
 }
 
 bool QuickLiveVerifySource::ClipConfirm(const QString& job_id, const QString& generation, QString* error) {
+    if (!RecordingClipAdapter::productAvailable()) {
+        *error = application_.recordingClipAdapter()->unavailableReason();
+        return false;
+    }
     auto* clips = application_.recordingClipAdapter();
     for (const auto& value : clips->jobs()) {
         const auto row = value.toMap();

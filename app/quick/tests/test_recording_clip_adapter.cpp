@@ -24,6 +24,35 @@ TEST(RecordingClipAdapterTest, MetadataBudgetFailureDoesNotClaimQueueIsFull) {
               RecordingClipAdapter::tr("The clip could not be saved."));
 }
 
+TEST(RecordingClipAdapterTest, StaleAvailabilityAndInvokableMethodsCannotRequestOrConfirmWork) {
+    RecordingClipAdapter adapter;
+    adapter.setAvailability(true, {});
+    EXPECT_FALSE(adapter.canRequest());
+    EXPECT_EQ(adapter.unavailableReason(),
+              RecordingClipAdapter::tr("Recording Clips are unavailable in this product version"));
+    RecordingClipJobSnapshot review;
+    review.job_id = engine::NewId<engine::JobId>();
+    review.generation = 1;
+    review.phase = RecordingClipPhase::Review;
+    review.actual_begin_r_ns = 1;
+    review.actual_end_r_ns = 2;
+    adapter.setJobs({review});
+    int plans = 0;
+    int confirms = 0;
+    int cancels = 0;
+    QObject::connect(&adapter, &RecordingClipAdapter::planRequested, [&](int64_t) { ++plans; });
+    QObject::connect(&adapter, &RecordingClipAdapter::confirmRequested, [&](engine::JobId, uint64_t) { ++confirms; });
+    QObject::connect(&adapter, &RecordingClipAdapter::cancelRequested, [&](engine::JobId, uint64_t) { ++cancels; });
+    EXPECT_TRUE(QMetaObject::invokeMethod(&adapter, "requestPlan", Q_ARG(QString, QStringLiteral("30"))));
+    const auto id = QString::fromStdString(engine::ToUuid(review.job_id));
+    EXPECT_TRUE(
+        QMetaObject::invokeMethod(&adapter, "confirmPlan", Q_ARG(QString, id), Q_ARG(QString, QStringLiteral("1"))));
+    EXPECT_TRUE(
+        QMetaObject::invokeMethod(&adapter, "cancelJob", Q_ARG(QString, id), Q_ARG(QString, QStringLiteral("1"))));
+    EXPECT_EQ(plans, 0);
+    EXPECT_EQ(confirms, 0);
+    EXPECT_EQ(cancels, 0);
+}
 TEST(RecordingClipAdapterTest, PositiveDurationRequiresBackendAvailability) {
     RecordingClipAdapter adapter;
     int requests = 0;
@@ -40,8 +69,8 @@ TEST(RecordingClipAdapterTest, PositiveDurationRequiresBackendAvailability) {
         adapter.requestPlan(invalid);
     EXPECT_EQ(requests, 0);
     adapter.requestPlan(QStringLiteral("1800"));
-    EXPECT_EQ(requests, 1);
-    EXPECT_EQ(requested_seconds, 1800);
+    EXPECT_EQ(requests, static_cast<int>(RecordingClipAdapter::productAvailable()));
+    EXPECT_EQ(requested_seconds, RecordingClipAdapter::productAvailable() ? 1800 : 0);
 }
 
 TEST(RecordingClipAdapterTest, ReviewUsesExactStringTokensAndKeepsActualRangeDistinct) {
@@ -71,12 +100,12 @@ TEST(RecordingClipAdapterTest, ReviewUsesExactStringTokensAndKeepsActualRangeDis
     });
     adapter.confirmPlan(row.value(QStringLiteral("jobId")).toString(),
                         row.value(QStringLiteral("generation")).toString());
-    EXPECT_EQ(confirms, 1);
+    EXPECT_EQ(confirms, static_cast<int>(RecordingClipAdapter::productAvailable()));
     EXPECT_EQ(adapter.preferredDurationSeconds(), QStringLiteral("30"));
     adapter.acceptConfirmedDuration(review.requested_duration_seconds);
     EXPECT_EQ(adapter.preferredDurationSeconds(), QStringLiteral("300"));
     adapter.confirmPlan(row.value(QStringLiteral("jobId")).toString(), QStringLiteral("9007199254740992"));
-    EXPECT_EQ(confirms, 1);
+    EXPECT_EQ(confirms, static_cast<int>(RecordingClipAdapter::productAvailable()));
 }
 
 TEST(RecordingClipAdapterTest, RejectedConfirmationDoesNotChangePreferredDuration) {
@@ -150,11 +179,11 @@ TEST(RecordingClipAdapterTest, CancelRequiresCurrentGenerationAndAnActiveJob) {
     adapter.cancelJob(job_id, QStringLiteral("4"));
     EXPECT_EQ(cancellations, 0);
     adapter.cancelJob(job_id, QStringLiteral("5"));
-    EXPECT_EQ(cancellations, 1);
+    EXPECT_EQ(cancellations, static_cast<int>(RecordingClipAdapter::productAvailable()));
     queued.phase = RecordingClipPhase::Cancelled;
     adapter.setJobs({queued});
     adapter.cancelJob(job_id, QStringLiteral("5"));
-    EXPECT_EQ(cancellations, 1);
+    EXPECT_EQ(cancellations, static_cast<int>(RecordingClipAdapter::productAvailable()));
 }
 
 } // namespace

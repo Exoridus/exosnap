@@ -16,6 +16,7 @@
 #include <QDir>
 #include <QEvent>
 #include <QFile>
+#include <QTemporaryDir>
 
 #include <algorithm>
 #include <array>
@@ -36,6 +37,7 @@
 #include "diagnostics/DiskSpaceProvider.h"
 #include "diagnostics/DiskSpaceThresholds.h"
 #include "models/OutputPathValidator.h"
+#include "quick/ExoSnap/Quick/RecordingClipAdapter.h"
 #include "services/RecordingAdmission.h"
 #include "services/RecordingCoordinator.h"
 #include "settings/RecoveryManifestStore.h"
@@ -43,12 +45,88 @@
 namespace exosnap {
 class RecordingCoordinatorTestPeer {
   public:
+    static void SetClipOutput(RecordingCoordinator& coordinator, const std::filesystem::path& path) {
+        coordinator.current_output_path_ = path;
+    }
+    static bool HasClipWorker(const RecordingCoordinator& coordinator) {
+        return coordinator.clip_jobs_ != nullptr;
+    }
+    static void SetClipRequestState(RecordingCoordinator& coordinator, bool recording, bool preparing,
+                                    uint64_t media_time_ns) {
+        coordinator.is_recording_.store(recording);
+        coordinator.prepare_in_flight_.store(preparing);
+        coordinator.last_media_time_ns_ = media_time_ns;
+    }
     static void PostClipJobsChanged(RecordingCoordinator& coordinator) {
         coordinator.PostClipJobsChanged();
     }
 };
 
 namespace {
+
+TEST(RecordingClipProduct, RejectsRequestsBeforePlanningRegardlessOfDurationOrTransportState) {
+    QTemporaryDir output;
+    ASSERT_TRUE(output.isValid());
+    RecordingCoordinator coordinator;
+    RecordingCoordinatorTestPeer::SetClipOutput(coordinator, output.path().toStdWString() + L"/recording.mkv");
+    EXPECT_FALSE(RecordingCoordinatorTestPeer::HasClipWorker(coordinator));
+    for (const bool recording : {false, true}) {
+        for (const bool preparing : {false, true}) {
+            for (const uint64_t time : {uint64_t{0}, uint64_t{60'000'000'000}, UINT64_MAX}) {
+                RecordingCoordinatorTestPeer::SetClipRequestState(coordinator, recording, preparing, time);
+                EXPECT_FALSE(coordinator.CanRequestRecordingClip());
+                for (const int64_t duration : {int64_t{-1}, int64_t{0}, int64_t{30}, INT64_MAX}) {
+                    const auto result = coordinator.RequestRecordingClip(duration);
+                    ASSERT_FALSE(result.succeeded());
+                    EXPECT_EQ(result.error()->owner, engine::EngineModule::Clip);
+                    EXPECT_EQ(result.error()->code, engine::EngineErrorCode::ProductCapabilityUnavailable);
+                    EXPECT_EQ(result.error()->retryability, engine::Retryability::Never);
+                    EXPECT_EQ(result.error()->context, "Recording Clips are unavailable in this product version");
+                    EXPECT_TRUE(coordinator.RecordingClipSnapshots().empty());
+                }
+            }
+        }
+    }
+    EXPECT_TRUE(QDir(output.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).empty());
+    RecordingCoordinatorTestPeer::SetClipRequestState(coordinator, false, false, 0);
+}
+
+TEST(RecordingClipProduct, StaleConfirmationAndCancellationCannotAdmitWork) {
+    RecordingCoordinator coordinator;
+    for (const auto job : {engine::JobId{}, engine::NewId<engine::JobId>()}) {
+        for (const auto generation : {uint64_t{0}, uint64_t{1}, UINT64_MAX}) {
+            EXPECT_FALSE(coordinator.ConfirmRecordingClip(job, generation));
+            EXPECT_FALSE(coordinator.CancelRecordingClip(job, generation));
+        }
+    }
+    EXPECT_TRUE(coordinator.RecordingClipSnapshots().empty());
+    EXPECT_FALSE(RecordingCoordinatorTestPeer::HasClipWorker(coordinator));
+}
+
+TEST(RecordingClipProduct, DirectAdapterSignalsCannotBypassCoordinatorAdmission) {
+    quick::RecordingClipAdapter adapter;
+    RecordingCoordinator coordinator;
+    std::optional<engine::Outcome<engine::JobId>> requested;
+    QObject::connect(&adapter, &quick::RecordingClipAdapter::planRequested,
+                     [&](int64_t seconds) { requested = coordinator.RequestRecordingClip(seconds); });
+    QObject::connect(&adapter, &quick::RecordingClipAdapter::confirmRequested,
+                     [&](engine::JobId job, uint64_t generation) {
+                         EXPECT_FALSE(coordinator.ConfirmRecordingClip(job, generation));
+                     });
+    QObject::connect(&adapter, &quick::RecordingClipAdapter::cancelRequested,
+                     [&](engine::JobId job, uint64_t generation) {
+                         EXPECT_FALSE(coordinator.CancelRecordingClip(job, generation));
+                     });
+    adapter.planRequested(30);
+    ASSERT_TRUE(requested);
+    ASSERT_FALSE(requested->succeeded());
+    EXPECT_EQ(requested->error()->code, engine::EngineErrorCode::ProductCapabilityUnavailable);
+    const auto stale = engine::NewId<engine::JobId>();
+    adapter.confirmRequested(stale, 1);
+    adapter.cancelRequested(stale, 1);
+    EXPECT_TRUE(coordinator.RecordingClipSnapshots().empty());
+    EXPECT_FALSE(RecordingCoordinatorTestPeer::HasClipWorker(coordinator));
+}
 
 using diagnostics::ExclusiveEvidence;
 

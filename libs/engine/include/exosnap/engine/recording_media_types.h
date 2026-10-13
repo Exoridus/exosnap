@@ -85,6 +85,7 @@ enum class EngineErrorCode {
     MetadataIncomplete,
     Cancelled,
     Stalled,
+    ProductCapabilityUnavailable,
 };
 
 enum class EngineModule { Configuration, Runtime, Audio, FileOutput, MediaIndex, Clip, Editor };

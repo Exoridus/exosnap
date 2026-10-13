@@ -1,4 +1,5 @@
 #include "RecordingCoordinator.h"
+#include "models/RecordingCapabilities.h"
 
 #include "models/CaptureTargetPresentation.h"
 #include "services/AtomicFileOps.h"
@@ -342,10 +343,11 @@ RecordingCoordinator::RecordingCoordinator()
       app_meter_service_(std::make_unique<exosnap::engine::LoopbackMeterService>()) {
     // One screenshot write at a time — see the snapshot_pool_ declaration.
     snapshot_pool_.setMaxThreadCount(1);
-    clip_jobs_ = std::make_unique<RecordingClipJobs>(
-        recording_artifacts_, [this](const RecordingClipJobSnapshot&) { PostClipJobsChanged(); },
-        [this] { return PauseClipBackground(); }, [this] { return primary_clip_reserve_bytes_.load(); },
-        background_storage_);
+    if constexpr (product::kRecordingClipsAvailable)
+        clip_jobs_ = std::make_unique<RecordingClipJobs>(
+            recording_artifacts_, [this](const RecordingClipJobSnapshot&) { PostClipJobsChanged(); },
+            [this] { return PauseClipBackground(); }, [this] { return primary_clip_reserve_bytes_.load(); },
+            background_storage_);
     session_.SetBackgroundIoAdmission([storage = background_storage_](uint64_t bytes, const std::atomic<bool>* cancel) {
         return storage->Acquire(bytes, cancel);
     });
@@ -353,7 +355,8 @@ RecordingCoordinator::RecordingCoordinator()
 
 RecordingCoordinator::~RecordingCoordinator() {
     CloseClipNotifications();
-    clip_jobs_->BeginShutdown();
+    if (clip_jobs_)
+        clip_jobs_->BeginShutdown();
     background_storage_->Close();
     // Before anything else: a disk-space auto-stop already queued on the UI thread
     // must find this expired rather than run against a half-destroyed coordinator.
@@ -437,7 +440,8 @@ RecordingCoordinator::~RecordingCoordinator() {
     //    success=false when the session stops), so waiting here — rather than
     //    relying only on the member's destructor — guarantees the wait happens
     //    after the last possible enqueue, not before it.
-    clip_jobs_->Shutdown();
+    if (clip_jobs_)
+        clip_jobs_->Shutdown();
     snapshot_pool_.waitForDone();
 }
 

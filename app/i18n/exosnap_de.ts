@@ -6332,6 +6332,10 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>RecordingClipAdapter</name>
     <message>
+        <source>Recording Clips are unavailable in this product version</source>
+        <translation>Aufnahmeclips sind in dieser Produktversion nicht verfügbar</translation>
+    </message>
+    <message>
         <location filename="../services/RecordingClipJobs.cpp" line="+267"/>
         <source>MKV preserves every recorded track. Copy includes only proven closed GOPs; the recording continues independently.</source>
         <translation>MKV erhält alle aufgenommenen Spuren. Beim Kopieren werden nur nachweislich abgeschlossene GOPs einbezogen; die Aufnahme läuft unabhängig weiter.</translation>

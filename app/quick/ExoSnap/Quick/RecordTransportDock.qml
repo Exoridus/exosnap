@@ -298,14 +298,18 @@ Rectangle {
 
         RecordActionButton {
             id: clipAction
+            objectName: "recordClipAction"
+            enabled: visible
+            activeFocusOnTab: visible
+            Accessible.ignored: !visible
             compact: root.compactControls
             accessibleLabel: qsTr("Save clip, %1 seconds selected").arg(root.clipAdapter.preferredDurationSeconds)
             text: qsTr("Clip · %1 s").arg(root.clipAdapter.preferredDurationSeconds)
             glyph: ExoGlyph.Scissors
-            visible: root.width >= 1100 && (root.recordViewModel.recording || root.recordViewModel.paused || root.clipAdapter.jobs.length > 0)
-            available: root.clipAdapter.canRequest || root.clipAdapter.jobs.length > 0
+            visible: root.clipAdapter.productAvailable && root.width >= 1100 && (root.recordViewModel.recording || root.recordViewModel.paused || root.clipAdapter.jobs.length > 0)
+            available: root.clipAdapter.productAvailable && (root.clipAdapter.canRequest || root.clipAdapter.jobs.length > 0)
             unavailableReason: root.clipAdapter.unavailableReason
-            onClicked: clipPanel.open()
+            onClicked: root.openClipPanel()
         }
 
         RecordActionButton {
@@ -428,10 +432,15 @@ Rectangle {
             onTriggered: root.recordViewModel.requestSplit()
         }
         MenuItem {
+            id: clipOverflowAction
+            objectName: "recordClipOverflowAction"
+            height: clipOverflowAction.visible ? clipOverflowAction.implicitHeight : 0
             text: qsTr("Save clip")
-            visible: root.width < 1100 && (root.recordViewModel.recording || root.recordViewModel.paused || root.clipAdapter.jobs.length > 0)
-            enabled: root.clipAdapter.canRequest || root.clipAdapter.jobs.length > 0
-            onTriggered: clipPanel.open()
+            activeFocusOnTab: visible && enabled
+            Accessible.ignored: !visible
+            visible: root.clipAdapter.productAvailable && root.width < 1100 && (root.recordViewModel.recording || root.recordViewModel.paused || root.clipAdapter.jobs.length > 0)
+            enabled: root.clipAdapter.productAvailable && (root.clipAdapter.canRequest || root.clipAdapter.jobs.length > 0)
+            onTriggered: root.openClipPanel()
         }
         MenuItem {
             text: qsTr("Edit finalized recording")
@@ -445,11 +454,20 @@ Rectangle {
         }
     }
 
-    RecordingClipPanel {
-        id: clipPanel
-        clipAdapter: root.clipAdapter
-        x: Math.max(8, root.width - width - 8)
-        y: -height - ExoTheme.spacingSm
+    function openClipPanel() {
+        if (root.clipAdapter.productAvailable && clipPanelLoader.status === Loader.Ready)
+            clipPanelLoader.item.open();
+    }
+
+    Loader {
+        id: clipPanelLoader
+        objectName: "recordClipPanelLoader"
+        active: root.clipAdapter.productAvailable
+        sourceComponent: RecordingClipPanel {
+            clipAdapter: root.clipAdapter
+            x: Math.max(8, root.width - width - 8)
+            y: -height - ExoTheme.spacingSm
+        }
     }
 
     // No focus is claimed here on a state change. Every recording state change

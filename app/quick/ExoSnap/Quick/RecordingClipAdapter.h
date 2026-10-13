@@ -18,6 +18,7 @@ class RecordingClipAdapter : public QObject {
     QML_ELEMENT
     QML_UNCREATABLE("RecordingClipAdapter is provided by the application")
 
+    Q_PROPERTY(bool productAvailable READ productAvailable CONSTANT FINAL)
     Q_PROPERTY(bool canRequest READ canRequest NOTIFY availabilityChanged FINAL)
     Q_PROPERTY(QString unavailableReason READ unavailableReason NOTIFY availabilityChanged FINAL)
     Q_PROPERTY(QVariantList jobs READ jobs NOTIFY jobsChanged FINAL)
@@ -28,6 +29,7 @@ class RecordingClipAdapter : public QObject {
     [[nodiscard]] QVariantList diagnosticResources(std::optional<uint64_t> recording_reserve = std::nullopt) const;
     explicit RecordingClipAdapter(QObject* parent = nullptr);
 
+    [[nodiscard]] static bool productAvailable() noexcept;
     [[nodiscard]] bool canRequest() const noexcept;
     [[nodiscard]] const QString& unavailableReason() const noexcept;
     [[nodiscard]] const QVariantList& jobs() const noexcept;

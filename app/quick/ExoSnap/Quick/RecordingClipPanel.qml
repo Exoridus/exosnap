@@ -8,6 +8,12 @@ Popup {
     id: root
     required property RecordingClipAdapter clipAdapter
 
+    enabled: root.clipAdapter.productAvailable
+    onAboutToShow: {
+        if (!root.clipAdapter.productAvailable)
+            root.close();
+    }
+
     width: 380
     padding: ExoTheme.spacingMd
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside

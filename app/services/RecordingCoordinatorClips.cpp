@@ -1,5 +1,6 @@
 #include "RecordingCoordinator.h"
 #include "diagnostics/DiskSpaceThresholds.h"
+#include "models/RecordingCapabilities.h"
 
 #include <QCoreApplication>
 #include <QMetaObject>
@@ -159,6 +160,8 @@ void RecordingCoordinator::SetClipJobsChangedCallback(ClipJobsChangedCallback ca
 }
 
 bool RecordingCoordinator::CanRequestRecordingClip() const {
+    if (!product::kRecordingClipsAvailable)
+        return false;
     if (!is_recording_.load() || prepare_in_flight_.load() ||
         !session_.HasCommittedRecordingClipInterval(record_request_.load()))
         return false;
@@ -174,6 +177,9 @@ engine::Outcome<engine::JobId> RecordingCoordinator::RequestRecordingClip(int64_
         error.context = context;
         return engine::Outcome<engine::JobId>{std::move(error)};
     };
+    if (!product::kRecordingClipsAvailable)
+        return failure(engine::EngineErrorCode::ProductCapabilityUnavailable,
+                       product::kRecordingClipsUnavailableReason);
     if (!CanRequestRecordingClip() || duration_seconds <= 0 || duration_seconds > INT64_MAX / 1000000000)
         return failure(engine::EngineErrorCode::InvalidConfig, "Recording clip duration or media time is unavailable");
     RecordingClipRequest request;
@@ -208,15 +214,15 @@ engine::Outcome<engine::JobId> RecordingCoordinator::RequestRecordingClip(int64_
 }
 
 bool RecordingCoordinator::ConfirmRecordingClip(engine::JobId job_id, uint64_t generation) {
-    return clip_jobs_->Confirm(job_id, generation);
+    return product::kRecordingClipsAvailable && clip_jobs_ && clip_jobs_->Confirm(job_id, generation);
 }
 
 bool RecordingCoordinator::CancelRecordingClip(engine::JobId job_id, uint64_t generation) {
-    return clip_jobs_->Cancel(job_id, generation);
+    return product::kRecordingClipsAvailable && clip_jobs_ && clip_jobs_->Cancel(job_id, generation);
 }
 
 std::vector<RecordingClipJobSnapshot> RecordingCoordinator::RecordingClipSnapshots() const {
-    return clip_jobs_->Snapshots();
+    return clip_jobs_ ? clip_jobs_->Snapshots() : std::vector<RecordingClipJobSnapshot>{};
 }
 uint64_t RecordingCoordinator::RecordingStorageReserveBytes() const noexcept {
     const auto extra = primary_clip_reserve_bytes_.load();

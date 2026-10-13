@@ -13,6 +13,7 @@
 #include "live_verify/LiveVerifyOptions.h"
 #include "live_verify/LiveVerifyProtocol.h"
 #include "live_verify/LiveVerifySource.h"
+#include "models/RecordingCapabilities.h"
 
 #include <gtest/gtest.h>
 
@@ -214,9 +215,11 @@ class FakeSource final : public LiveVerifySource {
         return Marker(QStringLiteral("clip.snapshot"));
     }
     bool ClipRequest(const QString&, QString* error) override {
+        calls.append(QStringLiteral("clip.request"));
         return Outcome(error);
     }
     bool ClipConfirm(const QString&, const QString&, QString* error) override {
+        calls.append(QStringLiteral("clip.confirm"));
         return Outcome(error);
     }
     bool ClipOpen(const QString&, QString* error) override {
@@ -740,6 +743,20 @@ TEST(LiveVerifyProtocol, ProtocolTwoErrorCodesFoldOntoCommandFailedForVersionOne
 // Handshake
 // ---------------------------------------------------------------------------
 
+TEST(LiveVerifyDispatcher, DisabledRecordingClipRequestsNeverReachTheApplicationSource) {
+    FakeSource source;
+    source.state.can_request_clip = true;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    Hello(dispatcher, QString::fromLatin1(kRunId), 2);
+    for (const auto& name : {QStringLiteral("clip.request"), QStringLiteral("clip.confirm")}) {
+        const QJsonObject params{{QStringLiteral("durationSeconds"), QStringLiteral("30")},
+                                 {QStringLiteral("jobId"), QStringLiteral("stale-job")},
+                                 {QStringLiteral("generation"), QStringLiteral("1")}};
+        const auto response = dispatcher.Dispatch(RequestV2(name, params));
+        EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kUnavailable));
+        EXPECT_TRUE(source.calls.isEmpty());
+    }
+}
 TEST(LiveVerifyDispatcher, RefusesEveryCommandBeforeTheHandshake) {
     FakeSource source;
     LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
@@ -893,7 +910,13 @@ TEST(LiveVerifyDispatcher, EveryListedCommandIsActuallyImplemented) {
         if (command.name == QStringLiteral("export.cancel"))
             source.state.edit_export_running = true;
         const QJsonObject response = dispatcher.Dispatch(RequestV2(command.name, PlausibleParams(command)));
-        EXPECT_TRUE(Ok(response)) << command.name.toStdString() << ": " << ErrorCode(response).toStdString();
+        if (!exosnap::product::kRecordingClipsAvailable &&
+            (command.name == QLatin1String("clip.request") || command.name == QLatin1String("clip.confirm"))) {
+            EXPECT_FALSE(Ok(response));
+            EXPECT_EQ(ErrorCode(response), QLatin1String(error_code::kUnavailable));
+        } else {
+            EXPECT_TRUE(Ok(response)) << command.name.toStdString() << ": " << ErrorCode(response).toStdString();
+        }
     }
 }
 

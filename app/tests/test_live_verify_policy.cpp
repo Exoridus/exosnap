@@ -9,6 +9,7 @@
 #include "live_verify/LiveVerifyAutomationState.h"
 #include "live_verify/LiveVerifyCommandPolicy.h"
 #include "live_verify/LiveVerifyProtocol.h"
+#include "models/RecordingCapabilities.h"
 
 #include <gtest/gtest.h>
 
@@ -162,12 +163,17 @@ TEST(LiveVerifyPolicy, ARefusalAlwaysNamesItsCauseOnBothSides) {
     }
 }
 
-TEST(LiveVerifyPolicy, APreconditionOnlyEverAnswersInvalidStateOrBlocked) {
+TEST(LiveVerifyPolicy, APreconditionDistinguishesStateFromUnavailableProductCapability) {
     for (const AutomationState& state : InterestingStates()) {
         for (const CommandDescriptor& command : AllCommands()) {
             const PreconditionVerdict verdict = Evaluate(command, state);
             if (verdict.allowed())
                 continue;
+            if (!exosnap::product::kRecordingClipsAvailable &&
+                (command.name == QLatin1String("clip.request") || command.name == QLatin1String("clip.confirm"))) {
+                EXPECT_EQ(verdict.code, QLatin1String(error_code::kUnavailable));
+                continue;
+            }
             EXPECT_TRUE(verdict.code == QLatin1String(error_code::kInvalidState) ||
                         verdict.code == QLatin1String(error_code::kBlocked))
                 << command.name.toStdString() << ": " << verdict.code.toStdString();
@@ -582,8 +588,24 @@ TEST(LiveVerifyPolicy, ClipRequestsUseMeasuredAvailabilityAndRespectBlockingSurf
     state.can_request_clip = false;
     EXPECT_FALSE(Evaluate(*command, state).allowed());
     state.can_request_clip = true;
-    EXPECT_TRUE(Evaluate(*command, state).allowed());
+    EXPECT_EQ(Evaluate(*command, state).allowed(), exosnap::product::kRecordingClipsAvailable);
     state.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecovery);
     EXPECT_FALSE(Evaluate(*command, state).allowed());
     EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("clip.confirm")), state).allowed());
+}
+
+TEST(LiveVerifyPolicy, RecordingClipCreationIsUnavailableEvenWithStalePositiveState) {
+    for (auto state : InterestingStates()) {
+        state.can_request_clip = true;
+        for (const auto* name : {"clip.request", "clip.confirm"}) {
+            const auto* command = FindCommand(QString::fromLatin1(name));
+            ASSERT_NE(command, nullptr);
+            const auto result = Evaluate(*command, state);
+            EXPECT_FALSE(result.allowed());
+            EXPECT_EQ(result.code, QString::fromLatin1(error_code::kUnavailable));
+            EXPECT_EQ(result.message, QStringLiteral("Recording Clips are unavailable in this product version"));
+            EXPECT_FALSE(AvailableActions(state).contains(QString::fromLatin1(name)));
+        }
+        EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("clip.snapshot")), state).allowed());
+    }
 }

@@ -1,4 +1,5 @@
 #include "LiveVerifyCommandPolicy.h"
+#include "models/RecordingCapabilities.h"
 #include <update/distribution_context.h>
 
 #include <QJsonArray>
@@ -134,8 +135,15 @@ PreconditionVerdict CanSplit(const AutomationState& state) {
                   QStringLiteral("splitEnabled"), true, false);
 }
 
+PreconditionVerdict CanConfirmClip(const AutomationState& state) {
+    if (!product::kRecordingClipsAvailable)
+        return Refuse(error_code::kUnavailable, Text(product::kRecordingClipsUnavailableReason),
+                      QStringLiteral("recordingClipsAvailable"), true, product::kRecordingClipsAvailable);
+    return CanNavigate(state);
+}
+
 PreconditionVerdict CanRequestClip(const AutomationState& state) {
-    if (const PreconditionVerdict blocked = RefuseUnderBlockingSurface(state); !blocked.allowed())
+    if (const auto blocked = CanConfirmClip(state); !blocked.allowed())
         return blocked;
     if (state.can_request_clip)
         return Allowed();
@@ -656,7 +664,7 @@ const QVector<CommandDescriptor>& AllCommands() {
          true,
          Settle::Synchronous,
          {Param("jobId", "string", true), Param("generation", "string", true)},
-         &CanNavigate},
+         &CanConfirmClip},
         {QStringLiteral("clip.open"),
          2,
          true,

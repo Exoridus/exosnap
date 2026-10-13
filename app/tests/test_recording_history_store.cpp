@@ -10,6 +10,7 @@
 #include <QTemporaryDir>
 
 #include "models/CompletedRecording.h"
+#include "models/RecordingCapabilities.h"
 #include "settings/RecordingHistoryStore.h"
 #include "viewmodels/RecordViewModel.h"
 
@@ -65,6 +66,26 @@ TEST(RecordingHistoryStoreTest, MissingStoreRestoresEmptyHistory) {
     RecordingHistoryStore store(path);
     auto recordings = store.Load();
     EXPECT_TRUE(recordings.isEmpty());
+}
+
+TEST(RecordingHistoryStoreTest, ExistingStandaloneClipRemainsInHistoryWhenCreationIsUnavailable) {
+    EXPECT_FALSE(product::kRecordingClipsAvailable);
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto path = directory.filePath(QStringLiteral("saved.clip.mkv"));
+    QFile media(path);
+    ASSERT_TRUE(media.open(QIODevice::WriteOnly));
+    ASSERT_GT(media.write("retained media"), 0);
+    media.close();
+    RecordingHistoryStore store(directory.filePath(QStringLiteral("history.json")));
+    const auto saved = MakeTestRecording(path);
+    ASSERT_TRUE(store.Save({saved}));
+    RecordViewModel view;
+    view.SetHistoryStore(&store);
+    view.RestoreHistory(store.Load());
+    ASSERT_EQ(view.recent_recordings.size(), 1u);
+    EXPECT_EQ(view.recent_recordings.front().file_path, path);
+    EXPECT_TRUE(QFileInfo::exists(path));
 }
 
 TEST(RecordingHistoryStoreTest, SegmentNanosecondsAndMasterPathRoundTripExactly) {

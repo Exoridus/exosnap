@@ -1,4 +1,5 @@
 #include "RecordingClipAdapter.h"
+#include "models/RecordingCapabilities.h"
 
 #include <QStringList>
 #include <QVariantMap>
@@ -50,6 +51,8 @@ QString PhaseText(RecordingClipPhase phase) {
 
 QString ErrorText(const engine::EngineError& error) {
     switch (error.code) {
+    case engine::EngineErrorCode::ProductCapabilityUnavailable:
+        return RecordingClipAdapter::tr("Recording Clips are unavailable in this product version");
     case engine::EngineErrorCode::StorageInsufficient:
         return RecordingClipAdapter::tr("Not enough space to save the clip.");
     case engine::EngineErrorCode::ResourceBudgetExceeded:
@@ -95,8 +98,9 @@ QVariantMap Row(const RecordingClipJobSnapshot& snapshot) {
         {QStringLiteral("sourceBytesRead"), QString::number(snapshot.source_bytes_read)},
         {QStringLiteral("stagingBytesWritten"), QString::number(snapshot.staging_bytes_written)},
         {QStringLiteral("reservedBytes"), QString::number(snapshot.reserved_bytes)},
-        {QStringLiteral("canConfirm"), snapshot.phase == RecordingClipPhase::Review && has_actual},
-        {QStringLiteral("canCancel"), CanCancel(snapshot.phase)},
+        {QStringLiteral("canConfirm"),
+         RecordingClipAdapter::productAvailable() && snapshot.phase == RecordingClipPhase::Review && has_actual},
+        {QStringLiteral("canCancel"), RecordingClipAdapter::productAvailable() && CanCancel(snapshot.phase)},
         {QStringLiteral("canOpen"), completed},
         {QStringLiteral("assetId"), completed ? QString::fromStdString(engine::ToUuid(*snapshot.asset_id)) : QString()},
         {QStringLiteral("errorSummary"), snapshot.error ? ErrorText(*snapshot.error) : QString()},
@@ -107,6 +111,11 @@ QVariantMap Row(const RecordingClipJobSnapshot& snapshot) {
 } // namespace
 
 RecordingClipAdapter::RecordingClipAdapter(QObject* parent) : QObject(parent) {
+    setAvailability(false, {});
+}
+
+bool RecordingClipAdapter::productAvailable() noexcept {
+    return product::kRecordingClipsAvailable;
 }
 
 bool RecordingClipAdapter::canRequest() const noexcept {
@@ -135,6 +144,9 @@ QVariantList RecordingClipAdapter::durationOptions() {
 }
 
 void RecordingClipAdapter::setAvailability(bool available, QString reason) {
+    available = productAvailable() && available;
+    if (!productAvailable())
+        reason = tr("Recording Clips are unavailable in this product version");
     if (can_request_ == available && unavailable_reason_ == reason)
         return;
     can_request_ = available;
@@ -177,6 +189,8 @@ void RecordingClipAdapter::acceptConfirmedDuration(int64_t seconds) {
 }
 
 void RecordingClipAdapter::confirmPlan(const QString& job_id, const QString& generation) {
+    if (!productAvailable())
+        return;
     const auto id = engine::FromUuid<engine::JobId>(job_id.toStdString());
     bool parsed = false;
     const auto value = generation.toULongLong(&parsed);
@@ -192,6 +206,8 @@ void RecordingClipAdapter::confirmPlan(const QString& job_id, const QString& gen
 }
 
 void RecordingClipAdapter::cancelJob(const QString& job_id, const QString& generation) {
+    if (!productAvailable())
+        return;
     const auto id = engine::FromUuid<engine::JobId>(job_id.toStdString());
     bool parsed = false;
     const auto value = generation.toULongLong(&parsed);
