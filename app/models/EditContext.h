@@ -50,6 +50,7 @@ struct EditContext {
     // markers proportionally on the Edit timeline; unknown duration renders an
     // inert timeline (no handles, playhead, or markers).
     double duration_seconds = 0.0;
+    bool delivery_pending = false;
 };
 
 } // namespace exosnap

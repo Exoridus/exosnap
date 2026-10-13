@@ -65,7 +65,7 @@ TEST(MuxAudioHoldTest, ReorderedVideoProgressRetainsBoundaryAudio) {
 }
 
 TEST(MuxAudioHoldTest, BytesAndMediaTimeFailClosedWithoutLosingHeldPackets) {
-    const size_t one_packet = sizeof(exosnap::engine::EncodedAudioPacket) + 1;
+    const size_t one_packet = 1;
     exosnap::engine::MuxAudioHold hold({one_packet, 60});
     hold.AdvanceVideo(100);
     EXPECT_FALSE(hold.Push(AudioPacket(161, 3)));
@@ -78,13 +78,44 @@ TEST(MuxAudioHoldTest, BytesAndMediaTimeFailClosedWithoutLosingHeldPackets) {
     EXPECT_EQ(hold.bytes(), 0u);
 }
 
-TEST(MuxAudioHoldTest, BudgetCoversMaximumSupportedPcmAudioForOneMinute) {
+TEST(MuxAudioHoldTest, AdmissionCountsRetainedCapacityAndPopReleasesTheCharge) {
+    exosnap::engine::MuxAudioHold hold;
+    exosnap::engine::EncodedAudioPacket packet;
+    packet.bytes.reserve(32u * 1024 * 1024);
+    packet.bytes.push_back(7);
+    ASSERT_TRUE(hold.Push(std::move(packet)));
+    EXPECT_EQ(hold.bytes(), 32u * 1024 * 1024);
+    EXPECT_FALSE(hold.Push({{8}, 0, 0}));
+    const auto popped = hold.Pop();
+    ASSERT_TRUE(popped.has_value());
+    EXPECT_EQ(popped->bytes.front(), 7);
+    EXPECT_EQ(hold.bytes(), 0u);
+    EXPECT_TRUE(hold.Push({{8}, 0, 0}));
+}
+
+TEST(MuxAudioHoldTest, PacketLimitRejectsPressureWithoutDiscardingEarlierAudio) {
+    exosnap::engine::MuxAudioHold hold;
+    for (uint32_t frame = 0; frame < 1200; ++frame) {
+        for (uint32_t track = 0; track < 8; ++track)
+            ASSERT_TRUE(hold.Push(AudioPacket(static_cast<uint64_t>(frame) * 2500000, 1, track)));
+    }
+    EXPECT_FALSE(hold.Push(AudioPacket(2997500000, 2)));
+    auto first = hold.Pop();
+    ASSERT_TRUE(first);
+    EXPECT_EQ(first->bytes.front(), 1);
+}
+
+TEST(MuxAudioHoldTest, ThreeSecondMediaHorizonRejectsAStalledVideoProducer) {
+    exosnap::engine::MuxAudioHold hold;
+    hold.AdvanceVideo(0);
+    EXPECT_FALSE(hold.Push(AudioPacket(3000000001, 1)));
+}
+
+TEST(MuxAudioHoldTest, BudgetCoversMaximumSupportedPcmAudioForThreeSeconds) {
     const exosnap::engine::MuxAudioHold::Limits limits;
-    const uint64_t pcm_bytes = 96000ull * 2 * 4 * exosnap::engine::CodecPrivateData::kMaxAudioTracks * 60;
-    const uint64_t packet_overhead =
-        100ull * exosnap::engine::CodecPrivateData::kMaxAudioTracks * 60 * sizeof(exosnap::engine::EncodedAudioPacket);
-    EXPECT_GT(limits.bytes, pcm_bytes + packet_overhead);
-    EXPECT_EQ(limits.duration_ns, 60000000000ull);
+    const uint64_t pcm_bytes = 96000ull * 2 * 4 * exosnap::engine::CodecPrivateData::kMaxAudioTracks * 3;
+    EXPECT_GT(limits.bytes, pcm_bytes);
+    EXPECT_EQ(limits.duration_ns, 3000000000ull);
 }
 
 // Convenience: most call sites in these tests only care about the derived
@@ -170,6 +201,7 @@ constexpr uint64_t kIdTracks = 0x1654AE6BULL;
 constexpr uint64_t kIdCues = 0x1C53BB6BULL;
 constexpr uint64_t kIdCluster = 0x1F43B675ULL;
 constexpr uint64_t kIdDuration = 0x4489ULL;
+constexpr uint64_t kIdTimestampScale = 0x2AD7B1ULL;
 
 std::vector<EbmlNode> SegmentChildren(const std::vector<uint8_t>& d) {
     const auto top = ParseChildren(d, 0, d.size());
@@ -194,6 +226,24 @@ int CountClusters(const std::vector<uint8_t>& d) {
     return n;
 }
 
+uint64_t ReadTimestampScaleNs(const std::vector<uint8_t>& d) {
+    for (const auto& c : SegmentChildren(d)) {
+        if (c.id != kIdInfo)
+            continue;
+        for (const auto& e : ParseChildren(d, c.data_off, c.data_off + c.data_size)) {
+            if (e.id != kIdTimestampScale)
+                continue;
+            if (e.data_size == 0 || e.data_size > 8)
+                return 0;
+            uint64_t scale = 0;
+            for (size_t i = 0; i < e.data_size; ++i)
+                scale = (scale << 8) | d[e.data_off + i];
+            return scale;
+        }
+    }
+    return 1'000'000;
+}
+
 double ReadDurationMs(const std::vector<uint8_t>& d) {
     for (const auto& c : SegmentChildren(d)) {
         if (c.id != kIdInfo)
@@ -209,7 +259,7 @@ double ReadDurationMs(const std::vector<uint8_t>& d) {
                 bits = (bits << 8) | d[e.data_off + static_cast<size_t>(i)];
             double val = 0.0;
             std::memcpy(&val, &bits, sizeof(val));
-            return val;
+            return val * static_cast<double>(ReadTimestampScaleNs(d)) / 1'000'000.0;
         }
     }
     return -1.0;
@@ -232,16 +282,17 @@ using AudioMarkers = std::array<std::vector<std::pair<uint8_t, int64_t>>, 2>;
 
 AudioMarkers ReadAudioMarkers(const std::filesystem::path& path) {
     const auto bytes = ReadFile(path.string());
+    const auto timestamp_scale_ns = ReadTimestampScaleNs(bytes);
     AudioMarkers markers;
     for (const auto& cluster : SegmentChildren(bytes)) {
         if (cluster.id != kIdCluster)
             continue;
         const auto blocks = ParseChildren(bytes, cluster.data_off, cluster.data_off + cluster.data_size);
-        int64_t cluster_ms = 0;
+        int64_t cluster_ticks = 0;
         for (const auto& block : blocks) {
             if (block.id == 0xE7) {
                 for (size_t i = 0; i < block.data_size; ++i)
-                    cluster_ms = (cluster_ms << 8) | bytes[block.data_off + i];
+                    cluster_ticks = (cluster_ticks << 8) | bytes[block.data_off + i];
             }
         }
         for (const auto& block : blocks) {
@@ -250,8 +301,11 @@ AudioMarkers ReadAudioMarkers(const std::filesystem::path& path) {
             const uint8_t track = bytes[block.data_off] & 0x7F;
             if (track < 2 || track > 3)
                 continue;
-            const auto relative_ms = static_cast<int16_t>((bytes[block.data_off + 1] << 8) | bytes[block.data_off + 2]);
-            markers[track - 2].emplace_back(bytes[block.data_off + 4], cluster_ms + relative_ms);
+            const auto relative_ticks =
+                static_cast<int16_t>((bytes[block.data_off + 1] << 8) | bytes[block.data_off + 2]);
+            const auto timestamp_ms =
+                (cluster_ticks + relative_ticks) * static_cast<int64_t>(timestamp_scale_ns) / 1'000'000;
+            markers[track - 2].emplace_back(bytes[block.data_off + 4], timestamp_ms);
         }
     }
     return markers;

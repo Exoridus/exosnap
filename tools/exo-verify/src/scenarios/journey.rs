@@ -108,11 +108,9 @@ fn journey(ctx: &mut Context) -> Step {
             ("video.videoCodec", json!("H.264")),
             ("video.frameRate", json!(30)),
             ("video.cfr", json!(true)),
-            ("audio.systemEnabled", json!(false)),
-            ("audio.appEnabled", json!(false)),
-            ("audio.microphoneEnabled", json!(false)),
         ],
     )?;
+    common::disable_recording_audio(&mut app)?;
     let accent = common::configure(
         &mut app,
         &[(PERSISTED_APP_KEY.0, json!(PERSISTED_APP_KEY.1))],

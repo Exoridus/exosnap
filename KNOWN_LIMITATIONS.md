@@ -72,6 +72,10 @@ MP4 is delivered by stream-copy remux from a transient recording. Source and out
 
 Low-disk protection depends on a usable free-space reading. A reachable/writable destination whose free space cannot be queried can record with a logged inactive-protection warning. FAT32's per-file limit is advisory: no automatic safe split at that limit. Time/size splits are keyframe-bound and approximate, so use headroom rather than a size threshold exactly at the filesystem maximum.
 
+## Recording clips
+
+Recording clips currently offer MKV stream copy with PCM or Opus audio. AAC, FLAC and MP4 clip output have no qualified decoder-start/priming contract and are rejected. HEVC/AV1 clip profiles, long split-spanning compressed multitrack clips and concurrent recording/export/storage pressure still require qualification. The inclusive 32 MiB per-job working-buffer limit is not yet proven by the existing component capacity guards. Opus clips use packet-duration-specific priming metadata. The initial GOP of a 2.5 ms Opus recording with a measured 5 ms startup gap is rejected because the gap exceeds one packet; later eligible GOPs remain available. A 5 ms packet profile can retain its measured one-packet startup gap.
+
 ## Editor
 
 Edit supports an application-lifetime multi-clip workspace with linked video/audio, trim, split, move, delete, ripple delete, Crossfade and undo/redo. Navigation retains it; application exit does not save a project. Crossfade overlaps shorten the timeline and preserve linked audio alignment. Preview/export share the evaluator and D3D11 composition. A running export continues independently from its snapshot. Splitter proportions persist as UI preferences, independently of media.

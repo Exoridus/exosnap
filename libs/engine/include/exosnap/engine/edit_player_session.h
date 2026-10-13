@@ -54,6 +54,9 @@ class EditPlayerSession {
     void Close();
 
     [[nodiscard]] bool HasAudioStream() const noexcept;
+    [[nodiscard]] AudioMetadataReadResult AudioMetadata() const;
+    bool SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error);
+    [[nodiscard]] bool MonitoringConfirmationRequired() const;
 
     // The opened clip's own frame rate in fps, or 0.0 when unknown -- the
     // caller drives its presentation timer from this rather than from a fixed

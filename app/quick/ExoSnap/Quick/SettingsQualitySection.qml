@@ -135,21 +135,6 @@ Screen content with small text degrades earlier than video does, so the useful r
     }
 
     ExoSettingRow {
-        label: qsTr("Preview frame rate")
-        hint: qsTr("Preview only · the recording is unaffected")
-        stacked: root.stacked
-        Layout.fillWidth: true
-
-        ExoSelect {
-            options: root.settings.previewFrameRateOptions
-            value: root.settings.previewFrameRate
-            Layout.fillWidth: true
-            Accessible.name: qsTr("Preview frame rate")
-            onValueActivated: value => root.settings.previewFrameRate = value
-        }
-    }
-
-    ExoSettingRow {
         label: qsTr("Frame timing")
         hint: qsTr("Constant rate · editor-friendly")
         stacked: root.stacked

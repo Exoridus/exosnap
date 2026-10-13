@@ -130,6 +130,10 @@ Outcome ExecuteReadOnly(const QString& command, const QJsonObject& params, LiveV
             return Failed(error_code::kInvalidParams, error);
         return Succeeded(values);
     }
+    if (command == QLatin1String("clip.snapshot"))
+        return Succeeded(source.ClipSnapshot());
+    if (command == QLatin1String("audio.routing.snapshot"))
+        return Succeeded(source.AudioRoutingSnapshot());
     if (command == QLatin1String("profiles.list"))
         return Succeeded(source.ProfilesSnapshot());
     if (command == QLatin1String("notifications.snapshot"))
@@ -422,6 +426,46 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         return Succeeded(result);
     }
 
+    if (command.name == QLatin1String("clip.request")) {
+        if (!source.ClipRequest(ParamString(params, "durationSeconds"), &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.ClipSnapshot());
+    }
+    if (command.name == QLatin1String("clip.confirm")) {
+        if (!source.ClipConfirm(ParamString(params, "jobId"), ParamString(params, "generation"), &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.ClipSnapshot());
+    }
+    if (command.name == QLatin1String("clip.open")) {
+        if (!source.ClipOpen(ParamString(params, "assetId"), &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.EditorSnapshot());
+    }
+    if (command.name == QLatin1String("audio.routing.setTrackRecordEnabled")) {
+        const qint64 revision = params.value(QStringLiteral("expectedRevision")).toInteger(-1);
+        if (revision < 0)
+            return Failed(error_code::kInvalidParams, QStringLiteral("expectedRevision must be nonnegative"));
+        if (!source.SetAudioTrackRecordEnabled(ParamString(params, "trackId"),
+                                               params.value(QStringLiteral("enabled")).toBool(),
+                                               static_cast<quint64>(revision), &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.AudioRoutingSnapshot());
+    }
+    if (command.name == QLatin1String("audio.routing.addTrack") ||
+        command.name == QLatin1String("audio.routing.assignSource")) {
+        const qint64 revision = params.value(QStringLiteral("expectedRevision")).toInteger(-1);
+        if (revision < 0)
+            return Failed(error_code::kInvalidParams, QStringLiteral("expectedRevision must be nonnegative"));
+        const bool accepted =
+            command.name == QLatin1String("audio.routing.addTrack")
+                ? source.AddAudioTrack(static_cast<quint64>(revision), &error)
+                : source.AssignAudioSource(ParamString(params, "sourceId"), ParamString(params, "trackId"),
+                                           params.value(QStringLiteral("mode")).toInt(), static_cast<quint64>(revision),
+                                           &error);
+        if (!accepted)
+            return IntentRefused(command, source, error);
+        return Succeeded(source.AudioRoutingSnapshot());
+    }
     if (command.name == QLatin1String("settings.reset")) {
         if (!source.SettingsReset(&error))
             return IntentRefused(command, source, error);

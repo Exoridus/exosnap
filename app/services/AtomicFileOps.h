@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <string>
 
 // Shared atomic-publish primitives for remux output.
@@ -34,6 +35,25 @@ std::filesystem::path MakeSiblingTempPath(const std::filesystem::path& target);
 // (identical to DWORD; declared as unsigned long to keep <windows.h> out of this
 // header).
 unsigned long AtomicReplaceInPlace(const std::filesystem::path& from, const std::filesystem::path& to);
+
+// Retains the recovery master until publication succeeds. Requires a same-volume
+// hard link and copies an existing identity envelope into the private staging name.
+unsigned long StageCompletedMediaForPublication(const std::filesystem::path& source,
+                                                const std::filesystem::path& staging);
+
+// Installs identity and marker companions before renaming completed media.
+// Restores previous companions on failure. This is not a multi-file atomic
+// transaction. With replacement disabled, an existing media target is retained.
+// Retire recovery sources only after successful publication.
+// The optional observer reports each completed rename, including backups. An
+// interrupted observer leaves the durable transaction available to recovery.
+// Observers must not reenter publication, recovery or staging cleanup.
+unsigned long PublishMediaAndIdentitySidecar(const std::filesystem::path& from, const std::filesystem::path& to,
+                                             bool replace_existing = true, std::function<void()> rename_committed = {});
+
+// Restores interrupted publications using recorded file identities. Ambiguous or
+// inaccessible transactions are retained and reported for a later retry.
+[[nodiscard]] std::string RecoverInterruptedMediaPublications();
 
 // Remove a staging file this attempt created, and SAY SO if it could not be
 // removed.

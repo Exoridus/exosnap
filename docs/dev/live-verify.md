@@ -57,6 +57,7 @@ never spawns a shell-loop stand-in.
 | Scenario | Interaction | What it protects |
 |---|---|---|
 | `capture.window-geometry-live` | semantic IPC | a moving WGC window keeps recording, and a client-size change ends the session with the structured size-change reason or encodes the new size |
+| `clip.creation-unavailable` | production control IPC | disabled Clip requests and stale confirmations report the product capability refusal, without jobs or output/staging entries through shutdown; included in preflight and release lanes |
 | `capture.region-contract` | semantic IPC (`record.selectRegion`) | an exact physical-pixel region records exactly those dimensions with changing content |
 | `capture.region-selector-interaction` | real pointer drag, commit click and Escape | the selector overlay turns the dragged rectangle into the product's reported region and cancels cleanly |
 | `webcam.overlay-live` | semantic IPC, physical camera | the camera advances generations during a recording, the overlay rect reads back exactly, and disable/re-enable round-trips |
@@ -89,6 +90,8 @@ capture the operator's other display locally.
 | `window.snapshot`, `window.moveToScreen` | Native style/geometry/affinity and application-owned placement; use a screen name returned by snapshot |
 | `preview.snapshot` | Publication/render counters and outstanding-frame debt |
 | `record.snapshot`, `record.selectTarget`, `record.selectRegion`, `record.openRegionSelector`, `record.start/pause/resume/stop/split/captureFrame`, `record.result` | Real source/transport/result flow with the same admission guards as UI. `record.selectRegion` applies an exact physical-pixel rect and `record.openRegionSelector` opens the real selector overlay; neither simulates a gesture, so a scenario can test region geometry and leave the drag/commit/Escape work to real pointer input |
+| `clip.snapshot`, `clip.request`, `clip.confirm`, `clip.open` | v1.3 reports `productAvailable: false`. Request/confirm return `unavailable` before dispatching work, including stale positive transport state. Retained completed rows use registered identity/generation for editor handoff. Previously saved clips also remain accessible through ordinary media import and History |
+| `audio.routing.snapshot`, `audio.routing.addTrack`, `audio.routing.assignSource`, `audio.routing.setTrackRecordEnabled` | The existing audio routing adapter exposes observed track IDs, recording flags and revision. Writes require the observed revision and use the same persistence path as the profile inspector. Assignment mode 0 moves a source and mode 1 adds its route to another track. Disable recording tracks here for silent fixtures; legacy source-row flags do not configure an Audio1 graph |
 | `ui.navigate`, `ui.reveal`, `ui.scrollHome`, `ui.scrollEnd` | Guarded navigation and actual visibility/scroll postconditions |
 | `edit.open`, `edit.playPause/seek/setTrimIn/setTrimOut/timelineHome/timelineEnd/close` | Existing edit session operations; only open creates a session |
 | `sourcePicker.open/close`, `notificationHub.open/close`, `notification.clearAll` | Application popups and hub state |

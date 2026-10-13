@@ -1,8 +1,12 @@
 #include "mux_thread.h"
+#include "recording_media_index.h"
+#include <exosnap/engine/audio_limits.h>
+#include <exosnap/engine/recording_media_types.h>
 
 #include "annexb_to_avcc.h"
 #include "annexb_to_hvcc.h"
 #include "av_epoch_align.h"
+#include "encoded_opus_preroll.h"
 #include "exosnap/engine/audio_track_model.h"
 #include "exosnap/engine/codec_types.h"
 #include "exosnap/engine/error_types.h"
@@ -13,6 +17,7 @@
 #include "mux_queue.h"
 #include "pipeline_diagnostics_aggregator.h"
 #include "premux_state.h"
+#include "recording_audio_manifest.h"
 #include "session_internal.h"
 #include "split_sentinel_policy.h"
 
@@ -191,6 +196,14 @@ void MuxThread::Run() {
     sw_config_template.opus_frame_samples =
         static_cast<uint32_t>(OpusFrameSizeSamples(m_state.config.opus_frame_duration));
     sw_config_template.audio_track_count = track_count;
+    const uint32_t video_fps = static_cast<uint32_t>(
+        (static_cast<uint64_t>(m_state.config.frame_rate_num) + m_state.config.frame_rate_den - 1) /
+        m_state.config.frame_rate_den);
+    const uint64_t packet_duration_ns =
+        m_state.config.audio_codec == AudioCodec::Opus
+            ? static_cast<uint64_t>(sw_config_template.opus_frame_samples) * 1000000000ULL / 48000
+            : kMinimumAudioPacketDurationNs;
+    sw_config_template.reorder_window_max_packets = ReorderPacketLimit(track_count, video_fps, packet_duration_ns);
     for (uint32_t i = 0; i < track_count; ++i) {
         sw_config_template.audio_tracks[i].codec_private = audioCp[i].bytes;
         sw_config_template.audio_tracks[i].codec_delay_samples = audioCp[i].codec_delay_samples;
@@ -199,7 +212,9 @@ void MuxThread::Run() {
         // single-loopback-track path (see recorder_session.cpp) has no
         // ResolvedAudioTrack to name, so that track is left unnamed rather than
         // guessed at.
-        if (i < m_state.config.audio_track_plan.tracks.size()) {
+        if (m_state.config.resolved_audio_plan && i < m_state.config.resolved_audio_plan->tracks.size()) {
+            sw_config_template.audio_tracks[i].name = m_state.config.resolved_audio_plan->tracks[i].name;
+        } else if (i < m_state.config.audio_track_plan.tracks.size()) {
             sw_config_template.audio_tracks[i].name = DeriveAudioTrackName(m_state.config.audio_track_plan.tracks[i]);
         }
     }
@@ -217,27 +232,40 @@ void MuxThread::Run() {
     // --- Segment state ---
     struct SegmentState {
         std::unique_ptr<MatroskaStreamWriter> writer;
+        std::shared_ptr<const AudioManifest1> audio_manifest;
         std::filesystem::path path;
         uint32_t index = 0;
         // session PTS at which this segment began (epoch for segment-local rebasing)
         uint64_t epoch_session_pts_ns = 0;
+        uint64_t content_start_r_ns = 0;
         bool epoch_set = false;
-        // largest segment-local PTS emitted into this segment (for duration report)
-        uint64_t max_local_pts_ns = 0;
+        std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> codec_delay_ns{};
     };
     SegmentState seg;
+    const auto recording_id = NewId<RecordingId>();
+    const uint64_t output_generation = m_state.file_output ? m_state.file_output->generation().value : 1;
+    auto journal_path = base_output_path;
+    journal_path += L".exosnap.index";
+    auto media_index = std::make_shared<RecordingMediaIndex>(journal_path, m_state.background_io_admission);
+    auto commit_sequence = std::make_shared<std::atomic<uint64_t>>(0);
+    std::array<AudioEncoderInstanceId, CodecPrivateData::kMaxAudioTracks> encoder_instances{};
+    std::array<AudioTrackId, CodecPrivateData::kMaxAudioTracks> legacy_track_ids{};
+    std::array<std::vector<EncodedAudioPacket>, CodecPrivateData::kMaxAudioTracks> opus_history;
+    std::array<std::optional<OpusPrerollSelection>, CodecPrivateData::kMaxAudioTracks> split_preroll;
+    for (uint32_t track = 0; track < track_count; ++track) {
+        encoder_instances[track] = NewId<AudioEncoderInstanceId>();
+        legacy_track_ids[track] = NewId<AudioTrackId>();
+    }
+    {
+        std::lock_guard lock(m_state.attachment_mutex);
+        m_state.media_index = media_index;
+    }
 
     bool write_error = false;
     bool any_segment_opened = false;
     // Live-diagnostics baselines for per-segment write deltas (reset on each open).
     uint64_t diag_prev_bytes = 0;
     uint64_t diag_prev_flush = 0;
-    uint64_t frame_dur_ns = 0;
-    if (m_state.config.frame_rate_num > 0 && m_state.config.frame_rate_den > 0) {
-        frame_dur_ns = static_cast<uint64_t>(m_state.config.frame_rate_den) * 1000000000ULL /
-                       static_cast<uint64_t>(m_state.config.frame_rate_num);
-    }
-
     const auto open_segment = [&](uint32_t index, uint64_t epoch_session_pts_ns, bool epoch_set) -> bool {
         const SegmentPathResult path_result = DeriveSegmentPath(base_output_path, index);
         if (!path_result.success) {
@@ -254,8 +282,8 @@ void MuxThread::Run() {
         seg.path = path_result.path;
         seg.index = index;
         seg.epoch_session_pts_ns = epoch_session_pts_ns;
+        seg.content_start_r_ns = epoch_session_pts_ns;
         seg.epoch_set = epoch_set;
-        seg.max_local_pts_ns = 0;
         seg.writer = std::make_unique<MatroskaStreamWriter>();
         // Publish cluster-flush progress into SessionState so the shutdown sequence
         // can tell a slow-but-progressing finalize from a stalled one. A new writer
@@ -264,6 +292,69 @@ void MuxThread::Run() {
 
         MatroskaStreamConfig cfg = sw_config_template;
         cfg.output_path = seg.path.string();
+        for (uint32_t track = 0; track < track_count; ++track) {
+            auto& encoded = cfg.audio_tracks[track];
+            if (split_preroll[track]) {
+                const auto discard = split_preroll[track]->decoder_discard_samples;
+                encoded.codec_private[10] = static_cast<uint8_t>(discard & 0xff);
+                encoded.codec_private[11] = static_cast<uint8_t>(discard >> 8);
+                encoded.codec_delay_samples = discard;
+            }
+            seg.codec_delay_ns[track] = static_cast<uint64_t>(encoded.codec_delay_samples) * 1000000000ULL /
+                                        std::max<uint32_t>(1u, cfg.audio_sample_rate);
+        }
+        if (m_state.config.resolved_audio_plan) {
+            auto manifest = BuildRecordingAudioManifest(*m_state.config.resolved_audio_plan, cfg, recording_id,
+                                                        epoch_session_pts_ns);
+            if (!manifest.succeeded()) {
+                m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Mux, manifest.error()->context);
+                seg.writer.reset();
+                return false;
+            }
+            cfg.audio_manifest = std::move(*manifest.value());
+            for (auto& track : cfg.audio_manifest->tracks) {
+                const auto mux_index = track.container.stream_index.value;
+                track.container.encoder_instance_id = encoder_instances[mux_index];
+                track.container.encoder_reset = index == 0;
+                if (split_preroll[mux_index]) {
+                    const uint64_t audible_r_ns = split_preroll[mux_index]->audible_start_r_ns;
+                    track.container.first_decoded_sample_r =
+                        static_cast<int64_t>((audible_r_ns / 1000000000ULL) * cfg.audio_sample_rate +
+                                             (audible_r_ns % 1000000000ULL) * cfg.audio_sample_rate / 1000000000ULL);
+                }
+                if (cfg.audio_codec == StreamAudioCodec::Opus) {
+                    track.container.packet_duration_ns = packet_duration_ns;
+                    track.container.preroll_ns = 80'000'000;
+                }
+            }
+        }
+        RecordingMediaDescriptor descriptor;
+        descriptor.recording_id = recording_id;
+        descriptor.writer_generation = output_generation;
+        descriptor.descriptor_revision = static_cast<uint64_t>(index) + 1;
+        descriptor.segment_origin_r_ns = static_cast<int64_t>(epoch_session_pts_ns);
+        descriptor.continuity_group = 1;
+        descriptor.audio_tracks.resize(track_count);
+        for (uint32_t track = 0; track < track_count; ++track) {
+            descriptor.audio_tracks[track].track_id = legacy_track_ids[track];
+            descriptor.audio_tracks[track].encoder_instance_id = encoder_instances[track];
+            descriptor.audio_tracks[track].encoder_reset = index == 0;
+            if (split_preroll[track]) {
+                const auto audible_r_ns = split_preroll[track]->audible_start_r_ns;
+                descriptor.audio_tracks[track].first_decoded_sample_r =
+                    static_cast<int64_t>((audible_r_ns / 1000000000ULL) * cfg.audio_sample_rate +
+                                         (audible_r_ns % 1000000000ULL) * cfg.audio_sample_rate / 1000000000ULL);
+            }
+        }
+        if (m_state.config.resolved_audio_plan)
+            descriptor.source_timeline_revision = m_state.config.resolved_audio_plan->revision.value;
+        cfg.media_descriptor = std::move(descriptor);
+        seg.audio_manifest = cfg.audio_manifest ? std::make_shared<const AudioManifest1>(*cfg.audio_manifest) : nullptr;
+        cfg.initial_commit_sequence = commit_sequence->load(std::memory_order_relaxed);
+        cfg.publish_committed = [media_index, commit_sequence](CommittedMediaReceipt receipt) {
+            commit_sequence->store(receipt.commit_sequence, std::memory_order_relaxed);
+            return media_index->PublishCommitted(std::move(receipt));
+        };
         cfg.fail_io = m_state.output_io_failure;
         // Only segment 0 keeps the base path the caller reserved; DeriveSegmentPath
         // mints every later one, so those are the writer's to create exclusively.
@@ -276,6 +367,7 @@ void MuxThread::Run() {
             return false;
         }
         any_segment_opened = true;
+        media_index->RegisterDescriptor(seg.writer->media_descriptor());
         m_state.diagnostics.OnSegmentOpened(index);
         diag_prev_bytes = 0;
         diag_prev_flush = 0;
@@ -297,6 +389,9 @@ void MuxThread::Run() {
                                           m_state.measured_max_fall_nits.load(std::memory_order_relaxed));
         const auto finalize_t0 = std::chrono::steady_clock::now();
         const bool ok = seg.writer->Finalize();
+        const auto media_descriptor = seg.writer->media_descriptor();
+        const auto measured_content_end_ns = seg.writer->measured_content_end_ns();
+        const auto seal = seg.writer->finalized_segment_seal();
         const double finalize_ms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - finalize_t0).count();
         const std::string err = seg.writer->error();
@@ -314,12 +409,6 @@ void MuxThread::Run() {
         seg.writer.reset();
         m_state.diagnostics.OnSegmentFinalized(finalize_ms, ok);
 
-        // The trailing frame duration represents the last *video* frame's on-screen
-        // interval. A segment that never received a video frame (epoch never set — an
-        // audio-only flush) has no such frame, so adding a video frame's worth would
-        // overstate its duration; use the audio PTS span as-is.
-        const uint64_t tail_ns = (seg.max_local_pts_ns > 0 && seg.epoch_set) ? frame_dur_ns : 0;
-        const uint64_t local_duration_ns = seg.max_local_pts_ns + tail_ns;
         // Query the real on-disk size regardless of `ok`: a failed Finalize()
         // still leaves the file on disk (see below), and any clusters flushed
         // before the failure are genuine bytes, not zero.
@@ -328,11 +417,20 @@ void MuxThread::Run() {
         CompletedSegment info;
         info.path = seg.path;
         info.index = seg.index;
-        info.session_start_ms = seg.epoch_session_pts_ns / 1000000ULL;
-        info.duration_ms = local_duration_ns / 1000000ULL;
+        const uint64_t preroll_duration_ns = seg.content_start_r_ns - seg.epoch_session_pts_ns;
+        const uint64_t content_duration_ns = measured_content_end_ns && *measured_content_end_ns > preroll_duration_ns
+                                                 ? *measured_content_end_ns - preroll_duration_ns
+                                                 : 0;
+        info.session_start_ms = seg.content_start_r_ns / 1000000ULL;
+        info.duration_ms = content_duration_ns / 1000000ULL;
         info.file_size_bytes = file_bytes;
         info.succeeded = ok;
         info.session_end = session_end;
+        info.audio_manifest = seg.audio_manifest;
+        info.media_descriptor = media_descriptor;
+        info.session_start_ns = seg.content_start_r_ns;
+        info.duration_ns = content_duration_ns;
+        info.seal = seal;
 
         if (!ok) {
             write_error = true;
@@ -371,7 +469,9 @@ void MuxThread::Run() {
     // --- A/V timestamp alignment, resolved incrementally (see header note) ---
     bool epoch_resolved = false;
     uint64_t video_epoch_100ns = 0;
-    MuxAudioHold pending_audio;
+    const MuxAudioHold::Limits audio_hold_limits{kAudioPremuxPayloadBytes, kAudioHoldHorizonNs,
+                                                 AudioHoldPacketLimit(track_count)};
+    MuxAudioHold pending_audio(audio_hold_limits);
 
     auto resolve_epoch = [&]() {
         if (epoch_resolved)
@@ -430,20 +530,15 @@ void MuxThread::Run() {
     // and the audio queue is independent -- so audio can arrive first, and
     // writing it before the epoch exists is what put ten-minute timestamps in a
     // freshly-opened file.
-    MuxAudioHold segment_pending_audio;
+    MuxAudioHold segment_pending_audio(audio_hold_limits);
     // Audio that belonged to a segment already closed. Counted, not just dropped.
     uint64_t trimmed_audio_packets = 0;
     // Highest aligned session PTS actually WRITTEN per audio track, so the
     // duration reported for audio describes the file rather than the encoder.
     std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> aligned_audio_end_ns{};
-    MuxAudioHold audio_hold;
+    MuxAudioHold audio_hold(audio_hold_limits);
     std::optional<SplitSentinel> pending_split;
 
-    std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> audio_codec_delay_ns{};
-    for (uint32_t i = 0; i < track_count; ++i) {
-        audio_codec_delay_ns[i] = static_cast<uint64_t>(audioCp[i].codec_delay_samples) * 1000000000ULL /
-                                  std::max<uint32_t>(1u, m_state.config.audio_sample_rate);
-    }
     auto align_audio = [&](EncodedAudioPacket& payload) -> bool {
         if (write_error || !seg.writer)
             return false;
@@ -470,8 +565,9 @@ void MuxThread::Run() {
             if (!segment_pending_audio.Push(std::move(payload))) {
                 write_error = true;
                 m_state.diagnostics.OnMuxFailure();
-                m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                      "Audio waiting for the segment epoch exceeded the mux byte or media-time limit");
+                m_state.RecordFailure(
+                    E_OUTOFMEMORY, ErrorPhase::Mux,
+                    "Audio waiting for the segment epoch exceeded the mux packet, payload or media-time limit");
             }
             return;
         }
@@ -485,14 +581,19 @@ void MuxThread::Run() {
         // Matroska stores audio block timestamps offset by the track's CodecDelay
         // (the reader subtracts it), so the first audible sample -- not the
         // encoder's priming -- lands where the timeline says it does.
-        const uint64_t local = placed.local_pts_ns + audio_codec_delay_ns[payload.track_id];
+        const uint64_t local = placed.local_pts_ns + seg.codec_delay_ns[payload.track_id];
+        if (sw_config_template.audio_codec == StreamAudioCodec::Opus) {
+            auto& history = opus_history[payload.track_id];
+            const size_t maximum_packets = 3840 / sw_config_template.opus_frame_samples;
+            if (history.size() == maximum_packets)
+                history.erase(history.begin());
+            history.push_back(payload);
+        }
         MuxPacket mp;
         mp.pts_ns = local;
         mp.track_num = 2 + payload.track_id;
         mp.is_key = true;
         mp.bytes = std::move(payload.bytes);
-        if (local > seg.max_local_pts_ns)
-            seg.max_local_pts_ns = local;
         if (!seg.writer->Push(std::move(mp))) {
             write_error = true;
             m_state.diagnostics.OnMuxFailure();
@@ -503,7 +604,7 @@ void MuxThread::Run() {
         // on the capture timeline and differs from this by the track's shift, so
         // comparing that against the video duration reported the epoch offset as
         // drift.
-        const uint64_t aligned_end = payload.pts_ns + audio_codec_delay_ns[payload.track_id];
+        const uint64_t aligned_end = payload.pts_ns + seg.codec_delay_ns[payload.track_id];
         if (aligned_end > aligned_audio_end_ns[payload.track_id])
             aligned_audio_end_ns[payload.track_id] = aligned_end;
     };
@@ -517,6 +618,7 @@ void MuxThread::Run() {
         // in here, because that drain goes back through push_audio.
         if (!seg.epoch_set) {
             seg.epoch_session_pts_ns = payload.pts_ns;
+            seg.content_start_r_ns = payload.pts_ns;
             seg.epoch_set = true;
         }
         // The epoch was just set from this packet when it is the segment's first,
@@ -567,8 +669,6 @@ void MuxThread::Run() {
         } else {
             mp.bytes = std::move(payload.bytes);
         }
-        if (local > seg.max_local_pts_ns)
-            seg.max_local_pts_ns = local;
         if (!seg.writer->Push(std::move(mp))) {
             write_error = true;
             m_state.diagnostics.OnMuxFailure();
@@ -591,15 +691,16 @@ void MuxThread::Run() {
             write_error = true;
             m_state.diagnostics.OnMuxFailure();
             m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                  "Audio waiting for video exceeded the mux byte or media-time limit");
+                                  "Audio waiting for video exceeded the mux packet, payload or media-time limit");
         }
     };
     auto buffer_pending_audio = [&](EncodedAudioPacket&& payload) {
         if (!pending_audio.Push(std::move(payload))) {
             write_error = true;
             m_state.diagnostics.OnMuxFailure();
-            m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                  "Audio waiting for the video epoch exceeded the mux byte or media-time limit");
+            m_state.RecordFailure(
+                E_OUTOFMEMORY, ErrorPhase::Mux,
+                "Audio waiting for the video epoch exceeded the mux packet, payload or media-time limit");
         }
     };
     auto drain_pending_audio = [&]() {
@@ -650,13 +751,52 @@ void MuxThread::Run() {
         // cppcheck-suppress identicalConditionAfterEarlyExit
         if (write_error)
             return;
-        // Open the next segment with epoch unset; push_video sets it from the
-        // first video packet (the forced keyframe that follows the sentinel).
+        // The keyframe boundary also freezes the origin in the immutable header
+        // and index descriptor before any segment media is published.
         m_state.diagnostics.OnSplitTransition(ToDiagnosticsSplitTrigger(s.trigger));
         // Reset size-split guard so the new segment can trigger if it also exceeds
         // the threshold.
         m_state.size_split_armed.store(false);
-        open_segment(s.new_segment_index, /*epoch*/ 0, /*epoch_set*/ false);
+        uint64_t segment_origin_ns = boundary_ns;
+        if (sw_config_template.audio_codec == StreamAudioCodec::Opus) {
+            for (uint32_t track = 0; track < track_count; ++track) {
+                const auto& history = opus_history[track];
+                if (history.empty() || history.back().pts_ns > UINT64_MAX - packet_duration_ns) {
+                    write_error = true;
+                    m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Opus split has no contiguous decoder preroll");
+                    return;
+                }
+                split_preroll[track] = SelectOpusPreroll(history, track, history.back().pts_ns + packet_duration_ns,
+                                                         sw_config_template.opus_frame_samples);
+                if (!split_preroll[track] || sw_config_template.audio_tracks[track].codec_private.size() < 12) {
+                    write_error = true;
+                    m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Opus split has insufficient decoder preroll");
+                    return;
+                }
+                segment_origin_ns = (std::min)(segment_origin_ns, split_preroll[track]->origin_r_ns);
+            }
+        }
+        if (!open_segment(s.new_segment_index, segment_origin_ns, true)) {
+            write_error = true;
+            return;
+        }
+        seg.content_start_r_ns = boundary_ns;
+        for (uint32_t track = 0; track < track_count; ++track) {
+            if (!split_preroll[track])
+                continue;
+            for (const auto& packet : opus_history[track]) {
+                MuxPacket preroll;
+                preroll.track_num = 2 + track;
+                preroll.pts_ns = packet.pts_ns - segment_origin_ns + seg.codec_delay_ns[track];
+                preroll.is_key = true;
+                preroll.bytes = packet.bytes;
+                if (!seg.writer->Push(std::move(preroll))) {
+                    write_error = true;
+                    m_state.diagnostics.OnMuxFailure();
+                    return;
+                }
+            }
+        }
     };
 
     // A single dispatch for a queued MuxItem payload.

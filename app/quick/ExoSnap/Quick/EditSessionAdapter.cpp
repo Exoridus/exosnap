@@ -161,6 +161,13 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
     emit editPageRequested();
 }
 
+void EditSessionAdapter::setDeliveryPending(bool pending) {
+    if (context_.delivery_pending == pending)
+        return;
+    context_.delivery_pending = pending;
+    emit clipChanged();
+}
+
 const EditContext& EditSessionAdapter::editContext() const noexcept {
     return context_;
 }
@@ -403,6 +410,11 @@ void EditSessionAdapter::setTrimUs(int64_t start_us, int64_t end_us) {
     emit trimChanged();
     if (had_edits != hasUnsavedEdits())
         emit unsavedEditsChanged();
+}
+
+void EditSessionAdapter::setAssetMonitorSelection(edit::Id asset, engine::MonitorSelectionSnapshot selection) {
+    if (workspace_.setMonitorSelection(asset, std::move(selection)))
+        emit workspaceChanged();
 }
 
 void EditSessionAdapter::applyReport(const EditContext& context) {

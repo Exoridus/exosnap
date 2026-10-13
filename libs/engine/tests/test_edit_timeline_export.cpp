@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <string>
 #include <system_error>
 #include <vector>
 
@@ -143,6 +145,14 @@ TEST_F(TimelineExportTest, ProbeReadsRealMediaAndReportsMissingSource) {
     EXPECT_FALSE(ProbeEditMedia(output).error.empty());
 }
 
+TEST_F(TimelineExportTest, CancelledAssessmentRejectsAnOtherwiseValidSource) {
+    const auto clip = FullClip();
+    std::atomic<bool> cancelled{true};
+    const auto result = AssessTimelineExport({clip}, true, &cancelled);
+    EXPECT_EQ(result.eligibility, TimelineExportEligibility::Invalid);
+    EXPECT_NE(result.reason.find("cancelled"), std::string::npos);
+}
+
 TEST_F(TimelineExportTest, InvalidRecipesAreRejectedBeforeOpeningMedia) {
     EXPECT_EQ(AssessTimelineExport({}, true).eligibility, TimelineExportEligibility::Invalid);
     EXPECT_EQ(AssessTimelineExport({{output, -1, 100, 0}}, true).eligibility, TimelineExportEligibility::Invalid);
@@ -254,6 +264,16 @@ TEST_F(TimelineExportTest, AudioHardCutPreservesEverySampleAndMonotoneTimestamps
     EXPECT_EQ(status, AVERROR_EOF);
     EXPECT_EQ(bytes, 2 * 48000 * 2);
     EXPECT_LE(std::abs(input->duration - 2000000), 1000);
+}
+
+TEST_F(TimelineExportTest, UntaggedDistinctAssetsRequireExplicitSemanticMapping) {
+    ASSERT_TRUE(WritePcmMatroska(audio_source));
+    const auto other = output.parent_path() / "distinct-audio-source.mkv";
+    ASSERT_TRUE(std::filesystem::copy_file(audio_source, other));
+    const auto result = AssessTimelineExport({{audio_source, 0, 1000000, 0}, {other, 0, 1000000, 1000000}}, false);
+    EXPECT_EQ(result.eligibility, TimelineExportEligibility::Invalid);
+    EXPECT_FALSE(std::filesystem::exists(output));
+    std::filesystem::remove(other);
 }
 
 TEST_F(TimelineExportTest, CancellationRemovesPartialOutput) {

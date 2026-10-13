@@ -48,6 +48,15 @@ TEST(AudioPlanValidateTest, Validate_AcceptsMergedAudioTrack_TwoSources) {
     EXPECT_TRUE(validation.succeeded);
 }
 
+TEST(AudioPlanValidateTest, ExplicitEmptyResolvedPlanDoesNotUseLegacyTracks) {
+    RecorderSession session;
+    auto config = MakeValidBaseConfig();
+    config.resolved_audio_plan.emplace();
+    config.audio_track_plan.tracks.push_back(MakeTrack(0, {AudioSourceKind::App}));
+    RecorderResult result;
+    EXPECT_TRUE(session.Validate(config, &result)) << result.error_detail;
+}
+
 TEST(AudioPlanValidateTest, Validate_RejectsTrackWithFourSources) {
     // Tracks with more than 3 sources remain invalid.
     RecorderSession session;
@@ -209,6 +218,18 @@ TEST(AudioPlanValidateTest, Validate_RejectsPcmFloatWithBitDepth16) {
     EXPECT_FALSE(session.Validate(cfg, &validation));
     EXPECT_EQ(validation.error_code, E_INVALIDARG);
     EXPECT_EQ(validation.error_phase, ErrorPhase::Prepare);
+}
+
+TEST(AudioPlanValidateTest, EightDenseTracksValidateAndNinthFailsBeforeCapture) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidBaseConfig();
+    for (uint32_t index = 0; index < 8; ++index)
+        cfg.audio_track_plan.tracks.push_back(MakeTrack(index, {AudioSourceKind::SystemOutput}));
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    cfg.audio_track_plan.tracks.push_back(MakeTrack(8, {AudioSourceKind::SystemOutput}));
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
 }
 
 } // namespace

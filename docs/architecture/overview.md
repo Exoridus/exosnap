@@ -20,7 +20,7 @@ The practical dependency direction is presentation → application services/mode
 
 ## Main data flows
 
-A settings gesture reaches `SettingsAdapter`, then the existing reconciliation and sanitization functions. The composition root persists the resulting live configuration and supplies it to the recording coordinator. A start snapshots its inputs before crossing into a worker. The worker validates the destination and resolved configuration, acquires resources, and enters `RecorderSession`. Engine workers produce packets and measurements. The mux worker owns file serialization, while queued application callbacks update the presentation models.
+A settings gesture reaches `SettingsAdapter`, then the existing reconciliation and sanitization functions. The composition root persists the resulting live configuration and supplies it to the recording coordinator. The recording inspector and global Settings share one adapter. A recording freezes the active configuration while explicit next-recording editing changes the persisted draft without reconfiguring active resources. On return to idle the draft is applied to coordinator preparation. Panel state and minimum preview geometry are reduced in C++, while QML presents overlays and explicit pinned insets. A start snapshots its inputs before crossing into a worker. The worker validates the destination and resolved configuration, acquires resources, and enters `RecorderSession`. Engine workers produce packets and measurements. The mux worker owns file serialization, while queued application callbacks update the presentation models.
 
 The preview is a separate consumer of GPU images, not the capture or encode clock. Idle preview uses capture hubs. Recording preview consumes the composited engine image. An unavailable or slow preview must not hold the recorder's producer or encoder resources indefinitely.
 
@@ -42,7 +42,7 @@ A worker that outlives a bounded join must retain everything it can still access
 
 ## Cross-cutting invariants
 
-There is one owner for each policy. The source rows are editable inputs, the resolved tracks are engine results, and neither is reconstructed in JavaScript. Hardware availability is measured, not inferred from a product name. Unknown metrics remain unavailable rather than becoming zero. Files become final only after the operation that makes them valid succeeds. An update offer, its signed manifest, its installed version and its release notes refer to the same target.
+There is one owner for each policy. Typed source/track/route intents are editable inputs and resolved tracks are engine results; neither is reconstructed in JavaScript. Legacy row configuration remains an explicit compatibility variant. Hardware availability is measured, not inferred from a product name. Unknown metrics remain unavailable rather than becoming zero. Files become final only after the operation that makes them valid succeeds. An update offer, its signed manifest, its installed version and its release notes refer to the same target.
 
 Errors cross boundaries as typed outcomes with a phase and actionable detail. A diagnostic notice is not a blocker. A verification infrastructure error is not a product failure. A UI indication that a command was accepted is not evidence that an asynchronous operation completed.
 

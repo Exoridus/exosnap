@@ -1,7 +1,10 @@
 #pragma once
 
+#include <exosnap/engine/audio_routing_model.h>
 #include <exosnap/engine/audio_track_model.h>
+#include <exosnap/engine/background_io.h>
 #include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/recording_media_types.h>
 #include <exosnap/engine/split_trigger_source.h>
 
 #include "backend_tuning.h"
@@ -25,6 +28,8 @@
 #include <vector>
 
 namespace exosnap::engine {
+
+struct AudioManifest1;
 
 // ---------------------------------------------------------------------------
 // WebcamFrameProvider — injected into RecorderConfig for compositing
@@ -253,14 +258,6 @@ struct CaptureRegion {
 };
 
 // Microphone channel mapping policy for MIC capture in M4 Phase 4.2.
-enum class MicChannelMode {
-    Auto,
-    PreserveStereo,
-    MonoMix,
-    LeftToStereo,
-    RightToStereo,
-};
-
 // ---------------------------------------------------------------------------
 // Split recording (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1)
 // ---------------------------------------------------------------------------
@@ -305,6 +302,11 @@ struct CompletedSegment {
     // than inferred from an outstanding split request, which may never have
     // reached a boundary (a split asked for while paused, or just before stop).
     bool session_end = false;
+    std::shared_ptr<const AudioManifest1> audio_manifest;
+    std::shared_ptr<const RecordingMediaDescriptor> media_descriptor;
+    uint64_t session_start_ns = 0;
+    uint64_t duration_ns = 0;
+    std::optional<RecordingSegmentSeal> seal;
 };
 
 // Invoked from the mux worker thread as each segment is finalized. Must be
@@ -519,6 +521,9 @@ struct RecorderConfig {
     // Phase 2 legacy compatibility: empty plan means single audio track.
     AudioTrackPlan audio_track_plan;
 
+    // Authoritative when present. An empty resolved plan explicitly records no audio.
+    std::optional<ResolvedAudioPlan> resolved_audio_plan;
+
     // When false, no audio threads are started and audio_track_plan is ignored.
     // Default true preserves backward compatibility: empty plan -> WasapiLoopbackSrc.
     bool record_audio = true;
@@ -636,6 +641,9 @@ struct RecorderConfig {
     // Automatic/manual segment splitting. Default Off == single-file recording.
     RecordingSplitSettings split;
 };
+
+// In-process identity for explicit configuration values. Not a persistent file or codec fingerprint.
+[[nodiscard]] std::string RuntimeConfigContentKey(const RecorderConfig& config);
 
 [[nodiscard]] inline constexpr EffectiveCaptureBackend ResolveCaptureBackend(const RecorderConfig& config) noexcept {
     return ResolveCaptureBackend(config.target.kind, config.capture_backend);
@@ -829,8 +837,17 @@ class RecorderSession {
     // request_id scopes the call exactly as it does for Stop().
     void SetAudioSourceMuted(AudioSourceKind kind, bool muted,
                              RecordRequestId request_id = kUnscopedRecordRequest) noexcept;
+    // Addresses a logical source in the active plan without restarting capture.
+    bool SetAudioSourceMuted(const AudioSourceId& id, bool muted, RecordRequestId request_id = kUnscopedRecordRequest);
 
     void SetSegmentCallback(SegmentCallback cb);
+    // Captured at Record(). Applies only to background index I/O, never mux payload.
+    void SetBackgroundIoAdmission(BackgroundIoAdmission admission);
+    [[nodiscard]] bool HasCommittedRecordingClipInterval(RecordRequestId request_id) const;
+
+    // Returns a finite committed snapshot without waiting for new recorder output.
+    // The caller owns background journal/media reads and must recheck source identity.
+    Outcome<MediaIndexSnapshot> FreezeRecordingMediaIndex(RecordRequestId request_id = kUnscopedRecordRequest);
 
     // Thread-safe live webcam overlay update. Honoured from the moment
     // Record(request_id) has taken over the session state. No-op if request_id is

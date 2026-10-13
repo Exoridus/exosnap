@@ -6,6 +6,7 @@
 #include <string>
 
 #include "../models/CrashReportPolicy.h"
+#include "../models/HiddenCaptureTargets.h"
 #include "../models/PreviewRatePolicy.h"
 
 namespace exosnap {
@@ -75,6 +76,7 @@ enum class SettingsWriteDecision : uint8_t {
 }
 
 struct PersistedAppSettings {
+    QVector<HiddenCaptureRule> hidden_window_rules;
     int preview_frame_rate = 60;
     // Indexed by HotkeyAction: ToggleRecording, TogglePause, CaptureFrame,
     // AddMarker, SplitRecording. Size must match kHotkeyActionCount.

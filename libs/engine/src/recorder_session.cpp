@@ -1,6 +1,10 @@
+#include "audio_runtime_graph.h"
 #include <cstdint>
 #include <cwchar>
+#include <exosnap/engine/background_io.h>
+#include <exosnap/engine/mic_dsp_config.h>
 #include <exosnap/engine/recorder_session.h>
+#include <exosnap/engine/recording_media_types.h>
 
 #include "audio_thread.h"
 #include "brickwall_limiter.h"
@@ -19,11 +23,14 @@
 #include "mux_thread.h"
 #include "pipeline_diagnostics_aggregator.h"
 #include "premux_state.h"
+#include "production_runtime.h"
+#include "recording_media_index.h"
 #include "session_callback_gate.h"
 #include "session_internal.h"
 #include "session_outcome.h"
 #include "session_stats_collector.h"
 #include "session_stop_reset.h"
+#include "shared_audio_capture.h"
 #include "split_sentinel_policy.h"
 #include "video_thread.h"
 #include "wasapi_capture_src.h"
@@ -156,6 +163,8 @@ struct RecorderSession::Impl {
     // session gets an untouched one.
     std::mutex state_mutex;
     std::shared_ptr<SessionState> state = std::make_shared<SessionState>();
+    std::shared_ptr<ProductionRuntime> runtime = std::make_shared<ProductionRuntime>();
+    uint64_t output_generation = 0;
     bool workers_leaked = false; // guarded by state_mutex
     // A Stop() that arrives outside Record()'s active-recording window (see
     // session_stop_reset.h). Deliberately NOT on SessionState: it must survive
@@ -176,6 +185,7 @@ struct RecorderSession::Impl {
     PreviewSharedHandleCallback preview_shared_handle_callback;
     PreviewFramePublishedCallback preview_frame_published_callback;
     SegmentCallback segment_callback;
+    BackgroundIoAdmission background_io_admission;
     uint64_t diagnostics_generation{0};
     std::atomic<bool> recording{false};
 
@@ -204,6 +214,7 @@ RecorderSession::RecorderSession() : m_impl(new Impl{}) {
 RecorderSession::~RecorderSession() {
     if (m_impl->gate)
         m_impl->gate->Close();
+    m_impl->runtime->RequestShutdown();
     delete m_impl;
 }
 
@@ -430,9 +441,9 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         }
     }
 
-    if (config.record_audio) {
+    if (!config.resolved_audio_plan && config.record_audio) {
         if (config.audio_track_plan.tracks.size() > CodecPrivateData::kMaxAudioTracks) {
-            return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_track_plan: max 3 audio tracks supported");
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_track_plan: max 8 audio tracks supported");
         }
 
         // track_index is the position a worker writes into -- codec-private slots,
@@ -566,6 +577,17 @@ bool RecorderSession::RequestSplit(SplitTriggerSource source, RecordRequestId re
     return true;
 }
 
+bool RecorderSession::SetAudioSourceMuted(const AudioSourceId& id, bool muted, RecordRequestId request_id) {
+    const auto state = m_impl->StateForRequest(request_id);
+    if (!state)
+        return false;
+    std::shared_ptr<AudioRuntimeGraph> graph;
+    {
+        std::lock_guard lock(state->attachment_mutex);
+        graph = state->audio_runtime_graph;
+    }
+    return graph && graph->SetSourceMuted(id, muted);
+}
 void RecorderSession::SetAudioSourceMuted(AudioSourceKind kind, bool muted, RecordRequestId request_id) noexcept {
     // Gated on the request, not on the workers being up: between Record()'s
     // state reset and its worker start the mask already belongs to this
@@ -585,6 +607,41 @@ void RecorderSession::SetSegmentCallback(SegmentCallback cb) {
     // Stored on the Impl (not the SessionState) so the callback survives the
     // fresh-state swap after a leaked worker; Record() copies it in.
     m_impl->segment_callback = std::move(cb);
+}
+
+void RecorderSession::SetBackgroundIoAdmission(BackgroundIoAdmission admission) {
+    std::lock_guard lock(m_impl->state_mutex);
+    m_impl->background_io_admission = std::move(admission);
+}
+
+bool RecorderSession::HasCommittedRecordingClipInterval(RecordRequestId request_id) const {
+    const auto state = m_impl->StateForRequest(request_id);
+    if (!state)
+        return false;
+    std::shared_ptr<RecordingMediaIndex> index;
+    {
+        std::lock_guard lock(state->attachment_mutex);
+        index = state->media_index;
+    }
+    return index && index->has_closed_clip_interval();
+}
+
+Outcome<MediaIndexSnapshot> RecorderSession::FreezeRecordingMediaIndex(RecordRequestId request_id) {
+    const auto state = m_impl->StateForRequest(request_id);
+    std::shared_ptr<RecordingMediaIndex> index;
+    if (state) {
+        std::lock_guard lock(state->attachment_mutex);
+        index = state->media_index;
+    }
+    if (!index) {
+        EngineError error;
+        error.code = EngineErrorCode::IndexNotReady;
+        error.owner = EngineModule::MediaIndex;
+        error.context = "No committed index is attached to this recording";
+        error.retryability = Retryability::Transient;
+        return error;
+    }
+    return index->Freeze();
 }
 
 void RecorderSession::RequestFrameSnapshot(FrameSnapshotCallback callback, RecordRequestId request_id) {
@@ -646,6 +703,9 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
     // When the user selected MP4, redirect the engine to a transient MKV path;
     // the app layer handles the remux and deletion after this call returns.
     RecorderConfig engine_config = config;
+    const bool record_audio =
+        config.resolved_audio_plan ? !config.resolved_audio_plan->tracks.empty() : config.record_audio;
+    engine_config.record_audio = record_audio;
     if (config.container == Container::Mp4) {
         engine_config.container = Container::Matroska;
         engine_config.output_path = DeriveTransientMkvPath(config.output_path);
@@ -660,11 +720,14 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
     bool pre_stop = false;
     {
         std::lock_guard lk(m_impl->state_mutex);
-        if (m_impl->workers_leaked) {
-            m_impl->state = std::make_shared<SessionState>();
+        if (m_impl->workers_leaked || m_impl->runtime->gpu_stalled()) {
+            m_impl->runtime->RequestShutdown();
+            m_impl->runtime = std::make_shared<ProductionRuntime>();
             m_impl->workers_leaked = false;
         }
+        m_impl->state = std::make_shared<SessionState>();
         state_ptr = m_impl->state;
+        state_ptr->background_io_admission = m_impl->background_io_admission;
         m_impl->active_request = request_id;
         // Consumed here (under the same lock as the swap above) so a Stop() that
         // raced ahead of this Record() call is honored regardless of whether the
@@ -687,13 +750,15 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         // stop token this call must start with is the last word.
         ResetStopRequestedForNewSession(st, pre_stop);
         st.config = engine_config;
+        st.production_runtime = m_impl->runtime;
         st.SeedWebcamOverlayFromConfig();
-        if (!config.record_audio) {
+        if (!record_audio) {
             st.audio_track_count = 0;
         } else {
-            st.audio_track_count = config.audio_track_plan.tracks.empty()
-                                       ? 1u
-                                       : static_cast<uint32_t>(config.audio_track_plan.tracks.size());
+            st.audio_track_count =
+                config.resolved_audio_plan ? static_cast<uint32_t>(config.resolved_audio_plan->tracks.size())
+                : config.audio_track_plan.tracks.empty() ? 1u
+                                                         : static_cast<uint32_t>(config.audio_track_plan.tracks.size());
         }
         {
             LARGE_INTEGER qpc, freq;
@@ -738,6 +803,9 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
     }
 
     auto failPrepare = [&](int32_t hr, const std::string& detail) -> RecorderResult {
+        state_ptr->RequestCleanStop();
+        if (state_ptr->audio_runtime_graph)
+            state_ptr->audio_runtime_graph->Start();
         RecorderResult r;
         r.succeeded = false;
         r.error_code = hr;
@@ -746,6 +814,22 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         m_impl->recording.store(false);
         return r;
     };
+
+    const auto runtime = state_ptr->production_runtime;
+    if (!runtime->audio_registry())
+        runtime->SetAudioRegistry(std::make_shared<SharedAudioCaptureRegistry>());
+    RuntimeOutputCommand output_command;
+    output_command.command_id = NewId<CommandId>();
+    output_command.expected_revision = runtime->revision();
+    output_command.output_generation = {++m_impl->output_generation};
+    output_command.content_key = RuntimeConfigContentKey(engine_config);
+    const auto prepared_output = runtime->PrepareOutput(state_ptr, std::move(output_command));
+    if (!prepared_output.succeeded())
+        return failPrepare(E_FAIL, prepared_output.error()->context);
+    {
+        std::lock_guard lock(state_ptr->attachment_mutex);
+        state_ptr->file_output = *prepared_output.value();
+    }
 
     auto createAudioSource = [&](AudioSourceKind kind) -> std::unique_ptr<IAudioCaptureSource> {
         switch (kind) {
@@ -785,8 +869,24 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
     };
 
     std::vector<std::shared_ptr<AudioThread>> audioWorkers;
-    if (!config.record_audio) {
+    if (!record_audio) {
         // Video-only path: no audio workers.
+    } else if (config.resolved_audio_plan) {
+        std::string error;
+        auto graph = AudioRuntimeGraph::Prepare(
+            *config.resolved_audio_plan, runtime->audio_registry(), state_ptr->session_start_qpc_100ns * 100,
+            config.audio_codec == AudioCodec::Opus ? 48000u : config.audio_sample_rate, config.audio_channels,
+            config.audio_clock_slaving_enabled, error);
+        if (!graph)
+            return failPrepare(E_FAIL, error);
+        {
+            std::lock_guard lock(state_ptr->attachment_mutex);
+            state_ptr->audio_runtime_graph = graph;
+        }
+        auto tracks = graph->TakeTracks();
+        for (size_t index = 0; index < tracks.size(); ++index)
+            audioWorkers.push_back(
+                std::make_shared<AudioThread>(state_ptr, std::move(tracks[index]), static_cast<uint32_t>(index)));
     } else if (config.audio_track_plan.tracks.empty()) {
         auto source = std::make_unique<WasapiLoopbackSrc>();
         audioWorkers.push_back(std::make_shared<AudioThread>(
@@ -858,6 +958,18 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         }
     }
 
+    const auto attached_output = runtime->AttachOutput(state_ptr->file_output);
+    if (!attached_output.succeeded())
+        return failPrepare(E_FAIL, attached_output.error()->context);
+    if (state_ptr->stop_requested.load())
+        state_ptr->RequestCleanStop();
+    if (state_ptr->audio_runtime_graph) {
+        std::weak_ptr<SessionState> weak_state = state_ptr;
+        state_ptr->audio_runtime_graph->Start([weak_state](std::string error) {
+            if (const auto state = weak_state.lock())
+                state->RecordFailure(E_FAIL, ErrorPhase::AudioCapture, error);
+        });
+    }
     m_impl->recording.store(true);
 
     // Start stats collector (Stop() joins its thread before Record returns, so
@@ -871,7 +983,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
     // Workers are shared_ptr-owned: each Start() hands the running thread shared
     // ownership of its worker (and through it the SessionState), so abandoning a
     // stalled worker below leaks the thread but never dangles what it touches.
-    auto videoThread = std::make_shared<VideoThread>(state_ptr);
+    auto videoThread = runtime->AcquireVideoWorker(state_ptr);
     auto muxThread = std::make_shared<MuxThread>(state_ptr);
 
     for (auto& worker : audioWorkers) {
@@ -892,7 +1004,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
     // handle becomes invalid once the std::thread is joined.
     std::vector<HANDLE> allHandles;
     allHandles.reserve(audioWorkers.size() + 2);
-    allHandles.push_back(videoThread->NativeHandle());
+    allHandles.push_back(state_ptr->file_output->VideoEndedHandle());
     for (auto& worker : audioWorkers) {
         allHandles.push_back(worker->NativeHandle());
     }
@@ -959,7 +1071,10 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         // destructors don't detach a still-running thread (order matches producerHandles:
         // video at 0, audio at 1..n). Timed-out workers stay unsignaled and are detached.
         if (!jr.signaled.empty() && jr.signaled[0]) {
-            videoJoined = videoThread->Join(0);
+            videoJoined = true;
+            if (const auto native = videoThread->NativeHandle();
+                native && WaitForSingleObject(native, 0) == WAIT_OBJECT_0)
+                (void)videoThread->Join(0);
         }
         for (size_t i = 0; i < audioWorkers.size(); ++i) {
             if (jr.signaled[1 + i]) {

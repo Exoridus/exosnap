@@ -10,7 +10,10 @@
 #include <QVariantMap>
 #include <QtQmlIntegration/qqmlintegration.h>
 
+#include "models/HiddenCaptureTargets.h"
+
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -48,6 +51,7 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(QString driftText READ driftText NOTIFY changed FINAL)
     Q_PROPERTY(bool liveStatsAvailable READ liveStatsAvailable NOTIFY liveStatsAvailableChanged FINAL)
 
+    Q_PROPERTY(bool pendingEditMasterAvailable READ pendingEditMasterAvailable NOTIFY changed FINAL)
     Q_PROPERTY(bool canStart READ canStart NOTIFY changed FINAL)
     Q_PROPERTY(bool canStop READ canStop NOTIFY changed FINAL)
     Q_PROPERTY(bool canPause READ canPause NOTIFY changed FINAL)
@@ -70,6 +74,13 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(QVariantList targetOptions READ targetOptions NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(QVariantList displayTargetOptions READ displayTargetOptions NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(QVariantList windowTargetOptions READ windowTargetOptions NOTIFY targetOptionsChanged FINAL)
+    Q_PROPERTY(
+        QVariantList filteredWindowTargetOptions READ filteredWindowTargetOptions NOTIFY targetOptionsChanged FINAL)
+    Q_PROPERTY(int pickerSearchMatchCount READ pickerSearchMatchCount NOTIFY targetOptionsChanged FINAL)
+    Q_PROPERTY(int hiddenWindowCount READ hiddenWindowCount NOTIFY targetOptionsChanged FINAL)
+    Q_PROPERTY(
+        bool showHiddenWindows READ showHiddenWindows WRITE setShowHiddenWindows NOTIFY targetOptionsChanged FINAL)
+    Q_PROPERTY(QVariantList hiddenWindowRules READ hiddenWindowRules NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(QVariantMap targetStillOptions READ targetStillOptions NOTIFY targetStillOptionsChanged FINAL)
     Q_PROPERTY(int targetCount READ targetCount NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(QString selectedTargetIdentity READ selectedTargetIdentity NOTIFY targetOptionsChanged FINAL)
@@ -184,6 +195,26 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] bool harnessBrandStage() const noexcept;
     void applyBrandStageForHarness();
     [[nodiscard]] Q_INVOKABLE QVariantList filteredTargetOptions(const QString& kind, const QString& query) const;
+    [[nodiscard]] QVariantList filteredWindowTargetOptions() const;
+    [[nodiscard]] int pickerSearchMatchCount() const;
+    Q_INVOKABLE void setWindowSearchQuery(QString query);
+    [[nodiscard]] int hiddenWindowCount() const;
+    [[nodiscard]] bool showHiddenWindows() const noexcept;
+    [[nodiscard]] QVariantList hiddenWindowRules() const;
+    Q_INVOKABLE void setShowHiddenWindows(bool shown);
+    Q_INVOKABLE void hideWindowInstance(const QString& identity);
+    Q_INVOKABLE void addTitleRule(const QString& identity, const QString& text, const QString& match,
+                                  bool case_sensitive, bool all_applications);
+    Q_INVOKABLE void addApplicationRule(const QString& identity, bool confirmed);
+    Q_INVOKABLE void removeHiddenRule(const QString& id);
+    Q_INVOKABLE void setHiddenRuleEnabled(const QString& id, bool enabled);
+    [[nodiscard]] Q_INVOKABLE int windowSearchMatchCount(const QString& query) const;
+    [[nodiscard]] Q_INVOKABLE bool confirmTarget(const QString& identity, int capture_mode);
+    void setHiddenWindowRules(QVector<HiddenCaptureRule> rules);
+    void setWindowIdentities(QHash<quintptr, QString> identities, QHash<quintptr, QString> applications);
+    void setTargetConfirmation(std::function<bool(const QString&, int)> confirm);
+    [[nodiscard]] QString targetIdentity(const exosnap::engine::CaptureTarget& target) const;
+    [[nodiscard]] bool targetVisible(const QString& identity) const;
     [[nodiscard]] int selectedTargetIndex() const noexcept;
     [[nodiscard]] int captureMode() const noexcept;
     [[nodiscard]] const QString& sourceName() const noexcept;
@@ -232,6 +263,10 @@ class RecordViewModelAdapter : public QObject {
     void setRegionState(QRectF normalized_rect, bool selection_needed);
     void setPreviewFrameReady(bool ready);
     void setSplitEnabled(bool enabled);
+    void setPendingEditMasterAvailable(bool available);
+    [[nodiscard]] bool pendingEditMasterAvailable() const noexcept {
+        return pending_edit_master_available_;
+    }
     void setMeters(double system, double app, double microphone);
     // `tone` defaults to "warning" so an existing caller that never named one
     // keeps the banner it already had; the callers that state a tone are the
@@ -254,6 +289,7 @@ class RecordViewModelAdapter : public QObject {
     Q_INVOKABLE void requestCaptureFrame();
     Q_INVOKABLE void requestAddMarker();
     Q_INVOKABLE void requestSplit();
+    Q_INVOKABLE void requestEditMaster();
     Q_INVOKABLE void requestSelectTarget(int target_index, int capture_mode);
     Q_INVOKABLE void requestSelectRegion(QRectF normalized_rect);
     // The Region tab's preset choice. "custom" means draw-from-scratch; the
@@ -280,6 +316,7 @@ class RecordViewModelAdapter : public QObject {
     void outputSizeTextChanged();
     void liveStatsAvailableChanged();
     void targetOptionsChanged();
+    void hiddenWindowRulesChanged();
     void targetStillOptionsChanged();
     void recentRecordingsChanged();
     void harnessBrandStageChanged();
@@ -294,6 +331,7 @@ class RecordViewModelAdapter : public QObject {
     void captureFrameRequested();
     void addMarkerRequested();
     void splitRequested();
+    void editMasterRequested();
     void selectTargetRequested(int target_index, int capture_mode);
     void selectRegionRequested(QRectF normalized_rect);
     void regionPresetRequested(QString key);
@@ -321,6 +359,13 @@ class RecordViewModelAdapter : public QObject {
     // the frame counter is.
     void updateCapturedFps();
 
+    HiddenCaptureTargets hidden_targets_;
+    QHash<quintptr, QString> window_identities_;
+    QHash<quintptr, QString> window_applications_;
+    std::function<bool(const QString&, int)> target_confirmation_;
+    bool show_hidden_windows_ = false;
+    QString window_search_query_;
+    void publishHiddenTargets(bool persist);
     const RecordViewModel* source_ = nullptr;
     // Property indices carrying NOTIFY changed, resolved once from the static
     // meta-object, plus the last values published under that signal.
@@ -374,6 +419,7 @@ class RecordViewModelAdapter : public QObject {
     double countdown_progress_ = 1.0;
     bool preview_frame_ready_ = false;
     bool split_enabled_ = false;
+    bool pending_edit_master_available_ = false;
 };
 
 } // namespace quick

@@ -1591,7 +1591,8 @@ int main(int argc, char* argv[]) {
                     QMetaObject::invokeMethod(page, "openSourcePicker");
                     if (auto* picker = root_window->findChild<QObject*>(QStringLiteral("recordSourcePicker"))) {
                         if (visual_popup != QLatin1String("source-picker"))
-                            picker->setProperty("currentTab", 1);
+                            QMetaObject::invokeMethod(picker, "jumpToSection",
+                                                      Q_ARG(QString, QStringLiteral("window")));
                         if (visual_popup == QLatin1String("source-picker-search"))
                             picker->setProperty("windowQuery", QStringLiteral("Task"));
                     }
@@ -1617,13 +1618,15 @@ int main(int argc, char* argv[]) {
     const auto open_visual_dialog = [root_window, visual_dialog]() {
         if (visual_dialog.isEmpty() || root_window == nullptr)
             return;
-        // Settings owns its own dialogs; everything else on this list belongs
-        // to the shell, which is the root object itself.
-        QObject* host = visual_dialog.startsWith(QLatin1String("preset-"))
-                            ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))
-                            : static_cast<QObject*>(root_window);
+        const bool profile_dialog = visual_dialog.startsWith(QLatin1String("preset-"));
+        if (profile_dialog) {
+            if (auto* shell = root_window->findChild<QObject*>(QStringLiteral("quickAppShell")))
+                shell->setProperty("currentPage", 0);
+        }
+        QObject* host = profile_dialog ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage"))
+                                       : static_cast<QObject*>(root_window);
         if (host == nullptr) {
-            qWarning("--visual-dialog: no Settings page; is --visual-page set to Settings?");
+            qWarning("--visual-dialog: no recording workspace");
             return;
         }
         // Typed args, not QVariant: a QML function declared with a typed

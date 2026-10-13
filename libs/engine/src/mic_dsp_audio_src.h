@@ -1,5 +1,7 @@
 #pragma once
 
+#include <exosnap/engine/mic_dsp_config.h>
+
 #include <exosnap/engine/interfaces/IAudioCaptureSource.h>
 
 #include "automatic_gain_control.h"
@@ -13,33 +15,6 @@
 #include <vector>
 
 namespace exosnap::engine {
-
-// ---------------------------------------------------------------------------
-// MicDspConfig (Audio v2 — 0.6.0)
-// ---------------------------------------------------------------------------
-//
-// The single aggregate of microphone-DSP settings, carrying every stage of the
-// mic-DSP chain: the high-pass filter, the noise gate, the AGC, and RNNoise
-// neural noise suppression. MicDspAudioSrc stays the one chain that owns all mic
-// processing.
-struct MicDspConfig {
-    bool hpf_enabled = false;
-    float hpf_cutoff_hz = 80.0f;
-
-    bool gate_enabled = false;
-    float gate_threshold_db = -45.0f;
-
-    bool agc_enabled = false;
-    float agc_target_db = -18.0f;
-
-    bool rnnoise_enabled = false;
-
-    // True when at least one DSP stage is enabled. When false the decorator is a
-    // no-op and the caller should not bother wrapping the mic source.
-    [[nodiscard]] bool AnyEnabled() const {
-        return hpf_enabled || gate_enabled || agc_enabled || rnnoise_enabled;
-    }
-};
 
 // ---------------------------------------------------------------------------
 // MicDspAudioSrc (Audio v2 — 0.6.0)

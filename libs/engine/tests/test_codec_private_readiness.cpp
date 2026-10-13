@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include "premux_state.h"
@@ -51,6 +52,16 @@ TEST(CodecPrivateReadinessTest, CodecPrivateData_Reset_StartsNotReady) {
     EXPECT_FALSE(data.AudioAllReady(1));
     EXPECT_FALSE(data.AudioAllReady(2));
     EXPECT_FALSE(data.AudioAllReady(3));
+}
+
+TEST(CodecPrivateReadinessTest, EightTracksRequireEveryHeaderAndRejectTheNinth) {
+    CodecPrivateData data{};
+    for (uint32_t track = 0; track < data.audio_track_ready.size(); ++track) {
+        EXPECT_FALSE(data.AudioAllReady(8));
+        data.audio_track_ready[track] = true;
+    }
+    EXPECT_TRUE(data.AudioAllReady(8));
+    EXPECT_FALSE(data.AudioAllReady(9));
 }
 
 } // namespace

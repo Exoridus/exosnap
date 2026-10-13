@@ -24,6 +24,7 @@ TestCase {
             width: 1100
             height: 96
             recordViewModel: recordDriver.adapter
+            clipAdapter: recordDriver.clipAdapter
         }
     }
 
@@ -91,6 +92,56 @@ TestCase {
         const dock = createTemporaryObject(dockComponent, testCase);
         verify(!!dock, "the transport dock exists");
         compare(findAccessible(dock, qsTr("Pause recording")), null);
+    }
+
+    function test_recording_clips_are_absent_data() {
+        return [
+            {tag: "compact-recording", width: 860, state: "recording"},
+            {tag: "compact-paused", width: 860, state: "paused"},
+            {tag: "wide-recording", width: 1100, state: "recording"},
+            {tag: "full-paused", width: 1600, state: "paused"}
+        ];
+    }
+
+    function test_recording_clips_are_absent(data) {
+        recordDriver.setRecordingState(data.state);
+        const dock = createTemporaryObject(dockComponent, testCase, {width: data.width});
+        verify(!!dock);
+        waitForRendering(dock);
+        compare(findAccessible(dock, qsTr("Save clip, %1 seconds selected").arg("30")), null);
+        const clip = findChild(dock, "recordClipAction");
+        const overflow = findChild(dock, "recordClipOverflowAction");
+        const loader = findChild(dock, "recordClipPanelLoader");
+        verify(clip && overflow && loader);
+        for (const action of [clip, overflow]) {
+            verify(!action.visible);
+            verify(!action.enabled);
+            verify(!action.activeFocusOnTab);
+            verify(action.Accessible.ignored);
+            verify(!action.activeFocus);
+        }
+        if (data.width < 1100) {
+            const menu = overflow.menu;
+            verify(!!menu);
+            menu.open();
+            tryCompare(menu, "visible", true);
+            waitForRendering(dock);
+            compare(overflow.height, 0);
+            const marker = menu.itemAt(1);
+            const split = menu.itemAt(2);
+            verify(marker.visible && marker.height > 0);
+            verify(split.visible && split.height > 0);
+            compare(menu.itemAt(3), overflow);
+            verify(menu.currentIndex !== 3);
+            menu.close();
+        }
+        verify(!loader.active);
+        compare(loader.item, null);
+        dock.openClipPanel();
+        compare(loader.item, null);
+        verify(!!findAccessible(dock, qsTr("Stop recording")));
+        if (data.state === "paused")
+            verify(!!findAccessible(dock, qsTr("Resume recording")));
     }
 
     function findClock(dock) {

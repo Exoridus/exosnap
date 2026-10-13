@@ -50,7 +50,8 @@ Item {
     Component.onCompleted: {
         overviewLoader.setSource(Qt.resolvedUrl("DiagnosticsPage.qml"), {
             diagnostics: workspace.diagnostics,
-            device: workspace.device
+            device: workspace.device,
+            shell: workspace.shell
         });
         if (workspace.section === ShellAdapter.DiagnosticsLogs)
             workspace.ensureLogsLoaded();
@@ -75,7 +76,7 @@ Item {
                 id: overviewLoader
 
                 anchors.fill: parent
-                asynchronous: true
+                asynchronous: false
             }
 
             Connections {
@@ -100,7 +101,7 @@ Item {
                 id: logsLoader
 
                 anchors.fill: parent
-                asynchronous: true
+                asynchronous: false
 
                 onStatusChanged: {
                     if (logsLoader.status === Loader.Ready && workspace.section === ShellAdapter.DiagnosticsLogs)

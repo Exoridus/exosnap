@@ -8,15 +8,19 @@
 #include "exosnap/engine/pipeline_diagnostics.h"
 #include "exosnap/engine/recorder_session.h"
 #include "exosnap/engine/split_trigger_source.h"
+#include "file_output.h"
 #include "frame_luminance.h"
 #include "mux_queue.h"
 #include "premux_state.h"
+#include "production_runtime.h"
 #include "qpc_100ns.h"
 #include "webcam_frame_observation.h"
 #include <atomic>
 #include <cstdint>
 #include <exosnap/engine/gpu_surface_inventory.h>
+#include <exosnap/engine/interfaces/IVideoEncoder.h>
 #include <exosnap/engine/video_processor_color.h>
+#include <iterator>
 
 #include "annexb_to_avcc.h"
 #include "annexb_to_hvcc.h"
@@ -60,9 +64,11 @@
 #include <exosnap/engine/sdr_white_level.h>
 #include <exosnap/engine/webcam_placement.h>
 
+#include <algorithm>
 #include <functional>
 #include <inspectable.h>
 #include <ios>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <ratio>
@@ -247,7 +253,215 @@ void HandleWgcUnknownException(SessionState& state, const char* context, std::at
 
 } // namespace
 
-VideoThread::VideoThread(std::shared_ptr<SessionState> state) : m_state_ptr(std::move(state)), m_state(*m_state_ptr) {
+struct VideoThread::NativeState {
+    struct ExportTexture {
+        winrt::com_ptr<ID3D11Texture2D> texture;
+        winrt::com_ptr<ID3D11Query> query;
+        RuntimeCompletionToken completion;
+        bool submitted = false;
+        std::chrono::steady_clock::time_point submitted_at;
+    };
+    struct ExportConnection {
+        explicit ExportConnection(std::shared_ptr<RawVideoReader> reader, uint64_t domain)
+            : reader(std::move(reader)), pool(3, domain, {1}) {
+        }
+        std::weak_ptr<RawVideoReader> reader;
+        RuntimeFramePool pool;
+        std::array<std::shared_ptr<ExportTexture>, 3> textures;
+        std::optional<D3D11_TEXTURE2D_DESC> format;
+    };
+    winrt::com_ptr<ID3D11Device> device;
+    winrt::com_ptr<ID3D11DeviceContext> context;
+    winrt::com_ptr<ID3D11VideoDevice> video_device;
+    winrt::com_ptr<ID3D11VideoContext> video_context;
+    winrt::com_ptr<ID3D11VideoContext1> video_context1;
+    DxgiOdCaptureSrc od;
+    bool od_open = false;
+    winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{nullptr};
+    winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool frame_pool{nullptr};
+    winrt::Windows::Graphics::Capture::GraphicsCaptureSession capture_session{nullptr};
+    winrt::event_token closed_token{};
+    uint32_t wgc_width = 0, wgc_height = 0;
+    DXGI_FORMAT wgc_format = DXGI_FORMAT_UNKNOWN;
+    HWND window = nullptr;
+    HMONITOR monitor = nullptr;
+    std::atomic<bool> source_lost{false};
+    winrt::com_ptr<ID3D11Texture2D> held;
+    std::optional<RuntimeFrameLease> held_lease;
+    std::vector<std::unique_ptr<ExportConnection>> exports;
+    uint64_t sequence = 0;
+    uint64_t domain = 0;
+    bool source_hdr = false;
+    std::weak_ptr<ProductionRuntime> runtime;
+
+    NativeState() {
+        static std::atomic<uint64_t> next_domain{0};
+        domain = next_domain.fetch_add(1) + 1;
+    }
+    void CloseCapture() noexcept {
+        od.Close();
+        od_open = false;
+        try {
+            if (item && closed_token)
+                item.Closed(closed_token);
+            closed_token = {};
+            if (capture_session)
+                capture_session.Close();
+            if (frame_pool)
+                frame_pool.Close();
+        } catch (...) {
+        }
+        capture_session = nullptr;
+        frame_pool = nullptr;
+        item = nullptr;
+        wgc_width = wgc_height = 0;
+        wgc_format = DXGI_FORMAT_UNKNOWN;
+    }
+    ~NativeState() {
+        CloseCapture();
+    }
+    void Poll() {
+        for (auto& connection : exports) {
+            for (auto& resource : connection->textures) {
+                if (!resource || !resource->submitted)
+                    continue;
+                BOOL completed = FALSE;
+                const HRESULT result = context->GetData(resource->query.get(), &completed, sizeof(completed),
+                                                        D3D11_ASYNC_GETDATA_DONOTFLUSH);
+                if (result == S_OK && completed) {
+                    connection->pool.Complete(resource->completion);
+                    resource->submitted = false;
+                } else if (FAILED(result)) {
+                    if (auto owner = runtime.lock())
+                        owner->MarkGpuStalled();
+                    if (auto reader = connection->reader.lock())
+                        reader->Close();
+                } else if (std::chrono::steady_clock::now() - resource->submitted_at > std::chrono::milliseconds(500)) {
+                    if (auto owner = runtime.lock())
+                        owner->MarkGpuStalled();
+                    if (auto reader = connection->reader.lock())
+                        reader->Close();
+                }
+            }
+        }
+        std::erase_if(exports, [](const auto& connection) {
+            auto reader = connection->reader.lock();
+            return (!reader || reader->closed()) && connection->pool.reclaimable();
+        });
+    }
+    bool PendingGpu() const {
+        return std::any_of(exports.begin(), exports.end(),
+                           [](const auto& connection) { return !connection->pool.idle(); });
+    }
+    bool OutstandingLeases() const {
+        return std::any_of(exports.begin(), exports.end(),
+                           [](const auto& connection) { return !connection->pool.reclaimable(); });
+    }
+    void TryExport(ProductionRuntime& owner, ID3D11Texture2D* source, RuntimeQpc100ns qpc) noexcept {
+        try {
+            Export(owner, source, qpc);
+        } catch (...) {
+            owner.MarkGpuStalled();
+            for (auto& connection : exports)
+                if (auto reader = connection->reader.lock())
+                    reader->Close();
+        }
+    }
+    void Export(ProductionRuntime& owner, ID3D11Texture2D* source, RuntimeQpc100ns qpc) {
+        Poll();
+        const auto readers = owner.RawReaders();
+        if (readers.empty())
+            return;
+        D3D11_TEXTURE2D_DESC descriptor{};
+        source->GetDesc(&descriptor);
+        if (sequence == (std::numeric_limits<uint64_t>::max)()) {
+            for (const auto& reader : readers)
+                reader->Close();
+            return;
+        }
+        ++sequence;
+        for (const auto& reader : readers) {
+            auto found = std::find_if(exports.begin(), exports.end(),
+                                      [&](const auto& connection) { return connection->reader.lock() == reader; });
+            if (found == exports.end()) {
+                if (exports.size() >= 8) {
+                    reader->Close();
+                    continue;
+                }
+                exports.push_back(std::make_unique<ExportConnection>(reader, domain));
+                found = std::prev(exports.end());
+            }
+            auto& connection = **found;
+            if (connection.format &&
+                (connection.format->Width != descriptor.Width || connection.format->Height != descriptor.Height ||
+                 connection.format->Format != descriptor.Format)) {
+                reader->Close();
+                continue;
+            }
+            connection.format = descriptor;
+            const auto slot = connection.pool.Reserve();
+            if (!slot)
+                continue;
+            auto& resource = connection.textures[*slot];
+            if (!resource) {
+                resource = std::make_shared<ExportTexture>();
+                auto owned = descriptor;
+                owned.Usage = D3D11_USAGE_DEFAULT;
+                owned.CPUAccessFlags = 0;
+                owned.MiscFlags = 0;
+                owned.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                const D3D11_QUERY_DESC query{D3D11_QUERY_EVENT, 0};
+                if (FAILED(CreateTrackedTexture2D(device.get(), &owned, nullptr, resource->texture.put(),
+                                                  GpuSurfaceOwner::Preview)) ||
+                    FAILED(device->CreateQuery(&query, resource->query.put()))) {
+                    connection.pool.CancelReserved(*slot);
+                    reader->Close();
+                    resource.reset();
+                    continue;
+                }
+            }
+            const auto token =
+                connection.pool.BeginWrite(*slot, std::shared_ptr<void>(resource, resource->texture.get()));
+            if (!token.succeeded()) {
+                connection.pool.CancelReserved(*slot);
+                reader->Close();
+                continue;
+            }
+            context->CopyResource(resource->texture.get(), source);
+            context->End(resource->query.get());
+            resource->completion = *token.value();
+            resource->submitted = true;
+            resource->submitted_at = std::chrono::steady_clock::now();
+            owner.CountRawExport(LogicalSurfaceBytes(descriptor));
+            auto metadata = ColorMetadata{};
+            metadata.range = ColorRange::Full;
+            metadata.matrix = MatrixCoefficients::Unspecified;
+            metadata.transfer = TransferCharacteristics::Unspecified;
+            RuntimeFrameGeometry::ColorSpace colorSpace = RuntimeFrameGeometry::ColorSpace::Srgb;
+            if (descriptor.Format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+                metadata.bits_per_channel = 16;
+                metadata.hdr = source_hdr;
+                colorSpace = RuntimeFrameGeometry::ColorSpace::LinearScrgb;
+            } else if (descriptor.Format == DXGI_FORMAT_R10G10B10A2_UNORM && source_hdr) {
+                metadata = MakeHdr10ColorMetadata(od.DisplayFacts());
+                metadata.range = ColorRange::Full;
+                metadata.matrix = MatrixCoefficients::Unspecified;
+                colorSpace = RuntimeFrameGeometry::ColorSpace::Bt2020Pq;
+            }
+            auto frame = connection.pool.Publish(
+                *slot, sequence, qpc,
+                {descriptor.Width, descriptor.Height, static_cast<uint32_t>(descriptor.Format), metadata, colorSpace});
+            if (frame.succeeded()) {
+                held = resource->texture;
+                held_lease = *frame.value();
+                reader->TryPublish(std::move(*frame.value()));
+            }
+        }
+    }
+};
+
+VideoThread::VideoThread(std::shared_ptr<SessionState> state)
+    : m_state_ptr(std::move(state)), m_initial_output(m_state_ptr->file_output) {
 }
 
 VideoThread::~VideoThread() {
@@ -260,6 +474,8 @@ VideoThread::~VideoThread() {
 }
 
 void VideoThread::Start() {
+    if (m_started.exchange(true, std::memory_order_acq_rel))
+        return;
     // Self-ownership handoff: the lambda keeps this worker (and through
     // m_state_ptr the SessionState) alive until Run() returns, so dropping the
     // session's handle on a hung producer can never dangle the state the
@@ -280,11 +496,175 @@ bool VideoThread::Join(unsigned timeout_ms) {
     return false;
 }
 
+HANDLE VideoThread::OutputEndedHandle() const noexcept {
+    return m_initial_output ? m_initial_output->VideoEndedHandle() : nullptr;
+}
+
 // ---------------------------------------------------------------------------
 // Run
 // ---------------------------------------------------------------------------
 
 void VideoThread::Run() {
+    const auto runtime = m_state_ptr->production_runtime;
+    auto native = std::make_shared<NativeState>();
+    native->runtime = runtime;
+    ComApartment ownerApartment(COINIT_APARTMENTTHREADED);
+    for (;;) {
+        auto output = runtime ? runtime->TakePendingOutput() : m_state_ptr->file_output;
+        bool haveState = true;
+        if (output) {
+            auto state = output->LockState();
+            if (!state || output->phase() != FileOutputPhase::Attached || (runtime && runtime->stopping())) {
+                haveState = false;
+            } else
+                m_state_ptr = std::move(state);
+        }
+        if (haveState)
+            RunAttachment(native, output);
+        if (output) {
+            output->VideoDrained();
+            if (runtime)
+                runtime->OutputDetached(output);
+        }
+        if (!runtime)
+            break;
+        if (runtime->HasRawReaders() && !runtime->HasPendingOutput()) {
+            if (native->od_open || native->capture_session)
+                PumpRawReaders(*native);
+            else
+                for (auto& reader : runtime->RawReaders())
+                    reader->Close();
+        }
+        if (!runtime->HasRawReaders()) {
+            native->held_lease.reset();
+            native->held = nullptr;
+        }
+        if (native->PendingGpu())
+            native->context->Flush();
+        while ((native->PendingGpu() || native->OutstandingLeases()) &&
+               (runtime->stopping() || !runtime->HasPendingOutput())) {
+            native->Poll();
+            Sleep(1);
+        }
+        if (runtime->stopping()) {
+            native->CloseCapture();
+            break;
+        }
+        if (runtime->VideoWorkerMayExit(this))
+            break;
+    }
+    if (runtime)
+        runtime->VideoWorkerExited(this);
+}
+
+void VideoThread::PumpRawReaders(NativeState& native) {
+    const auto runtime = m_state_ptr->production_runtime;
+    if (!runtime || !native.device)
+        return;
+    LARGE_INTEGER frequency{};
+    QueryPerformanceFrequency(&frequency);
+    WgcFrameGeometryTracker geometry({static_cast<int32_t>(native.wgc_width), static_cast<int32_t>(native.wgc_height)});
+    auto lastColorCheck = std::chrono::steady_clock::now();
+    while (!runtime->stopping() && !runtime->HasPendingOutput() && runtime->HasRawReaders()) {
+        native.Poll();
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastColorCheck >= std::chrono::seconds(1)) {
+            lastColorCheck = now;
+            HdrDisplayFacts facts;
+            const HMONITOR monitor =
+                native.window ? MonitorFromWindow(native.window, MONITOR_DEFAULTTONEAREST) : native.monitor;
+            if (QueryDisplayHdrFacts(monitor, facts) && facts.hdr_active != native.source_hdr)
+                native.source_lost.store(true, std::memory_order_release);
+        }
+        if (native.source_lost.load(std::memory_order_acquire)) {
+            for (auto& reader : runtime->RawReaders())
+                reader->Close();
+            break;
+        }
+        if (native.od_open) {
+            ID3D11Texture2D* raw = nullptr;
+            DXGI_OUTDUPL_FRAME_INFO info{};
+            HRESULT result = S_OK;
+            if (native.od.TryAcquireFrame(0, &raw, &info, &result)) {
+                winrt::com_ptr<ID3D11Texture2D> source;
+                source.attach(raw);
+                try {
+                    if (info.LastPresentTime.QuadPart != 0)
+                        native.TryExport(*runtime, source.get(),
+                                         {QpcTicksTo100ns(static_cast<uint64_t>(info.LastPresentTime.QuadPart),
+                                                          static_cast<uint64_t>(frequency.QuadPart))});
+                } catch (...) {
+                    for (auto& reader : runtime->RawReaders())
+                        reader->Close();
+                }
+                native.od.ReleaseFrame();
+            } else if (result != DXGI_ERROR_WAIT_TIMEOUT && FAILED(result)) {
+                for (auto& reader : runtime->RawReaders())
+                    reader->Close();
+                break;
+            }
+        } else if (native.frame_pool) {
+            MSG message{};
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            try {
+                auto frame = native.frame_pool.TryGetNextFrame();
+                if (frame) {
+                    const auto content = frame.ContentSize();
+                    const bool minimized = native.window && IsIconic(native.window) != FALSE;
+                    const auto verdict = geometry.Classify({content.Width, content.Height}, minimized);
+                    if (verdict == WgcFrameGeometry::SourceResized) {
+                        for (auto& reader : runtime->RawReaders())
+                            reader->Close();
+                        break;
+                    }
+                    if (verdict == WgcFrameGeometry::HoldLastFrame) {
+                        Sleep(1);
+                        continue;
+                    }
+                    auto access =
+                        frame.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                    winrt::com_ptr<ID3D11Texture2D> texture;
+                    winrt::check_hresult(access->GetInterface(IID_PPV_ARGS(texture.put())));
+                    D3D11_TEXTURE2D_DESC descriptor{};
+                    texture->GetDesc(&descriptor);
+                    if (descriptor.Width != native.wgc_width || descriptor.Height != native.wgc_height ||
+                        descriptor.Format != native.wgc_format) {
+                        for (auto& reader : runtime->RawReaders())
+                            reader->Close();
+                        break;
+                    }
+                    native.TryExport(*runtime, texture.get(),
+                                     {static_cast<uint64_t>(frame.SystemRelativeTime().count())});
+                }
+            } catch (...) {
+                for (auto& reader : runtime->RawReaders())
+                    reader->Close();
+                break;
+            }
+        }
+        if (native.PendingGpu())
+            native.context->Flush();
+        Sleep(1);
+    }
+    if (native.PendingGpu())
+        native.context->Flush();
+}
+
+void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, const std::shared_ptr<FileOutput>& output) {
+    auto& m_state = *m_state_ptr;
+    const auto runtime = m_state.production_runtime;
+    const bool hasOutput = !!output || !runtime;
+    struct EncoderRelease {
+        std::shared_ptr<FileOutput> output;
+        ~EncoderRelease() {
+            if (output)
+                output->ReleaseEncoder();
+        }
+    } encoderRelease{output};
+    const bool retainedCapture = native->od_open || !!native->capture_session;
     // Cache QPC frequency once — it is constant for the process lifetime.
     LARGE_INTEGER qpcFreqRaw;
     QueryPerformanceFrequency(&qpcFreqRaw);
@@ -342,9 +722,9 @@ void VideoThread::Run() {
     }
 
     // --- D3D11 video-capable device (exclusive to this thread's context) ---
-    winrt::com_ptr<ID3D11Device> d3dDevice;
-    winrt::com_ptr<ID3D11DeviceContext> d3dContext;
-    winrt::com_ptr<ID3D11VideoDevice> videoDevice;
+    auto& d3dDevice = native->device;
+    auto& d3dContext = native->context;
+    auto& videoDevice = native->video_device;
 
     // Real GPU-execution-time profilers for the three GPU passes on the immediate
     // context (composite, scRGB->SDR tone-map, RGB->YUV blit). Strictly additive
@@ -356,15 +736,15 @@ void VideoThread::Run() {
     GpuStageTimer tonemapGpuTimer;
     GpuStageTimer luminanceGpuTimer;
     GpuStageTimer vpbltGpuTimer;
-    winrt::com_ptr<ID3D11VideoContext> videoContext;
+    auto& videoContext = native->video_context;
     // Optional newer interface: VideoProcessorSet{Stream,Output}ColorSpace1 takes
     // explicit DXGI_COLOR_SPACE_TYPE enums, which drivers honour for the YUV
     // quantization range. The legacy D3D11_VIDEO_PROCESSOR_COLOR_SPACE.Nominal_Range
     // is widely ignored on output (NVIDIA included), so the studio-range request was
     // silently dropped and full-range YUV was tagged as limited (washed-out / dark).
-    winrt::com_ptr<ID3D11VideoContext1> videoContext1;
+    auto& videoContext1 = native->video_context1;
 
-    {
+    if (!d3dDevice) {
         D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
         UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
 
@@ -385,8 +765,26 @@ void VideoThread::Run() {
             m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
             return;
         }
+    }
 
-        hr = d3dDevice->QueryInterface(IID_PPV_ARGS(videoDevice.put()));
+    if (monitorAdapter) {
+        winrt::com_ptr<IDXGIDevice> retainedDevice;
+        winrt::com_ptr<IDXGIAdapter> retainedAdapter;
+        DXGI_ADAPTER_DESC retainedDesc{};
+        DXGI_ADAPTER_DESC1 targetDesc{};
+        if (FAILED(d3dDevice->QueryInterface(IID_PPV_ARGS(retainedDevice.put()))) ||
+            FAILED(retainedDevice->GetAdapter(retainedAdapter.put())) ||
+            FAILED(retainedAdapter->GetDesc(&retainedDesc)) || FAILED(monitorAdapter->GetDesc1(&targetDesc)) ||
+            retainedDesc.AdapterLuid.HighPart != targetDesc.AdapterLuid.HighPart ||
+            retainedDesc.AdapterLuid.LowPart != targetDesc.AdapterLuid.LowPart) {
+            m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Prepare,
+                                  "Retained capture adapter changed; close its readers before retargeting");
+            return;
+        }
+    }
+
+    if (hasOutput) {
+        hr = videoDevice ? S_OK : d3dDevice->QueryInterface(IID_PPV_ARGS(videoDevice.put()));
         if (FAILED(hr)) {
             char buf[80];
             snprintf(buf, sizeof(buf), "QI ID3D11VideoDevice failed 0x%08lX", static_cast<unsigned long>(hr));
@@ -394,7 +792,7 @@ void VideoThread::Run() {
             return;
         }
 
-        hr = d3dContext->QueryInterface(IID_PPV_ARGS(videoContext.put()));
+        hr = videoContext ? S_OK : d3dContext->QueryInterface(IID_PPV_ARGS(videoContext.put()));
         if (FAILED(hr)) {
             char buf[80];
             snprintf(buf, sizeof(buf), "QI ID3D11VideoContext failed 0x%08lX", static_cast<unsigned long>(hr));
@@ -402,7 +800,8 @@ void VideoThread::Run() {
             return;
         }
         // Optional — present on all Windows 10+; failure is non-fatal (legacy path).
-        videoContext->QueryInterface(IID_PPV_ARGS(videoContext1.put()));
+        if (!videoContext1)
+            videoContext->QueryInterface(IID_PPV_ARGS(videoContext1.put()));
     }
 
     bool windowHandleValid = false;
@@ -446,8 +845,8 @@ void VideoThread::Run() {
     // Monitor defaults to DXGI Output Duplication; the harness may select WGC.
     // Window always uses WGC GraphicsCaptureSession.
 
-    DxgiOdCaptureSrc odSrc;
-    winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{nullptr};
+    auto& odSrc = native->od;
+    auto& item = native->item;
 
     // WGC path: HDR facts of the captured monitor, resolved once at session start.
     // That is the target monitor itself, or the window's host via MonitorFromWindow.
@@ -477,10 +876,11 @@ void VideoThread::Run() {
     bool expectNativeHdr = false;
     if (useOdCapture) {
         std::string odErr;
-        if (!odSrc.Open(d3dDevice.get(), reinterpret_cast<HMONITOR>(target.native_id), odErr)) {
+        if (!native->od_open && !odSrc.Open(d3dDevice.get(), reinterpret_cast<HMONITOR>(target.native_id), odErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "DXGI OD open: " + odErr);
             return;
         }
+        native->od_open = true;
         hdrPeakScale =
             HdrPeakScale(odSrc.HdrActive(), odSrc.MaxLuminanceNits(), odSrc.DisplayFacts().sdr_white_level_nits);
         hdrPaperWhiteScale = SdrPaperWhiteScale(odSrc.DisplayFacts().sdr_white_level_nits);
@@ -488,16 +888,19 @@ void VideoThread::Run() {
             IsHdr10NativeEffective(m_state.config.hdr_mode, odSrc.HdrActive(), m_state.config.video_codec);
     } else {
         try {
-            auto interop = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem,
-                                                         IGraphicsCaptureItemInterop>();
-            if (targetIsMonitor) {
-                winrt::check_hresult(interop->CreateForMonitor(
-                    reinterpret_cast<HMONITOR>(target.native_id),
-                    winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(), winrt::put_abi(item)));
-            } else {
-                winrt::check_hresult(interop->CreateForWindow(
-                    targetHwnd, winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
-                    winrt::put_abi(item)));
+            if (!item) {
+                auto interop = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem,
+                                                             IGraphicsCaptureItemInterop>();
+                if (targetIsMonitor) {
+                    winrt::check_hresult(interop->CreateForMonitor(
+                        reinterpret_cast<HMONITOR>(target.native_id),
+                        winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
+                        winrt::put_abi(item)));
+                } else {
+                    winrt::check_hresult(interop->CreateForWindow(
+                        targetHwnd, winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
+                        winrt::put_abi(item)));
+                }
             }
         } catch (const winrt::hresult_error& e) {
             char buf[96];
@@ -539,6 +942,14 @@ void VideoThread::Run() {
     // monitor handle used on both paths — the WGC path's documented "resolved once
     // at session start" limitation applies here too).
     const bool initialHdrActive = useOdCapture ? odSrc.HdrActive() : wgcHdrFacts.hdr_active;
+    if (retainedCapture && native->source_hdr != initialHdrActive) {
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Prepare,
+                              "Retained capture color mode changed; close its readers before retargeting");
+        return;
+    }
+    native->source_hdr = initialHdrActive;
+    native->window = targetHwnd;
+    native->monitor = useOdCapture ? reinterpret_cast<HMONITOR>(target.native_id) : wgcMonitor;
     // The display state every consumer's colour scalars were resolved from, kept
     // so the periodic guard can say what changed rather than only whether HDR is
     // still on. Advanced by the guard itself when a change is one the session can
@@ -607,6 +1018,96 @@ void VideoThread::Run() {
 
     uint32_t sourceWidth = static_cast<uint32_t>(sourceWidthSigned);
     uint32_t sourceHeight = static_cast<uint32_t>(sourceHeightSigned);
+
+    if (!useOdCapture && native->capture_session &&
+        (native->wgc_width != sourceWidth || native->wgc_height != sourceHeight ||
+         native->wgc_format != wgcPlan.frame_pool_format)) {
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Prepare,
+                              "Retained capture size or pixel format changed; close its readers before retargeting");
+        return;
+    }
+    auto& framePool = native->frame_pool;
+    auto& captureSession = native->capture_session;
+    auto& closedToken = native->closed_token;
+    auto initializeWgcCapture = [&]() -> bool {
+        if (!useOdCapture && !captureSession) {
+            try {
+                winrt::com_ptr<IDXGIDevice> dxgiDev = d3dDevice.as<IDXGIDevice>();
+                winrt::com_ptr<IInspectable> insp;
+                winrt::check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgiDev.get(), insp.put()));
+                auto d3dWinRTDev = insp.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
+
+                auto capSz = item.Size();
+                // BGRA8 for the SDR window path (unchanged); scRGB FP16 when the hosting
+                // display is HDR-active and HDR handling is on (wgcPlan). FP16 delivers
+                // the real HDR signal instead of DWM's silent SDR tone-map.
+                const auto wgcPoolFormat =
+                    (wgcPlan.frame_pool_format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+                        ? winrt::Windows::Graphics::DirectX::DirectXPixelFormat::R16G16B16A16Float
+                        : winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized;
+                framePool = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::Create(
+                    d3dWinRTDev, wgcPoolFormat, 3, capSz);
+
+                native->wgc_width = static_cast<uint32_t>(capSz.Width);
+                native->wgc_height = static_cast<uint32_t>(capSz.Height);
+                native->wgc_format = wgcPlan.frame_pool_format;
+                captureSession = framePool.CreateCaptureSession(item);
+                captureSession.IsBorderRequired(false);
+                // WGC's built-in cursor would be baked into the source frame before
+                // webcam composition. Draw it manually through the GPU compositor so
+                // cursor z-order matches DXGI Output Duplication.
+                captureSession.IsCursorCaptureEnabled(false);
+                WgcMinUpdateIntervalResult intervalResult;
+                const HRESULT intervalHr = ConfigureWgcMinUpdateInterval(
+                    captureSession.as<winrt::Windows::Foundation::IInspectable>(), &intervalResult);
+                if (FAILED(intervalHr)) {
+                    char buf[112];
+                    snprintf(buf, sizeof(buf), "WGC MinUpdateInterval configuration failed 0x%08lX",
+                             static_cast<unsigned long>(intervalHr));
+                    m_state.RecordFailure(intervalHr, ErrorPhase::VideoCapture, buf);
+                    return false;
+                }
+
+                char effectiveMs[32] = "default";
+                if (intervalResult.supported) {
+                    snprintf(effectiveMs, sizeof(effectiveMs), "%.3f",
+                             static_cast<double>(intervalResult.effective_ticks) / 10'000.0);
+                }
+                char targetFps[32];
+                snprintf(targetFps, sizeof(targetFps), "%.3f",
+                         static_cast<double>(m_state.config.frame_rate_num) /
+                             static_cast<double>(m_state.config.frame_rate_den));
+                const logging::LogField intervalFields[] = {{"supported", BoolText(intervalResult.supported)},
+                                                            {"requested_ms", "1.000"},
+                                                            {"effective_ms", effectiveMs},
+                                                            {"target_fps", targetFps}};
+                logging::log(intervalResult.supported ? logging::LogLevel::Info : logging::LogLevel::Warn,
+                             "video_thread",
+                             intervalResult.supported ? "WGC minimum update interval configured"
+                                                      : "WGC minimum update interval unsupported; using OS default",
+                             std::span<const logging::LogField>(intervalFields, std::size(intervalFields)));
+                captureSession.StartCapture();
+
+                closedToken = item.Closed([weak = std::weak_ptr<NativeState>(native)](const auto&, const auto&) {
+                    if (const auto owner = weak.lock())
+                        owner->source_lost.store(true, std::memory_order_release);
+                });
+            } catch (const winrt::hresult_error& e) {
+                char buf[96];
+                snprintf(buf, sizeof(buf), "WGC frame pool init failed 0x%08X",
+                         static_cast<unsigned int>(e.code().value));
+                m_state.RecordFailure(static_cast<HRESULT>(e.code().value), ErrorPhase::VideoCapture, buf);
+                return false;
+            }
+        }
+        return true;
+    };
+    if (!hasOutput) {
+        if (!initializeWgcCapture())
+            return;
+        PumpRawReaders(*native);
+        return;
+    }
 
     // The screen-to-source mapping for the manually drawn cursor. A captured
     // window can be dragged while recording, and WGC follows it, so this has to
@@ -761,100 +1262,106 @@ void VideoThread::Run() {
     // staying a separate field a future split can populate truthfully.
     m_state.diagnostics.SetProcessingAdapter(captureAdapterLuid, adapterDesc.VendorId);
     m_state.diagnostics.SetEncoderAdapter(captureAdapterLuid, adapterDesc.VendorId);
-    std::string encoderError;
-    auto encoder = m_state.video_encoder_factory->CreateForAdapter(adapterDesc.VendorId, m_state.config, encoderError);
-    if (!encoder) {
-        m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, encoderError);
-        return;
-    }
+    std::unique_ptr<IVideoEncoder> standaloneEncoder;
+    IVideoEncoder* encoder = nullptr;
     bool sequenceHeaderPublished = false;
-    {
-        encoder->SetCodec(m_state.config.video_codec);
-        encoder->SetBitDepth(m_state.config.bit_depth);
-        encoder->SetChroma(m_state.config.chroma);
-        encoder->SetCq(m_state.config.cq);
-        encoder->SetRateControl(m_state.config.rate_control_mode, m_state.config.target_bitrate_kbps);
-        // Keyframe interval (Settings → Advanced → Video). Must be set before
-        // Configure() so InitEncoder derives gopLength/idrPeriod from it; without
-        // this the encoder silently stays at its 2 s default and the selector has
-        // no effect.
-        encoder->SetKeyframeIntervalSecs(m_state.config.keyframe_interval_secs);
-        // Submission regime. The keyframe cadence is media-time based either way;
-        // this controls whether the backend's frame-count backstop stays armed. Under VFR the loop below submits every
-        // frame the source produces, so a source faster than the configured rate would trip that counter before the
-        // media-time boundary.
-        encoder->SetConstantFrameRate(m_state.config.cfr);
-        // Color signaling (fix for color-range-signaling bug): the encoded
-        // bitstream itself must carry the same color description as the
-        // VideoProcessor conversion below and the Matroska Colour element
-        // (mux_thread.cpp), otherwise players/ffprobe that read color info from
-        // the bitstream (all of them for AV1 — verified; container tags are
-        // ignored) see an untagged/wrong-range stream regardless of correct
-        // container tagging.
-        encoder->SetColor(m_state.config.color);
-
-        std::string err;
-        if (!encoder->Open(d3dDevice.get(), err)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "Video encoder open: " + err);
+    if (hasOutput) {
+        std::string encoderError;
+        standaloneEncoder =
+            m_state.video_encoder_factory->CreateForAdapter(adapterDesc.VendorId, m_state.config, encoderError);
+        if (!standaloneEncoder) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, encoderError);
             return;
         }
-        if (!encoder->Configure(encodeWidth, encodeHeight, m_state.config.frame_rate_num, m_state.config.frame_rate_den,
-                                err)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
-                                  "Video encoder configure: " + err + "; preInit={" + diag.str() + "}");
-            return;
-        }
+        encoder = output ? output->OwnEncoder(std::move(standaloneEncoder)) : standaloneEncoder.get();
+        {
+            encoder->SetCodec(m_state.config.video_codec);
+            encoder->SetBitDepth(m_state.config.bit_depth);
+            encoder->SetChroma(m_state.config.chroma);
+            encoder->SetCq(m_state.config.cq);
+            encoder->SetRateControl(m_state.config.rate_control_mode, m_state.config.target_bitrate_kbps);
+            // Keyframe interval (Settings → Advanced → Video). Must be set before
+            // Configure() so InitEncoder derives gopLength/idrPeriod from it; without
+            // this the encoder silently stays at its 2 s default and the selector has
+            // no effect.
+            encoder->SetKeyframeIntervalSecs(m_state.config.keyframe_interval_secs);
+            // Submission regime. The keyframe cadence is media-time based either way;
+            // this controls whether the backend's frame-count backstop stays armed. Under VFR the loop below submits
+            // every frame the source produces, so a source faster than the configured rate would trip that counter
+            // before the media-time boundary.
+            encoder->SetConstantFrameRate(m_state.config.cfr);
+            // Color signaling (fix for color-range-signaling bug): the encoded
+            // bitstream itself must carry the same color description as the
+            // VideoProcessor conversion below and the Matroska Colour element
+            // (mux_thread.cpp), otherwise players/ffprobe that read color info from
+            // the bitstream (all of them for AV1 — verified; container tags are
+            // ignored) see an untagged/wrong-range stream regardless of correct
+            // container tagging.
+            encoder->SetColor(m_state.config.color);
 
-        const auto header = encoder->SequenceHeader();
-        if (!header.empty()) {
-            std::vector<uint8_t> cp;
-            if (m_state.config.video_codec == VideoCodec::H264) {
-                sequenceHeaderPublished = annexb::ExtractH264SpsAndPps(header.data(), header.size(), cp);
-            } else if (m_state.config.video_codec == VideoCodec::Hevc) {
-                sequenceHeaderPublished = annexb::ExtractHevcVpsSpsPps(header.data(), header.size(), cp);
-            } else {
-                char reason[256]{};
-                sequenceHeaderPublished =
-                    codec_private::DeriveAv1CodecPrivate(header.data(), header.size(), cp, reason, sizeof(reason));
-            }
-            if (!sequenceHeaderPublished) {
-                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
-                                      "Video encoder sequence header could not produce codec private data");
+            std::string err;
+            if (!encoder->Open(d3dDevice.get(), err)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "Video encoder open: " + err);
                 return;
             }
-            m_state.premux.PublishVideo(m_state.config.video_codec, std::move(cp));
+            if (!encoder->Configure(encodeWidth, encodeHeight, m_state.config.frame_rate_num,
+                                    m_state.config.frame_rate_den, err)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                      "Video encoder configure: " + err + "; preInit={" + diag.str() + "}");
+                return;
+            }
+
+            const auto header = encoder->SequenceHeader();
+            if (!header.empty()) {
+                std::vector<uint8_t> cp;
+                if (m_state.config.video_codec == VideoCodec::H264) {
+                    sequenceHeaderPublished = annexb::ExtractH264SpsAndPps(header.data(), header.size(), cp);
+                } else if (m_state.config.video_codec == VideoCodec::Hevc) {
+                    sequenceHeaderPublished = annexb::ExtractHevcVpsSpsPps(header.data(), header.size(), cp);
+                } else {
+                    char reason[256]{};
+                    sequenceHeaderPublished =
+                        codec_private::DeriveAv1CodecPrivate(header.data(), header.size(), cp, reason, sizeof(reason));
+                }
+                if (!sequenceHeaderPublished) {
+                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                          "Video encoder sequence header could not produce codec private data");
+                    return;
+                }
+                m_state.premux.PublishVideo(m_state.config.video_codec, std::move(cp));
+            }
+
+            // Capture the resolved encoder init parameters for the live diagnostics
+            // snapshot and the on-disk session report, and emit them once as a
+            // structured event so they reach the JSONL even if a later failure means no
+            // final snapshot is produced. hdr_mode is a session-level concept the
+            // encoder does not know, so it is filled from the config here.
+            EncoderInitInfo enc_init = encoder->GetInitInfo();
+            enc_init.hdr_mode = m_state.config.hdr_mode;
+            m_state.diagnostics.SetEncoderInitInfo(enc_init);
+
+            const char* rc_name = enc_init.rc_mode == RateControlMode::ConstantQuality   ? "cq"
+                                  : enc_init.rc_mode == RateControlMode::VariableBitrate ? "vbr"
+                                  : enc_init.rc_mode == RateControlMode::ConstantBitrate ? "cbr"
+                                                                                         : "lossless";
+            const std::vector<exosnap::engine::logging::LogField> init_fields = {
+                {"codec", std::to_string(static_cast<int>(enc_init.codec))},
+                {"preset", std::string(enc_init.backend_preset)},
+                {"rc", rc_name},
+                {"target_kbps", std::to_string(enc_init.target_bitrate_kbps)},
+                {"max_kbps", std::to_string(enc_init.max_bitrate_kbps)},
+                {"gop", std::to_string(enc_init.gop_length)},
+                {"bit_depth", enc_init.bit_depth == BitDepth::Bit10 ? "10" : "8"},
+                {"spatial_aq", enc_init.spatial_aq ? "1" : "0"},
+                {"backend_b_ref_mode", std::string(enc_init.backend_b_ref_mode)},
+                {"backend_multipass", std::string(enc_init.backend_multipass)},
+                {"input_slots", std::to_string(enc_init.input_slots)},
+                {"output_depth", std::to_string(enc_init.output_depth)},
+            };
+            exosnap::engine::logging::log(
+                exosnap::engine::logging::LogLevel::Info, "encoder", "encoder.init",
+                std::span<const exosnap::engine::logging::LogField>(init_fields.data(), init_fields.size()));
         }
-
-        // Capture the resolved encoder init parameters for the live diagnostics
-        // snapshot and the on-disk session report, and emit them once as a
-        // structured event so they reach the JSONL even if a later failure means no
-        // final snapshot is produced. hdr_mode is a session-level concept the
-        // encoder does not know, so it is filled from the config here.
-        EncoderInitInfo enc_init = encoder->GetInitInfo();
-        enc_init.hdr_mode = m_state.config.hdr_mode;
-        m_state.diagnostics.SetEncoderInitInfo(enc_init);
-
-        const char* rc_name = enc_init.rc_mode == RateControlMode::ConstantQuality   ? "cq"
-                              : enc_init.rc_mode == RateControlMode::VariableBitrate ? "vbr"
-                              : enc_init.rc_mode == RateControlMode::ConstantBitrate ? "cbr"
-                                                                                     : "lossless";
-        const std::vector<exosnap::engine::logging::LogField> init_fields = {
-            {"codec", std::to_string(static_cast<int>(enc_init.codec))},
-            {"preset", std::string(enc_init.backend_preset)},
-            {"rc", rc_name},
-            {"target_kbps", std::to_string(enc_init.target_bitrate_kbps)},
-            {"max_kbps", std::to_string(enc_init.max_bitrate_kbps)},
-            {"gop", std::to_string(enc_init.gop_length)},
-            {"bit_depth", enc_init.bit_depth == BitDepth::Bit10 ? "10" : "8"},
-            {"spatial_aq", enc_init.spatial_aq ? "1" : "0"},
-            {"backend_b_ref_mode", std::string(enc_init.backend_b_ref_mode)},
-            {"backend_multipass", std::string(enc_init.backend_multipass)},
-            {"input_slots", std::to_string(enc_init.input_slots)},
-            {"output_depth", std::to_string(enc_init.output_depth)},
-        };
-        exosnap::engine::logging::log(
-            exosnap::engine::logging::LogLevel::Info, "encoder", "encoder.init",
-            std::span<const exosnap::engine::logging::LogField>(init_fields.data(), init_fields.size()));
     }
 
     // --- NV12 / P010 texture ring + video processor ---
@@ -873,8 +1380,8 @@ void VideoThread::Run() {
     const DXGI_FORMAT encodeFormat = chroma444 ? DXGI_FORMAT_AYUV : (tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12);
 
     // Number of pipelined capture/encode slots (shared by every per-slot texture array).
-    const int32_t kSlotCount = encoder->SlotCount();
-    if (kSlotCount <= 0) {
+    const int32_t kSlotCount = encoder ? encoder->SlotCount() : 0;
+    if (hasOutput && kSlotCount <= 0) {
         m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "Video encoder exposes no input slots");
         return;
     }
@@ -1996,7 +2503,7 @@ void VideoThread::Run() {
     };
 
     // --- WGC frame pool and session ---
-    std::atomic<bool> sourceLost{false};
+    auto& sourceLost = native->source_lost;
     // OD recovery hold state (Recover branch, i.e. DXGI_ERROR_ACCESS_LOST). While
     // holding, the encode loop keeps emitting at CFR cadence (the last frame is
     // held, not black) and retries Reopen() on a throttle instead of blocking —
@@ -2163,91 +2670,8 @@ void VideoThread::Run() {
         }
     };
 
-    winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool framePool{nullptr};
-    winrt::Windows::Graphics::Capture::GraphicsCaptureSession captureSession{nullptr};
-    winrt::event_token closedToken{};
-    // Revoked on every exit of this frame, not only the normal one at the end
-    // of the encode loop: the delegate writes to a local of this frame, and the
-    // early returns between the registration and that point (first-frame
-    // timeout, converter and compositor init failures) would otherwise leave it
-    // registered against a destroyed frame.
-    struct ClosedRevoker {
-        winrt::Windows::Graphics::Capture::GraphicsCaptureItem& item;
-        winrt::event_token& token;
-        ~ClosedRevoker() {
-            if (item && token) {
-                try {
-                    item.Closed(token);
-                } catch (...) {
-                    // Teardown of a source that may already be gone; nothing left to report.
-                }
-                token = {};
-            }
-        }
-    } closedRevoker{item, closedToken};
-
-    if (!useOdCapture) {
-        try {
-            winrt::com_ptr<IDXGIDevice> dxgiDev = d3dDevice.as<IDXGIDevice>();
-            winrt::com_ptr<IInspectable> insp;
-            winrt::check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgiDev.get(), insp.put()));
-            auto d3dWinRTDev = insp.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
-
-            auto capSz = item.Size();
-            // BGRA8 for the SDR window path (unchanged); scRGB FP16 when the hosting
-            // display is HDR-active and HDR handling is on (wgcPlan). FP16 delivers
-            // the real HDR signal instead of DWM's silent SDR tone-map.
-            const auto wgcPoolFormat =
-                (wgcPlan.frame_pool_format == DXGI_FORMAT_R16G16B16A16_FLOAT)
-                    ? winrt::Windows::Graphics::DirectX::DirectXPixelFormat::R16G16B16A16Float
-                    : winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized;
-            framePool = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::Create(d3dWinRTDev,
-                                                                                              wgcPoolFormat, 3, capSz);
-
-            captureSession = framePool.CreateCaptureSession(item);
-            captureSession.IsBorderRequired(false);
-            // WGC's built-in cursor would be baked into the source frame before
-            // webcam composition. Draw it manually through the GPU compositor so
-            // cursor z-order matches DXGI Output Duplication.
-            captureSession.IsCursorCaptureEnabled(false);
-            WgcMinUpdateIntervalResult intervalResult;
-            const HRESULT intervalHr = ConfigureWgcMinUpdateInterval(
-                captureSession.as<winrt::Windows::Foundation::IInspectable>(), &intervalResult);
-            if (FAILED(intervalHr)) {
-                char buf[112];
-                snprintf(buf, sizeof(buf), "WGC MinUpdateInterval configuration failed 0x%08lX",
-                         static_cast<unsigned long>(intervalHr));
-                m_state.RecordFailure(intervalHr, ErrorPhase::VideoCapture, buf);
-                return;
-            }
-
-            char effectiveMs[32] = "default";
-            if (intervalResult.supported) {
-                snprintf(effectiveMs, sizeof(effectiveMs), "%.3f",
-                         static_cast<double>(intervalResult.effective_ticks) / 10'000.0);
-            }
-            char targetFps[32];
-            snprintf(targetFps, sizeof(targetFps), "%.3f",
-                     static_cast<double>(m_state.config.frame_rate_num) /
-                         static_cast<double>(m_state.config.frame_rate_den));
-            const logging::LogField intervalFields[] = {{"supported", BoolText(intervalResult.supported)},
-                                                        {"requested_ms", "1.000"},
-                                                        {"effective_ms", effectiveMs},
-                                                        {"target_fps", targetFps}};
-            logging::log(intervalResult.supported ? logging::LogLevel::Info : logging::LogLevel::Warn, "video_thread",
-                         intervalResult.supported ? "WGC minimum update interval configured"
-                                                  : "WGC minimum update interval unsupported; using OS default",
-                         std::span<const logging::LogField>(intervalFields, std::size(intervalFields)));
-            captureSession.StartCapture();
-
-            closedToken = item.Closed([&sourceLost](const auto&, const auto&) { sourceLost = true; });
-        } catch (const winrt::hresult_error& e) {
-            char buf[96];
-            snprintf(buf, sizeof(buf), "WGC frame pool init failed 0x%08X", static_cast<unsigned int>(e.code().value));
-            m_state.RecordFailure(static_cast<HRESULT>(e.code().value), ErrorPhase::VideoCapture, buf);
-            return;
-        }
-    } // end if (!useOdCapture) — WGC session init
+    if (!initializeWgcCapture())
+        return;
 
     // The WGC frame pool RECYCLES its surfaces: once a frame object is
     // released, WGC renders future frames into the same texture. Anything the
@@ -2358,6 +2782,21 @@ void VideoThread::Run() {
         QueryPerformanceCounter(&tStart);
         constexpr double kTimeoutSec = 5.0;
         bool gotFirst = false;
+        if (native->held) {
+            if (useOdCapture) {
+                if (checkOdFrame(native->held.get()) != OdFrameCheck::Ok)
+                    return;
+                d3dContext->CopyResource(odCapturedTex.get(), native->held.get());
+                odCapturedTexValid = true;
+            } else {
+                const auto copied = copyWgcFrame(native->held.get(), nullptr);
+                if (!copied)
+                    return;
+                seedWgcTex.copy_from(copied);
+            }
+            ++visualGenerations.screen;
+            gotFirst = true;
+        }
 
         // OD start-hold recovery: a game entering exclusive fullscreen exactly as
         // recording starts throws ACCESS_LOST before the first frame. Rather than
@@ -2379,7 +2818,7 @@ void VideoThread::Run() {
         constexpr double kOverallBudgetSec = std::chrono::duration<double>(kFirstFrameOverallBudget).count();
         unsigned startHoldsEntered = 0;
 
-        while (!gotFirst && !m_state.stop_requested.load()) {
+        while (!gotFirst && !m_state.stop_requested.load() && (!runtime || !runtime->stopping())) {
             if (!useOdCapture) {
                 MSG msg{};
                 while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -2517,6 +2956,10 @@ void VideoThread::Run() {
                         continue;
                     }
                     d3dContext->CopyResource(odCapturedTex.get(), rawTex);
+                    if (runtime && info.LastPresentTime.QuadPart != 0)
+                        native->TryExport(
+                            *runtime, rawTex,
+                            {QpcTicksTo100ns(static_cast<uint64_t>(info.LastPresentTime.QuadPart), qpcFreq)});
                     rawTex->Release();
                     if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
                         if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap))
@@ -2602,6 +3045,9 @@ void VideoThread::Run() {
                                 surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                             winrt::com_ptr<ID3D11Texture2D> tex;
                             if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                                if (runtime)
+                                    native->TryExport(*runtime, tex.get(),
+                                                      {static_cast<uint64_t>(frame.SystemRelativeTime().count())});
                                 ID3D11Texture2D* const copied = copyWgcFrame(tex.get(), nullptr);
                                 if (copied == nullptr) {
                                     // copyWgcFrame already recorded the failure.
@@ -3620,7 +4066,9 @@ void VideoThread::Run() {
             }
         }
 
-        while (!m_state.stop_requested.load()) {
+        while (!m_state.stop_requested.load() && (!runtime || !runtime->stopping())) {
+            if (runtime)
+                native->Poll();
             const uint64_t workerWake100ns = Qpc100ns(qpcFreq);
             if (!useOdCapture) {
                 MSG msg{};
@@ -3751,6 +4199,10 @@ void VideoThread::Run() {
                         if (diag_recording)
                             m_state.diagnostics.OnPhaseRingCursorOnlyEventIgnored();
                     }
+                    if (runtime && info.LastPresentTime.QuadPart != 0)
+                        native->TryExport(
+                            *runtime, rawTex,
+                            {QpcTicksTo100ns(static_cast<uint64_t>(info.LastPresentTime.QuadPart), qpcFreq)});
                     rawTex->Release();
                     if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
                         if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap)) {
@@ -3853,6 +4305,9 @@ void VideoThread::Run() {
                                 // Copy out of the pool while the frame object is
                                 // still alive — the pool recycles this surface as
                                 // soon as the frame is released (see wgcCapturedTex).
+                                if (runtime)
+                                    native->TryExport(*runtime, tex.get(),
+                                                      {static_cast<uint64_t>(frame.SystemRelativeTime().count())});
                                 ID3D11Texture2D* const copied = copyWgcFrame(tex.get(), heldWgcTex.get());
                                 if (copied == nullptr) {
                                     // copyWgcFrame already recorded the failure.
@@ -4397,7 +4852,9 @@ void VideoThread::Run() {
             }
         }
 
-        while (!m_state.stop_requested.load()) {
+        while (!m_state.stop_requested.load() && (!runtime || !runtime->stopping())) {
+            if (runtime)
+                native->Poll();
             if (!useOdCapture) {
                 MSG msg{};
                 while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -4510,6 +4967,10 @@ void VideoThread::Run() {
                         if (diag_recording)
                             m_state.diagnostics.OnScreenGenerationChanged();
                     }
+                    if (runtime && info.LastPresentTime.QuadPart != 0)
+                        native->TryExport(
+                            *runtime, rawTex,
+                            {QpcTicksTo100ns(static_cast<uint64_t>(info.LastPresentTime.QuadPart), qpcFreq)});
                     rawTex->Release();
                     if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
                         if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap)) {
@@ -4612,6 +5073,9 @@ void VideoThread::Run() {
                                 surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                             winrt::com_ptr<ID3D11Texture2D> tex;
                             if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                                if (runtime)
+                                    native->TryExport(*runtime, tex.get(),
+                                                      {static_cast<uint64_t>(frame.SystemRelativeTime().count())});
                                 ID3D11Texture2D* const copied = copyWgcFrame(tex.get(), nullptr);
                                 if (copied == nullptr) {
                                     // copyWgcFrame already recorded the failure.
@@ -5003,30 +5467,33 @@ end_encode_loop:
     }
 
     // --- Stop capture ---
-    if (useOdCapture) {
-        odSrc.Close();
-    } else {
-        try {
-            if (captureSession != nullptr) {
-                captureSession.Close();
-                captureSession = nullptr;
-            }
-            if (framePool != nullptr) {
-                framePool.Close();
-                framePool = nullptr;
-            }
+    if (!runtime || !runtime->HasRawReaders()) {
+        if (useOdCapture) {
+            native->od_open = false;
+            odSrc.Close();
+        } else {
             try {
-                item.Closed(closedToken);
-                closedToken = {};
+                if (captureSession != nullptr) {
+                    captureSession.Close();
+                    captureSession = nullptr;
+                }
+                if (framePool != nullptr) {
+                    framePool.Close();
+                    framePool = nullptr;
+                }
+                try {
+                    item.Closed(closedToken);
+                    closedToken = {};
+                } catch (...) {
+                    // Teardown, and deliberately silent: the session has already
+                    // ended, the file is finalized below, and a revoke/Close that
+                    // throws on a source that is already gone has nothing left to
+                    // report. Unlike the acquire paths above, nothing downstream can
+                    // mistake this for a running recording.
+                }
             } catch (...) {
-                // Teardown, and deliberately silent: the session has already
-                // ended, the file is finalized below, and a revoke/Close that
-                // throws on a source that is already gone has nothing left to
-                // report. Unlike the acquire paths above, nothing downstream can
-                // mistake this for a running recording.
+                // Same boundary as above, for Close() on the session or the pool.
             }
-        } catch (...) {
-            // Same boundary as above, for Close() on the session or the pool.
         }
     }
 
@@ -5142,6 +5609,8 @@ end_encode_loop:
 
     // --- Unregister encoder resources + destroy ---
     encoder->Destroy();
+    if (output)
+        output->ReleaseEncoder();
 
     // --- Update final stats ---
     {
@@ -5154,6 +5623,15 @@ end_encode_loop:
 
     // --- Push video EOS sentinel ---
     m_state.mux_queue.PushSentinel(VideoEosSentinel{});
+    if (output) {
+        output->VideoDrained();
+        runtime->OutputDetached(output);
+    }
+    if (runtime && runtime->HasRawReaders()) {
+        if (!native->held_lease && odCapturedTex)
+            native->held = odCapturedTex;
+        PumpRawReaders(*native);
+    }
 
     // Cleanup slot views and textures
     for (int32_t i = 0; i < kSlotCount; ++i) {
@@ -5162,10 +5640,6 @@ end_encode_loop:
     }
     videoProcessor = nullptr;
     videoEnum = nullptr;
-    videoContext = nullptr;
-    videoDevice = nullptr;
-    d3dContext = nullptr;
-    d3dDevice = nullptr;
 }
 
 } // namespace exosnap::engine

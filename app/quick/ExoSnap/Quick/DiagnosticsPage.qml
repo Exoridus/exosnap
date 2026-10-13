@@ -19,6 +19,7 @@ Item {
     id: root
 
     required property DiagnosticsAdapter diagnostics
+    required property ShellAdapter shell
     // Detected adapters and their encoder capabilities. Observed facts about the
     // machine, so they belong here rather than under a navigation destination of
     // their own — see DeviceCapabilityPanel.
@@ -674,6 +675,15 @@ Item {
                     }
                     onAssistedFixRequested: function (id) {
                         root.diagnostics.openAssistedFix(id);
+                    }
+                }
+
+                Loader {
+                    active: root.shell.currentPage === ShellAdapter.DiagnosticsPage
+                    Layout.fillWidth: true
+
+                    sourceComponent: DiagnosticsResourcesCard {
+                        resourceSnapshot: root.diagnostics.audioResources
                     }
                 }
 

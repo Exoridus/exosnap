@@ -36,6 +36,7 @@ class EditSessionAdapter : public QObject {
     QML_UNCREATABLE("EditSessionAdapter is provided by the application")
 
     Q_PROPERTY(bool open READ open NOTIFY openChanged FINAL)
+    Q_PROPERTY(bool deliveryPending READ deliveryPending NOTIFY clipChanged FINAL)
     Q_PROPERTY(QString clipTitle READ clipTitle NOTIFY clipChanged FINAL)
     Q_PROPERTY(QString clipPath READ clipPath NOTIFY clipChanged FINAL)
     Q_PROPERTY(QString playerMetaText READ playerMetaText NOTIFY clipChanged FINAL)
@@ -78,6 +79,7 @@ class EditSessionAdapter : public QObject {
     [[nodiscard]] const edit::Workspace& workspace() const {
         return workspace_;
     }
+    void setAssetMonitorSelection(edit::Id asset, engine::MonitorSelectionSnapshot selection);
     [[nodiscard]] QVariantList media() const;
     [[nodiscard]] QVariantList tracks() const;
     [[nodiscard]] bool canUndo() const {
@@ -119,6 +121,10 @@ class EditSessionAdapter : public QObject {
     // Primary entry point. Resets trim, markers, report and position, and starts
     // the asynchronous keyframe index read.
     void setEditContext(const EditContext& context, qint64 timeline_start_ms = -1);
+    [[nodiscard]] bool deliveryPending() const noexcept {
+        return context_.delivery_pending;
+    }
+    void setDeliveryPending(bool pending);
     [[nodiscard]] const EditContext& editContext() const noexcept;
 
     [[nodiscard]] bool open() const noexcept;

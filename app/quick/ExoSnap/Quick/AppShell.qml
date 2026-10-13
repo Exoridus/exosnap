@@ -7,8 +7,35 @@ import QtQuick.Layouts
 Item {
     id: root
 
+    RecordingWorkspaceState { id: recordingWorkspaceState }
+    Binding {
+        target: root.settingsAdapter
+        property: "active"
+        value: root.displayedPage === ShellAdapter.SettingsPage
+               || (root.displayedPage === ShellAdapter.RecordPage && recordingWorkspaceState.profileState !== "Closed")
+    }
+    Connections {
+        target: root.settingsAdapter
+        function onSettingsFocusRequested(target: int): void {
+            if (target === SettingsAdapter.Presence || target === SettingsAdapter.Appearance
+                || target === SettingsAdapter.Hotkeys || target === SettingsAdapter.Updates)
+                return;
+            root.navigateTo(ShellAdapter.RecordPage);
+            recordPage.openProfile(target);
+        }
+    }
+    Connections {
+        target: settingsLoader.item
+        ignoreUnknownSignals: true
+        function onRecordingProfileRequested(target: int): void {
+            root.navigateTo(ShellAdapter.RecordPage);
+            recordPage.openProfile(target);
+        }
+    }
+
     required property AboutViewModelAdapter aboutViewModel
     required property RecordViewModelAdapter recordViewModel
+    required property RecordingClipAdapter clipAdapter
     required property RecordPreviewAdapter previewAdapter
     required property SettingsAdapter settingsAdapter
     required property DeviceAdapter deviceAdapter
@@ -67,6 +94,7 @@ Item {
 
     property int displayedPage: ShellAdapter.RecordPage
     readonly property int stackIndex: root.stackIndexForPage(root.displayedPage)
+    property bool componentReady: false
 
     // Advances `displayedPage` to `currentPage` once its content exists.
     // Called after every navigation and again whenever a loader's status
@@ -103,6 +131,8 @@ Item {
     // Idempotent by status: a second navigation to the same page finds it loaded
     // and does nothing, which is the resident-page contract QCR-602 established.
     function loadDestination(page: int): void {
+        if (!root.componentReady)
+            return;
         switch (page) {
         case ShellAdapter.EditPage:
             if (editLoader.status === Loader.Null)
@@ -686,7 +716,11 @@ Item {
             Layout.fillHeight: true
 
             RecordPage {
+                id: recordPage
+                workspaceState: recordingWorkspaceState
+                settings: root.settingsAdapter
                 recordViewModel: root.recordViewModel
+                clipAdapter: root.clipAdapter
                 previewAdapter: root.previewAdapter
                 shell: root.shell
                 // displayedPage, not currentPage: `active` drives the live preview,
@@ -813,6 +847,7 @@ Item {
     Component.onCompleted: {
         if (root.editSession.durationMs > 0)
             root.currentPage = ShellAdapter.EditPage;
+        root.componentReady = true;
         root.loadDestination(root.currentPage);
         root.refreshDisplayedPage();
     }

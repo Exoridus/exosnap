@@ -112,6 +112,19 @@ class LiveVerifySource {
     // product changes its mind about is still a success, and the caller reads
     // the result back to see what it became.
     virtual bool SettingsSet(const QString& key, const QJsonValue& value, QString* error) = 0;
+    // Observes the same revision and identities used by the profile inspector.
+    [[nodiscard]] virtual QJsonObject AudioRoutingSnapshot() const = 0;
+    virtual bool AddAudioTrack(quint64 expected_revision, QString* error) = 0;
+    virtual bool AssignAudioSource(const QString& source_id, const QString& track_id, int mode,
+                                   quint64 expected_revision, QString* error) = 0;
+    virtual bool SetAudioTrackRecordEnabled(const QString& track_id, bool enabled, quint64 expected_revision,
+                                            QString* error) = 0;
+
+    // Clip commands use the current job generation and registered completed asset.
+    [[nodiscard]] virtual QJsonObject ClipSnapshot() const = 0;
+    virtual bool ClipRequest(const QString& duration_seconds, QString* error) = 0;
+    virtual bool ClipConfirm(const QString& job_id, const QString& generation, QString* error) = 0;
+    virtual bool ClipOpen(const QString& asset_id, QString* error) = 0;
 
     // Applies live overlay fields to the running recording and reports what was
     // put into effect. `fields` carries only the keys the caller wants changed;

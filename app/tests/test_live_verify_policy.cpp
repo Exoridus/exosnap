@@ -9,6 +9,7 @@
 #include "live_verify/LiveVerifyAutomationState.h"
 #include "live_verify/LiveVerifyCommandPolicy.h"
 #include "live_verify/LiveVerifyProtocol.h"
+#include "models/RecordingCapabilities.h"
 
 #include <gtest/gtest.h>
 
@@ -162,12 +163,17 @@ TEST(LiveVerifyPolicy, ARefusalAlwaysNamesItsCauseOnBothSides) {
     }
 }
 
-TEST(LiveVerifyPolicy, APreconditionOnlyEverAnswersInvalidStateOrBlocked) {
+TEST(LiveVerifyPolicy, APreconditionDistinguishesStateFromUnavailableProductCapability) {
     for (const AutomationState& state : InterestingStates()) {
         for (const CommandDescriptor& command : AllCommands()) {
             const PreconditionVerdict verdict = Evaluate(command, state);
             if (verdict.allowed())
                 continue;
+            if (!exosnap::product::kRecordingClipsAvailable &&
+                (command.name == QLatin1String("clip.request") || command.name == QLatin1String("clip.confirm"))) {
+                EXPECT_EQ(verdict.code, QLatin1String(error_code::kUnavailable));
+                continue;
+            }
             EXPECT_TRUE(verdict.code == QLatin1String(error_code::kInvalidState) ||
                         verdict.code == QLatin1String(error_code::kBlocked))
                 << command.name.toStdString() << ": " << verdict.code.toStdString();
@@ -257,6 +263,7 @@ TEST(LiveVerifyPolicy, SettingsAndProfilesAreLockedWhileARecordingIsInFlight) {
     AutomationState ready = Ready();
     ready.profile_id = QStringLiteral("preset.mine");
     EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("settings.set")), ready).allowed());
+    EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("audio.routing.setTrackRecordEnabled")), ready).allowed());
     EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("profiles.select")), ready).allowed());
 
     for (const char* live : {"Countdown", "Preparing", "Recording", "Paused", "Stopping", "Saving"}) {
@@ -269,6 +276,7 @@ TEST(LiveVerifyPolicy, SettingsAndProfilesAreLockedWhileARecordingIsInFlight) {
         // controls do while the transport is live.
         EXPECT_EQ(verdict.code, QString::fromLatin1(error_code::kBlocked)) << live;
         EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("settings.set"))) << live;
+        EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("audio.routing.setTrackRecordEnabled"))) << live;
     }
 
     // Reading is never refused. An observation a product state can turn off is
@@ -571,4 +579,33 @@ TEST(LiveVerifyUpdatePolicy, TheStateSnapshotCarriesTheUpdateFacts) {
     const QJsonObject empty = StateToJson(none, 1).value(QStringLiteral("update")).toObject();
     EXPECT_TRUE(empty.value(QStringLiteral("availableVersion")).isNull())
         << "an empty string is a value; null is \"there is none\"";
+}
+
+TEST(LiveVerifyPolicy, ClipRequestsUseMeasuredAvailabilityAndRespectBlockingSurfaces) {
+    const auto* command = FindCommand(QStringLiteral("clip.request"));
+    ASSERT_NE(command, nullptr);
+    auto state = Ready();
+    state.can_request_clip = false;
+    EXPECT_FALSE(Evaluate(*command, state).allowed());
+    state.can_request_clip = true;
+    EXPECT_EQ(Evaluate(*command, state).allowed(), exosnap::product::kRecordingClipsAvailable);
+    state.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecovery);
+    EXPECT_FALSE(Evaluate(*command, state).allowed());
+    EXPECT_FALSE(Evaluate(*FindCommand(QStringLiteral("clip.confirm")), state).allowed());
+}
+
+TEST(LiveVerifyPolicy, RecordingClipCreationIsUnavailableEvenWithStalePositiveState) {
+    for (auto state : InterestingStates()) {
+        state.can_request_clip = true;
+        for (const auto* name : {"clip.request", "clip.confirm"}) {
+            const auto* command = FindCommand(QString::fromLatin1(name));
+            ASSERT_NE(command, nullptr);
+            const auto result = Evaluate(*command, state);
+            EXPECT_FALSE(result.allowed());
+            EXPECT_EQ(result.code, QString::fromLatin1(error_code::kUnavailable));
+            EXPECT_EQ(result.message, QStringLiteral("Recording Clips are unavailable in this product version"));
+            EXPECT_FALSE(AvailableActions(state).contains(QString::fromLatin1(name)));
+        }
+        EXPECT_TRUE(Evaluate(*FindCommand(QStringLiteral("clip.snapshot")), state).allowed());
+    }
 }

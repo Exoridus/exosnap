@@ -147,7 +147,7 @@ FocusScope {
                           : button.visualFocus ? ExoTheme.text
                           : !root.available ? ExoTheme.line
                           : root.emphasisOutlined ? root.emphasisColor : "transparent"
-            radius: root.round ? height / 2 : ExoTheme.radiusPill
+            radius: root.round ? height / 2 : ExoTheme.radiusSm
         }
     }
 

@@ -28,8 +28,10 @@
 // (the scrub and trim-handle-drag path) as well as continuous playback decode
 // (StartPlaybackDecode/StopPlaybackDecode).
 
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/color_metadata.h>
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -74,6 +76,8 @@ struct DecodedAudioBlock {
 struct AudioTrackDescription {
     int stream_index = -1;
     std::string name;
+    std::optional<AudioTrackId> track_id;
+    std::string role;
 };
 
 using AudioBlockCallback = std::function<void(DecodedAudioBlock)>;
@@ -139,7 +143,8 @@ class EditPlayerEngine {
     // Opens `path` (the MKV edit master) and locates its video/audio streams.
     // Returns false with a human-readable message in out_error on failure
     // (missing file, unreadable container, no decodable video stream).
-    bool Open(const std::filesystem::path& path, std::string& out_error);
+    // Cancellation applies to opening. Playback is stopped separately.
+    bool Open(const std::filesystem::path& path, std::string& out_error, const std::atomic<bool>* cancelled = nullptr);
 
     // Closes the file and stops any running playback decode (see Task 6).
     void Close();
@@ -224,6 +229,10 @@ class EditPlayerEngine {
     // points at. The vector holds at most a handful of entries.
     // cppcheck-suppress returnByReference
     [[nodiscard]] std::vector<AudioTrackDescription> AudioTracks() const;
+    [[nodiscard]] AudioMetadataReadResult AudioMetadata() const;
+    // Selection changes require a stopped decode run. The same snapshot is used
+    // by continuous playback and range decoding for export.
+    bool SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error);
 
     // ---- Continuous playback decode ----
 

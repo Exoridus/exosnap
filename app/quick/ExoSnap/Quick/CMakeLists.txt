@@ -56,6 +56,7 @@ qt_add_qml_module(exosnap
         DeviceCapabilityRow.qml
         DeviceCodecChip.qml
         DiagnosticsPage.qml
+        DiagnosticsResourcesCard.qml
         DiagnosticsWorkspace.qml
         DiagnosticsSectionHeader.qml
         DiagnosticsSelfTestRow.qml
@@ -126,17 +127,23 @@ qt_add_qml_module(exosnap
         PreviewTestCard.qml
         RecordActionButton.qml
         RecordPage.qml
+        RecordingSourcePanel.qml
+        RecordingProfileInspector.qml
         RecordingErrorOverlay.qml
         RecordSourcePicker.qml
         RecordSourceToggle.qml
         RecordSplitButton.qml
         RecordTransportDock.qml
+        RecordingWorkspaceSurface.qml
+        RecordingClipPanel.qml
         RecoveryOverlay.qml
         RegionSelectionOverlay.qml
         RegionSelectionWindow.qml
         SettingsAppearanceSection.qml
         SettingsAudioEncodingSection.qml
         SettingsAudioSourcesSection.qml
+        AudioTrackCard.qml
+        AudioRoutingPanel.qml
         SettingsAudioSourceRow.qml
         SettingsAudioTrackLedger.qml
         SettingsMicrophoneSection.qml
@@ -227,6 +234,10 @@ qt_add_qml_module(exosnap
         OverlayTelemetryAdapter.h
         RecordViewModelAdapter.cpp
         RecordViewModelAdapter.h
+        RecordingClipAdapter.cpp
+        RecordingClipAdapter.h
+        RecordingWorkspaceState.cpp
+        RecordingWorkspaceState.h
         RecordingErrorAdapter.cpp
         RecordingErrorAdapter.h
         RecoveryAdapter.cpp
@@ -238,6 +249,8 @@ qt_add_qml_module(exosnap
         QuickWheelMetrics.h
         SettingsAdapter.cpp
         SettingsAdapter.h
+        AudioRoutingAdapter.cpp
+        AudioRoutingAdapter.h
         ShellAdapter.cpp
         ShellAdapter.h
         WhatsNewAdapter.cpp
@@ -259,6 +272,19 @@ qt_add_qml_module(exosnap
         # How QML addresses the rendered mark and the canonical beat.
         Brand.h
 )
+
+# A compiled lookup can reference another local QML type's property layout.
+# Qt's per-file cache rules do not track these dependencies, so an incremental
+# build must invalidate the module's compiled lookups together.
+get_target_property(exosnap_qml_files exosnap QT_QML_MODULE_QML_FILES)
+get_target_property(exosnap_qml_sources exosnap SOURCES)
+foreach(exosnap_qml_source IN LISTS exosnap_qml_sources)
+    if(exosnap_qml_source MATCHES "/qmlcache/.*_(qml|js|mjs)\\.cpp$")
+        add_custom_command(OUTPUT "${exosnap_qml_source}" APPEND
+            DEPENDS ${exosnap_qml_files}
+        )
+    endif()
+endforeach()
 
 target_sources(exosnap
     PRIVATE
@@ -347,6 +373,8 @@ target_sources(exosnap
         # read or written.
         SettingsAutomationKeys.cpp
         SettingsAutomationKeys.h
+        AudioRoutingAdapter.cpp
+        AudioRoutingAdapter.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SessionLedger.cpp
@@ -414,6 +442,9 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/WindowEvidenceProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/services/WindowEvidenceProbe.h
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinator.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinatorClips.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/RecordingClipJobs.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/RecordingArtifactRegistry.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingAdmission.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinator.h
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCountdownController.cpp
@@ -453,6 +484,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/RecoveryService.h
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingHistoryStore.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingHistoryStore.h
+        ${PROJECT_SOURCE_DIR}/app/models/HiddenCaptureTargets.cpp
         ${PROJECT_SOURCE_DIR}/app/models/CaptureTargetPresentation.cpp
         ${PROJECT_SOURCE_DIR}/app/models/CaptureTargetPresentation.h
         ${PROJECT_SOURCE_DIR}/app/viewmodels/RecordViewModel.cpp
@@ -1024,6 +1056,8 @@ qt_add_qml_module(record_controls_qml_tests
         # contract is the whole fix, and it is one property write away from
         # being undone.
         ExoTextField.qml
+        DiagnosticsResourcesCard.qml
+        DiagnosticsSectionHeader.qml
         ExoTheme.qml
         # QCR-604: the pipeline cards are delegates over a model with a stable
         # per-stage identity now, so what has to be asserted is that a value
@@ -1161,6 +1195,8 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditExportAdapter.h
         RecordViewModelAdapter.cpp
         RecordViewModelAdapter.h
+        RecordingClipAdapter.cpp
+        RecordingClipAdapter.h
         EditPlayerAdapter.cpp
         EditPlayerAdapter.h
         EditPlayerWorker.cpp
@@ -1192,6 +1228,8 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditActionButton.qml
         EditTimelineRuler.qml
         ExoButton.qml
+        ExoCard.qml
+        ExoCheckBox.qml
         ExoNavTab.qml
         ExoSelect.qml
         ExoChevron.qml
@@ -1271,13 +1309,57 @@ qt_add_qml_module(record_source_picker_qml_tests
         # its base type and stops publishing the Kind enum.
         QtQuick.Shapes
     SOURCES
+        ExoWebcamPreviewItem.cpp
+        ExoWebcamPreviewItem.h
+        WebcamPreviewFeed.cpp
+        WebcamPreviewFeed.h
+        RecordingWorkspaceState.cpp
+        RecordingWorkspaceState.h
+        SettingsAdapter.cpp
+        SettingsAdapter.h
+        AudioRoutingAdapter.cpp
+        AudioRoutingAdapter.h
+        ${PROJECT_SOURCE_DIR}/app/models/OverlayContentPolicy.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/OverlayContentPolicy.h
         RecordViewModelAdapter.cpp
         RecordViewModelAdapter.h
+        RecordingClipAdapter.cpp
+        RecordingClipAdapter.h
         QuickThemeTokens.cpp
         QuickThemeTokens.h
         # ExoTheme.qml resolves wheelScrollLines through this singleton.
         QuickWheelMetrics.h
     QML_FILES
+        AudioRoutingPanel.qml
+        AudioTrackCard.qml
+        ExoCard.qml
+        ExoCheckBox.qml
+        ExoConfirmDialog.qml
+        ExoInfoButton.qml
+        ExoNotice.qml
+        ExoNumberField.qml
+        ExoScrollView.qml
+        ExoSelect.qml
+        ExoSettingRow.qml
+        ExoSlider.qml
+        ExoSwitch.qml
+        ExoTextField.qml
+        RecordingProfileInspector.qml
+        RecordingSourcePanel.qml
+        SettingsAudioEncodingSection.qml
+        SettingsAudioSourcesSection.qml
+        SettingsChromaSlider.qml
+        SettingsFormatSection.qml
+        SettingsGroupToggle.qml
+        SettingsMicDspGroup.qml
+        SettingsMicrophoneSection.qml
+        SettingsOutputFolderDialog.qml
+        SettingsOutputSection.qml
+        SettingsPresetBar.qml
+        SettingsPresetFileDialog.qml
+        SettingsPresetNameDialog.qml
+        SettingsQualitySection.qml
+        SettingsWebcamSection.qml
         ExoButton.qml
         ExoChevron.qml
         ExoFieldErrorMark.qml
@@ -1293,6 +1375,8 @@ qt_add_qml_module(record_source_picker_qml_tests
         RecordSourceToggle.qml
         RecordSplitButton.qml
         RecordTransportDock.qml
+        RecordingWorkspaceSurface.qml
+        RecordingClipPanel.qml
         RegionSelectionOverlay.qml
 )
 
@@ -1321,6 +1405,8 @@ target_link_libraries(record_source_picker_qml_tests
         Qt6::QuickControls2
         Qt6::QuickTest
         exosnap_record_viewmodel_test_support
+        exosnap_output_model_test_support
+        exosnap::update
         exosnap::capability
         exosnap_engine
 )
@@ -1371,6 +1457,8 @@ exosnap_add_gtest(
         ${EXOSNAP_QUICK_TESTS_DIR}/test_record_viewmodel_adapter.cpp
         RecordViewModelAdapter.cpp
         RecordViewModelAdapter.h
+        RecordingClipAdapter.cpp
+        RecordingClipAdapter.h
         CaptureTargetStillProvider.cpp
         CaptureTargetStillProvider.h
     LIBRARIES
@@ -1449,7 +1537,12 @@ exosnap_add_gtest(
     NAME settings_qml_adapter_tests
     TEST_PREFIX quick_settings_adapter.
     SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_recording_workspace.cpp
+        RecordingWorkspaceState.cpp
+        RecordingWorkspaceState.h
         ${EXOSNAP_QUICK_TESTS_DIR}/test_settings_adapter.cpp
+        AudioRoutingAdapter.cpp
+        AudioRoutingAdapter.h
         # The automation key table lives with the adapter it binds to, so a
         # renamed setter is a compile error in both at once.
         ${EXOSNAP_QUICK_TESTS_DIR}/test_settings_automation_keys.cpp
@@ -2199,3 +2292,15 @@ foreach(_i18n_scale IN ITEMS 1 1.25 1.5 2)
     )
     exosnap_set_test_phase("${_i18n_test}" desktop)
 endforeach()
+
+
+exosnap_add_gtest(
+    NAME recording_clip_qml_adapter_tests
+    TEST_PREFIX quick_adapter.
+    SOURCES ${EXOSNAP_QUICK_TESTS_DIR}/test_recording_clip_adapter.cpp
+        RecordingClipAdapter.cpp RecordingClipAdapter.h
+    LIBRARIES Qt6::Core Qt6::Qml exosnap_engine
+)
+target_include_directories(recording_clip_qml_adapter_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/app)
+target_compile_definitions(recording_clip_qml_adapter_tests PRIVATE NOMINMAX)

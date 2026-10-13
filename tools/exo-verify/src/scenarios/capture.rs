@@ -132,11 +132,9 @@ fn configure(app: &mut App) -> Step {
             ("video.container", json!("MKV")),
             ("video.videoCodec", json!("H.264")),
             ("video.frameRate", json!(30)),
-            ("audio.systemEnabled", json!(false)),
-            ("audio.appEnabled", json!(false)),
-            ("audio.microphoneEnabled", json!(false)),
         ],
-    )
+    )?;
+    common::disable_recording_audio(app)
 }
 
 fn notifications(app: &mut App) -> Step<Value> {
@@ -385,12 +383,10 @@ fn window_geometry_live(ctx: &mut Context) -> Step {
             ("video.videoCodec", json!("H.264")),
             ("video.frameRate", json!(30)),
             ("video.cfr", json!(true)),
-            ("audio.systemEnabled", json!(false)),
-            ("audio.appEnabled", json!(false)),
-            ("audio.microphoneEnabled", json!(false)),
             ("app.hideWindowFromCapture", json!(true)),
         ],
     )?;
+    common::disable_recording_audio(&mut app)?;
     let mut stimulus = Stimulus::start(
         ctx,
         StimulusOptions {
@@ -404,7 +400,7 @@ fn window_geometry_live(ctx: &mut Context) -> Step {
     common::select_window(&mut app, &stimulus.title)?;
     let selected = common::record_snapshot(&mut app)?;
     product_ensure!(
-        selected["sourceKindText"] == "WINDOW",
+        selected["captureMode"] == 1,
         "the product selected {:?} instead of the stimulus window",
         selected["sourceKindText"]
     );
@@ -514,12 +510,10 @@ fn region_contract(ctx: &mut Context) -> Step {
             ("video.videoCodec", json!("H.264")),
             ("video.frameRate", json!(30)),
             ("video.cfr", json!(true)),
-            ("audio.systemEnabled", json!(false)),
-            ("audio.appEnabled", json!(false)),
-            ("audio.microphoneEnabled", json!(false)),
             ("app.hideWindowFromCapture", json!(true)),
         ],
     )?;
+    common::disable_recording_audio(&mut app)?;
     let mut stimulus = Stimulus::start(
         ctx,
         StimulusOptions {
@@ -552,7 +546,7 @@ fn region_contract(ctx: &mut Context) -> Step {
         .map_err(|refusal| Stop::infra(format!("record.selectRegion was refused: {refusal}")))?;
     let selected = common::record_snapshot(&mut app)?;
     product_ensure!(
-        selected["sourceKindText"] == "REGION",
+        selected["captureMode"] == 2,
         "the product reports {:?}, not REGION",
         selected["sourceKindText"]
     );
@@ -654,7 +648,7 @@ fn region_selector_interaction(ctx: &mut Context) -> Step {
     common::select_display(&mut app, &device)?;
     let before = common::record_snapshot(&mut app)?;
     product_ensure!(
-        before["sourceKindText"] == "SCREEN",
+        before["captureMode"] == 0,
         "the display target reads {:?}, not SCREEN",
         before["sourceKindText"]
     );
@@ -675,7 +669,7 @@ fn region_selector_interaction(ctx: &mut Context) -> Step {
     let committed = app
         .client
         .poll("record.snapshot", json!({}), secs(10.0), |snapshot| {
-            snapshot["sourceKindText"] == "REGION" && snapshot["sourceName"] == "Screen region"
+            snapshot["captureMode"] == 2
         })?
         .ok_or_else(|| Stop::fail("the pointer drag produced no committed region"))?;
     let drag_w = end.0 - start.0;
@@ -703,7 +697,7 @@ fn region_selector_interaction(ctx: &mut Context) -> Step {
     let restored = app
         .client
         .poll("record.snapshot", json!({}), secs(10.0), |snapshot| {
-            snapshot["sourceKindText"] == "SCREEN"
+            snapshot["captureMode"] == 0
         })?
         .ok_or_else(|| Stop::fail("Escape did not restore the previous capture target"))?;
     product_ensure!(

@@ -121,6 +121,7 @@ class ShellAdapter : public QObject {
     // enum exists, and Q_ENUM means QML writes ShellAdapter.SettingsPage instead
     // of a 1 that silently means something else after a reorder.
     void navigateToPageRequested(Page page);
+    void audioProfileRequested();
 
     // The source picker, asked for from outside the Record page — today only the
     // control channel. Routed as a request rather than by writing

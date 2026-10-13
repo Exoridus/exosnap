@@ -31,6 +31,8 @@ struct RawAudioBuffer {
 struct AudioDeviceTiming {
     uint64_t device_position_ns = 0;
     uint64_t qpc_position_ns = 0;
+    uint64_t device_position_frames = 0;
+    bool device_position_frames_valid = false;
 };
 
 // Convert a device sample position (frames) to nanoseconds on that device's
@@ -94,6 +96,11 @@ class IAudioCaptureSource {
     virtual uint32_t Channels() const = 0;
     virtual AudioSampleFormat SampleFormat() const = 0;
     virtual const std::string& EndpointName() const = 0;
+
+    // Physical capture owns clock correction. Downstream consumers must not correct it again.
+    virtual bool ClockCorrected() const {
+        return false;
+    }
 
     // Raw platform HRESULT of the last fatal acquire failure (e.g. a WASAPI
     // endpoint that was invalidated mid-recording), or 0 (S_OK) when the source

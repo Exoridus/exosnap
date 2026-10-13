@@ -1120,6 +1120,31 @@ class ModelChangeCounter {
     std::vector<int> changed_rows_;
 };
 
+TEST(DiagnosticsAdapterResources, CoalescesValuesAndPreservesClipCountersAcrossMeterUpdates) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    SignalCounter changed(&adapter, &DiagnosticsAdapter::audioResourcesChanged);
+    const QVariantList jobs{QVariantMap{
+        {QStringLiteral("identity"), QStringLiteral("opaque-job")},
+        {QStringLiteral("metrics"), QVariantList{QVariantMap{{QStringLiteral("label"), QStringLiteral("Reserve")},
+                                                             {QStringLiteral("value"), QStringLiteral("456")},
+                                                             {QStringLiteral("available"), true}}}}}};
+    adapter.setClipResources(jobs);
+    EXPECT_EQ(changed.count(), 1);
+    adapter.setClipResources(jobs);
+    EXPECT_EQ(changed.count(), 1);
+    const QVariantMap audio{{QStringLiteral("physical"),
+                             QVariantList{QVariantMap{{QStringLiteral("identity"), QStringLiteral("opaque-clock")}}}}};
+    adapter.setAudioResources(audio);
+    EXPECT_EQ(changed.count(), 2);
+    EXPECT_EQ(adapter.audioResources().value("clipJobs").toList(), jobs);
+    adapter.setAudioResources(audio);
+    EXPECT_EQ(changed.count(), 2);
+    adapter.setClipResources({});
+    EXPECT_EQ(changed.count(), 3);
+    EXPECT_TRUE(adapter.audioResources().value("clipJobs").toList().isEmpty());
+    EXPECT_EQ(adapter.audioResources().value("physical"), audio.value("physical"));
+}
 } // namespace
 
 TEST(DiagnosticIssueModelTest, IdenticalCardsChangeNothingAtAll) {

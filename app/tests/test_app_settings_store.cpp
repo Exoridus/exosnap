@@ -987,3 +987,36 @@ TEST(AppSettingsStoreTest, LanguagePreferenceRoundTripsStableTokensAndRejectsUnk
     EXPECT_EQ(store.Load().ui_language, QStringLiteral("system"));
 }
 } // namespace exosnap
+namespace exosnap {
+TEST(AppSettingsStoreTest, HiddenWindowRulesRoundTripWithoutSessionState) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    AppSettingsStore store(directory.filePath(QStringLiteral("settings.ini")));
+    PersistedAppSettings settings;
+    HiddenCaptureRule title;
+    title.id = QStringLiteral("title-rule");
+    title.text = QStringLiteral("Document");
+    title.title_match = HiddenCaptureTitleMatch::Equals;
+    title.case_sensitive = true;
+    title.application_scope = QStringLiteral("application");
+    title.enabled = false;
+    HiddenCaptureRule application;
+    application.id = QStringLiteral("app-rule");
+    application.kind = HiddenCaptureRuleKind::Application;
+    application.application_scope = QStringLiteral("application");
+    settings.hidden_window_rules = {title, application};
+    ASSERT_TRUE(store.Save(settings));
+    const auto loaded = store.Load();
+    ASSERT_EQ(loaded.hidden_window_rules.size(), 2);
+    EXPECT_EQ(loaded.hidden_window_rules[0].id, title.id);
+    EXPECT_EQ(loaded.hidden_window_rules[0].text, title.text);
+    EXPECT_EQ(loaded.hidden_window_rules[0].title_match, HiddenCaptureTitleMatch::Equals);
+    EXPECT_TRUE(loaded.hidden_window_rules[0].case_sensitive);
+    EXPECT_FALSE(loaded.hidden_window_rules[0].enabled);
+    EXPECT_EQ(loaded.hidden_window_rules[1].kind, HiddenCaptureRuleKind::Application);
+    EXPECT_EQ(loaded.hidden_window_rules[1].application_scope, application.application_scope);
+    settings.hidden_window_rules.clear();
+    ASSERT_TRUE(store.Save(settings));
+    EXPECT_TRUE(store.Load().hidden_window_rules.empty());
+}
+} // namespace exosnap

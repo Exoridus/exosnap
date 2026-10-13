@@ -1,6 +1,7 @@
 #pragma once
 #include <update/update_types.h>
 
+#include "AudioRoutingAdapter.h"
 #include "models/AudioMeterScale.h"
 #include "models/CrashReportPolicy.h"
 #include "models/OutputPathValidator.h"
@@ -25,6 +26,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <vector>
 
 namespace exosnap::quick {
@@ -74,13 +76,42 @@ class SettingsAdapter : public QObject {
     Q_ENUM(FocusTarget)
 
     using OutputFolderValidator = std::function<FolderValidationResult(const std::filesystem::path&)>;
+    Q_PROPERTY(exosnap::quick::AudioRoutingAdapter* audioRouting READ audioRouting CONSTANT FINAL)
+    AudioRoutingAdapter* audioRouting() const {
+        return audio_routing_;
+    }
+    void setAudioRouting(AudioRoutingAdapter* routing) {
+        audio_routing_ = routing;
+    }
 
     // ---- Global tier / lock -------------------------------------------------
     Q_PROPERTY(bool expertMode READ expertMode WRITE setExpertMode NOTIFY appSettingsChanged FINAL)
     Q_PROPERTY(bool controlsLocked READ controlsLocked NOTIFY controlsLockedChanged FINAL)
+    Q_PROPERTY(bool recordingActive READ recordingActive NOTIFY recordingContextChanged FINAL)
+    Q_PROPERTY(bool editingNextRecording READ editingNextRecording NOTIFY recordingContextChanged FINAL)
+    Q_PROPERTY(QString activePresetName READ activePresetName NOTIFY recordingContextChanged FINAL)
     // True while the Settings page is the current page. The level meters on
     // the Audio sources card are fed only while a page that shows them is up.
     Q_PROPERTY(bool active READ active WRITE setActive NOTIFY activeChanged FINAL)
+
+    bool recordingActive() const {
+        return controls_locked_;
+    }
+    bool editingNextRecording() const {
+        return editing_next_recording_;
+    }
+    const QString& activePresetName() const {
+        return active_preset_name_;
+    }
+    const RecordingPresetConfig& displayedConfig() const {
+        return config_;
+    }
+    const RecordingPresetConfig& sessionConfig() const {
+        return active_config_ ? *active_config_ : config_;
+    }
+    void updateActiveWebcam(const WebcamSettings& settings);
+    Q_INVOKABLE void editNextRecording();
+    Q_INVOKABLE void showActiveRecording();
     // The adapter the encode is running on, as a fact rather than as a choice.
     // Empty until the capability probe has named one; the row that shows it says
     // so rather than inventing a placeholder.
@@ -865,6 +896,7 @@ class SettingsAdapter : public QObject {
     Q_INVOKABLE bool presetNameRejected(const QString& name, const QString& exclude_id) const;
 
   signals:
+    void recordingContextChanged();
     void configChanged();
     void optionsChanged();
     void appSettingsChanged();
@@ -937,6 +969,10 @@ class SettingsAdapter : public QObject {
     void setRowSeparate(exosnap::engine::AudioSourceKind kind, bool separate);
 
     RecordingPresetConfig config_;
+    RecordingPresetConfig next_config_;
+    std::optional<RecordingPresetConfig> active_config_;
+    QString active_preset_name_;
+    bool editing_next_recording_ = false;
     bool active_ = false;
     PersistedAppSettings app_settings_;
     QString startup_language_;
@@ -1057,6 +1093,7 @@ class SettingsAdapter : public QObject {
     QString update_available_version_;
     bool update_action_enabled_ = true;
     bool whats_new_available_ = false;
+    AudioRoutingAdapter* audio_routing_ = nullptr;
 };
 
 } // namespace exosnap::quick

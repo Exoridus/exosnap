@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <gtest/gtest.h>
 
+#include <exosnap/engine/audio_limits.h>
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/packet_types.h>
 #include <exosnap/engine/recorder_session.h>
@@ -89,7 +90,7 @@ TEST(MultiTrackPacketTypesTest, Validate_RejectsAudioTrackPlanAboveMax) {
     cfg.target.kind = exosnap::engine::CaptureTarget::Kind::Monitor;
     cfg.target.native_id = 1;
 
-    for (uint32_t i = 0; i < 4; ++i) {
+    for (uint32_t i = 0; i <= exosnap::engine::kMaxAudioTracks; ++i) {
         ResolvedAudioTrack track{};
         track.track_index = i;
         cfg.audio_track_plan.tracks.push_back(track);
@@ -97,7 +98,7 @@ TEST(MultiTrackPacketTypesTest, Validate_RejectsAudioTrackPlanAboveMax) {
 
     RecorderResult validation{};
     EXPECT_FALSE(session.Validate(cfg, &validation));
-    EXPECT_EQ(validation.error_detail, "audio_track_plan: max 3 audio tracks supported");
+    EXPECT_EQ(validation.error_detail, "audio_track_plan: max 8 audio tracks supported");
 }
 
 TEST(MultiTrackPacketTypesTest, Validate_AcceptsOpusForMatroska) {

@@ -77,6 +77,7 @@ void EditPlayerFrameSink::clear() {
 }
 
 EditPlayerAdapter::EditPlayerAdapter(QObject* parent) : QObject(parent) {
+    qRegisterMetaType<engine::MonitorSelectionSnapshot>();
     worker_ = new EditPlayerWorker(sink_);
     worker_->moveToThread(&worker_thread_);
     connect(&worker_thread_, &QThread::finished, worker_, &QObject::deleteLater);
@@ -102,6 +103,17 @@ EditPlayerAdapter::EditPlayerAdapter(QObject* parent) : QObject(parent) {
         emit playingChanged();
     });
 
+    connect(worker_, &EditPlayerWorker::monitoringChanged, this, &EditPlayerAdapter::setMonitoringState);
+    connect(worker_, &EditPlayerWorker::monitoringRejected, this, [this](const QString& error) {
+        setPlaying(false);
+        setPlaceholderText(error);
+    });
+    connect(worker_, &EditPlayerWorker::monitorSelectionConfirmed, this,
+            [this](qulonglong asset, engine::MonitorSelectionSnapshot selection) {
+                if (session_)
+                    session_->setAssetMonitorSelection(asset, std::move(selection));
+            });
+
     worker_thread_.setObjectName(QStringLiteral("exosnap-edit-player"));
     worker_thread_.start();
 }
@@ -122,9 +134,10 @@ void EditPlayerAdapter::setSession(EditSessionAdapter* session) {
     connect(session_, &EditSessionAdapter::workspaceChanged, this, [this]() {
         duration_ms_ = session_->durationMs();
         auto workspace = session_->workspace();
-        if (timeline_clips_ == workspace.clips())
+        if (timeline_clips_ == workspace.clips() && timeline_monitoring_revision_ == workspace.monitoringRevision())
             return;
         timeline_clips_ = workspace.clips();
+        timeline_monitoring_revision_ = workspace.monitoringRevision();
         setPlaying(false);
         const auto generation = sink_->invalidate();
         QMetaObject::invokeMethod(
@@ -203,8 +216,8 @@ void EditPlayerAdapter::togglePlay() {
 void EditPlayerAdapter::setPlaying(bool playing) {
     if (playing == playing_)
         return;
-    if (playing && (duration_ms_ <= 0 || !clip_open_))
-        return; // unknown duration or no clip: nothing to play against
+    if (playing && (duration_ms_ <= 0 || !clip_open_ || monitoring_confirmation_required_))
+        return;
     playing_ = playing;
     if (playing_) {
         const qint64 from = session_ != nullptr ? session_->positionMs() : 0;
@@ -215,6 +228,28 @@ void EditPlayerAdapter::setPlaying(bool playing) {
         QMetaObject::invokeMethod(worker_, "pause", Qt::QueuedConnection);
     }
     emit playingChanged();
+}
+
+void EditPlayerAdapter::confirmMonitoring(QStringList trackIds, bool overlapConfirmed) {
+    setPlaying(false);
+    QMetaObject::invokeMethod(
+        worker_,
+        [worker = worker_, trackIds = std::move(trackIds), overlapConfirmed]() mutable {
+            worker->confirmMonitoring(std::move(trackIds), overlapConfirmed);
+        },
+        Qt::QueuedConnection);
+}
+
+void EditPlayerAdapter::setMonitoringState(QVariantList tracks, bool confirmationRequired) {
+    if (confirmationRequired)
+        setPlaying(false);
+    if (monitoring_tracks_ == tracks && monitoring_confirmation_required_ == confirmationRequired)
+        return;
+    monitoring_tracks_ = std::move(tracks);
+    monitoring_confirmation_required_ = confirmationRequired;
+    if (!confirmationRequired && clip_open_)
+        setPlaceholderText({});
+    emit monitoringChanged();
 }
 
 void EditPlayerAdapter::beginScrub() {
@@ -252,6 +287,9 @@ void EditPlayerAdapter::openClip(const QString& master_path, qint64 duration_ms)
 
 void EditPlayerAdapter::closeClip() {
     duration_ms_ = 0;
+    timeline_clips_.clear();
+    timeline_monitoring_revision_ = 0;
+    setMonitoringState({}, false);
     if (playing_) {
         playing_ = false;
         emit playingChanged();

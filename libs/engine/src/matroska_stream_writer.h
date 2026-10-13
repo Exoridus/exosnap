@@ -1,5 +1,9 @@
 #pragma once
 
+#include <exosnap/engine/audio_limits.h>
+#include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/recording_media_types.h>
+
 // MatroskaStreamWriter: incremental, constant-RAM Matroska/WebM container writer.
 //
 // Replaces the previous batch-collect-then-write-once muxer body. Instead of
@@ -41,6 +45,7 @@
 // this header does not drag third-party headers (and their MSVC warnings) into
 // every translation unit that only needs the interface.
 namespace libebml {
+class EbmlElement;
 class EbmlVoid;
 } // namespace libebml
 namespace libmatroska {
@@ -61,6 +66,7 @@ namespace exosnap::engine {
 // dragging <cstdio>/<windows.h> into every translation unit that only needs the
 // writer's interface.
 class DurableFileIo;
+class DiskCueSpool;
 
 // Decides when a periodic durability flush (fflush + OS-level FlushFileBuffers)
 // is due, based on wall-clock time elapsed since the previous one. This is pure
@@ -139,8 +145,15 @@ struct OutputIoTimings {
 };
 
 struct MatroskaStreamConfig {
+    std::optional<AudioManifest1> audio_manifest;
+    std::optional<RecordingMediaDescriptor> media_descriptor;
+    uint64_t initial_commit_sequence = 0;
+    std::function<ReceiptAcceptance(CommittedMediaReceipt)> publish_committed;
     // Optional deterministic fault injector. Called only by the owning mux worker.
     std::function<bool(OutputIoOperation)> fail_io;
+    // Optional clip-worker budget hooks. Recorder configurations leave them empty.
+    std::function<bool(OutputIoOperation, uint64_t)> before_write;
+    std::function<void(OutputIoOperation, uint64_t)> after_write;
     std::string output_path;
 
     // True when the caller has already created output_path exclusively and is
@@ -186,7 +199,7 @@ struct MatroskaStreamConfig {
     // Audio
     StreamAudioCodec audio_codec = StreamAudioCodec::Aac;
     uint32_t audio_track_count = 0;
-    std::array<StreamAudioTrack, 3> audio_tracks{}; // CodecPrivateData::kMaxAudioTracks
+    std::array<StreamAudioTrack, exosnap::engine::kMaxAudioTracks> audio_tracks{}; // CodecPrivateData::kMaxAudioTracks
 
     // Audio format. These values are written into KaxTrackAudio for
     // every audio track. bit_depth is only written for PCM and FLAC.
@@ -206,11 +219,35 @@ struct MatroskaStreamConfig {
     // A/V streams whose PTS interleave within this horizon get sorted correctly.
     // The window is ALSO bounded by count to cap RAM if one track stalls.
     uint64_t reorder_window_ns = 3ULL * 1000000000ULL; // 3 seconds
-    size_t reorder_window_max_packets = 4096;          // hard ceiling
+    size_t reorder_window_max_packets = 4096;
+    size_t reorder_window_max_bytes = kMuxReorderPayloadBytes;
+    // Zero preserves the recorder's time-based clusters. Clip jobs may cap an
+    // in-memory cluster by retained capacity and start a new one before admission.
+    size_t max_cluster_payload_bytes = 0;
+    // Clip length must not determine retained cue metadata or cluster object count.
+    bool stream_cues_to_disk = false;
+    bool collect_media_index = true;
 };
 
 class MatroskaStreamWriter {
   public:
+    [[nodiscard]] std::shared_ptr<const RecordingMediaDescriptor> media_descriptor() const noexcept {
+        return m_media_descriptor;
+    }
+    [[nodiscard]] bool media_index_degraded() const noexcept {
+        return m_media_index_degraded;
+    }
+    // Segment-local end of emitted, decoded audio or video coverage after a successful finalize.
+    // Empty when no measured coverage is available; an explicit Duration override does not alter it.
+    [[nodiscard]] std::optional<uint64_t> measured_content_end_ns() const noexcept {
+        if (!m_finalized || m_failed || m_media_index_degraded || !m_has_covered_end)
+            return std::nullopt;
+        return m_max_covered_end_ns;
+    }
+    // A closed writer can prove the final video endpoint only after its last cluster was accepted.
+    // The caller must match this seal against a frozen journal snapshot before using EOS as a boundary.
+    [[nodiscard]] std::optional<RecordingSegmentSeal> finalized_segment_seal() const noexcept;
+
     MatroskaStreamWriter();
     ~MatroskaStreamWriter();
 
@@ -226,6 +263,8 @@ class MatroskaStreamWriter {
     // Returns false if a write error occurred (state then becomes failed; further
     // Push/Finalize calls are no-ops returning false).
     bool Push(MuxPacket packet);
+
+    [[nodiscard]] size_t retained_cue_count() const noexcept;
 
     // Hand over the stream's measured content light levels, in cd/m^2. Only has
     // an effect on an HDR session opened with reserve_content_light_level, where
@@ -264,8 +303,8 @@ class MatroskaStreamWriter {
         return m_error;
     }
 
-    // Diagnostics for tests / logging: peak number of packets and bytes held in
-    // the reorder window at any instant. Proves constant-RAM behavior.
+    // Reorder bytes count retained payload capacity, including unused space.
+    // Container nodes and cluster storage are separate from this counter.
     [[nodiscard]] size_t peak_window_packets() const noexcept {
         return m_peak_window_packets;
     }
@@ -277,6 +316,9 @@ class MatroskaStreamWriter {
     }
     [[nodiscard]] uint64_t current_window_bytes() const noexcept {
         return m_cur_window_bytes;
+    }
+    [[nodiscard]] uint64_t peak_cluster_payload_bytes() const noexcept {
+        return m_peak_cluster_payload_bytes;
     }
 
     // Filesystem write-boundary diagnostics. bytes_written is the cumulative file
@@ -303,7 +345,7 @@ class MatroskaStreamWriter {
     // Minimum spacing between durability flushes performed inside FlushCluster()
     // (see DurabilityFlushScheduler above and FlushCluster()'s use of it in the
     // .cpp). Deliberately NOT a user-facing setting (no UI scope). Clusters
-    // already land roughly every 2 s in steady-state recording (kClusterBoundaryMs
+    // already land roughly every 2 s in steady-state recording (kClusterBoundaryTicks
     // in matroska_stream_writer.cpp), so this keeps the added OS-durability
     // syscall on the same cadence as that steady rhythm instead of firing on
     // every cluster — a pathological burst of clusters (e.g. Finalize()'s forced
@@ -316,6 +358,18 @@ class MatroskaStreamWriter {
     }
 
   private:
+    bool InitializeMediaDescriptor();
+    void PublishCommitted(bool durable) noexcept;
+    std::shared_ptr<const RecordingMediaDescriptor> m_media_descriptor;
+    ClusterExtent m_active_cluster_extent;
+    std::vector<std::pair<libebml::EbmlElement*, size_t>> m_pending_rap_blocks;
+    std::vector<ClusterExtent> m_pending_closed_extents;
+    uint64_t m_commit_sequence = 0;
+    uint64_t m_readable_end = 0;
+    uint64_t m_durable_end = 0;
+    size_t m_pending_receipt_bytes = 0;
+    bool m_media_index_degraded = false;
+
     // Decode-time interleave window entry.
     struct WindowEntry {
         uint64_t pts_ns = 0;
@@ -329,7 +383,7 @@ class MatroskaStreamWriter {
     // Emit window entries whose decode time is behind the horizon (force=true drains all).
     bool DrainWindow(bool force);
     // Write a single resolved packet into the current/next cluster.
-    bool EmitPacket(const WindowEntry& e);
+    bool EmitPacket(WindowEntry& e);
     bool FlushCluster();
     // Publish the current file position (clamped to a running max, so a
     // transient backward seek/restore inside a back-patch never regresses the
@@ -348,6 +402,7 @@ class MatroskaStreamWriter {
     std::unique_ptr<libmatroska::KaxInfo> m_info;
     std::unique_ptr<libmatroska::KaxTracks> m_tracks;
     std::unique_ptr<libmatroska::KaxCues> m_cues;
+    std::unique_ptr<DiskCueSpool> m_cue_spool;
     std::vector<libmatroska::KaxTrackEntry*> m_track_entries; // owned by m_tracks
     // The two reserved content-light leaves inside the video track's Colour
     // element, owned by m_tracks. Non-null only for a session that reserved them.
@@ -366,15 +421,24 @@ class MatroskaStreamWriter {
     // Active cluster state.
     libmatroska::KaxCluster* m_cluster = nullptr;
     bool m_first_cluster = true;
-    uint64_t m_cluster_start_ms = 0;
+    uint64_t m_cluster_start_ticks = 0;
     // Backing bytes for blocks in the current cluster must outlive its Render().
     std::vector<std::vector<uint8_t>> m_cluster_bytes;
+    uint64_t m_cluster_payload_bytes = 0;
+    uint64_t m_peak_cluster_payload_bytes = 0;
     // Video keyframe cue points pending for the current cluster.
-    std::vector<uint64_t> m_pending_cue_ms;
+    std::vector<uint64_t> m_pending_cue_ticks;
+    std::array<uint64_t, exosnap::engine::kMaxAudioTracks> m_opus_emitted_samples{};
 
     uint64_t m_max_emitted_pts_ns = 0; // for final Duration
+    uint64_t m_max_covered_end_ns = 0;
+    bool m_has_covered_end = false;
+    uint64_t m_max_video_covered_end_ns = 0;
+    bool m_has_video_covered_end = false;
+    bool m_emit_exact_audio_timestamps = false;
     bool m_opened = false;
     bool m_finalized = false;
+    bool m_finalize_succeeded = false;
     bool m_failed = false;
     std::string m_error;
 

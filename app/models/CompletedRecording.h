@@ -37,6 +37,9 @@ struct CompletedRecordingSegment {
     double duration_seconds = 0.0; // segment-local media duration
     qint64 file_size_bytes = 0;
     bool succeeded = false; // false => finalize failed / file quarantined
+    QString edit_master_path;
+    uint64_t session_start_ns = 0;
+    uint64_t duration_ns = 0;
 
     [[nodiscard]] QString fileName() const {
         return file_path.isEmpty() ? QString() : QFileInfo(file_path).fileName();
@@ -55,7 +58,8 @@ struct CompletedRecordingSegment {
     bool operator==(const CompletedRecordingSegment& o) const noexcept {
         return file_path == o.file_path && index == o.index && session_start_ms == o.session_start_ms &&
                duration_seconds == o.duration_seconds && file_size_bytes == o.file_size_bytes &&
-               succeeded == o.succeeded;
+               succeeded == o.succeeded && edit_master_path == o.edit_master_path &&
+               session_start_ns == o.session_start_ns && duration_ns == o.duration_ns;
     }
     bool operator!=(const CompletedRecordingSegment& o) const noexcept {
         return !(*this == o);

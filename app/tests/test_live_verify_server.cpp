@@ -133,6 +133,30 @@ class StubSource final : public LiveVerifySource {
     bool SettingsSet(const QString&, const QJsonValue&, QString*) override {
         return true;
     }
+    [[nodiscard]] QJsonObject AudioRoutingSnapshot() const override {
+        return {};
+    }
+    bool AddAudioTrack(quint64, QString*) override {
+        return true;
+    }
+    bool AssignAudioSource(const QString&, const QString&, int, quint64, QString*) override {
+        return true;
+    }
+    bool SetAudioTrackRecordEnabled(const QString&, bool, quint64, QString*) override {
+        return true;
+    }
+    [[nodiscard]] QJsonObject ClipSnapshot() const override {
+        return {};
+    }
+    bool ClipRequest(const QString&, QString*) override {
+        return true;
+    }
+    bool ClipConfirm(const QString&, const QString&, QString*) override {
+        return true;
+    }
+    bool ClipOpen(const QString&, QString*) override {
+        return true;
+    }
     bool WebcamOverlaySet(const QJsonObject&, QJsonObject* applied, QString*) override {
         applied->insert(QStringLiteral("appliedSequence"), 1);
         return true;

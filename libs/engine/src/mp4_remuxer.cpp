@@ -14,8 +14,15 @@
 // Note: _CRT_SECURE_NO_WARNINGS is propagated from the FFmpeg::mux IMPORTED
 // target's INTERFACE_COMPILE_DEFINITIONS — do not redefine it here.
 
+#include "audio_media_manifest_adapter.h"
+#include "budgeted_media_avio.h"
+#include "media_identity_sidecar.h"
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
+#include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/background_io.h>
+#include <functional>
 #include <ratio>
 #include <system_error>
 #include <utility>
@@ -72,6 +79,32 @@ namespace exosnap::engine {
 namespace {
 
 constexpr const char* kLogComponent = "mp4_remuxer";
+struct BudgetedReopen {
+    std::filesystem::path path;
+    const RemuxIoControl* control = nullptr;
+    bool* denied = nullptr;
+};
+
+static int OpenBudgetedReopen(AVFormatContext* format, AVIOContext** context, const char* url, int flags,
+                              AVDictionary**) {
+    const auto* state = static_cast<const BudgetedReopen*>(format->opaque);
+    if (!state || flags != AVIO_FLAG_READ || !url || std::string_view(url) != state->path.string())
+        return AVERROR(EINVAL);
+    auto owner = BudgetedMediaAvio::Open(state->path, false, &state->control->before_io, state->control->cancelled,
+                                         state->denied);
+    if (!owner)
+        return AVERROR(EIO);
+    *context = owner->context();
+    (void)owner.release();
+    return 0;
+}
+
+static int CloseBudgetedReopen(AVFormatContext*, AVIOContext* context) {
+    auto* owner = static_cast<BudgetedMediaAvio*>(context->opaque);
+    const int result = owner->Close();
+    delete owner;
+    return result;
+}
 
 // Convenience wrappers: log a string without fields.
 static void LogInfo(const char* msg) {
@@ -157,8 +190,10 @@ static bool HasExactPacketTimestamps(const AVPacket* packet) {
     return type == kPacketTimestampMappingType;
 }
 
-static bool ConfigureExactTimestampRewrite(const AVFormatContext* input, const std::string& output,
-                                           MatroskaStreamConfig& config, std::vector<uint64_t>& track_numbers) {
+} // namespace
+
+bool ConfigureMatroskaStreamCopy(const AVFormatContext* input, const std::string& output, MatroskaStreamConfig& config,
+                                 std::vector<uint64_t>& track_numbers) {
     config.output_path = output;
     config.path_pre_reserved = std::filesystem::exists(output);
     track_numbers.resize(input->nb_streams);
@@ -286,17 +321,29 @@ static bool ConfigureExactTimestampRewrite(const AVFormatContext* input, const s
     return video_found;
 }
 
+namespace {
+
 // Generic internal stream-copy remux. Both RemuxToProgressiveMp4 and
 // RemuxToMkv delegate here. opts.format_name must not be nullptr.
 // tr is optional: TrimRange{} (both kNoTimestamp) means no trim.
 static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
                                    RemuxProgressCallback progress_cb, const RemuxOptions& opts, TrimRange tr,
-                                   const RemuxIoFaults* faults) {
+                                   const RemuxIoFaults* faults, const RemuxIoControl* io) {
+    MediaIdentityReferenceCopyGuard reference_copies;
     const auto remux_start = std::chrono::steady_clock::now();
     double write_ms = 0.0, peak_write_ms = 0.0;
     int64_t output_bytes = 0;
     const std::string in_str = input_path.string();
     const std::string out_str = output_path.string();
+    bool admission_denied = false;
+    const auto io_cancelled = [&] { return io && io->cancelled && io->cancelled->load(std::memory_order_relaxed); };
+    const BackgroundIoAdmission metered_io = [&](uint64_t bytes, const std::atomic<bool>* cancelled) {
+        if ((!cancelled || !cancelled->load(std::memory_order_relaxed)) &&
+            (!io || !io->before_io || io->before_io(bytes, cancelled)))
+            return true;
+        admission_denied = true;
+        return false;
+    };
 
     {
         logging::LogField fields[] = {{"input", in_str}, {"output", out_str}, {"format", opts.format_name}};
@@ -307,14 +354,30 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     // -----------------------------------------------------------------------
     // 1. Open input
     // -----------------------------------------------------------------------
+    auto input_lease = AcquireMediaReadLease(input_path);
+    if (!input_lease.succeeded())
+        return RemuxResult::Fail(AVERROR(EACCES), "Cannot retain the source media read identity");
+    std::unique_ptr<BudgetedMediaAvio> input_avio;
     InputCtxGuard in_guard;
     {
-        int ret = avformat_open_input(&in_guard.ctx, in_str.c_str(), nullptr, nullptr);
+        if (io) {
+            input_avio = BudgetedMediaAvio::Open(input_path, false, &io->before_io, io->cancelled, &admission_denied);
+            if (!input_avio)
+                return RemuxResult::Fail(AVERROR(EIO), "Cannot open budgeted source media");
+            in_guard.ctx = avformat_alloc_context();
+            if (!in_guard.ctx)
+                return RemuxResult::Fail(AVERROR(ENOMEM), "Cannot allocate input context");
+            in_guard.ctx->pb = input_avio->context();
+            in_guard.ctx->flags |= AVFMT_FLAG_CUSTOM_IO;
+        }
+        int ret = avformat_open_input(&in_guard.ctx, io ? nullptr : in_str.c_str(), nullptr, nullptr);
         if (ret < 0) {
             std::string msg = std::string("avformat_open_input failed: ") + av_err2str(ret);
             LogError(msg.c_str());
             return RemuxResult::Fail(ret, std::move(msg));
         }
+        if (admission_denied)
+            return RemuxResult::Fail(AVERROR_EXIT, "Source I/O admission was denied");
     }
 
     {
@@ -324,9 +387,19 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
             LogError(msg.c_str());
             return RemuxResult::Fail(ret, std::move(msg));
         }
+        if (admission_denied)
+            return RemuxResult::Fail(AVERROR_EXIT, "Source I/O admission was denied");
     }
 
     AVFormatContext* const in_ctx = in_guard.ctx;
+    const auto source_metadata = ReadAudioMediaMetadata(
+        input_path, in_ctx, io ? std::function<bool()>{[&] { return !io_cancelled(); }} : std::function<bool()>{},
+        io ? metered_io : BackgroundIoAdmission{}, io ? io->cancelled : nullptr);
+    if (io_cancelled() || admission_denied)
+        return RemuxResult::Fail(AVERROR_EXIT, "Remux cancelled during source metadata verification");
+    std::optional<AudioManifest1> output_manifest;
+    if (source_metadata.status == AudioMetadataStatus::Verified && source_metadata.manifest)
+        output_manifest = DeriveAudioManifest(*source_metadata.manifest);
     auto free_packet = [](AVPacket* packet) { av_packet_free(&packet); };
     std::vector<std::unique_ptr<AVPacket, decltype(free_packet)>> prefetched;
     size_t prefetch_index = 0;
@@ -359,12 +432,25 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     std::unique_ptr<MatroskaStreamWriter> exact_writer;
     MatroskaStreamConfig rewrite_config;
     std::vector<uint64_t> rewrite_track_numbers;
-    if (exact_mkv_rewrite) {
-        if (!ConfigureExactTimestampRewrite(in_ctx, out_str, rewrite_config, rewrite_track_numbers))
+    const bool verified_mkv_rewrite = std::string_view(opts.format_name) == "matroska" && output_manifest.has_value();
+    if (exact_mkv_rewrite || verified_mkv_rewrite) {
+        if (!ConfigureMatroskaStreamCopy(in_ctx, out_str, rewrite_config, rewrite_track_numbers))
             return RemuxResult::Fail(AVERROR(ENOSYS),
                                      "Unsupported track configuration for exact-timestamp MKV rewrite");
+        if (output_manifest) {
+            for (auto& track : output_manifest->tracks) {
+                track.container.track_uid = 2 + track.container.stream_index.value;
+                rewrite_config.audio_tracks[track.container.stream_index.value].name = track.container.name;
+            }
+            rewrite_config.audio_manifest = *output_manifest;
+        }
         if (faults && faults->fail_output_close)
             rewrite_config.fail_io = [](OutputIoOperation operation) { return operation == OutputIoOperation::Close; };
+        if (io)
+            rewrite_config.before_write = [io](OutputIoOperation, uint64_t bytes) {
+                return (!io->cancelled || !io->cancelled->load(std::memory_order_relaxed)) &&
+                       (!io->before_io || io->before_io(bytes, io->cancelled));
+            };
         exact_writer = std::make_unique<MatroskaStreamWriter>();
         if (!exact_writer->Open(rewrite_config))
             return RemuxResult::Fail(AVERROR(EIO), exact_writer->error());
@@ -386,6 +472,8 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     // -----------------------------------------------------------------------
     // 2. Create output context
     // -----------------------------------------------------------------------
+    std::unique_ptr<BudgetedMediaAvio> output_avio;
+    BudgetedReopen reopen_state{output_path, io, &admission_denied};
     OutputCtxGuard out_guard;
     {
         int ret = avformat_alloc_output_context2(&out_guard.ctx, nullptr, opts.format_name, out_str.c_str());
@@ -398,6 +486,11 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     }
 
     AVFormatContext* const out_ctx = out_guard.ctx;
+    if (io) {
+        out_ctx->opaque = &reopen_state;
+        out_ctx->io_open = &OpenBudgetedReopen;
+        out_ctx->io_close2 = &CloseBudgetedReopen;
+    }
 
     // 'hvc1'-vs-'hev1' codec-tag selection (below) applies only to the ISOBMFF
     // (MP4) muxer; the Matroska muxer maps tracks by CodecID and ignores it.
@@ -420,6 +513,10 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
             LogError(msg.c_str());
             return RemuxResult::Fail(ret, std::move(msg));
         }
+        if (av_dict_copy(&out_st->metadata, in_st->metadata, 0) < 0)
+            return RemuxResult::Fail(AVERROR(ENOMEM), "Cannot copy source stream metadata");
+        out_st->disposition = in_st->disposition;
+        out_st->avg_frame_rate = in_st->avg_frame_rate;
 
         // Clear codec_tag so the output muxer picks the correct FourCC for its
         // own container (MP4 and MKV use different tag spaces).
@@ -488,17 +585,41 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         }
     }
 
+    if (av_dict_copy(&out_ctx->metadata, in_ctx->metadata, 0) < 0)
+        return RemuxResult::Fail(AVERROR(ENOMEM), "Cannot copy source container metadata");
+    if (output_manifest) {
+        const auto metadata = WriteAudioManifestMetadata(out_ctx, *output_manifest);
+        if (!metadata.succeeded())
+            return RemuxResult::Fail(AVERROR(EINVAL), "Cannot write output audio metadata");
+    } else {
+        av_dict_set(&out_ctx->metadata, "EXOSNAP_AUDIO_MANIFEST", nullptr, 0);
+        for (unsigned index = 0; index < out_ctx->nb_streams; ++index) {
+            av_dict_set(&out_ctx->streams[index]->metadata, "EXOSNAP_TRACK_ID", nullptr, 0);
+            av_dict_set(&out_ctx->streams[index]->metadata, "EXOSNAP_ROLE", nullptr, 0);
+            av_dict_set(&out_ctx->streams[index]->metadata, "EXOSNAP_PROVENANCE", nullptr, 0);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // 4. Open the output file
     // -----------------------------------------------------------------------
     if (!exact_writer && !(out_ctx->oformat->flags & AVFMT_NOFILE)) {
-        int ret = avio_open(&out_ctx->pb, out_str.c_str(), AVIO_FLAG_WRITE);
+        int ret = 0;
+        if (io) {
+            output_avio = BudgetedMediaAvio::Open(output_path, true, &io->before_io, io->cancelled, &admission_denied);
+            if (output_avio)
+                out_ctx->pb = output_avio->context();
+            else
+                ret = AVERROR(EIO);
+        } else {
+            ret = avio_open(&out_ctx->pb, out_str.c_str(), AVIO_FLAG_WRITE);
+        }
         if (ret < 0) {
             std::string msg = std::string("avio_open failed: ") + av_err2str(ret);
             LogError(msg.c_str());
             return RemuxResult::Fail(ret, std::move(msg));
         }
-        out_guard.avio_opened = true;
+        out_guard.avio_opened = !io;
     }
 
     // -----------------------------------------------------------------------
@@ -513,6 +634,8 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
 
     if (!exact_writer) {
         int ret = avformat_write_header(out_ctx, &header_opts.dict);
+        if (admission_denied)
+            return RemuxResult::Fail(AVERROR_EXIT, "Output I/O admission was denied");
         if (ret < 0) {
             std::string msg = std::string("avformat_write_header failed: ") + av_err2str(ret);
             LogError(msg.c_str());
@@ -623,9 +746,10 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
             ret = 0;
         } else
             ret = prefetch_error < 0 ? prefetch_error : av_read_frame(in_ctx, pkt);
-        if (ret == AVERROR_EOF)
+        if (ret == AVERROR_EOF && (!io || !in_ctx->pb || in_ctx->pb->error >= 0 || in_ctx->pb->error == AVERROR_EOF) &&
+            !admission_denied)
             break;
-        if (ret < 0) {
+        if (ret < 0 || admission_denied) {
             // A non-EOF read error means the source could not be read to
             // completion (corruption, disk I/O failure, etc.) — the remaining
             // packets are lost. Finalizing here would silently hand back an
@@ -633,7 +757,7 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
             // (handled above) remains the only non-fatal termination.
             std::string msg = std::string("av_read_frame failed: ") + av_err2str(ret);
             LogError(msg.c_str());
-            return RemuxResult::Fail(ret, std::move(msg));
+            return RemuxResult::Fail(admission_denied ? AVERROR_EXIT : ret, std::move(msg));
         }
 
         const int si = pkt->stream_index;
@@ -648,7 +772,7 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         size_t additional_size = 0;
         const uint8_t* additional =
             av_packet_get_side_data(pkt, AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL, &additional_size);
-        if (si == video_stream_idx && additional && additional_size >= 8) {
+        if (additional && additional_size >= 8) {
             uint64_t type = 0;
             for (size_t i = 0; i < 8; ++i)
                 type = (type << 8) | additional[i];
@@ -656,11 +780,13 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
                 exact_timestamps = DecodeMatroskaPacketTimestamps({additional + 8, additional_size - 8});
                 if (!exact_timestamps)
                     return RemuxResult::Fail(AVERROR_INVALIDDATA, "Invalid ExoSnap packet timestamp metadata");
-                if (std::string_view(opts.format_name) == "matroska" && !exact_writer)
+                if (si == video_stream_idx && std::string_view(opts.format_name) == "matroska" && !exact_writer)
                     return RemuxResult::Fail(AVERROR_INVALIDDATA, "Exact video timestamps exceed the MKV prefix limit");
-                pkt->pts =
-                    av_rescale_q(static_cast<int64_t>(exact_timestamps->pts_ns), {1, 1000000000}, in_st->time_base);
-                pkt->dts = av_rescale_q(exact_timestamps->dts_ns, {1, 1000000000}, in_st->time_base);
+                if (si == video_stream_idx) {
+                    pkt->pts =
+                        av_rescale_q(static_cast<int64_t>(exact_timestamps->pts_ns), {1, 1000000000}, in_st->time_base);
+                    pkt->dts = av_rescale_q(exact_timestamps->dts_ns, {1, 1000000000}, in_st->time_base);
+                }
             }
         }
 
@@ -733,6 +859,13 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         if (exact_timestamps) {
             pkt->pts = av_rescale_q(static_cast<int64_t>(exact_timestamps->pts_ns), {1, 1000000000}, out_st->time_base);
             pkt->dts = av_rescale_q(exact_timestamps->dts_ns, {1, 1000000000}, out_st->time_base);
+            if (in_st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+                const auto delay = av_rescale_q(in_st->codecpar->initial_padding, {1, in_st->codecpar->sample_rate},
+                                                out_st->time_base);
+                pkt->pts -= delay;
+                pkt->dts -= delay;
+            }
+            av_packet_side_data_remove(pkt->side_data, &pkt->side_data_elems, AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL);
         }
         pkt->pos = -1; // invalidate byte position (invalid in the new file)
 
@@ -747,8 +880,15 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
             packet.is_key = (pkt->flags & AV_PKT_FLAG_KEY) != 0;
             packet.bytes.assign(pkt->data, pkt->data + pkt->size);
             if (packet.track_num == 1) {
-                if (!exact_timestamps)
-                    return RemuxResult::Fail(AVERROR_INVALIDDATA, "Missing exact video timestamps in MKV rewrite");
+                if (!exact_timestamps) {
+                    if (exact_mkv_rewrite || pkt->pts == AV_NOPTS_VALUE || pkt->dts == AV_NOPTS_VALUE)
+                        return RemuxResult::Fail(AVERROR_INVALIDDATA, "Missing exact video timestamps in MKV rewrite");
+                    const auto pts_ns = av_rescale_q(pkt->pts, out_st->time_base, {1, 1000000000});
+                    const auto dts_ns = av_rescale_q(pkt->dts, out_st->time_base, {1, 1000000000});
+                    if (pts_ns < 0 || dts_ns == AV_NOPTS_VALUE || dts_ns > pts_ns)
+                        return RemuxResult::Fail(AVERROR_INVALIDDATA, "Invalid video timestamps in MKV rewrite");
+                    exact_timestamps = MatroskaPacketTimestamps{static_cast<uint64_t>(pts_ns), dts_ns};
+                }
                 if (!rewrite_epoch_ns)
                     rewrite_epoch_ns = tr.HasStart() ? exact_timestamps->pts_ns : 0;
                 const auto epoch = static_cast<int64_t>(*rewrite_epoch_ns);
@@ -764,8 +904,17 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
                     rewrite_config.audio_tracks[static_cast<size_t>(packet.track_num - 2)].codec_delay_samples;
                 const int64_t delay_ticks =
                     av_rescale_q(delay, {1, static_cast<int>(rewrite_config.audio_sample_rate)}, out_st->time_base);
-                const int64_t pts_ns = av_rescale_q(pkt->pts + delay_ticks, out_st->time_base, {1, 1000000000});
-                if (pts_ns < 0 || pkt->pts == AV_NOPTS_VALUE)
+                if (pkt->pts == AV_NOPTS_VALUE || pkt->dts == AV_NOPTS_VALUE ||
+                    pkt->pts > (std::numeric_limits<int64_t>::max)() - delay_ticks ||
+                    pkt->dts > (std::numeric_limits<int64_t>::max)() - delay_ticks)
+                    return RemuxResult::Fail(AVERROR_INVALIDDATA, "Invalid audio timestamps in MKV rewrite");
+                const int64_t pts_ns = exact_timestamps
+                                           ? static_cast<int64_t>(exact_timestamps->pts_ns)
+                                           : av_rescale_q(pkt->pts + delay_ticks, out_st->time_base, {1, 1000000000});
+                const int64_t dts_ns = exact_timestamps
+                                           ? exact_timestamps->dts_ns
+                                           : av_rescale_q(pkt->dts + delay_ticks, out_st->time_base, {1, 1000000000});
+                if (pts_ns < 0 || dts_ns == AV_NOPTS_VALUE || dts_ns > pts_ns)
                     return RemuxResult::Fail(AVERROR_INVALIDDATA, "Invalid audio timestamp in MKV rewrite");
                 const auto epoch = rewrite_epoch_ns.value_or(0);
                 if (static_cast<uint64_t>(pts_ns) < epoch) {
@@ -773,6 +922,9 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
                     continue;
                 }
                 packet.pts_ns = static_cast<uint64_t>(pts_ns) - epoch;
+                if (dts_ns < (std::numeric_limits<int64_t>::min)() + static_cast<int64_t>(epoch) + 1)
+                    return RemuxResult::Fail(AVERROR_INVALIDDATA, "Audio timestamp underflow in MKV rewrite");
+                packet.dts_ns = dts_ns - static_cast<int64_t>(epoch);
             }
             ret = exact_writer->Push(std::move(packet)) ? 0 : AVERROR(EIO);
         } else
@@ -802,7 +954,7 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         // it is handled at the top of the loop.
         if (progress_cb && input_duration_sec > 0.0 && si == video_stream_idx && pkt_pts != AV_NOPTS_VALUE) {
             const double pts_sec = static_cast<double>(pkt_pts) * av_q2d(out_tb);
-            last_progress = std::clamp(static_cast<float>(pts_sec / input_duration_sec), 0.0f, 1.0f);
+            last_progress = std::clamp(static_cast<float>(pts_sec / input_duration_sec), 0.0f, 0.99f);
 
             if (!progress_cb(last_progress)) {
                 cancelled = true;
@@ -817,7 +969,10 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     if (cancelled) {
         exact_writer.reset();
         // Close handles before deleting the partial file.
-        if (out_guard.avio_opened && !(out_ctx->oformat->flags & AVFMT_NOFILE)) {
+        if (output_avio) {
+            out_ctx->pb = nullptr;
+            output_avio.reset();
+        } else if (out_guard.avio_opened && !(out_ctx->oformat->flags & AVFMT_NOFILE)) {
             avio_closep(&out_ctx->pb);
             out_guard.avio_opened = false;
         }
@@ -847,6 +1002,8 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         output_bytes = static_cast<int64_t>(exact_writer->bytes_written());
     } else {
         int ret = av_write_trailer(out_ctx);
+        if (admission_denied)
+            return RemuxResult::Fail(AVERROR_EXIT, "Trailer I/O admission was denied");
         if (ret < 0) {
             // The trailer carries the faststart moov (or, for Matroska, the Cues /
             // SeekHead / Duration) — without it the output is not the well-formed
@@ -858,7 +1015,19 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         }
     }
 
-    if (out_guard.avio_opened && !(out_ctx->oformat->flags & AVFMT_NOFILE)) {
+    if (output_avio) {
+        avio_flush(out_ctx->pb);
+        const int stream_error = out_ctx->pb->error;
+        output_bytes = out_ctx->pb->bytes_written;
+        out_ctx->pb = nullptr;
+        int close_error = output_avio->Close();
+        output_avio.reset();
+        if (faults && faults->fail_output_close && close_error >= 0)
+            close_error = AVERROR(EIO);
+        const int error = stream_error < 0 ? stream_error : close_error;
+        if (error < 0)
+            return RemuxResult::Fail(error, std::string("Output flush/close failed: ") + av_err2str(error));
+    } else if (out_guard.avio_opened && !(out_ctx->oformat->flags & AVFMT_NOFILE)) {
         avio_flush(out_ctx->pb);
         const int stream_error = out_ctx->pb->error;
         output_bytes = out_ctx->pb->bytes_written;
@@ -871,9 +1040,24 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
             return RemuxResult::Fail(error, std::string("Output flush/close failed: ") + av_err2str(error));
     }
 
+    if (output_manifest && (out_is_mp4 || !source_metadata.references.marker_refs.empty() ||
+                            source_metadata.references.source_ranges_json != "[]")) {
+        const auto copied =
+            CopyMediaIdentityReferenceFiles(input_path, output_path, source_metadata.references, &reference_copies,
+                                            io ? metered_io : BackgroundIoAdmission{}, io ? io->cancelled : nullptr);
+        if (!copied.succeeded())
+            return RemuxResult::Fail(AVERROR(EIO), copied.error()->context);
+        const auto sidecar = WriteMediaIdentitySidecar(
+            output_path, *output_manifest, [&] { return !io_cancelled() && (!progress_cb || progress_cb(0.99f)); },
+            source_metadata.references, io ? metered_io : BackgroundIoAdmission{}, io ? io->cancelled : nullptr);
+        if (!sidecar.succeeded())
+            return RemuxResult::Fail(AVERROR(EIO),
+                                     "MetadataIncomplete: cannot publish the final media identity sidecar");
+    }
+
     // Signal 100% progress.
-    if (progress_cb)
-        progress_cb(1.0f);
+    if (io_cancelled() || (progress_cb && !progress_cb(1.0f)))
+        return RemuxResult::Fail(AVERROR_EXIT, "Remux cancelled.");
 
     // error_code overload: this is the only throwing call on the success path of a
     // function the caller joins synchronously on the GUI thread, and an output that
@@ -895,7 +1079,9 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
                      std::span<const logging::LogField>(fields, std::size(fields)));
     }
 
-    return RemuxResult::Ok();
+    auto result = RemuxResult::Ok();
+    result.created_metadata_companions = reference_copies.Commit();
+    return result;
 }
 
 } // namespace
@@ -906,13 +1092,14 @@ RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const
 }
 
 RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
-                                  RemuxProgressCallback progress_cb, TrimRange tr, const RemuxIoFaults* faults) {
+                                  RemuxProgressCallback progress_cb, TrimRange tr, const RemuxIoFaults* faults,
+                                  const RemuxIoControl* io) {
     // movflags=+faststart: two-pass write that moves moov before mdat.
     static const char* const kMp4Opts[] = {"movflags", "+faststart", nullptr};
     RemuxOptions opts;
     opts.format_name = "mp4";
     opts.extra_opts = kMp4Opts;
-    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts, tr, faults);
+    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts, tr, faults, io);
 }
 
 RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
@@ -921,13 +1108,14 @@ RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::files
 }
 
 RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
-                       RemuxProgressCallback progress_cb, TrimRange tr, const RemuxIoFaults* faults) {
+                       RemuxProgressCallback progress_cb, TrimRange tr, const RemuxIoFaults* faults,
+                       const RemuxIoControl* io) {
     // The matroska muxer writes Cues, SeekHead, and Duration at trailer time.
     // No extra options needed: libavformat defaults are correct for recovery MKV.
     RemuxOptions opts;
     opts.format_name = "matroska";
     opts.extra_opts = nullptr;
-    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts, tr, faults);
+    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts, tr, faults, io);
 }
 
 std::vector<int64_t> ExtractKeyframeTimestamps(const std::filesystem::path& input_path) {

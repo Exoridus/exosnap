@@ -1163,4 +1163,18 @@ void DiagnosticsAdapter::updateLiveProbeTimer() {
         live_probe_timer_.stop();
 }
 
+void DiagnosticsAdapter::setAudioResources(QVariantMap resources) {
+    resources.insert(QStringLiteral("clipJobs"), clip_resources_);
+    if (audio_resources_ == resources)
+        return;
+    audio_resources_ = std::move(resources);
+    emit audioResourcesChanged();
+}
+void DiagnosticsAdapter::setClipResources(QVariantList jobs) {
+    if (clip_resources_ == jobs)
+        return;
+    clip_resources_ = std::move(jobs);
+    audio_resources_.insert(QStringLiteral("clipJobs"), clip_resources_);
+    emit audioResourcesChanged();
+}
 } // namespace exosnap::quick

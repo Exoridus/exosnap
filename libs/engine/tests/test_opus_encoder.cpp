@@ -1,5 +1,10 @@
+#include "mux_audio_hold.h"
+#include <array>
 #include <cstddef>
+#include <exosnap/engine/audio_limits.h>
+#include <exosnap/engine/recorder_session.h>
 #include <gtest/gtest.h>
+#include <utility>
 
 #include "exosnap/engine/packet_types.h"
 #include "opus_audio_encoder.h"
@@ -318,6 +323,79 @@ TEST(OpusEncoderTest, OpusEncoder_Shutdown_IsIdempotent) {
     encoder.Shutdown();
     encoder.Shutdown();
     SUCCEED();
+}
+
+TEST(OpusEncoderTest, EightShortestPacketTracksFillPremuxAndDrainAtCommonVideoWatermark) {
+    using namespace exosnap::engine;
+    constexpr uint32_t tracks = 8;
+    constexpr uint32_t sample_rate = 48000;
+    constexpr uint32_t channels = 2;
+    constexpr uint32_t block_frames = 60;
+    constexpr uint64_t total_frames = 3 * sample_rate;
+    constexpr uint64_t packet_ns = 2'500'000;
+    constexpr size_t packets_per_track = 1200;
+    static_assert(kMaxAudioTracks == tracks);
+    std::array<OpusAudioEncoder, tracks> encoders;
+    std::array<uint64_t, tracks> accumulated{};
+    std::array<size_t, tracks> emitted{};
+    std::array<float, block_frames * channels> block{};
+    MuxAudioHold::Limits limits;
+    limits.packets = AudioHoldPacketLimit(tracks);
+    ASSERT_EQ(limits.packets, tracks * packets_per_track);
+    MuxAudioHold hold(limits);
+    std::string error;
+    for (auto& encoder : encoders) {
+        encoder.SetEncodingParams(160, OpusFrameDuration::Ms2_5);
+        ASSERT_TRUE(encoder.Init(sample_rate, channels, error)) << error;
+        ASSERT_EQ(encoder.FrameSizeSamples(), 120);
+    }
+    EncodedAudioPacket overflow;
+    size_t admitted = 0;
+    for (uint64_t frame = 0; frame < total_frames; frame += block_frames) {
+        for (uint32_t track = 0; track < tracks; ++track) {
+            std::vector<EncodedAudioPacket> packets;
+            encoders[track].FeedFloat32(block.data(), block.size(), frame * 1'000'000'000ULL / sample_rate,
+                                        accumulated[track], sample_rate, channels, packets);
+            ASSERT_EQ(packets.size(), (frame / block_frames) % 2 == 0 ? 0u : 1u);
+            for (auto& packet : packets) {
+                ASSERT_FALSE(packet.bytes.empty());
+                ASSERT_EQ(packet.pts_ns, emitted[track] * packet_ns);
+                packet.track_id = track;
+                overflow = packet;
+                ASSERT_TRUE(hold.Push(std::move(packet))) << "track=" << track << " packet=" << emitted[track];
+                ++emitted[track];
+                ++admitted;
+            }
+        }
+    }
+    ASSERT_EQ(admitted, 9600u);
+    for (uint32_t track = 0; track < tracks; ++track) {
+        EXPECT_EQ(accumulated[track], total_frames);
+        EXPECT_EQ(emitted[track], packets_per_track);
+        std::vector<EncodedAudioPacket> tail;
+        encoders[track].Flush(tail);
+        EXPECT_TRUE(tail.empty());
+    }
+    const auto held_bytes = hold.bytes();
+    ASSERT_GT(held_bytes, 0u);
+    EXPECT_LE(held_bytes, kAudioPremuxPayloadBytes);
+    EXPECT_FALSE(hold.PopEligible().has_value());
+    overflow.pts_ns = kAudioHoldHorizonNs;
+    EXPECT_FALSE(hold.Push(std::move(overflow)));
+    EXPECT_EQ(hold.bytes(), held_bytes);
+    hold.AdvanceVideo(0);
+    EXPECT_FALSE(hold.PopEligible().has_value());
+    hold.AdvanceVideo(kAudioHoldHorizonNs);
+    size_t drained = 0;
+    while (auto packet = hold.PopEligible()) {
+        ASSERT_EQ(packet->track_id, drained % tracks);
+        ASSERT_EQ(packet->pts_ns, (drained / tracks) * packet_ns);
+        ASSERT_FALSE(packet->bytes.empty());
+        ++drained;
+    }
+    EXPECT_EQ(drained, admitted);
+    EXPECT_EQ(hold.bytes(), 0u);
+    EXPECT_FALSE(hold.Pop().has_value());
 }
 
 } // namespace

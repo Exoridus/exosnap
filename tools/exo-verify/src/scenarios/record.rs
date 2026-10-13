@@ -144,11 +144,9 @@ fn wgc_hevc_mp4(ctx: &mut Context) -> Step {
             ("video.audioCodec", json!("AAC")),
             ("video.frameRate", json!(30)),
             ("video.cfr", json!(true)),
-            ("audio.systemEnabled", json!(false)),
-            ("audio.appEnabled", json!(false)),
-            ("audio.microphoneEnabled", json!(false)),
         ],
     )?;
+    common::disable_recording_audio(&mut app)?;
     let mut stimulus = Stimulus::start(ctx, StimulusOptions::default())?;
     common::select_window(&mut app, &stimulus.title)?;
     let (result, file, wall) = common::record_for(&mut app, 10.0)?;
@@ -172,7 +170,7 @@ fn wgc_hevc_mp4(ctx: &mut Context) -> Step {
     );
     product_ensure!(
         common::audio_streams(&video.probe) == 0,
-        "an audio track was written although all audio sources were disabled"
+        "an audio track was written although recording was disabled on every audio track"
     );
     ctx.evidence.put("recordResult", result);
     ctx.evidence.put("recordWallSeconds", wall);
@@ -204,11 +202,9 @@ fn pause_resume(ctx: &mut Context) -> Step {
             ("video.videoCodec", json!("H.264")),
             ("video.frameRate", json!(30)),
             ("video.cfr", json!(true)),
-            ("audio.systemEnabled", json!(false)),
-            ("audio.appEnabled", json!(false)),
-            ("audio.microphoneEnabled", json!(false)),
         ],
     )?;
+    common::disable_recording_audio(&mut app)?;
     let mut stimulus = Stimulus::start(ctx, StimulusOptions::default())?;
     common::select_window(&mut app, &stimulus.title)?;
     common::start_recording(&mut app)?;

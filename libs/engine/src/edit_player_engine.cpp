@@ -2,7 +2,10 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
+#include <exosnap/engine/audio_limits.h>
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/performance_measurements.h>
+#include <exosnap/engine/recording_media_types.h>
 #include <filesystem>
 #include <functional>
 #include <new>
@@ -12,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "audio_media_manifest_adapter.h"
 #include "edit_audio_mix.h"
 #include "edit_playback_pacing.h"
 #include "edit_player_hw_decode.h"
@@ -19,8 +23,12 @@
 #include "exosnap/engine/logging/logging.h"
 #include "hdr_preview.h"
 #include "hdr_tonemap.h"
+#include "media_identity_sidecar.h"
 #include "playback_clock.h"
 #include "yuv_to_bgra.h"
+#include <cmath>
+#include <exosnap/engine/audio_track_model.h>
+#include <set>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -71,6 +79,27 @@ constexpr const char* kLogComponent = "edit_player_engine";
 
 void LogWarn(const char* msg) {
     logging::log(logging::LogLevel::Warn, kLogComponent, msg);
+}
+
+bool SameUnverifiedAsset(const UnverifiedAudioAssetBinding& frozen, const UnverifiedAudioAssetBinding& current) {
+    if (frozen.file_identity != current.file_identity || frozen.file_size != current.file_size ||
+        frozen.sha256 != current.sha256 || frozen.actual_tracks.size() != current.actual_tracks.size())
+        return false;
+    std::set<AudioTrackId> ids;
+    for (size_t index = 0; index < frozen.actual_tracks.size(); ++index) {
+        const auto& before = frozen.actual_tracks[index];
+        const auto& after = current.actual_tracks[index];
+        const auto& x = before.codec;
+        const auto& y = after.codec;
+        if (before.track_id == AudioTrackId{} || !ids.insert(before.track_id).second ||
+            before.stream_index.value != index || after.stream_index.value != index ||
+            before.track_uid != after.track_uid || before.name != after.name || before.role != after.role ||
+            before.source_ids != after.source_ids || x.codec_id != y.codec_id || x.codec_private != y.codec_private ||
+            x.sample_rate != y.sample_rate || x.channels != y.channels || x.bit_depth != y.bit_depth ||
+            x.codec_delay_samples != y.codec_delay_samples || x.channel_layout != y.channel_layout)
+            return false;
+    }
+    return true;
 }
 
 // RAII wrapper for AVFormatContext* (input), matching mp4_remuxer.cpp's InputCtxGuard.
@@ -491,12 +520,13 @@ bool TryAttachD3D11VA(AVCodecContext* vctx) {
 } // namespace
 
 struct EditPlayerEngine::Impl {
+    std::atomic<const std::atomic<bool>*> opening_cancelled{nullptr};
+    std::shared_ptr<void> media_read_lease;
     InputCtxGuard fmt;
     CodecCtxGuard video_codec;
-    // Every audio track whose decoder opened, in stream order. All of them are
-    // played, summed before the renderer -- a recording with system and
-    // microphone sound on separate tracks is one recording, not a choice.
     std::vector<std::unique_ptr<AudioTrack>> audio_tracks;
+    AudioMetadataReadResult audio_metadata;
+    MonitorSelectionSnapshot monitor_selection;
     // Snapshot of what AudioTracks() reports, taken at Open while no playback
     // thread exists. A snapshot rather than a live read of the format context,
     // because that context belongs to the demux thread for the whole of a
@@ -547,6 +577,18 @@ struct EditPlayerEngine::Impl {
         return fmt.ctx != nullptr;
     }
 
+    [[nodiscard]] float MonitorGain(int stream_index) const {
+        const auto description =
+            std::find_if(audio_track_descriptions.begin(), audio_track_descriptions.end(),
+                         [stream_index](const auto& value) { return value.stream_index == stream_index; });
+        if (description == audio_track_descriptions.end() || !description->track_id)
+            return 0;
+        for (const auto& selection : monitor_selection.tracks)
+            if (selection.track_id == *description->track_id)
+                return selection.muted ? 0 : selection.gain_linear;
+        return 0;
+    }
+
     // Tears playback down in producer-to-consumer order -- demux, video, audio
     // -- waking every blocking wait before the thread holding it is joined.
     // Call with playback_mutex held.
@@ -595,15 +637,48 @@ EditPlayerEngine::~EditPlayerEngine() {
     Close();
 }
 
-bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_error) {
-    Close(); // tear down any previous session first
+bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_error,
+                            const std::atomic<bool>* cancelled) {
+    Close();
+    struct ResetOpeningCancellation {
+        std::atomic<const std::atomic<bool>*>& token;
+        ~ResetOpeningCancellation() {
+            token.store(nullptr, std::memory_order_relaxed);
+        }
+    } reset{impl_->opening_cancelled};
+    impl_->opening_cancelled.store(cancelled, std::memory_order_relaxed);
+    if (cancelled && cancelled->load(std::memory_order_relaxed)) {
+        out_error = "Media opening cancelled.";
+        return false;
+    }
+
+    auto lease = AcquireMediaReadLease(path);
+    if (!lease.succeeded()) {
+        out_error = "Cannot retain an immutable media read identity.";
+        return false;
+    }
+    impl_->media_read_lease = std::move(*lease.value());
 
     const std::string path_str = path.string();
 
-    AVFormatContext* fmt_ctx = nullptr;
+    AVFormatContext* fmt_ctx = avformat_alloc_context();
+    if (!fmt_ctx) {
+        out_error = "Cannot allocate the media input context.";
+        Close();
+        return false;
+    }
+    // Protocol I/O retains a copy of this callback after Open returns.
+    // The owned indirection is cleared before the borrowed opening token expires.
+    fmt_ctx->interrupt_callback = {[](void* opaque) {
+                                       const auto* token = static_cast<Impl*>(opaque)->opening_cancelled.load(
+                                           std::memory_order_relaxed);
+                                       return token && token->load(std::memory_order_relaxed) ? 1 : 0;
+                                   },
+                                   impl_.get()};
     int ret = avformat_open_input(&fmt_ctx, path_str.c_str(), nullptr, nullptr);
     if (ret < 0) {
         out_error = std::string("avformat_open_input failed: ") + av_err2str(ret);
+        Close();
         return false;
     }
     impl_->fmt.ctx = fmt_ctx;
@@ -617,9 +692,8 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
 
     // The best video stream (av_find_best_stream picks the most likely primary
     // stream of a type -- correct for our own single-video-track recordings).
-    // Audio deliberately does NOT go through it: a recording can carry system
-    // and microphone sound on separate tracks and all of them are played, so
-    // every audio stream is enumerated below instead of one being elected.
+    // Audio descriptions enumerate actual streams even when provenance is
+    // unavailable. Monitoring is selected separately after identity validation.
     const int video_idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
 
     if (video_idx < 0) {
@@ -696,6 +770,17 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
                               ? std::make_unique<P010PqMonitorConverter>(HdrPeakScale(false, 0.0f, 0.0f))
                               : nullptr;
 
+    impl_->audio_metadata = ReadAudioMediaMetadata(path, fmt_ctx, {}, {}, cancelled);
+    if (cancelled && cancelled->load(std::memory_order_relaxed)) {
+        out_error = "Media opening cancelled.";
+        Close();
+        return false;
+    }
+    impl_->monitor_selection.media_id = impl_->audio_metadata.selection_media_id;
+    if (impl_->audio_metadata.manifest && !impl_->audio_metadata.monitoring_confirmation_required)
+        for (const auto& id : impl_->audio_metadata.manifest->default_monitor_track_ids)
+            impl_->monitor_selection.tracks.push_back({id, 1.0f, false});
+    size_t audio_ordinal = 0;
     for (unsigned int i = 0; i < fmt_ctx->nb_streams; ++i) {
         AVStream* ast = fmt_ctx->streams[i];
         if (ast->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)
@@ -707,11 +792,15 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
         // would misrepresent the recording rather than the failure.
         AudioTrackDescription description;
         description.stream_index = static_cast<int>(i);
-        // Matroska's KaxTrackName surfaces as the stream metadata key "title".
-        // Absent for recordings written before track names were muxed; the
-        // name then stays EMPTY -- deriving one from the track order would be
-        // a guess the container does not support (the mapping is positional
-        // only by our own muxing convention, and a track can merge sources).
+        if (audio_ordinal < impl_->audio_metadata.actual_tracks.size()) {
+            const auto& metadata_track = impl_->audio_metadata.actual_tracks[audio_ordinal];
+            description.track_id = metadata_track.track_id;
+            description.role = metadata_track.role;
+            description.name = metadata_track.name;
+        }
+        ++audio_ordinal;
+        // Metadata parsing also recognizes MP4's actual handler name. A missing
+        // name remains empty rather than being invented from the track ordinal.
         if (const AVDictionaryEntry* title = av_dict_get(ast->metadata, "title", nullptr, 0);
             title != nullptr && title->value != nullptr)
             description.name = title->value;
@@ -750,6 +839,9 @@ void EditPlayerEngine::Close() {
         avcodec_free_context(&impl_->video_codec.ctx);
     if (impl_->fmt.ctx)
         avformat_close_input(&impl_->fmt.ctx);
+    impl_->media_read_lease.reset();
+    impl_->audio_metadata = {};
+    impl_->monitor_selection = {};
     impl_->video_stream_idx = -1;
     impl_->frame_rate = AVRational{0, 1};
     impl_->pq_converter.reset();
@@ -1255,18 +1347,94 @@ std::vector<AudioTrackDescription> EditPlayerEngine::AudioTracks() const {
     return impl_->audio_track_descriptions;
 }
 
+AudioMetadataReadResult EditPlayerEngine::AudioMetadata() const {
+    std::lock_guard lock(impl_->playback_mutex);
+    return impl_->audio_metadata;
+}
+bool EditPlayerEngine::SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error) {
+    std::lock_guard lock(impl_->playback_mutex);
+    if (!impl_->audio_metadata.manifest && selection.unverified_asset_binding) {
+        const auto& current = impl_->audio_metadata.unverified_asset_binding;
+        const auto& frozen = *selection.unverified_asset_binding;
+        if (!selection.overlap_confirmed || !current || !SameUnverifiedAsset(frozen, *current)) {
+            error = "Confirmed legacy selection does not match the current media bytes and track layout.";
+            return false;
+        }
+        for (auto& track : selection.tracks) {
+            const auto found = std::find_if(frozen.actual_tracks.begin(), frozen.actual_tracks.end(),
+                                            [&](const auto& value) { return value.track_id == track.track_id; });
+            if (found == frozen.actual_tracks.end()) {
+                error = "Confirmed legacy selection references a missing bound track.";
+                return false;
+            }
+            const auto index = static_cast<size_t>(found - frozen.actual_tracks.begin());
+            track.track_id = current->actual_tracks[index].track_id;
+        }
+        selection.media_id = impl_->audio_metadata.selection_media_id;
+        selection.unverified_asset_binding = current;
+    }
+    if (!impl_->IsOpen() || impl_->playback_running.load() ||
+        selection.media_id != impl_->audio_metadata.selection_media_id || selection.revision.value == 0 ||
+        selection.revision.value <= impl_->monitor_selection.revision.value ||
+        selection.tracks.size() > kMaxAudioTracks) {
+        error = "Monitoring selection has a stale identity or revision, or playback is active.";
+        return false;
+    }
+    if (impl_->audio_metadata.manifest) {
+        if (!ValidateMonitorSelection(selection, *impl_->audio_metadata.manifest).succeeded()) {
+            error = "Monitoring selection has invalid tracks, gains, or unconfirmed overlap.";
+            return false;
+        }
+    } else if (!selection.overlap_confirmed) {
+        error = "Legacy audio tracks require explicit monitoring confirmation.";
+        return false;
+    }
+    std::set<AudioTrackId> ids;
+    for (const auto& track : selection.tracks) {
+        const bool known =
+            std::any_of(impl_->audio_metadata.actual_tracks.begin(), impl_->audio_metadata.actual_tracks.end(),
+                        [&](const auto& actual) { return actual.track_id == track.track_id; });
+        if (!known || !ids.insert(track.track_id).second || !std::isfinite(track.gain_linear) ||
+            track.gain_linear < 0 || track.gain_linear > GainDbToLinear(kMaxGainDb, false)) {
+            error = "Monitoring selection has invalid tracks or gains.";
+            return false;
+        }
+    }
+    impl_->monitor_selection = std::move(selection);
+    impl_->audio_metadata.monitoring_confirmation_required = false;
+    error.clear();
+    return true;
+}
+
 bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_count, std::vector<float>& output,
                                         std::string& error) {
+    std::lock_guard lock(impl_->playback_mutex);
     if (!impl_->IsOpen() || first_sample < 0 || frame_count > 48000) {
         error = "Invalid timeline audio range.";
         return false;
     }
     output.assign(static_cast<size_t>(frame_count) * 2, 0);
-    if (impl_->audio_tracks.size() != impl_->audio_track_descriptions.size()) {
-        error = "A source audio track has no usable decoder.";
+    if (impl_->playback_running.load() || impl_->audio_metadata.monitoring_confirmation_required) {
+        error = "Audio monitoring requires a confirmed selection and stopped playback.";
         return false;
     }
-    if (impl_->audio_tracks.empty() || frame_count == 0)
+    std::vector<AudioTrack*> selected_tracks;
+    std::vector<float> selected_gains;
+    for (const auto& description : impl_->audio_track_descriptions) {
+        const float gain = impl_->MonitorGain(description.stream_index);
+        if (gain == 0)
+            continue;
+        const auto found = std::find_if(impl_->audio_tracks.begin(), impl_->audio_tracks.end(), [&](const auto& track) {
+            return track->stream_index == description.stream_index;
+        });
+        if (found == impl_->audio_tracks.end()) {
+            error = "A selected audio track has no usable decoder.";
+            return false;
+        }
+        selected_tracks.push_back(found->get());
+        selected_gains.push_back(gain);
+    }
+    if (selected_tracks.empty() || frame_count == 0)
         return true;
     auto* format = impl_->fmt.ctx;
     const int64_t start_us = first_sample * 1'000'000 / 48000;
@@ -1277,7 +1445,7 @@ bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_cou
         error = "Cannot seek source audio.";
         return false;
     }
-    for (auto& track : impl_->audio_tracks) {
+    for (auto* track : selected_tracks) {
         avcodec_flush_buffers(track->codec.ctx);
         if (track->resampler.ctx)
             swr_free(&track->resampler.ctx);
@@ -1294,11 +1462,11 @@ bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_cou
         return false;
     }
     const int64_t last_sample = first_sample + frame_count;
-    std::vector<int64_t> through(impl_->audio_tracks.size(), 0);
-    std::vector<std::optional<int64_t>> next_sample(impl_->audio_tracks.size());
+    std::vector<int64_t> through(selected_tracks.size(), 0);
+    std::vector<std::optional<int64_t>> next_sample(selected_tracks.size());
     std::vector<float> scratch;
     const auto pump = [&](size_t index) {
-        auto& track = *impl_->audio_tracks[index];
+        auto& track = *selected_tracks[index];
         for (;;) {
             const int received = avcodec_receive_frame(track.codec.ctx, frame.frame);
             if (received == AVERROR(EAGAIN) || received == AVERROR_EOF)
@@ -1337,7 +1505,7 @@ bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_cou
             for (int64_t sample = std::max(first_sample, at); sample < std::min(last_sample, at + produced); ++sample)
                 for (size_t channel = 0; channel < 2; ++channel)
                     output[static_cast<size_t>(sample - first_sample) * 2 + channel] +=
-                        scratch[static_cast<size_t>(sample - at) * 2 + channel];
+                        scratch[static_cast<size_t>(sample - at) * 2 + channel] * selected_gains[index];
             through[index] = std::max(through[index], at + produced);
             next_sample[index] = at + produced;
         }
@@ -1350,11 +1518,11 @@ bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_cou
                 error = "Source audio read failed: " + std::string(av_err2str(read));
                 return false;
             }
-            for (size_t i = 0; i < impl_->audio_tracks.size(); ++i) {
-                avcodec_send_packet(impl_->audio_tracks[i]->codec.ctx, nullptr);
+            for (size_t i = 0; i < selected_tracks.size(); ++i) {
+                avcodec_send_packet(selected_tracks[i]->codec.ctx, nullptr);
                 if (!pump(i))
                     return false;
-                auto* resampler = impl_->audio_tracks[i]->resampler.ctx;
+                auto* resampler = selected_tracks[i]->resampler.ctx;
                 const int capacity = swr_get_out_samples(resampler, 0);
                 if (capacity < 0 || capacity > 480000) {
                     error = "Source audio resampler flush exceeds its bounded block size.";
@@ -1372,13 +1540,13 @@ bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_cou
                      ++sample)
                     for (size_t channel = 0; channel < 2; ++channel)
                         output[static_cast<size_t>(sample - first_sample) * 2 + channel] +=
-                            scratch[static_cast<size_t>(sample - at) * 2 + channel];
+                            scratch[static_cast<size_t>(sample - at) * 2 + channel] * selected_gains[i];
             }
             break;
         }
-        for (size_t i = 0; i < impl_->audio_tracks.size(); ++i)
-            if (impl_->audio_tracks[i]->stream_index == packet.pkt->stream_index) {
-                const int sent = avcodec_send_packet(impl_->audio_tracks[i]->codec.ctx, packet.pkt);
+        for (size_t i = 0; i < selected_tracks.size(); ++i)
+            if (selected_tracks[i]->stream_index == packet.pkt->stream_index) {
+                const int sent = avcodec_send_packet(selected_tracks[i]->codec.ctx, packet.pkt);
                 if (sent < 0 || !pump(i)) {
                     if (error.empty())
                         error = "Cannot submit source audio packet.";
@@ -1407,6 +1575,10 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     std::lock_guard<std::mutex> lock(impl_->playback_mutex);
     if (!impl_->IsOpen() || impl_->playback_running.load())
         return;
+    if (impl_->audio_metadata.monitoring_confirmation_required) {
+        LogWarn("audio monitoring requires explicit track confirmation");
+        return;
+    }
 
     // A previous run's threads may have finished on their own (EOF) without
     // StopPlaybackDecode() ever being called. Assigning over a still-joinable
@@ -1442,8 +1614,12 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     // take the tracks that DID build down with it, and the mix must not wait
     // for a track that will never submit anything.
     std::vector<AudioTrack*> playing_tracks;
+    std::vector<float> playing_gains;
     std::vector<QueuedStream> audio_streams;
     for (const auto& track : impl->audio_tracks) {
+        const float gain = impl->MonitorGain(track->stream_index);
+        if (gain == 0)
+            continue;
         avcodec_flush_buffers(track->codec.ctx);
         if (track->resampler.ctx != nullptr)
             swr_free(&track->resampler.ctx);
@@ -1451,6 +1627,7 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
         if (track->resampler.ctx == nullptr)
             continue;
         playing_tracks.push_back(track.get());
+        playing_gains.push_back(gain);
         audio_streams.push_back(QueuedStream{track->stream_index, track->time_base});
     }
     const bool audio_enabled = !playing_tracks.empty();
@@ -1669,8 +1846,8 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
 
     // ---- Audio thread: owns every track's AVCodecContext and resampler ----
     if (audio_enabled) {
-        impl->audio_thread = std::thread([impl, tracks = std::move(playing_tracks), start_us,
-                                          on_audio = std::move(on_audio)]() {
+        impl->audio_thread = std::thread([impl, tracks = std::move(playing_tracks), gains = std::move(playing_gains),
+                                          start_us, on_audio = std::move(on_audio)]() {
             PacketGuard pkt(av_packet_alloc());
             FrameGuard frame(av_frame_alloc());
             // Sums the tracks by timestamp before anything reaches the
@@ -1725,6 +1902,8 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                     av_frame_unref(frame.frame);
                     if (produced <= 0)
                         continue;
+                    for (size_t sample = 0; sample < static_cast<size_t>(produced) * kPlaybackOutChannels; ++sample)
+                        pcm[sample] *= gains[index];
 
                     // Trim the preroll the seek forced on us. av_seek_frame
                     // positioned on the keyframe at or before start_us, so

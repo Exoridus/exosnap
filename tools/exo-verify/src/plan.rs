@@ -49,6 +49,28 @@ pub struct ReleasePlan {
 }
 
 impl ReleasePlan {
+    pub fn create(bundle: &Bundle, registry: &[Scenario]) -> Self {
+        Self {
+            schema: PLAN_SCHEMA.into(),
+            product_version: bundle.inventory.product_version.clone(),
+            bundle_sha256: bundle.sha256.clone(),
+            candidate_id: bundle.inventory.candidate_id.clone(),
+            source_commit: bundle.inventory.source_commit.clone(),
+            created_at: crate::model::now_rfc3339(),
+            scenarios: registry
+                .iter()
+                .filter(|s| s.lane.is_release())
+                .map(|s| PlannedScenario {
+                    id: s.id.into(),
+                    scenario_revision: s.revision,
+                    lane: s.lane.name().into(),
+                    tier: s.tier,
+                    title: s.title.into(),
+                })
+                .collect(),
+        }
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let plan: ReleasePlan = serde_json::from_slice(
             &fs::read(path).with_context(|| format!("read {}", path.display()))?,
@@ -317,6 +339,48 @@ mod tests {
         let mut wrong_commit = plan;
         wrong_commit.source_commit = "c".repeat(40);
         assert!(wrong_commit.verify_against(&bundle, &registry).is_err());
+    }
+
+    #[test]
+    fn offered_clip_plan_requires_negative_admission_and_preserves_frozen_validation() {
+        let bundle = fixture_bundle();
+        let registry = crate::scenarios::registry();
+        let plan = ReleasePlan::create(&bundle, &registry);
+        plan.verify_against(&bundle, &registry).unwrap();
+        let clip = plan.entry("clip.creation-unavailable").unwrap();
+        assert_eq!(clip.scenario_revision, 1);
+        assert_eq!(clip.tier, Tier::Required);
+        assert!(plan.entry("clip.recording-live").is_none());
+        for mutation in ["omit", "demote", "revision", "historical-positive"] {
+            let mut changed = plan.clone();
+            let index = changed
+                .scenarios
+                .iter()
+                .position(|s| s.id == clip.id)
+                .unwrap();
+            match mutation {
+                "omit" => {
+                    changed.scenarios.remove(index);
+                }
+                "demote" => changed.scenarios[index].tier = Tier::Recommended,
+                "revision" => changed.scenarios[index].scenario_revision += 1,
+                _ => {
+                    changed.scenarios[index].id = "clip.recording-live".into();
+                    changed.scenarios[index].scenario_revision = 3;
+                }
+            }
+            assert!(
+                changed.verify_against(&bundle, &registry).is_err(),
+                "{mutation}"
+            );
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("plan.json");
+        crate::write_json(&path, &plan).unwrap();
+        ReleasePlan::load(&path)
+            .unwrap()
+            .verify_against(&bundle, &registry)
+            .unwrap();
     }
 
     #[test]

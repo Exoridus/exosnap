@@ -23,10 +23,8 @@ Popup {
     // is not committing: the capture keeps its current source until then.
     //
     // `pendingIdentity`/`pendingKind` are the durable half of the selection.
-    // `pendingTargetIndex` is only the last index that identity was seen at --
-    // a list insert or a rescan may move it, so commit re-resolves the row by
-    // identity instead of trusting the index. The type is carried too, so the
-    // Windows tab can never confirm a display the user picked earlier.
+    // `pendingTargetIndex` is only the last index that identity was seen at.
+    // Confirmation passes the identity to C++ for a fresh lifetime check.
     property int pendingTargetIndex: -1
     property int pendingCaptureMode: 0
     property string pendingPresetKey: ""
@@ -35,19 +33,33 @@ Popup {
 
     property int currentTab: 0
     property string windowQuery: ""
+    property var hideCandidate: null
 
     readonly property var regionPresetRows: recordViewModel.regionPresetOptions
 
     readonly property var displayRows: recordViewModel.displayTargetOptions
-    // Filtered through the adapter so the match policy (label, short title, app
-    // name and window title) is shared with the control channel rather than
-    // reimplemented per surface. The extra read of windowTargetOptions keeps
-    // the binding alive across a rescan.
-    readonly property var windowRows: {
-        root.recordViewModel.windowTargetOptions;
-        return root.recordViewModel.filteredTargetOptions("window", root.windowQuery);
-    }
+    readonly property var windowRows: recordViewModel.filteredWindowTargetOptions
     readonly property int windowTotalCount: recordViewModel.windowTargetOptions.length
+    readonly property int hiddenWindowCount: recordViewModel.hiddenWindowCount
+    readonly property int windowSearchMatchCount: recordViewModel.pickerSearchMatchCount
+    onWindowQueryChanged: root.recordViewModel.setWindowSearchQuery(root.windowQuery)
+    readonly property var hiddenWindowRules: recordViewModel.hiddenWindowRules
+
+    readonly property var pickerRows: {
+        const rows = [];
+        function appendCards(kind, targets, columns) {
+            rows.push({kind: "heading", section: kind});
+            for (let index = 0; index < targets.length; index += columns)
+                rows.push({kind: "cards", section: kind, cards: targets.slice(index, index + columns)});
+            if (targets.length === 0)
+                rows.push({kind: "empty", section: kind});
+        }
+        appendCards("display", root.displayRows, root.displayColumns);
+        appendCards("window", root.windowRows, root.windowColumns);
+        rows.push({kind: "heading", section: "region"});
+        rows.push({kind: "region", section: "region"});
+        return rows;
+    }
 
     readonly property string windowsCountText: qsTr("Windows: %n", "", windowRows.length)
 
@@ -86,11 +98,8 @@ Popup {
         return Math.max(1, Math.min(4, columns));
     }
 
-    // GridView has no inter-cell spacing and derives its column count from
-    // floor(rowWidth / cellWidth), so the gap is folded into the pitch and the
-    // card is sized so that `columns * pitch` never exceeds the content width.
-    // The delegate is then one gap shorter than its cell, which is the single
-    // place the gap is subtracted.
+    // Keep the existing card widths while grouping no more than four cards in
+    // each virtualized list row. The cap limits layout work, not window count.
     function cardWidthFor(availableWidth: real, columns: int): real {
         const count = Math.max(1, columns);
         if (count === 1)
@@ -152,10 +161,8 @@ Popup {
     readonly property real gridContentWidth: Math.max(0, width - 2 * root.contentPadding)
     readonly property int pickerColumns: root.columnsForWidth(root.gridContentWidth)
 
-    // Fewer displays than the width would allow must not leave an oversized
-    // empty list: the display grid uses one column per display, and the cards
-    // then cap at 420 instead of stretching. The window grid keeps the width
-    // policy -- the search may not reflow the dialog on every keystroke.
+    // Fewer displays than the width would allow use fewer columns. Windows
+    // retain the full width policy as the search result changes.
     readonly property int displayColumns: Math.max(1, Math.min(root.pickerColumns, root.displayRows.length))
     readonly property int windowColumns: root.pickerColumns
 
@@ -167,18 +174,7 @@ Popup {
     readonly property real windowsCellHeight: root.windowsCardHeight + root.gridGap
     // One card plus one gap is a row pitch; a grid on its own is one card tall.
 
-    // Rows the dialog reserves height for. For the Windows tab it is the
-    // UNFILTERED count, so typing in the search field never makes the dialog
-    // grow and shrink under the card the user is aiming at.
-    readonly property int heightRowCount: root.currentTab === 1 ? root.windowTotalCount
-                                          : root.currentTab === 0 ? root.displayRows.length : 0
-    readonly property real naturalGridHeight: {
-        if (root.currentTab === 2)
-            return 190;
-        const columns = root.currentTab === 1 ? root.windowColumns : root.displayColumns;
-        const cellHeight = root.currentTab === 1 ? root.windowsCellHeight : root.displaysCellHeight;
-        return Math.ceil(root.heightRowCount / Math.max(1, columns)) * cellHeight;
-    }
+    readonly property real naturalGridHeight: 440
 
     // ── Pending identity contract ────────────────────────────────────────────
 
@@ -205,19 +201,17 @@ Popup {
         return title !== "" ? title : row.label;
     }
 
-    readonly property string expectedKind: root.currentTab === 0 ? "display"
-                                          : root.currentTab === 1 ? "window" : ""
     readonly property var pendingRow: root.resolvePendingRow()
-    readonly property bool pendingMatchesTab: root.pendingKind !== "" && root.pendingKind === root.expectedKind
-    readonly property bool pendingMissing: root.pendingMatchesTab && root.pendingRow === null
+    readonly property bool pendingMissing: root.pendingKind !== "" && root.pendingKind !== "region"
+                                            && root.pendingRow === null
 
     readonly property bool confirmEnabled: {
-        if (root.currentTab === 2)
+        if (root.pendingKind === "region")
             return root.pendingPresetKey !== "";
-        return root.pendingMatchesTab && root.pendingRow !== null;
+        return root.pendingKind !== "" && root.pendingRow !== null;
     }
 
-    readonly property bool footerWarning: root.currentTab !== 2 && root.pendingMissing
+    readonly property bool footerWarning: root.pendingMissing
 
     function regionPresetRow(key: string): var {
         const rows = root.regionPresetRows;
@@ -229,14 +223,14 @@ Popup {
     }
 
     function footerStatusText(): string {
-        if (root.currentTab === 2) {
+        if (root.pendingKind === "region") {
             if (root.pendingPresetKey === "")
                 return qsTr("Select a region preset");
             const preset = root.regionPresetRow(root.pendingPresetKey);
             return preset ? qsTr("Selected: %1").arg(preset.label) : qsTr("Select a region preset");
         }
-        if (!root.pendingMatchesTab)
-            return root.currentTab === 0 ? qsTr("Select a display to capture") : root.windowsCountText;
+        if (root.pendingKind === "")
+            return qsTr("Select a display, window, or region.");
         if (root.pendingRow === null)
             return qsTr("Selected source is no longer available.");
         return qsTr("Selected: %1").arg(root.targetPrimaryLabel(root.pendingRow));
@@ -244,40 +238,49 @@ Popup {
 
     // ── Visible-target publication ───────────────────────────────────────────
     //
-    // The identities the two grids currently have inside their viewport, in
-    // layout order. The still service walks exactly this list, so a card that
-    // is scrolled away stops costing a capture. Columns are derived from the
-    // grid's own used width rather than the dialog's, because the display grid
-    // may be centred narrower than the window grid.
-    // The identities the two grids currently have inside their viewport, in
-    // layout order. The still service walks exactly this list, so a card that
-    // is scrolled away stops costing a capture. Columns are derived from the
-    // grid's own used width rather than the dialog's, because the display grid
-    // may be centred narrower than the window grid.
-    function identitiesInView(grid: GridView, rows: var): var {
-        if (!grid || !grid.visible || grid.cellHeight <= 0 || grid.cellWidth <= 0 || rows.length === 0)
-            return []
-        const columns = Math.max(1, Math.round(grid.width / grid.cellWidth))
-        const firstRow = Math.max(0, Math.floor(grid.contentY / grid.cellHeight))
-        const lastRow = Math.floor((grid.contentY + grid.height - 1) / grid.cellHeight)
-        const identities = []
-        for (let index = firstRow * columns; index <= (lastRow + 1) * columns - 1 && index < rows.length; ++index)
-            identities.push(rows[index].identity)
-        return identities
-    }
-
     function publishVisibleTargets(): void {
-        let identities = []
-        if (root.visible && root.currentTab === 0)
-            identities = root.identitiesInView(displaysGrid, root.displayRows)
-        else if (root.visible && root.currentTab === 1)
-            identities = root.identitiesInView(windowsGrid, root.windowRows)
-        // The Region tab's cards are preset rectangles, not capture targets.
-        root.recordViewModel.setVisibleTargetIdentities(identities)
+        const identities = [];
+        if (root.visible) {
+            const top = sourceList.contentY;
+            const bottom = top + sourceList.height;
+            let offset = 0;
+            for (const row of root.pickerRows) {
+                const height = root.pickerRowHeight(row);
+                if (offset < bottom && offset + height > top && row.kind === "cards") {
+                    for (const card of row.cards)
+                        identities.push(card.identity);
+                }
+                offset += height;
+                if (offset >= bottom)
+                    break;
+            }
+        }
+        root.recordViewModel.setVisibleTargetIdentities(identities);
     }
 
-    onCurrentTabChanged: visiblePublishDelay.restart()
-    onWindowRowsChanged: visiblePublishDelay.restart()
+    function pickerRowHeight(row: var): real {
+        if (row.kind === "heading")
+            return 38;
+        if (row.kind === "region")
+            return 196;
+        if (row.kind === "empty")
+            return 50;
+        return row.section === "display" ? root.displaysCellHeight : root.windowsCellHeight;
+    }
+
+    function jumpToSection(section: string): void {
+        let index = 0;
+        for (const row of root.pickerRows) {
+            if (row.kind === "heading" && row.section === section) {
+                sourceList.positionViewAtIndex(index, ListView.Beginning);
+                visiblePublishDelay.restart();
+                return;
+            }
+            ++index;
+        }
+    }
+
+    onPickerRowsChanged: visiblePublishDelay.restart()
 
     // Hiding the Record destination does not take this popup down: it parents
     // itself into the window overlay (see `parent` above), so it has no view of
@@ -305,7 +308,10 @@ Popup {
     }
 
     onAboutToShow: {
+        root.currentTab = 0;
+        sourceList.positionViewAtBeginning();
         root.windowQuery = "";
+        root.recordViewModel.setWindowSearchQuery("");
         windowSearchField.text = "";
         const mode = root.recordViewModel.captureMode;
         root.pendingCaptureMode = mode;
@@ -361,20 +367,24 @@ Popup {
     onClosed: recordViewModel.setVisibleTargetIdentities([])
 
     function selectCard(row: var, captureMode: int): void {
+        if (row.available === false || row.identity === "")
+            return;
         root.pendingTargetIndex = row.targetIndex;
         root.pendingCaptureMode = captureMode;
         root.pendingIdentity = row.identity;
         root.pendingKind = row.kind;
+        root.pendingPresetKey = "";
     }
 
     function commit(): void {
-        if (root.currentTab === 2) {
+        if (root.pendingKind === "region") {
             if (root.pendingPresetKey === "")
                 return;
             const anchor = regionAnchorRow();
             if (!anchor)
                 return;
-            recordViewModel.requestSelectTarget(anchor.targetIndex, 2);
+            if (!recordViewModel.confirmTarget(anchor.identity, 2))
+                return;
             recordViewModel.requestRegionPreset(root.pendingPresetKey);
             close();
             return;
@@ -386,8 +396,8 @@ Popup {
         const row = root.resolvePendingRow();
         if (!row)
             return;
-        recordViewModel.requestSelectTarget(row.targetIndex, root.pendingCaptureMode);
-        close();
+        if (recordViewModel.confirmTarget(row.identity, root.pendingCaptureMode))
+            close();
     }
 
     function confirmCard(row: var, captureMode: int): void {
@@ -397,7 +407,13 @@ Popup {
 
     function commitPreset(key: string): void {
         root.pendingPresetKey = key;
+        root.pendingKind = "region";
         root.commit();
+    }
+
+    function hideCandidateSession(): void {
+        if (root.hideCandidate)
+            recordViewModel.hideWindowInstance(root.hideCandidate.identity);
     }
 
     // The display a Region-tab rectangle anchors on: the display the user has
@@ -506,7 +522,10 @@ Popup {
                     options: [qsTr("Displays"), qsTr("Windows"), qsTr("Region")]
                     Accessible.name: qsTr("Source type")
                     currentIndex: root.currentTab
-                    onSelected: index => root.currentTab = index
+                    onSelected: index => {
+                        root.currentTab = index;
+                        root.jumpToSection(index === 0 ? "display" : index === 1 ? "window" : "region");
+                    }
                 }
             }
         }
@@ -516,7 +535,6 @@ Popup {
 
             objectName: "windowSearchRow"
             Layout.fillWidth: true
-            visible: root.currentTab === 1
             spacing: ExoTheme.spacingMd
 
             ExoSearchField {
@@ -527,156 +545,148 @@ Popup {
                 placeholderText: qsTr("Search windows...")
                 onSearchEdited: query => root.windowQuery = query
             }
+
+            Label {
+                objectName: "searchMatchCount"
+                text: qsTr("%1 search matches").arg(root.windowSearchMatchCount)
+                color: ExoTheme.textSecondary
+                font.family: ExoTheme.sansFamily
+                font.pixelSize: ExoTheme.fontCaption
+            }
+
+            CheckBox {
+                objectName: "showHiddenWindows"
+                text: qsTr("Show hidden (%1)").arg(root.hiddenWindowCount)
+                checked: root.recordViewModel.showHiddenWindows
+                onToggled: root.recordViewModel.setShowHiddenWindows(checked)
+            }
+
+            ExoButton {
+                objectName: "hiddenRulesButton"
+                text: qsTr("Hidden rules")
+                quiet: true
+                onClicked: rulesPopup.open()
+            }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            text: qsTr("Hiding a window here does not hide it from a display recording.")
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            color: ExoTheme.textSecondary
+            font.family: ExoTheme.sansFamily
+            font.pixelSize: ExoTheme.fontCaption
         }
 
         Item {
             id: gridArea
-
             objectName: "gridArea"
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.minimumHeight: 0
             Layout.preferredHeight: root.naturalGridHeight
             implicitHeight: root.naturalGridHeight
-            clip: true
 
-            Item {
-                id: displaysPage
-
-                objectName: "displaysPage"
-                visible: root.currentTab === 0
+            ListView {
+                id: sourceList
+                objectName: "sourceList"
                 anchors.fill: parent
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                model: root.pickerRows
+                onContentYChanged: visiblePublishDelay.restart()
+                onHeightChanged: visiblePublishDelay.restart()
+                onWidthChanged: visiblePublishDelay.restart()
+                ScrollBar.vertical: ExoScrollBar { objectName: "sourceScrollBar" }
 
-                GridView {
-                    id: displaysGrid
-
-                    objectName: "displaysGrid"
-                    x: Math.round((parent.width - (width - root.gridGap)) / 2)
-                    width: root.displayColumns * (root.displaysCardWidth + root.gridGap)
-                    height: Math.floor(parent.height / cellHeight) * cellHeight
-                    clip: true
-                    model: root.displayRows
-                    cellWidth: root.displaysCardWidth + root.gridGap
-                    cellHeight: root.displaysCardHeight + root.gridGap
-                    boundsBehavior: Flickable.StopAtBounds
-                    onContentYChanged: visiblePublishDelay.restart()
-                    onHeightChanged: visiblePublishDelay.restart()
-                    onWidthChanged: visiblePublishDelay.restart()
-                    onCellWidthChanged: visiblePublishDelay.restart()
-                    ScrollBar.vertical: ExoScrollBar {
-                    }
-
-                    delegate: TargetCard {
-                        captureMode: 0
-                        width: GridView.view.cellWidth - root.gridGap
-                        height: GridView.view.cellHeight - root.gridGap
-                    }
-                }
-
-                Label {
-                    objectName: "displaysEmptyState"
-                    anchors.centerIn: parent
-                    visible: root.displayRows.length === 0
-                    text: qsTr("No displays found.")
-                    textFormat: Text.PlainText
-                    color: ExoTheme.textMuted
-                    font.family: ExoTheme.sansFamily
-                    font.pixelSize: ExoTheme.fontSecondary
-                }
-            }
-
-            Item {
-                id: windowsPage
-
-                objectName: "windowsPage"
-                visible: root.currentTab === 1
-                anchors.fill: parent
-
-                GridView {
-                    id: windowsGrid
-
-                    objectName: "windowsGrid"
-                    x: Math.round((parent.width - (width - root.gridGap)) / 2)
-                    width: root.windowColumns * (root.windowsCardWidth + root.gridGap)
-                    height: Math.floor(parent.height / cellHeight) * cellHeight
-                    clip: true
-                    model: root.windowRows
-                    cellWidth: root.windowsCardWidth + root.gridGap
-                    cellHeight: root.windowsCardHeight + root.gridGap
-                    boundsBehavior: Flickable.StopAtBounds
-                    onContentYChanged: visiblePublishDelay.restart()
-                    onHeightChanged: visiblePublishDelay.restart()
-                    onWidthChanged: visiblePublishDelay.restart()
-                    onCellWidthChanged: visiblePublishDelay.restart()
-                    ScrollBar.vertical: ExoScrollBar {
-                        objectName: "windowsScrollBar"
-                    }
-
-                    delegate: TargetCard {
-                        captureMode: 1
-                        width: GridView.view.cellWidth - root.gridGap
-                        height: GridView.view.cellHeight - root.gridGap
-                    }
-                }
-
-                Label {
-                    objectName: "windowsEmptyState"
-                    anchors.centerIn: parent
-                    visible: root.windowRows.length === 0
-                    text: root.windowTotalCount === 0 ? qsTr("No windows to capture.")
-                                                      : qsTr("No windows match your search.")
-                    textFormat: Text.PlainText
-                    color: ExoTheme.textMuted
-                    font.family: ExoTheme.sansFamily
-                    font.pixelSize: ExoTheme.fontSecondary
-                }
-            }
-
-            Item {
-                id: regionPage
-
-                objectName: "regionPage"
-                visible: root.currentTab === 2
-                anchors.fill: parent
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: ExoTheme.spacingMd
+                delegate: Item {
+                    id: rowItem
+                    required property var modelData
+                    width: sourceList.width
+                    height: root.pickerRowHeight(rowItem.modelData)
 
                     Label {
-                        objectName: "regionCaption"
+                        objectName: rowItem.modelData.kind === "heading"
+                                    ? rowItem.modelData.section + "SectionLabel" : ""
+                        visible: rowItem.modelData.kind === "heading"
+                        text: rowItem.modelData.section === "display" ? qsTr("Displays")
+                              : rowItem.modelData.section === "window" ? qsTr("Windows / Applications")
+                              : qsTr("Region")
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: ExoTheme.text
+                        font.family: ExoTheme.sansFamily
+                        font.pixelSize: ExoTheme.fontSectionTitle
+                        font.weight: Font.DemiBold
+                    }
 
-                        text: {
-                            const anchor = root.regionAnchorRow()
-                            return anchor ? qsTr("A preset starts an editable rectangle on %1.").arg(anchor.regionLabel)
-                                          : qsTr("Select a display first.")
-                        }
-                        textFormat: Text.PlainText
-                        wrapMode: Text.WordWrap
-                        color: ExoTheme.textSecondary
-                        Layout.fillWidth: true
+                    Label {
+                        objectName: rowItem.modelData.kind !== "empty" ? "" : rowItem.modelData.section === "display"
+                                    ? "displaysEmptyState" : "windowsEmptyState"
+                        visible: rowItem.modelData.kind === "empty"
+                        text: rowItem.modelData.section === "display" ? qsTr("No displays found.")
+                              : root.windowTotalCount === 0 ? qsTr("No windows to capture.")
+                              : root.windowSearchMatchCount === 0 ? qsTr("No windows match your search.")
+                              : qsTr("No visible windows. Show hidden windows to review them.")
+                        anchors.centerIn: parent
+                        color: ExoTheme.textMuted
                         font.family: ExoTheme.sansFamily
                         font.pixelSize: ExoTheme.fontSecondary
                     }
 
-                    Flow {
-                        spacing: ExoTheme.spacingSm
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-
+                    Row {
+                        x: Math.round((parent.width - implicitWidth) / 2)
+                        spacing: root.gridGap
+                        visible: rowItem.modelData.kind === "cards"
                         Repeater {
-                            model: root.regionPresetRows
+                            model: rowItem.modelData.kind === "cards" ? rowItem.modelData.cards : []
+                            delegate: TargetCard {
+                                captureMode: rowItem.modelData.section === "window" ? 1 : 0
+                                width: rowItem.modelData.section === "window"
+                                       ? root.windowsCardWidth : root.displaysCardWidth
+                                height: rowItem.modelData.section === "window"
+                                        ? root.windowsCardHeight : root.displaysCardHeight
+                            }
+                        }
+                    }
 
-                            delegate: PresetCard {
-                                width: Math.min(190, (regionPage.width - 2 * ExoTheme.spacingSm) / 3)
-                                height: 128
+                    Loader {
+                        active: rowItem.modelData.kind === "region"
+                        anchors.fill: parent
+                        sourceComponent: Component {
+                            Column {
+                                spacing: ExoTheme.spacingMd
+                                Label {
+                                    objectName: "regionCaption"
+                                    width: parent.width
+                                    text: {
+                                        const anchor = root.regionAnchorRow()
+                                        return anchor ? qsTr("A preset starts an editable rectangle on %1.").arg(anchor.regionLabel)
+                                                      : qsTr("Select a display first.")
+                                    }
+                                    wrapMode: Text.WordWrap
+                                    color: ExoTheme.textSecondary
+                                    font.family: ExoTheme.sansFamily
+                                    font.pixelSize: ExoTheme.fontSecondary
+                                }
+                                Flow {
+                                    width: parent.width
+                                    spacing: ExoTheme.spacingSm
+                                    Repeater {
+                                        model: root.regionPresetRows
+                                        delegate: PresetCard {
+                                            width: Math.min(190, (rowItem.width - 2 * ExoTheme.spacingSm) / 3)
+                                            height: 128
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
         }
-
         RowLayout {
             id: footerRow
 
@@ -716,9 +726,131 @@ Popup {
 
     readonly property real chromeHeight: root.contentPadding * 2
                                          + pickerHeader.implicitHeight
-                                         + (searchRow.visible ? searchRow.implicitHeight : 0)
+                                         + searchRow.implicitHeight
+                                         + ExoTheme.fontCaption * 2
                                          + footerRow.implicitHeight
-                                         + ExoTheme.spacingLg * (searchRow.visible ? 3 : 2)
+                                         + ExoTheme.spacingLg * 4
+
+    Popup {
+        id: rulesPopup
+        parent: Overlay.overlay
+        modal: true
+        focus: true
+        width: Math.min(440, root.safeWidth - 48)
+        height: Math.min(360, root.safeHeight - 48)
+        x: (root.safeWidth - width) / 2
+        y: (root.safeHeight - height) / 2
+        padding: ExoTheme.spacingMd
+
+        contentItem: ColumnLayout {
+            Label {
+                text: qsTr("Hidden window rules")
+                font.family: ExoTheme.sansFamily
+                font.pixelSize: ExoTheme.fontSectionTitle
+                color: ExoTheme.text
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                ColumnLayout {
+                    width: rulesPopup.availableWidth
+                    Repeater {
+                        model: root.hiddenWindowRules
+                        delegate: RowLayout {
+                            id: ruleRow
+                            required property var modelData
+                            Layout.fillWidth: true
+                            CheckBox {
+                                checked: ruleRow.modelData.enabled
+                                Accessible.name: qsTr("Enable rule %1").arg(ruleRow.modelData.text)
+                                onToggled: recordViewModel.setHiddenRuleEnabled(ruleRow.modelData.id, checked)
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: ruleRow.modelData.kind === "application"
+                                      ? qsTr("Application: %1 (%2)").arg(ruleRow.modelData.applicationScope).arg(ruleRow.modelData.affectedCount)
+                                      : qsTr("Title: %1 (%2)").arg(ruleRow.modelData.text).arg(ruleRow.modelData.affectedCount)
+                                elide: Text.ElideMiddle
+                                color: ExoTheme.text
+                            }
+                            ExoButton {
+                                text: qsTr("Remove")
+                                quiet: true
+                                onClicked: recordViewModel.removeHiddenRule(ruleRow.modelData.id)
+                            }
+                        }
+                    }
+                }
+            }
+
+            ExoButton {
+                text: qsTr("Done")
+                Layout.alignment: Qt.AlignRight
+                onClicked: rulesPopup.close()
+            }
+        }
+    }
+
+    Dialog {
+        id: titleRuleDialog
+        parent: Overlay.overlay
+        modal: true
+        anchors.centerIn: parent
+        title: qsTr("Hide windows by title")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            titleMatch.currentIndex = 1;
+            titleCase.checked = false;
+            allApplications.checked = false;
+        }
+        onAccepted: {
+            if (root.hideCandidate)
+                recordViewModel.addTitleRule(root.hideCandidate.identity, titlePattern.text,
+                                             titleMatch.currentIndex === 0 ? "equals" : "contains",
+                                             titleCase.checked, allApplications.checked);
+        }
+        contentItem: ColumnLayout {
+            TextField {
+                id: titlePattern
+                Layout.preferredWidth: 320
+                placeholderText: qsTr("Window title text")
+            }
+            ComboBox {
+                id: titleMatch
+                Layout.fillWidth: true
+                model: [qsTr("Equals"), qsTr("Contains")]
+            }
+            CheckBox {
+                id: titleCase
+                text: qsTr("Match case")
+            }
+            CheckBox {
+                id: allApplications
+                text: qsTr("Match all applications")
+            }
+        }
+    }
+
+    Dialog {
+        id: applicationRuleDialog
+        parent: Overlay.overlay
+        modal: true
+        anchors.centerIn: parent
+        title: qsTr("Hide application")
+        standardButtons: Dialog.Yes | Dialog.Cancel
+        onAccepted: {
+            if (root.hideCandidate)
+                recordViewModel.addApplicationRule(root.hideCandidate.identity, true);
+        }
+        contentItem: Label {
+            width: 320
+            wrapMode: Text.WordWrap
+            text: root.hideCandidate
+                  ? qsTr("Hide all windows from %1?").arg(root.hideCandidate.appName)
+                  : ""
+        }
+    }
 
     component TargetCard: Rectangle {
         id: card
@@ -741,7 +873,7 @@ Popup {
         // The window's app is the secondary identity; a display has no measured
         // resolution or refresh data in the engine's target row, so it shows no
         // invented value instead.
-        readonly property string secondaryLabel: card.kind === "window" && card.windowTitle !== "" ? card.appName : ""
+        readonly property string secondaryLabel: card.modelData.available === false ? card.modelData.unavailableReason : card.kind === "window" && card.windowTitle !== "" ? card.appName : ""
         readonly property var still: root.recordViewModel.targetStillOptions[card.identity]
         readonly property string thumbnailState: card.still ? card.still.state : "placeholder"
         readonly property string thumbnailSource: card.still ? card.still.source : ""
@@ -782,15 +914,62 @@ Popup {
         }
 
         ToolTip {
-            text: card.label
+            text: card.modelData.available === false ? card.modelData.unavailableReason : card.label
             visible: (cardHover.hovered || card.activeFocus) && card.label !== ""
             delay: 400
         }
 
         MouseArea {
             anchors.fill: parent
-            onClicked: root.selectCard(card.modelData, card.captureMode)
-            onDoubleClicked: root.confirmCard(card.modelData, card.captureMode)
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
+            onClicked: mouse => {
+                if (mouse.button === Qt.LeftButton)
+                    root.selectCard(card.modelData, card.captureMode);
+            }
+            onDoubleClicked: mouse => {
+                if (mouse.button === Qt.LeftButton)
+                    root.confirmCard(card.modelData, card.captureMode);
+            }
+            onPressed: mouse => {
+                if (mouse.button === Qt.RightButton && card.kind === "window") {
+                    root.hideCandidate = card.modelData;
+                    hideMenu.popup();
+                }
+            }
+        }
+
+        Menu {
+            id: hideMenu
+            MenuItem {
+                text: qsTr("Hide this window until restart")
+                onTriggered: root.hideCandidateSession()
+            }
+            MenuItem {
+                text: qsTr("Hide windows by title...")
+                enabled: card.modelData.applicationIdentity !== ""
+                onTriggered: {
+                    titlePattern.text = card.windowTitle;
+                    titleRuleDialog.open();
+                }
+            }
+            MenuItem {
+                text: qsTr("Hide this application...")
+                enabled: card.modelData.applicationIdentity !== ""
+                onTriggered: applicationRuleDialog.open()
+            }
+        }
+
+        ToolButton {
+            objectName: "windowHideOptions"
+            visible: card.kind === "window"
+            text: "\u22ee"
+            Accessible.name: qsTr("Window hide options")
+            anchors.top: parent.top
+            anchors.right: parent.right
+            onClicked: {
+                root.hideCandidate = card.modelData;
+                hideMenu.popup();
+            }
         }
 
         Rectangle {
@@ -939,6 +1118,7 @@ Popup {
         }
         Keys.onSpacePressed: event => {
             root.pendingPresetKey = presetCard.key
+            root.pendingKind = "region"
             event.accepted = true
         }
 
@@ -948,7 +1128,10 @@ Popup {
 
         MouseArea {
             anchors.fill: parent
-            onClicked: root.pendingPresetKey = presetCard.key
+            onClicked: {
+                root.pendingPresetKey = presetCard.key;
+                root.pendingKind = "region";
+            }
             onDoubleClicked: root.commitPreset(presetCard.key)
         }
 

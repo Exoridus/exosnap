@@ -8,6 +8,14 @@
 
 namespace exosnap::engine {
 
+enum class MicChannelMode {
+    Auto,
+    PreserveStereo,
+    MonoMix,
+    LeftToStereo,
+    RightToStereo,
+};
+
 enum class AudioSourceKind {
     App,
     Mic,
@@ -66,6 +74,7 @@ struct AudioSourceRow {
     float gain_db = 0.0f;
     // When true, this source contributes silence (GainDbToLinear returns 0).
     bool muted = false;
+    bool operator==(const AudioSourceRow&) const = default;
 };
 
 struct ResolvedAudioTrack {

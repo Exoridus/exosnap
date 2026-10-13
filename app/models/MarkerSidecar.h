@@ -216,7 +216,7 @@ inline bool ApplyMarkerExportPlan(const MarkerExportPlan& plan) {
         return WriteMarkerSidecar(plan.sidecar_path, plan.markers, plan.media);
     std::error_code ec;
     std::filesystem::remove(plan.sidecar_path, ec);
-    return true;
+    return !ec;
 }
 
 } // namespace exosnap

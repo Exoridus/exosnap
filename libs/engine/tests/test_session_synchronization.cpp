@@ -4,6 +4,7 @@
 #include "premux_state.h"
 #include "session_failure.h"
 #include "split_sentinel_policy.h"
+#include <exosnap/engine/audio_limits.h>
 
 #include <gtest/gtest.h>
 
@@ -78,7 +79,7 @@ TEST(PremuxState, RoutesPreserveBoundsPacketOwnershipAndResetReadiness) {
 
     EncodedAudioPacket audio;
     uint32_t depth = 0;
-    for (size_t i = 0; i < PremuxState::kAudioLimit; ++i) {
+    for (size_t i = 0; i < AudioHoldPacketLimit(1); ++i) {
         audio.bytes = {4};
         ASSERT_EQ(state.Route(audio, VideoCodec::Av1, 1, depth), PremuxRoute::Buffered);
         EXPECT_EQ(depth, i + 1);
@@ -88,6 +89,77 @@ TEST(PremuxState, RoutesPreserveBoundsPacketOwnershipAndResetReadiness) {
     EXPECT_EQ(audio.bytes, (std::vector<uint8_t>{5}));
     state.Reset();
     EXPECT_TRUE(state.PendingSnapshot().audio.empty());
+}
+
+TEST(PremuxState, EightShortOpusTracksRetainThreeSecondsBeforeHeaders) {
+    PremuxState state;
+    uint32_t depth = 0;
+    for (uint32_t frame = 0; frame < 1200; ++frame) {
+        for (uint32_t track = 0; track < 8; ++track) {
+            EncodedAudioPacket packet{{1}, static_cast<uint64_t>(frame) * 2500000, track};
+            ASSERT_EQ(state.Route(packet, VideoCodec::Av1, 8, depth), PremuxRoute::Buffered);
+        }
+    }
+    EXPECT_EQ(state.TakePending().audio.size(), 9600u);
+}
+
+TEST(PremuxState, AudioByteOverflowPreservesTheRejectedPacket) {
+    PremuxState state;
+    uint32_t depth = 0;
+    EncodedAudioPacket packet;
+    packet.bytes.resize(32u * 1024 * 1024 + 1, 7);
+    EXPECT_EQ(state.Route(packet, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
+    EXPECT_EQ(packet.bytes.size(), 32u * 1024 * 1024 + 1);
+    EXPECT_TRUE(state.PendingSnapshot().audio.empty());
+}
+
+TEST(PremuxState, AudioAdmissionCountsRetainedCapacityAndResetsAfterTransfer) {
+    PremuxState state;
+    uint32_t depth = 0;
+    EncodedAudioPacket packet;
+    packet.bytes.reserve(32u * 1024 * 1024);
+    packet.bytes.push_back(7);
+    ASSERT_EQ(state.Route(packet, VideoCodec::Av1, 1, depth), PremuxRoute::Buffered);
+    EncodedAudioPacket extra{{8}, 0, 0};
+    EXPECT_EQ(state.Route(extra, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
+    EXPECT_EQ(extra.bytes, (std::vector<uint8_t>{8}));
+    auto pending = state.TakePending();
+    ASSERT_EQ(pending.audio.size(), 1u);
+    EXPECT_EQ(pending.audio.front().bytes.capacity(), 32u * 1024 * 1024);
+    EXPECT_EQ(state.Route(extra, VideoCodec::Av1, 1, depth), PremuxRoute::Buffered);
+    state.Reset();
+    packet.bytes.reserve(32u * 1024 * 1024 + 1);
+    packet.bytes.push_back(9);
+    EXPECT_EQ(state.Route(packet, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
+    EXPECT_EQ(packet.bytes.front(), 9);
+}
+
+TEST(PremuxState, MediaTimeLimitRejectsLongGapsEvenWithOnlyTwoPackets) {
+    PremuxState state;
+    uint32_t depth = 0;
+    EncodedAudioPacket first{{1}, 0, 0};
+    ASSERT_EQ(state.Route(first, VideoCodec::Av1, 1, depth), PremuxRoute::Buffered);
+    EncodedAudioPacket late{{2}, 3000000001, 0};
+    ASSERT_EQ(state.Route(late, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
+    EXPECT_EQ(late.bytes.front(), 2);
+    EXPECT_EQ(state.TakePending().audio.size(), 1u);
+}
+
+TEST(PremuxState, OutOfOrderPacketsCannotHideMediaTimeOrInvalidTrack) {
+    PremuxState state;
+    uint32_t depth = 0;
+    EncodedAudioPacket late{{1}, 9000000000, 0};
+    ASSERT_EQ(state.Route(late, VideoCodec::Av1, 1, depth), PremuxRoute::Buffered);
+    EncodedAudioPacket earlier{{2}, 5999999999, 0};
+    EXPECT_EQ(state.Route(earlier, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
+    EXPECT_EQ(earlier.bytes, (std::vector<uint8_t>{2}));
+    (void)state.TakePending();
+    EXPECT_EQ(state.Route(earlier, VideoCodec::Av1, 1, depth), PremuxRoute::Buffered);
+    state.PublishVideo(VideoCodec::Av1, {3});
+    state.PublishAudio(0, {});
+    EncodedAudioPacket invalid{{4}, 6000000000, 1};
+    EXPECT_EQ(state.Route(invalid, VideoCodec::Av1, 1, depth), PremuxRoute::Full);
+    EXPECT_EQ(invalid.bytes, (std::vector<uint8_t>{4}));
 }
 
 TEST(SessionFailureState, ConcurrentWritersPublishOneWholeFailure) {

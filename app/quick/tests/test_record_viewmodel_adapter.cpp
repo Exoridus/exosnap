@@ -9,6 +9,18 @@
 namespace exosnap::quick {
 namespace {
 
+void SeedWindowIdentities(RecordViewModelAdapter& adapter, const RecordViewModel& source) {
+    QHash<quintptr, QString> identities;
+    QHash<quintptr, QString> applications;
+    for (const auto& target : source.targets) {
+        if (target.kind != engine::CaptureTarget::Kind::Window)
+            continue;
+        identities.insert(target.native_id, QStringLiteral("window:%1").arg(target.native_id));
+        applications.insert(target.native_id, QStringLiteral("application:%1").arg(target.native_id));
+    }
+    adapter.setWindowIdentities(std::move(identities), std::move(applications));
+    adapter.synchronize();
+}
 TEST(RecordViewModelAdapterTest, CopiesRepresentativeStateAtConstruction) {
     RecordViewModel source;
     source.state_text = L"Ready";
@@ -17,6 +29,7 @@ TEST(RecordViewModelAdapterTest, CopiesRepresentativeStateAtConstruction) {
     source.live_stats_available = true;
 
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     EXPECT_EQ(adapter.stateText(), QStringLiteral("No source"));
     EXPECT_EQ(adapter.elapsedText(), QStringLiteral("00:01:23"));
@@ -27,6 +40,7 @@ TEST(RecordViewModelAdapterTest, CopiesRepresentativeStateAtConstruction) {
 TEST(RecordViewModelAdapterTest, SynchronizeEmitsOnlyForChangedProperties) {
     RecordViewModel source;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     int state_changes = 0;
     int elapsed_changes = 0;
@@ -64,6 +78,7 @@ TEST(RecordViewModelAdapterTest, ASyncThatMovesNothingDoesNotInvalidateTheBroadS
     RecordViewModel source;
     source.state_text = L"Ready";
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     int broad_changes = 0;
     QObject::connect(&adapter, &RecordViewModelAdapter::changed, [&broad_changes]() { ++broad_changes; });
@@ -82,6 +97,7 @@ TEST(RecordViewModelAdapterTest, LiveStatsAloneDoNotInvalidateTheBroadSignal) {
     source.live_stats_available = true;
     source.elapsed_text = L"0:01";
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     int broad_changes = 0;
     QObject::connect(&adapter, &RecordViewModelAdapter::changed, [&broad_changes]() { ++broad_changes; });
@@ -101,6 +117,7 @@ TEST(RecordViewModelAdapterTest, AStateChangeStillInvalidatesTheBroadSignalExact
     RecordViewModel source;
     source.SetState(UiRecordingState::Ready);
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     int broad_changes = 0;
     QObject::connect(&adapter, &RecordViewModelAdapter::changed, [&broad_changes]() { ++broad_changes; });
@@ -115,6 +132,29 @@ TEST(RecordViewModelAdapterTest, AStateChangeStillInvalidatesTheBroadSignalExact
     EXPECT_EQ(broad_changes, 1);
 }
 
+TEST(RecordViewModelAdapterTest, FinalizedEditMasterActionOnlySignalsWhenAvailable) {
+    RecordViewModelAdapter adapter;
+    int changes = 0;
+    int requests = 0;
+    QObject::connect(&adapter, &RecordViewModelAdapter::changed, [&] { ++changes; });
+    QObject::connect(&adapter, &RecordViewModelAdapter::editMasterRequested, [&] { ++requests; });
+
+    adapter.requestEditMaster();
+    EXPECT_EQ(requests, 0);
+    adapter.setPendingEditMasterAvailable(true);
+    EXPECT_TRUE(adapter.pendingEditMasterAvailable());
+    EXPECT_EQ(changes, 1);
+    adapter.setPendingEditMasterAvailable(true);
+    EXPECT_EQ(changes, 1);
+    adapter.requestEditMaster();
+    EXPECT_EQ(requests, 1);
+    adapter.setPendingEditMasterAvailable(false);
+    EXPECT_FALSE(adapter.pendingEditMasterAvailable());
+    EXPECT_EQ(changes, 2);
+    adapter.requestEditMaster();
+    EXPECT_EQ(requests, 1);
+}
+
 // The three option lists are the expensive half: a QVariantMap of three QStrings
 // per monitor and per eligible window, each label parsed out of the target.
 TEST(RecordViewModelAdapterTest, TargetOptionsAreRebuiltOnlyWhenTheTargetVectorIsReplaced) {
@@ -124,6 +164,7 @@ TEST(RecordViewModelAdapterTest, TargetOptionsAreRebuiltOnlyWhenTheTargetVectorI
     };
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
     ASSERT_EQ(adapter.targetOptions().size(), 1);
 
     int option_changes = 0;
@@ -176,6 +217,7 @@ TEST(RecordViewModelAdapterTest, DetachingSourceClearsTheBoundarySnapshot) {
     source.output_size_text = L"128.0 MB";
     source.live_stats_available = true;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     adapter.setSource(nullptr);
 
@@ -194,6 +236,7 @@ TEST(RecordViewModelAdapterTest, SourceSelectionIsClosedForEveryInFlightState) {
     source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     // The capture is committed, or an overlay owns the picking.
     for (UiRecordingState state : {UiRecordingState::Countdown, UiRecordingState::Preparing,
@@ -231,6 +274,7 @@ TEST(RecordViewModelAdapterTest, MapsRecordingStateActionsAndTone) {
     source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     source.SetState(UiRecordingState::Ready);
     adapter.synchronize();
@@ -272,6 +316,7 @@ TEST(RecordViewModelAdapterTest, NormalStatesNeverReportTheWarningTone) {
     source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     for (const auto state : {UiRecordingState::Ready, UiRecordingState::Countdown, UiRecordingState::Preparing,
                              UiRecordingState::Recording, UiRecordingState::Paused, UiRecordingState::Stopping,
@@ -285,6 +330,7 @@ TEST(RecordViewModelAdapterTest, NormalStatesNeverReportTheWarningTone) {
 TEST(RecordViewModelAdapterTest, MapsBlockedAndFailedStatesTextually) {
     RecordViewModel source;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     source.SetState(UiRecordingState::Blocked);
     source.capability_status_text = L"No supported hardware encoder";
@@ -308,6 +354,7 @@ TEST(RecordViewModelAdapterTest, SuccessfulCompletedProjectsTheIdleTransport) {
     source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     CompletedRecording recording;
     recording.succeeded = true;
@@ -351,6 +398,7 @@ TEST(RecordViewModelAdapterTest, FailedResultStaysDistinctFromTheIdleTransport) 
     source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     source.last_succeeded = false;
     source.elapsed_text = L"0:42";
@@ -374,6 +422,7 @@ TEST(RecordViewModelAdapterTest, BuildsTypedDisplayAndWindowTargetOptions) {
     source.selected_target_index = 1;
     source.capture_mode = CaptureMode::Window;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     ASSERT_EQ(adapter.targetOptions().size(), 2);
     EXPECT_EQ(adapter.targetOptions().at(0).toMap().value(QStringLiteral("kind")).toString(),
@@ -392,6 +441,7 @@ TEST(RecordViewModelAdapterTest, PickerRowsExposeStableIdentityPresentationAndSe
     source.selected_target_index = 1;
     source.capture_mode = CaptureMode::Window;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     ASSERT_EQ(adapter.targetCount(), 2);
     const QVariantMap display = adapter.targetOptions().at(0).toMap();
@@ -419,6 +469,7 @@ TEST(RecordViewModelAdapterTest, PickerFilterMatchesKindAndResolvedLabel) {
         {exosnap::engine::CaptureTarget::Kind::Window, 74, "Task Manager"},
     };
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     const QVariantList matches = adapter.filteredTargetOptions(QStringLiteral("window"), QStringLiteral("claude"));
 
@@ -433,6 +484,7 @@ TEST(RecordViewModelAdapterTest, CachedStillSurvivesRefreshAndOtherTargetsKeepAP
         {exosnap::engine::CaptureTarget::Kind::Window, 74, "Task Manager"},
     };
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
     int list_changes = 0;
     QObject::connect(&adapter, &RecordViewModelAdapter::targetOptionsChanged, [&list_changes]() { ++list_changes; });
     adapter.setTargetStill(QStringLiteral("window:73"), QStringLiteral("image://capture-target/window-73/1"));
@@ -457,6 +509,7 @@ TEST(RecordViewModelAdapterTest, VisibleIdentitiesAreForwardedOnceInLayoutOrder)
         {exosnap::engine::CaptureTarget::Kind::Window, 73, "Claude Design - Brave"},
     };
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
     QList<QStringList> published;
     QObject::connect(&adapter, &RecordViewModelAdapter::visibleTargetIdentitiesChanged,
                      [&published](const QStringList& identities) { published.push_back(identities); });
@@ -480,6 +533,7 @@ TEST(RecordViewModelAdapterTest, AnUnavailableTargetKeepsItsStillAndGoesStale) {
         {exosnap::engine::CaptureTarget::Kind::Window, 74, "Task Manager"},
     };
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
     adapter.setTargetStill(QStringLiteral("window:73"), QStringLiteral("image://capture-target/window-73/1"));
 
     adapter.setTargetStillUnavailable(QStringLiteral("window:73"));
@@ -506,6 +560,7 @@ TEST(RecordViewModelAdapterTest, AnUnavailableTargetKeepsItsStillAndGoesStale) {
 TEST(RecordViewModelAdapterTest, RegionPresetsLeadWithDrawCustomAndCoverTheNamedRatios) {
     RecordViewModel source;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     const QVariantList presets = adapter.regionPresetOptions();
 
@@ -534,6 +589,7 @@ TEST(RecordViewModelAdapterTest, RegionEditingLocksOnlyWhileTheCaptureIsLive) {
     source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     // The rectangle is the thing the user is still composing, so every state
     // before the capture itself is live leaves it editable -- including the
@@ -564,6 +620,7 @@ TEST(RecordViewModelAdapterTest, ResumeIsOfferedForAnArmedRecoverySession) {
     source.targets.push_back({exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     source.SetState(UiRecordingState::ArmedFromRecovery);
     adapter.synchronize();
@@ -583,6 +640,7 @@ TEST(RecordViewModelAdapterTest, DisplayRowsCarryTheResolvedRegionLabel) {
         {exosnap::engine::CaptureTarget::Kind::Window, 73, "Claude Design - Brave"},
     };
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     const QVariantMap display = adapter.targetOptions().at(0).toMap();
     const QVariantMap window = adapter.targetOptions().at(1).toMap();
@@ -593,6 +651,7 @@ TEST(RecordViewModelAdapterTest, DisplayRowsCarryTheResolvedRegionLabel) {
 TEST(RecordViewModelAdapterTest, RegionPresetRequestRoutesThroughTheNarrowSignal) {
     RecordViewModel source;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
     QString requested;
     QObject::connect(&adapter, &RecordViewModelAdapter::regionPresetRequested,
                      [&requested](const QString& key) { requested = key; });
@@ -607,6 +666,7 @@ TEST(RecordViewModelAdapterTest, DisappearedSelectionRemainsNamedButUnresolved) 
     source.targets = {{exosnap::engine::CaptureTarget::Kind::Window, 73, "Claude Design - Brave"}};
     source.selected_target_index = 0;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
     ASSERT_EQ(adapter.selectedTargetIdentity(), QStringLiteral("window:73"));
 
     source.targets.clear();
@@ -626,6 +686,7 @@ TEST(RecordViewModelAdapterTest, RegionSelectionBlocksStartAndNormalizesCrop) {
     source.capture_mode = CaptureMode::Region;
     source.SetState(UiRecordingState::Ready);
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     adapter.setRegionState(QRectF(-0.2, 0.1, 0.8, 1.2), true);
     EXPECT_TRUE(adapter.regionSelectionNeeded());
@@ -649,6 +710,7 @@ TEST(RecordViewModelAdapterTest, MapsAudioAndDeviceAvailabilityWithoutResolvingP
         {exosnap::engine::AudioSourceKind::Mic, true, false},
     };
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
     adapter.setDeviceState(false, true, true, QStringLiteral("Device is busy"));
 
     EXPECT_TRUE(adapter.systemAudioEnabled());
@@ -665,6 +727,7 @@ TEST(RecordViewModelAdapterTest, MapsAudioAndDeviceAvailabilityWithoutResolvingP
 TEST(RecordViewModelAdapterTest, ClampsMetersAndGatesSessionActions) {
     RecordViewModel source;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
     adapter.setMeters(-0.5, 0.4, 1.5);
     EXPECT_DOUBLE_EQ(adapter.systemMeter(), 0.0);
     EXPECT_DOUBLE_EQ(adapter.appMeter(), 0.4);
@@ -694,6 +757,7 @@ TEST(RecordViewModelAdapterTest, FormatsLiveDiagnosticsAtAdapterCadence) {
     source.av_drift_available = true;
     source.av_drift_ms = -4.6;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
 
     EXPECT_EQ(adapter.bitrateText(), QStringLiteral("10.0 Mb/s"));
     EXPECT_EQ(adapter.droppedFramesText(), QStringLiteral("3"));
@@ -703,6 +767,7 @@ TEST(RecordViewModelAdapterTest, FormatsLiveDiagnosticsAtAdapterCadence) {
 TEST(RecordViewModelAdapterTest, RoutesNarrowCommandsWithoutServiceExposure) {
     RecordViewModel source;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
     int starts = 0;
     int selected_index = -1;
     int selected_mode = -1;
@@ -776,6 +841,7 @@ TEST(RecordViewModelAdapterTest, SourceButtonStatesPreserveSelectedIdentity) {
     RecordViewModel source;
     source.selected_target_index = -1;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
     EXPECT_EQ(adapter.sourceButtonText(), QStringLiteral("Select source"));
     source.targets = {{exosnap::engine::CaptureTarget::Kind::Monitor, 1, "Display 1: 2560x1440 at (0, 0)"},
                       {exosnap::engine::CaptureTarget::Kind::Window, 2, "Google Chrome"}};
@@ -799,6 +865,7 @@ TEST(RecordViewModelAdapterTest, SourceButtonStatesPreserveSelectedIdentity) {
 TEST(RecordViewModelAdapterTest, ConfidenceIndicatorsRemainDecorativeAndIntentionalOffIsNeutral) {
     RecordViewModel source;
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
     const auto indicators = adapter.confidenceIndicators();
     ASSERT_EQ(indicators.size(), 3);
     for (const auto& indicator : indicators) {
@@ -809,6 +876,63 @@ TEST(RecordViewModelAdapterTest, ConfidenceIndicatorsRemainDecorativeAndIntentio
     }
 }
 
+TEST(RecordViewModelAdapterTest, HiddenRulesDeduplicateCountsAndDropStillDemandWithoutRetargeting) {
+    RecordViewModel source;
+    source.state = UiRecordingState::Ready;
+    source.targets = {{engine::CaptureTarget::Kind::Window, 42, "Document - Editor"},
+                      {engine::CaptureTarget::Kind::Window, 43, "Document - Editor"}};
+    source.selected_target_index = 0;
+    source.capture_mode = CaptureMode::Window;
+    RecordViewModelAdapter adapter(&source);
+    adapter.setWindowIdentities({{42, QStringLiteral("window:42:10:20:1")}, {43, QStringLiteral("window:43:10:20:1")}},
+                                {{42, QStringLiteral("editor")}, {43, QStringLiteral("editor")}});
+    adapter.synchronize();
+    QStringList demanded;
+    QObject::connect(&adapter, &RecordViewModelAdapter::visibleTargetIdentitiesChanged,
+                     [&demanded](const auto& identities) { demanded = identities; });
+    adapter.setVisibleTargetIdentities({QStringLiteral("window:42:10:20:1"), QStringLiteral("window:43:10:20:1")});
+    adapter.hideWindowInstance(QStringLiteral("window:42:10:20:1"));
+    EXPECT_EQ(adapter.hiddenWindowCount(), 1);
+    EXPECT_EQ(demanded, QStringList{QStringLiteral("window:43:10:20:1")});
+    EXPECT_EQ(source.selected_target_index, 0);
+    EXPECT_TRUE(adapter.selectedTargetAvailable());
+    adapter.addTitleRule(QStringLiteral("window:42:10:20:1"), QStringLiteral("Document"), QStringLiteral("contains"),
+                         false, false);
+    EXPECT_EQ(adapter.hiddenWindowCount(), 2);
+    EXPECT_EQ(adapter.windowSearchMatchCount(QStringLiteral("absent")), 0);
+    EXPECT_EQ(adapter.hiddenWindowCount(), 2);
+    EXPECT_TRUE(demanded.empty());
+    adapter.setShowHiddenWindows(true);
+    EXPECT_TRUE(demanded.empty());
+    adapter.setVisibleTargetIdentities({QStringLiteral("window:43:10:20:1")});
+    EXPECT_EQ(demanded, QStringList{QStringLiteral("window:43:10:20:1")});
+}
+TEST(RecordViewModelAdapterTest, ConfirmationRejectsUnwitnessedTargetAndUsesFreshCallback) {
+    RecordViewModel source;
+    source.state = UiRecordingState::Ready;
+    source.targets = {{engine::CaptureTarget::Kind::Window, 42, "Document"}};
+    RecordViewModelAdapter adapter(&source);
+    EXPECT_TRUE(adapter.targetOptions().front().toMap().value(QStringLiteral("identity")).toString().isEmpty());
+    EXPECT_FALSE(adapter.confirmTarget(QStringLiteral("window:42"), 1));
+    const QString original = QStringLiteral("window:42:10:20:1");
+    adapter.setWindowIdentities({{42, original}}, {{42, QStringLiteral("editor")}});
+    adapter.synchronize();
+    QString fresh = original;
+    int confirmations = 0;
+    adapter.setTargetConfirmation([&](const QString& identity, int mode) {
+        if (identity != fresh || mode != 1)
+            return false;
+        ++confirmations;
+        return true;
+    });
+    EXPECT_TRUE(adapter.confirmTarget(original, 1));
+    fresh = QStringLiteral("window:42:10:20:2");
+    EXPECT_FALSE(adapter.confirmTarget(original, 1));
+    EXPECT_EQ(confirmations, 1);
+    source.state = UiRecordingState::Recording;
+    adapter.synchronize();
+    EXPECT_FALSE(adapter.confirmTarget(fresh, 1));
+}
 } // namespace
 } // namespace exosnap::quick
 
@@ -820,6 +944,7 @@ TEST(SourceConfidencePolicy, ExpectedLossAndIntentionalMuteRemainDistinct) {
     source.audio_ui_state.source_rows = {{engine::AudioSourceKind::Sys, true, false},
                                          {engine::AudioSourceKind::Mic, true, false}};
     RecordViewModelAdapter adapter(&source);
+    SeedWindowIdentities(adapter, source);
     adapter.setDeviceState(true, true, true);
     EXPECT_EQ(adapter.confidenceIndicators()[0].toMap().value("tone").toString(), "success");
     adapter.setAudioSourceHealth(engine::AudioSourceKindBit(engine::AudioSourceKind::Mic));

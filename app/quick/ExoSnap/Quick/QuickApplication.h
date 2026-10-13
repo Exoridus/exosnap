@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AboutViewModelAdapter.h"
+#include "AudioRoutingAdapter.h"
 #include "BlockingSurfaceArbiter.h"
 #include "CaptureTargetStillProvider.h"
 #include "CrashReportAdapter.h"
@@ -20,6 +21,7 @@
 #include "QuickWindowGeometry.h"
 #include "RecordPreviewAdapter.h"
 #include "RecordViewModelAdapter.h"
+#include "RecordingClipAdapter.h"
 #include "RecordingErrorAdapter.h"
 #include "RecoveryAdapter.h"
 #include "SettingsAdapter.h"
@@ -30,6 +32,7 @@
 #include "TrayAdapter.h"
 #include "WebcamPreviewFeed.h"
 #include "WhatsNewAdapter.h"
+#include "services/RecordingArtifactRegistry.h"
 
 #include "diagnostics/AudioSourceDegradation.h"
 #include "diagnostics/DpcLatencyProvider.h"
@@ -70,6 +73,7 @@ class QQuickWindow;
 #include <QJsonObject>
 #include <functional>
 #include <memory>
+#include <set>
 
 #include <optional>
 #include <string>
@@ -94,6 +98,8 @@ class QuickApplication {
     [[nodiscard]] RecordViewModelAdapter* recordViewModelAdapter() noexcept;
     [[nodiscard]] OverlayTelemetryAdapter* overlayTelemetryAdapter() noexcept;
     [[nodiscard]] SettingsAdapter* settingsAdapter() noexcept;
+    [[nodiscard]] AudioRoutingAdapter* audioRoutingAdapter() noexcept;
+    [[nodiscard]] RecordingClipAdapter* recordingClipAdapter() noexcept;
     [[nodiscard]] DeviceAdapter* deviceAdapter() noexcept;
     [[nodiscard]] DiagnosticsAdapter* diagnosticsAdapter() noexcept;
     [[nodiscard]] LogsAdapter* logsAdapter() noexcept;
@@ -199,6 +205,7 @@ class QuickApplication {
         CountdownCancelled,
         RefusedByBlockingSurface,
         RefusedByState,
+        RefusedByConfiguration,
         RefusedNoTarget,
     };
     [[nodiscard]] StartAdmission lastStartAdmission() const noexcept {
@@ -537,6 +544,8 @@ class QuickApplication {
     // what makes the overlay appear.
     void openEditorForCurrentRecording();
     [[nodiscard]] bool canOpenEditorForCurrentRecording() const;
+    std::optional<EditContext> pending_edit_master_;
+    std::optional<RecordingArtifactRegistry::SourceLease> pending_master_editor_lease_;
     // Harness-only, env-configured (EXOSNAP_VISUAL_EDIT_SCENARIO): seeds a
     // deterministic Edit surface so a --visual-test capture never depends on
     // there being a real recording on this machine. Never creates or drives a
@@ -625,6 +634,7 @@ class QuickApplication {
     // state wants. Re-checks the stop condition, because it runs one debounce
     // interval after the decision that scheduled it.
     void startMeterServices();
+    void synchronizeWindowIdentities(const CaptureTargetSnapshot& snapshot);
     void refreshCaptureTargets(const CaptureTargetSnapshot& snapshot, DiscoveryReason reason);
     void updateOutputTargetContext(const exosnap::engine::CaptureTarget& target);
     void persistLiveConfig();
@@ -699,6 +709,7 @@ class QuickApplication {
     const exosnap::update::DistributionContext distribution_;
     RecordingPresetStore preset_store_;
     RecordingPresetConfig live_config_;
+    bool draft_changed_during_recording_ = false;
     // True until the first capability probe has had its say on a first start
     // (no persisted live config): the built-in default names a codec this GPU
     // may not have, and the probe is the first moment that can be known.
@@ -711,6 +722,9 @@ class QuickApplication {
     RecoveryService recovery_service_;
     AboutViewModelAdapter about_view_model_;
     SettingsAdapter settings_adapter_;
+    AudioRoutingAdapter audio_routing_adapter_;
+    QTimer audio_routing_meter_timer_;
+    std::optional<engine::ConfigRevision> audio_routing_active_revision_;
     DeviceAdapter device_adapter_;
     // DPC/ISR latency. Declared BEFORE the adapter that borrows it: the
     // adapter samples it on every evaluation, so this member has to outlive it —
@@ -754,6 +768,8 @@ class QuickApplication {
     BlockingSurfaceArbiter surface_arbiter_;
     RecordViewModel record_view_model_;
     RecordViewModelAdapter record_view_model_adapter_;
+    RecordingClipAdapter recording_clip_adapter_;
+    std::set<engine::MediaId> published_clip_assets_;
     // After record_view_model_: it holds a pointer into it and is constructed
     // with that pointer.
     OverlayAdapter overlay_adapter_;

@@ -116,6 +116,7 @@ TEST(PresetExportImport, MultiItemFile_ImportAll_ReturnsBothPresets) {
     const QString path = UniqueTempPath();
 
     const QString toml = QStringLiteral("schema_version = %1\n"
+                                        "audio_contract = \"%2\"\n"
                                         "\n"
                                         "[[presets]]\n"
                                         "id = \"preset.hand-a\"\n"
@@ -124,7 +125,8 @@ TEST(PresetExportImport, MultiItemFile_ImportAll_ReturnsBothPresets) {
                                         "[[presets]]\n"
                                         "id = \"preset.hand-b\"\n"
                                         "name = \"Preset B\"\n")
-                             .arg(kPresetSchemaVersion);
+                             .arg(kPresetSchemaVersion)
+                             .arg(QString::fromUtf8(kAudioContract));
     ASSERT_TRUE(WriteTomlString(path, toml));
 
     const std::vector<std::string> no_existing;

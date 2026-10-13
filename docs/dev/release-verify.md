@@ -22,7 +22,19 @@ The source registry in `tools/exo-verify/src/scenarios` is the executable catalo
 
 This selection does not alter an already frozen candidate plan. Several specialist checks, including `diagnostics.present-elevated`, `diagnostics.present-crosscheck` and `preview.cross-monitor`, currently remain Required in the registry. If the reviewed delta does not warrant repeating one, the maintainer records an explicit `exo-verify accept` decision against the new bundle, naming the prior evidence, unchanged contract and reason for reuse. A new observed failure requires `ACCEPTED_RISK`, not a reuse rationale. Recommended checks need no readiness override when unselected. Run all mandated candidate artifact gates against the exact files. Do not copy old hardware results into a new candidate's result set.
 
+The [mandatory v0.11 hardware gates](../release-checklist.md#mandatory-v011-hardware-acceptance) remain RELEASE-BLOCKING - NOT YET QUALIFIED. The current Recommended tier of `audio.mixed-clock-soak` does not make that product obligation optional. Its 30-minute recording is supporting evidence, not the required 2-3-hour independent SYS/MIC reference qualification. The release approver also requires comparable runtime/background-load evidence, including supported MP4 remux work. Review exact binary/environment/reference identities and the existing acceptance criteria before publication. No disabled ClipJob is required, and this schedule does not enable Recording Clips.
+
 ## Candidate and execution lanes
+
+Recording Clip creation is unavailable in the offered product. The required
+`clip.creation-unavailable` scenario (revision 1) uses the candidate's production
+control endpoint to verify typed request/stale-confirmation rejection, empty job
+snapshots and no output or staging entries through shutdown. It belongs to
+release-ci-core and also runs in release-gpu and ordinary preflight. The positive
+`clip.recording-live` implementation retains revision 3 outside the active registry
+for future source-level reactivation after qualification. New candidate plans
+require the negative contract. Existing frozen plans and historical results keep
+their identities; plan validation never rewrites or waives a positive failure.
 
 The `Build release candidate` workflow creates one official final-version build from a commit on `next`. Download `candidate-bundle/` and `candidate-plan.json` from the same Actions run. Keep them together with the separately signed disposable test-feed artifact. The bundle inventories the exact MSI, portable ZIP and verifier bytes; the plan freezes the source registry for that candidate.
 

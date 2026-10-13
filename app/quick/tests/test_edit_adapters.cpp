@@ -6,10 +6,12 @@
 
 #include "models/EditTimelineModel.h"
 #include "models/OutputSettingsModel.h"
+#include "models/RecordingCapabilities.h"
 #include "models/VideoSettingsModel.h"
 
 #include <capability/capability_builder.h>
 #include <capability/encoder_device_resolver.h>
+#include <exosnap/engine/edit_player_engine.h>
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -19,6 +21,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QSemaphore>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -28,6 +31,9 @@
 #include <QVariantMap>
 
 #include <gtest/gtest.h>
+
+#include <windows.h>
+#include <winioctl.h>
 
 #include <chrono>
 #include <string>
@@ -118,6 +124,23 @@ TEST(EditWorkspacePresentation, SelectingEitherLinkedRowHighlightsTheWholeGroup)
     rows = session.visibleClips(0, 100000);
     EXPECT_TRUE(rows[0].toMap().value(QStringLiteral("selected")).toBool());
     EXPECT_TRUE(rows[1].toMap().value(QStringLiteral("selected")).toBool());
+}
+
+TEST(EditSessionAdapterPresentation, DeliveryPendingChangesNotifyTheOpenEditPage) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    int notifications = 0;
+    QObject::connect(&session, &EditSessionAdapter::clipChanged, [&] { ++notifications; });
+    EXPECT_FALSE(session.deliveryPending());
+    session.setDeliveryPending(true);
+    EXPECT_TRUE(session.deliveryPending());
+    EXPECT_EQ(notifications, 1);
+    session.setDeliveryPending(true);
+    EXPECT_EQ(notifications, 1);
+    session.setDeliveryPending(false);
+    EXPECT_FALSE(session.deliveryPending());
+    EXPECT_EQ(notifications, 2);
 }
 
 TEST(EditTrimSnap, SnapsBackToTheKeyframeAtOrBeforeTheRequest) {
@@ -575,6 +598,37 @@ TEST(EditWorkspaceAdapter, LocalMediaBatchPreservesInputOrderAndUndoesAsOneOpera
     EXPECT_EQ(session.workspace().clips(), imported);
 }
 
+TEST(EditWorkspaceAdapter, SavedStandaloneClipRemainsImportableAndEditableWhenCreationIsUnavailable) {
+    EnsureApplication();
+    EXPECT_FALSE(product::kRecordingClipsAvailable);
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto fixture =
+        QFileInfo(QString::fromUtf8(__FILE__))
+            .dir()
+            .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const auto saved = directory.filePath(QStringLiteral("saved.clip.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture, saved));
+    EditSessionAdapter session;
+    QEventLoop loop;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &loop, &QEventLoop::quit);
+    QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+    session.importMedia(QUrl::fromLocalFile(saved), true);
+    loop.exec();
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    ASSERT_EQ(session.workspace().assets().size(), 1u);
+    EXPECT_EQ(session.workspace().assets().front().path, saved.toStdWString());
+    ASSERT_EQ(session.workspace().clips().size(), 1u);
+    const auto clip = session.workspace().clips().front();
+    ASSERT_GT(clip.duration(), 200'000);
+    session.trimClip(clip.id, 100, (clip.source_out / 1000) - 100);
+    EXPECT_TRUE(session.workspaceError().isEmpty());
+    EXPECT_LT(session.workspace().clips().front().duration(), clip.duration());
+    session.undo();
+    EXPECT_EQ(session.workspace().clips().front(), clip);
+    EXPECT_TRUE(QFileInfo::exists(saved));
+}
+
 TEST(EditWorkspaceAdapter, UnknownSegmentDurationIsResolvedBeforeOrderedPositionedInsertion) {
     EnsureApplication();
     QTemporaryDir directory;
@@ -742,6 +796,94 @@ TEST(EditExportAdapterRun, AnEmptyWorkspaceFailsBeforeAnyThreadIsStarted) {
     EXPECT_EQ(exporter.errorText(), QStringLiteral("No edit master available for export."));
 }
 
+TEST(EditExportAdapterRun, CancellingPreparationAndDestroyingAdapterLeavesNoOutput) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    EditSessionAdapter session;
+    const QString fixture =
+        QFileInfo(QString::fromUtf8(__FILE__))
+            .dir()
+            .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    QEventLoop imported;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
+    QTimer::singleShot(10000, &imported, &QEventLoop::quit);
+    session.importMedia(QUrl::fromLocalFile(fixture), true);
+    imported.exec();
+    ASSERT_EQ(session.workspace().clips().size(), 1u);
+    auto exporter = std::make_unique<EditExportAdapter>();
+    exporter->setSession(&session);
+    exporter->setOutputDirectoryProvider([&] { return directory.path(); });
+    exporter->startExport();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Preparing);
+    exporter->cancel();
+    EXPECT_EQ(exporter->state(), EditExportAdapter::Cancelling);
+    exporter.reset();
+    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+}
+
+TEST(EditExportAdapterRun, DestructionCancelsAnActiveSourceProbeBeforeTheWholeHashCompletes) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString fixture =
+        QFileInfo(QString::fromUtf8(__FILE__))
+            .dir()
+            .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const QString source_path = QDir(directory.path()).filePath(QStringLiteral("large-source.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture, source_path));
+    {
+        const HANDLE file = CreateFileW(reinterpret_cast<const wchar_t*>(source_path.utf16()), GENERIC_WRITE,
+                                        FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ASSERT_NE(file, INVALID_HANDLE_VALUE);
+        DWORD returned = 0;
+        const bool sparse = DeviceIoControl(file, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &returned, nullptr);
+        LARGE_INTEGER end{};
+        end.QuadPart = 2LL * 1024 * 1024 * 1024;
+        const bool extended = sparse && SetFilePointerEx(file, end, nullptr, FILE_BEGIN) && SetEndOfFile(file);
+        CloseHandle(file);
+        ASSERT_TRUE(extended);
+    }
+    QTemporaryDir output;
+    ASSERT_TRUE(output.isValid());
+    {
+        EditSessionAdapter session;
+        QEventLoop imported;
+        QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
+        QTimer::singleShot(60000, &imported, &QEventLoop::quit);
+        session.importMedia(QUrl::fromLocalFile(source_path), true);
+        imported.exec();
+        ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+        ASSERT_EQ(session.workspace().clips().size(), 1u);
+        auto exporter = std::make_unique<EditExportAdapter>();
+        exporter->setSession(&session);
+        exporter->setOutputDirectoryProvider([&] { return output.path(); });
+        IO_COUNTERS before{}, current{};
+        ASSERT_TRUE(GetProcessIoCounters(GetCurrentProcess(), &before));
+        exporter->startExport();
+        ASSERT_EQ(exporter->state(), EditExportAdapter::Preparing);
+        QPointer<QThread> worker = EditExportAdapterTestPeer::worker(*exporter);
+        ASSERT_NE(worker, nullptr);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        do {
+            ASSERT_TRUE(GetProcessIoCounters(GetCurrentProcess(), &current));
+            if (current.ReadTransferCount - before.ReadTransferCount >= 4 * 1024 * 1024)
+                break;
+            std::this_thread::yield();
+        } while (worker->isRunning() && std::chrono::steady_clock::now() < deadline);
+        ASSERT_GE(current.ReadTransferCount - before.ReadTransferCount, 4u * 1024 * 1024);
+        ASSERT_TRUE(worker->isRunning());
+        const auto cancelled = std::chrono::steady_clock::now();
+        exporter->cancel();
+        exporter.reset();
+        EXPECT_LT(std::chrono::steady_clock::now() - cancelled, std::chrono::seconds(1));
+        EXPECT_TRUE(worker.isNull());
+        EXPECT_TRUE(QDir(output.path()).entryList(QDir::Files).isEmpty());
+    }
+    QFile writable(source_path);
+    EXPECT_TRUE(writable.open(QIODevice::WriteOnly));
+}
+
 TEST(EditExportAdapterRun, DestructionJoinsActiveRenderAndRemovesStagingWithoutEventDelivery) {
     EnsureApplication();
     const QString fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
@@ -749,6 +891,11 @@ TEST(EditExportAdapterRun, DestructionJoinsActiveRenderAndRemovesStagingWithoutE
         GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
     QTemporaryDir output;
     ASSERT_TRUE(output.isValid());
+    QTemporaryDir config;
+    ASSERT_TRUE(config.isValid());
+    const auto previous_config = qgetenv("EXOSNAP_CONFIG_DIR");
+    const auto restore_config = qScopeGuard([previous_config] { qputenv("EXOSNAP_CONFIG_DIR", previous_config); });
+    qputenv("EXOSNAP_CONFIG_DIR", config.path().toUtf8());
     EditSessionAdapter session;
     QEventLoop imported;
     QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
@@ -759,6 +906,17 @@ TEST(EditExportAdapterRun, DestructionJoinsActiveRenderAndRemovesStagingWithoutE
     imported.exec();
     ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
     ASSERT_EQ(session.workspace().assets().size(), 2u);
+    for (const auto& asset : session.workspace().assets()) {
+        engine::EditPlayerEngine player;
+        std::string error;
+        ASSERT_TRUE(player.Open(std::filesystem::path(asset.path), error)) << error;
+        const auto metadata = player.AudioMetadata();
+        engine::MonitorSelectionSnapshot selection{
+            metadata.selection_media_id, {1}, {}, true, metadata.unverified_asset_binding};
+        for (const auto& track : metadata.actual_tracks)
+            selection.tracks.push_back({track.track_id, 1.0f, false});
+        session.setAssetMonitorSelection(asset.id, std::move(selection));
+    }
     ASSERT_TRUE(session.applyCrossfade(session.workspace().clips().front().id));
     // Enough real frames to observe an in-flight render even on a fast encoder.
     for (int i = 0; i < 100; ++i)
@@ -768,6 +926,16 @@ TEST(EditExportAdapterRun, DestructionJoinsActiveRenderAndRemovesStagingWithoutE
     exporter->setSession(&session);
     exporter->setOutputDirectoryProvider([&] { return output.path(); });
     exporter->startExport();
+    QEventLoop review;
+    QObject::connect(exporter.get(), &EditExportAdapter::stateChanged, &review, [&] {
+        if (exporter->state() == EditExportAdapter::Review || exporter->state() == EditExportAdapter::Failed)
+            review.quit();
+    });
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    if (exporter->state() == EditExportAdapter::Preparing)
+        review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    exporter->confirmPreparedExport();
     QPointer<QThread> worker = EditExportAdapterTestPeer::worker(*exporter);
     ASSERT_NE(worker, nullptr);
     std::atomic<bool> finished{false};
@@ -811,11 +979,15 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
     EnsureApplication();
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
+    QTemporaryDir source_directory;
+    ASSERT_TRUE(source_directory.isValid());
     EditSessionAdapter session;
-    const QString fixture =
+    const QString fixture_template =
         QFileInfo(QString::fromUtf8(__FILE__))
             .dir()
             .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const QString fixture = QDir(source_directory.path()).filePath(QStringLiteral("source.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture_template, fixture));
     QEventLoop imported;
     QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
     QTimer::singleShot(10000, &imported, &QEventLoop::quit);
@@ -826,6 +998,73 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
     exporter->setSession(&session);
     exporter->setOutputDirectoryProvider([&] { return directory.path(); });
     exporter->startExport();
+    QEventLoop review;
+    QObject::connect(exporter.get(), &EditExportAdapter::stateChanged, &review, [&] {
+        if (exporter->state() == EditExportAdapter::Review)
+            review.quit();
+    });
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    if (exporter->state() != EditExportAdapter::Review)
+        review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    EXPECT_EQ(exporter->reviewOutcome().value(QStringLiteral("path")).toString(), QStringLiteral("Copy"));
+    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    const auto first_destination = exporter->outputPath();
+    EXPECT_FALSE(QFileInfo::exists(first_destination + QStringLiteral(".tmp")));
+    session.trimClip(session.workspace().clips().front().id, 0, 2000);
+    EXPECT_EQ(exporter->state(), EditExportAdapter::Options);
+    exporter->startExport();
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    if (exporter->state() != EditExportAdapter::Review)
+        review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    engine::RecorderConfig changed_config;
+    changed_config.video_codec = engine::VideoCodec::H264;
+    exporter->setRenderConfigProvider([&] { return changed_config; });
+    exporter->confirmPreparedExport();
+    EXPECT_EQ(exporter->state(), EditExportAdapter::Preparing);
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    engine::AudioMetadataReadResult metadata;
+    {
+        engine::EditPlayerEngine player;
+        std::string error;
+        ASSERT_TRUE(player.Open(std::filesystem::path(fixture.toStdWString()), error)) << error;
+        metadata = player.AudioMetadata();
+    }
+    session.setAssetMonitorSelection(session.workspace().assets().front().id,
+                                     {metadata.selection_media_id, {1}, {}, true, metadata.unverified_asset_binding});
+    EXPECT_EQ(exporter->state(), EditExportAdapter::Options);
+    exporter->startExport();
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    QFile source_file(fixture);
+    ASSERT_TRUE(source_file.open(QIODevice::Append));
+    ASSERT_EQ(source_file.write("x", 1), 1);
+    source_file.close();
+    exporter->confirmPreparedExport();
+    QEventLoop changed_source;
+    QObject::connect(exporter.get(), &EditExportAdapter::stateChanged, &changed_source, [&] {
+        if (exporter->state() == EditExportAdapter::Failed)
+            changed_source.quit();
+    });
+    QTimer::singleShot(10000, &changed_source, &QEventLoop::quit);
+    if (exporter->state() != EditExportAdapter::Failed)
+        changed_source.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Failed) << exporter->errorText().toStdString();
+    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    session.setAssetMonitorSelection(session.workspace().assets().front().id,
+                                     {metadata.selection_media_id, {2}, {}, true, metadata.unverified_asset_binding});
+    exporter->retry();
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    exporter->confirmPreparedExport();
     QPointer<QThread> worker = EditExportAdapterTestPeer::worker(*exporter);
     ASSERT_NE(worker, nullptr);
     ASSERT_TRUE(worker->wait(10000));

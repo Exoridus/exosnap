@@ -30,29 +30,9 @@ Item {
     // "start in 5 seconds" beside it would be two answers to one question.
     readonly property bool chevronEnabled: !root.counting && !root.busy && root.recordViewModel.canStart
 
-    // The countdown is the one state that keeps the accent FILL: cancelling it is
-    // unambiguously the action in flight, whatever else is on the bar.
-    //
-    // It used to take the ERROR fill, which said "destructive" about a button
-    // that stops something from starting. Nothing has been recorded yet, no file
-    // exists and nothing is lost; the countdown's one available action is simply
-    // its primary action, and it is drawn like one. The face's own glyph carries
-    // the difference — a cross rather than the record dot — so Cancel and Record
-    // are never confused at a glance despite sharing a colour.
-    // Outlined, not filled -- the same treatment Stop wears while paused, which
-    // is the loudest the bar ever needs a resting action to be. A solid accent
-    // slab is the transport's way of saying "this is happening now": it belongs
-    // to Stop and to Resume, and Record borrowing it made the idle bar shout
-    // about a recording that has not started.
-    //
-    // A countdown is the exception and keeps the fill, because then something IS
-    // happening and cancelling it is the one available action.
-    readonly property bool outlined: !root.counting
+    readonly property bool outlined: !root.mainEnabled && !root.busy
     readonly property color fill: root.outlined ? ExoTheme.surfaceRaised : ExoTheme.accent
     readonly property color ink: root.outlined ? ExoTheme.accent : ExoTheme.accentInk
-    // The accent hairline is what carries "primary" once the fill is gone. An
-    // unavailable Record keeps the ordinary line instead: a control that cannot
-    // start must not be the most emphasised thing on the bar.
     readonly property color frameColor: root.mainEnabled || root.busy ? ExoTheme.accent : ExoTheme.line
 
     // -1 is "no fraction measured yet", which covers all of Stopping and the
@@ -93,7 +73,7 @@ Item {
         // round control sits on, so a Record button that cannot start would have
         // read as the most ordinary control on the bar.
         color: root.mainEnabled || root.busy ? root.fill : ExoTheme.surface
-        radius: height / 2
+        radius: ExoTheme.radiusSm
     }
 
     Row {
@@ -127,8 +107,8 @@ Item {
                 color: mainFace.down ? Qt.darker(root.fill, 1.14)
                      : mainFace.hovered && mainFace.enabled ? Qt.lighter(root.fill, 1.08) : "transparent"
                 // Only the outer end is round: the inner end meets the divider.
-                topLeftRadius: height / 2
-                bottomLeftRadius: height / 2
+                topLeftRadius: ExoTheme.radiusSm
+                bottomLeftRadius: ExoTheme.radiusSm
                 visible: mainFace.hovered || mainFace.down
             }
 
@@ -137,7 +117,7 @@ Item {
                 color: "transparent"
                 border.width: 2
                 border.color: ExoTheme.text
-                radius: height / 2
+                radius: ExoTheme.radiusSm
                 visible: mainFace.visualFocus
             }
 
@@ -177,8 +157,8 @@ Item {
                 color: chevronFace.down ? Qt.darker(root.fill, 1.14)
                      : (chevronFace.hovered || countdownMenu.opened) && chevronFace.enabled ? Qt.lighter(root.fill, 1.08)
                                                                                             : "transparent"
-                topRightRadius: height / 2
-                bottomRightRadius: height / 2
+                topRightRadius: ExoTheme.radiusSm
+                bottomRightRadius: ExoTheme.radiusSm
                 visible: chevronFace.hovered || chevronFace.down || countdownMenu.opened
             }
 
@@ -187,7 +167,7 @@ Item {
                 color: "transparent"
                 border.width: 2
                 border.color: ExoTheme.text
-                radius: height / 2
+                radius: ExoTheme.radiusSm
                 visible: chevronFace.visualFocus
             }
 
@@ -260,7 +240,7 @@ Item {
         color: "transparent"
         border.width: root.outlined ? 1 : 0
         border.color: root.frameColor
-        radius: height / 2
+        radius: ExoTheme.radiusSm
     }
 
     // Hover opens it, as in the Widgets shell. It deliberately does NOT close on

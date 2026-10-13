@@ -18,6 +18,12 @@
 
 #include "viewmodels/RecordViewModel.h"
 
+#include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/edit_player_engine.h>
+#include <filesystem>
+#include <string>
+#include <utility>
+
 #include <QCoreApplication>
 #include <QObject>
 #include <QQmlContext>
@@ -66,6 +72,10 @@ class MediaPreviewDriver final : public QObject {
                 error_ = error;
             emit changed();
         });
+        connect(worker_, &exosnap::quick::EditPlayerWorker::monitoringRejected, this, [this](const QString& error) {
+            error_ = error;
+            emit changed();
+        });
         connect(worker_, &exosnap::quick::EditPlayerWorker::reachedEnd, this, [this] {
             ended_ = true;
             emit changed();
@@ -87,6 +97,24 @@ class MediaPreviewDriver final : public QObject {
             exosnap::edit::Asset asset;
             asset.path = (qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES") + "/" + name).toStdWString();
             asset.duration = 2'000'000;
+            exosnap::engine::EditPlayerEngine player;
+            std::string error;
+            if (!player.Open(std::filesystem::path(asset.path), error)) {
+                error_ = QString::fromStdString(error);
+                emit changed();
+                return;
+            }
+            const auto metadata = player.AudioMetadata();
+            exosnap::engine::MonitorSelectionSnapshot selection{
+                metadata.selection_media_id, {1}, {}, true, metadata.unverified_asset_binding};
+            for (const auto& track : metadata.actual_tracks)
+                selection.tracks.push_back({track.track_id, 1.0f, false});
+            if (!player.SetMonitorSelection(selection, error)) {
+                error_ = QString::fromStdString(error);
+                emit changed();
+                return;
+            }
+            asset.monitor_selection = std::move(selection);
             workspace.insert(workspace.addAsset(std::move(asset)));
         }
         if (!workspace.crossfade(workspace.clips()[0].id, workspace.clips()[1].id)) {

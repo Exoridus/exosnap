@@ -112,6 +112,9 @@ QJsonObject SegmentToJson(const CompletedRecordingSegment& seg) {
     obj[QStringLiteral("durationMs")] = static_cast<qint64>(seg.duration_seconds * 1000.0);
     obj[QStringLiteral("fileSizeBytes")] = seg.file_size_bytes;
     obj[QStringLiteral("succeeded")] = seg.succeeded;
+    obj[QStringLiteral("editMasterPath")] = seg.edit_master_path;
+    obj[QStringLiteral("sessionStartNs")] = QString::number(seg.session_start_ns);
+    obj[QStringLiteral("durationNs")] = QString::number(seg.duration_ns);
     return obj;
 }
 
@@ -144,6 +147,20 @@ bool ValidateSegment(const QJsonObject& obj, CompletedRecordingSegment& out) {
         out.file_size_bytes = v;
     }
     out.succeeded = obj.value(QStringLiteral("succeeded")).toBool(true);
+    out.edit_master_path = obj.value(QStringLiteral("editMasterPath")).toString();
+    for (const auto& field : {QStringLiteral("sessionStartNs"), QStringLiteral("durationNs")}) {
+        const auto value = obj.value(field);
+        if (value.isUndefined())
+            continue;
+        bool valid = false;
+        const auto ns = value.toString().toULongLong(&valid);
+        if (!valid)
+            return false;
+        if (field == QStringLiteral("sessionStartNs"))
+            out.session_start_ns = ns;
+        else
+            out.duration_ns = ns;
+    }
     return true;
 }
 

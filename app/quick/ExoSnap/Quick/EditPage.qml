@@ -233,7 +233,9 @@ FocusScope {
                 }
                 Label {
                     objectName: "editExportProgress"
-                    text: root.exporter.state === EditExportAdapter.Cancelling ? qsTr("Cancelling…") : qsTr("%1%").arg(root.exporter.progressPercent)
+                    text: root.exporter.state === EditExportAdapter.Preparing ? qsTr("Preparing export…")
+                        : root.exporter.state === EditExportAdapter.Cancelling ? qsTr("Cancelling…")
+                        : qsTr("%1%").arg(root.exporter.progressPercent)
                     visible: root.exporter.running
                     color: ExoTheme.textSecondary
                     Accessible.name: qsTr("Exporting %1%").arg(root.exporter.progressPercent)
@@ -311,6 +313,14 @@ FocusScope {
                 }
             }
             Label {
+                objectName: "editDeliveryPending"
+                text: qsTr("MP4 delivery in progress. The finalized edit master is ready.")
+                visible: root.session.deliveryPending
+                color: ExoTheme.textSecondary
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            Label {
                 text: root.session.workspaceError || root.exporter.errorText
                 visible: text.length > 0
                 color: ExoTheme.textSecondary
@@ -325,6 +335,89 @@ FocusScope {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.minimumHeight: 140
+            }
+        }
+    }
+    Dialog {
+        id: exportReview
+        objectName: "editExportReview"
+        title: qsTr("Review export")
+        modal: true
+        width: Math.min(root.width - 32, 520)
+        anchors.centerIn: parent
+        closePolicy: Popup.CloseOnEscape
+        onClosed: if (root.exporter.state === EditExportAdapter.Review)
+            root.exporter.discardPreparedExport()
+        Connections {
+            target: root.exporter
+            function onStateChanged() {
+                if (root.exporter.state === EditExportAdapter.Review)
+                    exportReview.open()
+                else if (exportReview.opened)
+                    exportReview.close()
+            }
+        }
+        contentItem: ColumnLayout {
+            spacing: ExoTheme.spacingSm
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("%1 to %2 · %3 video · %4")
+                    .arg(root.exporter.reviewOutcome.path === "Copy" ? qsTr("Copy") : qsTr("Render"))
+                    .arg(root.exporter.reviewOutcome.container || "")
+                    .arg(root.exporter.reviewOutcome.videoCodec || "")
+                    .arg(root.exporter.reviewOutcome.outputFile || "")
+                wrapMode: Text.Wrap
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: root.exporter.reviewOutcome.path === "Copy"
+                text: qsTr("All %1 source audio tracks will be copied: %2")
+                    .arg((root.exporter.reviewOutcome.outputAudioTracks || []).length)
+                    .arg((root.exporter.reviewOutcome.outputAudioTracks || []).map(track => track.name).join(", ") || qsTr("none"))
+                wrapMode: Text.Wrap
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: root.exporter.reviewOutcome.path === "Render"
+                text: root.exporter.reviewOutcome.videoOnly
+                    ? qsTr("Video-only render. No audio tracks will be included.")
+                    : qsTr("Selected tracks (%1) will be mixed into one 48 kHz stereo PCM24 track: %2")
+                        .arg((root.exporter.reviewOutcome.selectedTracks || []).length)
+                        .arg((root.exporter.reviewOutcome.selectedTracks || []).map(track => track.name).join(", "))
+                wrapMode: Text.Wrap
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: root.exporter.reviewOutcome.path === "Render"
+                text: qsTr("Other tracks will not be included: %1")
+                    .arg((root.exporter.reviewOutcome.excludedTracks || []).map(track => track.name).join(", ") || qsTr("none"))
+                wrapMode: Text.Wrap
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: root.exporter.reviewOutcome.path === "Render"
+                text: qsTr("Original source recordings remain unchanged.")
+                wrapMode: Text.Wrap
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: root.exporter.reviewOutcome.replaceExisting
+                text: qsTr("The existing destination file will be replaced.")
+                wrapMode: Text.Wrap
+            }
+        }
+        footer: RowLayout {
+            Button {
+                text: qsTr("Cancel")
+                onClicked: exportReview.close()
+            }
+            Item { Layout.fillWidth: true }
+            Button {
+                text: root.exporter.reviewOutcome.path === "Render" ? qsTr("Render with selected tracks") : qsTr("Start copy")
+                onClicked: {
+                    root.exporter.confirmPreparedExport()
+                    exportReview.close()
+                }
             }
         }
     }

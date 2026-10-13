@@ -68,6 +68,8 @@ The committed golden clip under `tests/samples/media` and `cargo exo-dev gen-av-
 
 ## Release soak inspection
 
+The [v0.11 independent-clock and runtime obligations](../release-checklist.md#mandatory-v011-hardware-acceptance) are RELEASE-BLOCKING - NOT YET QUALIFIED. Use this infrastructure for the required 2-3-hour independent SYS/MIC recording and qualified 20 ms fitted-drift analysis. `audio.mixed-clock-soak` currently runs 30 minutes and cannot close that longer reference gate alone. Retain audio discontinuity/longest-gap, degradation/loss, resampler-drain, mux and comparable background-load observations with exact binary/hardware/OS/driver/tool/media identities. Physical recovery and rate variants follow the established change-triggered policy. Simulated clocks and one-source eight-track fan-out remain separately attributed.
+
 For the durations/profile/device setup and numeric acceptance budgets, follow the release checklist. Inspect every audio stream's packet span and sample continuity, not only optional container duration tags or one track's metadata. Listen at multiple points and compare the session report to the independently inspected file.
 
 Silent gap filling preserves elapsed time but cannot recreate missing sound. Judge discontinuities by lost duration and maximum gap, not count alone. Slaving within its envelope can remove sustained rate error; saturation beyond the cap can leave growing residual. A report showing unavailable drift must not be read as zero.

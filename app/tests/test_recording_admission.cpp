@@ -14,12 +14,19 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
+#include <QTemporaryDir>
 
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -30,12 +37,96 @@
 #include "diagnostics/DiskSpaceProvider.h"
 #include "diagnostics/DiskSpaceThresholds.h"
 #include "models/OutputPathValidator.h"
+#include "quick/ExoSnap/Quick/RecordingClipAdapter.h"
 #include "services/RecordingAdmission.h"
 #include "services/RecordingCoordinator.h"
 #include "settings/RecoveryManifestStore.h"
 
 namespace exosnap {
+class RecordingCoordinatorTestPeer {
+  public:
+    static void SetClipOutput(RecordingCoordinator& coordinator, const std::filesystem::path& path) {
+        coordinator.current_output_path_ = path;
+    }
+    static bool HasClipWorker(const RecordingCoordinator& coordinator) {
+        return coordinator.clip_jobs_ != nullptr;
+    }
+    static void SetClipRequestState(RecordingCoordinator& coordinator, bool recording, bool preparing,
+                                    uint64_t media_time_ns) {
+        coordinator.is_recording_.store(recording);
+        coordinator.prepare_in_flight_.store(preparing);
+        coordinator.last_media_time_ns_ = media_time_ns;
+    }
+    static void PostClipJobsChanged(RecordingCoordinator& coordinator) {
+        coordinator.PostClipJobsChanged();
+    }
+};
+
 namespace {
+
+TEST(RecordingClipProduct, RejectsRequestsBeforePlanningRegardlessOfDurationOrTransportState) {
+    QTemporaryDir output;
+    ASSERT_TRUE(output.isValid());
+    RecordingCoordinator coordinator;
+    RecordingCoordinatorTestPeer::SetClipOutput(coordinator, output.path().toStdWString() + L"/recording.mkv");
+    EXPECT_FALSE(RecordingCoordinatorTestPeer::HasClipWorker(coordinator));
+    for (const bool recording : {false, true}) {
+        for (const bool preparing : {false, true}) {
+            for (const uint64_t time : {uint64_t{0}, uint64_t{60'000'000'000}, UINT64_MAX}) {
+                RecordingCoordinatorTestPeer::SetClipRequestState(coordinator, recording, preparing, time);
+                EXPECT_FALSE(coordinator.CanRequestRecordingClip());
+                for (const int64_t duration : {int64_t{-1}, int64_t{0}, int64_t{30}, INT64_MAX}) {
+                    const auto result = coordinator.RequestRecordingClip(duration);
+                    ASSERT_FALSE(result.succeeded());
+                    EXPECT_EQ(result.error()->owner, engine::EngineModule::Clip);
+                    EXPECT_EQ(result.error()->code, engine::EngineErrorCode::ProductCapabilityUnavailable);
+                    EXPECT_EQ(result.error()->retryability, engine::Retryability::Never);
+                    EXPECT_EQ(result.error()->context, "Recording Clips are unavailable in this product version");
+                    EXPECT_TRUE(coordinator.RecordingClipSnapshots().empty());
+                }
+            }
+        }
+    }
+    EXPECT_TRUE(QDir(output.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).empty());
+    RecordingCoordinatorTestPeer::SetClipRequestState(coordinator, false, false, 0);
+}
+
+TEST(RecordingClipProduct, StaleConfirmationAndCancellationCannotAdmitWork) {
+    RecordingCoordinator coordinator;
+    for (const auto job : {engine::JobId{}, engine::NewId<engine::JobId>()}) {
+        for (const auto generation : {uint64_t{0}, uint64_t{1}, UINT64_MAX}) {
+            EXPECT_FALSE(coordinator.ConfirmRecordingClip(job, generation));
+            EXPECT_FALSE(coordinator.CancelRecordingClip(job, generation));
+        }
+    }
+    EXPECT_TRUE(coordinator.RecordingClipSnapshots().empty());
+    EXPECT_FALSE(RecordingCoordinatorTestPeer::HasClipWorker(coordinator));
+}
+
+TEST(RecordingClipProduct, DirectAdapterSignalsCannotBypassCoordinatorAdmission) {
+    quick::RecordingClipAdapter adapter;
+    RecordingCoordinator coordinator;
+    std::optional<engine::Outcome<engine::JobId>> requested;
+    QObject::connect(&adapter, &quick::RecordingClipAdapter::planRequested,
+                     [&](int64_t seconds) { requested = coordinator.RequestRecordingClip(seconds); });
+    QObject::connect(&adapter, &quick::RecordingClipAdapter::confirmRequested,
+                     [&](engine::JobId job, uint64_t generation) {
+                         EXPECT_FALSE(coordinator.ConfirmRecordingClip(job, generation));
+                     });
+    QObject::connect(&adapter, &quick::RecordingClipAdapter::cancelRequested,
+                     [&](engine::JobId job, uint64_t generation) {
+                         EXPECT_FALSE(coordinator.CancelRecordingClip(job, generation));
+                     });
+    adapter.planRequested(30);
+    ASSERT_TRUE(requested);
+    ASSERT_FALSE(requested->succeeded());
+    EXPECT_EQ(requested->error()->code, engine::EngineErrorCode::ProductCapabilityUnavailable);
+    const auto stale = engine::NewId<engine::JobId>();
+    adapter.confirmRequested(stale, 1);
+    adapter.cancelRequested(stale, 1);
+    EXPECT_TRUE(coordinator.RecordingClipSnapshots().empty());
+    EXPECT_FALSE(RecordingCoordinatorTestPeer::HasClipWorker(coordinator));
+}
 
 using diagnostics::ExclusiveEvidence;
 
@@ -240,6 +331,209 @@ void MakeReadyCoordinator(RecordingCoordinator& coordinator, const std::filesyst
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     caps.probed = true;
     coordinator.OnCapabilitiesReady(caps);
+}
+
+class ProcessAudioWindow {
+  public:
+    ProcessAudioWindow()
+        : window_(CreateWindowExW(0, L"STATIC", L"Audio identity", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
+                                  GetModuleHandleW(nullptr), nullptr)) {
+    }
+    ~ProcessAudioWindow() {
+        if (window_)
+            DestroyWindow(window_);
+    }
+    exosnap::engine::CaptureTarget Target() const {
+        exosnap::engine::CaptureTarget target;
+        target.kind = exosnap::engine::CaptureTarget::Kind::Window;
+        target.native_id = reinterpret_cast<uint64_t>(window_);
+        return target;
+    }
+
+  private:
+    HWND window_ = nullptr;
+};
+
+exosnap::engine::TrackGraph1Intent ProcessAudioGraph(exosnap::engine::AudioBindingKind kind) {
+    using namespace exosnap::engine;
+    TrackGraph1Intent graph;
+    AudioSourceSpec source;
+    source.id = NewId<AudioSourceId>();
+    source.binding.kind = kind;
+    graph.sources.push_back(source);
+    AudioTrackSpec track;
+    track.id = NewId<AudioTrackId>();
+    graph.tracks.push_back(track);
+    graph.routes.push_back({NewId<AudioRouteId>(), source.id, track.id});
+    return graph;
+}
+
+TEST(RecordingProcessAudio, NativeObserverConfirmsTheSelectedProcessInstance) {
+    ProcessAudioWindow window;
+    ASSERT_NE(window.Target().native_id, 0u);
+    const auto environment = ObserveRecordingAudioEnvironment(window.Target(), 20348);
+    ASSERT_TRUE(environment.capture_target_process);
+    EXPECT_EQ(environment.capture_target_process->process_id, GetCurrentProcessId());
+    EXPECT_NE(environment.capture_target_process->creation_time, 0u);
+    EXPECT_NE(std::find(environment.confirmed_processes.begin(), environment.confirmed_processes.end(),
+                        *environment.capture_target_process),
+              environment.confirmed_processes.end());
+}
+
+TEST(RecordingProcessAudio, NativeObserverAllowsTargetProcessInStartResolution) {
+    using namespace exosnap::engine;
+    ProcessAudioWindow window;
+    ASSERT_NE(window.Target().native_id, 0u);
+    const auto environment = ObserveRecordingAudioEnvironment(window.Target(), 20348);
+    for (const auto kind : {AudioBindingKind::CaptureTargetProcess, AudioBindingKind::LegacyExcludeTarget}) {
+        const auto result = ResolveAudioIntent(ProcessAudioGraph(kind), environment);
+        ASSERT_TRUE(result.succeeded()) << result.error()->context;
+        ASSERT_EQ(result.value()->sources.size(), 1u);
+        ASSERT_TRUE(result.value()->sources[0].capture_key);
+        EXPECT_EQ(result.value()->sources[0].capture_key->process->process_id, GetCurrentProcessId());
+    }
+}
+
+TEST(RecordingProcessAudio, IndependentProcessIsConfirmedWithoutAWindowCaptureTarget) {
+    using namespace exosnap::engine;
+    ProcessAudioWindow window;
+    const auto selected = ObserveRecordingAudioEnvironment(window.Target(), 20348);
+    ASSERT_TRUE(selected.capture_target_process);
+    EXPECT_FALSE(selected.capture_target_process->identity_hint.empty());
+    auto graph = ProcessAudioGraph(AudioBindingKind::IndependentProcess);
+    graph.sources[0].binding.process = selected.capture_target_process;
+    const AudioIntent intent = graph;
+    const auto environment = ObserveRecordingAudioEnvironment({}, 20348, &intent);
+    EXPECT_FALSE(environment.capture_target_process);
+    const auto result = ResolveAudioIntent(intent, environment);
+    ASSERT_TRUE(result.succeeded()) << result.error()->context;
+    EXPECT_EQ(result.value()->sources[0].capture_key->process->process_id, GetCurrentProcessId());
+}
+
+TEST(RecordingProcessAudio, NativeConfirmationDoesNotRebindAChangedProcessInstanceOrExecutable) {
+    using namespace exosnap::engine;
+    ProcessAudioWindow window;
+    const auto selected = ObserveRecordingAudioEnvironment(window.Target(), 20348);
+    ASSERT_TRUE(selected.capture_target_process);
+    auto graph = ProcessAudioGraph(AudioBindingKind::IndependentProcess);
+    graph.sources[0].binding.process = selected.capture_target_process;
+    for (const bool change_executable : {false, true}) {
+        auto changed = graph;
+        if (change_executable)
+            changed.sources[0].binding.process->identity_hint += ".changed";
+        else
+            ++changed.sources[0].binding.process->creation_time;
+        const AudioIntent intent = changed;
+        const auto environment = ObserveRecordingAudioEnvironment({}, 20348, &intent);
+        ASSERT_EQ(environment.confirmed_processes.size(), 1u);
+        EXPECT_EQ(environment.confirmed_processes[0], *selected.capture_target_process);
+        EXPECT_FALSE(ResolveAudioIntent(intent, environment).succeeded());
+    }
+}
+
+TEST(RecordingProcessAudio, NativeObservationCannotConfirmAPersistedIndependentBinding) {
+    using namespace exosnap::engine;
+    ProcessAudioWindow window;
+    const auto selected = ObserveRecordingAudioEnvironment(window.Target(), 20348);
+    ASSERT_TRUE(selected.capture_target_process);
+    auto graph = ProcessAudioGraph(AudioBindingKind::IndependentProcess);
+    graph.sources[0].binding.process = selected.capture_target_process;
+    graph.sources[0].binding.process_selection_confirmed = false;
+    const AudioIntent intent = graph;
+    const auto without_target = ObserveRecordingAudioEnvironment({}, 20348, &intent);
+    EXPECT_TRUE(without_target.confirmed_processes.empty());
+    EXPECT_FALSE(ResolveAudioIntent(intent, without_target).succeeded());
+    const auto same_video_process = ObserveRecordingAudioEnvironment(window.Target(), 20348, &intent);
+    ASSERT_EQ(same_video_process.confirmed_processes.size(), 1u);
+    EXPECT_FALSE(ResolveAudioIntent(intent, same_video_process).succeeded());
+}
+
+TEST(RecordingProcessAudio, ExitedIndependentProcessCannotBeConfirmed) {
+    using namespace exosnap::engine;
+    std::wstring executable(MAX_PATH, L'\0');
+    const UINT count = GetSystemDirectoryW(executable.data(), static_cast<UINT>(executable.size()));
+    ASSERT_GT(count, 0u);
+    ASSERT_LT(count, executable.size());
+    executable.resize(count);
+    executable += L"\\cmd.exe";
+    std::wstring arguments = L"cmd.exe /d /c exit 0";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION child{};
+    ASSERT_TRUE(CreateProcessW(executable.c_str(), arguments.data(), nullptr, nullptr, FALSE,
+                               CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &startup, &child));
+    FILETIME creation{}, exit_time{}, kernel{}, user{};
+    const bool queried = GetProcessTimes(child.hProcess, &creation, &exit_time, &kernel, &user);
+    ResumeThread(child.hThread);
+    const DWORD completion = WaitForSingleObject(child.hProcess, 10000);
+    if (completion != WAIT_OBJECT_0) {
+        TerminateProcess(child.hProcess, 1);
+        WaitForSingleObject(child.hProcess, 10000);
+    }
+    CloseHandle(child.hThread);
+    CloseHandle(child.hProcess);
+    ASSERT_TRUE(queried);
+    ASSERT_EQ(completion, WAIT_OBJECT_0);
+    auto graph = ProcessAudioGraph(AudioBindingKind::IndependentProcess);
+    graph.sources[0].binding.process = ProcessInstanceIdentity{
+        child.dwProcessId, (uint64_t{creation.dwHighDateTime} << 32) | creation.dwLowDateTime, {}};
+    const AudioIntent intent = graph;
+    const auto environment = ObserveRecordingAudioEnvironment({}, 20348, &intent);
+    EXPECT_FALSE(ResolveAudioIntent(intent, environment).succeeded());
+}
+
+TEST(RecordingProcessAudio, ProcessIntentsReachTheCommittedStartConfiguration) {
+    using namespace exosnap::engine;
+    int argc = 0;
+    QCoreApplication app(argc, nullptr);
+    for (const auto kind : {AudioBindingKind::CaptureTargetProcess, AudioBindingKind::IndependentProcess}) {
+        const auto folder = UniqueTempDir(L"process_audio_start");
+        {
+            RecordingCoordinator coordinator;
+            OutputSettingsModel settings;
+            settings.output_folder = folder;
+            settings.container = capability::Container::Matroska;
+            settings.video_codec = capability::VideoCodec::H264;
+            settings.audio_codec = capability::AudioCodec::Opus;
+            coordinator.SetOutputSettings(settings);
+            auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+            caps.probed = true;
+            caps.runtime.os.build_number = 20348;
+            coordinator.OnCapabilitiesReady(caps);
+            StubFreeSpace plenty(500ULL * 1024 * 1024 * 1024);
+            coordinator.SetDiskSpaceProvider(&plenty);
+            coordinator.SetDisplayFactsProvider([] { return std::vector<capability::DisplayHdrFacts>{}; });
+            ProcessAudioWindow window;
+            ASSERT_NE(window.Target().native_id, 0u);
+            auto graph = ProcessAudioGraph(kind);
+            auto target = window.Target();
+            if (kind == AudioBindingKind::IndependentProcess) {
+                const auto selected = ObserveRecordingAudioEnvironment(target, 20348);
+                ASSERT_TRUE(selected.capture_target_process);
+                graph.sources[0].binding.process = selected.capture_target_process;
+                target.kind = CaptureTarget::Kind::Monitor;
+                target.native_id = 1;
+            }
+            const auto result = std::make_shared<std::optional<UiRecordingResult>>();
+            coordinator.SetResultReadyCallback([result](const UiRecordingResult& completed) { *result = completed; });
+            ASSERT_TRUE(coordinator.StartRecording(target, {}, std::nullopt, CaptureBackend::Default, graph, {7}));
+            RecorderConfig committed;
+            ASSERT_TRUE(
+                PumpUntil([&] { return coordinator.LastCommittedRecorderConfig(&committed) || result->has_value(); }));
+            ASSERT_TRUE(coordinator.LastCommittedRecorderConfig(&committed))
+                << static_cast<int>(kind) << ": "
+                << (result->has_value() ? QString::fromStdWString((*result)->error_detail).toStdString()
+                                        : "No terminal result");
+            ASSERT_TRUE(committed.resolved_audio_plan);
+            EXPECT_EQ(committed.resolved_audio_plan->revision.value, 7u);
+            ASSERT_EQ(committed.resolved_audio_plan->sources.size(), 1u);
+            EXPECT_EQ(committed.resolved_audio_plan->sources[0].capture_key->process->process_id,
+                      GetCurrentProcessId());
+            coordinator.StopRecording();
+        }
+        std::error_code ignored;
+        std::filesystem::remove_all(folder, ignored);
+    }
 }
 
 // HDR10 + H.264 on an HDR-active display: the start must not reach the engine.
@@ -790,6 +1084,307 @@ TEST(WebcamDeviceAdmission, OnlyTheVisibleIdleRecordPageAsksForThePreviewCamera)
     // The Settings page has its own camera preview request.
     EXPECT_FALSE(RecordPreviewWantsWebcam(/*record_page_visible=*/false, true));
     EXPECT_FALSE(RecordPreviewWantsWebcam(true, /*idle=*/false));
+}
+
+class ClipNotificationApplication final : public QCoreApplication {
+  public:
+    using QCoreApplication::QCoreApplication;
+    unsigned meta_calls = 0;
+
+    bool event(QEvent* event) override {
+        if (event->type() == QEvent::MetaCall)
+            ++meta_calls;
+        return QCoreApplication::event(event);
+    }
+
+    void DeliverNotifications() {
+        QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
+    }
+};
+
+struct ClipCallbackCounts {
+    std::atomic<unsigned> copies{0};
+    unsigned calls = 0;
+};
+
+class CountedClipCallback {
+  public:
+    explicit CountedClipCallback(std::shared_ptr<ClipCallbackCounts> counts) : counts_(std::move(counts)) {
+    }
+    CountedClipCallback(const CountedClipCallback& other) : counts_(other.counts_), payload_(other.payload_) {
+        ++counts_->copies;
+    }
+    void operator()() const {
+        ++counts_->calls;
+    }
+
+  private:
+    std::shared_ptr<ClipCallbackCounts> counts_;
+    std::array<unsigned char, 256> payload_{};
+};
+
+TEST(RecordingClipNotifications, StalledConcurrentProgressQueuesOneRefreshWithoutCopyingCallbackPerUpdate) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    RecordingCoordinator coordinator;
+    auto counts = std::make_shared<ClipCallbackCounts>();
+    coordinator.SetClipJobsChangedCallback(CountedClipCallback(counts));
+    const auto copies_before = counts->copies.load();
+    std::vector<std::thread> producers;
+    for (unsigned producer = 0; producer < 4; ++producer)
+        producers.emplace_back([&] {
+            for (unsigned update = 0; update < 2048; ++update)
+                RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+        });
+    for (auto& producer : producers)
+        producer.join();
+
+    EXPECT_EQ(counts->calls, 0u);
+    EXPECT_LE(counts->copies.load() - copies_before, 1u);
+    app.DeliverNotifications();
+    EXPECT_EQ(counts->calls, 1u);
+    EXPECT_EQ(app.meta_calls, 1u);
+    app.DeliverNotifications();
+    EXPECT_EQ(counts->calls, 1u);
+    EXPECT_EQ(app.meta_calls, 1u);
+}
+
+TEST(RecordingClipNotifications, PendingRefreshUsesReplacementCallback) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    RecordingCoordinator coordinator;
+    unsigned old_calls = 0;
+    unsigned replacement_calls = 0;
+    coordinator.SetClipJobsChangedCallback([&] { ++old_calls; });
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+    coordinator.SetClipJobsChangedCallback([&] { ++replacement_calls; });
+
+    app.DeliverNotifications();
+    EXPECT_EQ(old_calls, 0u);
+    EXPECT_EQ(replacement_calls, 1u);
+    EXPECT_EQ(app.meta_calls, 1u);
+}
+
+TEST(RecordingClipNotifications, CallbackReplacementDuringConcurrentProgressKeepsOnePendingRefresh) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    RecordingCoordinator coordinator;
+    unsigned stale_calls = 0;
+    unsigned final_calls = 0;
+    coordinator.SetClipJobsChangedCallback([&] { ++stale_calls; });
+    std::atomic<bool> started{false};
+    std::thread producer([&] {
+        started.store(true);
+        for (unsigned update = 0; update < 4096; ++update)
+            RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+    });
+    while (!started.load())
+        std::this_thread::yield();
+    for (unsigned replacement = 0; replacement < 1024; ++replacement)
+        coordinator.SetClipJobsChangedCallback([&] { ++stale_calls; });
+    producer.join();
+    coordinator.SetClipJobsChangedCallback([&] { ++final_calls; });
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+
+    app.DeliverNotifications();
+    EXPECT_EQ(stale_calls, 0u);
+    EXPECT_EQ(final_calls, 1u);
+    EXPECT_EQ(app.meta_calls, 1u);
+}
+
+TEST(RecordingClipNotifications, UpdatesDuringDeliveryQueueOneSuccessorObservingLatestTerminalState) {
+    for (const auto terminal :
+         {RecordingClipPhase::Completed, RecordingClipPhase::Cancelled, RecordingClipPhase::Failed}) {
+        SCOPED_TRACE(static_cast<int>(terminal));
+        int argc = 0;
+        ClipNotificationApplication app(argc, nullptr);
+        RecordingCoordinator coordinator;
+        std::atomic<RecordingClipPhase> latest_phase{RecordingClipPhase::Reading};
+        std::vector<RecordingClipPhase> observed;
+        unsigned depth = 0;
+        unsigned maximum_depth = 0;
+        coordinator.SetClipJobsChangedCallback([&] {
+            ++depth;
+            maximum_depth = (std::max)(maximum_depth, depth);
+            observed.push_back(latest_phase.load());
+            if (observed.size() == 1) {
+                std::thread producer([&] {
+                    latest_phase.store(RecordingClipPhase::Finalizing);
+                    for (unsigned update = 0; update < 2048; ++update)
+                        RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+                    latest_phase.store(terminal);
+                    RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+                });
+                producer.join();
+            }
+            --depth;
+        });
+        RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+
+        app.DeliverNotifications();
+        app.DeliverNotifications();
+        EXPECT_EQ(observed, (std::vector<RecordingClipPhase>{RecordingClipPhase::Reading, terminal}));
+        EXPECT_EQ(maximum_depth, 1u);
+        EXPECT_EQ(app.meta_calls, 2u);
+        app.DeliverNotifications();
+        EXPECT_EQ(observed.size(), 2u);
+        EXPECT_EQ(app.meta_calls, 2u);
+    }
+}
+
+TEST(RecordingClipNotifications, ClearingCallbackSuppressesPendingRefreshAndReleasesItsCapture) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    RecordingCoordinator coordinator;
+    unsigned calls = 0;
+    auto capture = std::make_shared<int>(0);
+    std::weak_ptr<int> retained = capture;
+    coordinator.SetClipJobsChangedCallback([&, capture] { ++calls; });
+    capture.reset();
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+    coordinator.SetClipJobsChangedCallback({});
+
+    EXPECT_TRUE(retained.expired());
+    app.DeliverNotifications();
+    EXPECT_EQ(calls, 0u);
+    coordinator.SetClipJobsChangedCallback([&] { ++calls; });
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+    app.DeliverNotifications();
+    EXPECT_EQ(calls, 1u);
+}
+
+TEST(RecordingClipNotifications, DestructionSuppressesQueuedRefreshAndReleasesCallbackCapture) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    unsigned calls = 0;
+    auto capture = std::make_shared<int>(0);
+    std::weak_ptr<int> retained = capture;
+    auto coordinator = std::make_unique<RecordingCoordinator>();
+    coordinator->SetClipJobsChangedCallback([&, capture] { ++calls; });
+    capture.reset();
+    for (unsigned update = 0; update < 2048; ++update)
+        RecordingCoordinatorTestPeer::PostClipJobsChanged(*coordinator);
+    coordinator.reset();
+
+    EXPECT_TRUE(retained.expired());
+    app.DeliverNotifications();
+    EXPECT_EQ(calls, 0u);
+    EXPECT_EQ(app.meta_calls, 1u);
+}
+
+TEST(RecordingClipNotifications, DestructionDuringDeliverySuppressesSuccessorWithoutRetainingCoordinator) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    auto coordinator = std::make_unique<RecordingCoordinator>();
+    unsigned calls = 0;
+    coordinator->SetClipJobsChangedCallback([&] {
+        ++calls;
+        for (unsigned update = 0; update < 2048; ++update)
+            RecordingCoordinatorTestPeer::PostClipJobsChanged(*coordinator);
+        coordinator.reset();
+    });
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(*coordinator);
+
+    app.DeliverNotifications();
+    app.DeliverNotifications();
+    EXPECT_EQ(calls, 1u);
+    EXPECT_FALSE(coordinator);
+    EXPECT_LE(app.meta_calls, 2u);
+}
+
+TEST(RecordingClipNotifications, ConcurrentDestructionWaitsForRunningRefreshBeforeReturning) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    auto coordinator = std::make_unique<RecordingCoordinator>();
+    std::promise<void> destruction_started;
+    auto started = destruction_started.get_future();
+    std::promise<void> destruction_finished;
+    auto finished = destruction_finished.get_future();
+    std::mutex delivery_mutex;
+    std::condition_variable release_delivery;
+    bool released = false;
+    std::atomic<bool> returned_during_delivery{false};
+    std::thread destroyer;
+    std::thread releaser;
+    coordinator->SetClipJobsChangedCallback([&] {
+        destroyer = std::thread([&, owned = std::move(coordinator)]() mutable {
+            destruction_started.set_value();
+            owned.reset();
+            destruction_finished.set_value();
+        });
+        releaser = std::thread([&] {
+            started.wait();
+            returned_during_delivery.store(finished.wait_for(std::chrono::milliseconds(100)) ==
+                                           std::future_status::ready);
+            {
+                std::lock_guard lock(delivery_mutex);
+                released = true;
+            }
+            release_delivery.notify_one();
+        });
+        std::unique_lock lock(delivery_mutex);
+        release_delivery.wait(lock, [&] { return released; });
+    });
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(*coordinator);
+
+    app.DeliverNotifications();
+    releaser.join();
+    destroyer.join();
+    EXPECT_FALSE(returned_during_delivery.load());
+    EXPECT_EQ(app.meta_calls, 1u);
+}
+
+TEST(RecordingClipNotifications, ReplacedCallbackCaptureIsReleasedBeforeConcurrentShutdownReturns) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    auto coordinator = std::make_unique<RecordingCoordinator>();
+    std::promise<void> destruction_started;
+    auto started = destruction_started.get_future();
+    std::promise<void> destruction_finished;
+    auto finished = destruction_finished.get_future();
+    std::atomic<bool> shutdown_returned_before_capture_release{false};
+    struct BorrowedCapture {
+        BorrowedCapture(std::future<void>& finished_future, std::atomic<bool>& shutdown_observation)
+            : finished(finished_future), shutdown_returned(shutdown_observation) {
+        }
+        ~BorrowedCapture() {
+            shutdown_returned.store(finished.wait_for(std::chrono::milliseconds(100)) == std::future_status::ready);
+        }
+        std::future<void>& finished;
+        std::atomic<bool>& shutdown_returned;
+    };
+    auto capture = std::make_shared<BorrowedCapture>(finished, shutdown_returned_before_capture_release);
+    std::thread destroyer;
+    coordinator->SetClipJobsChangedCallback([&, capture] {
+        coordinator->SetClipJobsChangedCallback({});
+        destroyer = std::thread([&, owned = std::move(coordinator)]() mutable {
+            destruction_started.set_value();
+            owned.reset();
+            destruction_finished.set_value();
+        });
+        started.wait();
+    });
+    capture.reset();
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(*coordinator);
+
+    app.DeliverNotifications();
+    destroyer.join();
+    EXPECT_FALSE(shutdown_returned_before_capture_release.load());
+    EXPECT_EQ(app.meta_calls, 1u);
+}
+
+TEST(RecordingClipNotifications, WithoutApplicationRefreshRemainsSynchronous) {
+    ASSERT_EQ(QCoreApplication::instance(), nullptr);
+    RecordingCoordinator coordinator;
+    unsigned calls = 0;
+    coordinator.SetClipJobsChangedCallback([&] { ++calls; });
+    for (unsigned update = 0; update < 4; ++update) {
+        RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+        EXPECT_EQ(calls, update + 1);
+    }
+    coordinator.SetClipJobsChangedCallback({});
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+    EXPECT_EQ(calls, 4u);
 }
 
 } // namespace

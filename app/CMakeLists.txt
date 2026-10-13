@@ -243,6 +243,7 @@ exosnap_add_app_test_support(exosnap_output_model_test_support
     models/OutputPathValidator.cpp
     models/OutputSettingsModel.cpp
     models/RecordingPreset.cpp
+    models/AudioRoutingMigration.cpp
 )
 target_link_libraries(exosnap_output_model_test_support PUBLIC
     Qt6::Core Qt6::Gui exosnap_capability exosnap_engine ole32.lib shell32.lib
@@ -256,6 +257,7 @@ target_link_libraries(exosnap_observability PUBLIC
 )
 
 exosnap_add_app_test_support(exosnap_record_viewmodel_test_support
+    models/HiddenCaptureTargets.cpp
     models/CaptureTargetPresentation.cpp
     services/DisplayNumbering.cpp
     viewmodels/RecordViewModel.cpp
@@ -341,6 +343,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_recording_preset.cpp
         models/RecordingPreset.cpp
+        models/AudioRoutingMigration.cpp
         models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine
 )
@@ -414,6 +417,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_video_rate_control.cpp
         models/RecordingPreset.cpp
+        models/AudioRoutingMigration.cpp
         models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine
 )
@@ -428,6 +432,7 @@ exosnap_add_gtest(
         tests/test_audio_encoding_preset.cpp
         settings/RecordingPresetStore.cpp
         models/RecordingPreset.cpp
+        models/AudioRoutingMigration.cpp
         models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core
 )
@@ -604,6 +609,9 @@ exosnap_add_gtest(
     SOURCES
         tests/test_output_settings.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingCoordinatorClips.cpp
+        services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         models/CaptureTargetPresentation.cpp
@@ -706,7 +714,12 @@ exosnap_add_gtest(
     TEST_PREFIX admission.
     SOURCES
         tests/test_recording_admission.cpp
+        quick/ExoSnap/Quick/RecordingClipAdapter.cpp
+        quick/ExoSnap/Quick/RecordingClipAdapter.h
         services/RecordingCoordinator.cpp
+        services/RecordingCoordinatorClips.cpp
+        services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         models/CaptureTargetPresentation.cpp
@@ -716,7 +729,7 @@ exosnap_add_gtest(
         exosnap_output_model_test_support
         exosnap_device_service_test_support
         exosnap_diagnostics_test_support
-        Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
+        Qt6::Core Qt6::Gui Qt6::Qml exosnap_capability exosnap_engine
 )
 target_include_directories(recording_admission_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_admission_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib)
@@ -731,6 +744,9 @@ exosnap_add_gtest(
     SOURCES
         tests/test_session_report_handoff.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingCoordinatorClips.cpp
+        services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         models/CaptureTargetPresentation.cpp
@@ -753,6 +769,9 @@ exosnap_add_gtest(
     SOURCES
         tests/test_mp4_split_remux.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingCoordinatorClips.cpp
+        services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         models/CaptureTargetPresentation.cpp
@@ -1009,6 +1028,7 @@ exosnap_add_gtest(
     SOURCES tests/test_recording_preset_registry.cpp
             models/RecordingPresetRegistry.cpp
             models/RecordingPreset.cpp
+            models/AudioRoutingMigration.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine)
 target_include_directories(recording_preset_registry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -1020,10 +1040,25 @@ exosnap_add_gtest(
     SOURCES tests/test_recording_preset_store.cpp
             settings/RecordingPresetStore.cpp
             models/RecordingPreset.cpp
+            models/AudioRoutingMigration.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core)
 target_include_directories(recording_preset_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_store_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
+
+exosnap_add_gtest(
+    NAME audio_routing_adapter_tests
+    TEST_PREFIX audio.
+    SOURCES tests/test_audio_routing_adapter.cpp
+            quick/ExoSnap/Quick/AudioRoutingAdapter.cpp
+            quick/ExoSnap/Quick/AudioRoutingAdapter.h
+            settings/RecordingPresetStore.cpp
+            models/RecordingPreset.cpp
+            models/AudioRoutingMigration.cpp
+            models/OutputSettingsModel.cpp
+    LIBRARIES exosnap_capability exosnap_engine Qt6::Core Qt6::Qml)
+target_include_directories(audio_routing_adapter_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(audio_routing_adapter_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
 # PRESET-EXPORT-IMPORT-R1 tests
 exosnap_add_gtest(
@@ -1032,6 +1067,7 @@ exosnap_add_gtest(
     SOURCES tests/test_preset_export_import.cpp
             settings/RecordingPresetStore.cpp
             models/RecordingPreset.cpp
+            models/AudioRoutingMigration.cpp
             models/RecordingPresetRegistry.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core)
@@ -1045,6 +1081,7 @@ exosnap_add_gtest(
     SOURCES tests/test_audio_gain_preset.cpp
             settings/RecordingPresetStore.cpp
             models/RecordingPreset.cpp
+            models/AudioRoutingMigration.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core)
 target_include_directories(audio_gain_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -1243,6 +1280,8 @@ exosnap_add_gtest(
     TEST_PREFIX capture.targets.
     SOURCES
         tests/test_capture_target_notifier.cpp
+        tests/test_hidden_capture_targets.cpp
+        models/HiddenCaptureTargets.cpp
     LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability exosnap_engine)
 target_include_directories(capture_target_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(capture_target_notifier_tests PRIVATE ole32.lib user32.lib)
@@ -1256,6 +1295,9 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_capture_frame.cpp
             services/RecordingCoordinator.cpp
+            services/RecordingCoordinatorClips.cpp
+            services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
             services/RecordingAdmission.cpp
             services/AtomicFileOps.cpp
             models/CaptureTargetPresentation.cpp
@@ -1309,6 +1351,9 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_recording_markers.cpp
             services/RecordingCoordinator.cpp
+            services/RecordingCoordinatorClips.cpp
+            services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
             services/RecordingAdmission.cpp
             services/AtomicFileOps.cpp
             models/CaptureTargetPresentation.cpp
@@ -1479,6 +1524,9 @@ exosnap_add_gtest(
         services/UpdateCheckGate.cpp
         services/WhatsNewPayload.cpp
         services/RecordingCoordinator.cpp
+        services/RecordingCoordinatorClips.cpp
+        services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp
         services/RecordingAdmission.cpp
         services/AtomicFileOps.cpp
         models/CaptureTargetPresentation.cpp
@@ -1498,3 +1546,24 @@ target_compile_definitions(update_service_distribution_tests PRIVATE NOMINMAX)
 target_link_libraries(update_service_distribution_tests PRIVATE
     mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib shell32.lib)
 add_dependencies(update_service_distribution_tests exosnap_build_info)
+
+exosnap_add_gtest(
+    NAME recording_artifact_lease_tests
+    TEST_PREFIX recording_artifacts.
+    SOURCES tests/test_recording_artifact_leases.cpp services/RecordingArtifactRegistry.cpp
+    LIBRARIES exosnap_engine Qt6::Core
+)
+target_include_directories(recording_artifact_lease_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(recording_artifact_lease_tests PRIVATE NOMINMAX)
+
+
+exosnap_add_gtest(
+    NAME recording_clip_jobs_tests
+    TEST_PREFIX recording_clips.
+    SOURCES tests/test_recording_clip_jobs.cpp tests/test_recording_clip_publication.cpp services/RecordingClipJobs.cpp
+        services/RecordingArtifactRegistry.cpp services/AtomicFileOps.cpp
+    LIBRARIES exosnap_engine exosnap_diagnostics_test_support exosnap_app_log_test_support FFmpeg::mux Qt6::Core Qt6::Gui
+)
+target_include_directories(recording_clip_jobs_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/libs/engine/src ${PROJECT_SOURCE_DIR}/libs/engine/tests)
+target_compile_definitions(recording_clip_jobs_tests PRIVATE NOMINMAX)

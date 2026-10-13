@@ -26,6 +26,8 @@ struct PersistedPresetState {
     // this. False on a first run (missing file) — there is nothing to repair
     // yet.
     bool repaired = false;
+    bool read_only = false;
+    std::string validation_error;
 };
 
 // ---------------------------------------------------------------------------

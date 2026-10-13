@@ -21,6 +21,7 @@
 #include "diagnostics/PresentSnapshotOverlay.h"
 #include "diagnostics/StartupClock.h"
 #include "models/AudioMeterScale.h"
+#include "models/AudioRoutingMigration.h"
 #include "models/CompletedRecording.h"
 #include "models/EditContextFactory.h"
 #include "models/FrameRateLimits.h"
@@ -382,6 +383,10 @@ QuickApplication::QuickApplication()
     preset_registry_.LoadState(persisted.user_presets,
                                persisted.selected_id.empty() ? std::string(kDefaultPresetId) : persisted.selected_id);
     live_config_ = persisted.live.has_value() ? SanitizePresetConfig(*persisted.live) : MakeDefaultPreset().config;
+    if (persisted.read_only) {
+        live_config_.audio_read_only = true;
+        live_config_.audio_validation_error = "The preset store uses an unsupported configuration version.";
+    }
     seed_video_codec_from_capabilities_ = !persisted.live.has_value();
     // Latched rather than raised here: the notification manager is not wired up
     // until initializeNotifications(). Silently repairing a user's saved
@@ -757,6 +762,7 @@ void QuickApplication::initializeRecordWorkflow() {
         // post-flight numbers. They feed the Edit surface's report badge, so
         // carrying them over would attribute one recording's drops to the next.
         if (state == UiRecordingState::Recording && previous != UiRecordingState::Paused) {
+            pending_edit_master_.reset();
             peak_av_drift_ms_ = 0.0;
             av_drift_ever_available_ = false;
             last_completed_snapshot_ = {};
@@ -874,7 +880,61 @@ void QuickApplication::initializeRecordWorkflow() {
                      [this, sink = recording_coordinator_->FrozenLedgerSink()]() {
                          sink->Set(diagnostics_adapter_.frozenLedger(), diagnostics_adapter_.compensatedConditions());
                      });
+    recording_coordinator_->SetClipJobsChangedCallback([this] {
+        const auto jobs = recording_coordinator_->RecordingClipSnapshots();
+        recording_clip_adapter_.setJobs(jobs);
+        diagnostics_adapter_.setClipResources(
+            recording_clip_adapter_.diagnosticResources(recording_coordinator_->RecordingStorageReserveBytes()));
+        for (const auto& job : jobs)
+            if (job.phase == RecordingClipPhase::Completed && job.asset_id && job.completed &&
+                published_clip_assets_.insert(*job.asset_id).second)
+                record_view_model_.AddToRecentRecordings(*job.completed);
+        record_view_model_adapter_.synchronize();
+    });
+    QObject::connect(&recording_clip_adapter_, &RecordingClipAdapter::planRequested, &recording_clip_adapter_,
+                     [this](int64_t seconds) {
+                         const auto requested = recording_coordinator_->RequestRecordingClip(seconds);
+                         if (!requested.succeeded()) {
+                             notifications::NotificationEvent event;
+                             event.type = notifications::NotificationType::CaptureActionFailed;
+                             event.title = QCoreApplication::translate("QuickApplication", "Clip unavailable");
+                             event.body =
+                                 requested.error()->code == engine::EngineErrorCode::ProductCapabilityUnavailable
+                                     ? recording_clip_adapter_.unavailableReason()
+                                     : QString::fromStdString(requested.error()->context);
+                             notifications_adapter_.manager().Enqueue(std::move(event));
+                         }
+                     });
+    QObject::connect(
+        &recording_clip_adapter_, &RecordingClipAdapter::confirmRequested, &recording_clip_adapter_,
+        [this](engine::JobId job, uint64_t generation) {
+            const auto snapshots = recording_coordinator_->RecordingClipSnapshots();
+            const auto requested = std::find_if(snapshots.begin(), snapshots.end(), [&](const auto& snapshot) {
+                return snapshot.job_id == job && snapshot.generation == generation;
+            });
+            if (requested != snapshots.end() && recording_coordinator_->ConfirmRecordingClip(job, generation))
+                recording_clip_adapter_.acceptConfirmedDuration(requested->requested_duration_seconds);
+        });
+    QObject::connect(&recording_clip_adapter_, &RecordingClipAdapter::cancelRequested, &recording_clip_adapter_,
+                     [this](engine::JobId job, uint64_t generation) {
+                         (void)recording_coordinator_->CancelRecordingClip(job, generation);
+                     });
+    QObject::connect(&recording_clip_adapter_, &RecordingClipAdapter::openCompletedRequested, &recording_clip_adapter_,
+                     [this](engine::MediaId asset) {
+                         const auto jobs = recording_coordinator_->RecordingClipSnapshots();
+                         const auto completed = std::find_if(jobs.begin(), jobs.end(), [&](const auto& job) {
+                             return job.phase == RecordingClipPhase::Completed && job.asset_id == asset &&
+                                    job.completed && job.completed->succeeded;
+                         });
+                         if (completed == jobs.end() || !QFileInfo::exists(completed->completed->file_path))
+                             return;
+                         pending_master_editor_lease_.reset();
+                         edit_session_adapter_.setEditContext(MakeEditContextForCurrentSession(
+                             *completed->completed, completed->completed->file_path, 0.0, false, {}));
+                     });
     recording_coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
+        pending_edit_master_.reset();
+        edit_session_adapter_.setDeliveryPending(false);
         record_view_model_.SetResult(result);
         diagnostics_adapter_.setLastSession(result);
         // Only a failure earns a page banner. A SUCCESSFUL stop used to add a
@@ -905,6 +965,19 @@ void QuickApplication::initializeRecordWorkflow() {
             // capture can send anything, so only there is the action offered.
             presentRecordingFailure(*failure, crash_capture::IsActive());
         }
+    });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::editMasterRequested,
+                     &record_view_model_adapter_, [this] { openEditorForCurrentRecording(); });
+    recording_coordinator_->SetEditMasterReadyCallback(
+        [this, alive = QPointer<RecordViewModelAdapter>(&record_view_model_adapter_)](const EditContext& context) {
+            if (!alive)
+                return;
+            pending_edit_master_ = context;
+            synchronizeRecordState();
+        });
+    QObject::connect(&edit_session_adapter_, &EditSessionAdapter::openChanged, &record_view_model_adapter_, [this] {
+        if (!edit_session_adapter_.open())
+            pending_master_editor_lease_.reset();
     });
     // A toast, not the page notice. The banner above the Preview Surface is for
     // UNRESOLVED conditions; a frame that has been written is a confirmation, and
@@ -973,10 +1046,11 @@ void QuickApplication::initializeRecordWorkflow() {
         preflight_app_rms_ = std::clamp(rms, 0.0f, 1.0f);
         scheduleMeterUpdate();
     });
-    recording_coordinator_->SetRecordingMeterCallback([this](const std::array<float, 3>& rms) {
-        record_view_model_.UpdateMeterRms(rms);
-        scheduleMeterUpdate();
-    });
+    recording_coordinator_->SetRecordingMeterCallback(
+        [this](const std::array<float, exosnap::engine::kMaxAudioTracks>& rms) {
+            record_view_model_.UpdateMeterRms(rms);
+            scheduleMeterUpdate();
+        });
     recording_coordinator_->SetWebcamStatusCallback(&record_view_model_adapter_,
                                                     [this](bool ok, const QString& reason) {
                                                         webcam_error_ = ok ? QString{} : reason;
@@ -995,6 +1069,13 @@ void QuickApplication::initializeRecordWorkflow() {
         &webcam_preview_feed_, &WebcamPreviewFeed::hasViewersChanged, &record_view_model_adapter_,
         [this]() { recording_coordinator_->SetWebcamSettingsPreviewActive(webcam_preview_feed_.hasViewers()); });
 
+    if (HarnessCaptureTargets()) {
+        capture_target_notifier_.setWindowIdentityObserverForTest(
+            [](const auto& target) -> std::optional<WindowCaptureIdentity> {
+                return WindowCaptureIdentity{target.native_id, static_cast<uint32_t>(target.native_id), 1, 0,
+                                             QStringLiteral("fixture-application:%1").arg(target.native_id)};
+            });
+    }
     capture_target_notifier_.setEnumerator([this]() {
         if (auto seeded = HarnessCaptureTargets())
             return CaptureTargetSnapshot{std::move(*seeded)};
@@ -1017,18 +1098,35 @@ void QuickApplication::initializeRecordWorkflow() {
                          requests.reserve(static_cast<std::size_t>(identities.size()));
                          for (const QString& identity : identities) {
                              for (const exosnap::engine::CaptureTarget& target : record_view_model_.targets) {
-                                 if (RecordViewModelAdapter::TargetIdentity(target) != identity)
+                                 if (record_view_model_adapter_.targetIdentity(target) != identity)
                                      continue;
-                                 requests.push_back({identity, target});
+                                 std::function<bool()> valid;
+                                 if (target.kind == engine::CaptureTarget::Kind::Window) {
+                                     const auto& facts = capture_target_notifier_.currentSnapshot().window_identities;
+                                     const auto witness =
+                                         std::find_if(facts.begin(), facts.end(), [&identity](const auto& entry) {
+                                             return entry.stableIdentity() == identity;
+                                         });
+                                     if (witness == facts.end())
+                                         continue;
+                                     valid = capture_target_notifier_.windowIdentityValidator(*witness);
+                                     if (!valid())
+                                         continue;
+                                 }
+                                 requests.push_back({identity, target, std::move(valid)});
                                  break;
                              }
                          }
+                         const bool has_requests = !requests.empty();
                          target_still_service_.setVisibleTargets(std::move(requests));
-                         target_still_service_.start();
+                         if (has_requests)
+                             target_still_service_.start();
+                         else
+                             target_still_service_.stop();
                      });
     QObject::connect(&target_still_service_, &CaptureTargetStillService::stillReady, &record_view_model_adapter_,
                      [this](const QString& identity, const QImage& image) {
-                         if (target_still_provider_ == nullptr)
+                         if (target_still_provider_ == nullptr || !record_view_model_adapter_.targetVisible(identity))
                              return;
                          record_view_model_adapter_.setTargetStill(
                              identity, target_still_provider_->submitStill(identity, image));
@@ -1037,7 +1135,61 @@ void QuickApplication::initializeRecordWorkflow() {
         &target_still_service_, &CaptureTargetStillService::stillUnavailable, &record_view_model_adapter_,
         [this](const QString& identity) { record_view_model_adapter_.setTargetStillUnavailable(identity); });
 
+    record_view_model_adapter_.setHiddenWindowRules(settings_.hidden_window_rules);
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::hiddenWindowRulesChanged,
+                     &record_view_model_adapter_, [this]() {
+                         settings_.hidden_window_rules.clear();
+                         for (const auto& value : record_view_model_adapter_.hiddenWindowRules()) {
+                             const auto row = value.toMap();
+                             HiddenCaptureRule rule;
+                             rule.id = row.value(QStringLiteral("id")).toString();
+                             rule.kind = row.value(QStringLiteral("kind")).toString() == QStringLiteral("application")
+                                             ? HiddenCaptureRuleKind::Application
+                                             : HiddenCaptureRuleKind::Title;
+                             rule.title_match =
+                                 row.value(QStringLiteral("match")).toString() == QStringLiteral("equals")
+                                     ? HiddenCaptureTitleMatch::Equals
+                                     : HiddenCaptureTitleMatch::Contains;
+                             rule.text = row.value(QStringLiteral("text")).toString();
+                             rule.case_sensitive = row.value(QStringLiteral("caseSensitive")).toBool();
+                             rule.application_scope = row.value(QStringLiteral("applicationScope")).toString();
+                             rule.enabled = row.value(QStringLiteral("enabled")).toBool();
+                             settings_.hidden_window_rules.push_back(std::move(rule));
+                         }
+                         persistAppSettings(SettingsWriteIntent::UserEdit);
+                         settings_adapter_.setAppSettings(settings_);
+                     });
+    record_view_model_adapter_.setTargetConfirmation([this](const QString& identity, int capture_mode) {
+        if (locksCaptureTargets(record_view_model_.state))
+            return false;
+        capture_target_notifier_.rescan();
+        const auto& snapshot = capture_target_notifier_.currentSnapshot();
+        refreshCaptureTargets(snapshot, DiscoveryReason::Rescan);
+        for (int index = 0; index < static_cast<int>(record_view_model_.targets.size()); ++index) {
+            const auto& target = record_view_model_.targets[static_cast<size_t>(index)];
+            if (record_view_model_adapter_.targetIdentity(target) != identity ||
+                (capture_mode == static_cast<int>(CaptureMode::Window)) !=
+                    (target.kind == engine::CaptureTarget::Kind::Window))
+                continue;
+            if (target.kind == engine::CaptureTarget::Kind::Window) {
+                const auto facts =
+                    std::find_if(snapshot.window_identities.begin(), snapshot.window_identities.end(),
+                                 [&identity](const auto& entry) { return entry.stableIdentity() == identity; });
+                if (facts == snapshot.window_identities.end() || !capture_target_notifier_.isCurrent(*facts))
+                    return false;
+            }
+            selectTarget(index, static_cast<CaptureMode>(capture_mode));
+            return true;
+        }
+        return false;
+    });
+    QObject::connect(&capture_target_notifier_, &CaptureTargetNotifier::windowLifetimeInvalidated,
+                     &record_view_model_adapter_, [this](qulonglong) {
+                         target_still_service_.setVisibleTargets({});
+                         target_still_service_.stop();
+                     });
     capture_target_notifier_.start();
+    synchronizeWindowIdentities(capture_target_notifier_.currentSnapshot());
     record_view_model_.targets = capture_target_notifier_.currentSnapshot().targets;
     ++record_view_model_.targets_revision;
     record_view_model_.target_display_names.reserve(record_view_model_.targets.size());
@@ -1442,8 +1594,18 @@ void QuickApplication::wireRecordCommands() {
 }
 
 void QuickApplication::synchronizeRecordState() {
-    const bool mkv = live_config_.output.container == capability::Container::Matroska ||
-                     live_config_.output.container == capability::Container::WebM;
+    const bool busy = locksCaptureTargets(pending_record_visual_state_.isEmpty() ? recording_coordinator_->State()
+                                                                                 : record_view_model_.state);
+    settings_adapter_.setControlsLocked(busy);
+    if (!busy && draft_changed_during_recording_) {
+        draft_changed_during_recording_ = false;
+        applyPresetConfig(live_config_);
+        return;
+    }
+    const auto& record_config = busy ? settings_adapter_.sessionConfig() : live_config_;
+    record_view_model_.audio_configuration_valid = !record_config.audio_read_only;
+    const bool mkv = record_config.output.container == capability::Container::Matroska ||
+                     record_config.output.container == capability::Container::WebM;
     const QSize previewSize = record_preview_adapter_.sourceSize();
     engine::FrameSize sourceSize{static_cast<uint32_t>(std::max(0, previewSize.width())),
                                  static_cast<uint32_t>(std::max(0, previewSize.height()))};
@@ -1451,7 +1613,7 @@ void QuickApplication::synchronizeRecordState() {
         record_view_model_.region.IsValid())
         sourceSize = {static_cast<uint32_t>(record_view_model_.region.width),
                       static_cast<uint32_t>(record_view_model_.region.height)};
-    record_view_model_adapter_.setFormatText(formatLabel(live_config_, sourceSize));
+    record_view_model_adapter_.setFormatText(formatLabel(record_config, sourceSize));
     // The Settings audio card scopes its sources to the capture target by name:
     // "Everything except Chrome" is a different recording from "Everything the
     // computer plays", and the two are the same row.
@@ -1465,23 +1627,23 @@ void QuickApplication::synchronizeRecordState() {
                       record_view_model_.targets[static_cast<std::size_t>(target_index)]))
                 : QString());
     }
-    record_view_model_adapter_.setDeviceState(microphone_available_, webcam_available_, live_config_.webcam.enabled,
+    record_view_model_adapter_.setDeviceState(microphone_available_, webcam_available_, record_config.webcam.enabled,
                                               webcam_error_);
     record_view_model_adapter_.setWebcamPresentation(
-        QRectF(live_config_.webcam.overlay.x_norm, live_config_.webcam.overlay.y_norm,
-               live_config_.webcam.overlay.w_norm, live_config_.webcam.overlay.h_norm),
-        live_config_.webcam.mirror, live_config_.webcam.opacity);
-    const WebcamChromaKeySettings::ActiveRgb key_color = live_config_.webcam.chroma_key.active_color();
+        QRectF(record_config.webcam.overlay.x_norm, record_config.webcam.overlay.y_norm,
+               record_config.webcam.overlay.w_norm, record_config.webcam.overlay.h_norm),
+        record_config.webcam.mirror, record_config.webcam.opacity);
+    const WebcamChromaKeySettings::ActiveRgb key_color = record_config.webcam.chroma_key.active_color();
     exosnap::engine::ChromaKeyParams chroma;
-    chroma.enabled = live_config_.webcam.chroma_key.enabled;
+    chroma.enabled = record_config.webcam.chroma_key.enabled;
     chroma.r = key_color.r;
     chroma.g = key_color.g;
     chroma.b = key_color.b;
-    chroma.tolerance = live_config_.webcam.chroma_key.tolerance;
-    chroma.softness = live_config_.webcam.chroma_key.softness;
-    chroma.spill_reduction = live_config_.webcam.chroma_key.spill_reduction;
-    record_preview_adapter_.setWebcamStyle(live_config_.webcam.mirror, live_config_.webcam.opacity, chroma);
-    webcam_preview_feed_.setStyle(live_config_.webcam.mirror, live_config_.webcam.opacity, chroma);
+    chroma.tolerance = record_config.webcam.chroma_key.tolerance;
+    chroma.softness = record_config.webcam.chroma_key.softness;
+    chroma.spill_reduction = record_config.webcam.chroma_key.spill_reduction;
+    record_preview_adapter_.setWebcamStyle(record_config.webcam.mirror, record_config.webcam.opacity, chroma);
+    webcam_preview_feed_.setStyle(record_config.webcam.mirror, record_config.webcam.opacity, chroma);
     // Latched at the first live state and cleared when the session ends: it lists
     // the sources that were resolved into a track, which is what a live mute can
     // reach. Refilling it as rows change would let a source muted mid-run drop
@@ -1501,22 +1663,20 @@ void QuickApplication::synchronizeRecordState() {
         }
     }
     record_view_model_adapter_.setLiveToggleableSources(live_toggleable_sources_);
-    record_view_model_adapter_.setCountdownState(live_config_.countdown_seconds, countdown_remaining_,
+    record_view_model_adapter_.setCountdownState(record_config.countdown_seconds, countdown_remaining_,
                                                  countdown_progress_);
     record_view_model_adapter_.setPreviewFrameReady(record_preview_adapter_.frameReady());
     record_view_model_adapter_.setSplitEnabled(mkv && !recording_coordinator_->IsSplitPending());
-    // Recording configuration must not be editable while a capture is in flight:
-    // container and codec are fixed for the session once the encoder is up.
-    // Sampling this once during initialization left every Settings row unlocked
-    // for the whole run, because nothing re-evaluated it on a state change.
-    //
-    // A visual scenario has no coordinator behind it, so under one the view model
-    // is the authority. Without this, `--record-visual-state recording` rendered
-    // the Settings page in its idle arrangement -- every locked row editable and
-    // no lock banner -- which is exactly the state that decides whether a blocked
-    // control reads as blocked.
-    settings_adapter_.setControlsLocked(locksCaptureTargets(
-        pending_record_visual_state_.isEmpty() ? recording_coordinator_->State() : record_view_model_.state));
+    const bool clip_available = recording_coordinator_->CanRequestRecordingClip();
+    recording_clip_adapter_.setAvailability(
+        clip_available,
+        (!RecordingClipAdapter::productAvailable() || clip_available)
+            ? QString()
+            : QCoreApplication::translate("QuickApplication",
+                                          "Start recording and wait for committed media to create a clip."));
+    record_view_model_adapter_.setPendingEditMasterAvailable(record_view_model_.state == UiRecordingState::Saving &&
+                                                             pending_edit_master_ &&
+                                                             canOpenEditorForCurrentRecording());
     // The single edge that re-points the exclusive-fullscreen probe: every
     // selection change and every recording-state change already lands here, and
     // the unchanged case costs one comparison.
@@ -1633,6 +1793,17 @@ void QuickApplication::selectTarget(int target_index, CaptureMode mode) {
     synchronizeRecordState();
 }
 
+void QuickApplication::synchronizeWindowIdentities(const CaptureTargetSnapshot& snapshot) {
+    QHash<quintptr, QString> identities;
+    QHash<quintptr, QString> applications;
+    for (const auto& entry : snapshot.window_identities) {
+        if (!capture_target_notifier_.isCurrent(entry))
+            continue;
+        identities.insert(entry.native_id, entry.stableIdentity());
+        applications.insert(entry.native_id, entry.application_identity);
+    }
+    record_view_model_adapter_.setWindowIdentities(std::move(identities), std::move(applications));
+}
 void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapshot, DiscoveryReason reason) {
     if (locksCaptureTargets(record_view_model_.state)) {
         capture_target_refresh_pending_ = true;
@@ -1644,13 +1815,15 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
         record_view_model_.selected_target_index < static_cast<int>(record_view_model_.targets.size())) {
         previous = record_view_model_.targets[static_cast<size_t>(record_view_model_.selected_target_index)];
     }
+    const QString previous_identity = previous ? record_view_model_adapter_.targetIdentity(*previous) : QString{};
+    synchronizeWindowIdentities(snapshot);
     record_view_model_.targets = snapshot.targets;
     ++record_view_model_.targets_revision;
     if (target_still_provider_ != nullptr) {
         QSet<QString> live;
         live.reserve(static_cast<qsizetype>(record_view_model_.targets.size()));
         for (const exosnap::engine::CaptureTarget& target : record_view_model_.targets)
-            live.insert(RecordViewModelAdapter::TargetIdentity(target));
+            live.insert(record_view_model_adapter_.targetIdentity(target));
         target_still_provider_->retainOnly(live);
     }
     record_view_model_.target_display_names.clear();
@@ -1664,18 +1837,10 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
     if (previous.has_value()) {
         for (int index = 0; index < static_cast<int>(record_view_model_.targets.size()); ++index) {
             const auto& candidate = record_view_model_.targets[static_cast<size_t>(index)];
-            if (candidate.kind == previous->kind && candidate.native_id == previous->native_id) {
-                resolved_index = index;
-                break;
-            }
-        }
-    }
-    if (resolved_index < 0 && record_view_model_.capture_mode == CaptureMode::Window &&
-        !live_config_.capture.window_key.empty()) {
-        for (int index = 0; index < static_cast<int>(record_view_model_.targets.size()); ++index) {
-            const auto& candidate = record_view_model_.targets[static_cast<size_t>(index)];
-            if (candidate.kind == exosnap::engine::CaptureTarget::Kind::Window &&
-                RecordViewModel::TargetLabelFromCaptureTarget(candidate) == live_config_.capture.window_key) {
+            if (candidate.kind == previous->kind && candidate.native_id == previous->native_id &&
+                (candidate.kind != engine::CaptureTarget::Kind::Window ||
+                 (!previous_identity.isEmpty() &&
+                  record_view_model_adapter_.targetIdentity(candidate) == previous_identity))) {
                 resolved_index = index;
                 break;
             }
@@ -1804,6 +1969,10 @@ void QuickApplication::startRequested() {
         last_start_admission_ = StartAdmission::RefusedByBlockingSurface;
         return;
     }
+    if (live_config_.audio_read_only) {
+        last_start_admission_ = StartAdmission::RefusedByConfiguration;
+        return;
+    }
     if (!record_view_model_adapter_.canStart()) {
         last_start_admission_ = StartAdmission::RefusedByState;
         return;
@@ -1822,10 +1991,16 @@ void QuickApplication::startRequested() {
         last_start_admission_ = StartAdmission::Accepted;
         return;
     }
-    last_start_admission_ = startRecordingNow() ? StartAdmission::Accepted : StartAdmission::RefusedNoTarget;
+    if (startRecordingNow())
+        last_start_admission_ = StartAdmission::Accepted;
 }
 
 bool QuickApplication::startRecordingNow() {
+    last_start_admission_ = StartAdmission::RefusedNoTarget;
+    if (live_config_.audio_read_only) {
+        last_start_admission_ = StartAdmission::RefusedByConfiguration;
+        return false;
+    }
     if (record_view_model_.selected_target_index < 0 ||
         record_view_model_.selected_target_index >= static_cast<int>(record_view_model_.targets.size()))
         return false;
@@ -1847,8 +2022,10 @@ bool QuickApplication::startRecordingNow() {
     recording_coordinator_->SetEncoderDeviceResolution(encoder_device, &encoder_caps);
     recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
     record_view_model_.ResetStats();
-    recording_coordinator_->StartRecording(target, record_view_model_.audio_ui_state, crop);
-    return true;
+    last_start_admission_ = StartAdmission::RefusedByState;
+    return recording_coordinator_->StartRecording(target, record_view_model_.audio_ui_state, crop,
+                                                  engine::CaptureBackend::Default, live_config_.audio_intent,
+                                                  {audio_routing_adapter_.revision()});
 }
 
 void QuickApplication::cancelCountdown() {
@@ -1881,7 +2058,11 @@ void QuickApplication::toggleSource(const QString& key) {
     if (key == QStringLiteral("webcam")) {
         if (!webcam_available_)
             return;
-        live_config_.webcam.enabled = !live_config_.webcam.enabled;
+        auto webcam =
+            settings_adapter_.recordingActive() ? settings_adapter_.sessionConfig().webcam : live_config_.webcam;
+        webcam.enabled = !webcam.enabled;
+        live_config_.webcam.enabled = webcam.enabled;
+        settings_adapter_.updateActiveWebcam(webcam);
         webcam_error_.clear();
         recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
         persistLiveConfig();
@@ -1940,7 +2121,8 @@ void QuickApplication::updateMeters() {
         settings_adapter_.setMeters(db[0], db[1], db[2]);
         return;
     }
-    const bool session = record_view_model_.state == UiRecordingState::Recording ||
+    const bool session = record_view_model_.state == UiRecordingState::Preparing ||
+                         record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;
     const float system = recording_coordinator_->IsSysMeterRunning() ? preflight_system_rms_
@@ -1985,6 +2167,12 @@ std::optional<exosnap::engine::AppliedWebcamOverlay> QuickApplication::applyLive
     if (fields.value(QStringLiteral("mirror")).isBool())
         live_config_.webcam.mirror = fields.value(QStringLiteral("mirror")).toBool();
 
+    auto webcam = webcamSettingsForCapture();
+    webcam.overlay = live_config_.webcam.overlay;
+    webcam.opacity = live_config_.webcam.opacity;
+    webcam.mirror = live_config_.webcam.mirror;
+    settings_adapter_.updateActiveWebcam(webcam);
+
     // The production path, not a second one: the same call the drag makes.
     const std::optional<exosnap::engine::AppliedWebcamOverlay> applied =
         recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
@@ -2004,6 +2192,9 @@ void QuickApplication::updateWebcamOverlay(const QRectF& normalized_rect) {
     overlay.w_norm = static_cast<float>(normalized_rect.width());
     overlay.h_norm = static_cast<float>(normalized_rect.height());
     live_config_.webcam.overlay = SanitizeWebcamOverlayRect(overlay);
+    auto webcam = webcamSettingsForCapture();
+    webcam.overlay = live_config_.webcam.overlay;
+    settings_adapter_.updateActiveWebcam(webcam);
     recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
     webcam_overlay_persist_timer_.start();
     synchronizeRecordState();
@@ -2059,7 +2250,8 @@ void QuickApplication::updateMeterServices() {
     // source row. Feeding them only for Record left the Settings readings at
     // silence while the user was looking at them.
     const bool visible = record_view_model_adapter_.active() || settings_adapter_.active();
-    const bool session = record_view_model_.state == UiRecordingState::Recording ||
+    const bool session = record_view_model_.state == UiRecordingState::Preparing ||
+                         record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;
     if (!visible || session) {
@@ -2129,7 +2321,6 @@ void QuickApplication::initializeSettingsArea() {
                          recording_coordinator_->ApplyOutputFolderValidation(result);
                      });
     QObject::connect(&shell_adapter_, &ShellAdapter::currentPageChanged, &settings_adapter_, [this]() {
-        settings_adapter_.setActive(shell_adapter_.currentPage() == ShellAdapter::SettingsPage);
         if (shell_adapter_.currentPage() == ShellAdapter::SettingsPage) {
             settings_adapter_.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::OutputCardReveal);
         }
@@ -2758,6 +2949,61 @@ void QuickApplication::applyDiagnosticsFix(const QString& fix_id) {
 }
 
 void QuickApplication::wireSettingsCommands() {
+    QObject::connect(&shell_adapter_, &ShellAdapter::audioProfileRequested, &settings_adapter_, [this]() {
+        emit shell_adapter_.navigateToPageRequested(ShellAdapter::RecordPage);
+        settings_adapter_.requestSettingsFocus(SettingsAdapter::FocusTarget::AudioSources);
+    });
+    settings_adapter_.setAudioRouting(&audio_routing_adapter_);
+    QObject::connect(&settings_adapter_, &SettingsAdapter::recordingContextChanged, &audio_routing_adapter_, [this]() {
+        const auto& displayed = settings_adapter_.displayedConfig();
+        audio_routing_adapter_.refresh(
+            displayed.audio_intent.value_or(engine::AudioIntent{engine::TrackGraph1Intent{}}),
+            displayed.audio_read_only || settings_adapter_.controlsLocked(),
+            QString::fromStdString(displayed.audio_validation_error));
+    });
+    audio_routing_adapter_.configure(
+        [this](const engine::AudioIntent& intent, QString& error) {
+            auto candidate = live_config_;
+            candidate.audio_intent = intent;
+            candidate = SanitizePresetConfig(std::move(candidate));
+            if (!preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), candidate, &error))
+                return false;
+            live_config_ = std::move(candidate);
+            if (settings_adapter_.recordingActive())
+                draft_changed_during_recording_ = true;
+            settings_adapter_.setConfig(live_config_);
+            refreshPresetState();
+            synchronizeRecordState();
+            return true;
+        },
+        [this]() {
+            return ObserveRecordingAudioEnvironment(selectedCaptureTarget().value_or(engine::CaptureTarget{}),
+                                                    capabilities_.runtime.os.build_number,
+                                                    live_config_.audio_intent ? &*live_config_.audio_intent : nullptr);
+        },
+        [this](engine::AudioSourceId id, bool muted) {
+            return recording_coordinator_->SetAudioSourceMuted(id, muted);
+        });
+    audio_routing_adapter_.refresh(live_config_.audio_intent.value_or(engine::AudioIntent{engine::TrackGraph1Intent{}}),
+                                   live_config_.audio_read_only,
+                                   QString::fromStdString(live_config_.audio_validation_error));
+    audio_routing_meter_timer_.setInterval(100);
+    QObject::connect(&audio_routing_meter_timer_, &QTimer::timeout, &audio_routing_adapter_, [this]() {
+        const auto active = recording_coordinator_->ActiveAudioPlan();
+        const auto revision = active && locksCaptureTargets(recording_coordinator_->State())
+                                  ? std::optional<engine::ConfigRevision>{active->revision}
+                                  : std::nullopt;
+        if (revision != audio_routing_active_revision_) {
+            audio_routing_active_revision_ = revision;
+            audio_routing_adapter_.setActivePlan(revision ? active : std::nullopt);
+        }
+        const auto meters = recording_coordinator_->LatestAudioRoutingMeters();
+        audio_routing_adapter_.setMeters(meters.sources, meters.tracks, meters.physical);
+        diagnostics_adapter_.setAudioResources(audio_routing_adapter_.resourceDiagnostics());
+        diagnostics_adapter_.setClipResources(
+            recording_clip_adapter_.diagnosticResources(recording_coordinator_->RecordingStorageReserveBytes()));
+    });
+    audio_routing_meter_timer_.start();
     QObject::connect(&settings_adapter_, &SettingsAdapter::configEdited, &settings_adapter_,
                      [this]() { applySettingsConfigEdit(); });
     QObject::connect(&settings_adapter_, &SettingsAdapter::appSettingsEdited, &settings_adapter_, [this]() {
@@ -2827,6 +3073,8 @@ void QuickApplication::syncConfigMirrors() {
     // the Settings surface at all, so applySettingsConfigEdit restores it from
     // the owner instead of relying on this push.
     settings_adapter_.setConfig(live_config_);
+    if (settings_adapter_.recordingActive())
+        return;
     // Record mirror. The audio rows are editable from BOTH surfaces (Record's
     // source toggles and the Settings audio section write the same enable/
     // separate flags), so a Settings edit has to land back in the view model or
@@ -2908,6 +3156,8 @@ void QuickApplication::applyWindowCaptureExclusion() {
 }
 
 void QuickApplication::applySettingsConfigEdit() {
+    if (settings_adapter_.controlsLocked())
+        return;
     RecordingPresetConfig edited = settings_adapter_.config();
     // The adapter mirrors the whole struct but the Settings surface exposes only
     // part of it. Capture target/region, the countdown and the webcam overlay
@@ -2917,7 +3167,28 @@ void QuickApplication::applySettingsConfigEdit() {
     edited.capture = live_config_.capture;
     edited.countdown_seconds = live_config_.countdown_seconds;
     edited.webcam.overlay = live_config_.webcam.overlay;
+    if (edited.audio_intent) {
+        if (const auto* legacy = std::get_if<engine::LegacyRows25Intent>(&*edited.audio_intent)) {
+            auto synchronized = SynchronizeLegacyAudioRows(*legacy, edited.audio);
+            if (!synchronized.succeeded()) {
+                settings_adapter_.setConfig(live_config_);
+                return;
+            }
+            edited.audio_intent = std::move(*synchronized.value());
+        } else if (auto* graph = std::get_if<engine::TrackGraph1Intent>(&*edited.audio_intent)) {
+            graph->limiter = {edited.audio.limiter_enabled, edited.audio.limiter_ceiling_db};
+        }
+    }
     live_config_ = std::move(edited);
+    audio_routing_adapter_.refresh(live_config_.audio_intent.value_or(engine::AudioIntent{engine::TrackGraph1Intent{}}),
+                                   live_config_.audio_read_only,
+                                   QString::fromStdString(live_config_.audio_validation_error));
+    if (settings_adapter_.recordingActive()) {
+        draft_changed_during_recording_ = true;
+        persistLiveConfig();
+        refreshPresetState();
+        return;
+    }
     // Audio rows and the webcam enable/mirror flags ARE editable here, so the
     // Record-side mirror has to follow.
     record_view_model_.audio_ui_state = live_config_.audio;
@@ -2939,7 +3210,16 @@ void QuickApplication::applySettingsConfigEdit() {
 
 void QuickApplication::applyPresetConfig(RecordingPresetConfig config) {
     live_config_ = SanitizePresetConfig(std::move(config));
+    audio_routing_adapter_.refresh(live_config_.audio_intent.value_or(engine::AudioIntent{engine::TrackGraph1Intent{}}),
+                                   live_config_.audio_read_only,
+                                   QString::fromStdString(live_config_.audio_validation_error));
     settings_adapter_.setConfig(live_config_);
+    if (settings_adapter_.recordingActive()) {
+        draft_changed_during_recording_ = true;
+        persistLiveConfig();
+        refreshPresetState();
+        return;
+    }
     recording_coordinator_->SetOutputSettings(live_config_.output);
     recording_coordinator_->SetVideoSettings(live_config_.video);
     recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
@@ -2952,7 +3232,8 @@ void QuickApplication::applyPresetConfig(RecordingPresetConfig config) {
 }
 
 WebcamSettings QuickApplication::webcamSettingsForCapture() const {
-    WebcamSettings resolved = live_config_.webcam;
+    WebcamSettings resolved =
+        settings_adapter_.recordingActive() ? settings_adapter_.sessionConfig().webcam : live_config_.webcam;
     if (resolved.device_id.empty()) {
         resolved.device_id = default_webcam_device_id_;
     }
@@ -5312,6 +5593,8 @@ void QuickApplication::wireTaskbarProgress() {
             export_progress_lease_ = {};
             break;
         case EditExportAdapter::Options:
+        case EditExportAdapter::Preparing:
+        case EditExportAdapter::Review:
             // Reached from Cancelling once the thread has been joined, and from
             // reset(). Either way the run is over and owes the bar nothing.
             taskbar_presence_.cancelProgress(export_progress_lease_);
@@ -5450,6 +5733,17 @@ void QuickApplication::flushPendingPersists() {
 void QuickApplication::openEditorForCurrentRecording() {
     if (!canOpenEditorForCurrentRecording())
         return;
+    if (record_view_model_.state == UiRecordingState::Saving && pending_edit_master_) {
+        auto lease = recording_coordinator_->AcquireEditMasterLease(
+            std::filesystem::path(pending_edit_master_->mkv_master_path.toStdWString()));
+        if (!lease)
+            return;
+        auto context = *pending_edit_master_;
+        context.mkv_master_path = QString::fromStdWString(lease->path().wstring());
+        pending_master_editor_lease_ = std::move(lease);
+        edit_session_adapter_.setEditContext(context);
+        return;
+    }
     edit_session_adapter_.setEditContext(
         MakeEditContextForCurrentSession(record_view_model_.current_completed_recording,
                                          QString::fromStdWString(record_view_model_.result_mkv_master_path),
@@ -5457,6 +5751,8 @@ void QuickApplication::openEditorForCurrentRecording() {
 }
 
 bool QuickApplication::canOpenEditorForCurrentRecording() const {
+    if (record_view_model_.state == UiRecordingState::Saving && pending_edit_master_)
+        return QFileInfo::exists(pending_edit_master_->mkv_master_path);
     if (!record_view_model_.last_succeeded)
         return false;
     // A live capture owns the Record surface until the entire session ends.
@@ -5498,6 +5794,7 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("minimumWindowSize"), QVariant::fromValue(QSizeF(minimum_size))},
         {QStringLiteral("aboutViewModel"), QVariant::fromValue(&about_view_model_)},
         {QStringLiteral("recordViewModel"), QVariant::fromValue(&record_view_model_adapter_)},
+        {QStringLiteral("clipAdapter"), QVariant::fromValue(&recording_clip_adapter_)},
         {QStringLiteral("previewAdapter"), QVariant::fromValue(&record_preview_adapter_)},
         {QStringLiteral("settingsAdapter"), QVariant::fromValue(&settings_adapter_)},
         {QStringLiteral("deviceAdapter"), QVariant::fromValue(&device_adapter_)},
@@ -5741,6 +6038,12 @@ OverlayTelemetryAdapter* QuickApplication::overlayTelemetryAdapter() noexcept {
 }
 SettingsAdapter* QuickApplication::settingsAdapter() noexcept {
     return &settings_adapter_;
+}
+AudioRoutingAdapter* QuickApplication::audioRoutingAdapter() noexcept {
+    return &audio_routing_adapter_;
+}
+RecordingClipAdapter* QuickApplication::recordingClipAdapter() noexcept {
+    return &recording_clip_adapter_;
 }
 DeviceAdapter* QuickApplication::deviceAdapter() noexcept {
     return &device_adapter_;

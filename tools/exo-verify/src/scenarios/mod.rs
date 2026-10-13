@@ -5,6 +5,7 @@ pub mod audio;
 pub mod capture;
 mod chocolatey_worker;
 pub mod clean;
+pub mod clips;
 #[cfg(test)]
 mod command_names;
 pub mod common;
@@ -93,6 +94,7 @@ pub fn registry() -> Vec<Scenario> {
     all.extend(present::scenarios());
     all.extend(preview::scenarios());
     all.extend(record::scenarios());
+    all.extend(clips::scenarios());
     all.extend(schema::scenarios());
     all.extend(update::scenarios());
     all.extend(handoff::scenarios());
@@ -214,5 +216,43 @@ mod tests {
                 .requires
                 .contains(&crate::capability::Capability::Wgc)
         );
+    }
+
+    #[test]
+    fn clip_registry_matches_the_offered_product_capability() {
+        let source = include_str!("../../../../app/models/RecordingCapabilities.h");
+        let capability = regex::Regex::new(r"kRecordingClipsAvailable\s*=\s*(true|false)\s*;")
+            .unwrap()
+            .captures(source)
+            .expect("the authoritative C++ clip capability must be explicit");
+        let available = &capability[1] == "true";
+        let clips: Vec<_> = registry()
+            .into_iter()
+            .filter(|s| s.id.starts_with("clip."))
+            .collect();
+        assert_eq!(clips.len(), 1);
+        assert_eq!(
+            clips[0].id,
+            if available {
+                "clip.recording-live"
+            } else {
+                "clip.creation-unavailable"
+            }
+        );
+        assert_eq!(clips[0].tier, crate::plan::Tier::Required);
+        for lane in [crate::scenario::Lane::Gpu, crate::scenario::Lane::Preflight] {
+            let registry = registry();
+            let selection = crate::runner::Selection {
+                lane,
+                only: &[],
+                skip: &[],
+            };
+            let selected: Vec<_> = crate::runner::selected(&registry, &selection)
+                .into_iter()
+                .filter(|s| s.id.starts_with("clip."))
+                .collect();
+            assert_eq!(selected.len(), 1);
+            assert_eq!(selected[0].id, clips[0].id);
+        }
     }
 }

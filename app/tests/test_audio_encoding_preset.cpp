@@ -16,6 +16,7 @@
 #include <capability/audio_ui_state.h>
 #include <exosnap/engine/recorder_session.h>
 
+#include "models/AudioRoutingMigration.h"
 #include "models/RecordingPreset.h"
 #include "settings/RecordingPresetStore.h"
 
@@ -444,6 +445,9 @@ TEST(AudioEncodingPreset, StoreRoundTrip_Limiter) {
     p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.audio.limiter_enabled = false;
     p.config.audio.limiter_ceiling_db = -3.0f;
+    auto& intent = std::get<engine::TrackGraph1Intent>(*p.config.audio_intent);
+    intent.limiter = {false, -3.0f};
+    ProjectNativeAudioIntent(intent, p.config.audio);
     store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
@@ -451,6 +455,9 @@ TEST(AudioEncodingPreset, StoreRoundTrip_Limiter) {
     const auto& loaded = state.user_presets.front().config.audio;
     EXPECT_FALSE(loaded.limiter_enabled);
     EXPECT_NEAR(loaded.limiter_ceiling_db, -3.0f, 0.01f);
+    const auto& loaded_intent = std::get<engine::TrackGraph1Intent>(*state.user_presets.front().config.audio_intent);
+    EXPECT_FALSE(loaded_intent.limiter.enabled);
+    EXPECT_FLOAT_EQ(loaded_intent.limiter.ceiling_db, -3.0f);
     QFile::remove(path);
 }
 

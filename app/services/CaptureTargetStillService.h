@@ -8,6 +8,7 @@
 
 #include <condition_variable>
 #include <cstddef>
+#include <functional>
 #include <mutex>
 #include <stop_token>
 #include <thread>
@@ -31,6 +32,8 @@ class CaptureTargetStillService final : public QObject {
     struct Request {
         QString identity;
         exosnap::engine::CaptureTarget target;
+        // Invoked on the worker before capture and before publishing. Must be thread-safe.
+        std::function<bool()> valid;
     };
 
     static constexpr int kGrabIntervalMs = 250;

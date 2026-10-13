@@ -3,7 +3,10 @@
 // WASAPI default render loopback capture wrapper.
 // Lifted from M2.8 probe (probe_wgc_nvenc_aac_mkv).
 
+#include <exosnap/engine/interfaces/IAudioCaptureSource.h>
+
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include <Audioclient.h>
@@ -26,6 +29,16 @@ struct LoopbackAcquireResult {
 };
 LoopbackAcquireResult ClassifyLoopbackAcquire(const char* api_name, HRESULT hr);
 
+struct WasapiNativeFormat {
+    uint32_t sample_rate = 0;
+    uint32_t channels = 0;
+    AudioSampleFormat sample_format = AudioSampleFormat::Float32;
+};
+
+std::optional<WasapiNativeFormat> ClassifyNativeWasapiFormat(const WAVEFORMATEX& format);
+bool DescribeNativePlaybackFormat(const std::optional<std::string>& endpoint_id, WasapiNativeFormat& format,
+                                  std::string& out_error);
+
 // ---------------------------------------------------------------------------
 // WasapiLoopback
 // ---------------------------------------------------------------------------
@@ -39,10 +52,13 @@ class WasapiLoopback {
     WasapiLoopback& operator=(const WasapiLoopback&) = delete;
 
     // Initialize and start the loopback stream.
-    // Always requests 48000 Hz stereo float via AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
-    // so devices mixing at a different rate/channel count are resampled/downmixed
-    // by WASAPI rather than rejected.
-    bool Init(std::string& out_error);
+    // Legacy capture requests 48000 Hz stereo float with WASAPI conversion.
+    // Native capture preserves the selected endpoint's mix format for the physical clock owner.
+    bool Init(std::string& out_error, const std::optional<std::string>& endpoint_id = std::nullopt,
+              bool native_format = false);
+    const WasapiNativeFormat& Format() const noexcept {
+        return format_;
+    }
 
     // Retrieve the next available packet.
     // Returns false if no data is available or on a fatal acquire error (e.g. the
@@ -85,6 +101,7 @@ class WasapiLoopback {
     }
 
   private:
+    WasapiNativeFormat format_{48000, 2, AudioSampleFormat::Float32};
     IMMDevice* m_pDevice = nullptr;
     IAudioClient* m_pAudioClient = nullptr;
     IAudioCaptureClient* m_pCaptureClient = nullptr;

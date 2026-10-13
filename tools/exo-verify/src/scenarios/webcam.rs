@@ -48,13 +48,11 @@ fn webcam_overlay_live(ctx: &mut Context) -> Step {
             ("video.videoCodec", json!("H.264")),
             ("video.frameRate", json!(30)),
             ("video.cfr", json!(true)),
-            ("audio.systemEnabled", json!(false)),
-            ("audio.appEnabled", json!(false)),
-            ("audio.microphoneEnabled", json!(false)),
             ("app.hideWindowFromCapture", json!(true)),
             ("webcam.enabled", json!(true)),
         ],
     )?;
+    common::disable_recording_audio(&mut app)?;
     // The stimulus keeps presenting, because a fully quiet desktop can stop
     // delivering capture frames at all; the webcam oracle is the product's own
     // webcam-generation counter, which is independent of the source content.

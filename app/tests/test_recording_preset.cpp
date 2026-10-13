@@ -1297,6 +1297,48 @@ TEST(RecordingPreset, GeneratePresetId_AllStartWithPresetDot) {
     }
 }
 
+TEST(RecordingPreset, ProcessSelectionAuthorityDoesNotChangeStoredConfigurationEquality) {
+    auto confirmed = MakeDefaultPreset().config;
+    auto& original = std::get<engine::TrackGraph1Intent>(*confirmed.audio_intent).sources[0].binding;
+    original.kind = engine::AudioBindingKind::IndependentProcess;
+    original.process = engine::ProcessInstanceIdentity{23, 456, "player"};
+    auto restored = confirmed;
+    std::get<engine::TrackGraph1Intent>(*restored.audio_intent).sources[0].binding.process_selection_confirmed = false;
+    EXPECT_TRUE(NormalizedConfigEquals(confirmed, restored));
+    EXPECT_TRUE(ConfigDirtyEquivalent(confirmed, restored));
+    EXPECT_NE(confirmed.audio_intent, restored.audio_intent);
+}
+
+TEST(RecordingPreset, ProcessIdentityAndRoutingStillChangeStoredConfigurationEquality) {
+    auto original = MakeDefaultPreset().config;
+    auto& graph = std::get<engine::TrackGraph1Intent>(*original.audio_intent);
+    graph.sources[0].binding.kind = engine::AudioBindingKind::IndependentProcess;
+    graph.sources[0].binding.process = engine::ProcessInstanceIdentity{23, 456, "player"};
+    for (int field = 0; field < 5; ++field) {
+        auto changed = original;
+        auto& candidate = std::get<engine::TrackGraph1Intent>(*changed.audio_intent);
+        switch (field) {
+        case 0:
+            ++candidate.sources[0].binding.process->process_id;
+            break;
+        case 1:
+            ++candidate.sources[0].binding.process->creation_time;
+            break;
+        case 2:
+            candidate.sources[0].binding.process->identity_hint += ".changed";
+            break;
+        case 3:
+            candidate.sources[0].id = engine::NewId<engine::AudioSourceId>();
+            break;
+        case 4:
+            candidate.routes[0].gain_db = -6.0f;
+            break;
+        }
+        EXPECT_FALSE(NormalizedConfigEquals(original, changed));
+        EXPECT_FALSE(ConfigDirtyEquivalent(original, changed));
+    }
+}
+
 TEST(RecordingPreset, GeneratePresetId_NoneEqualsDefaultPresetId) {
     for (int i = 0; i < 1000; ++i) {
         EXPECT_NE(GeneratePresetId(), std::string(kDefaultPresetId));

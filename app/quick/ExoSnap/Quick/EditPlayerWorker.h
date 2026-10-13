@@ -44,11 +44,15 @@ class EditPlayerWorker : public QObject {
     void seek(qint64 position_ms);
     void setScreenRefreshHz(double screen_hz);
     void setVolume(double volume);
+    void confirmMonitoring(const QStringList& track_ids, bool overlap_confirmed);
 
   signals:
     void openFinished(bool opened, const QString& error);
     void positionAdvanced(qint64 position_ms);
     void reachedEnd();
+    void monitoringChanged(QVariantList tracks, bool confirmation_required);
+    void monitoringRejected(QString error);
+    void monitorSelectionConfirmed(qulonglong asset, exosnap::engine::MonitorSelectionSnapshot selection);
 
   private:
     void ensureTimer();
@@ -61,6 +65,7 @@ class EditPlayerWorker : public QObject {
     void onTick();
     void seekTimeline(qint64 position_ms, bool resume);
     bool renderTimeline(qint64 position_ms);
+    void publishMonitoring();
     void tickRenderTimeline();
 
     std::shared_ptr<EditPlayerFrameSink> sink_;
@@ -82,6 +87,9 @@ class EditPlayerWorker : public QObject {
     engine::EditRenderPlan render_plan_;
     qint64 render_origin_ms_ = 0;
     int64_t audio_sample_ = 0;
+    uint64_t monitor_revision_ = 0;
 };
 
 } // namespace exosnap::quick
+
+Q_DECLARE_METATYPE(exosnap::engine::MonitorSelectionSnapshot)

@@ -1,5 +1,6 @@
 #include "RecordingPresetStore.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -9,16 +10,26 @@
 #include <QTextStream>
 #include <QVector>
 
+#include "models/AudioRoutingMigration.h"
 #include "settings/ConfigPaths.h"
 
 #include <toml++/toml.hpp>
 
 #include <algorithm>
+#include <map>
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stdexcept>
+#include <utility>
 
 namespace exosnap {
+
+struct PresetRawDocument {
+    toml::table original;
+    toml::table known;
+};
+
 namespace {
 
 // ---------------------------------------------------------------------------
@@ -582,7 +593,356 @@ StableDisplayId StableDisplayIdFromToml(const toml::node_view<const toml::node>&
 // Serializes the config body shared by every stored preset AND the [live]
 // table — capture/output/video/audio/webcam/countdown. No id/name here: those
 // are preset-only identity, not part of the config.
+template <typename Enum> std::string EnumText(Enum value, std::initializer_list<const char*> names) {
+    const auto index = static_cast<size_t>(value);
+    if (index >= names.size())
+        throw std::invalid_argument("Unknown audio enum value");
+    return *(names.begin() + index);
+}
+
+template <typename Enum>
+Enum ReadEnum(const toml::node_view<const toml::node>& node, std::initializer_list<const char*> names,
+              Enum fallback = {}) {
+    if (!node)
+        return fallback;
+    const auto text = node.value<std::string>();
+    size_t index = 0;
+    for (const auto* name : names) {
+        if (text && *text == name)
+            return static_cast<Enum>(index);
+        ++index;
+    }
+    throw std::invalid_argument("Unknown audio enum value");
+}
+
+template <typename Id> Id ReadId(const toml::node_view<const toml::node>& node) {
+    auto id = engine::FromUuid<Id>(TomlStr(node));
+    if (!id)
+        throw std::invalid_argument("Invalid audio identity");
+    return *id;
+}
+
+engine::MicChannelMode ReadAudioChannelMode(const toml::node_view<const toml::node>& node) {
+    if (!node)
+        return engine::MicChannelMode::Auto;
+    const auto channel = MicChannelModeFromString(QString::fromStdString(TomlStr(node)));
+    if (!channel)
+        throw std::invalid_argument("Unknown logical audio channel mode");
+    return *channel;
+}
+
+double ReadAudioFloat(const toml::node_view<const toml::node>& node, double fallback) {
+    if (node && !node.is_integer() && !node.is_floating_point())
+        throw std::invalid_argument("Invalid audio numeric parameter");
+    return TomlFloat(node, fallback);
+}
+
+bool ReadAudioBool(const toml::node_view<const toml::node>& node, bool fallback) {
+    if (node && !node.is_boolean())
+        throw std::invalid_argument("Invalid audio boolean parameter");
+    return TomlBool(node, fallback);
+}
+
+toml::table BindingToToml(const engine::AudioSourceBinding& binding) {
+    toml::table table;
+    table.insert("kind", EnumText(binding.kind, {"PlaybackEndpoint", "MicrophoneEndpoint", "CaptureTargetProcess",
+                                                 "IndependentProcess", "LegacyExcludeTarget"}));
+    table.insert("follow_default", binding.follow_default);
+    table.insert("endpoint_role", EnumText(binding.endpoint_role, {"console", "multimedia", "communications"}));
+    table.insert("endpoint_id", binding.endpoint_id);
+    if (binding.process) {
+        toml::table process;
+        process.insert("pid", static_cast<int64_t>(binding.process->process_id));
+        process.insert("creation_time", std::to_string(binding.process->creation_time));
+        process.insert("identity_hint", binding.process->identity_hint);
+        table.insert("process", std::move(process));
+    }
+    return table;
+}
+
+engine::AudioSourceBinding BindingFromToml(const toml::node_view<const toml::node>& node) {
+    if (!node.is_table())
+        throw std::invalid_argument("Audio source binding is missing");
+    engine::AudioSourceBinding binding;
+    binding.kind = ReadEnum<engine::AudioBindingKind>(node["kind"],
+                                                      {"PlaybackEndpoint", "MicrophoneEndpoint", "CaptureTargetProcess",
+                                                       "IndependentProcess", "LegacyExcludeTarget"});
+    binding.follow_default = ReadAudioBool(node["follow_default"], true);
+    binding.endpoint_role = ReadEnum<engine::AudioEndpointRole>(
+        node["endpoint_role"], {"console", "multimedia", "communications"}, engine::AudioEndpointRole::Multimedia);
+    binding.endpoint_id = TomlStr(node["endpoint_id"]);
+    if (node["process"].is_table()) {
+        engine::ProcessInstanceIdentity process;
+        const auto pid = TomlInt(node["process"]["pid"], 0);
+        if (pid <= 0 || pid > UINT32_MAX)
+            throw std::invalid_argument("Invalid audio process identity");
+        process.process_id = static_cast<uint32_t>(pid);
+        const auto text = TomlStr(node["process"]["creation_time"]);
+        size_t parsed = 0;
+        process.creation_time = std::stoull(text, &parsed);
+        if (parsed != text.size() || process.creation_time == 0)
+            throw std::invalid_argument("Invalid audio process creation time");
+        process.identity_hint = TomlStr(node["process"]["identity_hint"]);
+        binding.process = process;
+    }
+    if (binding.kind == engine::AudioBindingKind::IndependentProcess && !binding.process)
+        throw std::invalid_argument("Independent audio source process identity is missing");
+    if (binding.kind == engine::AudioBindingKind::IndependentProcess)
+        binding.process_selection_confirmed = false;
+    return binding;
+}
+
+toml::table DspToToml(const engine::MicDspConfig& dsp) {
+    return toml::table{{"hpf_enabled", dsp.hpf_enabled},        {"hpf_cutoff_hz", double(dsp.hpf_cutoff_hz)},
+                       {"gate_enabled", dsp.gate_enabled},      {"gate_threshold_db", double(dsp.gate_threshold_db)},
+                       {"agc_enabled", dsp.agc_enabled},        {"agc_target_db", double(dsp.agc_target_db)},
+                       {"rnnoise_enabled", dsp.rnnoise_enabled}};
+}
+
+engine::MicDspConfig DspFromToml(const toml::node_view<const toml::node>& node) {
+    return {ReadAudioBool(node["hpf_enabled"], false),    float(ReadAudioFloat(node["hpf_cutoff_hz"], 80)),
+            ReadAudioBool(node["gate_enabled"], false),   float(ReadAudioFloat(node["gate_threshold_db"], -45)),
+            ReadAudioBool(node["agc_enabled"], false),    float(ReadAudioFloat(node["agc_target_db"], -18)),
+            ReadAudioBool(node["rnnoise_enabled"], false)};
+}
+
+toml::table IntentToToml(const engine::AudioIntent& intent) {
+    using namespace engine;
+    toml::table table;
+    const auto common = [&](const auto& value) {
+        toml::array monitor;
+        for (const auto& id : value.default_monitor_track_ids)
+            monitor.push_back(ToUuid(id));
+        table.insert("default_monitor_track_ids", std::move(monitor));
+        table.insert("monitor_selection_origin", EnumText(value.monitor_selection_origin, {"default", "user"}));
+        table.insert("limiter",
+                     toml::table{{"enabled", value.limiter.enabled}, {"ceiling_db", double(value.limiter.ceiling_db)}});
+    };
+    if (const auto* legacy = std::get_if<LegacyRows25Intent>(&intent)) {
+        table.insert("kind", "LegacyRows25");
+        table.insert("namespace", ToUuid(legacy->id_namespace));
+        table.insert("microphone_binding", BindingToToml(legacy->microphone_binding));
+        table.insert("microphone_channel_mode", MicChannelModeToString(legacy->microphone_channel_mode).toStdString());
+        table.insert("microphone_dsp", DspToToml(legacy->microphone_dsp));
+        table.insert("microphone_gain_linear", double(legacy->microphone_gain_linear));
+        toml::array rows;
+        for (const auto& row : legacy->rows) {
+            rows.push_back(toml::table{{"row_id", ToUuid(row.row_id)},
+                                       {"source_id", ToUuid(row.source_id)},
+                                       {"anchor_track_id", ToUuid(row.anchor_track_id)},
+                                       {"kind", AudioSourceKindToString(row.row.kind).toStdString()},
+                                       {"enabled", row.row.enabled},
+                                       {"merge", row.row.merge_with_above},
+                                       {"gain_db", double(row.row.gain_db)},
+                                       {"muted", row.row.muted},
+                                       {"name_kind", EnumText(row.name_kind, {"automatic", "custom"})},
+                                       {"name", row.name},
+                                       {"role", EnumText(row.role, {"standard", "stem", "mix"})},
+                                       {"record_enabled", row.record_enabled}});
+        }
+        table.insert("rows", std::move(rows));
+        common(*legacy);
+    } else {
+        const auto& graph = std::get<TrackGraph1Intent>(intent);
+        table.insert("kind", "TrackGraph1");
+        toml::array sources, tracks, routes;
+        for (const auto& source : graph.sources) {
+            toml::table item{{"id", ToUuid(source.id)},
+                             {"name", source.name},
+                             {"binding", BindingToToml(source.binding)},
+                             {"channel_mode", MicChannelModeToString(source.channel_mode).toStdString()},
+                             {"dsp", DspToToml(source.dsp)},
+                             {"post_dsp_gain_linear", double(source.post_dsp_gain_linear)},
+                             {"participation", source.participation},
+                             {"muted", source.muted}};
+            if (source.legacy_row_id)
+                item.insert("legacy_row_id", ToUuid(*source.legacy_row_id));
+            sources.push_back(std::move(item));
+        }
+        for (const auto& track : graph.tracks)
+            tracks.push_back(toml::table{{"id", ToUuid(track.id)},
+                                         {"order", int64_t(track.order)},
+                                         {"name_kind", EnumText(track.name_kind, {"automatic", "custom"})},
+                                         {"name", track.name},
+                                         {"record_enabled", track.record_enabled},
+                                         {"role", EnumText(track.role, {"standard", "stem", "mix"})}});
+        for (const auto& route : graph.routes)
+            routes.push_back(toml::table{{"id", ToUuid(route.id)},
+                                         {"source_id", ToUuid(route.source_id)},
+                                         {"track_id", ToUuid(route.track_id)},
+                                         {"gain_db", double(route.gain_db)},
+                                         {"muted", route.muted},
+                                         {"enabled", route.enabled}});
+        table.insert("sources", std::move(sources));
+        table.insert("tracks", std::move(tracks));
+        table.insert("routes", std::move(routes));
+        common(graph);
+    }
+    return table;
+}
+
+engine::AudioIntent IntentFromToml(const toml::node_view<const toml::node>& node) {
+    using namespace engine;
+    const auto common = [&](auto& value) {
+        if (auto* ids = node["default_monitor_track_ids"].as_array())
+            for (const auto& id : *ids)
+                value.default_monitor_track_ids.push_back(ReadId<AudioTrackId>(toml::node_view<const toml::node>{id}));
+        value.monitor_selection_origin =
+            ReadEnum<MonitorSelectionOrigin>(node["monitor_selection_origin"], {"default", "user"});
+        value.limiter = {ReadAudioBool(node["limiter"]["enabled"], true),
+                         float(ReadAudioFloat(node["limiter"]["ceiling_db"], 0))};
+    };
+    if (TomlStr(node["kind"]) == "LegacyRows25") {
+        LegacyRows25Intent legacy;
+        legacy.id_namespace = ReadId<PresetNamespaceId>(node["namespace"]);
+        legacy.microphone_binding = BindingFromToml(node["microphone_binding"]);
+        if (legacy.microphone_binding.kind != AudioBindingKind::MicrophoneEndpoint)
+            throw std::invalid_argument("Legacy microphone binding has wrong kind");
+        legacy.microphone_channel_mode = ReadAudioChannelMode(node["microphone_channel_mode"]);
+        legacy.microphone_dsp = DspFromToml(node["microphone_dsp"]);
+        legacy.microphone_gain_linear = float(ReadAudioFloat(node["microphone_gain_linear"], 1));
+        const auto* rows = node["rows"].as_array();
+        if (!rows)
+            throw std::invalid_argument("Legacy audio rows are missing");
+        for (const auto& value : *rows) {
+            const auto* item = value.as_table();
+            if (!item)
+                throw std::invalid_argument("Invalid legacy row table");
+            LegacyAudioRow row;
+            row.row_id = ReadId<LegacyRowId>((*item)["row_id"]);
+            row.source_id = ReadId<AudioSourceId>((*item)["source_id"]);
+            row.anchor_track_id = ReadId<AudioTrackId>((*item)["anchor_track_id"]);
+            const auto kind = AudioSourceKindFromString(QString::fromStdString(TomlStr((*item)["kind"])));
+            if (!kind)
+                throw std::invalid_argument("Unknown legacy source kind");
+            row.row = {*kind, ReadAudioBool((*item)["enabled"], true), ReadAudioBool((*item)["merge"], false),
+                       float(ReadAudioFloat((*item)["gain_db"], 0)), ReadAudioBool((*item)["muted"], false)};
+            row.name_kind = ReadEnum<AudioTrackNameKind>((*item)["name_kind"], {"automatic", "custom"});
+            row.name = TomlStr((*item)["name"]);
+            row.role = ReadEnum<AudioTrackRole>((*item)["role"], {"standard", "stem", "mix"});
+            row.record_enabled = ReadAudioBool((*item)["record_enabled"], true);
+            legacy.rows.push_back(row);
+        }
+        common(legacy);
+        auto validated = MaterializeLegacyIntent(legacy, AudioEnvironmentSnapshot{true});
+        if (!validated.succeeded())
+            throw std::invalid_argument(validated.error()->context);
+        return legacy;
+    }
+    if (TomlStr(node["kind"]) != "TrackGraph1")
+        throw std::invalid_argument("Unknown audio intent contract");
+    TrackGraph1Intent graph;
+    const auto parse_array = [&](const char* key, const auto& parse) {
+        const auto* array = node[key].as_array();
+        if (!array)
+            throw std::invalid_argument("Audio graph array is missing");
+        for (const auto& value : *array) {
+            const auto* item = value.as_table();
+            if (!item)
+                throw std::invalid_argument("Invalid audio graph table");
+            parse(*item);
+        }
+    };
+    parse_array("sources", [&](const toml::table& item) {
+        AudioSourceSpec source;
+        source.id = ReadId<AudioSourceId>(item["id"]);
+        if (item["legacy_row_id"])
+            source.legacy_row_id = ReadId<LegacyRowId>(item["legacy_row_id"]);
+        source.name = TomlStr(item["name"]);
+        source.binding = BindingFromToml(item["binding"]);
+        source.channel_mode = ReadAudioChannelMode(item["channel_mode"]);
+        source.dsp = DspFromToml(item["dsp"]);
+        source.post_dsp_gain_linear = float(ReadAudioFloat(item["post_dsp_gain_linear"], 1));
+        source.participation = ReadAudioBool(item["participation"], true);
+        source.muted = ReadAudioBool(item["muted"], false);
+        graph.sources.push_back(source);
+    });
+    parse_array("tracks", [&](const toml::table& item) {
+        AudioTrackSpec track;
+        track.id = ReadId<AudioTrackId>(item["id"]);
+        const auto order = TomlInt(item["order"], -1);
+        if (order < 0 || order > UINT32_MAX)
+            throw std::invalid_argument("Invalid audio track order");
+        track.order = uint32_t(order);
+        track.name_kind = ReadEnum<AudioTrackNameKind>(item["name_kind"], {"automatic", "custom"});
+        track.name = TomlStr(item["name"]);
+        track.role = ReadEnum<AudioTrackRole>(item["role"], {"standard", "stem", "mix"});
+        track.record_enabled = ReadAudioBool(item["record_enabled"], true);
+        graph.tracks.push_back(track);
+    });
+    parse_array("routes", [&](const toml::table& item) {
+        graph.routes.push_back({ReadId<AudioRouteId>(item["id"]), ReadId<AudioSourceId>(item["source_id"]),
+                                ReadId<AudioTrackId>(item["track_id"]), float(ReadAudioFloat(item["gain_db"], 0)),
+                                ReadAudioBool(item["muted"], false), ReadAudioBool(item["enabled"], true)});
+    });
+    common(graph);
+    const auto valid = ValidateTrackGraph1Intent(graph);
+    if (!valid.succeeded())
+        throw std::invalid_argument(valid.error()->context);
+    return graph;
+}
+
+void MergeKnown(toml::table& destination, const toml::table& replacement, const toml::table* before = nullptr) {
+    if (before) {
+        for (const auto& [key, value] : *before)
+            if (!replacement.contains(key))
+                destination.erase(key);
+    }
+    for (const auto& [key, value] : replacement) {
+        const auto* prior = before ? before->get(key) : nullptr;
+        if (prior && toml::node_view<const toml::node>{*prior} == toml::node_view<const toml::node>{value})
+            continue;
+        auto* current = destination.get(key);
+        if (current && current->is_table() && value.is_table()) {
+            MergeKnown(*current->as_table(), *value.as_table(), prior ? prior->as_table() : nullptr);
+        } else if (current && current->is_array() && value.is_array()) {
+            toml::array merged;
+            const auto* old_array = current->as_array();
+            const auto* prior_array = prior ? prior->as_array() : nullptr;
+            size_t ordinal = 0;
+            std::map<std::string, size_t> object_occurrences;
+            for (const auto& next : *value.as_array()) {
+                if (!next.is_table()) {
+                    merged.push_back(next);
+                    ++ordinal;
+                    continue;
+                }
+                const auto& next_table = *next.as_table();
+                const auto object_id = TomlStr(next_table["id"], TomlStr(next_table["row_id"]));
+                const size_t occurrence = object_occurrences[object_id]++;
+                const toml::table* old = nullptr;
+                const toml::table* old_known = nullptr;
+                const auto find = [&](const toml::array* array) -> const toml::table* {
+                    if (!array)
+                        return nullptr;
+                    size_t matching = 0;
+                    for (size_t i = 0; i < array->size(); ++i) {
+                        const auto* candidate = (*array)[i].as_table();
+                        if (candidate && (object_id.empty() ? i == ordinal
+                                                            : TomlStr((*candidate)["id"],
+                                                                      TomlStr((*candidate)["row_id"])) == object_id &&
+                                                                  matching++ == occurrence))
+                            return candidate;
+                    }
+                    return nullptr;
+                };
+                old = find(old_array);
+                old_known = find(prior_array);
+                toml::table item = old ? *old : toml::table{};
+                MergeKnown(item, next_table, old_known);
+                merged.push_back(std::move(item));
+                ++ordinal;
+            }
+            destination.insert_or_assign(key, std::move(merged));
+        } else {
+            destination.insert_or_assign(key, value);
+        }
+    }
+}
+
 toml::table ConfigToToml(const RecordingPresetConfig& config) {
+    if (config.audio_read_only && config.raw_document)
+        return config.raw_document->original;
     toml::table tbl;
 
     // --- Capture ---
@@ -696,19 +1056,9 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     aud_tbl.emplace("pcm_float", aud.audio_pcm_float);
     aud_tbl.emplace("flac_compression_level", static_cast<int64_t>(aud.flac_compression_level));
 
-    // audio sources as array-of-tables
-    toml::array sources_arr;
-    for (const auto& row : aud.source_rows) {
-        toml::table row_tbl;
-        row_tbl.emplace("kind", AudioSourceKindToString(row.kind).toStdString());
-        row_tbl.emplace("enabled", row.enabled);
-        row_tbl.emplace("merge", row.merge_with_above);
-        // Audio v2 (0.6.0): per-row gain + mute.
-        row_tbl.emplace("gain_db", static_cast<double>(row.gain_db));
-        row_tbl.emplace("muted", row.muted);
-        sources_arr.push_back(std::move(row_tbl));
-    }
-    aud_tbl.emplace("sources", std::move(sources_arr));
+    const engine::AudioIntent intent = config.audio_intent.value_or(engine::AudioIntent{
+        CreateLegacyAudioIntent(SanitizePresetConfig(config).audio, engine::NewId<engine::PresetNamespaceId>())});
+    aud_tbl.emplace("intent", IntentToToml(intent));
     tbl.emplace("audio", std::move(aud_tbl));
 
     // --- Webcam ---
@@ -754,6 +1104,17 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     // --- Countdown ---
     tbl.emplace("countdown_seconds", static_cast<int64_t>(config.countdown_seconds));
 
+    if (config.raw_document) {
+        auto merged = config.raw_document->original;
+        MergeKnown(merged, tbl, &config.raw_document->known);
+        if (!merged["audio"].is_table())
+            merged.insert_or_assign("audio", toml::table{});
+        auto* audio_table = merged["audio"].as_table();
+        if (!(*audio_table)["intent"])
+            audio_table->insert("intent", IntentToToml(intent));
+        audio_table->erase("sources");
+        return merged;
+    }
     return tbl;
 }
 
@@ -1138,6 +1499,57 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     // --- Countdown ---
     config.countdown_seconds = static_cast<int>(TomlInt(tbl["countdown_seconds"], 0));
 
+    try {
+        if (tbl["audio"]["intent"]) {
+            config.audio_intent = IntentFromToml(tbl["audio"]["intent"]);
+            if (const auto* legacy = std::get_if<engine::LegacyRows25Intent>(&*config.audio_intent))
+                ProjectLegacyAudioIntent(*legacy, config.audio);
+            else
+                ProjectNativeAudioIntent(std::get<engine::TrackGraph1Intent>(*config.audio_intent), config.audio);
+        } else {
+            if (tbl["audio"]["sources"] && !tbl["audio"]["sources"].is_array())
+                throw std::invalid_argument("Legacy audio source array has an unsupported type");
+            if (const auto* rows = tbl["audio"]["sources"].as_array()) {
+                if (rows->size() != config.audio.source_rows.size())
+                    throw std::invalid_argument("Unknown legacy audio source semantics");
+            }
+            config = SanitizePresetConfig(std::move(config));
+            std::ostringstream identity_text;
+            identity_text << tbl;
+            const auto identity_string = identity_text.str();
+            const auto hash =
+                QCryptographicHash::hash(QByteArray::fromStdString(identity_string), QCryptographicHash::Sha256);
+            engine::PresetNamespaceId id_namespace;
+            for (size_t i = 0; i < id_namespace.bytes.size(); ++i)
+                id_namespace.bytes[i] = static_cast<uint8_t>(hash[static_cast<qsizetype>(i)]);
+            id_namespace.bytes[6] = (id_namespace.bytes[6] & 0x0f) | 0x80;
+            id_namespace.bytes[8] = (id_namespace.bytes[8] & 0x3f) | 0x80;
+            config.audio_intent = CreateLegacyAudioIntent(config.audio, id_namespace);
+        }
+    } catch (const std::exception& error) {
+        config.audio_read_only = true;
+        config.audio_validation_error = error.what();
+    }
+    auto raw = std::make_shared<PresetRawDocument>();
+    raw->original = tbl;
+    if (!tbl["audio"]["intent"] && config.audio_intent && !config.audio_read_only) {
+        auto intent_table = IntentToToml(*config.audio_intent);
+        if (auto* old_rows = tbl["audio"]["sources"].as_array()) {
+            auto* new_rows = intent_table["rows"].as_array();
+            for (size_t ordinal = 0; new_rows && ordinal < old_rows->size() && ordinal < new_rows->size(); ++ordinal) {
+                if (const auto* original_row = (*old_rows)[ordinal].as_table()) {
+                    auto merged_row = *original_row;
+                    MergeKnown(merged_row, *(*new_rows)[ordinal].as_table());
+                    (*new_rows)[ordinal].as_table()->operator=(std::move(merged_row));
+                }
+            }
+        }
+        if (auto* original_audio = raw->original["audio"].as_table())
+            original_audio->insert_or_assign("intent", std::move(intent_table));
+    }
+    if (!config.audio_read_only)
+        raw->known = ConfigToToml(config);
+    config.raw_document = std::move(raw);
     return config;
 }
 
@@ -1218,6 +1630,45 @@ std::optional<toml::table> ParseTomlFile(const QString& path, bool* parse_failed
     }
 }
 
+bool IsProtectedDocument(const toml::table& doc) {
+    if (doc["schema_version"] && (!doc["schema_version"].is_integer() || TomlInt(doc["schema_version"], -1) < 0))
+        return true;
+    const auto version = TomlInt(doc["schema_version"], -1);
+    return version > kPresetSchemaVersion ||
+           (version == kPresetSchemaVersion && TomlStr(doc["audio_contract"]) != kAudioContract);
+}
+
+bool EnsureOriginalBackup(const QString& path, int64_t version, QString* error) {
+    QFile original(path);
+    if (!original.open(QIODevice::ReadOnly)) {
+        if (error)
+            *error = original.errorString();
+        return false;
+    }
+    const auto bytes = original.readAll();
+    if (original.error() != QFileDevice::NoError) {
+        if (error)
+            *error = original.errorString();
+        return false;
+    }
+    const auto hash = QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+    QFile backup(path + QStringLiteral(".schema%1.%2.bak").arg(version).arg(QString::fromLatin1(hash)));
+    if (backup.exists()) {
+        if (backup.open(QIODevice::ReadOnly) && backup.readAll() == bytes)
+            return true;
+        if (error)
+            *error = QStringLiteral("Original backup exists with different or unreadable bytes.");
+        return false;
+    }
+    if (!backup.open(QIODevice::WriteOnly | QIODevice::NewOnly) || backup.write(bytes) != bytes.size() ||
+        !backup.flush()) {
+        if (error)
+            *error = backup.errorString();
+        return false;
+    }
+    return true;
+}
+
 // A first run (no file yet) is not a repair — there is nothing to fix.
 PersistedPresetState MakeFirstRunState() {
     PersistedPresetState state;
@@ -1263,10 +1714,16 @@ PersistedPresetState RecordingPresetStore::Load() const {
     if (!maybe_doc.has_value()) {
         PersistedPresetState state;
         state.selected_id = std::string(kDefaultPresetId);
+        state.read_only = true;
+        state.validation_error = "Unsupported or unparseable preset syntax";
         state.repaired = true; // Unparseable file — nothing survived.
         return state;
     }
     const toml::table& doc = *maybe_doc;
+    const bool protected_document = IsProtectedDocument(doc);
+    QString backup_error;
+    if (protected_document)
+        EnsureOriginalBackup(file_path_, TomlInt(doc["schema_version"], -1), &backup_error);
 
     // A schema mismatch alone is a routine version re-stamp, not a repair —
     // every field still parses cleanly and nothing is discarded. `repaired`
@@ -1366,6 +1823,11 @@ PersistedPresetState RecordingPresetStore::Load() const {
     state.user_presets = std::move(accepted);
     state.selected_id = std::move(selected_id);
     state.live = std::move(live);
+    state.read_only = protected_document;
+    if (protected_document)
+        state.validation_error = backup_error.isEmpty()
+                                     ? "Unknown preset schema or audio contract requires explicit import"
+                                     : backup_error.toStdString();
     state.repaired = item_dropped;
     return state;
 }
@@ -1387,7 +1849,27 @@ bool RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, con
         return false;
     }
 
+    std::optional<toml::table> existing;
+    if (QFileInfo::exists(file_path_)) {
+        bool failed = false;
+        existing = ParseTomlFile(file_path_, &failed);
+        if (!existing || IsProtectedDocument(*existing)) {
+            if (err)
+                *err =
+                    QStringLiteral("Preset file is read-only: unknown schema, audio contract or unsupported syntax.");
+            return false;
+        }
+        const auto version = TomlInt(std::as_const(*existing)["schema_version"], -1);
+        if (version < kPresetSchemaVersion && !EnsureOriginalBackup(file_path_, version, err))
+            return false;
+    }
+    if (live.audio_read_only) {
+        if (err)
+            *err = QString::fromStdString(live.audio_validation_error);
+        return false;
+    }
     toml::table doc;
+    doc.emplace("audio_contract", std::string(kAudioContract));
     doc.emplace("schema_version", static_cast<int64_t>(kPresetSchemaVersion));
     doc.emplace("selected_id", selected_id);
     doc.emplace("live", ConfigToToml(live));
@@ -1398,8 +1880,38 @@ bool RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, con
             continue; // Built-ins are code-defined — never written to disk.
         presets_arr.push_back(PresetToToml(preset));
     }
+    if (existing) {
+        if (const auto* originals = (*existing)["presets"].as_array()) {
+            std::map<std::string, size_t> original_ids;
+            std::map<std::string, size_t> written_ids;
+            for (const auto& item : presets_arr)
+                if (const auto* table = item.as_table())
+                    ++written_ids[TomlStr((*table)["id"])];
+            for (const auto& original : *originals) {
+                const auto* table = original.as_table();
+                if (!table) {
+                    presets_arr.push_back(original);
+                    continue;
+                }
+                const auto parsed = PresetFromToml(*table);
+                const size_t ordinal = parsed ? ++original_ids[parsed->id] : 0;
+                const bool duplicate = ordinal > 1;
+                if (!parsed || ((parsed->config.audio_read_only || duplicate) && written_ids[parsed->id] < ordinal)) {
+                    presets_arr.push_back(original);
+                    if (parsed)
+                        ++written_ids[parsed->id];
+                }
+            }
+        }
+    }
     doc.emplace("presets", std::move(presets_arr));
 
+    if (existing) {
+        auto merged = *existing;
+        for (const auto& [key, value] : doc)
+            merged.insert_or_assign(key, value);
+        doc = std::move(merged);
+    }
     return WriteTomlAtomic(doc, file_path_, err);
 }
 
@@ -1430,6 +1942,7 @@ bool RecordingPresetStore::ExportPresetToFile(const RecordingPreset& preset, con
     }
 
     toml::table doc;
+    doc.emplace("audio_contract", std::string(kAudioContract));
     doc.emplace("schema_version", static_cast<int64_t>(kPresetSchemaVersion));
     doc.emplace("export_kind", std::string("single"));
 
@@ -1467,6 +1980,11 @@ QVector<RecordingPreset> RecordingPresetStore::ImportPresetsFromFile(const QStri
         return {};
     }
     const toml::table& doc = *maybe_doc;
+    if (IsProtectedDocument(doc)) {
+        if (err)
+            *err = QStringLiteral("Unknown preset schema or audio contract requires explicit import.");
+        return {};
+    }
 
     // Schema version check: best-effort — attempt to parse regardless.
     const int64_t file_version = TomlInt(doc["schema_version"], -1);

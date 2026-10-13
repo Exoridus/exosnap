@@ -1,5 +1,7 @@
 #pragma once
 
+#include <exosnap/engine/audio_limits.h>
+
 // Internal per-session aggregator for live pipeline diagnostics.
 // Worker threads feed cheap counters/timers; the stats collector calls BuildSnapshot
 // (~5 Hz) to produce an immutable RecordingDiagnosticsSnapshot. Time is injected
@@ -650,10 +652,10 @@ class PipelineDiagnosticsAggregator {
     uint32_t audio_discontinuity_frames_longest_ = 0;
     // Per-track degraded/total capture-source counts. Array size
     // mirrors CodecPrivateData::kMaxAudioTracks; summed in BuildSnapshot.
-    std::array<uint32_t, 3> audio_degraded_sources_{};
-    std::array<uint32_t, 3> audio_degraded_source_kinds_{};
-    std::array<bool, 3> audio_endpoint_in_use_{};
-    std::array<uint32_t, 3> audio_total_sources_{};
+    std::array<uint32_t, exosnap::engine::kMaxAudioTracks> audio_degraded_sources_{};
+    std::array<uint32_t, exosnap::engine::kMaxAudioTracks> audio_degraded_source_kinds_{};
+    std::array<bool, exosnap::engine::kMaxAudioTracks> audio_endpoint_in_use_{};
+    std::array<uint32_t, exosnap::engine::kMaxAudioTracks> audio_total_sources_{};
 
     // Queues
     uint32_t video_queue_depth_ = 0;
@@ -717,14 +719,14 @@ class PipelineDiagnosticsAggregator {
     // A/V clock slaving: latest per-track raw drift, residual (raw minus applied
     // compensation) and compensation rate (ppm). Array size mirrors
     // CodecPrivateData::kMaxAudioTracks. Protected by mutex_.
-    std::array<double, 3> audio_clock_raw_ms_{};
-    std::array<double, 3> audio_clock_residual_ms_{};
-    std::array<double, 3> audio_clock_ppm_{};
-    std::array<bool, 3> audio_clock_valid_{};
+    std::array<double, exosnap::engine::kMaxAudioTracks> audio_clock_raw_ms_{};
+    std::array<double, exosnap::engine::kMaxAudioTracks> audio_clock_residual_ms_{};
+    std::array<double, exosnap::engine::kMaxAudioTracks> audio_clock_ppm_{};
+    std::array<bool, exosnap::engine::kMaxAudioTracks> audio_clock_valid_{};
     // Latched per track: this track's drift figures are known-invalid, so the
     // snapshot must say so instead of publishing them as measurements.
-    std::array<bool, 3> audio_clock_faulted_{};
-    std::array<bool, 3> audio_clock_saturated_{};
+    std::array<bool, exosnap::engine::kMaxAudioTracks> audio_clock_faulted_{};
+    std::array<bool, exosnap::engine::kMaxAudioTracks> audio_clock_saturated_{};
 
     // Peak |av_drift_ms| (residual) this session (running maximum). Single source
     // of truth for both the live UI and the session report.

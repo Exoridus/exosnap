@@ -1,5 +1,7 @@
 #pragma once
 
+#include "audio_tee.h"
+
 #include <exosnap/engine/interfaces/IAudioCaptureSource.h>
 #include <exosnap/engine/recorder_session.h>
 
@@ -55,10 +57,13 @@ enum class WasapiAcquireFailAction {
 // (fail closed, never loop silently).
 WasapiAcquireFailAction ClassifyWasapiAcquireFailure(HRESULT hr) noexcept;
 
+bool DescribeNativeMicrophoneFormat(const std::optional<std::string>& device_id, AudioCaptureDescriptor& descriptor,
+                                    std::string& out_error);
+
 class WasapiCaptureSrc : public IAudioCaptureSource {
   public:
     explicit WasapiCaptureSrc(MicChannelMode channel_mode = MicChannelMode::Auto,
-                              std::optional<std::string> device_id = std::nullopt);
+                              std::optional<std::string> device_id = std::nullopt, bool native_format = false);
     ~WasapiCaptureSrc() override;
 
     WasapiCaptureSrc(const WasapiCaptureSrc&) = delete;
@@ -114,6 +119,7 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
     // clock-drift metric (audio_clock_drift.h).
     bool last_timing_valid_ = false;
     uint64_t last_device_position_ns_ = 0;
+    uint64_t last_device_position_frames_ = 0;
     uint64_t last_qpc_position_ns_ = 0;
 
     bool pending_capture_error_ = false;
@@ -126,6 +132,7 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
 
     MicChannelMode requested_channel_mode_ = MicChannelMode::Auto;
     std::optional<std::string> device_id_;
+    bool native_format_ = false;
     MicChannelMode auto_resolved_mode_ = MicChannelMode::MonoMix;
     bool auto_mode_locked_ = false;
     uint64_t auto_detect_frames_ = 0;

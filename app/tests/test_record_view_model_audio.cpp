@@ -390,7 +390,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_MapsAppTrack) {
     RecordViewModel vm;
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
 
-    std::array<float, 3> rms{0.6f, 0.0f, 0.0f};
+    std::array<float, exosnap::engine::kMaxAudioTracks> rms{0.6f, 0.0f, 0.0f};
     vm.UpdateMeterRms(rms);
 
     EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.6f);
@@ -407,7 +407,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_MapsMicTrack) {
             r.enabled = true;
     vm.RebuildAudioPlan();
 
-    std::array<float, 3> rms{0.0f, 0.9f, 0.0f};
+    std::array<float, exosnap::engine::kMaxAudioTracks> rms{0.0f, 0.9f, 0.0f};
     vm.UpdateMeterRms(rms);
 
     EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.0f);
@@ -421,7 +421,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_DoesNotAffectOther
     vm.elapsed_seconds = 42.0;
     vm.frames_captured = 123;
 
-    std::array<float, 3> rms{0.5f, 0.0f, 0.0f};
+    std::array<float, exosnap::engine::kMaxAudioTracks> rms{0.5f, 0.0f, 0.0f};
     vm.UpdateMeterRms(rms);
 
     // Elapsed and frame count must be untouched
@@ -439,7 +439,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_DisabledSourceStay
     vm.RebuildAudioPlan();
 
     // Track 0=app, track 1=mic; sys is not a preview track.
-    std::array<float, 3> rms{0.5f, 0.4f, 0.3f};
+    std::array<float, exosnap::engine::kMaxAudioTracks> rms{0.5f, 0.4f, 0.3f};
     vm.UpdateMeterRms(rms);
 
     EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.5f);
@@ -459,7 +459,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_MergedTrackFillsAl
     }
     vm.RebuildAudioPlan();
 
-    std::array<float, 3> rms{0.4f, 0.0f, 0.0f};
+    std::array<float, exosnap::engine::kMaxAudioTracks> rms{0.4f, 0.0f, 0.0f};
     vm.UpdateMeterRms(rms);
 
     EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.4f);
@@ -886,6 +886,19 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DisplayDefault_OnlySysIsActive) {
 }
 
 // ---------------------------------------------------------------------------
+
+TEST(RecordViewModelStateGuardTest, UnsupportedAudioConfigurationBlocksEveryStartableState) {
+    RecordViewModel vm;
+    vm.targets.push_back({});
+    vm.selected_target_index = 0;
+    vm.audio_configuration_valid = false;
+    for (const auto state : {UiRecordingState::Ready, UiRecordingState::Completed, UiRecordingState::Failed}) {
+        vm.state = state;
+        EXPECT_FALSE(vm.CanStart());
+    }
+    vm.audio_configuration_valid = true;
+    EXPECT_TRUE(vm.CanStart());
+}
 
 TEST(RecordViewModelStateGuardTest, CanStart_Ready_WithTargets_ReturnsTrue) {
     RecordViewModel vm;

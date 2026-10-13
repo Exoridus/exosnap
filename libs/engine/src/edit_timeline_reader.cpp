@@ -27,12 +27,6 @@ EditRenderPlan ClassifyEditExport(const TimelineRenderSnapshot& snapshot,
         plan.path = EditExportPath::StreamCopy;
         return plan;
     }
-    if (snapshot.timeline.crossfades.empty()) {
-        plan.reason = EXOSNAP_TRANSLATABLE(
-            "EditRender",
-            "This recipe is not stream-copy compatible. Render export currently requires a Crossfade timeline.");
-        return plan;
-    }
     if (to_mp4) {
         plan.reason =
             EXOSNAP_TRANSLATABLE("EditRender", "Render export currently supports Matroska with PCM audio. Choose MKV.");
@@ -69,6 +63,12 @@ EditRenderPlan ClassifyEditExport(const TimelineRenderSnapshot& snapshot,
         const auto& metadata = source->metadata;
         if (!metadata.render_color_supported) {
             plan.reason = metadata.render_color_reason;
+            return plan;
+        }
+        if (metadata.width <= 0 || metadata.height <= 0 ||
+            !IsEncoderAlignedSize({static_cast<uint32_t>(metadata.width), static_cast<uint32_t>(metadata.height)})) {
+            plan.reason = EXOSNAP_TRANSLATABLE(
+                "EditRender", "Match source rendering needs even video dimensions and an exact positive frame rate.");
             return plan;
         }
         if (!plan.output.IsValid()) {
@@ -128,6 +128,10 @@ struct EditTimelineReader::Impl {
             *slot = {};
             slot->engine = std::make_unique<EditPlayerEngine>();
             if (!slot->engine->Open(source->path, error)) {
+                slot->engine.reset();
+                return false;
+            }
+            if (source->monitor_selection && !slot->engine->SetMonitorSelection(*source->monitor_selection, error)) {
                 slot->engine.reset();
                 return false;
             }

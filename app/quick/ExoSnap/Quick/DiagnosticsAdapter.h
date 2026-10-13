@@ -110,6 +110,7 @@ class DiagnosticsAdapter : public QObject {
     Q_PROPERTY(QString presentProviderState READ presentProviderState NOTIFY changed FINAL)
 
     Q_PROPERTY(bool bundleBusy READ bundleBusy NOTIFY bundleBusyChanged FINAL)
+    Q_PROPERTY(QVariantMap audioResources READ audioResources NOTIFY audioResourcesChanged FINAL)
     Q_PROPERTY(QString defaultBundleFileName READ defaultBundleFileName NOTIFY lastCheckChanged FINAL)
 
   public:
@@ -152,6 +153,11 @@ class DiagnosticsAdapter : public QObject {
     [[nodiscard]] QVariantList measurementSources() const;
     [[nodiscard]] QString presentProviderState() const;
     [[nodiscard]] bool bundleBusy() const noexcept;
+    [[nodiscard]] const QVariantMap& audioResources() const noexcept {
+        return audio_resources_;
+    }
+    void setAudioResources(QVariantMap resources);
+    void setClipResources(QVariantList jobs);
     [[nodiscard]] QString defaultBundleFileName() const;
 
     // Starts the first probe if none has run and none is in flight.
@@ -257,6 +263,7 @@ class DiagnosticsAdapter : public QObject {
     void selfTestChanged();
     void pipelineChanged();
     void bundleBusyChanged();
+    void audioResourcesChanged();
 
     // The mandatory confirm before an Auto fix is applied.
     void fixConfirmRequested(const QString& fixId, const QString& label, const QString& changesSummary);
@@ -316,6 +323,8 @@ class DiagnosticsAdapter : public QObject {
     QVariantList config_rows_;
     QVariantList self_test_rows_;
     QVariantMap last_session_;
+    QVariantMap audio_resources_;
+    QVariantList clip_resources_;
 
     // Sparkline history, one bounded deque per live-tile key. Adapter-side by
     // design: the engine publishes instants, and a trend is a property of the

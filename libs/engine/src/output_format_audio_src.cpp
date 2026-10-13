@@ -1,4 +1,6 @@
 #include "output_format_audio_src.h"
+#include <algorithm>
+#include <new>
 
 #include "discontinuity_gap.h"
 #include "exosnap/engine/interfaces/IAudioCaptureSource.h"
@@ -16,6 +18,7 @@ extern "C" {
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 
 namespace exosnap::engine {
 
@@ -35,7 +38,8 @@ void ConvertInt16ToFloat32(const std::int16_t* src, float* dst, size_t sample_co
 
 OutputFormatAudioSrc::OutputFormatAudioSrc(std::unique_ptr<IAudioCaptureSource> inner, uint32_t target_sample_rate,
                                            uint32_t target_channels)
-    : inner_(std::move(inner)), target_sample_rate_(target_sample_rate), target_channels_(target_channels) {
+    : inner_(std::move(inner)), target_sample_rate_(target_sample_rate), target_channels_(target_channels),
+      native_rate_(target_sample_rate == 0), native_channels_(target_channels == 0) {
 }
 
 OutputFormatAudioSrc::~OutputFormatAudioSrc() {
@@ -84,6 +88,10 @@ bool OutputFormatAudioSrc::ConfigureConversion(std::string& out_error) {
     inner_rate_ = inner_->SampleRate();
     inner_channels_ = inner_->Channels();
     inner_format_ = inner_->SampleFormat();
+    if (native_rate_)
+        target_sample_rate_ = inner_rate_;
+    if (native_channels_)
+        target_channels_ = inner_channels_;
 
     if (inner_rate_ == 0 || inner_channels_ == 0) {
         out_error = "OutputFormatAudioSrc: inner source reported invalid rate/channels after Init";
@@ -203,6 +211,26 @@ uint32_t OutputFormatAudioSrc::PendingFrameCount() {
     return inner_->PendingFrameCount();
 }
 
+bool OutputFormatAudioSrc::SetBufferSampleLimit(size_t maximum_samples, std::string& out_error) {
+    if (initialized_ || maximum_samples == 0) {
+        out_error = "Audio conversion buffer admission must precede Init";
+        return false;
+    }
+    try {
+        resample_buf_.reserve(maximum_samples);
+        silence_buf_.reserve(maximum_samples);
+    } catch (const std::bad_alloc&) {
+        out_error = "Audio conversion scratch preallocation failed";
+        return false;
+    }
+    buffer_sample_limit_ = maximum_samples;
+    return true;
+}
+
+uint64_t OutputFormatAudioSrc::BufferedFrames() const {
+    return swr_ && target_sample_rate_ ? static_cast<uint64_t>(swr_get_delay(swr_, target_sample_rate_)) : 0;
+}
+
 bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) {
     out_buf = {};
     out_error.clear();
@@ -210,6 +238,24 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
     RawAudioBuffer src_buf{};
     if (!inner_->AcquireBuffer(src_buf, out_error)) {
         return false;
+    }
+    last_input_frames_ = src_buf.num_frames;
+    if (buffer_sample_limit_ && static_cast<size_t>(src_buf.num_frames) * inner_->Channels() > buffer_sample_limit_) {
+        out_error = "Native audio packet exceeds admitted payload envelope; reprepare required";
+        inner_->ReleaseBuffer();
+        return false;
+    }
+    if (inner_->SampleRate() != inner_rate_ || inner_->Channels() != inner_channels_ ||
+        inner_->SampleFormat() != inner_format_) {
+        if (swr_)
+            swr_free(&swr_);
+        compensation_engaged_ = false;
+        compensation_ppm_ = 0;
+        in_total_ = out_total_ = 0;
+        if (!ConfigureConversion(out_error)) {
+            inner_->ReleaseBuffer();
+            return false;
+        }
     }
 
     output_qpc_ns_ = inner_->LastBufferQpcNs();
@@ -250,6 +296,13 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
     const uint32_t inner_channels = inner_->Channels();
     const int in_frames = static_cast<int>(src_buf.num_frames);
 
+    // Re-arming changes the output bound, so it must precede the capacity check.
+    if (compensation_engaged_ && swr_ != nullptr) {
+        const int distance = 10 * static_cast<int>(target_sample_rate_);
+        const int sample_delta = static_cast<int>(std::lround(compensation_ppm_ * 1e-6 * distance));
+        swr_set_compensation(swr_, sample_delta, distance);
+    }
+
     // Worst-case output frame count: swr_get_out_samples accounts for internal
     // buffered samples plus the new input.
     const int max_out_frames = swr_get_out_samples(swr_, in_frames);
@@ -264,6 +317,11 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
 
     // Allocate output scratch.
     const size_t out_samples = static_cast<size_t>(max_out_frames) * target_channels_;
+    if (buffer_sample_limit_ && out_samples > buffer_sample_limit_) {
+        out_error = "Corrected audio packet exceeds admitted payload envelope; reprepare required";
+        inner_->ReleaseBuffer();
+        return false;
+    }
     resample_buf_.resize(out_samples);
 
     // Prepare source pointer (null for silent — swr_convert will generate silence).
@@ -274,18 +332,6 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
         // Feed zero-valued samples (silence) so swr keeps its internal clock.
         silence_buf_.assign(static_cast<size_t>(in_frames) * inner_channels, 0.0f);
         in_ptr = reinterpret_cast<const uint8_t*>(silence_buf_.data());
-    }
-
-    // Re-arm the clock-slaving compensation window before every convert while a
-    // compensation has ever engaged. distance = 10 * target_rate gives 0.1 ppm
-    // resolution; the window never expires because we re-arm each acquire. A ppm
-    // of 0 arms a zero delta, cancelling cleanly while keeping the context.
-    // Sign contract: p > 0 -> positive sample_delta -> more output frames per
-    // input (the swr characterization test pins this; invert here if it fails).
-    if (compensation_engaged_ && swr_ != nullptr) {
-        const int distance = 10 * static_cast<int>(target_sample_rate_);
-        const int sample_delta = static_cast<int>(std::lround(compensation_ppm_ * 1e-6 * distance));
-        swr_set_compensation(swr_, sample_delta, distance);
     }
 
     uint8_t* out_ptr = reinterpret_cast<uint8_t*>(resample_buf_.data());
@@ -342,8 +388,18 @@ uint32_t OutputFormatAudioSrc::DrainResampler(RawAudioBuffer& out_buf, int64_t* 
     bool emptied = false;
     for (int iter = 0; iter < kMaxDrainIterations; ++iter) {
         const int64_t delay = swr_get_delay(swr_, static_cast<int64_t>(target_sample_rate_));
+        if (delay < 0 || delay > (std::numeric_limits<int>::max)() - kMinChunkFrames) {
+            if (out_undrained_frames)
+                *out_undrained_frames = (std::max)(delay, int64_t{0});
+            break;
+        }
         const int chunk = (delay > 0 ? static_cast<int>(delay) : 0) + kMinChunkFrames;
         const size_t base = resample_buf_.size();
+        if (buffer_sample_limit_ && base + static_cast<size_t>(chunk) * target_channels_ > buffer_sample_limit_) {
+            if (out_undrained_frames)
+                *out_undrained_frames = delay;
+            break;
+        }
         resample_buf_.resize(base + static_cast<size_t>(chunk) * target_channels_);
         uint8_t* out_ptr = reinterpret_cast<uint8_t*>(resample_buf_.data() + base);
         const int produced = swr_convert(swr_, &out_ptr, chunk, nullptr, 0);
@@ -426,6 +482,10 @@ uint32_t OutputFormatAudioSrc::DegradedSourceCount() const {
 
 uint32_t OutputFormatAudioSrc::DegradedSourceIndexMask() const {
     return inner_ ? inner_->DegradedSourceIndexMask() : 0;
+}
+
+bool OutputFormatAudioSrc::ClockCorrected() const {
+    return inner_ && inner_->ClockCorrected();
 }
 
 void OutputFormatAudioSrc::Shutdown() {

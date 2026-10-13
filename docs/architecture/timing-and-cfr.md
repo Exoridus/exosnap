@@ -52,11 +52,11 @@ The mixer owns silence during multi-source outages. The outer audio worker must 
 
 ### Clock slaving
 
-Clock slaving is enabled by default and uses the existing output-format resampler, not a second resampler or periodic PTS jumps. Its fixed controller uses measured rate feed-forward plus proportional correction of residual error:
+Clock slaving is enabled by default. The typed capture path applies the existing resampler controller once per physical capture, before source DSP and fanout. Downstream logical and track sources declare that correction has already happened; format conversion does not start another controller. The legacy path retains its compatibility decorator. The fixed controller uses measured rate feed-forward plus proportional correction of residual error:
 
 `requested_ppm = measured_rate_ppm + residual_ms / 60 * 1000`
 
-The rate is the slope from a settled reference sample, not `drift / elapsed`, which mistakes a fixed startup offset for a changing clock. The reference begins after five seconds and needs at least sixty seconds of span. Engagement occurs if absolute drift exceeds 15 ms or the trustworthy rate predicts that threshold within ten minutes. Engagement latches for the current stream.
+The rate is the slope from a settled reference sample, not `drift / elapsed`, which mistakes a fixed startup offset for a changing clock. The reference begins after five seconds. The typed physical-capture controller requires five seconds of measurement span; the legacy controller retains its sixty-second span. Engagement occurs if absolute drift exceeds 15 ms or the trustworthy rate predicts that threshold within ten minutes. Engagement latches for the current stream.
 
 The controller updates at roughly one second, caps correction at ±500 ppm, slew-limits it to 125 ppm per second and suppresses changes below its minimum meaningful step. Feed-forward removes the steady rate burden from the proportional term; within the correction envelope the residual can converge near zero. At the rate cap, existing offset need not close. Beyond the cap, residual can continue growing. There is no universal bounded-drift promise for an arbitrarily bad device clock.
 

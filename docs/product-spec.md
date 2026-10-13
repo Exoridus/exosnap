@@ -14,7 +14,7 @@ Configuration and compatibility have one C++ owner. Presentation consumes resolv
 
 The title band provides five direct destinations in this order: **Record, Edit, Settings, Diagnostics, About**. Logs is not a top-level destination: it is the full log view inside Diagnostics, reached from the Reference section, a failed recording's View log action or a Show in log action, and it keeps Diagnostics selected. Hotkeys is a Settings card. Hardware inspection is a collapsed Diagnostics reference, not a Device destination or an encoder selector.
 
-Settings owns user choices. Diagnostics owns observations and hosts both its overview and the internal Logs view. Record owns capture setup, preview and transport. Edit owns the in-memory recording-edit workspace. About owns application identity and project links.
+The Recording profile inspector owns recording choices. Settings owns global application preferences. Diagnostics owns observations and hosts both its overview and the internal Logs view. Record owns capture setup, preview and transport. Edit owns the in-memory recording-edit workspace. About owns application identity and project links.
 
 ### Shell and window
 
@@ -48,6 +48,9 @@ Text and filled-control ink target 4.5:1 contrast; state/focus indicators target
 
 Unavailable controls retain labels/current values, drop interactive emphasis and expose the real reason. A locked-on switch preserves its on shape without looking pressable. A row dims only when all its controls are unavailable. Accent swatches show the value for the current appearance and use a separate selection ring and accessible name.
 
+The source picker groups displays, application windows and region actions in one scrollable selection. Search and section jumps change the visible choices without changing the active source. All eligible windows remain reachable; virtualization limits thumbnail work to visible rows. Confirmation resolves the pending lifetime identity against a fresh target list. A disappeared or recycled window is unavailable and never falls back to its old list index.
+
+Hiding a window until restart applies only to that window lifetime. Persistent title rules explicitly choose equals or contains, case sensitivity and application scope. The default is contains, case insensitive and scoped to the selected application. Application-wide hiding requires separate confirmation. The picker menu reviews, disables and removes global rules independently of recording presets. The hidden count deduplicates eligible windows before text search; search matches have a separate count. Hidden windows have no thumbnail demand unless the user reveals them and they are in the viewport. Hiding the selected window does not stop or retarget its recording, and does not conceal its contents in a monitor recording.
 ## 3. Recording defaults and profiles
 
 | Setting | Default |
@@ -63,9 +66,9 @@ Unavailable controls retain labels/current values, drop interactive emphasis and
 | HDR handling | Tone-map to SDR on an HDR-active source |
 | Cursor | Included |
 | Countdown | Off; choices Off, 3, 5 or 10 seconds |
-| Application audio | Configured on; contributes only for a specific window target |
+| Application audio | Added explicitly for a selected application window |
 | System audio / microphone | System on, microphone off |
-| Tracks | One per enabled eligible source unless mixed into the previous track |
+| Tracks | One named Audio 1 track with system audio assigned; microphone initially unassigned and off |
 | Webcam / microphone DSP | Off |
 | Mixed-bus limiter / clock slaving | On |
 | Check for updates at startup | Off |
@@ -102,7 +105,7 @@ Availability additionally depends on the actual GPU/driver and selected depth/ch
 
 Switching container reconciles video/audio to a permitted combination through the C++ resolver. An AV1 setup switched to MP4 resolves to H.264 + AAC. AV1-in-MP4 and PCM-in-MP4 remain unoffered; a muxer being able to write them is insufficient compatibility evidence. FLAC is MKV-only and not a current MP4 target. WebM never offers H.264/HEVC.
 
-MP4 is delivered from a Matroska recording by progressive faststart stream copy. The UI distinguishes Finalizing/Saving from Saved and shows a percentage only once measured progress exists. Cancellation/failure retains valid source media where available. A successful single-file MP4 recording can retain an `.edit.mkv` master for editing; it consumes additional storage. Split MP4 recordings remux each completed segment while capture continues and are Saved only after required remux work completes.
+MP4 is delivered from a Matroska recording by progressive faststart stream copy. The UI distinguishes Finalizing/Saving from Saved and shows a percentage only once measured progress exists. Cancellation/failure retains valid source media where available. MP4 recordings retain the finalized MKV source of every segment as an edit master; these masters consume additional storage. A failed master rename leaves the valid source at its original path. Split MP4 recordings remux each completed segment while capture continues and are Saved only after required remux work completes.
 
 SDR and native-HDR outputs carry their actual color descriptions. Native HDR is not relabeled BT.709 during MP4 delivery. The `hvc1` tag is part of the intended compatibility path, not a guarantee that every player or editor accepts every file.
 
@@ -110,9 +113,11 @@ SDR and native-HDR outputs carry their actual color descriptions. Native HDR is 
 
 ### Sources and tracks
 
-Settings lists Application, System and Microphone in product order (`APP`, `SYS`, `MIC`). Application remains configured while a display/region target is selected but recedes with the explanation that it takes effect for a specific application window. It has no Mix into previous track control because it is first.
+New configurations use stable source, track and route identities. Settings presents track cards with names, roles, recording participation, assigned source chips and route gains. Empty tracks remain visible and produce no output stream. Move removes a source's previous routes and assigns it to the chosen track; Also add preserves existing routes. One source can feed several tracks, and several sources can feed one track. Output supports up to eight recorded tracks.
 
-Eligible enabled sources form separate tracks by default. **Mix into previous track** appends a source to the track being built from the preceding eligible rows. Chained selections can produce one combined track. The engine resolves the actual track structure and names; the UI does not invent one from visible row positions.
+The source list separates participation, availability and mute. New sources are unassigned until explicitly routed. Application sources use a specific selected capture application; independent application sources freeze that process instance instead of following later capture-target edits. Source details own device, channel, post-DSP gain and individual processing controls.
+
+Existing configurations retain their ordered-row routing and shared microphone settings until a structural edit is explicitly converted. Conversion fixes the current track layout, preserves IDs and can be undone. Unsupported future configurations remain read-only. There is one persistent routing editor; during recording its Active view describes the frozen output and edits configure the Next plan.
 
 During recording, a source admitted at start can be muted and unmuted. Muting preserves its track and duration with silence. A source absent from the initial plan cannot be added mid-session and its toggle remains locked. Changing capture device or track structure requires a new recording.
 
@@ -120,9 +125,9 @@ Source gain is −60 to +24 dB, default 0 dB, with microphone gain on its own ca
 
 ### Meters and microphone
 
-Source blocks align the include control/name, measured level and mix-to-previous slot. Meter position, ruler and numeric readout use the same decibel value. Settings meters provide a full-width segmented scale with −60, −40, −20, −6 and 0 dBFS marks and peak hold. Silence is distinct from a finite −60 dB reading. An off source collapses to its header instead of displaying a meaningless full-width meter.
+Source rows show measured pre-mute RMS and peak independently of post-limiter track RMS. Values use dBFS and remain unavailable until measured; silence is distinct from a finite -60 dB reading. Meter updates publish separately from editable routing cards so they do not replace focused inputs or drafts. Active output meter snapshots reach the routing panel at 10 Hz.
 
-Microphone Device, Channels, Gain and Post-processing are a separate card below Audio sources. The summary identifies the chosen device/gain/processing and says No microphone connected when appropriate. A disconnected configured device is not silently replaced by an arbitrary one.
+Microphone Device, Channels, Gain and Post-processing belong to the explicitly chosen source's details. Legacy configurations retain a separate shared microphone card. A disconnected configured device is not silently replaced by an arbitrary one.
 
 The optional microphone chain is **high-pass → noise gate → AGC → RNNoise**, each independently off by default. RNNoise adds one 10 ms block of latency at 48 kHz; turning processing off does not negate other conversions or clock compensation. No master DSP switch implies all stages share one setting.
 
@@ -147,7 +152,7 @@ An endpoint lost during recording silences the affected source while video and o
 
 Merged sources share one QPC-aligned output timeline after normalization to 48 kHz stereo. A bounded 30 ms arrival horizon fills missing intervals with silence, including quiet sources and endpoint outages. Rejoining sources occupy their timestamped intervals rather than extending the track. Single-source loss retains elapsed-time silence accounting. Long-running independent device clocks and physical partial recovery require hardware validation. An ordinary quiet but connected loopback source is not labeled lost. Diagnostics and standing notifications identify real degradation and clear when it ends; the report records that a gap occurred. No system can recover sound that was not captured.
 
-Clock slaving is on by default. It gently resamples a measurable single-device track to the video/QPC clock. It engages from drift above roughly 15 ms or a measured drift rate likely to exceed that within ten minutes. The displayed drift is the residual after actual correction; raw drift and applied rate are also diagnostic data. Correction is capped at ±500 ppm. Within that envelope the residual can approach zero; at/beyond the cap it can remain or grow. Multi-source merged tracks are not slaved because they have several clocks.
+Clock slaving is on by default. It gently resamples each measurable physical capture to the video/QPC clock before logical-source DSP and track fanout. It engages from drift above roughly 15 ms or a measured drift rate likely to exceed that within ten minutes. The displayed drift is the residual after actual correction; raw drift and applied rate are also diagnostic data. Correction is capped at ±500 ppm. Within that envelope the residual can approach zero; at/beyond the cap it can remain or grow. Merged tracks consume already corrected sources and do not run a second clock controller.
 
 Expert can disable clock slaving for a bit-exact workflow. That only removes this correction: gain, mixing, channel conversion, quantization and lossy encoding still determine whether the overall chosen path is bit-exact.
 
@@ -216,7 +221,7 @@ The Record preview canvas fills the available page area with the same inset and 
 
 Idle display preview uses the selected capture hub and holds through transient loss. Window/region idle preview uses WGC. Preview stops when Record is no longer actually displayed. During recording it normally switches to the engine's composited image and stops independent capture, without a black flash during handoff. Cross-adapter sharing failure and the already-PQ path are explicit exceptions, so WYSIWYG is not unconditional on every configuration.
 
-Preview frame rate is a global preference under Video quality & timing: Off, 15, 30, 60 or 120 fps, default 60. Unsupported display-derived choices remain visible but disabled. It caps idle acquisition/publication and preview presentation independently of recording cadence. Off releases the idle capture subscription and shows Preview off; framing and webcam placement cannot be checked there while disabled. Recording and its composited tap continue. The preference is not part of a recording preset.
+Preview frame rate is a global preference under Settings / App behaviour: Off, 15, 30, 60 or 120 fps, default 60. Unsupported display-derived choices remain visible but disabled. It caps idle acquisition/publication and preview presentation independently of recording cadence. Off releases the idle capture subscription and shows Preview off; framing and webcam placement cannot be checked there while disabled. Recording and its composited tap continue. The preference is not part of a recording preset.
 
 Preview redraw is producer-driven. A published frame missed during screen movement/exposure/scene reconstruction is presented when rendering is usable again without another frame or mouse event. Ready screenshots remain disabled until a usable preview frame exists.
 
@@ -256,7 +261,7 @@ The Record layout has a full preview canvas with persistent context chrome and a
 
 | State | Recommended action and behavior |
 |---|---|
-| Ready | Outlined Record; source and countdown controls available as applicable |
+| Ready | Filled primary Record; source and countdown controls available as applicable |
 | Countdown | Filled Cancel, neutral progress state |
 | Preparing | Preparing feedback; pending start can be canceled cooperatively |
 | Recording | Filled Stop, secondary pause/screenshot/marker/split where supported |
@@ -266,6 +271,14 @@ The Record layout has a full preview canvas with persistent context chrome and a
 | Failed | Modal failure explanation and report action; Back acknowledges the failure before Record returns; no success result |
 
 A successful recording is confirmed by the Saved notification, whose Edit and folder actions open that recording, and by the shell's brief Saved indication. Record keeps no persistent success layout; the recording remains reachable from Edit History. A split recording can open in Edit as ordered segment clips. Missing/failed media is represented honestly rather than silently omitted. Capture frame is not shown beside a failed run. Icon-only controls have descriptive tooltips, and unavailable reasons remain hover-readable.
+
+### Recording workspace and profile
+
+Sources on the left and Recording profile on the right start closed. Opening an overlay leaves the preview geometry unchanged. Below 1200 logical pixels of workspace width, opening one overlay closes the other. Pinning is an explicit action and requires at least 480 by 280 logical pixels for the preview. A resize that violates this minimum closes the most recently opened panel with a visible explanation. Growing the window does not reopen it. Escape closes the active panel, and focus returns to its opening control without stopping a recording.
+
+The source overview uses the configured source identities and shows availability, participation and measured levels. The profile inspector owns format, quality, output, audio routing, microphone, audio encoding and webcam configuration. It reuses the shared preset draft and the single track routing editor. Named preset apply retains environment-owned capture and HDR fields. During recording, Active recording is a frozen read-only view. Edit next recording explicitly exposes the separate next draft, whose changes take effect at the next start. Operational mute and webcam participation remain session actions.
+
+The transport uses compact source meters and a geometrically centered timer with reserved width for hours. Stop remains directly reachable while secondary actions use a named overflow at narrow widths. Recording Clip creation is unavailable in v1.3. Opening the editor retains its existing availability rules.
 
 ### Runtime health and duration
 
@@ -298,6 +311,13 @@ Only one continuation is armed at a time. Missing/empty artifacts are removed fr
 
 Manifest failure does not abort a good recording. It raises Recovery protection unavailable and marks that session unprotected instead of pretending an entry exists. Local recording recovery is independent of crash-upload consent.
 
+### Recording clips
+
+Recording Clip creation is outside the offered v1.3 product scope. The transport and overflow menu contain no Save clip action, and no clip panel is constructed. A compile-time C++ product capability rejects application requests before planning, leases, staging or background work. QML methods, stale adapter state and control-channel requests cannot enable it. There is no configuration, runtime switch or production development bypass.
+
+The retained clip engine, UI components and regression tests remain engineering groundwork. Reactivation requires an intentional source change, proof of the inclusive 33,554,432-byte per-active-job memory contract and complete codec, long-duration and recording/isolation qualification. The memory contract is unresolved, not passed or waived. No H.264, HEVC, AV1 or audio clip-creation profile is advertised as available.
+
+Previously saved standalone clips remain ordinary media files. Import, playback, History, editing, stream-copy trim and supported render/export use their existing media rules. This availability boundary changes creation only. Normal recording, splits, markers, recovery, MKV/WebM writing, MKV-to-MP4 delivery and shared background I/O admission remain active.
 ### Edit workspace and export
 
 Successful recordings remain on Record, which is immediately ready for the next recording, and appear in Edit history. Saved-recording notifications follow the notification preference. Editing starts only through an explicit user action. History and notification Edit actions navigate to the Edit destination and add the relevant recording to its resident workspace.
@@ -316,7 +336,7 @@ Preview and render export use exactly the same pure timeline evaluator and sourc
 
 Export defaults to Match source. The native save dialog starts in the configured ExoSnap output folder and allows filename, folder and MKV/MP4 container selection. Existing destinations require confirmation; originals are not overwritten implicitly. There is no forced sibling `_edit` destination. Resolution-changing YouTube and Archive profiles remain unavailable; render output takes fixed geometry and exact rational frame rate from the first video source.
 
-The C++ classifier selects StreamCopy, Render or Unsupported. Eligible single-source trims and compatible full-source concatenations still use stream copy without re-encoding; contiguous splits can coalesce. Removing Crossfade restores that eligibility where other lossless rules permit. Stream copy does not promise frame accuracy: reordered video retains dependency pictures through the next random-access boundary where required. Crossfade renders explicit BT.709 SDR 8-bit 4:2:0 sources into limited-range SDR video and 48 kHz stereo PCM24 Matroska using the existing generic video/audio encoders and muxer. Unknown/non-BT.709 color, HDR, 10-bit, 4:4:4, independent audio edits and render MP4 fail explicitly. Render export uses the current encoder preset, backend tuning and lookahead policy with the same capability reconciliation as recording. Video and audio share one timeline duration rounded to the final output frame. Export snapshots are independent of navigation; cancellation remains pending until the worker stops, and completion/failure continues through notifications. Closing the application waits for cancelled export work and staging cleanup before completing teardown.
+The C++ classifier selects StreamCopy, Render or Unsupported. Eligible single-source trims and compatible full-source concatenations still use stream copy without re-encoding; contiguous splits can coalesce. Removing Crossfade restores that eligibility where other lossless rules permit. Stream copy does not promise frame accuracy: reordered video retains dependency pictures through the next random-access boundary where required. Crossfade and valid linked hard-cut recipes that cannot use stream copy render explicit BT.709 SDR 8-bit 4:2:0 sources into limited-range SDR video and 48 kHz stereo PCM24 Matroska using the existing generic video/audio encoders and muxer. Unknown/non-BT.709 color, HDR, 10-bit, 4:4:4, independent audio edits and render MP4 fail explicitly. Before export starts, a review shows the selected path, container, codecs and kept or mixed audio tracks. Copy retains all recorded audio tracks. Render uses the explicitly confirmed monitor selection and creates a new stereo mix, including deliberate silence when no tracks are selected. Changes to the recipe, sources or selection require another review. Overwriting a file requires a separate confirmation. Render export uses the current encoder preset, backend tuning and lookahead policy with the same capability reconciliation as recording. Video and audio share one timeline duration rounded to the final output frame. Export snapshots are independent of navigation; cancellation remains pending until the worker stops, and completion/failure continues through notifications. Closing the application waits for cancelled export work and staging cleanup before completing teardown.
 
 Marker sidecars use `<stem>.markers.json`, not a suffix appended to the media extension. Export filters and rebases surviving markers, removes stale sidecars when no markers remain and writes no container chapters.
 
@@ -376,7 +396,7 @@ The top bar retains three noninteractive source-health indicators across every p
 
 ## 11. Diagnostics and fix actions
 
-Diagnostics keeps four main live tiles: Frame pacing, Encoder, Storage and Audio sync. The recording verdict and ledger describe measured impact. Raw timing, presentation, GPU/memory and kernel evidence stays in grouped In-depth details; missing PresentMon is neutral. Compensated condition periods stay in In-depth/reports. Diagnostics is state-ordered, not a separate Simple/Expert mode. The Expert toggle belongs only to Settings.
+Diagnostics keeps four main live tiles: Frame pacing, Encoder, Storage and Audio sync. The recording verdict and ledger describe measured impact. Raw timing, presentation, GPU/memory and kernel evidence stays in grouped In-depth details; missing PresentMon is neutral. Compensated condition periods stay in In-depth/reports. Diagnostics is state-ordered, not a separate Simple/Expert mode. The shared Expert preference is edited in the recording profile inspector.
 
 | State | Main contents |
 |---|---|
@@ -385,6 +405,10 @@ Diagnostics keeps four main live tiles: Frame pacing, Encoder, Storage and Audio
 | After stop | Readiness verdict plus Last session card and frozen findings |
 
 Self-test, Hardware capabilities, Environment & configuration and Support bundle are collapsed references with summaries and their relevant actions. Probes run on relevant visibility/configuration and periodic refresh rather than needing a misleading permanent check button. Live metrics use their measured cadence and do not masquerade as raw per-frame analysis.
+
+Audio resources retain distinct physical capture, logical source and track output rows. Opaque capture/clock IDs link shared resources without exposing endpoint paths, process IDs or window titles. Physical capture and source DSP counters are counted once per owner, independent of route count. Runtime rows show reader counts, clock quality, raw/residual drift and compensation, reinitialization, source gaps and reader overflow, source pre-mute RMS/peak, and track post-limiter RMS/peaks and current gain reduction.
+
+Processing costs are cumulative elapsed milliseconds for capture/clock conversion, logical source processing, and track mixing/limiting. They are not CPU utilization or an estimate from route counts. Unmeasured values show n/a with a reason; measured silence remains distinct. The retained clip adapter can project exact job counters for engineering tests. The v1.3 product admits no ClipJobs and shows no active clip rows. A shared recording storage row shows the disk floor plus the current recording/remux allowance enforced by clip admission. It is shown once regardless of job count and is not a disk free-space measurement. Index commit lag and CPU utilization remain unavailable because the runtime does not publish those measurements.
 
 Each diagnosis declares both severity (Pass/Notice/Blocker) and tier: Blocker, Measured problem, Optimization or Fact. Blockers prevent start. Measured problems remain represented and attention-colored. Optimization tips bundle quietly and cannot alone make readiness amber. Facts are neutral reference and do not count in the verdict.
 
@@ -402,9 +426,9 @@ Logs provides a virtualized structured list with Time, Level, Category and Messa
 
 ## 12. Settings model (Default / Expert)
 
-Settings serves technically inclined users without assuming video/audio specialization. Default exposes practical format, source, quality, output and recovery choices. Expert reveals raw or compatibility-sensitive mechanics **within** existing cards; it never hides an entire section.
+Settings retains card-based global application preferences: App behaviour, Hotkeys, Appearance, Overlays, Updates and Support & diagnostics. Recording choices are edited in the Recording profile inspector. A Settings shortcut opens that inspector rather than providing another editable copy. Expert reveals raw or compatibility-sensitive mechanics within the recording cards; it never hides an entire section.
 
-At desktop width the left column is Recording format, Audio sources, Microphone, Output, App behaviour, Hotkeys and Appearance. The right is Video quality & timing, Audio encoding, Webcam, Overlays, Updates and Support & diagnostics. Narrow layout retains the same sections and operability. Preset actions and Expert share the first toolbar.
+Global Settings adapts its card columns to the available width. The inspector uses one scrollable column and retains preset actions and the shared Expert preference.
 
 Expert owns numeric rate control/CQ/bitrate, custom frame-rate entry, pacing, NVENC preset and advanced tuning, keyframe interval, color range/depth/chroma, specialized Opus/sample-rate/clock controls and relevant raw gain/limiter/float choices. Relevance can narrow these further: no H.264 10-bit row, no unsupported 4:4:4 row, and no lossy-codec bit-depth field. HDR handling is Default-visible on a relevant HDR display. Automatic splitting, microphone processing and ordinary audio controls are not hidden just for sounding technical.
 

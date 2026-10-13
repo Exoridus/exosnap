@@ -1,6 +1,12 @@
 #pragma once
 
+#include "exosnap/engine/audio_media_manifest.h"
 #include "exosnap/engine/mp4_remuxer.h"
+
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <string>
 
 namespace exosnap::engine {
 
@@ -14,10 +20,18 @@ struct EditMediaMetadata {
     bool render_color_supported = false;
     std::string render_color_reason;
     bool has_audio = false;
+    AudioMetadataReadResult audio_metadata;
+    std::string video_codec;
+    FileIdentity file_identity;
+    uint64_t file_size = 0;
+    std::array<uint8_t, 32> content_sha256{};
+    bool content_identity_valid = false;
     std::string error;
 };
 
-EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source);
+EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source, const std::function<bool()>& continue_io = {},
+                                 const BackgroundIoAdmission& before_io = {},
+                                 const std::atomic<bool>* cancelled = nullptr);
 
 struct TimelineExportClip {
     std::filesystem::path source;
@@ -37,7 +51,8 @@ struct TimelineExportAssessment {
 // must reject independent audio edits, compositing and transitions before calling.
 // Single-source trims retain TrimRange's keyframe accuracy contract. Multiple
 // sources currently require complete, compatible streams without gaps.
-TimelineExportAssessment AssessTimelineExport(const std::vector<TimelineExportClip>& clips, bool to_mp4);
+TimelineExportAssessment AssessTimelineExport(const std::vector<TimelineExportClip>& clips, bool to_mp4,
+                                              const std::atomic<bool>* cancelled = nullptr);
 
 // Synchronous and independent of mutable workspace state. Output must be a new
 // staging path, never a source. Failed/cancelled exports remove that staging file.

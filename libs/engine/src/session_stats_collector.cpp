@@ -178,6 +178,34 @@ void SessionStatsCollector::Run() {
             {
                 std::lock_guard lk(m_state.stats_mutex);
                 meter.per_track_rms = m_state.stats.per_track_rms;
+                if (m_state.config.resolved_audio_plan) {
+                    for (const auto& track : m_state.config.resolved_audio_plan->tracks) {
+                        const auto index = track.mux_index.value;
+                        if (index < meter.per_track_rms.size())
+                            meter.tracks.push_back(
+                                {track.id, m_state.stats.per_track_meter_measured[index], meter.per_track_rms[index]});
+                    }
+                }
+            }
+            if (m_state.audio_runtime_graph) {
+                meter.tracks = m_state.audio_runtime_graph->TrackMeters();
+                meter.physical = m_state.audio_runtime_graph->PhysicalMeters();
+                for (const auto& source : m_state.audio_runtime_graph->SourceMeters())
+                    meter.sources.push_back({source.source_id,
+                                             {source.source_generation},
+                                             source.has_measurement,
+                                             source.rms,
+                                             source.peak,
+                                             source.muted,
+                                             source.clock_id,
+                                             source.reader_count,
+                                             source.processed_blocks,
+                                             source.processed_frames,
+                                             source.missing_frames,
+                                             source.reader_overflow_frames,
+                                             source.history_reset_count,
+                                             source.processing_time_available,
+                                             source.processing_ms});
             }
             m_state.meter_callback(meter);
         }

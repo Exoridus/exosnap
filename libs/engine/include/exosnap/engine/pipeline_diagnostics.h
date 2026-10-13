@@ -1,5 +1,7 @@
 #pragma once
 
+#include <exosnap/engine/audio_limits.h>
+
 // Live recording-pipeline diagnostics (DIAGNOSTICS-LIVE-PIPELINE-R1).
 //
 // Immutable, UI-free typed telemetry snapshot for the active recording pipeline.
@@ -366,9 +368,9 @@ struct AudioDiagnostics {
     // are meaningful only where resampler_drain_recorded is true — a track that
     // never reached its drain (failed session, join timeout, no resample context)
     // leaves them at 0, which is not a measurement.
-    std::array<bool, 3> resampler_drain_recorded{};
-    std::array<uint64_t, 3> resampler_drained_frames{};
-    std::array<uint64_t, 3> resampler_undrained_frames{};
+    std::array<bool, exosnap::engine::kMaxAudioTracks> resampler_drain_recorded{};
+    std::array<uint64_t, exosnap::engine::kMaxAudioTracks> resampler_drained_frames{};
+    std::array<uint64_t, exosnap::engine::kMaxAudioTracks> resampler_undrained_frames{};
 };
 
 struct QueueDiagnostics {

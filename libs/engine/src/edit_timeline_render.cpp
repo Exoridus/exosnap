@@ -17,6 +17,7 @@
 #include "codec_private.h"
 #include "matroska_stream_writer.h"
 #include "pcm_audio_encoder.h"
+#include "render_audio_manifest.h"
 
 #include <dxgi1_6.h>
 
@@ -217,6 +218,11 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
             error = "Export cancelled.";
             return false;
         }
+        auto audio_preflight = PrepareRenderAudioManifest(snapshot);
+        if (!audio_preflight.succeeded()) {
+            error = audio_preflight.error()->context;
+            return false;
+        }
         RenderDevice gpu;
         if (!gpu.Open(config, error))
             return false;
@@ -261,11 +267,13 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
         mux.frame_rate_den = plan.fps_den;
         mux.timeline_duration_ns = duration_ns;
         mux.color = config.color;
-        const bool audio = std::any_of(snapshot.timeline.clips.begin(), snapshot.timeline.clips.end(),
-                                       [](const auto& clip) { return clip.audio; });
+        const bool audio = !audio_preflight.value()->manifest.tracks.empty();
         mux.audio_track_count = audio ? 1 : 0;
         mux.audio_codec = StreamAudioCodec::Pcm;
         mux.audio_bit_depth = 24;
+        mux.audio_manifest = audio_preflight.value()->manifest;
+        if (audio)
+            mux.audio_tracks[0].name = mux.audio_manifest->tracks[0].container.name;
         if (!VideoPrivate(config.video_codec, encoder->SequenceHeader(), mux, error))
             return false;
         MatroskaStreamWriter writer;

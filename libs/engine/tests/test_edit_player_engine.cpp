@@ -7,6 +7,7 @@
 
 #include "edit_playback_pacing.h"
 #include "exosnap/engine/edit_player_engine.h"
+#include <exosnap/engine/audio_media_manifest.h>
 
 extern "C" {
 #include <libavcodec/codec_id.h>
@@ -213,6 +214,22 @@ TEST(EditPlayerEngine, OpenNonexistentFileFails) {
     std::string err;
     EXPECT_FALSE(engine.Open(std::filesystem::path("Z:/does/not/exist.mkv"), err));
     EXPECT_FALSE(err.empty());
+}
+
+TEST(EditPlayerEngine, OpeningCancellationDoesNotSurviveIntoPlayback) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    EditPlayerEngine engine;
+    std::string error;
+    {
+        std::atomic<bool> cancelled{true};
+        EXPECT_FALSE(engine.Open(fixture, error, &cancelled));
+        EXPECT_FALSE(engine.HasVideoStream());
+        cancelled.store(false);
+        ASSERT_TRUE(engine.Open(fixture, error, &cancelled)) << error;
+        cancelled.store(true);
+    }
+    EXPECT_TRUE(engine.DecodeFrameAt(0));
+    EXPECT_TRUE(engine.DecodeFrameAt(1000000));
 }
 
 TEST(EditPlayerEngine, OpenGarbageFileFails) {
@@ -623,6 +640,14 @@ TEST(EditPlayerEngine, DecodeRawDeliversRefcountedFramesThatOutliveEngineTeardow
         std::string err;
         ASSERT_TRUE(engine.Open(fixture, err)) << err;
         ASSERT_TRUE(engine.HasVideoStream());
+
+        const auto metadata = engine.AudioMetadata();
+        exosnap::engine::MonitorSelectionSnapshot selection;
+        selection.media_id = metadata.selection_media_id;
+        selection.revision = {1};
+        selection.overlap_confirmed = true;
+        selection.unverified_asset_binding = metadata.unverified_asset_binding;
+        ASSERT_TRUE(engine.SetMonitorSelection(selection, err)) << err;
 
         // No media clock: nothing is presenting these frames, so nothing is
         // discarded before conversion (ShouldConvertDecodedFrame) -- every

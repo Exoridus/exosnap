@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <exosnap/engine/mic_dsp_config.h>
 #include <gtest/gtest.h>
 
 #include "exosnap/engine/interfaces/IAudioCaptureSource.h"

@@ -192,15 +192,8 @@ struct Sighting {
 
 fn not_recorded(ctx: &mut Context) -> Step {
     let mut app = ctx.launch(&[])?;
-    common::configure_exact(
-        &mut app,
-        &[
-            ("audio.systemEnabled", json!(false)),
-            ("audio.appEnabled", json!(false)),
-            ("audio.microphoneEnabled", json!(false)),
-            ("video.captureCursor", json!(false)),
-        ],
-    )?;
+    common::configure_exact(&mut app, &[("video.captureCursor", json!(false))])?;
+    common::disable_recording_audio(&mut app)?;
     configure_overlays(&mut app, false)?;
     let mut stimulus = Stimulus::start(
         ctx,
@@ -573,14 +566,7 @@ fn hit_test_failures(tests: &[HitTest], product_pid: u32, stimulus_hwnd: u64) ->
 
 fn operable_hit_test(ctx: &mut Context) -> Step {
     let mut app = ctx.launch(&[])?;
-    common::configure_exact(
-        &mut app,
-        &[
-            ("audio.systemEnabled", json!(false)),
-            ("audio.appEnabled", json!(false)),
-            ("audio.microphoneEnabled", json!(false)),
-        ],
-    )?;
+    common::disable_recording_audio(&mut app)?;
     configure_overlays(&mut app, true)?;
     let mut stimulus = Stimulus::start(
         ctx,
