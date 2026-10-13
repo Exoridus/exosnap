@@ -20,6 +20,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QSemaphore>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -858,6 +859,11 @@ TEST(EditExportAdapterRun, DestructionJoinsActiveRenderAndRemovesStagingWithoutE
         GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
     QTemporaryDir output;
     ASSERT_TRUE(output.isValid());
+    QTemporaryDir config;
+    ASSERT_TRUE(config.isValid());
+    const auto previous_config = qgetenv("EXOSNAP_CONFIG_DIR");
+    const auto restore_config = qScopeGuard([previous_config] { qputenv("EXOSNAP_CONFIG_DIR", previous_config); });
+    qputenv("EXOSNAP_CONFIG_DIR", config.path().toUtf8());
     EditSessionAdapter session;
     QEventLoop imported;
     QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
