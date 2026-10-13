@@ -60,11 +60,12 @@ use crate::lint::{
 /// stands in for it. Bump by hand whenever a stored diagnostic could stop
 /// describing the same verdict for the same inputs: the clang-tidy
 /// invocation's own literal flags change (a new `--extra-arg`, a different
-/// `-p`/`--quiet` form), or the cache entry's stored format changes.
+/// `-p`/`--quiet` form), the cache entry's stored format changes, or its
+/// producer's required input-validation contract becomes stricter.
 /// Scoping (which translation units get analysed) does not affect what a
 /// stored entry means and is not a reason to bump this. Nothing else
 /// enforces the bump.
-pub const CACHE_SCHEMA: u32 = 3;
+pub const CACHE_SCHEMA: u32 = 4;
 
 /// Canary translation units, analysed whenever the analysis configuration
 /// itself changes rather than the code it inspects. A change to `.clang-tidy`
@@ -141,6 +142,8 @@ impl ClangTidyReport {
 /// the complete command identities, `.clang-tidy`, [`CACHE_SCHEMA`], the check
 /// list and the tool version banner. Reuse requires complete, current Ninja
 /// records from the configured build. Unhashable inputs are cache misses.
+/// Keep inputs stable throughout analysis. Persistent drift aborts before
+/// fresh cache writes; before/after checks cannot detect edit-and-restore.
 #[allow(clippy::too_many_arguments)]
 pub fn run_blocking(
     repo_root: &Path,
@@ -282,19 +285,13 @@ pub fn run_blocking(
     let toolchain_started = Instant::now();
     let toolchain_hash = toolchain_identity::hash(build_dir);
     timing.toolchain_identity_seconds = toolchain_started.elapsed().as_secs_f64();
-    let configuration_hash =
-        configuration_hash
-            .zip(toolchain_hash)
-            .map(|(configuration, toolchain)| {
-                sha256_hex(
-                    format!("configuration={configuration}\ntoolchain={toolchain}").as_bytes(),
-                )
-            });
+    let configuration_hash = combine_configuration_identity(configuration_hash, toolchain_hash);
     let salt = compute_salt(&banner, &flags, configuration_hash.as_deref());
     timing.configuration_identity_seconds = configuration_started.elapsed().as_secs_f64();
 
     timing.workers = jobs.min(sources.len());
     let phase = Instant::now();
+    let mut cache_dependencies = None;
     let (cache_enabled, cache_keys) = if salt.is_none() {
         (false, HashMap::new())
     } else {
@@ -318,6 +315,7 @@ pub fn run_blocking(
                 let keys =
                     build_cache_keys(&sources, &dep_graph, &commands, salt.as_deref().unwrap());
                 timing.hashing_seconds = hashing.elapsed().as_secs_f64();
+                cache_dependencies = Some(dep_graph);
                 (!keys.is_empty(), keys)
             }
         }
@@ -355,6 +353,28 @@ pub fn run_blocking(
     let phase = Instant::now();
     let fresh = analyze_pending(&tool, build_dir, &flags, &pending, jobs);
     timing.analysis_wall_seconds = phase.elapsed().as_secs_f64();
+    if cache_enabled && !fresh.is_empty() {
+        let phase = Instant::now();
+        let current_configuration = configuration_identity(repo_root, build_dir);
+        // Validate the complete batch before any write; an earlier clean
+        // result must not survive a later source's input drift.
+        revalidate_cache_inputs(
+            &compile_db_path,
+            &compile_db_text,
+            configuration_hash
+                .as_deref()
+                .context("missing captured cache configuration")?,
+            current_configuration.as_deref(),
+            &sources,
+            cache_dependencies
+                .as_ref()
+                .context("missing captured cache dependencies")?,
+            &commands,
+            salt.as_deref().context("missing captured cache salt")?,
+            &cache_keys,
+        )?;
+        timing.input_revalidation_seconds = phase.elapsed().as_secs_f64();
+    }
     let phase = Instant::now();
     for (src, output, code, unit_timing) in &fresh {
         timing.units.push(unit_timing.clone());
@@ -1102,6 +1122,23 @@ fn compute_salt(
     ))
 }
 
+fn combine_configuration_identity(
+    configuration: Option<String>,
+    toolchain: Option<String>,
+) -> Option<String> {
+    configuration
+        .zip(toolchain)
+        .map(|(configuration, toolchain)| {
+            sha256_hex(format!("configuration={configuration}\ntoolchain={toolchain}").as_bytes())
+        })
+}
+
+fn configuration_identity(repo: &Path, build: &Path) -> Option<String> {
+    let configuration =
+        input_identity::HeaderInventory::read(repo, build)?.configuration_hash(repo);
+    combine_configuration_identity(configuration, toolchain_identity::hash(build))
+}
+
 fn build_cache_keys(
     sources: &[String],
     dep_graph: &HashMap<String, Vec<String>>,
@@ -1140,6 +1177,33 @@ fn build_cache_keys(
         keys.insert(src.clone(), sha256_hex(parts.join("\n").as_bytes()));
     }
     keys
+}
+
+#[allow(clippy::too_many_arguments)]
+fn revalidate_cache_inputs(
+    compile_db_path: &Path,
+    compile_db_text: &str,
+    expected_configuration: &str,
+    configuration: Option<&str>,
+    sources: &[String],
+    dependencies: &HashMap<String, Vec<String>>,
+    commands: &HashMap<String, String>,
+    salt: &str,
+    keys: &HashMap<String, String>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        std::fs::read(compile_db_path).ok().as_deref() == Some(compile_db_text.as_bytes()),
+        "clang-tidy inputs changed or became unavailable during analysis: compilation database"
+    );
+    anyhow::ensure!(
+        configuration == Some(expected_configuration),
+        "clang-tidy inputs changed or became unavailable during analysis: configuration or toolchain"
+    );
+    anyhow::ensure!(
+        build_cache_keys(sources, dependencies, commands, salt) == *keys,
+        "clang-tidy inputs changed or became unavailable during analysis: source or dependency content"
+    );
+    Ok(())
 }
 
 fn hash_file(path: &str) -> Option<String> {
@@ -1810,6 +1874,229 @@ mod tests {
         assert_eq!(
             extract_violations(&[(source.into(), replayed)], "C:/repo", "C:/repo/build").len(),
             1
+        );
+    }
+
+    #[test]
+    fn schema_three_cache_entries_are_rejected_without_input_stability_proof() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "abcdef0123456789";
+        let source = "source.cpp";
+        store_cache_entry(dir.path(), key, source, "", 0);
+        let path = cache_entry_path(dir.path(), key);
+        let mut entry: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        entry["schema"] = serde_json::json!(3);
+        std::fs::write(&path, serde_json::to_vec(&entry).unwrap()).unwrap();
+        assert!(read_cache_entry(&path, key, source).is_none());
+    }
+
+    #[test]
+    fn persistent_input_drift_aborts_before_any_fresh_cache_write() {
+        for changed in [
+            "unchanged",
+            "source",
+            "header",
+            "database",
+            "configuration",
+            "membership",
+            "toolchain",
+            "missing-source",
+            "missing-configuration",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = dir.path();
+            let build = repo.join("build");
+            std::fs::create_dir_all(repo.join("libs")).unwrap();
+            std::fs::create_dir(&build).unwrap();
+            std::fs::write(repo.join("libs/shared.h"), "int shared;\n").unwrap();
+            std::fs::write(repo.join(".clang-tidy"), "Checks: '-*'\n").unwrap();
+            std::fs::write(repo.join("compiler-input"), "compiler").unwrap();
+            let sources: Vec<String> = ["a.cpp", "b.cpp"]
+                .into_iter()
+                .map(|file| {
+                    let path = repo.join("libs").join(file);
+                    std::fs::write(&path, "int value;\n").unwrap();
+                    normalize_root(&path)
+                })
+                .collect();
+            let records: Vec<_> = sources.iter().map(|source| serde_json::json!({"file": source, "directory": normalize_root(&build), "command": "cl.exe /c"})).collect();
+            let database = serde_json::to_string(&records).unwrap();
+            let database_path = build.join("compile_commands.json");
+            std::fs::write(&database_path, &database).unwrap();
+            let commands = command_identities(&parse_compile_db(&database).unwrap());
+            let dependencies: HashMap<_, _> = sources
+                .iter()
+                .map(|source| {
+                    (
+                        source.clone(),
+                        vec![normalize_root(&repo.join("libs/shared.h"))],
+                    )
+                })
+                .collect();
+            let identity = || {
+                combine_configuration_identity(
+                    input_identity::configuration_hash(repo, &build),
+                    hash_file(&normalize_root(&repo.join("compiler-input"))),
+                )
+            };
+            let configuration = identity().unwrap();
+            let salt = compute_salt("version", &[], Some(&configuration)).unwrap();
+            let keys = build_cache_keys(&sources, &dependencies, &commands, &salt);
+            match changed {
+                "source" => std::fs::write(&sources[1], "int changed;\n").unwrap(),
+                "header" => std::fs::write(repo.join("libs/shared.h"), "int changed;\n").unwrap(),
+                "database" => std::fs::write(&database_path, "[]").unwrap(),
+                "configuration" => {
+                    std::fs::write(repo.join(".clang-tidy"), "Checks: '*'\n").unwrap()
+                }
+                "membership" => {
+                    std::fs::write(repo.join("libs/new.h"), "int new_header;\n").unwrap()
+                }
+                "toolchain" => {
+                    std::fs::write(repo.join("compiler-input"), "changed compiler").unwrap()
+                }
+                "missing-source" => std::fs::remove_file(&sources[1]).unwrap(),
+                "missing-configuration" => std::fs::remove_file(repo.join(".clang-tidy")).unwrap(),
+                _ => {}
+            }
+            let current = identity();
+            let checked = revalidate_cache_inputs(
+                &database_path,
+                &database,
+                &configuration,
+                current.as_deref(),
+                &sources,
+                &dependencies,
+                &commands,
+                &salt,
+                &keys,
+            );
+            let cache = repo.join("cache");
+            if checked.is_ok() {
+                for source in &sources {
+                    store_cache_entry(&cache, &keys[source], source, "", 0);
+                }
+            }
+            if changed == "unchanged" {
+                checked.unwrap();
+                for source in &sources {
+                    assert!(
+                        read_cache_entry(
+                            &cache_entry_path(&cache, &keys[source]),
+                            &keys[source],
+                            source
+                        )
+                        .is_some()
+                    );
+                }
+            } else {
+                assert!(checked.is_err(), "{changed}");
+                assert!(
+                    !cache.exists(),
+                    "no earlier fresh result may be stored when another input drifts: {changed}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires EXO_DEV_DRIFT_CLANG_TIDY naming a real clang-tidy executable"]
+    fn a_source_changed_after_key_capture_cannot_store_a_clean_verdict_for_the_original() {
+        let tool = PathBuf::from(
+            std::env::var_os("EXO_DEV_DRIFT_CLANG_TIDY").expect("set EXO_DEV_DRIFT_CLANG_TIDY"),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let build = repo.join("build");
+        std::fs::create_dir_all(repo.join("libs")).unwrap();
+        std::fs::create_dir(&build).unwrap();
+        let source = normalize_root(&repo.join("libs/drift.cpp"));
+        let original = include_str!(
+            "../../tests/fixtures/lint-canaries/clang-analyzer-core.CallAndMessage.cpp"
+        );
+        std::fs::write(&source, original).unwrap();
+        let database = serde_json::json!([{"directory": normalize_root(&build), "file": source, "command": format!("clang-cl.exe /TP /std:c++20 /c \"{source}\"")}]).to_string();
+        std::fs::write(build.join("compile_commands.json"), &database).unwrap();
+        let entries = parse_compile_db(&database).unwrap();
+        let commands = command_identities(&entries);
+        let sources = vec![source.clone()];
+        let dependencies = HashMap::from([(source.clone(), vec![source.clone()])]);
+        let flags = invocation_flags(&format!("-*,{}", BLOCKING_CHECKS.join(",")), HEADER_FILTER);
+        let banner = clang_tidy_version_banner(&tool).unwrap();
+        let salt = compute_salt(&banner, &flags, Some("stable-configuration")).unwrap();
+        let keys = build_cache_keys(&sources, &dependencies, &commands, &salt);
+        let key = &keys[&source];
+        let initial = analyze_pending(&tool, &build, &flags, &sources, 1);
+        require_analysis(&source, &initial[0].1, initial[0].2).unwrap();
+        let findings = extract_violations(
+            &[(source.clone(), initial[0].1.clone())],
+            &normalize_root(repo),
+            &normalize_root(&build),
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.contains("clang-analyzer-core.CallAndMessage")),
+            "original null-pointer call must be blocking: {}",
+            initial[0].1
+        );
+        eprintln!("original source: {} blocking finding(s)", findings.len());
+
+        std::fs::write(&source, "int value() { return 1; }\n").unwrap();
+        let fresh = analyze_pending(&tool, &build, &flags, &sources, 1);
+        require_analysis(&source, &fresh[0].1, fresh[0].2).unwrap();
+        assert!(
+            extract_violations(
+                &[(source.clone(), fresh[0].1.clone())],
+                &normalize_root(repo),
+                &normalize_root(&build)
+            )
+            .is_empty(),
+            "changed source must analyze cleanly: {}",
+            fresh[0].1
+        );
+        let cache = repo.join("cache");
+        let checked = revalidate_cache_inputs(
+            &build.join("compile_commands.json"),
+            &database,
+            "stable-configuration",
+            Some("stable-configuration"),
+            &sources,
+            &dependencies,
+            &commands,
+            &salt,
+            &keys,
+        );
+        if checked.is_ok() {
+            store_cache_entry(&cache, key, &source, &fresh[0].1, fresh[0].2);
+        }
+        assert!(
+            checked.is_err(),
+            "changed source must abort before storing any fresh output"
+        );
+        std::fs::write(&source, original).unwrap();
+        assert_eq!(
+            build_cache_keys(&sources, &dependencies, &commands, &salt),
+            keys
+        );
+        let replayed = read_cache_entry(&cache_entry_path(&cache, key), key, &source);
+        if let Some(output) = &replayed {
+            assert!(
+                extract_violations(
+                    &[(source.clone(), output.clone())],
+                    &normalize_root(repo),
+                    &normalize_root(&build)
+                )
+                .is_empty()
+            );
+            eprintln!(
+                "restored original source incorrectly replays the clean changed-source verdict under key {key}"
+            );
+        }
+        assert!(
+            replayed.is_none(),
+            "a changed input must prevent storing the fresh verdict under its prior key"
         );
     }
 

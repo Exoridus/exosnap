@@ -21,6 +21,7 @@ pub struct TidyTiming {
     pub hashing_seconds: f64,
     pub cache_lookup_seconds: f64,
     pub analysis_wall_seconds: f64,
+    pub input_revalidation_seconds: f64,
     pub validation_and_storage_seconds: f64,
     pub reporting_seconds: f64,
     pub workers: usize,

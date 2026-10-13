@@ -65,7 +65,7 @@ without changing recorded dependency paths.
 
 Ninja omits installed MSVC/SDK headers from its MSVC dependency records.
 Their content trees, compiler identity and include environment therefore contribute one global
-fingerprint per run. Use a matching Developer PowerShell for direct lint invocations.
+fingerprint, rechecked before fresh results are cached. Use a matching Developer PowerShell for direct lint invocations.
 Without an explicit INCLUDE environment or readable supported toolchain inputs, verdicts are
 not reused. The CI job initializes that environment before building and analysing. Header scoping includes consumers with incomplete
 coverage rather than reporting an empty successful scope. CMake/preset changes select the full tree.
@@ -73,6 +73,13 @@ Added, removed or renamed headers select the full tree without cached verdicts b
 and conditional inclusion can change outside the previous dependency graph.
 
 Cached entries carry their schema, source, key, exit status and output digest.
+Before storing any fresh result, the runner rechecks compilation-database bytes,
+configuration, header membership, toolchain identity and the captured source/dependency keys.
+Changed or unreadable evidence aborts the run with an error before any fresh cache writes.
+Schema 4 rejects entries from producers that did not perform this validation.
+Keep analysis inputs stable throughout the run. Build locks do not prevent editor changes.
+Before/after checks detect persistent drift but cannot detect an edit and restoration during
+analysis, or make sequential file reads immutable. Immutable input snapshots are not provided.
 Old, malformed or damaged entries are misses. The digest detects corruption, not forgery by someone
 already able to write a trusted cache scope. GitHub cache ref isolation remains the trust boundary.
 cppcheck keeps its separate build-directory cache.
@@ -92,7 +99,7 @@ The verification runner also retains clang-tidy-profile.json beside its step log
 The Debug CI job uploads that profile on successful and failing runs when analysis produced it.
 
 Discovery, version detection, database parsing, configuration/toolchain identity, git scope, header expansion, Ninja extraction/parsing,
-freshness checks, hashing, cache lookup, fresh subprocess execution, validation/storage and reporting
+freshness checks, hashing, cache lookup, fresh subprocess execution, input revalidation, validation/storage and reporting
 are distinct measurements. Scope/dependency totals include their detailed subphases, so do not sum
 nested counters. Per-process CPU time is additive. Per-process memory peaks are not a simultaneous
 aggregate memory peak. GitHub restore/save durations come from workflow logs, outside this profile.
