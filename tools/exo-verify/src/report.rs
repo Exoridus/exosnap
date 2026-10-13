@@ -746,6 +746,38 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_clip_contract_is_required_without_demanding_creation() {
+        let mut plan = plan();
+        plan.scenarios = crate::scenarios::clips::scenarios()
+            .iter()
+            .map(|s| PlannedScenario {
+                id: s.id.into(),
+                scenario_revision: s.revision,
+                lane: s.lane.name().into(),
+                tier: s.tier,
+                title: s.title.into(),
+            })
+            .collect();
+        assert_eq!(plan.scenarios.len(), 1);
+        assert_eq!(plan.scenarios[0].id, "clip.creation-unavailable");
+        let missing = merge(&plan, &[], None).unwrap();
+        assert!(!missing.ready_for_approval);
+        assert_eq!(
+            missing.blocking,
+            vec!["clip.creation-unavailable (not run)"]
+        );
+        for verdict in [Verdict::Pass, Verdict::Fail, Verdict::Unavailable] {
+            let results = [lane(Some(SHA), &[("clip.creation-unavailable", verdict)])];
+            let report = merge(&plan, &results, None).unwrap();
+            assert_eq!(report.ready_for_approval, verdict == Verdict::Pass);
+            assert_eq!(report.scenarios[0].tier, Tier::Required);
+            verify(&report, &plan, &results, None).unwrap();
+        }
+        let historical = [lane(Some(SHA), &[("clip.recording-live", Verdict::Pass)])];
+        assert!(!merge(&plan, &historical, None).unwrap().ready_for_approval);
+    }
+
+    #[test]
     fn absent_external_lane_is_explicitly_pending() {
         let mut plan = plan();
         plan.scenarios[0].lane = "release-gpu".into();

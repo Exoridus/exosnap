@@ -42,7 +42,7 @@ use std::process::ExitCode;
 
 use crate::capability::Capability;
 use crate::model::LaneResult;
-use crate::plan::{Decision, DecisionKind, Decisions, PLAN_SCHEMA, PlannedScenario, ReleasePlan};
+use crate::plan::{Decision, DecisionKind, Decisions, ReleasePlan};
 use crate::scenario::Lane;
 
 #[derive(Parser)]
@@ -622,26 +622,7 @@ fn real_main() -> Result<ExitCode> {
         Command::Plan(PlanCommand::Create { bundle: path, out }) => {
             let b = bundle::open_any(&path)?;
             let registry = scenarios::registry();
-            let scenarios = registry
-                .iter()
-                .filter(|s| s.lane.is_release())
-                .map(|s| PlannedScenario {
-                    id: s.id.into(),
-                    scenario_revision: s.revision,
-                    lane: s.lane.name().into(),
-                    tier: s.tier,
-                    title: s.title.into(),
-                })
-                .collect();
-            let plan = ReleasePlan {
-                schema: PLAN_SCHEMA.into(),
-                product_version: b.inventory.product_version.clone(),
-                bundle_sha256: b.sha256.clone(),
-                candidate_id: b.inventory.candidate_id.clone(),
-                source_commit: b.inventory.source_commit.clone(),
-                created_at: model::now_rfc3339(),
-                scenarios,
-            };
+            let plan = ReleasePlan::create(&b, &registry);
             write_json(&out, &plan)?;
             println!(
                 "{} scenarios planned for {}",

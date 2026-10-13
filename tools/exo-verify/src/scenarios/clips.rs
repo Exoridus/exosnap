@@ -1,4 +1,4 @@
-//! Live clips judged against the ongoing recording and decoded stimulus.
+//! Clip admission and the retained live recording oracle.
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -8,6 +8,7 @@ use std::time::Instant;
 use super::common::{self, Stimulus, StimulusOptions, VideoExpectation, secs};
 use crate::capability::Capability;
 use crate::context::{App, Context};
+use crate::control::Refusal;
 use crate::media;
 use crate::plan::Tier;
 use crate::product_ensure;
@@ -15,6 +16,84 @@ use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 
 pub fn scenarios() -> Vec<Scenario> {
     vec![Scenario {
+        id: "clip.creation-unavailable",
+        revision: 1,
+        title: "The product rejects Recording Clip creation without jobs or media",
+        class: ScenarioClass::Contract,
+        contract: "the production control endpoint reports Recording Clips unavailable, refuses requests and stale confirmations with the capability reason, and leaves no jobs, output or staging files through shutdown",
+        lane: Lane::CiCore,
+        also: &[Lane::Gpu, Lane::Preflight],
+        tier: Tier::Required,
+        requires: &[Capability::InteractiveDesktop],
+        timeout: secs(120.0),
+        run: creation_unavailable,
+    }]
+}
+
+fn judge_unavailable(snapshot: &Value, output: &std::path::Path) -> Step {
+    product_ensure!(
+        snapshot["productAvailable"] == false
+            && snapshot["canRequest"] == false
+            && snapshot["jobs"].as_array().is_some_and(Vec::is_empty),
+        "Recording Clip creation is exposed or admitted jobs: {snapshot}"
+    );
+    product_ensure!(
+        std::fs::read_dir(output)?.next().is_none(),
+        "a rejected clip request created output or staging entries in {}",
+        output.display()
+    );
+    Ok(())
+}
+
+fn judge_refusal(response: Result<Value, Refusal>) -> Step {
+    let refusal = response
+        .err()
+        .ok_or_else(|| Stop::fail("clip creation was accepted"))?;
+    product_ensure!(
+        refusal.code == "unavailable"
+            && refusal.requires == json!({"recordingClipsAvailable": true})
+            && refusal.actual == json!({"recordingClipsAvailable": false})
+            && !refusal.message.trim().is_empty(),
+        "clip creation did not report the unavailable product capability: {refusal}"
+    );
+    Ok(())
+}
+
+fn creation_unavailable(ctx: &mut Context) -> Step {
+    let mut app = ctx.launch(&[])?;
+    let before = app.call("clip.snapshot", json!({}))?;
+    judge_unavailable(&before, &app.output)?;
+    ctx.evidence.put("clipBefore", before);
+    for (command, params) in [
+        ("clip.request", json!({"durationSeconds": "30"})),
+        ("clip.request", json!({"durationSeconds": "1800"})),
+        (
+            "clip.confirm",
+            json!({
+                "jobId": "11111111-1111-4111-8111-111111111111",
+                "generation": "1"
+            }),
+        ),
+    ] {
+        judge_refusal(app.client.request(command, params, secs(30.0))?)?;
+        judge_unavailable(&app.call("clip.snapshot", json!({}))?, &app.output)?;
+    }
+    let after = app.call("clip.snapshot", json!({}))?;
+    ctx.evidence.put("clipAfter", after.clone());
+    ctx.evidence
+        .put("controlTranscript", json!(app.client.transcript));
+    let output = app.output.clone();
+    app.close_gracefully(secs(20.0))?;
+    judge_unavailable(&after, &output)?;
+    Ok(())
+}
+
+#[allow(
+    dead_code,
+    reason = "Retained for source-level Clip reactivation after qualification"
+)]
+fn recording_live_scenario() -> Scenario {
+    Scenario {
         id: "clip.recording-live",
         revision: 3,
         title: "A live recording saves an offered last-30-seconds clip while capture continues",
@@ -34,7 +113,7 @@ pub fn scenarios() -> Vec<Scenario> {
         ],
         timeout: secs(300.0),
         run: recording_live,
-    }]
+    }
 }
 
 fn accepted(app: &mut App, command: &str, params: Value) -> Step<Value> {
@@ -477,6 +556,64 @@ fn recording_live(ctx: &mut Context) -> Step {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_oracle_rejects_jobs_capability_drift_and_staging() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = json!({"productAvailable": false, "canRequest": false, "jobs": []});
+        assert!(judge_unavailable(&snapshot, directory.path()).is_ok());
+        for (key, value) in [
+            ("productAvailable", json!(true)),
+            ("canRequest", json!(true)),
+            ("jobs", json!([{"jobId": "unexpected"}])),
+            ("jobs", Value::Null),
+        ] {
+            let mut changed = snapshot.clone();
+            changed[key] = value;
+            assert!(matches!(
+                judge_unavailable(&changed, directory.path()),
+                Err(Stop::Fail(_))
+            ));
+        }
+        std::fs::create_dir(directory.path().join("staging")).unwrap();
+        assert!(matches!(
+            judge_unavailable(&snapshot, directory.path()),
+            Err(Stop::Fail(_))
+        ));
+    }
+
+    #[test]
+    fn unavailable_oracle_requires_a_typed_capability_refusal() {
+        let refusal = Refusal {
+            code: "unavailable".into(),
+            message: "Recording Clips are unavailable in this product version".into(),
+            requires: json!({"recordingClipsAvailable": true}),
+            actual: json!({"recordingClipsAvailable": false}),
+        };
+        assert!(judge_refusal(Err(refusal.clone())).is_ok());
+        assert!(matches!(judge_refusal(Ok(json!({}))), Err(Stop::Fail(_))));
+        for field in ["code", "requires", "actual", "message"] {
+            let mut changed = refusal.clone();
+            match field {
+                "code" => changed.code = "invalid_state".into(),
+                "requires" => changed.requires = json!({"canRequestClip": true}),
+                "actual" => changed.actual = json!({"recordingClipsAvailable": true}),
+                _ => changed.message.clear(),
+            }
+            assert!(matches!(judge_refusal(Err(changed)), Err(Stop::Fail(_))));
+        }
+    }
+
+    #[test]
+    fn retained_positive_oracle_keeps_its_historical_identity() {
+        let scenario = recording_live_scenario();
+        assert_eq!(scenario.id, "clip.recording-live");
+        assert_eq!(scenario.revision, 3);
+        assert_eq!(scenario.tier, Tier::Required);
+        assert_eq!(scenario.lane, Lane::Gpu);
+        assert!(scenario.also.contains(&Lane::Preflight));
+        assert!(!scenarios().iter().any(|s| s.id == scenario.id));
+    }
 
     #[test]
     fn authored_marker_requires_exact_rebase_and_identity() {

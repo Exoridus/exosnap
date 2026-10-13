@@ -57,6 +57,7 @@ never spawns a shell-loop stand-in.
 | Scenario | Interaction | What it protects |
 |---|---|---|
 | `capture.window-geometry-live` | semantic IPC | a moving WGC window keeps recording, and a client-size change ends the session with the structured size-change reason or encodes the new size |
+| `clip.creation-unavailable` | production control IPC | disabled Clip requests and stale confirmations report the product capability refusal, without jobs or output/staging entries through shutdown; included in preflight and release lanes |
 | `capture.region-contract` | semantic IPC (`record.selectRegion`) | an exact physical-pixel region records exactly those dimensions with changing content |
 | `capture.region-selector-interaction` | real pointer drag, commit click and Escape | the selector overlay turns the dragged rectangle into the product's reported region and cancels cleanly |
 | `webcam.overlay-live` | semantic IPC, physical camera | the camera advances generations during a recording, the overlay rect reads back exactly, and disable/re-enable round-trips |
