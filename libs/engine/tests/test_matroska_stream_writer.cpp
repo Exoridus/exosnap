@@ -21,6 +21,9 @@
 #include <limits>
 #include <memory>
 #include <new>
+#ifdef _MSC_VER
+#include <vcruntime_new.h>
+#endif
 #include <numeric>
 #include <optional>
 #include <string>
@@ -207,12 +210,6 @@ void operator delete(void* pointer) noexcept {
     writer_allocations::Free(pointer);
 }
 void operator delete[](void* pointer) noexcept {
-    writer_allocations::Free(pointer);
-}
-void operator delete(void* pointer, size_t) noexcept {
-    writer_allocations::Free(pointer);
-}
-void operator delete[](void* pointer, size_t) noexcept {
     writer_allocations::Free(pointer);
 }
 extern "C" {
@@ -668,6 +665,34 @@ MatroskaStreamConfig OwnershipConfig(const std::string& path, bool clip) {
     return config;
 }
 
+TEST_F(StreamWriterTest, RuntimeSizedDeallocationRetiresTrackedNativeStorage) {
+    for (bool array : {false, true}) {
+        for (int repetition = 0; repetition < 3; ++repetition) {
+            SCOPED_TRACE(::testing::Message() << "array=" << array << " repetition=" << repetition);
+            uint8_t byte = 0;
+            writer_allocations::Probe probe;
+            void* storage = array ? ::operator new[](sizeof(libmatroska::DataBuffer))
+                                  : ::operator new(sizeof(libmatroska::DataBuffer));
+            const size_t allocation = probe.count - 1;
+            auto* buffer = std::construct_at(static_cast<libmatroska::DataBuffer*>(storage), &byte, 1);
+            const auto before = probe.UnreleasedBuffers();
+            std::destroy_at(buffer);
+            if (array)
+                ::operator delete[](storage, sizeof(libmatroska::DataBuffer));
+            else
+                ::operator delete(storage, sizeof(libmatroska::DataBuffer));
+            const auto after = probe.UnreleasedBuffers();
+            probe.Stop();
+            // The CRT has freed storage even if its forwarding hook was missed.
+            probe.allocations[allocation].live = false;
+            probe.allocations[allocation].pointer = nullptr;
+            EXPECT_EQ(before, 1u);
+            EXPECT_EQ(after, 0u);
+            EXPECT_EQ(probe.buffers_created, 1u);
+            EXPECT_FALSE(probe.exhausted);
+        }
+    }
+}
 TEST_F(StreamWriterTest, SignedTimestampRejectionDoesNotLeakNativeDataBuffer) {
     for (bool clip : {false, true}) {
         for (int repetition = 0; repetition < 3; ++repetition) {
