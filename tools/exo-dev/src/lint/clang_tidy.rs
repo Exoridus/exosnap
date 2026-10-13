@@ -163,6 +163,7 @@ pub fn run_blocking(
     }
 
     let started = Instant::now();
+    timing::progress_phase("compile_database", started);
     let mut timing = TidyTiming::default();
     let phase = Instant::now();
     let compile_db_path = build_dir.join("compile_commands.json");
@@ -186,6 +187,7 @@ pub fn run_blocking(
     }
 
     timing.compile_database_seconds = phase.elapsed().as_secs_f64();
+    timing::progress_phase("tool_discovery", started);
     let phase = Instant::now();
     let tool = clang_tidy_path
         .map(Path::to_path_buf)
@@ -206,6 +208,7 @@ pub fn run_blocking(
     }
 
     timing.tool_discovery_seconds = phase.elapsed().as_secs_f64();
+    timing::progress_phase("tool_version", started);
     let phase = Instant::now();
     let banner = clang_tidy_version_banner(&tool)?;
     let version = parse_version(&banner).unwrap_or_else(|| "unknown".to_string());
@@ -220,6 +223,10 @@ pub fn run_blocking(
     }
 
     timing.tool_version_seconds = phase.elapsed().as_secs_f64();
+    timing::progress(
+        serde_json::json!({"event": "tool-ready", "version": version, "elapsed_seconds": started.elapsed().as_secs_f64()}),
+    );
+    timing::progress_phase("scope", started);
     let phase = Instant::now();
     let (obj_to_source, source_to_obj) = object_maps(&entries, &build_dir_norm);
     let ninja = RealNinja {
@@ -275,6 +282,7 @@ pub fn run_blocking(
     let flags = invocation_flags(&checks_arg, HEADER_FILTER);
 
     let configuration_started = Instant::now();
+    timing::progress_phase("configuration_identity", started);
     let commands = command_identities(&entries);
     let foreign_roots = input_identity::foreign_roots(repo_root);
     let inventory = input_identity::HeaderInventory::read(repo_root, build_dir);
@@ -289,7 +297,7 @@ pub fn run_blocking(
     let salt = compute_salt(&banner, &flags, configuration_hash.as_deref());
     timing.configuration_identity_seconds = configuration_started.elapsed().as_secs_f64();
 
-    timing.workers = jobs.min(sources.len());
+    timing::progress_phase("dependencies", started);
     let phase = Instant::now();
     let mut cache_dependencies = None;
     let (cache_enabled, cache_keys) = if salt.is_none() {
@@ -312,6 +320,7 @@ pub fn run_blocking(
                 );
                 timing.dependencies_seconds = phase.elapsed().as_secs_f64();
                 let hashing = Instant::now();
+                timing::progress_phase("hashing", started);
                 let keys =
                     build_cache_keys(&sources, &dep_graph, &commands, salt.as_deref().unwrap());
                 timing.hashing_seconds = hashing.elapsed().as_secs_f64();
@@ -335,6 +344,7 @@ pub fn run_blocking(
     timing.freshness_seconds = ninja.freshness_seconds.get();
     let phase = Instant::now();
     let mut results: Vec<(String, String)> = Vec::new();
+    timing::progress_phase("cache_lookup", started);
     let mut pending: Vec<String> = Vec::new();
     let mut replayed = 0;
     for src in &sources {
@@ -350,10 +360,15 @@ pub fn run_blocking(
     }
 
     timing.cache_lookup_seconds = phase.elapsed().as_secs_f64();
+    timing.workers = jobs.max(1).min(pending.len());
+    timing::progress(
+        serde_json::json!({"event": "input-ready", "selected": sources.len(), "hits": replayed, "fresh": pending.len(), "jobs": jobs, "workers": timing.workers, "cache_available": cache_enabled, "cache_keyed": cache_keys.len(), "elapsed_seconds": started.elapsed().as_secs_f64(), "timing": timing}),
+    );
     let phase = Instant::now();
     let fresh = analyze_pending(&tool, build_dir, &flags, &pending, jobs);
     timing.analysis_wall_seconds = phase.elapsed().as_secs_f64();
     if cache_enabled && !fresh.is_empty() {
+        timing::progress_phase("input_revalidation", started);
         let phase = Instant::now();
         let current_configuration = configuration_identity(repo_root, build_dir);
         // Validate the complete batch before any write; an earlier clean
@@ -376,6 +391,7 @@ pub fn run_blocking(
         timing.input_revalidation_seconds = phase.elapsed().as_secs_f64();
     }
     let phase = Instant::now();
+    timing::progress_phase("validation_storage", started);
     for (src, output, code, unit_timing) in &fresh {
         timing.units.push(unit_timing.clone());
         require_analysis(src, output, *code)?;
@@ -390,6 +406,7 @@ pub fn run_blocking(
     }
 
     timing.validation_and_storage_seconds = phase.elapsed().as_secs_f64();
+    timing::progress_phase("reporting", started);
     let phase = Instant::now();
     let violations = extract_violations(&results, &repo_root_norm, &build_dir_norm);
     timing.reporting_seconds = phase.elapsed().as_secs_f64();
@@ -1396,20 +1413,23 @@ fn analyze_pending(
         return Vec::new();
     }
     let jobs = jobs.max(1).min(pending.len());
-    let queue: Mutex<VecDeque<String>> = Mutex::new(pending.iter().cloned().collect());
+    let started = Instant::now();
+    let queue: Mutex<VecDeque<(usize, String)>> =
+        Mutex::new(pending.iter().cloned().enumerate().collect());
     let results = Mutex::new(Vec::new());
     std::thread::scope(|scope| {
         for _ in 0..jobs {
             scope.spawn(|| {
                 loop {
                     let next = queue.lock().unwrap().pop_front();
-                    let Some(src) = next else { break };
-                    let (output, code, unit_timing) =
+                    let Some((index, src)) = next else { break };
+                    timing::progress(serde_json::json!({"event": "tu-start", "unit": index + 1, "total": pending.len(), "analysis_elapsed_seconds": started.elapsed().as_secs_f64()}));
+                    let (output, code, mut unit_timing) =
                         invoke_clang_tidy(tool, build_dir, flags, &src);
-                    results
-                        .lock()
-                        .unwrap()
-                        .push((src, output, code, unit_timing));
+                    unit_timing.unit = Some(index + 1);
+                    let mut results = results.lock().unwrap();
+                    timing::progress(serde_json::json!({"event": "tu-complete", "unit": index + 1, "completed": results.len() + 1, "total": pending.len(), "analysis_elapsed_seconds": started.elapsed().as_secs_f64(), "exit_code": code, "wall_seconds": unit_timing.wall_seconds, "cpu_seconds": unit_timing.cpu_seconds, "peak_working_set_bytes": unit_timing.peak_working_set_bytes}));
+                    results.push((src, output, code, unit_timing));
                 }
             });
         }

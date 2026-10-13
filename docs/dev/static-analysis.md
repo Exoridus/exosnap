@@ -92,11 +92,24 @@ Full runs the whole tree. Fast scopes the pass to affected translation units whe
 
 The --profile-path option to cargo exo-dev lint clang-tidy writes a JSON profile
 with HEAD/dirty state, tool version, compilation-database SHA-256, selected-source count,
-cache counts, worker limit and pipeline wall times.
+cache counts, fresh-worker count and pipeline wall times.
 Each fresh translation unit records wall time and, on Windows when available, process CPU time
 and peak working-set bytes. Missing resource measurements are null.
 The verification runner also retains clang-tidy-profile.json beside its step logs.
 The Debug CI job uploads that profile on successful and failing runs when analysis produced it.
+It sets EXO_DEV_CLANG_TIDY_PROFILE=public: the uploaded profile omits tool, compilation-database
+and source paths, classifies scope without free-form details, and identifies fresh units by the
+same queue positions as progress records. Versions, digests, counts, timings and resources remain.
+Without that setting, local rich profiles retain their existing path fields.
+
+Set EXO_DEV_CLANG_TIDY_PROGRESS=1 for incremental parent-process progress on stderr.
+The Debug CI verification step enables it. Other invocations leave it off by default.
+Each EXO_DEV_CLANG_TIDY_PROGRESS line contains escaped JSON for a phase start,
+tool-version discovery, the input-ready counts/timings, or a translation-unit start/completion.
+Translation units use one-based positions in the fresh-work queue. Completions include
+completed/total counts and existing wall, CPU and working-set measurements.
+These records contain no source paths, compiler commands or defines, and survive in the
+GitHub Actions step log even when cancellation prevents a final profile. They do not constitute an analysis verdict.
 
 Discovery, version detection, database parsing, configuration/toolchain identity, git scope, header expansion, Ninja extraction/parsing,
 freshness checks, hashing, cache lookup, fresh subprocess execution, input revalidation, validation/storage and reporting

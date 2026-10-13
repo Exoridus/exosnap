@@ -1,5 +1,22 @@
 //! Wall-clock costs of the blocking analysis pipeline.
 
+pub(super) fn progress(event: serde_json::Value) {
+    if std::env::var_os("EXO_DEV_CLANG_TIDY_PROGRESS").as_deref() == Some(std::ffi::OsStr::new("1"))
+    {
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "EXO_DEV_CLANG_TIDY_PROGRESS {event}"
+        );
+    }
+}
+
+pub(super) fn progress_phase(phase: &str, started: std::time::Instant) {
+    progress(
+        serde_json::json!({"event": "phase-start", "phase": phase, "elapsed_seconds": started.elapsed().as_secs_f64()}),
+    );
+}
+
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct TidyTiming {
     pub wall_seconds: f64,
@@ -30,6 +47,8 @@ pub struct TidyTiming {
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct UnitTiming {
+    #[serde(skip)]
+    pub(super) unit: Option<usize>,
     pub source: String,
     pub wall_seconds: f64,
     pub cpu_seconds: Option<f64>,
@@ -44,6 +63,7 @@ pub(super) fn invoke(
     let started = std::time::Instant::now();
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut timing = UnitTiming {
+        unit: None,
         source: source.to_string(),
         wall_seconds: 0.0,
         cpu_seconds: None,
@@ -123,6 +143,19 @@ impl super::ClangTidyReport {
         dirty: bool,
     ) -> anyhow::Result<()> {
         use anyhow::Context as _;
+        let public = std::env::var_os("EXO_DEV_CLANG_TIDY_PROFILE").as_deref()
+            == Some(std::ffi::OsStr::new("public"));
+        let identity = self.profile_identity(head, dirty, public)?;
+        std::fs::write(path, serde_json::to_vec_pretty(&identity)?)
+            .with_context(|| format!("could not write {}", path.display()))
+    }
+
+    fn profile_identity(
+        &self,
+        head: Option<&str>,
+        dirty: bool,
+        public: bool,
+    ) -> anyhow::Result<serde_json::Value> {
         use sha2::Digest as _;
         let compile_database_sha256 = if self.compile_db.as_os_str().is_empty() {
             None
@@ -131,7 +164,7 @@ impl super::ClangTidyReport {
                 &self.compile_db,
             )?)))
         };
-        let identity = serde_json::json!({
+        let mut identity = serde_json::json!({
             "profile_schema": 1,
             "head": head,
             "dirty": dirty,
@@ -147,13 +180,103 @@ impl super::ClangTidyReport {
             "compiler_policy": self.compiler_policy,
             "timing": (!self.tool_path.as_os_str().is_empty()).then_some(&self.timing),
         });
-        std::fs::write(path, serde_json::to_vec_pretty(&identity)?)
-            .with_context(|| format!("could not write {}", path.display()))
+        if public {
+            let object = identity.as_object_mut().expect("profile object");
+            object.remove("tool");
+            object.remove("compile_database");
+            object.insert("profile_mode".into(), serde_json::json!("public"));
+            object.insert(
+                "scope".into(),
+                serde_json::json!(if self.analyzed == 0 {
+                    "skipped"
+                } else if self.scope.starts_with("full tree") {
+                    "full-tree"
+                } else {
+                    "scoped"
+                }),
+            );
+            if let Some(units) = identity
+                .get_mut("timing")
+                .and_then(|timing| timing.get_mut("units"))
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for (serialized, measured) in units.iter_mut().zip(&self.timing.units) {
+                    let object = serialized.as_object_mut().expect("unit timing object");
+                    object.remove("source");
+                    object.insert("unit".into(), serde_json::json!(measured.unit));
+                }
+            }
+        }
+        Ok(identity)
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
+    #[test]
+    fn public_profile_omits_paths_without_changing_local_profile_or_resource_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut report =
+            super::super::ClangTidyReport::skipped("scoped C:/private/source.cpp", dir.path());
+        report.compile_db = dir.path().join("compile_commands.json");
+        std::fs::write(&report.compile_db, "[]").unwrap();
+        report.tool_path = std::path::PathBuf::from("C:/private/clang-tidy.exe");
+        report.tool_version = "22.1.3".into();
+        report.analyzed = 2;
+        report.replayed = 1;
+        report.timing.units.push(super::UnitTiming {
+            unit: Some(2),
+            source: "C:/private/source.cpp".into(),
+            wall_seconds: 1.0,
+            cpu_seconds: Some(0.5),
+            peak_working_set_bytes: Some(4096),
+        });
+        let rich = report
+            .profile_identity(Some("abcdef"), true, false)
+            .unwrap();
+        assert_eq!(rich["tool"], "C:/private/clang-tidy.exe");
+        assert_eq!(
+            rich["timing"]["units"][0]["source"],
+            "C:/private/source.cpp"
+        );
+        assert!(rich["timing"]["units"][0].get("unit").is_none());
+        assert!(rich.get("profile_mode").is_none());
+        let public = report.profile_identity(Some("abcdef"), true, true).unwrap();
+        assert!(public.get("tool").is_none());
+        assert!(public.get("compile_database").is_none());
+        assert_eq!(public["profile_mode"], "public");
+        assert_eq!(public["scope"], "scoped");
+        assert!(public["timing"]["units"][0].get("source").is_none());
+        assert_eq!(public["timing"]["units"][0]["unit"], 2);
+        for field in [
+            "head",
+            "dirty",
+            "tool_version",
+            "compile_database_sha256",
+            "selected",
+            "cache_enabled",
+            "cache_hits",
+            "cache_misses",
+            "compiler_policy",
+        ] {
+            assert_eq!(public[field], rich[field], "{field}");
+        }
+        for field in ["wall_seconds", "cpu_seconds", "peak_working_set_bytes"] {
+            assert_eq!(
+                public["timing"]["units"][0][field], rich["timing"]["units"][0][field],
+                "{field}"
+            );
+        }
+        let serialized = public.to_string();
+        assert!(!serialized.contains("private"));
+        assert!(!serialized.contains(&report.compile_db.to_string_lossy().to_string()));
+        let skipped = super::super::ClangTidyReport::skipped("private skip details", dir.path())
+            .profile_identity(None, false, true)
+            .unwrap();
+        assert_eq!(skipped["scope"], "skipped");
+        assert!(skipped["timing"].is_null());
+    }
+    #[cfg(windows)]
     #[test]
     fn measures_completed_child_without_changing_output_or_exit() {
         let mut command = crate::process::command("cmd");

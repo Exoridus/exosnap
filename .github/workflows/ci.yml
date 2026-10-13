@@ -536,6 +536,8 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           TIDY_CACHE: ${{ runner.temp }}/clang-tidy-cache
+          EXO_DEV_CLANG_TIDY_PROGRESS: '1'
+          EXO_DEV_CLANG_TIDY_PROFILE: public
         run: >-
           cargo exo-dev verify --profile ci-build-debug --event $env:EVENT
           --tidy-cache-dir $env:TIDY_CACHE --jobs $([Environment]::ProcessorCount)
