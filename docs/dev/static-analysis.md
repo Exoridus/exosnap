@@ -17,7 +17,14 @@ The blocking set includes use-after-move, dangling handles, misleading indentati
 
 Unused aliases, redundant declarations, unused using declarations and unused parameters are blocking after whole-scope triage and positive canaries. Required callback and virtual signatures retain their contracts; the unused-parameter check uses its conservative default configuration. Include-cleaner is blocking for `libs/engine/`, `libs/capability/` and `libs/update/` through the Rust rule metadata. Application and other layers remain advisory: Qt meta-object generation and public umbrella headers need contextual include review. The global `.clang-tidy` file leaves include-cleaner advisory because it cannot express this path-scoped verdict.
 
-MSVC `/W4 /WX` is supplemented by explicit unhandled-enumerator C4062 enablement. C4061 for switches with a `default` stays separate. Keep exhaustive policy switches genuinely exhaustive rather than adding a default that hides a new enum case.
+The first-party `exosnap::warnings` target applies `/W4 /WX /sdl /utf-8` in MSVC Debug and Release builds.
+`/sdl` adds security diagnostics and code-generation protections. `/utf-8` fixes source and execution
+character sets independently of the host code page. It does not replace UTF-8/UTF-16 conversions at
+Windows API boundaries. Dependencies keep their own target policies rather than inheriting global flags.
+
+Explicit unhandled-enumerator C4062 enablement supplements `/W4 /WX`. C4061 for switches with a
+`default` stays separate. Keep exhaustive policy switches genuinely exhaustive rather than adding
+a default that hides a new enum case.
 
 ## Add a blocking check only with two proofs
 
