@@ -5,13 +5,144 @@
 #include <QMetaObject>
 
 #include <algorithm>
+#include <condition_variable>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <utility>
 
 namespace exosnap {
 
+struct RecordingCoordinator::ClipNotificationState {
+    struct Delivery;
+    inline static thread_local Delivery* current_delivery = nullptr;
+
+    std::mutex mutex;
+    std::condition_variable idle;
+    std::shared_ptr<const ClipJobsChangedCallback> callback;
+    size_t in_flight = 0;
+    bool dirty = false;
+    bool queued = false;
+    bool closed = false;
+
+    struct Delivery {
+        explicit Delivery(std::shared_ptr<ClipNotificationState> owner)
+            : state(std::move(owner)), previous(current_delivery) {
+            current_delivery = this;
+        }
+        ~Delivery() {
+            current_delivery = previous;
+            Finish(state);
+        }
+        std::shared_ptr<ClipNotificationState> state;
+        Delivery* previous;
+    };
+
+    static void Queue(const std::shared_ptr<ClipNotificationState>& state, QCoreApplication* app) {
+        try {
+            if (QMetaObject::invokeMethod(app, [state] { Deliver(state); }, Qt::QueuedConnection))
+                return;
+        } catch (...) {
+            std::lock_guard lock(state->mutex);
+            state->queued = false;
+            throw;
+        }
+        std::lock_guard lock(state->mutex);
+        state->queued = false;
+    }
+
+    static void Finish(const std::shared_ptr<ClipNotificationState>& state) {
+        QCoreApplication* app = QCoreApplication::instance();
+        bool queue = false;
+        {
+            std::lock_guard lock(state->mutex);
+            --state->in_flight;
+            if (app && !state->closed && state->callback && state->dirty && !state->queued && !state->in_flight) {
+                state->queued = true;
+                queue = true;
+            }
+        }
+        state->idle.notify_all();
+        if (queue)
+            Queue(state, app);
+    }
+
+    static void Deliver(const std::shared_ptr<ClipNotificationState>& state) {
+        std::shared_ptr<const ClipJobsChangedCallback> target_callback;
+        {
+            std::lock_guard lock(state->mutex);
+            state->queued = false;
+            if (state->closed || !state->callback || !state->dirty)
+                return;
+            state->dirty = false;
+            ++state->in_flight;
+            target_callback = state->callback;
+        }
+        Delivery delivery(state);
+        (*target_callback)();
+    }
+
+    static void Notify(const std::shared_ptr<ClipNotificationState>& state) {
+        QCoreApplication* app = QCoreApplication::instance();
+        std::shared_ptr<const ClipJobsChangedCallback> target_callback;
+        {
+            std::lock_guard lock(state->mutex);
+            if (state->closed || !state->callback)
+                return;
+            if (app) {
+                state->dirty = true;
+                if (state->queued || state->in_flight)
+                    return;
+                state->queued = true;
+            } else {
+                ++state->in_flight;
+                target_callback = state->callback;
+            }
+        }
+        if (app) {
+            Queue(state, app);
+        } else {
+            Delivery delivery(state);
+            (*target_callback)();
+        }
+    }
+
+    void Close() {
+        size_t own_deliveries = 0;
+        for (auto* delivery = current_delivery; delivery; delivery = delivery->previous)
+            if (delivery->state.get() == this)
+                ++own_deliveries;
+        std::shared_ptr<const ClipJobsChangedCallback> released;
+        std::unique_lock lock(mutex);
+        closed = true;
+        dirty = false;
+        released = std::move(callback);
+        // A callback can destroy its coordinator. Its stack guard keeps this state
+        // alive, while shutdown still joins every delivery on another thread.
+        idle.wait(lock, [&] { return in_flight <= own_deliveries; });
+        lock.unlock();
+    }
+};
+
+std::shared_ptr<RecordingCoordinator::ClipNotificationState> RecordingCoordinator::CreateClipNotificationState() {
+    return std::make_shared<ClipNotificationState>();
+}
+
+void RecordingCoordinator::CloseClipNotifications() {
+    clip_notification_state_->Close();
+}
+
 void RecordingCoordinator::SetClipJobsChangedCallback(ClipJobsChangedCallback callback) {
-    on_clip_jobs_changed_ = std::move(callback);
+    auto replacement = callback ? std::make_shared<const ClipJobsChangedCallback>(std::move(callback)) : nullptr;
+    {
+        std::lock_guard lock(clip_notification_state_->mutex);
+        if (clip_notification_state_->closed)
+            return;
+        clip_notification_state_->callback.swap(replacement);
+        if (!clip_notification_state_->callback)
+            clip_notification_state_->dirty = false;
+    }
 }
 
 bool RecordingCoordinator::CanRequestRecordingClip() const {
@@ -80,20 +211,7 @@ uint64_t RecordingCoordinator::RecordingStorageReserveBytes() const noexcept {
 }
 
 void RecordingCoordinator::PostClipJobsChanged() {
-    if (!on_clip_jobs_changed_)
-        return;
-    const std::weak_ptr<int> life = clip_callback_life_.load();
-    auto callback = on_clip_jobs_changed_;
-    if (QCoreApplication::instance())
-        QMetaObject::invokeMethod(
-            QCoreApplication::instance(),
-            [life, callback = std::move(callback)] {
-                if (!life.expired())
-                    callback();
-            },
-            Qt::QueuedConnection);
-    else if (!life.expired())
-        callback();
+    ClipNotificationState::Notify(clip_notification_state_);
 }
 
 bool RecordingCoordinator::PauseClipBackground() {

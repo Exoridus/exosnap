@@ -14,13 +14,17 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -37,6 +41,13 @@
 #include "settings/RecoveryManifestStore.h"
 
 namespace exosnap {
+class RecordingCoordinatorTestPeer {
+  public:
+    static void PostClipJobsChanged(RecordingCoordinator& coordinator) {
+        coordinator.PostClipJobsChanged();
+    }
+};
+
 namespace {
 
 using diagnostics::ExclusiveEvidence;
@@ -995,6 +1006,268 @@ TEST(WebcamDeviceAdmission, OnlyTheVisibleIdleRecordPageAsksForThePreviewCamera)
     // The Settings page has its own camera preview request.
     EXPECT_FALSE(RecordPreviewWantsWebcam(/*record_page_visible=*/false, true));
     EXPECT_FALSE(RecordPreviewWantsWebcam(true, /*idle=*/false));
+}
+
+class ClipNotificationApplication final : public QCoreApplication {
+  public:
+    using QCoreApplication::QCoreApplication;
+    unsigned meta_calls = 0;
+
+    bool event(QEvent* event) override {
+        if (event->type() == QEvent::MetaCall)
+            ++meta_calls;
+        return QCoreApplication::event(event);
+    }
+
+    void DeliverNotifications() {
+        QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
+    }
+};
+
+struct ClipCallbackCounts {
+    std::atomic<unsigned> copies{0};
+    unsigned calls = 0;
+};
+
+class CountedClipCallback {
+  public:
+    explicit CountedClipCallback(std::shared_ptr<ClipCallbackCounts> counts) : counts_(std::move(counts)) {
+    }
+    CountedClipCallback(const CountedClipCallback& other) : counts_(other.counts_), payload_(other.payload_) {
+        ++counts_->copies;
+    }
+    void operator()() const {
+        ++counts_->calls;
+    }
+
+  private:
+    std::shared_ptr<ClipCallbackCounts> counts_;
+    std::array<unsigned char, 256> payload_{};
+};
+
+TEST(RecordingClipNotifications, StalledConcurrentProgressQueuesOneRefreshWithoutCopyingCallbackPerUpdate) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    RecordingCoordinator coordinator;
+    auto counts = std::make_shared<ClipCallbackCounts>();
+    coordinator.SetClipJobsChangedCallback(CountedClipCallback(counts));
+    const auto copies_before = counts->copies.load();
+    std::vector<std::thread> producers;
+    for (unsigned producer = 0; producer < 4; ++producer)
+        producers.emplace_back([&] {
+            for (unsigned update = 0; update < 2048; ++update)
+                RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+        });
+    for (auto& producer : producers)
+        producer.join();
+
+    EXPECT_EQ(counts->calls, 0u);
+    EXPECT_LE(counts->copies.load() - copies_before, 1u);
+    app.DeliverNotifications();
+    EXPECT_EQ(counts->calls, 1u);
+    EXPECT_EQ(app.meta_calls, 1u);
+    app.DeliverNotifications();
+    EXPECT_EQ(counts->calls, 1u);
+    EXPECT_EQ(app.meta_calls, 1u);
+}
+
+TEST(RecordingClipNotifications, PendingRefreshUsesReplacementCallback) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    RecordingCoordinator coordinator;
+    unsigned old_calls = 0;
+    unsigned replacement_calls = 0;
+    coordinator.SetClipJobsChangedCallback([&] { ++old_calls; });
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+    coordinator.SetClipJobsChangedCallback([&] { ++replacement_calls; });
+
+    app.DeliverNotifications();
+    EXPECT_EQ(old_calls, 0u);
+    EXPECT_EQ(replacement_calls, 1u);
+    EXPECT_EQ(app.meta_calls, 1u);
+}
+
+TEST(RecordingClipNotifications, CallbackReplacementDuringConcurrentProgressKeepsOnePendingRefresh) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    RecordingCoordinator coordinator;
+    unsigned stale_calls = 0;
+    unsigned final_calls = 0;
+    coordinator.SetClipJobsChangedCallback([&] { ++stale_calls; });
+    std::atomic<bool> started{false};
+    std::thread producer([&] {
+        started.store(true);
+        for (unsigned update = 0; update < 4096; ++update)
+            RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+    });
+    while (!started.load())
+        std::this_thread::yield();
+    for (unsigned replacement = 0; replacement < 1024; ++replacement)
+        coordinator.SetClipJobsChangedCallback([&] { ++stale_calls; });
+    producer.join();
+    coordinator.SetClipJobsChangedCallback([&] { ++final_calls; });
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+
+    app.DeliverNotifications();
+    EXPECT_EQ(stale_calls, 0u);
+    EXPECT_EQ(final_calls, 1u);
+    EXPECT_EQ(app.meta_calls, 1u);
+}
+
+TEST(RecordingClipNotifications, UpdatesDuringDeliveryQueueOneSuccessorObservingLatestTerminalState) {
+    for (const auto terminal :
+         {RecordingClipPhase::Completed, RecordingClipPhase::Cancelled, RecordingClipPhase::Failed}) {
+        SCOPED_TRACE(static_cast<int>(terminal));
+        int argc = 0;
+        ClipNotificationApplication app(argc, nullptr);
+        RecordingCoordinator coordinator;
+        std::atomic<RecordingClipPhase> latest_phase{RecordingClipPhase::Reading};
+        std::vector<RecordingClipPhase> observed;
+        unsigned depth = 0;
+        unsigned maximum_depth = 0;
+        coordinator.SetClipJobsChangedCallback([&] {
+            ++depth;
+            maximum_depth = (std::max)(maximum_depth, depth);
+            observed.push_back(latest_phase.load());
+            if (observed.size() == 1) {
+                std::thread producer([&] {
+                    latest_phase.store(RecordingClipPhase::Finalizing);
+                    for (unsigned update = 0; update < 2048; ++update)
+                        RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+                    latest_phase.store(terminal);
+                    RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+                });
+                producer.join();
+            }
+            --depth;
+        });
+        RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+
+        app.DeliverNotifications();
+        app.DeliverNotifications();
+        EXPECT_EQ(observed, (std::vector<RecordingClipPhase>{RecordingClipPhase::Reading, terminal}));
+        EXPECT_EQ(maximum_depth, 1u);
+        EXPECT_EQ(app.meta_calls, 2u);
+        app.DeliverNotifications();
+        EXPECT_EQ(observed.size(), 2u);
+        EXPECT_EQ(app.meta_calls, 2u);
+    }
+}
+
+TEST(RecordingClipNotifications, ClearingCallbackSuppressesPendingRefreshAndReleasesItsCapture) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    RecordingCoordinator coordinator;
+    unsigned calls = 0;
+    auto capture = std::make_shared<int>(0);
+    std::weak_ptr<int> retained = capture;
+    coordinator.SetClipJobsChangedCallback([&, capture] { ++calls; });
+    capture.reset();
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+    coordinator.SetClipJobsChangedCallback({});
+
+    EXPECT_TRUE(retained.expired());
+    app.DeliverNotifications();
+    EXPECT_EQ(calls, 0u);
+    coordinator.SetClipJobsChangedCallback([&] { ++calls; });
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+    app.DeliverNotifications();
+    EXPECT_EQ(calls, 1u);
+}
+
+TEST(RecordingClipNotifications, DestructionSuppressesQueuedRefreshAndReleasesCallbackCapture) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    unsigned calls = 0;
+    auto capture = std::make_shared<int>(0);
+    std::weak_ptr<int> retained = capture;
+    auto coordinator = std::make_unique<RecordingCoordinator>();
+    coordinator->SetClipJobsChangedCallback([&, capture] { ++calls; });
+    capture.reset();
+    for (unsigned update = 0; update < 2048; ++update)
+        RecordingCoordinatorTestPeer::PostClipJobsChanged(*coordinator);
+    coordinator.reset();
+
+    EXPECT_TRUE(retained.expired());
+    app.DeliverNotifications();
+    EXPECT_EQ(calls, 0u);
+    EXPECT_EQ(app.meta_calls, 1u);
+}
+
+TEST(RecordingClipNotifications, DestructionDuringDeliverySuppressesSuccessorWithoutRetainingCoordinator) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    auto coordinator = std::make_unique<RecordingCoordinator>();
+    unsigned calls = 0;
+    coordinator->SetClipJobsChangedCallback([&] {
+        ++calls;
+        for (unsigned update = 0; update < 2048; ++update)
+            RecordingCoordinatorTestPeer::PostClipJobsChanged(*coordinator);
+        coordinator.reset();
+    });
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(*coordinator);
+
+    app.DeliverNotifications();
+    app.DeliverNotifications();
+    EXPECT_EQ(calls, 1u);
+    EXPECT_FALSE(coordinator);
+    EXPECT_LE(app.meta_calls, 2u);
+}
+
+TEST(RecordingClipNotifications, ConcurrentDestructionWaitsForRunningRefreshBeforeReturning) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    auto coordinator = std::make_unique<RecordingCoordinator>();
+    std::promise<void> destruction_started;
+    auto started = destruction_started.get_future();
+    std::promise<void> destruction_finished;
+    auto finished = destruction_finished.get_future();
+    std::mutex delivery_mutex;
+    std::condition_variable release_delivery;
+    bool released = false;
+    std::atomic<bool> returned_during_delivery{false};
+    std::thread destroyer;
+    std::thread releaser;
+    coordinator->SetClipJobsChangedCallback([&] {
+        destroyer = std::thread([&, owned = std::move(coordinator)]() mutable {
+            destruction_started.set_value();
+            owned.reset();
+            destruction_finished.set_value();
+        });
+        releaser = std::thread([&] {
+            started.wait();
+            returned_during_delivery.store(finished.wait_for(std::chrono::milliseconds(100)) ==
+                                           std::future_status::ready);
+            {
+                std::lock_guard lock(delivery_mutex);
+                released = true;
+            }
+            release_delivery.notify_one();
+        });
+        std::unique_lock lock(delivery_mutex);
+        release_delivery.wait(lock, [&] { return released; });
+    });
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(*coordinator);
+
+    app.DeliverNotifications();
+    releaser.join();
+    destroyer.join();
+    EXPECT_FALSE(returned_during_delivery.load());
+    EXPECT_EQ(app.meta_calls, 1u);
+}
+
+TEST(RecordingClipNotifications, WithoutApplicationRefreshRemainsSynchronous) {
+    ASSERT_EQ(QCoreApplication::instance(), nullptr);
+    RecordingCoordinator coordinator;
+    unsigned calls = 0;
+    coordinator.SetClipJobsChangedCallback([&] { ++calls; });
+    for (unsigned update = 0; update < 4; ++update) {
+        RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+        EXPECT_EQ(calls, update + 1);
+    }
+    coordinator.SetClipJobsChangedCallback({});
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(coordinator);
+    EXPECT_EQ(calls, 4u);
 }
 
 } // namespace

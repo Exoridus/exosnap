@@ -352,7 +352,7 @@ RecordingCoordinator::RecordingCoordinator()
 }
 
 RecordingCoordinator::~RecordingCoordinator() {
-    clip_callback_life_.store({});
+    CloseClipNotifications();
     clip_jobs_->BeginShutdown();
     background_storage_->Close();
     // Before anything else: a disk-space auto-stop already queued on the UI thread

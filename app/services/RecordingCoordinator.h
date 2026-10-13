@@ -812,8 +812,10 @@ class RecordingCoordinator {
     RecordingArtifactRegistry recording_artifacts_;
     std::shared_ptr<BackgroundStorageBudget> background_storage_ = std::make_shared<BackgroundStorageBudget>();
     std::unique_ptr<RecordingClipJobs> clip_jobs_;
-    ClipJobsChangedCallback on_clip_jobs_changed_;
-    std::atomic<std::shared_ptr<int>> clip_callback_life_{std::make_shared<int>(0)};
+    struct ClipNotificationState;
+    static std::shared_ptr<ClipNotificationState> CreateClipNotificationState();
+    void CloseClipNotifications();
+    std::shared_ptr<ClipNotificationState> clip_notification_state_{CreateClipNotificationState()};
     std::atomic<uint64_t> primary_clip_reserve_bytes_{0};
     std::atomic<uint64_t> active_segment_remux_jobs_{0};
     void PostClipJobsChanged();
