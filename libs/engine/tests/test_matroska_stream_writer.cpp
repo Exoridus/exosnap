@@ -82,8 +82,11 @@ struct Probe {
         // Reclaim only orphaned native wrappers after the writer has been destroyed.
         // Other native objects have separate ownership and are not this probe's claim.
         for (auto& allocation : allocations)
-            if (allocation.live && allocation.data_buffer)
-                delete static_cast<libmatroska::DataBuffer*>(allocation.pointer);
+            if (allocation.live && allocation.data_buffer) {
+                auto* buffer = static_cast<libmatroska::DataBuffer*>(std::exchange(allocation.pointer, nullptr));
+                allocation.live = false;
+                delete buffer;
+            }
     }
     void Identify(Allocation& allocation) {
         if (!allocation.live || allocation.data_buffer || allocation.size != sizeof(libmatroska::DataBuffer))
@@ -146,10 +149,11 @@ struct Probe {
         allocations[count++] = {pointer, size, true, false};
     }
     void Freed(void* pointer) {
+        // Deallocation follows destruction, so native objects can no longer be inspected.
         for (size_t index = count; index-- > 0;)
             if (allocations[index].live && allocations[index].pointer == pointer) {
-                Identify(allocations[index]);
                 allocations[index].live = false;
+                allocations[index].pointer = nullptr;
                 return;
             }
     }

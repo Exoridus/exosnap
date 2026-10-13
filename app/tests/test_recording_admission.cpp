@@ -1256,6 +1256,45 @@ TEST(RecordingClipNotifications, ConcurrentDestructionWaitsForRunningRefreshBefo
     EXPECT_EQ(app.meta_calls, 1u);
 }
 
+TEST(RecordingClipNotifications, ReplacedCallbackCaptureIsReleasedBeforeConcurrentShutdownReturns) {
+    int argc = 0;
+    ClipNotificationApplication app(argc, nullptr);
+    auto coordinator = std::make_unique<RecordingCoordinator>();
+    std::promise<void> destruction_started;
+    auto started = destruction_started.get_future();
+    std::promise<void> destruction_finished;
+    auto finished = destruction_finished.get_future();
+    std::atomic<bool> shutdown_returned_before_capture_release{false};
+    struct BorrowedCapture {
+        BorrowedCapture(std::future<void>& finished_future, std::atomic<bool>& shutdown_observation)
+            : finished(finished_future), shutdown_returned(shutdown_observation) {
+        }
+        ~BorrowedCapture() {
+            shutdown_returned.store(finished.wait_for(std::chrono::milliseconds(100)) == std::future_status::ready);
+        }
+        std::future<void>& finished;
+        std::atomic<bool>& shutdown_returned;
+    };
+    auto capture = std::make_shared<BorrowedCapture>(finished, shutdown_returned_before_capture_release);
+    std::thread destroyer;
+    coordinator->SetClipJobsChangedCallback([&, capture] {
+        coordinator->SetClipJobsChangedCallback({});
+        destroyer = std::thread([&, owned = std::move(coordinator)]() mutable {
+            destruction_started.set_value();
+            owned.reset();
+            destruction_finished.set_value();
+        });
+        started.wait();
+    });
+    capture.reset();
+    RecordingCoordinatorTestPeer::PostClipJobsChanged(*coordinator);
+
+    app.DeliverNotifications();
+    destroyer.join();
+    EXPECT_FALSE(shutdown_returned_before_capture_release.load());
+    EXPECT_EQ(app.meta_calls, 1u);
+}
+
 TEST(RecordingClipNotifications, WithoutApplicationRefreshRemainsSynchronous) {
     ASSERT_EQ(QCoreApplication::instance(), nullptr);
     RecordingCoordinator coordinator;

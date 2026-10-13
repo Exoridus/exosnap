@@ -26,6 +26,8 @@ struct RecordingCoordinator::ClipNotificationState {
     bool queued = false;
     bool closed = false;
 
+    // Callback captures must be released before this guard retires delivery.
+    // Shutdown can destroy their borrowed resources as soon as its wait ends.
     struct Delivery {
         explicit Delivery(std::shared_ptr<ClipNotificationState> owner)
             : state(std::move(owner)), previous(current_delivery) {
@@ -53,17 +55,23 @@ struct RecordingCoordinator::ClipNotificationState {
     }
 
     static void Finish(const std::shared_ptr<ClipNotificationState>& state) {
+        {
+            std::lock_guard lock(state->mutex);
+            --state->in_flight;
+        }
+        state->idle.notify_all();
+    }
+
+    static void Schedule(const std::shared_ptr<ClipNotificationState>& state) {
         QCoreApplication* app = QCoreApplication::instance();
         bool queue = false;
         {
             std::lock_guard lock(state->mutex);
-            --state->in_flight;
             if (app && !state->closed && state->callback && state->dirty && !state->queued && !state->in_flight) {
                 state->queued = true;
                 queue = true;
             }
         }
-        state->idle.notify_all();
         if (queue)
             Queue(state, app);
     }
@@ -79,8 +87,12 @@ struct RecordingCoordinator::ClipNotificationState {
             ++state->in_flight;
             target_callback = state->callback;
         }
-        Delivery delivery(state);
-        (*target_callback)();
+        {
+            Delivery delivery(state);
+            auto active_callback = std::move(target_callback);
+            (*active_callback)();
+        }
+        Schedule(state);
     }
 
     static void Notify(const std::shared_ptr<ClipNotificationState>& state) {
@@ -104,7 +116,8 @@ struct RecordingCoordinator::ClipNotificationState {
             Queue(state, app);
         } else {
             Delivery delivery(state);
-            (*target_callback)();
+            auto active_callback = std::move(target_callback);
+            (*active_callback)();
         }
     }
 
