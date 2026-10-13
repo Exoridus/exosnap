@@ -60,6 +60,8 @@ Missing input coverage causes fresh analysis. Header membership is part of the g
 including repository vendor include directories, so a newly available conditional header cannot
 reuse a verdict from the previous include search. Dependency paths that ambiguously belong to
 another checkout are rejected rather than remapped.
+Checkout ownership and header consumers compare physically proven Windows path aliases
+without changing recorded dependency paths.
 
 Ninja omits installed MSVC/SDK headers from its MSVC dependency records.
 Their content trees, compiler identity and include environment therefore contribute one global

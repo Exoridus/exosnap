@@ -1024,6 +1024,10 @@ fn scope_for_base(
             foreign_roots.as_deref(),
             inventory.as_ref(),
         );
+        let changed_header_names: HashSet<String> = changed_headers
+            .iter()
+            .map(|header| header.to_ascii_lowercase())
+            .collect();
         let objects: Vec<String> = obj_to_source
             .iter()
             .filter(|(_, source)| graph.contains_key(*source))
@@ -1048,10 +1052,12 @@ fn scope_for_base(
             if !is_project_source(src, repo_root_norm, build_dir_norm) {
                 continue;
             }
-            if deps
-                .iter()
-                .any(|dep| changed_abs.contains(&dep.to_ascii_lowercase()))
-            {
+            if deps.iter().any(|dep| {
+                inventory
+                    .as_ref()
+                    .and_then(|inventory| inventory.repository_relative(dep))
+                    .is_some_and(|relative| changed_header_names.contains(&relative))
+            }) {
                 affected.insert(src.clone());
             }
         }
@@ -2420,6 +2426,48 @@ mod tests {
             panic!("expected a scoped result, the header change is analysable");
         };
         assert_eq!(sources, vec![foo_cpp]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn current_header_consumers_survive_a_different_checkout_root_alias() {
+        let dir = crate::test_support::fixture_repo_committed(&[
+            ("libs/a.h", "int a;\n"),
+            ("libs/a.cpp", "int a;\n"),
+            ("libs/b.cpp", "int b;\n"),
+        ]);
+        crate::test_support::write_files(dir.path(), &[("libs/a.h", "int changed;\n")]);
+        let alias = std::fs::canonicalize(dir.path()).unwrap();
+        let root = normalize_root(&alias);
+        let a = format!("{root}/libs/a.cpp");
+        let b = format!("{root}/libs/b.cpp");
+        let sources = vec![a.clone(), b.clone()];
+        let objects = HashMap::from([("a.obj".into(), a.clone()), ("b.obj".into(), b)]);
+        let ninja = FakeNinja {
+            whole: Some(vec![
+                "a.obj: #deps 1, deps mtime 1 (VALID)".into(),
+                format!("    {}", dir.path().join("libs/a.h").display()),
+                String::new(),
+                "b.obj: #deps 1, deps mtime 1 (VALID)".into(),
+                format!("    {}", dir.path().join("libs/b.cpp").display()),
+            ]),
+            batched: None,
+        };
+        let scope = scope_for_base(
+            &alias,
+            &root,
+            &format!("{root}/build"),
+            "HEAD",
+            &sources,
+            &objects,
+            &ninja,
+            &mut TidyTiming::default(),
+        )
+        .unwrap();
+        assert!(
+            matches!(scope, BaseScope::Scoped { sources, .. } if sources == vec![a]),
+            "a current object using another root alias must retain only the changed header's consumer"
+        );
     }
 
     /// The canary branch does not need a Ninja graph at all: a change to an

@@ -1,10 +1,104 @@
 //! Identity and checkout ownership of repository headers.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+pub(super) struct CheckoutRoot {
+    canonical: String,
+    lexical: String,
+    components: Vec<(String, String)>,
+}
+
+impl CheckoutRoot {
+    fn read(path: &Path) -> Option<Self> {
+        let resolved = std::fs::canonicalize(path).ok()?;
+        if !resolved.is_dir() {
+            return None;
+        }
+        let canonical = checkout_name(&resolved)?;
+        let lexical = checkout_name(path)?;
+        let short = checkout_name(&short_root(&resolved)?)?;
+        let long: Vec<_> = canonical.split('/').collect();
+        let short: Vec<_> = short.split('/').collect();
+        if long.len() != short.len() {
+            return None;
+        }
+        let components = long
+            .into_iter()
+            .zip(short)
+            .map(|(long, short)| (long.to_string(), short.to_string()))
+            .collect();
+        Some(Self {
+            canonical: format!("{canonical}/"),
+            lexical: format!("{lexical}/"),
+            components,
+        })
+    }
+
+    fn relative<'a>(&self, path: &'a str) -> Option<&'a str> {
+        if let Some(relative) = path
+            .strip_prefix(&self.lexical)
+            .or_else(|| path.strip_prefix(&self.canonical))
+        {
+            return Some(relative);
+        }
+        // Windows can mix short and long names within one path. Match only
+        // names obtained from the physical root, without probing every header.
+        let mut relative = path;
+        for (long, short) in &self.components {
+            let (component, rest) = relative.split_once('/')?;
+            if component != long && component != short {
+                return None;
+            }
+            relative = rest;
+        }
+        Some(relative)
+    }
+}
+
+fn checkout_name(path: &Path) -> Option<String> {
+    let path = path.to_str()?.replace('\\', "/");
+    let path = if let Some(unc) = path.strip_prefix("//?/UNC/") {
+        format!("//{unc}")
+    } else {
+        path.strip_prefix("//?/").unwrap_or(&path).to_string()
+    };
+    Some(
+        super::normalize_segments(&path)
+            .trim_end_matches('/')
+            .to_ascii_lowercase(),
+    )
+}
+
+#[cfg(windows)]
+fn short_root(path: &Path) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+    use windows::core::PCWSTR;
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let capacity = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), None) };
+    if capacity == 0 {
+        return None;
+    }
+    let mut output = vec![0u16; capacity as usize];
+    let copied = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut output)) } as usize;
+    if copied == 0 || copied >= output.len() {
+        return None;
+    }
+    Some(PathBuf::from(String::from_utf16(&output[..copied]).ok()?))
+}
+
+#[cfg(not(windows))]
+fn short_root(path: &Path) -> Option<PathBuf> {
+    Some(path.to_path_buf())
+}
 
 pub(super) struct HeaderInventory {
-    root: String,
+    root: CheckoutRoot,
     suffixes: HashMap<String, Vec<String>>,
     hash: String,
 }
@@ -52,7 +146,7 @@ impl HeaderInventory {
                 .push(format!("/{relative}"));
         }
         Some(Self {
-            root: format!("{}/", super::normalize_root(repo).to_ascii_lowercase()),
+            root: CheckoutRoot::read(repo)?,
             suffixes,
             hash,
         })
@@ -65,9 +159,16 @@ impl HeaderInventory {
         ))
     }
 
+    pub(super) fn repository_relative(&self, path: &str) -> Option<String> {
+        let path = checkout_name(Path::new(path))?;
+        self.root.relative(&path).map(str::to_string)
+    }
+
     fn ambiguous_header(&self, path: &str) -> bool {
-        let path = path.replace('\\', "/").to_ascii_lowercase();
-        if path.starts_with(&self.root) {
+        let Some(path) = checkout_name(Path::new(path)) else {
+            return true;
+        };
+        if self.root.relative(&path).is_some() {
             return false;
         }
         self.suffixes
@@ -81,31 +182,31 @@ pub(super) fn configuration_hash(repo: &Path, build: &Path) -> Option<String> {
     HeaderInventory::read(repo, build)?.configuration_hash(repo)
 }
 
-pub(super) fn foreign_roots(repo: &Path) -> Option<Vec<String>> {
+pub(super) fn foreign_roots(repo: &Path) -> Option<Vec<CheckoutRoot>> {
     let (code, output) = crate::git::Git::new(repo).run(&["worktree", "list", "--porcelain"]);
     if code != 0 {
         return None;
     }
-    let current = super::normalize_segments(&super::normalize_root(repo));
-    let roots: Vec<String> = output
+    let current = format!("{}/", checkout_name(&std::fs::canonicalize(repo).ok()?)?);
+    let roots: Vec<CheckoutRoot> = output
         .lines()
         .filter_map(|line| line.strip_prefix("worktree "))
-        .map(|path| super::normalize_segments(&path.replace('\\', "/")))
-        .collect();
-    if !roots.iter().any(|root| root.eq_ignore_ascii_case(&current)) {
+        .map(|path| CheckoutRoot::read(Path::new(path)))
+        .collect::<Option<_>>()?;
+    if !roots.iter().any(|root| root.canonical == current) {
         return None;
     }
     Some(
         roots
             .into_iter()
-            .filter(|root| !root.eq_ignore_ascii_case(&current))
+            .filter(|root| root.canonical != current)
             .collect(),
     )
 }
 
 pub(super) fn retain_dependencies(
     graph: &mut HashMap<String, Vec<String>>,
-    foreign: Option<&[String]>,
+    foreign: Option<&[CheckoutRoot]>,
     inventory: Option<&HeaderInventory>,
 ) {
     let (Some(foreign), Some(inventory)) = (foreign, inventory) else {
@@ -117,10 +218,11 @@ pub(super) fn retain_dependencies(
             if inventory.ambiguous_header(path) {
                 return false;
             }
-            let path = path.replace('\\', "/").to_ascii_lowercase();
+            let Some(path) = checkout_name(Path::new(path)) else {
+                return false;
+            };
             !foreign.iter().any(|root| {
-                let prefix = format!("{}/", root.to_ascii_lowercase());
-                let Some(relative) = path.strip_prefix(&prefix) else {
+                let Some(relative) = root.relative(&path) else {
                     return false;
                 };
                 matches!(
@@ -188,6 +290,138 @@ mod tests {
         let mut graph = HashMap::from([("source.cpp".into(), vec!["header.h".into()])]);
         retain_dependencies(&mut graph, None, None);
         assert!(graph.is_empty());
+    }
+
+    #[test]
+    fn a_physical_current_root_alias_preserves_dependency_ownership() {
+        let dir = crate::test_support::fixture_repo_committed(&[("libs/a.h", "int a;\n")]);
+        let alias = std::fs::canonicalize(dir.path()).unwrap();
+        let roots =
+            foreign_roots(&alias).expect("Git's listed root must identify the physical checkout");
+        assert!(roots.is_empty());
+        let inventory = HeaderInventory::read(&alias, &alias.join("build")).unwrap();
+        let mut graph = HashMap::from([(
+            "source.cpp".into(),
+            vec![super::super::normalize_root(&dir.path().join("libs/a.h"))],
+        )]);
+        retain_dependencies(&mut graph, Some(&roots), Some(&inventory));
+        assert_eq!(
+            graph.len(),
+            1,
+            "a different spelling of the current root is not a foreign checkout"
+        );
+    }
+
+    #[test]
+    fn mixed_short_and_long_root_components_require_the_proven_names() {
+        let root = CheckoutRoot {
+            canonical: "c:/users/runneradmin/checkout directory/".into(),
+            lexical: "c:/users/runneradmin/checkout directory/".into(),
+            components: vec![
+                ("c:".into(), "c:".into()),
+                ("users".into(), "users".into()),
+                ("runneradmin".into(), "runner~1".into()),
+                ("checkout directory".into(), "checko~1".into()),
+            ],
+        };
+        for path in [
+            "c:/users/runner~1/checkout directory/libs/a.h",
+            "c:/users/runneradmin/checko~1/libs/a.h",
+            "c:/users/runner~1/checko~1/libs/a.h",
+        ] {
+            assert_eq!(root.relative(path), Some("libs/a.h"));
+        }
+        for path in [
+            "c:/users/runner~2/checko~1/libs/a.h",
+            "c:/users/runner~1/checko~10/libs/a.h",
+            "c:/users/runner~1/checkout directory suffix/libs/a.h",
+        ] {
+            assert!(root.relative(path).is_none());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_root_aliases_accept_current_headers_and_reject_foreign_only_headers() {
+        let dir = crate::test_support::fixture_repo_committed(&[("libs/a.h", "int a;\n")]);
+        let foreign = dir.path().join("other checkout with long name");
+        assert_eq!(
+            crate::git::Git::new(dir.path())
+                .run(&[
+                    "worktree",
+                    "add",
+                    "--detach",
+                    foreign.to_str().unwrap(),
+                    "HEAD"
+                ])
+                .0,
+            0
+        );
+        std::fs::write(foreign.join("libs/foreign_only.h"), "int foreign;\n").unwrap();
+        let aliases = native_aliases(dir.path());
+        let foreign_aliases = native_aliases(&foreign);
+        for alias in aliases {
+            let roots = foreign_roots(&alias)
+                .expect("current root must match Git through its physical identity");
+            assert_eq!(roots.len(), 1);
+            let inventory = HeaderInventory::read(&alias, &alias.join("build")).unwrap();
+            for current in native_aliases(dir.path()) {
+                let mut graph = HashMap::from([(
+                    "source.cpp".into(),
+                    vec![super::super::normalize_root(&current.join("libs/a.h"))],
+                )]);
+                retain_dependencies(&mut graph, Some(&roots), Some(&inventory));
+                assert_eq!(graph.len(), 1);
+            }
+            for foreign in &foreign_aliases {
+                let mut graph = HashMap::from([(
+                    "source.cpp".into(),
+                    vec![super::super::normalize_root(
+                        &foreign.join("libs/foreign_only.h"),
+                    )],
+                )]);
+                retain_dependencies(&mut graph, Some(&roots), Some(&inventory));
+                assert!(
+                    graph.is_empty(),
+                    "foreign header absent from the current inventory must still be rejected"
+                );
+            }
+            let mut graph = HashMap::from([(
+                "source.cpp".into(),
+                vec![super::super::normalize_root(
+                    &foreign.join("build/borrowed_deps/include/vendor.h"),
+                )],
+            )]);
+            retain_dependencies(&mut graph, Some(&roots), Some(&inventory));
+            assert_eq!(graph.len(), 1);
+        }
+    }
+
+    #[cfg(windows)]
+    fn native_aliases(path: &Path) -> Vec<PathBuf> {
+        let canonical = std::fs::canonicalize(path).unwrap();
+        let short = short_root(&canonical).unwrap();
+        let long_name = checkout_name(&canonical).unwrap();
+        let short_name = checkout_name(&short).unwrap();
+        let mut aliases = BTreeSet::from([path.to_path_buf(), canonical, short]);
+        let components: Vec<_> = long_name.split('/').collect();
+        let mut short_components = 0;
+        for (index, short) in short_name.split('/').enumerate() {
+            if short != components[index] {
+                short_components += 1;
+                let mut mixed = components.clone();
+                mixed[index] = short;
+                aliases.insert(PathBuf::from(mixed.join("/")));
+            }
+        }
+        eprintln!(
+            "native checkout aliases: {} spellings, {short_components} short-name components",
+            aliases.len()
+        );
+        for alias in &aliases {
+            assert!(alias.is_dir());
+        }
+        aliases.into_iter().collect()
     }
 
     #[test]
