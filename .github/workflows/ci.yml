@@ -427,12 +427,11 @@ jobs:
   build-test-debug:
     name: build-test (windows-x64-debug)
     runs-on: windows-2022
-    # Measured over the last 20 runs: median 12 min at a 97-98 % sccache hit
-    # rate; worst 71 min on a cold cache with a header change that fanned the
-    # scoped clang-tidy set out across the tree (36 min of it). About 1.7x
-    # that worst case: a lint-policy change reaches every unit, and its first
-    # push is the run this ceiling has to let finish.
-    timeout-minutes: 120
+    # A cold full-tree analysis of 664 units projects to about 117 minutes
+    # on this runner, plus roughly 20 minutes for setup, build and tests.
+    # Allow that pass to finish and populate the verdict cache. Fresh results
+    # are stored only after the complete batch's inputs are revalidated.
+    timeout-minutes: 180
     # Not on a branch push: the next commit is the squash of a PR whose own run
     # of this exact job just went green (see "WHAT RUNS WHERE" at the top of this
     # file). Written as a positive list over the events this workflow can see
