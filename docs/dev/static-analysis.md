@@ -48,6 +48,16 @@ Cognitive complexity remains advisory. The report ranks up to 20 diagnosed funct
 
 Both CI analysis workflows provision cppcheck through `cargo exo-dev setup cppcheck`, pinned to the Chocolatey package version in `tools/exo-dev/src/setup.rs`. Provisioning validates the executable's version and fails if installation or discovery fails. `cargo exo-dev lint quality --only cppcheck-unused-function --report-path build/advisory/cppcheck.txt` measures unused-function candidates without turning findings into failures. Qt slots and registered callbacks require review before removal.
 
+## Windows compiler compatibility
+
+Windows analysis supplies `_CRT_USE_BUILTIN_OFFSETOF=1` to select the UCRT builtin
+`offsetof`, matching MSVC's predefined macro. Older Clang versions otherwise
+reject valid constant-expression layout assertions. Clang 21 and later define
+this macro themselves, as documented in the
+[LLVM release notes](https://releases.llvm.org/21.1.0/tools/clang/docs/ReleaseNotes.html).
+This argument contributes to the verdict identity and does not disable diagnostics
+or change native build flags.
+
 ## Missing tools and caches
 
 A requested but missing analysis tool yields exit 3 from the quality runner. `cargo exo-dev verify` reports `TOOL_MISSING`; `--full` fails, `--fast` can report the gap and continue. Install the missing tool rather than interpreting absence as success.

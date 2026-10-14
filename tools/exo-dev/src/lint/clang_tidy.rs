@@ -1380,11 +1380,19 @@ fn parse_version(banner: &str) -> Option<String> {
 /// the real invocation in [`invoke_clang_tidy`] cannot drift apart if a flag
 /// is ever added here.
 fn invocation_flags(checks_arg: &str, header_filter: &str) -> Vec<String> {
-    vec![
+    let flags = vec![
         "--quiet".to_string(),
         format!("--checks={checks_arg}"),
         format!("--header-filter={header_filter}"),
-    ]
+    ];
+    #[cfg(windows)]
+    let flags = {
+        let mut flags = flags;
+        // Older Clang lacks MSVC's macro selecting UCRT's constexpr offsetof.
+        flags.push("--extra-arg-before=-D_CRT_USE_BUILTIN_OFFSETOF=1".to_string());
+        flags
+    };
+    flags
 }
 
 fn invoke_clang_tidy(
@@ -2020,6 +2028,36 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires EXO_DEV_UCRT_CLANG_TIDY and a matching MSVC INCLUDE environment"]
+    fn ucrt_offsetof_layout_contracts_are_constant_expressions() {
+        let tool = PathBuf::from(
+            std::env::var_os("EXO_DEV_UCRT_CLANG_TIDY").expect("set EXO_DEV_UCRT_CLANG_TIDY"),
+        );
+        assert!(std::env::var_os("INCLUDE").is_some(), "set MSVC INCLUDE");
+        let dir = tempfile::tempdir().unwrap();
+        let source = normalize_root(&dir.path().join("layout.cpp"));
+        std::fs::write(
+            &source,
+            "#include <cstddef>\nstruct Constants { float key[4]; float params[4]; float params2[4]; };\nstatic_assert(sizeof(Constants) == 48);\nstatic_assert(offsetof(Constants, params) == 16);\nstatic_assert(offsetof(Constants, params2) == 32);\n",
+        )
+        .unwrap();
+        let database = serde_json::json!([{
+            "directory": normalize_root(dir.path()),
+            "file": source,
+            "command": format!("clang-cl.exe /TP /std:c++20 /c \"{source}\"")
+        }]);
+        std::fs::write(
+            dir.path().join("compile_commands.json"),
+            serde_json::to_vec(&database).unwrap(),
+        )
+        .unwrap();
+        let flags = invocation_flags(&format!("-*,{}", BLOCKING_CHECKS.join(",")), HEADER_FILTER);
+        let (output, code, _) = invoke_clang_tidy(&tool, dir.path(), &flags, &source);
+        require_analysis(&source, &output, code).expect(&output);
+        assert_eq!(code, 0, "{output}");
+    }
     #[test]
     #[ignore = "requires EXO_DEV_DRIFT_CLANG_TIDY naming a real clang-tidy executable"]
     fn a_source_changed_after_key_capture_cannot_store_a_clean_verdict_for_the_original() {
