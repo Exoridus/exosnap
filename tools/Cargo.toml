@@ -16,3 +16,6 @@ windows = "0.62"
 [profile.release]
 lto = "thin"
 codegen-units = 4
+
+[profile.dev.package.sha2]
+opt-level = 3

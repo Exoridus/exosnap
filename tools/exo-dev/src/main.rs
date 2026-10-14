@@ -630,6 +630,9 @@ enum LintCommand {
         /// Print the blocking check list and exit.
         #[arg(long)]
         list_checks: bool,
+        /// Write pipeline and per-translation-unit wall times as JSON.
+        #[arg(long)]
+        profile_path: Option<PathBuf>,
     },
     /// Runs the advisory clang-tidy check set (`.clang-tidy` minus
     /// `clang-analyzer-*`) and cppcheck over the project's own sources.
@@ -957,6 +960,7 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 cache_dir,
                 require_version,
                 list_checks,
+                profile_path,
             } => lint_clang_tidy(
                 &repo_root,
                 build_dir,
@@ -966,6 +970,7 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 cache_dir,
                 require_version,
                 list_checks,
+                profile_path,
             ),
             LintCommand::Quality {
                 only,
@@ -2421,6 +2426,7 @@ fn lint_clang_tidy(
     cache_dir: Option<PathBuf>,
     require_version: Option<String>,
     list_checks: bool,
+    profile_path: Option<PathBuf>,
 ) -> anyhow::Result<ExitCode> {
     let build_dir = if build_dir.is_absolute() {
         build_dir
@@ -2444,6 +2450,13 @@ fn lint_clang_tidy(
         return Ok(ExitCode::SUCCESS);
     }
 
+    if let Some(path) = profile_path {
+        let git = Git::new(repo_root);
+        let (_, head) = git.run(&["rev-parse", "HEAD"]);
+        let (_, status) = git.run(&["status", "--porcelain"]);
+        report.write_profile(&path, Some(head.trim()), !status.is_empty())?;
+    }
+
     println!("clang-tidy      : {}", report.tool_path.display());
     if !report.compile_db.as_os_str().is_empty() {
         println!("compile database: {}", report.compile_db.display());
@@ -2453,8 +2466,8 @@ fn lint_clang_tidy(
         exo_dev::lint::canaries::BLOCKING_CHECKS.join(", ")
     );
     println!(
-        "scope           : {}, {} translation unit(s), {jobs} parallel job(s)",
-        report.scope, report.analyzed
+        "scope           : {}, {} translation unit(s), {} parallel job(s)",
+        report.scope, report.analyzed, report.timing.workers
     );
     if report.cache_enabled {
         println!(
