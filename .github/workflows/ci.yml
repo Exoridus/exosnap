@@ -514,8 +514,9 @@ jobs:
       # repository's cache budget; entries are a few hundred bytes each, so the
       # set is never what fills it.
       - name: Restore clang-tidy result cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
+        id: tidy-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        # zizmor: ignore[cache-poisoning] -- verdict reuse validates inputs and entries within GitHub cache ref isolation
         with:
           path: ${{ runner.temp }}/clang-tidy-cache
           key: clang-tidy-blocking-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -540,6 +541,16 @@ jobs:
         run: >-
           cargo exo-dev verify --profile ci-build-debug --event $env:EVENT
           --tidy-cache-dir $env:TIDY_CACHE --jobs $([Environment]::ProcessorCount)
+
+      # Validated diagnostics remain blocking when replayed. Retain them even
+      # when an analysis finding or a later step fails, so a follow-up run can
+      # reuse unchanged inputs without repeating the completed analysis.
+      - name: Save clang-tidy result cache
+        if: always() && steps.tidy-cache.outputs.cache-primary-key != '' && steps.tidy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/clang-tidy-cache
+          key: ${{ steps.tidy-cache.outputs.cache-primary-key }}
 
       - name: sccache stats
         if: always()

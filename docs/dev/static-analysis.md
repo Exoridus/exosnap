@@ -92,6 +92,10 @@ Before/after checks detect persistent drift but cannot detect an edit and restor
 analysis, or make sequential file reads immutable. Immutable input snapshots are not provided.
 Old, malformed or damaged entries are misses. The digest detects corruption, not forgery by someone
 already able to write a trusted cache scope. GitHub cache ref isolation remains the trust boundary.
+CI restores and saves the verdict cache in separate steps. Validated diagnostics are saved
+also when they make the analysis fail, and replaying a blocking finding still fails the check.
+An interrupted analysis may not reach input revalidation or cache saving, so a timeout does
+not guarantee reusable fresh verdicts. Cache upload failures do not replace the analysis verdict.
 cppcheck keeps its separate build-directory cache.
 
 Shared tool caches live under %LOCALAPPDATA%\ExoSnap\tool-cache, outside source/build trees.
