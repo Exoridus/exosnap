@@ -426,6 +426,7 @@ add_library(exosnap_engine STATIC
     src/edit_timeline_reader.cpp
     src/edit_export_plan.cpp
     src/edit_timeline_render.cpp
+    src/edit_hybrid_export.cpp
     src/render_audio_manifest.cpp
     src/edit_audio_mix.h
     src/edit_audio_mix.cpp
@@ -1938,6 +1939,13 @@ exosnap_add_gtest(
     NAME test_editor_audio_mix
     TEST_PREFIX engine.
     SOURCES tests/test_editor_audio_mix.cpp
+    LIBRARIES exosnap_engine FFmpeg::mux
+)
+
+exosnap_add_gtest(
+    NAME test_editor_export_media
+    TEST_PREFIX engine.
+    SOURCES tests/test_editor_export_media.cpp
     LIBRARIES exosnap_engine FFmpeg::mux
 )
 

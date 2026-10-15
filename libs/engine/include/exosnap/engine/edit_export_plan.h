@@ -3,6 +3,7 @@
 #include <exosnap/engine/edit_timeline_render.h>
 
 #include <array>
+#include <atomic>
 #include <memory>
 
 namespace exosnap::engine {
@@ -103,5 +104,17 @@ struct EditExportPlan {
 [[nodiscard]] std::shared_ptr<const EditExportPlan> PrepareEditExport(TimelineRenderSnapshot snapshot,
                                                                       EditExportIntent intent, EditExportFacts facts);
 [[nodiscard]] bool AcceptsBoundaryConsent(const EditExportPlan& plan, const EditBoundaryConsent& consent);
+
+// Opens the snapshot's sources to establish which execution paths are actually
+// available. Blocking; run off the UI thread. `input_mix_validated` is the
+// caller's statement that every contributing source has a resolved starting mix.
+[[nodiscard]] EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& snapshot,
+                                                    const EditExportIntent& intent, bool input_mix_validated,
+                                                    const std::atomic<bool>* cancelled = nullptr);
+
+// Writes a ready plan to a new staging path; failure and cancellation remove it.
+// `config` supplies the shipping video encoder for a rendered video path.
+RemuxResult ExecuteEditExport(const EditExportPlan& plan, RecorderConfig config, const std::filesystem::path& staging,
+                              RemuxProgressCallback progress);
 
 } // namespace exosnap::engine

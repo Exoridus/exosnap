@@ -253,9 +253,17 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
             !encoder->Configure(plan.output.width, plan.output.height, plan.fps_num, plan.fps_den, error) ||
             !surfaces.Init(gpu, *encoder, compositor.Result(), plan, false, error))
             return false;
+        const int64_t span_in = plan.span_in_us;
+        const int64_t span_out = plan.span_out_us < 0 ? snapshot.timeline.duration_us : plan.span_out_us;
+        if (span_in < 0 || span_out <= span_in || span_out > snapshot.timeline.duration_us) {
+            error = "The render span is outside the timeline.";
+            return false;
+        }
+        const auto span_duration = static_cast<uint64_t>(span_out - span_in);
         const uint64_t frames =
-            (snapshot.timeline.duration_us * static_cast<uint64_t>(plan.fps_num) + 1'000'000ULL * plan.fps_den - 1) /
+            (span_duration * static_cast<uint64_t>(plan.fps_num) + 1'000'000ULL * plan.fps_den - 1) /
             (1'000'000ULL * plan.fps_den);
+        const int64_t audio_origin = AudioSampleIndex(span_in);
         const uint64_t duration_ns = frames * 1'000'000'000ULL * plan.fps_den / plan.fps_num;
         const uint64_t audio_count = (duration_ns * 48000 + 500'000'000ULL) / 1'000'000'000ULL;
         MatroskaStreamConfig mux;
@@ -323,7 +331,7 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
             }
             TimelineVideoFrame frame;
             const uint64_t pts = frame_index * 1'000'000'000ULL * plan.fps_den / plan.fps_num;
-            if (!reader.VideoAt(static_cast<int64_t>(pts / 1000), frame, error) ||
+            if (!reader.VideoAt(span_in + static_cast<int64_t>(pts / 1000), frame, error) ||
                 !compositor.Compose(frame.layers, error))
                 return false;
             int32_t slot = encoder->AcquireFreeSlot();
@@ -355,7 +363,7 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
                     : std::min(audio_count, (frame_index + 1) * 48000ULL * plan.fps_den / plan.fps_num);
             while (audio && audio_position < through) {
                 const auto count = static_cast<uint32_t>(std::min<uint64_t>(960, through - audio_position));
-                if (!reader.AudioAt(static_cast<int64_t>(audio_position), count, samples, error))
+                if (!reader.AudioAt(audio_origin + static_cast<int64_t>(audio_position), count, samples, error))
                     return false;
                 audio_encoder->FeedFloat32(samples.data(), samples.size(), audio_position * 1'000'000'000ULL / 48000,
                                            accumulated, 48000, 2, audio_packets);

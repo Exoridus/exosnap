@@ -1,4 +1,6 @@
 #include <exosnap/engine/edit_export_plan.h>
+#include <exosnap/engine/edit_timeline_export.h>
+#include <exosnap/engine/output_geometry.h>
 
 extern "C" {
 #include <libavutil/mem.h>
@@ -8,8 +10,12 @@ extern "C" {
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cwchar>
+#include <filesystem>
+#include <map>
 #include <new>
 #include <set>
+#include <system_error>
 
 namespace exosnap::engine {
 namespace {
@@ -311,4 +317,158 @@ std::shared_ptr<const EditExportPlan> PrepareEditExport(TimelineRenderSnapshot s
 bool AcceptsBoundaryConsent(const EditExportPlan& plan, const EditBoundaryConsent& consent) {
     return plan.hash == consent.plan_hash && plan.facts.deviations == consent.edges;
 }
+namespace {
+
+std::pair<int64_t, int64_t> Span(const TimelineSnapshot& timeline, EditExportSpan span) {
+    const int64_t in = span == EditExportSpan::ResultRange ? timeline.result_in_us : 0;
+    const int64_t out = span == EditExportSpan::ResultRange && timeline.result_out_us >= 0 ? timeline.result_out_us
+                                                                                           : timeline.duration_us;
+    return {in, out};
+}
+
+bool TrackEnabled(const TimelineSnapshot& timeline, const TimelineClip& clip) {
+    const auto track = std::find_if(timeline.tracks.begin(), timeline.tracks.end(),
+                                    [&clip](const auto& value) { return value.id == clip.track; });
+    return clip.enabled && (track == timeline.tracks.end() || track->enabled);
+}
+
+const TimelineMediaSource* SourceOf(const TimelineRenderSnapshot& snapshot, uint64_t asset) {
+    const auto found = std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
+                                    [asset](const auto& value) { return value.id == asset; });
+    return found == snapshot.sources.end() ? nullptr : &*found;
+}
+
+// Hardlinks and other aliases resolve to one file identity; an unresolvable
+// comparison is treated as an alias so a source is never overwritten.
+bool SameFile(const std::filesystem::path& a, const std::filesystem::path& b) {
+    std::error_code error;
+    if (std::filesystem::exists(a, error) && std::filesystem::exists(b, error)) {
+        const bool same = std::filesystem::equivalent(a, b, error);
+        return same || static_cast<bool>(error);
+    }
+    const auto left = std::filesystem::weakly_canonical(a, error);
+    const auto right = std::filesystem::weakly_canonical(b, error);
+    return _wcsicmp(left.c_str(), right.c_str()) == 0;
+}
+
+} // namespace
+
+EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& snapshot, const EditExportIntent& intent,
+                                      bool input_mix_validated, const std::atomic<bool>* cancelled) {
+    EditExportFacts facts;
+    facts.input_mix_validated = input_mix_validated;
+    const auto& timeline = snapshot.timeline;
+    const auto span = Span(timeline, intent.span);
+    const bool whole = span.first == 0 && span.second == timeline.duration_us;
+    const bool matroska = intent.container == EditExportContainer::Matroska;
+    facts.destination_admitted = !intent.destination.empty();
+    for (const auto& source : snapshot.sources)
+        if (facts.destination_admitted && SameFile(intent.destination, source.path))
+            facts.destination_admitted = false;
+
+    std::vector<const TimelineClip*> video;
+    std::set<uint64_t> video_tracks;
+    for (const auto& clip : timeline.clips)
+        if (!clip.audio && TrackEnabled(timeline, clip)) {
+            video.push_back(&clip);
+            video_tracks.insert(clip.track);
+        }
+    std::sort(video.begin(), video.end(), [](const auto* a, const auto* b) { return a->start_us < b->start_us; });
+    bool render_video = matroska && !video.empty();
+    bool complete = matroska && !video.empty() && video_tracks.size() == 1 && whole;
+    int64_t covered = 0;
+    for (const auto* clip : video) {
+        const auto* source = SourceOf(snapshot, clip->asset);
+        if (!source) {
+            render_video = false;
+            complete = false;
+            continue;
+        }
+        facts.copy_recipe.push_back({source->path, clip->source_in_us, clip->source_out_us, clip->start_us});
+        const auto& metadata = source->metadata;
+        if (!metadata.render_color_supported || metadata.fps_num <= 0 || metadata.fps_den <= 0 || metadata.width <= 0 ||
+            metadata.height <= 0 ||
+            !IsEncoderAlignedSize({static_cast<uint32_t>(metadata.width), static_cast<uint32_t>(metadata.height)}))
+            render_video = false;
+        complete = complete && clip->start_us == covered && clip->source_in_us == 0 &&
+                   std::abs(clip->source_out_us - metadata.duration_us) <= 1000;
+        covered += clip->source_out_us - clip->source_in_us;
+    }
+    facts.video_render_available = render_video;
+    if (!facts.copy_recipe.empty() && video_tracks.size() == 1 && whole) {
+        const bool mp4 = intent.container == EditExportContainer::Mp4;
+        facts.original_copy_qualified = AssessTimelineExport(facts.copy_recipe, mp4, cancelled).eligibility ==
+                                        TimelineExportEligibility::StreamCopy;
+        facts.video_copy_qualified =
+            complete && facts.original_copy_qualified && std::abs(covered - timeline.duration_us) <= 1000;
+    }
+
+    std::map<uint64_t, EditOriginalGroup> groups;
+    bool render_audio = true;
+    for (const auto& clip : timeline.clips) {
+        if (clip.group && clip.stream) {
+            auto& group = groups[clip.group];
+            group.group = clip.group;
+            if (std::find(group.streams.begin(), group.streams.end(), *clip.stream) == group.streams.end())
+                group.streams.push_back(*clip.stream);
+        }
+        if (!clip.audio || !TrackEnabled(timeline, clip) || clip.start_us >= span.second || clip.end_us() <= span.first)
+            continue;
+        const auto* source = SourceOf(snapshot, clip.asset);
+        if (!source || !clip.stream || clip.stream->kind != TimelineStreamKind::Audio) {
+            render_audio = false;
+            continue;
+        }
+        const auto stream =
+            std::find_if(source->metadata.streams.begin(), source->metadata.streams.end(), [&clip](const auto& value) {
+                return value.kind == TimelineStreamKind::Audio && value.container_index == clip.stream->container_index;
+            });
+        if (stream == source->metadata.streams.end() || stream->codec.channels == 0 || stream->codec.channels > 2)
+            render_audio = false;
+    }
+    for (auto& entry : groups)
+        facts.original_groups.push_back(std::move(entry.second));
+    facts.stereo_render_available = render_audio && matroska;
+    return facts;
+}
+
+RemuxResult ExecuteEditExport(const EditExportPlan& plan, RecorderConfig config, const std::filesystem::path& staging,
+                              RemuxProgressCallback progress) {
+    if (!plan.ready())
+        return RemuxResult::Fail(-1, "The export plan is not ready.");
+    const bool mp4 = plan.intent.container == EditExportContainer::Mp4;
+    if (plan.intent.mode == EditExportMode::OriginalStreams)
+        return ExportTimelineStreamCopy(plan.facts.copy_recipe, staging, mp4, std::move(progress));
+    if (plan.video_path == EditVideoPath::Copy)
+        return ExportEditTimelineWithCopiedVideo(plan.snapshot, plan.facts.copy_recipe, staging,
+                                                 plan.audio_path == EditAudioPath::RenderStereo, std::move(progress));
+    if (plan.video_path != EditVideoPath::Render || mp4)
+        return RemuxResult::Fail(-1, "This export path is unavailable.");
+    const auto& timeline = plan.snapshot.timeline;
+    const TimelineMediaSource* reference = nullptr;
+    for (const auto& clip : timeline.clips)
+        if (!clip.audio && !reference)
+            reference = SourceOf(plan.snapshot, clip.asset);
+    if (!reference)
+        return RemuxResult::Fail(-1, "The timeline has no video source to render.");
+    EditRenderPlan render;
+    render.path = EditExportPath::Render;
+    render.span_in_us = plan.span_in_us;
+    render.span_out_us = plan.span_out_us;
+    render.output = plan.intent.geometry.IsValid() ? plan.intent.geometry
+                                                   : FrameSize{static_cast<uint32_t>(reference->metadata.width),
+                                                               static_cast<uint32_t>(reference->metadata.height)};
+    if (plan.intent.fps_num) {
+        render.fps_num = static_cast<int>(plan.intent.fps_num);
+        render.fps_den = static_cast<int>(plan.intent.fps_den);
+    } else if (timeline.output_fps_num) {
+        render.fps_num = static_cast<int>(timeline.output_fps_num);
+        render.fps_den = static_cast<int>(timeline.output_fps_den);
+    } else {
+        render.fps_num = reference->metadata.fps_num;
+        render.fps_den = reference->metadata.fps_den;
+    }
+    return RenderEditTimeline(plan.snapshot, render, std::move(config), staging, false, std::move(progress));
+}
+
 } // namespace exosnap::engine

@@ -28,6 +28,9 @@ struct EditRenderPlan {
     FrameSize output;
     int fps_num = 0;
     int fps_den = 1;
+    // Rendered timeline interval; a negative out renders through the timeline end.
+    int64_t span_in_us = 0;
+    int64_t span_out_us = -1;
 };
 
 // Metadata and stream-copy eligibility are resolved before this pure policy.
@@ -68,5 +71,13 @@ struct TimelineRenderMeasurements {
 RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const EditRenderPlan& plan,
                                RecorderConfig config, const std::filesystem::path& output, bool to_mp4,
                                RemuxProgressCallback progress, TimelineRenderMeasurements* measurements = nullptr);
+
+// Copies the video packets of complete, compatible sources that cover the whole
+// timeline from zero and renders the result mix as 48 kHz stereo PCM beside
+// them. Matroska only. Fails rather than expanding or trimming copied video.
+RemuxResult ExportEditTimelineWithCopiedVideo(const TimelineRenderSnapshot& snapshot,
+                                              const std::vector<TimelineExportClip>& video_recipe,
+                                              const std::filesystem::path& output, bool render_audio,
+                                              RemuxProgressCallback progress);
 
 } // namespace exosnap::engine
