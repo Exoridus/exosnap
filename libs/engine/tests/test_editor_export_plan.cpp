@@ -1,9 +1,12 @@
 #include <exosnap/engine/edit_export_plan.h>
 #include <exosnap/engine/edit_timeline.h>
+#include <exosnap/engine/edit_timeline_compositor.h>
+#include <exosnap/engine/edit_timeline_export.h>
 #include <exosnap/engine/edit_timeline_render.h>
 #include <exosnap/engine/edit_types.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <utility>

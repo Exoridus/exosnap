@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <exosnap/engine/edit_frame_gpu_converter.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
 #include <exosnap/engine/gpu_surface_inventory.h>
 #include <exosnap/engine/output_geometry.h>
@@ -12,7 +13,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <memory>
 #include <numeric>
+#include <utility>
 #include <vector>
 
 namespace exosnap::engine {
