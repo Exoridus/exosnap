@@ -274,6 +274,27 @@ FocusScope {
                                     Accessible.name: qsTr("Export profile")
                                     onActivated: root.exporter.profileKey = currentValue
                                 }
+                                Label { text: qsTr("Export range") }
+                                ComboBox {
+                                    objectName: "editExportSpan"
+                                    Layout.fillWidth: true
+                                    model: [
+                                        { value: "result", label: qsTr("Result range") },
+                                        { value: "entire", label: qsTr("Entire timeline") }
+                                    ]
+                                    textRole: "label"
+                                    valueRole: "value"
+                                    currentIndex: model.findIndex(option => option.value === root.exporter.spanKey)
+                                    Accessible.name: qsTr("Export range")
+                                    onActivated: root.exporter.spanKey = currentValue
+                                }
+                                ExoCheckBox {
+                                    objectName: "editExportOriginalStreams"
+                                    Layout.fillWidth: true
+                                    text: qsTr("Keep original streams")
+                                    checked: root.exporter.modeKey === "originalStreams"
+                                    onToggledByUser: value => root.exporter.modeKey = value ? "originalStreams" : "finishedStereo"
+                                }
                             }
                         }
                     }
@@ -462,6 +483,9 @@ FocusScope {
             }
         }
         contentItem: ColumnLayout {
+            id: reviewContent
+            readonly property bool planned: root.exporter.reviewOutcome.audioSummary !== undefined
+            readonly property bool mixed: (root.exporter.reviewOutcome.outputAudioTracks || []).some(track => track.role === "mix")
             spacing: ExoTheme.spacingSm
             Label {
                 Layout.fillWidth: true
@@ -473,8 +497,15 @@ FocusScope {
                 wrapMode: Text.Wrap
             }
             Label {
+                objectName: "editExportAudioSummary"
                 Layout.fillWidth: true
-                visible: root.exporter.reviewOutcome.path === "Copy"
+                visible: reviewContent.planned
+                text: qsTr("Audio: %1").arg(root.exporter.reviewOutcome.audioSummary || "")
+                wrapMode: Text.Wrap
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: root.exporter.reviewOutcome.path === "Copy" && !reviewContent.planned
                 text: qsTr("All %1 source audio tracks will be copied: %2")
                     .arg((root.exporter.reviewOutcome.outputAudioTracks || []).length)
                     .arg((root.exporter.reviewOutcome.outputAudioTracks || []).map(track => track.name).join(", ") || qsTr("none"))
@@ -482,7 +513,7 @@ FocusScope {
             }
             Label {
                 Layout.fillWidth: true
-                visible: root.exporter.reviewOutcome.path === "Render"
+                visible: reviewContent.planned ? reviewContent.mixed : root.exporter.reviewOutcome.path === "Render"
                 text: root.exporter.reviewOutcome.videoOnly
                     ? qsTr("Video-only render. No audio tracks will be included.")
                     : qsTr("Selected tracks (%1) will be mixed into one 48 kHz stereo PCM24 track: %2")
@@ -492,14 +523,14 @@ FocusScope {
             }
             Label {
                 Layout.fillWidth: true
-                visible: root.exporter.reviewOutcome.path === "Render"
+                visible: reviewContent.planned ? reviewContent.mixed : root.exporter.reviewOutcome.path === "Render"
                 text: qsTr("Other tracks will not be included: %1")
                     .arg((root.exporter.reviewOutcome.excludedTracks || []).map(track => track.name).join(", ") || qsTr("none"))
                 wrapMode: Text.Wrap
             }
             Label {
                 Layout.fillWidth: true
-                visible: root.exporter.reviewOutcome.path === "Render"
+                visible: reviewContent.planned || root.exporter.reviewOutcome.path === "Render"
                 text: qsTr("Original source recordings remain unchanged.")
                 wrapMode: Text.Wrap
             }
@@ -517,7 +548,8 @@ FocusScope {
             }
             Item { Layout.fillWidth: true }
             Button {
-                text: root.exporter.reviewOutcome.path === "Render" ? qsTr("Render with selected tracks") : qsTr("Start copy")
+                text: reviewContent.planned ? qsTr("Export")
+                    : root.exporter.reviewOutcome.path === "Render" ? qsTr("Render with selected tracks") : qsTr("Start copy")
                 onClicked: {
                     root.exporter.confirmPreparedExport()
                     exportReview.close()

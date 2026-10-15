@@ -1015,6 +1015,21 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
     EXPECT_FALSE(QFileInfo::exists(first_destination + QStringLiteral(".tmp")));
     session.trimClip(session.workspace().clips().front().id, 0, 2000);
     EXPECT_EQ(exporter->state(), EditExportAdapter::Options);
+    // A trimmed finished result is rendered exactly, never copied from a moved
+    // keyframe. This fixture cannot be rendered, so only the explicit
+    // original-stream intent can copy the cut.
+    exporter->startExport();
+    QEventLoop blocked;
+    QObject::connect(exporter.get(), &EditExportAdapter::stateChanged, &blocked, [&] {
+        if (exporter->state() == EditExportAdapter::Failed)
+            blocked.quit();
+    });
+    QTimer::singleShot(10000, &blocked, &QEventLoop::quit);
+    if (exporter->state() != EditExportAdapter::Failed)
+        blocked.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Failed);
+    EXPECT_FALSE(exporter->errorText().isEmpty());
+    exporter->setModeKey(QStringLiteral("originalStreams"));
     exporter->startExport();
     QTimer::singleShot(10000, &review, &QEventLoop::quit);
     if (exporter->state() != EditExportAdapter::Review)

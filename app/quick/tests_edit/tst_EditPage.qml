@@ -422,6 +422,26 @@ Item {
             compare(profiles.count, testPageExporter.profileOptions.filter(option => option.selectable).length);
             compare(profiles.currentValue, testPageExporter.profileKey);
         }
+        function test_export_intent_and_range_are_explicit_choices() {
+            const page = make();
+            page.toggleDetails();
+            const original = child(page, "editExportOriginalStreams");
+            const span = child(page, "editExportSpan");
+            compare(testPageExporter.modeKey, "finishedStereo");
+            compare(original.checked, false);
+            compare(span.currentValue, "result");
+            original.toggledByUser(true);
+            compare(testPageExporter.modeKey, "originalStreams");
+            original.toggledByUser(false);
+            compare(testPageExporter.modeKey, "finishedStereo");
+            span.currentIndex = 1;
+            span.activated(1);
+            compare(testPageExporter.spanKey, "entire");
+            testPageExporter.spanKey = "result";
+            const fresh = make();
+            fresh.toggleDetails();
+            compare(child(fresh, "editExportSpan").currentValue, "result");
+        }
         function test_source_tabs_scroll_without_truncating_labels() {
             const page = make();
             page.toggleMedia();
