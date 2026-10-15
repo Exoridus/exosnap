@@ -152,6 +152,62 @@ int DecodeFrames(const std::filesystem::path& path) {
     return count;
 }
 
+struct DecodedAudio {
+    int64_t frames = 0;
+    double middle_level = 0;
+};
+
+// Decodes the first audio stream, honouring the container's priming discard.
+DecodedAudio DecodeAudio(const std::filesystem::path& path) {
+    DecodedAudio result{-1, 0};
+    AVFormatContext* input = nullptr;
+    if (avformat_open_input(&input, path.string().c_str(), nullptr, nullptr) < 0)
+        return result;
+    std::unique_ptr<AVFormatContext, void (*)(AVFormatContext*)> owned(
+        input, [](AVFormatContext* p) { avformat_close_input(&p); });
+    if (avformat_find_stream_info(input, nullptr) < 0)
+        return result;
+    const AVCodec* codec = nullptr;
+    const int audio = av_find_best_stream(input, AVMEDIA_TYPE_AUDIO, -1, -1, &codec, 0);
+    if (audio < 0)
+        return result;
+    std::unique_ptr<AVCodecContext, void (*)(AVCodecContext*)> decoder(
+        avcodec_alloc_context3(codec), [](AVCodecContext* p) { avcodec_free_context(&p); });
+    if (!decoder || avcodec_parameters_to_context(decoder.get(), input->streams[audio]->codecpar) < 0 ||
+        avcodec_open2(decoder.get(), codec, nullptr) < 0)
+        return result;
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    std::vector<float> left;
+    const auto drain = [&] {
+        while (avcodec_receive_frame(decoder.get(), frame) >= 0) {
+            if (frame->format == AV_SAMPLE_FMT_FLTP)
+                for (int i = 0; i < frame->nb_samples; ++i)
+                    left.push_back(reinterpret_cast<const float*>(frame->extended_data[0])[i]);
+            else
+                left.insert(left.end(), static_cast<size_t>(frame->nb_samples), 0.0f);
+            av_frame_unref(frame);
+        }
+    };
+    while (av_read_frame(input, packet) >= 0) {
+        if (packet->stream_index == audio && avcodec_send_packet(decoder.get(), packet) >= 0)
+            drain();
+        av_packet_unref(packet);
+    }
+    avcodec_send_packet(decoder.get(), nullptr);
+    drain();
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    result.frames = static_cast<int64_t>(left.size());
+    if (left.size() > 48000) {
+        double sum = 0;
+        for (size_t i = left.size() / 2 - 12000; i < left.size() / 2 + 12000; ++i)
+            sum += left[i];
+        result.middle_level = sum / 24000;
+    }
+    return result;
+}
+
 class EditorExportMedia : public ::testing::Test {
   protected:
     std::filesystem::path audio_source = exosnap_test::UniqueTempPath("export-audio.mkv");
@@ -216,6 +272,34 @@ TEST_F(EditorExportMedia, UnchangedVideoIsCopiedBesideARenderedStereoMix) {
     EXPECT_EQ(static_cast<int64_t>(exported[1].samples.size()), expected_frames * 2);
     for (size_t index = 0; index < exported[1].samples.size(); ++index)
         ASSERT_NEAR(exported[1].samples[index], 1 << 20, 64) << "sample " << index / 2;
+}
+
+TEST_F(EditorExportMedia, FinishedMp4CopiesVideoBesideAnAacMix) {
+    const auto mp4 = exosnap_test::UniqueTempPath("export-output.mp4");
+    const auto snapshot = Snapshot(true);
+    EditExportIntent intent;
+    intent.span = EditExportSpan::EntireTimeline;
+    intent.container = EditExportContainer::Mp4;
+    intent.destination = mp4;
+    const auto plan = PrepareEditExport(snapshot, intent, AssessEditExportFacts(snapshot, intent, true));
+    ASSERT_TRUE(plan->ready());
+    EXPECT_EQ(plan->video_path, EditVideoPath::Copy);
+    const auto result = ExecuteEditExport(*plan, {}, mp4, RemuxNoopCallback());
+    ASSERT_TRUE(result.success) << result.message;
+    auto intermediate = mp4;
+    intermediate += L".mix.mkv";
+    EXPECT_FALSE(std::filesystem::exists(intermediate));
+    const auto exported = Summarize(mp4);
+    ASSERT_EQ(exported.size(), 2u);
+    EXPECT_EQ(exported[0].codec, AV_CODEC_ID_H264);
+    EXPECT_EQ(exported[1].codec, AV_CODEC_ID_AAC);
+    EXPECT_EQ(DecodeFrames(mp4), DecodeFrames(VideoFixture()));
+    const auto audio = DecodeAudio(mp4);
+    const auto expected = (snapshot.timeline.duration_us * 48000 + Second / 2) / Second;
+    EXPECT_NEAR(static_cast<double>(audio.frames), static_cast<double>(expected), 1024);
+    EXPECT_NEAR(audio.middle_level, 0.125, 0.01);
+    std::error_code ignored;
+    std::filesystem::remove(mp4, ignored);
 }
 
 TEST_F(EditorExportMedia, TimelineWithoutEnabledAudioHasNoAudioStream) {

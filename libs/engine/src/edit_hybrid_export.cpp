@@ -4,10 +4,10 @@
 #include <exosnap/engine/packet_types.h>
 
 #include "audio_media_manifest_adapter.h"
+#include "edit_mix_encoder.h"
 #include "matroska_packet_timestamps.h"
 #include "matroska_stream_writer.h"
 #include "media_identity_sidecar.h"
-#include "pcm_audio_encoder.h"
 #include "render_audio_manifest.h"
 
 #include <algorithm>
@@ -86,7 +86,7 @@ bool SourceTimestampsNs(AVPacket& packet, const AVStream& stream, int64_t& pts_n
 
 RemuxResult ExportEditTimelineWithCopiedVideo(const TimelineRenderSnapshot& snapshot,
                                               const std::vector<TimelineExportClip>& video_recipe,
-                                              const std::filesystem::path& output, bool render_audio,
+                                              const std::filesystem::path& output, bool render_audio, bool aac_audio,
                                               RemuxProgressCallback progress) {
     std::error_code path_error;
     if (output.empty() || std::filesystem::exists(output, path_error) || path_error)
@@ -137,14 +137,16 @@ RemuxResult ExportEditTimelineWithCopiedVideo(const TimelineRenderSnapshot& snap
         }
         config.audio_tracks = {};
         config.audio_track_count = audio ? 1 : 0;
-        config.audio_codec = StreamAudioCodec::Pcm;
-        config.audio_sample_rate = 48000;
-        config.audio_channels = 2;
-        config.audio_bit_depth = 24;
-        config.audio_float = false;
-        config.audio_manifest = audio ? std::optional<AudioManifest1>(preflight->manifest) : std::nullopt;
-        if (audio)
+        EditMixEncoder encoder;
+        if (audio) {
+            if (!encoder.Init(aac_audio, error))
+                return false;
+            encoder.Configure(config, preflight->manifest);
+            config.audio_manifest = preflight->manifest;
             config.audio_tracks[0].name = preflight->manifest.tracks[0].container.name;
+        } else {
+            config.audio_manifest.reset();
+        }
         const auto duration_ns = static_cast<uint64_t>(snapshot.timeline.duration_us) * 1000ULL;
         config.timeline_duration_ns = duration_ns;
         MatroskaStreamWriter writer;
@@ -157,10 +159,6 @@ RemuxResult ExportEditTimelineWithCopiedVideo(const TimelineRenderSnapshot& snap
         reader_plan.path = EditExportPath::Render;
         if (audio && !reader.Open(snapshot, reader_plan, error))
             return false;
-        PcmAudioEncoder encoder;
-        encoder.SetBitDepth(24);
-        if (audio && !encoder.Init(48000, 2, error))
-            return false;
         const uint64_t audio_count = (duration_ns * 48000 + 500'000'000ULL) / 1'000'000'000ULL;
         uint64_t audio_position = 0;
         uint64_t accumulated = 0;
@@ -172,8 +170,8 @@ RemuxResult ExportEditTimelineWithCopiedVideo(const TimelineRenderSnapshot& snap
                 const auto count = static_cast<uint32_t>(std::min<uint64_t>(4800, through - audio_position));
                 if (!reader.AudioAt(static_cast<int64_t>(audio_position), count, samples, error))
                     return false;
-                encoder.FeedFloat32(samples.data(), samples.size(), audio_position * 1'000'000'000ULL / 48000,
-                                    accumulated, 48000, 2, audio_packets);
+                encoder.encoder->FeedFloat32(samples.data(), samples.size(), audio_position * 1'000'000'000ULL / 48000,
+                                             accumulated, 48000, 2, audio_packets);
                 for (auto& packet : audio_packets)
                     if (!writer.Push({packet.pts_ns, 2, true, std::move(packet.bytes), {}})) {
                         error = writer.error();
@@ -249,13 +247,13 @@ RemuxResult ExportEditTimelineWithCopiedVideo(const TimelineRenderSnapshot& snap
         if (!push_audio(audio_count))
             return false;
         if (audio) {
-            encoder.Flush(audio_packets);
+            encoder.encoder->Flush(audio_packets);
             for (auto& packet_out : audio_packets)
                 if (!writer.Push({packet_out.pts_ns, 2, true, std::move(packet_out.bytes), {}})) {
                     error = writer.error();
                     return false;
                 }
-            encoder.Shutdown();
+            encoder.encoder->Shutdown();
         }
         if (!writer.Finalize()) {
             error = writer.error();

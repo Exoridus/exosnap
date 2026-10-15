@@ -3651,12 +3651,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+71"/>
-        <location line="+139"/>
+        <location line="+144"/>
         <source>Export</source>
         <translation>Exportieren</translation>
     </message>
     <message>
-        <location line="-133"/>
+        <location line="-138"/>
         <source>MP4 delivery in progress. The finalized edit master is ready.</source>
         <translation>Die MP4-Datei wird noch erstellt. Die fertige MKV-Datei ist bereits zum Bearbeiten verfügbar.</translation>
     </message>
@@ -3707,17 +3707,22 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+2"/>
-        <location line="+17"/>
+        <location line="+22"/>
         <source>none</source>
         <translation>keine</translation>
     </message>
     <message>
-        <location line="-10"/>
+        <location line="-15"/>
         <source>Video-only render. No audio tracks will be included.</source>
         <translation>Nur Video rendern. Es werden keine Audiospuren übernommen.</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
+        <source>Enabled audio (%1) is mixed into one 48 kHz stereo %3 track: %2</source>
+        <translation>Aktiver Ton (%1) wird zu einer 48-kHz-Stereo-%3-Spur gemischt: %2</translation>
+    </message>
+    <message>
+        <location line="+4"/>
         <source>Selected tracks (%1) will be mixed into one 48 kHz stereo PCM24 track: %2</source>
         <translation>Die ausgewählten Spuren (%1) werden zu einer Stereo-PCM24-Spur mit 48 kHz gemischt: %2</translation>
     </message>
@@ -3752,7 +3757,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Kopieren starten</translation>
     </message>
     <message>
-        <location line="-143"/>
+        <location line="-148"/>
         <source>Exporting %1%</source>
         <translation>Export läuft: %1 %</translation>
     </message>
@@ -3882,7 +3887,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditSessionAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+487"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+491"/>
         <source>Frame drops: %1%</source>
         <translation>Verworfene Frames: %1%</translation>
     </message>
@@ -10317,7 +10322,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Medium kann nicht importiert werden: %1</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-431"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-435"/>
         <source>The recording overlaps existing clips.</source>
         <translation>Die Aufnahme überlappt vorhandene Clips.</translation>
     </message>

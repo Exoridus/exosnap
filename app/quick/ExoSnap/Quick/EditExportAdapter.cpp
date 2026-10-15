@@ -260,7 +260,7 @@ struct EditExportAdapter::PreparedExport {
             output_audio.push_back(
                 QVariantMap{{QStringLiteral("name"), QCoreApplication::translate("EditExportAdapter", "Rendered Mix")},
                             {QStringLiteral("role"), QStringLiteral("mix")},
-                            {QStringLiteral("codec"), QStringLiteral("PCM24")},
+                            {QStringLiteral("codec"), to_mp4 ? QStringLiteral("AAC") : QStringLiteral("PCM24")},
                             {QStringLiteral("sampleRate"), 48000},
                             {QStringLiteral("channels"), 2}});
             audio_summary = QCoreApplication::translate("EditExportAdapter", "Stereo");

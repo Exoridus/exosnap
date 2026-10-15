@@ -2,6 +2,8 @@
 #include <exosnap/engine/edit_timeline_export.h>
 #include <exosnap/engine/output_geometry.h>
 
+#include "ffmpeg_aac_encoder.h"
+
 extern "C" {
 #include <libavutil/mem.h>
 #include <libavutil/sha.h>
@@ -360,7 +362,13 @@ EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& snapshot, co
     const auto& timeline = snapshot.timeline;
     const auto span = Span(timeline, intent.span);
     const bool whole = span.first == 0 && span.second == timeline.duration_us;
-    const bool matroska = intent.container == EditExportContainer::Matroska;
+    const bool mp4 = intent.container == EditExportContainer::Mp4;
+    if (mp4) {
+        FfmpegAacEncoder probe;
+        std::string unavailable;
+        facts.mp4_finished_available = probe.Init(48000, 2, unavailable);
+        probe.Shutdown();
+    }
     facts.destination_admitted = !intent.destination.empty();
     for (const auto& source : snapshot.sources)
         if (facts.destination_admitted && SameFile(intent.destination, source.path))
@@ -374,8 +382,8 @@ EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& snapshot, co
             video_tracks.insert(clip.track);
         }
     std::sort(video.begin(), video.end(), [](const auto* a, const auto* b) { return a->start_us < b->start_us; });
-    bool render_video = matroska && !video.empty();
-    bool complete = matroska && !video.empty() && video_tracks.size() == 1 && whole;
+    bool render_video = !video.empty();
+    bool complete = !video.empty() && video_tracks.size() == 1 && whole;
     int64_t covered = 0;
     for (const auto* clip : video) {
         const auto* source = SourceOf(snapshot, clip->asset);
@@ -396,7 +404,6 @@ EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& snapshot, co
     }
     facts.video_render_available = render_video;
     if (!facts.copy_recipe.empty() && video_tracks.size() == 1 && whole) {
-        const bool mp4 = intent.container == EditExportContainer::Mp4;
         facts.original_copy_qualified = AssessTimelineExport(facts.copy_recipe, mp4, cancelled).eligibility ==
                                         TimelineExportEligibility::StreamCopy;
         facts.video_copy_qualified =
@@ -428,23 +435,55 @@ EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& snapshot, co
     }
     for (auto& entry : groups)
         facts.original_groups.push_back(std::move(entry.second));
-    facts.stereo_render_available = render_audio && matroska;
+    facts.stereo_render_available = render_audio;
     return facts;
 }
+
+namespace {
+
+// The finished MP4 profile is written as Matroska with an AAC mix first and then
+// delivered through the same faststart stream copy that recordings use.
+RemuxResult ExecuteFinished(const EditExportPlan& plan, RecorderConfig config, const std::filesystem::path& staging,
+                            bool aac, RemuxProgressCallback progress);
+
+} // namespace
 
 RemuxResult ExecuteEditExport(const EditExportPlan& plan, RecorderConfig config, const std::filesystem::path& staging,
                               RemuxProgressCallback progress) {
     if (!plan.ready())
         return RemuxResult::Fail(-1, "The export plan is not ready.");
+    if (!progress)
+        progress = RemuxNoopCallback();
     const bool mp4 = plan.intent.container == EditExportContainer::Mp4;
     if (plan.intent.mode == EditExportMode::OriginalStreams)
         return ExportTimelineStreamCopy(plan.facts.copy_recipe, staging, mp4, std::move(progress));
+    if (!mp4)
+        return ExecuteFinished(plan, std::move(config), staging, false, std::move(progress));
+    if (plan.video_path == EditVideoPath::Render && config.video_codec == VideoCodec::Av1)
+        return RemuxResult::Fail(-1, "AV1 rendering into MP4 is not a qualified profile.");
+    auto intermediate = staging;
+    intermediate += L".mix.mkv";
+    std::error_code ignored;
+    std::filesystem::remove(intermediate, ignored);
+    auto result = ExecuteFinished(plan, std::move(config), intermediate, true,
+                                  [&progress](float fraction) { return progress(fraction * 0.9f); });
+    if (result.success)
+        result = RemuxToProgressiveMp4(intermediate, staging,
+                                       [&progress](float fraction) { return progress(0.9f + fraction * 0.1f); });
+    std::filesystem::remove(intermediate, ignored);
+    return result;
+}
+
+namespace {
+
+RemuxResult ExecuteFinished(const EditExportPlan& plan, RecorderConfig config, const std::filesystem::path& staging,
+                            bool aac, RemuxProgressCallback progress) {
     if (plan.video_path == EditVideoPath::Copy)
         return ExportEditTimelineWithCopiedVideo(plan.snapshot, plan.facts.copy_recipe, staging,
                                                  plan.audio_path == EditAudioPath::RenderStereo ||
                                                      plan.audio_path == EditAudioPath::CopyStereo,
-                                                 std::move(progress));
-    if (plan.video_path != EditVideoPath::Render || mp4)
+                                                 aac, std::move(progress));
+    if (plan.video_path != EditVideoPath::Render)
         return RemuxResult::Fail(-1, "This export path is unavailable.");
     const auto& timeline = plan.snapshot.timeline;
     const TimelineMediaSource* reference = nullptr;
@@ -457,6 +496,7 @@ RemuxResult ExecuteEditExport(const EditExportPlan& plan, RecorderConfig config,
     render.path = EditExportPath::Render;
     render.span_in_us = plan.span_in_us;
     render.span_out_us = plan.span_out_us;
+    render.aac_audio = aac;
     render.output = plan.intent.geometry.IsValid() ? plan.intent.geometry
                                                    : FrameSize{static_cast<uint32_t>(reference->metadata.width),
                                                                static_cast<uint32_t>(reference->metadata.height)};
@@ -472,5 +512,7 @@ RemuxResult ExecuteEditExport(const EditExportPlan& plan, RecorderConfig config,
     }
     return RenderEditTimeline(plan.snapshot, render, std::move(config), staging, false, std::move(progress));
 }
+
+} // namespace
 
 } // namespace exosnap::engine

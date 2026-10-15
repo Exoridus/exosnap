@@ -31,6 +31,8 @@ struct EditRenderPlan {
     // Rendered timeline interval; a negative out renders through the timeline end.
     int64_t span_in_us = 0;
     int64_t span_out_us = -1;
+    // AAC-LC instead of PCM24 for the result mix, for the MP4 delivery profile.
+    bool aac_audio = false;
 };
 
 // Metadata and stream-copy eligibility are resolved before this pure policy.
@@ -77,7 +79,7 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
 // them. Matroska only. Fails rather than expanding or trimming copied video.
 RemuxResult ExportEditTimelineWithCopiedVideo(const TimelineRenderSnapshot& snapshot,
                                               const std::vector<TimelineExportClip>& video_recipe,
-                                              const std::filesystem::path& output, bool render_audio,
+                                              const std::filesystem::path& output, bool render_audio, bool aac_audio,
                                               RemuxProgressCallback progress);
 
 } // namespace exosnap::engine

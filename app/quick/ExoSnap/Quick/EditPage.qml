@@ -516,9 +516,14 @@ FocusScope {
                 visible: reviewContent.planned ? reviewContent.mixed : root.exporter.reviewOutcome.path === "Render"
                 text: root.exporter.reviewOutcome.videoOnly
                     ? qsTr("Video-only render. No audio tracks will be included.")
-                    : qsTr("Selected tracks (%1) will be mixed into one 48 kHz stereo PCM24 track: %2")
-                        .arg((root.exporter.reviewOutcome.selectedTracks || []).length)
-                        .arg((root.exporter.reviewOutcome.selectedTracks || []).map(track => track.name).join(", "))
+                    : reviewContent.planned
+                        ? qsTr("Enabled audio (%1) is mixed into one 48 kHz stereo %3 track: %2")
+                            .arg((root.exporter.reviewOutcome.selectedTracks || []).length)
+                            .arg((root.exporter.reviewOutcome.selectedTracks || []).map(track => track.name).join(", "))
+                            .arg(((root.exporter.reviewOutcome.outputAudioTracks || [])[0] || {}).codec || "")
+                        : qsTr("Selected tracks (%1) will be mixed into one 48 kHz stereo PCM24 track: %2")
+                            .arg((root.exporter.reviewOutcome.selectedTracks || []).length)
+                            .arg((root.exporter.reviewOutcome.selectedTracks || []).map(track => track.name).join(", "))
                 wrapMode: Text.Wrap
             }
             Label {

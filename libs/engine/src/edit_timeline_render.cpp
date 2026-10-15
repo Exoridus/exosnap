@@ -15,8 +15,8 @@
 #include "annexb_to_avcc.h"
 #include "annexb_to_hvcc.h"
 #include "codec_private.h"
+#include "edit_mix_encoder.h"
 #include "matroska_stream_writer.h"
-#include "pcm_audio_encoder.h"
 #include "render_audio_manifest.h"
 
 #include <dxgi1_6.h>
@@ -275,11 +275,15 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
         mux.frame_rate_den = plan.fps_den;
         mux.timeline_duration_ns = duration_ns;
         mux.color = config.color;
-        const bool audio = !audio_preflight.value()->manifest.tracks.empty();
+        auto& audio_manifest = audio_preflight.value()->manifest;
+        const bool audio = !audio_manifest.tracks.empty();
         mux.audio_track_count = audio ? 1 : 0;
-        mux.audio_codec = StreamAudioCodec::Pcm;
-        mux.audio_bit_depth = 24;
-        mux.audio_manifest = audio_preflight.value()->manifest;
+        EditMixEncoder mix;
+        if (audio && !mix.Init(plan.aac_audio, error))
+            return false;
+        if (audio)
+            mix.Configure(mux, audio_manifest);
+        mux.audio_manifest = audio_manifest;
         if (audio)
             mux.audio_tracks[0].name = mux.audio_manifest->tracks[0].container.name;
         if (!VideoPrivate(config.video_codec, encoder->SequenceHeader(), mux, error))
@@ -289,11 +293,7 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
             error = writer.error();
             return false;
         }
-        auto pcm_encoder = std::make_unique<PcmAudioEncoder>();
-        pcm_encoder->SetBitDepth(mux.audio_bit_depth);
-        std::unique_ptr<IAudioEncoder> audio_encoder = std::move(pcm_encoder);
-        if (audio && !audio_encoder->Init(48000, 2, error))
-            return false;
+        auto& audio_encoder = mix.encoder;
         EditTimelineReader reader;
         if (!reader.Open(snapshot, plan, error))
             return false;
