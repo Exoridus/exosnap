@@ -36,6 +36,7 @@
 #include <winioctl.h>
 
 #include <chrono>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -442,7 +443,7 @@ TEST(EditWorkspaceAdapter, OverlappingSegmentBatchChangesNoClipsAndAddsNoUndoCom
     split.segments = {{QStringLiteral("D:/Recordings/segment-0.mkv"), 2, true},
                       {QStringLiteral("D:/Recordings/segment-1.mkv"), 3, true}};
 
-    session.setEditContext(split, 9000);
+    session.setEditContext(split, 0);
 
     EXPECT_FALSE(session.workspaceError().isEmpty());
     EXPECT_EQ(session.workspace().clips(), original);
@@ -1725,6 +1726,63 @@ TEST(EditTimelinePreviewState, AnUnavailableStripLeavesTrimAndMarkersWorking) {
     EXPECT_EQ(session.trimEndMs(), 30'000);
     EXPECT_GT(session.durationMs(), 0);
     EXPECT_NE(timeline.markerModel(), nullptr);
+}
+
+TEST(EditSessionPreciseTime, SeekPreservesMicrosecondsAndNotifiesBothContractsOnce) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    qint64 precise = -1;
+    qint64 legacy = -1;
+    int precise_count = 0;
+    int legacy_count = 0;
+    QObject::connect(&session, &EditSessionAdapter::seekRequestedUs, &session, [&](qint64 value) {
+        precise = value;
+        ++precise_count;
+    });
+    QObject::connect(&session, &EditSessionAdapter::seekRequested, &session, [&](qint64 value) {
+        legacy = value;
+        ++legacy_count;
+    });
+    session.requestSeekUs(33'367);
+    EXPECT_EQ(session.positionUs(), 33'367);
+    EXPECT_EQ(session.workspace().playhead(), 33'367);
+    EXPECT_EQ(precise, 33'367);
+    EXPECT_EQ(legacy, 33);
+    EXPECT_EQ(precise_count, 1);
+    EXPECT_EQ(legacy_count, 1);
+}
+
+TEST(EditSessionPreciseTime, PlaybackPositionDoesNotIssueASeekAndKeepsSubMillisecondChanges) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    int seeks = 0;
+    int positions = 0;
+    QObject::connect(&session, &EditSessionAdapter::seekRequestedUs, &session, [&](qint64) { ++seeks; });
+    QObject::connect(&session, &EditSessionAdapter::positionChanged, &session, [&] { ++positions; });
+    session.setPositionUs(33'366);
+    session.setPositionUs(33'367);
+    EXPECT_EQ(session.positionUs(), 33'367);
+    EXPECT_EQ(session.workspace().playhead(), 33'367);
+    EXPECT_EQ(session.positionMs(), 33);
+    EXPECT_EQ(positions, 2);
+    EXPECT_EQ(seeks, 0);
+}
+
+TEST(EditSessionPreciseTime, LegacySeekStillPublishesThePreciseContract) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    qint64 precise = -1;
+    QObject::connect(&session, &EditSessionAdapter::seekRequestedUs, &session, [&](qint64 value) { precise = value; });
+    session.requestSeek(42);
+    EXPECT_EQ(session.positionUs(), 42'000);
+    EXPECT_EQ(precise, 42'000);
+    session.requestSeekUs(-1);
+    EXPECT_EQ(session.positionUs(), 0);
+    session.requestSeekUs((std::numeric_limits<qint64>::max)());
+    EXPECT_EQ(session.positionUs(), session.workspace().duration());
 }
 
 } // namespace

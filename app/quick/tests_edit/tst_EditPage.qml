@@ -270,8 +270,8 @@ Item {
             }
             child(page, "editCrossfadeOverlay").forceActiveFocus(Qt.TabFocusReason);
             keyClick(Qt.Key_Delete);
-            compare(testSession.transitions.length, 0);
-            compare(testSession.durationMs, 200000);
+            compare(testSession.durationMs, 199499);
+            compare(testSession.transitions[0].kind, "hardCut");
             while (testSession.canUndo) testSession.undo();
         }
 

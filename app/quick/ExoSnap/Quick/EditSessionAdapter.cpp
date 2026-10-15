@@ -311,26 +311,36 @@ void EditSessionAdapter::requestTrim(qint64 start_ms, qint64 end_ms) {
         shown_us = start_us;
     else if (end_moved)
         shown_us = end_us;
-    if (shown_us != exosnap::engine::TrimRange::kNoTimestamp)
+    if (shown_us != exosnap::engine::TrimRange::kNoTimestamp) {
+        emit seekRequestedUs(shown_us);
         emit seekRequested(shown_us / 1000);
+    }
 }
 
 void EditSessionAdapter::requestSeek(qint64 position_ms) {
     const qint64 clamped = ClampPlayheadMs(position_ms, duration_ms_);
-    workspace_.seek(clamped * 1000);
-    if (clamped != position_ms_) {
-        position_ms_ = clamped;
-        emit positionChanged();
-    }
-    emit seekRequested(clamped);
+    requestSeekUs(clamped * 1000);
+}
+
+void EditSessionAdapter::requestSeekUs(qint64 position_us) {
+    setPositionUs(position_us);
+    const auto clamped = workspace_.playhead();
+    emit seekRequestedUs(clamped);
+    emit seekRequested(clamped / 1000);
 }
 
 void EditSessionAdapter::setPositionMs(qint64 position_ms) {
     const qint64 clamped = ClampPlayheadMs(position_ms, duration_ms_);
-    workspace_.seek(clamped * 1000);
-    if (clamped == position_ms_)
+    setPositionUs(clamped * 1000);
+}
+
+void EditSessionAdapter::setPositionUs(qint64 position_us) {
+    const auto previous = workspace_.playhead();
+    workspace_.seek(position_us);
+    const auto clamped = workspace_.playhead();
+    if (clamped == previous)
         return;
-    position_ms_ = clamped;
+    position_ms_ = clamped / 1000;
     emit positionChanged();
 }
 

@@ -108,11 +108,14 @@ QVariantList EditSessionAdapter::transitions() const {
     QVariantList result;
     for (const auto& t : workspace_.transitions()) {
         const auto* incoming = workspace_.clip(t.incoming);
-        result.push_back(QVariantMap{{QStringLiteral("outgoing"), QVariant::fromValue<qulonglong>(t.outgoing)},
-                                     {QStringLiteral("incoming"), QVariant::fromValue<qulonglong>(t.incoming)},
-                                     {QStringLiteral("startMs"), incoming->start / 1000},
-                                     {QStringLiteral("durationMs"), t.duration / 1000},
-                                     {QStringLiteral("selected"), selected_transition_ == t.outgoing}});
+        result.push_back(
+            QVariantMap{{QStringLiteral("outgoing"), QVariant::fromValue<qulonglong>(t.outgoing)},
+                        {QStringLiteral("incoming"), QVariant::fromValue<qulonglong>(t.incoming)},
+                        {QStringLiteral("startMs"), incoming->start / 1000},
+                        {QStringLiteral("durationMs"), t.duration / 1000},
+                        {QStringLiteral("kind"), t.kind == edit::TransitionKind::HardCut ? QStringLiteral("hardCut")
+                                                                                         : QStringLiteral("crossfade")},
+                        {QStringLiteral("selected"), selected_transition_ == t.outgoing}});
     }
     return result;
 }

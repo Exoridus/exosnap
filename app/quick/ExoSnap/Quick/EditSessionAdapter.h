@@ -48,6 +48,7 @@ class EditSessionAdapter : public QObject {
     Q_PROPERTY(bool trimmed READ trimmed NOTIFY trimChanged FINAL)
     Q_PROPERTY(bool trimSnapReady READ trimSnapReady NOTIFY trimSnapReadyChanged FINAL)
     Q_PROPERTY(qint64 positionMs READ positionMs NOTIFY positionChanged FINAL)
+    Q_PROPERTY(qint64 positionUs READ positionUs NOTIFY positionChanged FINAL)
 
     Q_PROPERTY(int reportSeverity READ reportSeverityValue NOTIFY reportChanged FINAL)
     Q_PROPERTY(QString reportLabel READ reportLabel NOTIFY reportChanged FINAL)
@@ -139,6 +140,9 @@ class EditSessionAdapter : public QObject {
     [[nodiscard]] bool trimmed() const noexcept;
     [[nodiscard]] bool trimSnapReady() const noexcept;
     [[nodiscard]] qint64 positionMs() const noexcept;
+    [[nodiscard]] qint64 positionUs() const noexcept {
+        return workspace_.playhead();
+    }
 
     // Authoritative export range. TrimRange::kNoTimestamp means "no cut here".
     [[nodiscard]] int64_t trimStartUs() const noexcept;
@@ -162,6 +166,8 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE void requestTrim(qint64 start_ms, qint64 end_ms);
     // Scrub / playhead move. Clamped to the clip; forwarded as a seek request.
     Q_INVOKABLE void requestSeek(qint64 position_ms);
+    Q_INVOKABLE void requestSeekUs(qint64 position_us);
+    void setPositionUs(qint64 position_us);
     // Position reported back by the player's own clock (no seek is implied).
     void setPositionMs(qint64 position_ms);
     Q_INVOKABLE void close();
@@ -197,6 +203,7 @@ class EditSessionAdapter : public QObject {
     void clipClosed();
     // Show the frame at `position_ms` (scrub, or a released trim handle).
     void seekRequested(qint64 position_ms);
+    void seekRequestedUs(qint64 position_us);
     void closeRequested();
 
   private:

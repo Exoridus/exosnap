@@ -40,6 +40,7 @@ class EditPlayerWorker : public QObject {
     void open(const QString& master_path, qint64 duration_ms, double screen_hz);
     void close();
     void play(qint64 from_ms);
+    void playUs(qint64 from_us);
     void pause();
     void seek(qint64 position_ms);
     void seekUs(qint64 target_us);
@@ -49,6 +50,9 @@ class EditPlayerWorker : public QObject {
 
   signals:
     void openFinished(bool opened, const QString& error);
+    void openFinishedForGeneration(qulonglong generation, bool opened, const QString& error);
+    void playbackStateChanged(bool playing);
+    void positionAdvancedUs(qint64 position_us);
     void positionAdvanced(qint64 position_ms);
     void reachedEnd();
     void monitoringChanged(QVariantList tracks, bool confirmation_required);
@@ -57,6 +61,8 @@ class EditPlayerWorker : public QObject {
 
   private:
     void ensureTimer();
+    void publishOpenResult(bool opened, const QString& error);
+    void publishPlaybackState(bool playing);
     // Re-publishes the session's OWN clock into the item's present gate. Must run
     // after every Play/Pause/SeekTo, not only on the tick: the session resets its
     // clock to -1 on pause (and SeekTo pauses first), and without propagating
@@ -81,6 +87,7 @@ class EditPlayerWorker : public QObject {
     edit::Id active_clip_ = 0;
     bool timeline_mode_ = false;
     bool timeline_playing_ = false;
+    bool published_playing_ = false;
     double volume_ = 1.0;
     uint64_t request_generation_ = 0;
     bool render_mode_ = false;

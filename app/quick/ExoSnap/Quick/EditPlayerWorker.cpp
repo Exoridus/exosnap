@@ -56,7 +56,7 @@ void EditPlayerWorker::open(const QString& master_path, qint64 duration_ms, doub
     std::string error;
     if (!session_->Open(std::filesystem::path(master_path.toStdWString()), error)) {
         session_.reset();
-        emit openFinished(false, QString::fromStdString(error));
+        publishOpenResult(false, QString::fromStdString(error));
         return;
     }
     // Delivered straight from the decode/seek thread into the scene-graph item,
@@ -68,7 +68,7 @@ void EditPlayerWorker::open(const QString& master_path, qint64 duration_ms, doub
         mapped_clip ? SubtractTime(mapped_clip->start, mapped_clip->source_in) : std::optional<int64_t>{0};
     if (!timeline_offset) {
         close();
-        emit openFinished(false, tr("The source time is outside the supported range."));
+        publishOpenResult(false, tr("The source time is outside the supported range."));
         return;
     }
     session_->SetOnFrameReadyWithGeneration(
@@ -92,10 +92,12 @@ void EditPlayerWorker::open(const QString& master_path, qint64 duration_ms, doub
     // previous clip's value and drop this very frame.
     session_->SeekTo(0, request_generation_);
     syncClock();
-    emit openFinished(true, {});
+    publishOpenResult(true, {});
 }
 
 void EditPlayerWorker::close() {
+    timeline_playing_ = false;
+    publishPlaybackState(false);
     if (render_audio_)
         render_audio_->Shutdown();
     render_audio_.reset();
@@ -117,11 +119,16 @@ void EditPlayerWorker::close() {
 void EditPlayerWorker::play(qint64 from_ms) {
     from_ms = std::max<qint64>(from_ms, 0);
     if (from_ms > std::numeric_limits<qint64>::max() / 1000) {
-        emit openFinished(false, tr("The requested time is outside the supported range."));
+        publishOpenResult(false, tr("The requested time is outside the supported range."));
         return;
     }
+    playUs(from_ms * 1000);
+}
+
+void EditPlayerWorker::playUs(qint64 from_us) {
+    from_us = std::max<qint64>(from_us, 0);
     if (timeline_mode_) {
-        seekTimeline(from_ms >= workspace_.duration() / 1000 ? 0 : std::max<qint64>(0, from_ms) * 1000, true);
+        seekTimeline(from_us >= workspace_.duration() ? 0 : from_us, true);
         return;
     }
     if (!session_)
@@ -131,17 +138,19 @@ void EditPlayerWorker::play(qint64 from_ms) {
         emit monitoringRejected(tr("Confirm the audio monitoring selection before playback."));
         return;
     }
-    position_ms_ = from_ms;
-    position_us_ = from_ms * 1000;
+    position_us_ = from_us;
+    position_ms_ = from_us / 1000;
     ensureTimer();
     tick_timer_->setInterval(EditPreviewTickMsFor(session_->VideoFrameRate(), screen_hz_));
     elapsed_.restart();
     tick_timer_->start();
-    session_->Play(position_ms_ * 1000, request_generation_);
+    session_->Play(position_us_, request_generation_);
+    publishPlaybackState(true);
     syncClock();
 }
 
 void EditPlayerWorker::pause() {
+    publishPlaybackState(false);
     timeline_playing_ = false;
     if (tick_timer_ != nullptr)
         tick_timer_->stop();
@@ -155,13 +164,14 @@ void EditPlayerWorker::pause() {
 
 void EditPlayerWorker::seek(qint64 position_ms) {
     if (position_ms > std::numeric_limits<qint64>::max() / 1000) {
-        emit openFinished(false, tr("The requested time is outside the supported range."));
+        publishOpenResult(false, tr("The requested time is outside the supported range."));
         return;
     }
     seekUs(std::max<qint64>(position_ms, 0) * 1000);
 }
 
 void EditPlayerWorker::seekUs(qint64 target_us) {
+    pause();
     target_us = std::max<qint64>(target_us, 0);
     if (timeline_mode_) {
         seekTimeline(target_us, false);
@@ -178,6 +188,20 @@ void EditPlayerWorker::setScreenRefreshHz(double screen_hz) {
     screen_hz_ = screen_hz;
     if (tick_timer_ != nullptr && session_)
         tick_timer_->setInterval(EditPreviewTickMsFor(session_->VideoFrameRate(), screen_hz_));
+}
+
+void EditPlayerWorker::publishOpenResult(bool opened, const QString& error) {
+    if (!opened)
+        pause();
+    emit openFinishedForGeneration(request_generation_, opened, error);
+    emit openFinished(opened, error);
+}
+
+void EditPlayerWorker::publishPlaybackState(bool playing) {
+    if (published_playing_ == playing)
+        return;
+    published_playing_ = playing;
+    emit playbackStateChanged(playing);
 }
 
 void EditPlayerWorker::ensureTimer() {
@@ -209,7 +233,7 @@ void EditPlayerWorker::onTick() {
             const auto timeline_time = offset ? AddTime(session_->CurrentPositionUs(), *offset) : std::nullopt;
             if (!timeline_time) {
                 pause();
-                emit openFinished(false, tr("The source time is outside the supported range."));
+                publishOpenResult(false, tr("The source time is outside the supported range."));
                 return;
             }
             position_us_ = *timeline_time;
@@ -224,6 +248,7 @@ void EditPlayerWorker::onTick() {
             seekTimeline(position_us_, true);
         position_us_ = std::min<qint64>(position_us_, workspace_.duration());
         position_ms_ = position_us_ / 1000;
+        emit positionAdvancedUs(position_us_);
         emit positionAdvanced(position_ms_);
         if (position_us_ >= workspace_.duration()) {
             pause();
@@ -237,10 +262,12 @@ void EditPlayerWorker::onTick() {
     position_us_ = std::clamp<qint64>(session_->CurrentPositionUs(), 0, total * 1000);
     position_ms_ = position_us_ / 1000;
     syncClock();
+    emit positionAdvancedUs(position_us_);
     emit positionAdvanced(position_ms_);
     if (total > 0 && position_ms_ >= total) {
         tick_timer_->stop();
         session_->Pause();
+        publishPlaybackState(false);
         syncClock();
         emit reachedEnd();
     }
@@ -269,7 +296,7 @@ void EditPlayerWorker::setTimeline(edit::Workspace workspace) {
         std::string error;
         if (!render_reader_->UpdateSnapshot(snapshot, plan, error)) {
             pause();
-            emit openFinished(false, QString::fromStdString(error));
+            publishOpenResult(false, QString::fromStdString(error));
             return;
         }
         workspace_ = std::move(workspace);
@@ -297,15 +324,15 @@ void EditPlayerWorker::setTimeline(edit::Workspace workspace) {
         render_reader_ = std::make_unique<engine::EditTimelineReader>();
         if (!render_reader_->Open(snapshot, render_plan_, error)) {
             render_reader_.reset();
-            emit openFinished(false, QString::fromStdString(error));
+            publishOpenResult(false, QString::fromStdString(error));
             return;
         }
         render_snapshot_ = std::move(snapshot);
-        emit openFinished(true, {});
+        publishOpenResult(true, {});
     }
     seekTimeline(workspace_.playhead(), false);
     if (!EvaluatedClip(workspace_, workspace_.playhead()))
-        emit openFinished(workspace_.duration() > 0, {});
+        publishOpenResult(workspace_.duration() > 0, {});
 }
 void EditPlayerWorker::publishMonitoring() {
     if (!session_) {
@@ -449,7 +476,7 @@ void EditPlayerWorker::seekTimeline(qint64 position_us, bool resume) {
                 if (!render_audio_->Init(error)) {
                     render_audio_.reset();
                     timeline_playing_ = false;
-                    emit openFinished(false, QString::fromStdString(error));
+                    publishOpenResult(false, QString::fromStdString(error));
                     return;
                 }
             }
@@ -460,7 +487,7 @@ void EditPlayerWorker::seekTimeline(qint64 position_us, bool resume) {
                     static_cast<uint32_t>(std::min<int64_t>(9600, SampleAt(workspace_.duration()) - audio_sample_));
                 if (!render_reader_->AudioAt(audio_sample_, count, initial, error)) {
                     pause();
-                    emit openFinished(false, QString::fromStdString(error));
+                    publishOpenResult(false, QString::fromStdString(error));
                     return;
                 }
                 for (auto& sample : initial)
@@ -468,15 +495,17 @@ void EditPlayerWorker::seekTimeline(qint64 position_us, bool resume) {
                 render_audio_->Start(initial, true);
                 if (!render_audio_->Running()) {
                     pause();
-                    emit openFinished(false, tr("The audio output could not start."));
+                    publishOpenResult(false, tr("The audio output could not start."));
                     return;
                 }
                 audio_sample_ += count;
             }
             tickRenderTimeline();
-            tick_timer_->start();
+            if (timeline_playing_)
+                tick_timer_->start();
         } else
             tick_timer_->stop();
+        publishPlaybackState(timeline_playing_);
         return;
     }
     const auto* clip = EvaluatedClip(workspace_, position_us);
@@ -489,7 +518,7 @@ void EditPlayerWorker::seekTimeline(qint64 position_us, bool resume) {
         if (asset && asset->state == edit::AssetState::Available)
             open(QString::fromStdWString(asset->path), asset->duration / 1000, screen_hz_);
         else
-            emit openFinished(workspace_.duration() > 0, asset ? tr("Media unavailable") : QString());
+            publishOpenResult(workspace_.duration() > 0, asset ? tr("Media unavailable") : QString());
     }
     position_us_ = position_us;
     position_ms_ = position_us / 1000;
@@ -498,7 +527,7 @@ void EditPlayerWorker::seekTimeline(qint64 position_us, bool resume) {
         const auto source = offset ? AddTime(*offset, clip->source_in) : std::nullopt;
         if (!source) {
             pause();
-            emit openFinished(false, tr("The source time is outside the supported range."));
+            publishOpenResult(false, tr("The source time is outside the supported range."));
             return;
         }
         const auto source_us = *source;
@@ -514,6 +543,7 @@ void EditPlayerWorker::seekTimeline(qint64 position_us, bool resume) {
         syncClock();
     }
     timeline_playing_ = resume;
+    publishPlaybackState(timeline_playing_);
     ensureTimer();
     elapsed_.restart();
     if (resume)
@@ -529,7 +559,7 @@ bool EditPlayerWorker::renderTimeline(qint64 position_us, engine::VideoReadMode 
     std::string error;
     if (!render_reader_->VideoAt(position_us, frame, error, mode, 0)) {
         sink_->clear();
-        emit openFinished(false, QString::fromStdString(error));
+        publishOpenResult(false, QString::fromStdString(error));
         pause();
         return false;
     }
@@ -550,7 +580,7 @@ void EditPlayerWorker::tickRenderTimeline() {
     if (render_audio_) {
         if (!render_audio_->Running()) {
             pause();
-            emit openFinished(false, tr("The audio output stopped unexpectedly."));
+            publishOpenResult(false, tr("The audio output stopped unexpectedly."));
             return;
         }
         const auto consumed = render_audio_->TimelineConsumedFrames();
@@ -565,7 +595,7 @@ void EditPlayerWorker::tickRenderTimeline() {
             const auto count = static_cast<uint32_t>(std::min<int64_t>(9600, through - audio_sample_));
             if (!render_reader_->AudioAt(audio_sample_, count, samples, error)) {
                 pause();
-                emit openFinished(false, QString::fromStdString(error));
+                publishOpenResult(false, QString::fromStdString(error));
                 return;
             }
             for (auto& sample : samples)
@@ -577,6 +607,7 @@ void EditPlayerWorker::tickRenderTimeline() {
     }
     if (!renderTimeline(position_us_))
         return;
+    emit positionAdvancedUs(position_us_);
     emit positionAdvanced(position_ms_);
     if (position_us_ >= workspace_.duration()) {
         pause();
