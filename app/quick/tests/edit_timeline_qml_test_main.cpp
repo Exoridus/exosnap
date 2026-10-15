@@ -25,11 +25,32 @@
 #include <utility>
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QObject>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickStyle>
+#include <QSemaphore>
 #include <QtQuickTest>
+
+namespace exosnap::quick {
+class EditPlayerAdapterTestPeer {
+  public:
+    static EditPlayerWorker* worker(EditPlayerAdapter& adapter) {
+        return adapter.worker_;
+    }
+    static uint64_t generation(const EditPlayerAdapter& adapter) {
+        return adapter.request_generation_;
+    }
+    static bool dispatchActive(const EditPlayerAdapter& adapter) {
+        return adapter.seek_dispatch_active_;
+    }
+    static qint64 pendingSeekUs(const EditPlayerAdapter& adapter) {
+        return adapter.pending_seek_ ? adapter.pending_seek_->time_us : -1;
+    }
+};
+} // namespace exosnap::quick
 
 using exosnap::EditContext;
 using exosnap::quick::EditPlayerAdapter;
@@ -162,6 +183,160 @@ class MediaPreviewDriver final : public QObject {
         (void)item_.takePendingFrame();
         sink_->deliverTimeline({}, generation - 1);
         return !item_.takePendingFrame().timeline.has_value();
+    }
+    Q_INVOKABLE QVariantMap rawGenerationProbe() {
+        exosnap::quick::ExoEditPlayerItem item;
+        exosnap::quick::EditPlayerFrameSink sink;
+        sink.attach(&item);
+        const auto generation = sink.invalidate();
+        (void)item.takePendingFrame();
+        exosnap::engine::RawDecodedVideoFrame frame;
+        frame.pts_us = 33'367;
+        sink.deliver(frame, generation - 1, 1'000'000);
+        const bool stale_rejected = !item.takePendingFrame().frame.has_value();
+        sink.deliver(frame, generation, 1'000'000);
+        const auto accepted = item.takePendingFrame();
+        return {{"staleRejected", stale_rejected},
+                {"sourceTime", accepted.frame ? accepted.frame->pts_us : -1},
+                {"timelineTime", accepted.timeline_time_us.value_or(-1)}};
+    }
+    Q_INVOKABLE QVariantMap supersedeProbe() {
+        exosnap::quick::ExoEditPlayerItem item;
+        exosnap::quick::EditPlayerFrameSink sink;
+        sink.attach(&item);
+        const auto generation = sink.invalidate();
+        (void)item.takePendingFrame();
+        exosnap::engine::RawDecodedVideoFrame frame;
+        frame.pts_us = 33'367;
+        sink.deliver(frame, generation, 1'000'000);
+        const auto accepted = item.takePendingFrame();
+        const bool unavailable_before_render = !item.presentedTimeUs().isValid();
+        item.publishRenderStateFromRenderThread(accepted.generation, true, QSize(2, 2), {}, accepted.timeline_time_us);
+        QCoreApplication::processEvents();
+        const bool had_frame = item.hasFrame();
+        const auto shown_time = item.presentedTimeUs();
+        sink.invalidate();
+        const auto superseded = item.takePendingFrame();
+        item.publishRenderStateFromRenderThread(accepted.generation, false, {}, {});
+        QCoreApplication::processEvents();
+        return {{"unavailableBeforeRender", unavailable_before_render},
+                {"hadFrame", had_frame},
+                {"hasFrame", item.hasFrame()},
+                {"shownTime", shown_time},
+                {"retainedTime", item.presentedTimeUs()},
+                {"clearRequested", superseded.clear}};
+    }
+    Q_INVOKABLE QVariantMap previewProjectionProbe() {
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        player.setSession(&session);
+        const bool initially_empty = player.previewState() == EditPlayerAdapter::Empty;
+        session.setEditContext(FixtureContext());
+        session.requestSeekUs(33'367);
+        return {{"initiallyEmpty", initially_empty},
+                {"requestedTime", player.requestedTimeUs()},
+                {"hasPresentedTime", player.presentedTimeUs().isValid()},
+                {"seekPending", player.seekPending()},
+                {"buffering", player.buffering()},
+                {"hasDropMeasurement", player.actuallyDroppedRecent().isValid()}};
+    }
+    Q_INVOKABLE QVariantMap degradedOpenProbe() {
+        using exosnap::quick::EditPlayerAdapterTestPeer;
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        player.setSession(&session);
+        session.setEditContext(FixtureContext());
+        auto* worker = EditPlayerAdapterTestPeer::worker(player);
+        emit worker->openFinishedForGeneration(EditPlayerAdapterTestPeer::generation(player) + 1, true,
+                                               QStringLiteral("Media unavailable"));
+        const bool stale_ignored = player.placeholderText() == QStringLiteral("Preview unavailable");
+        emit worker->openFinishedForGeneration(EditPlayerAdapterTestPeer::generation(player), true,
+                                               QStringLiteral("Media unavailable"));
+        return {{"staleIgnored", stale_ignored},
+                {"clipOpen", player.clipOpen()},
+                {"failed", player.previewState() == EditPlayerAdapter::Failed},
+                {"placeholder", player.placeholderText()}};
+    }
+    // A seek into blank timeline time presents a black frame for that time and
+    // converges; a seek onto unavailable media stays a distinct degraded state.
+    Q_INVOKABLE QVariantMap gapSeekProbe() {
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        exosnap::quick::ExoEditPlayerItem item;
+        player.setSession(&session);
+        item.setPlayerAdapter(&player);
+        session.setEditContext(FixtureContext());
+        auto later = FixtureContext();
+        later.duration_seconds = 5.0;
+        session.setEditContext(later, 120'000);
+        const auto settle = [&](qint64 time_us) {
+            QElapsedTimer deadline;
+            deadline.start();
+            while (deadline.elapsed() < 5'000) {
+                auto pending = item.takePendingFrame();
+                if (pending.timeline && pending.timeline->time_us == time_us) {
+                    item.publishRenderStateFromRenderThread(pending.generation, true, QSize(2, 2), {},
+                                                            pending.timeline_time_us);
+                    QCoreApplication::processEvents();
+                    return QVariantMap{{"layers", static_cast<int>(pending.timeline->layers.size())},
+                                       {"width", static_cast<int>(pending.timeline->output.width)}};
+                }
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            }
+            return QVariantMap{};
+        };
+        session.requestSeekUs(110'000'000);
+        const auto blank = settle(110'000'000);
+        QVariantMap result{{"blankLayers", blank.value("layers", -1)},
+                           {"blankWidth", blank.value("width", 0)},
+                           {"ready", player.previewState() == EditPlayerAdapter::Ready},
+                           {"seekPending", player.seekPending()},
+                           {"presented", player.presentedTimeUs()},
+                           {"requested", player.requestedTimeUs()}};
+        session.requestSeekUs(50'000'000);
+        QElapsedTimer deadline;
+        deadline.start();
+        while (player.previewState() != EditPlayerAdapter::Degraded &&
+               player.previewState() != EditPlayerAdapter::Failed && deadline.elapsed() < 5'000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        result["missingUnavailable"] =
+            player.previewState() == EditPlayerAdapter::Degraded || player.previewState() == EditPlayerAdapter::Failed;
+        result["missingPlaceholder"] = player.placeholderText();
+        item.setPlayerAdapter(nullptr);
+        return result;
+    }
+    Q_INVOKABLE QVariantMap seekCoalescingProbe() {
+        using exosnap::quick::EditPlayerAdapterTestPeer;
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        player.setSession(&session);
+        session.setEditContext(FixtureContext());
+        QSemaphore entered;
+        QSemaphore release;
+        QMetaObject::invokeMethod(
+            EditPlayerAdapterTestPeer::worker(player),
+            [&entered, &release]() {
+                entered.release();
+                release.acquire();
+            },
+            Qt::QueuedConnection);
+        entered.acquire();
+        for (const qint64 at : {1'000, 2'000, 3'000, 4'000})
+            session.requestSeekUs(at);
+        const bool held_active = EditPlayerAdapterTestPeer::dispatchActive(player);
+        const auto held_pending = EditPlayerAdapterTestPeer::pendingSeekUs(player);
+        release.release();
+        QElapsedTimer deadline;
+        deadline.start();
+        while ((EditPlayerAdapterTestPeer::dispatchActive(player) ||
+                EditPlayerAdapterTestPeer::pendingSeekUs(player) >= 0) &&
+               deadline.elapsed() < 5'000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        return {{"heldActive", held_active},
+                {"heldPending", held_pending},
+                {"drained", !EditPlayerAdapterTestPeer::dispatchActive(player) &&
+                                EditPlayerAdapterTestPeer::pendingSeekUs(player) < 0},
+                {"requested", player.requestedTimeUs()}};
     }
   signals:
     void changed();

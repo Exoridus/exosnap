@@ -22,6 +22,7 @@
 #include <QTimer>
 #include <QVariantMap>
 #include <capability/encoder_device_resolver.h>
+#include <exosnap/engine/edit_export_plan.h>
 #include <exosnap/engine/edit_player_engine.h>
 #include <exosnap/engine/edit_timeline_export.h>
 #include <exosnap/engine/edit_timeline_render.h>
@@ -99,6 +100,53 @@ QVariantMap AudioRow(const engine::ContainerAudioTrack& track, uint64_t asset, b
             {QStringLiteral("position"), track.stream_index.value + 1}};
 }
 
+QString IssueText(const engine::EditExportPlan& plan, const engine::EditExportIssue& issue) {
+    using engine::EditExportIssueCode;
+    switch (issue.code) {
+    case EditExportIssueCode::EmptySpan:
+        return QCoreApplication::translate("EditExportAdapter", "The selected export range is empty.");
+    case EditExportIssueCode::InvalidTimeline:
+        return QCoreApplication::translate("EditExportAdapter", "The timeline contains an invalid clip.");
+    case EditExportIssueCode::MissingSource:
+        return QCoreApplication::translate("EditExportAdapter", "The timeline contains unavailable media.");
+    case EditExportIssueCode::SourceChanged:
+        return QCoreApplication::translate("EditExportAdapter",
+                                           "A source changed after it was imported. Import it again.");
+    case EditExportIssueCode::MixSelectionRequired:
+        return QCoreApplication::translate(
+            "EditExportAdapter", "Choose which audio streams of the recording form the mix before exporting.");
+    case EditExportIssueCode::OriginalRecipeChanged:
+        return QCoreApplication::translate("EditExportAdapter",
+                                           "Original streams can only be kept for unedited source cuts. Export "
+                                           "the finished result instead.");
+    case EditExportIssueCode::UnsupportedAudioLayout:
+        return QCoreApplication::translate("EditExportAdapter",
+                                           "An audio stream has a channel layout that cannot be mixed to stereo.");
+    case EditExportIssueCode::BoundaryConsentRequired:
+        return QCoreApplication::translate("EditExportAdapter",
+                                           "Copying would move the cut boundaries. Export a rendered result instead.");
+    case EditExportIssueCode::ResourceLimitExceeded:
+        return QCoreApplication::translate("EditExportAdapter", "The export needs more resources than are available.");
+    case EditExportIssueCode::DestinationAliasesSource:
+        return QCoreApplication::translate("EditExportAdapter",
+                                           "The destination would replace an original source. Choose another file.");
+    case EditExportIssueCode::UnsupportedProfile:
+        break;
+    }
+    if (plan.intent.container == engine::EditExportContainer::Mp4)
+        return QCoreApplication::translate("EditExportAdapter",
+                                           "MP4 is not available for the finished result yet. Choose MKV.");
+    if (issue.scope == engine::EditExportIssueScope::Audio)
+        return QCoreApplication::translate("EditExportAdapter",
+                                           "The timeline audio cannot be exported with this output.");
+    return plan.facts.original_copy_qualified
+               ? QCoreApplication::translate("EditExportAdapter",
+                                             "This edit cannot be rendered here. To copy the source cut, keep the "
+                                             "original streams in the export details.")
+               : QCoreApplication::translate("EditExportAdapter",
+                                             "The timeline video cannot be exported with this output.");
+}
+
 QString RenderVideoCodec(engine::VideoCodec codec) {
     switch (codec) {
     case engine::VideoCodec::Av1:
@@ -128,6 +176,17 @@ struct EditExportAdapter::PreparedExport {
     engine::TimelineExportAssessment copy_assessment;
     engine::EditRenderPlan plan;
     QVariantMap outcome;
+    // Timelines built from per-stream imports use the export planner; older
+    // linked imports keep the source-copy/render classification below.
+    engine::EditExportIntent intent;
+    bool input_mix_validated = true;
+    std::shared_ptr<const engine::EditExportPlan> edit_plan;
+
+    [[nodiscard]] bool Planned() const {
+        return !snapshot.timeline.clips.empty() &&
+               std::all_of(snapshot.timeline.clips.begin(), snapshot.timeline.clips.end(),
+                           [](const auto& clip) { return clip.stream.has_value(); });
+    }
 
     bool SameWorkspace(const edit::Workspace& workspace) const {
         if (workspace.clips() != clips || workspace.transitions() != transitions ||
@@ -143,7 +202,101 @@ struct EditExportAdapter::PreparedExport {
         return true;
     }
 
+    bool PreparePlanned(std::string& error, const std::atomic<bool>& cancelled) {
+        std::set<uint64_t> referenced;
+        for (const auto& clip : snapshot.timeline.clips)
+            referenced.insert(clip.asset);
+        for (auto& source : snapshot.sources) {
+            if (!referenced.contains(source.id))
+                continue;
+            source.metadata = engine::ProbeEditMedia(source.path, {}, {}, &cancelled);
+            if (cancelled.load()) {
+                error = "Export preparation cancelled.";
+                return false;
+            }
+        }
+        intent.container = to_mp4 ? engine::EditExportContainer::Mp4 : engine::EditExportContainer::Matroska;
+        intent.destination = output;
+        intent.replace_destination = replace_existing;
+        auto facts = engine::AssessEditExportFacts(snapshot, intent, input_mix_validated, &cancelled);
+        edit_plan = engine::PrepareEditExport(snapshot, intent, std::move(facts));
+        if (!edit_plan->ready()) {
+            error = IssueText(*edit_plan, edit_plan->issues.front()).toStdString();
+            return false;
+        }
+        const auto first_video = std::find_if(snapshot.timeline.clips.begin(), snapshot.timeline.clips.end(),
+                                              [](const auto& clip) { return !clip.audio; });
+        const auto first_source =
+            first_video == snapshot.timeline.clips.end()
+                ? snapshot.sources.end()
+                : std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
+                               [&](const auto& source) { return source.id == first_video->asset; });
+        if (first_source == snapshot.sources.end()) {
+            error = "Export has no available video source.";
+            return false;
+        }
+        QVariantList selected;
+        QVariantList excluded;
+        for (const auto& clip : snapshot.timeline.clips) {
+            if (!clip.audio)
+                continue;
+            const auto source = std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
+                                             [&](const auto& value) { return value.id == clip.asset; });
+            QVariantMap row{{QStringLiteral("asset"), QVariant::fromValue<qulonglong>(clip.asset)},
+                            {QStringLiteral("position"), clip.stream->container_index + 1}};
+            if (source != snapshot.sources.end())
+                for (const auto& track : source->metadata.audio_metadata.actual_tracks)
+                    if (track.track_id == clip.stream->stream_identity) {
+                        row.insert(QStringLiteral("name"), QString::fromStdString(track.name));
+                        row.insert(QStringLiteral("role"), QString::fromStdString(track.role));
+                    }
+            (clip.enabled ? selected : excluded).push_back(row);
+        }
+        QVariantList output_audio;
+        QString audio_summary;
+        switch (edit_plan->audio_path) {
+        case engine::EditAudioPath::RenderStereo:
+        case engine::EditAudioPath::CopyStereo:
+            output_audio.push_back(
+                QVariantMap{{QStringLiteral("name"), QCoreApplication::translate("EditExportAdapter", "Rendered Mix")},
+                            {QStringLiteral("role"), QStringLiteral("mix")},
+                            {QStringLiteral("codec"), to_mp4 ? QStringLiteral("AAC") : QStringLiteral("PCM24")},
+                            {QStringLiteral("sampleRate"), 48000},
+                            {QStringLiteral("channels"), 2}});
+            audio_summary = QCoreApplication::translate("EditExportAdapter", "Stereo");
+            break;
+        case engine::EditAudioPath::CopyOriginalStreams: {
+            const auto& metadata = first_source->metadata.audio_metadata;
+            for (const auto& track : metadata.actual_tracks)
+                output_audio.push_back(
+                    AudioRow(track, first_source->id, metadata.status == engine::AudioMetadataStatus::Verified));
+            audio_summary = QCoreApplication::translate("EditExportAdapter", "Original streams: %n audio track(s)",
+                                                        nullptr, static_cast<int>(output_audio.size()));
+            break;
+        }
+        case engine::EditAudioPath::Absent:
+        case engine::EditAudioPath::Unsupported:
+            audio_summary = QCoreApplication::translate("EditExportAdapter", "No audio");
+            break;
+        }
+        const bool copy = edit_plan->video_path == engine::EditVideoPath::Copy;
+        outcome = {{QStringLiteral("path"), copy ? QStringLiteral("Copy") : QStringLiteral("Render")},
+                   {QStringLiteral("container"), to_mp4 ? QStringLiteral("MP4") : QStringLiteral("MKV")},
+                   {QStringLiteral("videoCodec"), copy ? QString::fromStdString(first_source->metadata.video_codec)
+                                                       : RenderVideoCodec(config.video_codec)},
+                   {QStringLiteral("selectedTracks"), selected},
+                   {QStringLiteral("excludedTracks"), excluded},
+                   {QStringLiteral("outputAudioTracks"), output_audio},
+                   {QStringLiteral("audioSummary"), audio_summary},
+                   {QStringLiteral("videoOnly"), output_audio.empty()},
+                   {QStringLiteral("replaceExisting"), replace_existing},
+                   {QStringLiteral("outputFile"), QString::fromStdWString(output.filename().wstring())}};
+        return true;
+    }
+
     bool Prepare(std::string& error, const std::atomic<bool>& cancelled) {
+        if (Planned())
+            return PreparePlanned(error, cancelled);
         copy_assessment = engine::AssessTimelineExport(recipe, to_mp4, &cancelled);
         std::set<uint64_t> referenced;
         std::set<uint64_t> audio_assets;
@@ -371,6 +524,23 @@ QVariantList EditExportAdapter::profileOptions() {
         profiles.push_back(profile);
     }
     return profiles;
+}
+
+void EditExportAdapter::setModeKey(const QString& key) {
+    if (running() || mode_key_ == key ||
+        (key != QStringLiteral("finishedStereo") && key != QStringLiteral("originalStreams")))
+        return;
+    mode_key_ = key;
+    discardPreparedExport();
+    emit optionsChanged();
+}
+
+void EditExportAdapter::setSpanKey(const QString& key) {
+    if (running() || span_key_ == key || (key != QStringLiteral("result") && key != QStringLiteral("entire")))
+        return;
+    span_key_ = key;
+    discardPreparedExport();
+    emit optionsChanged();
 }
 
 void EditExportAdapter::setProfileKey(const QString& key) {
@@ -683,6 +853,15 @@ void EditExportAdapter::startExport() {
     prepared->monitoring_revision = session_->workspace().monitoringRevision();
     prepared->to_mp4 = to_mp4;
     prepared->replace_existing = replace_existing;
+    prepared->intent.mode = mode_key_ == QStringLiteral("originalStreams") ? engine::EditExportMode::OriginalStreams
+                                                                           : engine::EditExportMode::FinishedStereo;
+    prepared->intent.span = span_key_ == QStringLiteral("entire") ? engine::EditExportSpan::EntireTimeline
+                                                                  : engine::EditExportSpan::ResultRange;
+    for (const auto& clip : session_->workspace().clips()) {
+        const auto* asset = session_->workspace().asset(clip.asset);
+        if (asset && asset->mix_decision_required)
+            prepared->input_mix_validated = false;
+    }
     run_ = std::make_shared<RunState>();
     run_->prepared = std::move(prepared);
     setState(State::Preparing);
@@ -752,11 +931,13 @@ void EditExportAdapter::beginPreparedExport() {
         const auto& marker_plan = prepared->marker_plan;
         if (!prepared->SourcesUnchanged(run->error, run->cancel))
             return;
-        const auto reassessed = engine::AssessTimelineExport(recipe, to_mp4, &run->cancel);
-        if (reassessed.eligibility != prepared->copy_assessment.eligibility ||
-            engine::ClassifyEditExport(render_snapshot, reassessed, to_mp4).path != prepared->plan.path) {
-            run->error = "Export eligibility changed after review. Review the export outcome again.";
-            return;
+        if (!prepared->edit_plan) {
+            const auto reassessed = engine::AssessTimelineExport(recipe, to_mp4, &run->cancel);
+            if (reassessed.eligibility != prepared->copy_assessment.eligibility ||
+                engine::ClassifyEditExport(render_snapshot, reassessed, to_mp4).path != prepared->plan.path) {
+                run->error = "Export eligibility changed after review. Review the export outcome again.";
+                return;
+            }
         }
         const auto temp_output = MakeDisposableSiblingStagingPath(output);
 
@@ -769,18 +950,21 @@ void EditExportAdapter::beginPreparedExport() {
         };
 
         exosnap::engine::RemuxResult result;
-        switch (prepared->plan.path) {
-        case engine::EditExportPath::StreamCopy:
-            result = engine::ExportTimelineStreamCopy(recipe, temp_output, to_mp4, progress_cb);
-            break;
-        case engine::EditExportPath::Render:
-            result = engine::RenderEditTimeline(render_snapshot, prepared->plan, render_config, temp_output, to_mp4,
-                                                progress_cb);
-            break;
-        case engine::EditExportPath::Unsupported:
-            result = engine::RemuxResult::Fail(-1, prepared->plan.reason);
-            break;
-        }
+        if (prepared->edit_plan)
+            result = engine::ExecuteEditExport(*prepared->edit_plan, render_config, temp_output, progress_cb);
+        else
+            switch (prepared->plan.path) {
+            case engine::EditExportPath::StreamCopy:
+                result = engine::ExportTimelineStreamCopy(recipe, temp_output, to_mp4, progress_cb);
+                break;
+            case engine::EditExportPath::Render:
+                result = engine::RenderEditTimeline(render_snapshot, prepared->plan, render_config, temp_output, to_mp4,
+                                                    progress_cb);
+                break;
+            case engine::EditExportPath::Unsupported:
+                result = engine::RemuxResult::Fail(-1, prepared->plan.reason);
+                break;
+            }
         MetadataCompanionPublicationGuard companion_guard(std::move(result.created_metadata_companions));
         bool ok = result.success;
         std::string error = result.message;

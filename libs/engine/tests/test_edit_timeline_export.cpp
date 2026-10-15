@@ -1,8 +1,14 @@
+#include "../src/matroska_stream_writer.h"
 #include "exosnap/engine/edit_timeline_export.h"
 #include "test_unique_temp.h"
+#include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/edit_player_engine.h>
+#include <exosnap/engine/edit_types.h>
+#include <exosnap/engine/recording_media_types.h>
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -14,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 extern "C" {
@@ -53,7 +60,7 @@ class TimelineExportTest : public ::testing::Test {
     }
 };
 
-bool WritePcmMatroska(const std::filesystem::path& path) {
+bool WritePcmMatroska(const std::filesystem::path& path, int16_t amplitude = 0) {
     AVFormatContext* context = nullptr;
     if (avformat_alloc_output_context2(&context, nullptr, "matroska", path.string().c_str()) < 0 || !context)
         return false;
@@ -76,6 +83,10 @@ bool WritePcmMatroska(const std::filesystem::path& path) {
         avformat_write_header(context, nullptr) < 0)
         return false;
     std::array<uint8_t, 960> silence{};
+    for (size_t index = 0; index < silence.size(); index += 2) {
+        silence[index] = static_cast<uint8_t>(amplitude);
+        silence[index + 1] = static_cast<uint8_t>(static_cast<uint16_t>(amplitude) >> 8);
+    }
     for (int i = 0; i < 100; ++i) {
         AVPacket packet{};
         packet.data = silence.data();
@@ -88,6 +99,87 @@ bool WritePcmMatroska(const std::filesystem::path& path) {
             return false;
     }
     return av_write_trailer(context) >= 0 && avio_closep(&context->pb) >= 0;
+}
+
+void WriteFourTrackMatroska(const std::filesystem::path& path, AudioManifest1& manifest) {
+    AVFormatContext* context = nullptr;
+    ASSERT_GE(avformat_open_input(&context, Fixture().string().c_str(), nullptr, nullptr), 0);
+    auto close_input = [](AVFormatContext* input) { avformat_close_input(&input); };
+    std::unique_ptr<AVFormatContext, decltype(close_input)> input(context, close_input);
+    ASSERT_GE(avformat_find_stream_info(context, nullptr), 0);
+    const auto* video = context->streams[0];
+    MatroskaStreamConfig config;
+    config.output_path = path.string();
+    config.video_codec_id = "V_MPEG4/ISO/AVC";
+    config.video_codec_private.assign(video->codecpar->extradata,
+                                      video->codecpar->extradata + video->codecpar->extradata_size);
+    config.encode_width = static_cast<uint32_t>(video->codecpar->width);
+    config.encode_height = static_cast<uint32_t>(video->codecpar->height);
+    config.frame_rate_num = 30;
+    config.frame_rate_den = 1;
+    config.audio_codec = StreamAudioCodec::Pcm;
+    config.audio_track_count = 4;
+    manifest.media_id = NewId<MediaId>();
+    manifest.recording_id = NewId<RecordingId>();
+    manifest.segment_id = NewId<SegmentId>();
+    for (uint32_t index = 0; index < config.audio_track_count; ++index) {
+        AudioManifestSource source;
+        source.id = NewId<AudioSourceId>();
+        manifest.sources.push_back(source);
+        AudioManifestTrack track;
+        track.container.track_id = NewId<AudioTrackId>();
+        track.container.stream_index = {index};
+        track.container.track_uid = 2 + index;
+        track.container.name = index == 0 ? "Master" : "Stem " + std::to_string(index);
+        track.container.role = index == 0 ? "mix" : "stem";
+        track.container.codec = {"A_PCM/INT/LIT", {}, 48000, 2, 16, 0, "stereo"};
+        track.container.source_ids = {source.id};
+        track.routes.push_back({NewId<AudioRouteId>(), source.id, 1.0f});
+        config.audio_tracks[index].name = track.container.name;
+        manifest.tracks.push_back(std::move(track));
+    }
+    manifest.default_monitor_track_ids = {manifest.tracks.front().container.track_id};
+    config.audio_manifest = manifest;
+    std::vector<MuxPacket> packets;
+    auto free_packet = [](AVPacket* packet) { av_packet_free(&packet); };
+    std::unique_ptr<AVPacket, decltype(free_packet)> packet(av_packet_alloc(), free_packet);
+    ASSERT_TRUE(packet);
+    int status = 0;
+    while ((status = av_read_frame(context, packet.get())) >= 0) {
+        MuxPacket item;
+        item.track_num = 1;
+        item.pts_ns = static_cast<uint64_t>(av_rescale_q(packet->pts, video->time_base, {1, 1000000000}));
+        item.dts_ns = av_rescale_q(packet->dts, video->time_base, {1, 1000000000});
+        item.is_key = (packet->flags & AV_PKT_FLAG_KEY) != 0;
+        item.bytes.assign(packet->data, packet->data + packet->size);
+        packets.push_back(std::move(item));
+        av_packet_unref(packet.get());
+    }
+    ASSERT_EQ(status, AVERROR_EOF);
+    for (uint64_t pts = 0; pts < 4000000000ULL; pts += 10000000ULL) {
+        for (uint64_t index = 0; index < config.audio_track_count; ++index) {
+            MuxPacket item;
+            item.pts_ns = pts;
+            item.track_num = 2 + index;
+            item.is_key = true;
+            item.bytes.resize(480 * 2 * 2);
+            const auto sample = static_cast<uint16_t>(1024 * (index + 1));
+            for (size_t offset = 0; offset < item.bytes.size(); offset += 2) {
+                item.bytes[offset] = static_cast<uint8_t>(sample);
+                item.bytes[offset + 1] = static_cast<uint8_t>(sample >> 8);
+            }
+            packets.push_back(std::move(item));
+        }
+    }
+    std::stable_sort(packets.begin(), packets.end(), [](const auto& left, const auto& right) {
+        return left.dts_ns.value_or(static_cast<int64_t>(left.pts_ns)) <
+               right.dts_ns.value_or(static_cast<int64_t>(right.pts_ns));
+    });
+    MatroskaStreamWriter writer;
+    ASSERT_TRUE(writer.Open(config)) << writer.error();
+    for (auto& item : packets)
+        ASSERT_TRUE(writer.Push(std::move(item))) << writer.error();
+    ASSERT_TRUE(writer.Finalize()) << writer.error();
 }
 
 int DecodeFrames(const std::filesystem::path& path) {
@@ -134,6 +226,89 @@ int DecodeFrames(const std::filesystem::path& path) {
 }
 
 } // namespace
+
+TEST_F(TimelineExportTest, BaselineOriginalTrim) {
+    AudioManifest1 manifest;
+    ASSERT_NO_FATAL_FAILURE(WriteFourTrackMatroska(audio_source, manifest));
+    const auto source = ProbeEditMedia(audio_source);
+    ASSERT_TRUE(source.error.empty()) << source.error;
+    ASSERT_EQ(source.audio_metadata.status, AudioMetadataStatus::Verified);
+    ASSERT_EQ(source.audio_metadata.actual_tracks.size(), 4u);
+    const TimelineExportClip clip{audio_source, 500000, 1500000, 0};
+    const auto assessment = AssessTimelineExport({clip}, false);
+    ASSERT_EQ(assessment.eligibility, TimelineExportEligibility::StreamCopy) << assessment.reason;
+    const auto result = ExportTimelineStreamCopy({clip}, output, false);
+    ASSERT_TRUE(result.success) << result.message;
+    const auto copied = ProbeEditMedia(output);
+    ASSERT_TRUE(copied.error.empty()) << copied.error;
+    const auto& metadata = copied.audio_metadata;
+    ASSERT_EQ(metadata.status, AudioMetadataStatus::Verified) << testing::PrintToString(metadata.warnings);
+    ASSERT_TRUE(metadata.manifest);
+    ASSERT_EQ(metadata.actual_tracks.size(), 4u);
+    ASSERT_EQ(metadata.manifest->tracks.size(), 4u);
+    EXPECT_NE(metadata.manifest->media_id, manifest.media_id);
+    EXPECT_EQ(metadata.manifest->derived_from_media_ids, std::vector<MediaId>{manifest.media_id});
+    EXPECT_EQ(metadata.manifest->default_monitor_track_ids, manifest.default_monitor_track_ids);
+    for (size_t index = 0; index < manifest.tracks.size(); ++index) {
+        const auto& expected = manifest.tracks[index];
+        const auto& actual = metadata.manifest->tracks[index];
+        const auto& physical = metadata.actual_tracks[index];
+        EXPECT_EQ(actual.container.track_id, expected.container.track_id);
+        EXPECT_EQ(actual.container.name, expected.container.name);
+        EXPECT_EQ(actual.container.role, expected.container.role);
+        EXPECT_EQ(actual.container.source_ids, expected.container.source_ids);
+        ASSERT_EQ(actual.routes.size(), expected.routes.size());
+        EXPECT_EQ(actual.routes[0].id, expected.routes[0].id);
+        EXPECT_EQ(actual.routes[0].source_id, expected.routes[0].source_id);
+        EXPECT_EQ(actual.routes[0].gain_linear, expected.routes[0].gain_linear);
+        EXPECT_EQ(actual.container.stream_index, physical.stream_index);
+        EXPECT_EQ(actual.container.track_uid, physical.track_uid);
+        EXPECT_EQ(physical.track_id, expected.container.track_id);
+    }
+    AVFormatContext* context = nullptr;
+    ASSERT_GE(avformat_open_input(&context, output.string().c_str(), nullptr, nullptr), 0);
+    auto close_input = [](AVFormatContext* input) { avformat_close_input(&input); };
+    std::unique_ptr<AVFormatContext, decltype(close_input)> input(context, close_input);
+    ASSERT_GE(avformat_find_stream_info(context, nullptr), 0);
+    ASSERT_EQ(context->nb_streams, 5u);
+    std::vector<unsigned> audio_streams;
+    for (unsigned index = 0; index < context->nb_streams; ++index)
+        if (context->streams[index]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+            audio_streams.push_back(index);
+    ASSERT_EQ(audio_streams.size(), metadata.actual_tracks.size());
+    for (const auto& track : metadata.actual_tracks)
+        ASSERT_LT(track.stream_index.value, audio_streams.size());
+    auto free_packet = [](AVPacket* packet) { av_packet_free(&packet); };
+    std::unique_ptr<AVPacket, decltype(free_packet)> packet(av_packet_alloc(), free_packet);
+    ASSERT_TRUE(packet);
+    std::array<uint64_t, 4> sample_counts{};
+    int status = 0;
+    while ((status = av_read_frame(context, packet.get())) >= 0) {
+        for (size_t index = 0; index < metadata.actual_tracks.size(); ++index) {
+            if (packet->stream_index !=
+                static_cast<int>(audio_streams[metadata.actual_tracks[index].stream_index.value]))
+                continue;
+            EXPECT_EQ(context->streams[packet->stream_index]->codecpar->codec_id, AV_CODEC_ID_PCM_S16LE);
+            ASSERT_EQ(packet->size % 4, 0);
+            const auto expected = static_cast<uint16_t>(1024 * (index + 1));
+            for (int offset = 0; offset < packet->size; offset += 2) {
+                const auto sample = static_cast<uint16_t>(packet->data[offset] | (packet->data[offset + 1] << 8));
+                ASSERT_EQ(sample, expected) << "audio stream " << index;
+            }
+            sample_counts[index] += static_cast<uint64_t>(packet->size / 4);
+        }
+        av_packet_unref(packet.get());
+    }
+    EXPECT_EQ(status, AVERROR_EOF);
+    for (size_t index = 0; index < sample_counts.size(); ++index) {
+        EXPECT_GT(sample_counts[index], 0u);
+        EXPECT_LT(sample_counts[index], 192000u);
+        EXPECT_EQ(sample_counts[index], sample_counts[0]);
+    }
+    const auto frames = DecodeFrames(output);
+    EXPECT_GT(frames, 0);
+    EXPECT_LT(frames, DecodeFrames(audio_source));
+}
 
 TEST_F(TimelineExportTest, ProbeReadsRealMediaAndReportsMissingSource) {
     const auto metadata = ProbeEditMedia(Fixture());
@@ -294,4 +469,61 @@ TEST_F(TimelineExportTest, ExistingDestinationIsNeverTruncated) {
     std::string contents;
     existing >> contents;
     EXPECT_EQ(contents, "preserved");
+}
+
+TEST_F(TimelineExportTest, SourceDescriptorsUseGlobalContainerIndices) {
+    AudioManifest1 manifest;
+    ASSERT_NO_FATAL_FAILURE(WriteFourTrackMatroska(audio_source, manifest));
+    const auto metadata = ProbeEditMedia(audio_source);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    ASSERT_EQ(metadata.streams.size(), 5u);
+    EXPECT_EQ(metadata.streams.front().kind, TimelineStreamKind::Video);
+    EXPECT_EQ(metadata.streams.front().container_index, 0u);
+    ASSERT_TRUE(metadata.timestamp_origin_us);
+    for (size_t index = 0; index < manifest.tracks.size(); ++index) {
+        const auto& stream = metadata.streams[index + 1];
+        EXPECT_EQ(stream.kind, TimelineStreamKind::Audio);
+        EXPECT_EQ(stream.container_index, index + 1);
+        ASSERT_TRUE(stream.stream_identity);
+        EXPECT_EQ(*stream.stream_identity, manifest.tracks[index].container.track_id);
+        EXPECT_EQ(stream.codec.channels, 2u);
+        EXPECT_EQ(stream.codec.channel_layout, "stereo");
+        EXPECT_EQ(stream.codec.sample_rate, 48000u);
+    }
+}
+
+TEST_F(TimelineExportTest, ExplicitAudioStreamIgnoresMonitorSelection) {
+    AudioManifest1 manifest;
+    ASSERT_NO_FATAL_FAILURE(WriteFourTrackMatroska(audio_source, manifest));
+    EditPlayerEngine reader;
+    std::string error;
+    ASSERT_TRUE(reader.OpenAudioStream(audio_source, 2, error)) << error;
+    EXPECT_FALSE(reader.HasVideoStream());
+    ASSERT_TRUE(reader.SetMonitorSelection({manifest.media_id, {2}, {}, true, {}}, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(reader.DecodeAudioStreamRange(2, 4800, 480, samples, error)) << error;
+    ASSERT_EQ(samples.size(), 960u);
+    for (const auto sample : samples)
+        EXPECT_FLOAT_EQ(sample, 2048.0f / 32768.0f);
+}
+
+TEST_F(TimelineExportTest, EnabledAudioReferenceToVideoStreamFails) {
+    AudioManifest1 manifest;
+    ASSERT_NO_FATAL_FAILURE(WriteFourTrackMatroska(audio_source, manifest));
+    EditPlayerEngine reader;
+    std::string error;
+    EXPECT_FALSE(reader.OpenAudioStream(audio_source, 0, error));
+    EXPECT_FALSE(error.empty());
+}
+
+TEST_F(TimelineExportTest, AudioOnlyMonoDuplicatesAtUnityGain) {
+    ASSERT_TRUE(WritePcmMatroska(audio_source, 8192));
+    EditPlayerEngine reader;
+    std::string error;
+    ASSERT_TRUE(reader.OpenAudioStream(audio_source, 0, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(reader.DecodeAudioStreamRange(0, 4800, 480, samples, error)) << error;
+    ASSERT_EQ(samples.size(), 960u);
+    for (const auto sample : samples)
+        EXPECT_FLOAT_EQ(sample, 0.25f);
 }

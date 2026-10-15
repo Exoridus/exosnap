@@ -108,11 +108,14 @@ QVariantList EditSessionAdapter::transitions() const {
     QVariantList result;
     for (const auto& t : workspace_.transitions()) {
         const auto* incoming = workspace_.clip(t.incoming);
-        result.push_back(QVariantMap{{QStringLiteral("outgoing"), QVariant::fromValue<qulonglong>(t.outgoing)},
-                                     {QStringLiteral("incoming"), QVariant::fromValue<qulonglong>(t.incoming)},
-                                     {QStringLiteral("startMs"), incoming->start / 1000},
-                                     {QStringLiteral("durationMs"), t.duration / 1000},
-                                     {QStringLiteral("selected"), selected_transition_ == t.outgoing}});
+        result.push_back(
+            QVariantMap{{QStringLiteral("outgoing"), QVariant::fromValue<qulonglong>(t.outgoing)},
+                        {QStringLiteral("incoming"), QVariant::fromValue<qulonglong>(t.incoming)},
+                        {QStringLiteral("startMs"), incoming->start / 1000},
+                        {QStringLiteral("durationMs"), t.duration / 1000},
+                        {QStringLiteral("kind"), t.kind == edit::TransitionKind::HardCut ? QStringLiteral("hardCut")
+                                                                                         : QStringLiteral("crossfade")},
+                        {QStringLiteral("selected"), selected_transition_ == t.outgoing}});
     }
     return result;
 }
@@ -205,6 +208,10 @@ void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, 
             asset.fps_num = metadata.fps_num;
             asset.fps_den = metadata.fps_den;
             asset.audio = metadata.has_audio;
+            auto imported = edit::DescribeSourceImport(metadata);
+            asset.source_descriptor = std::move(imported.descriptor);
+            asset.input_mix_selection = std::move(imported.input_mix);
+            asset.mix_decision_required = imported.mix_decision_required;
             assets.push_back(std::move(asset));
         }
         if (!self)

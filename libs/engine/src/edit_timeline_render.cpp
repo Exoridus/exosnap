@@ -1,5 +1,6 @@
 #include <capability/adapter_enum.h>
 #include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
 #include <exosnap/engine/edit_timeline_render.h>
 #include <exosnap/engine/encoder_device.h>
@@ -15,8 +16,8 @@
 #include "annexb_to_avcc.h"
 #include "annexb_to_hvcc.h"
 #include "codec_private.h"
+#include "edit_mix_encoder.h"
 #include "matroska_stream_writer.h"
-#include "pcm_audio_encoder.h"
 #include "render_audio_manifest.h"
 
 #include <dxgi1_6.h>
@@ -253,9 +254,17 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
             !encoder->Configure(plan.output.width, plan.output.height, plan.fps_num, plan.fps_den, error) ||
             !surfaces.Init(gpu, *encoder, compositor.Result(), plan, false, error))
             return false;
+        const int64_t span_in = plan.span_in_us;
+        const int64_t span_out = plan.span_out_us < 0 ? snapshot.timeline.duration_us : plan.span_out_us;
+        if (span_in < 0 || span_out <= span_in || span_out > snapshot.timeline.duration_us) {
+            error = "The render span is outside the timeline.";
+            return false;
+        }
+        const auto span_duration = static_cast<uint64_t>(span_out - span_in);
         const uint64_t frames =
-            (snapshot.timeline.duration_us * static_cast<uint64_t>(plan.fps_num) + 1'000'000ULL * plan.fps_den - 1) /
+            (span_duration * static_cast<uint64_t>(plan.fps_num) + 1'000'000ULL * plan.fps_den - 1) /
             (1'000'000ULL * plan.fps_den);
+        const int64_t audio_origin = AudioSampleIndex(span_in);
         const uint64_t duration_ns = frames * 1'000'000'000ULL * plan.fps_den / plan.fps_num;
         const uint64_t audio_count = (duration_ns * 48000 + 500'000'000ULL) / 1'000'000'000ULL;
         MatroskaStreamConfig mux;
@@ -267,11 +276,15 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
         mux.frame_rate_den = plan.fps_den;
         mux.timeline_duration_ns = duration_ns;
         mux.color = config.color;
-        const bool audio = !audio_preflight.value()->manifest.tracks.empty();
+        auto& audio_manifest = audio_preflight.value()->manifest;
+        const bool audio = !audio_manifest.tracks.empty();
         mux.audio_track_count = audio ? 1 : 0;
-        mux.audio_codec = StreamAudioCodec::Pcm;
-        mux.audio_bit_depth = 24;
-        mux.audio_manifest = audio_preflight.value()->manifest;
+        EditMixEncoder mix;
+        if (audio && !mix.Init(plan.aac_audio, error))
+            return false;
+        if (audio)
+            mix.Configure(mux, audio_manifest);
+        mux.audio_manifest = audio_manifest;
         if (audio)
             mux.audio_tracks[0].name = mux.audio_manifest->tracks[0].container.name;
         if (!VideoPrivate(config.video_codec, encoder->SequenceHeader(), mux, error))
@@ -281,11 +294,7 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
             error = writer.error();
             return false;
         }
-        auto pcm_encoder = std::make_unique<PcmAudioEncoder>();
-        pcm_encoder->SetBitDepth(mux.audio_bit_depth);
-        std::unique_ptr<IAudioEncoder> audio_encoder = std::move(pcm_encoder);
-        if (audio && !audio_encoder->Init(48000, 2, error))
-            return false;
+        auto& audio_encoder = mix.encoder;
         EditTimelineReader reader;
         if (!reader.Open(snapshot, plan, error))
             return false;
@@ -323,7 +332,7 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
             }
             TimelineVideoFrame frame;
             const uint64_t pts = frame_index * 1'000'000'000ULL * plan.fps_den / plan.fps_num;
-            if (!reader.VideoAt(static_cast<int64_t>(pts / 1000), frame, error) ||
+            if (!reader.VideoAt(span_in + static_cast<int64_t>(pts / 1000), frame, error) ||
                 !compositor.Compose(frame.layers, error))
                 return false;
             int32_t slot = encoder->AcquireFreeSlot();
@@ -355,7 +364,7 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
                     : std::min(audio_count, (frame_index + 1) * 48000ULL * plan.fps_den / plan.fps_num);
             while (audio && audio_position < through) {
                 const auto count = static_cast<uint32_t>(std::min<uint64_t>(960, through - audio_position));
-                if (!reader.AudioAt(static_cast<int64_t>(audio_position), count, samples, error))
+                if (!reader.AudioAt(audio_origin + static_cast<int64_t>(audio_position), count, samples, error))
                     return false;
                 audio_encoder->FeedFloat32(samples.data(), samples.size(), audio_position * 1'000'000'000ULL / 48000,
                                            accumulated, 48000, 2, audio_packets);

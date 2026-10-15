@@ -3,8 +3,11 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <limits>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace exosnap::quick {
 namespace {
@@ -13,10 +16,72 @@ namespace {
 // no usable frame rate).
 constexpr int kWorkerFallbackTickMs = 16;
 
+std::optional<int64_t> AddTime(int64_t a, int64_t b) {
+    if ((b > 0 && a > std::numeric_limits<int64_t>::max() - b) ||
+        (b < 0 && a < std::numeric_limits<int64_t>::min() - b))
+        return std::nullopt;
+    return a + b;
+}
+
+std::optional<int64_t> SubtractTime(int64_t a, int64_t b) {
+    if ((b > 0 && a < std::numeric_limits<int64_t>::min() + b) ||
+        (b < 0 && a > std::numeric_limits<int64_t>::max() + b))
+        return std::nullopt;
+    return a - b;
+}
+
+int64_t SampleAt(int64_t time_us) {
+    return time_us / 1000 * 48 + (time_us % 1000 * 48 + 500) / 1000;
+}
+
+// The front-most visible clip. Evaluation lists contributions back to front.
 const edit::Clip* EvaluatedClip(const edit::Workspace& workspace, int64_t time_us) {
     const auto evaluation = engine::EvaluateTimeline(workspace.timeline(), time_us);
-    return evaluation.error.empty() && !evaluation.video.empty() ? workspace.clip(evaluation.video.front().clip)
+    return evaluation.error.empty() && !evaluation.video.empty() ? workspace.clip(evaluation.video.back().clip)
                                                                  : nullptr;
+}
+
+// The single-clip session shows exactly one decoded source at full opacity.
+// Junctions, partial opacity, video edge fades and simultaneously visible
+// video clips need the compositing reader instead.
+bool NeedsComposition(const edit::Workspace& workspace) {
+    if (!workspace.transitions().empty())
+        return true;
+    std::vector<const edit::Clip*> video;
+    for (const auto& clip : workspace.clips()) {
+        const auto track = std::find_if(workspace.tracks().begin(), workspace.tracks().end(),
+                                        [&clip](const auto& value) { return value.id == clip.track; });
+        if (track == workspace.tracks().end() || track->type != edit::TrackType::Video || !track->edit_enabled ||
+            !clip.enabled)
+            continue;
+        if (clip.opacity != 1 || clip.fade_in.duration_us > 0 || clip.fade_out.duration_us > 0)
+            return true;
+        video.push_back(&clip);
+    }
+    std::sort(video.begin(), video.end(), [](const auto* a, const auto* b) { return a->start < b->start; });
+    int64_t reach = std::numeric_limits<int64_t>::min();
+    for (const auto* clip : video) {
+        if (clip->start < reach)
+            return true;
+        reach = std::max(reach, clip->end());
+    }
+    return false;
+}
+
+// Display geometry of an empty composition: the timeline output, else the
+// first video source. Only its aspect ratio is visible.
+engine::FrameSize BlankGeometry(const edit::Workspace& workspace) {
+    const auto even = [](int width, int height) {
+        return engine::FrameSize{static_cast<uint32_t>(std::max(2, width & ~1)),
+                                 static_cast<uint32_t>(std::max(2, height & ~1))};
+    };
+    const auto timeline = workspace.timeline();
+    if (timeline.output_width > 0 && timeline.output_height > 0)
+        return even(static_cast<int>(timeline.output_width), static_cast<int>(timeline.output_height));
+    for (const auto& asset : workspace.assets())
+        if (asset.width > 0 && asset.height > 0)
+            return even(asset.width, asset.height);
+    return {2, 2};
 }
 
 } // namespace
@@ -36,14 +101,25 @@ void EditPlayerWorker::open(const QString& master_path, qint64 duration_ms, doub
     std::string error;
     if (!session_->Open(std::filesystem::path(master_path.toStdWString()), error)) {
         session_.reset();
-        emit openFinished(false, QString::fromStdString(error));
+        publishOpenResult(false, QString::fromStdString(error));
         return;
     }
     // Delivered straight from the decode/seek thread into the scene-graph item,
     // with no UI-thread hop: the item's mailbox is thread-safe by design, and a
     // per-frame hop would undo the point of the GPU path.
     auto sink = sink_;
-    session_->SetOnFrameReady([sink](exosnap::engine::RawDecodedVideoFrame frame) { sink->deliver(std::move(frame)); });
+    const auto* mapped_clip = workspace_.clip(active_clip_);
+    const auto timeline_offset =
+        mapped_clip ? SubtractTime(mapped_clip->start, mapped_clip->source_in) : std::optional<int64_t>{0};
+    if (!timeline_offset) {
+        close();
+        publishOpenResult(false, tr("The source time is outside the supported range."));
+        return;
+    }
+    session_->SetOnFrameReadyWithGeneration(
+        [sink, offset = *timeline_offset](exosnap::engine::RawDecodedVideoFrame frame, uint64_t generation) {
+            sink->deliver(std::move(frame), generation, offset);
+        });
     session_->SetVolume(static_cast<float>(volume_));
     const auto* clip = workspace_.clip(active_clip_);
     const auto* asset = clip ? workspace_.asset(clip->asset) : nullptr;
@@ -59,16 +135,19 @@ void EditPlayerWorker::open(const QString& master_path, qint64 duration_ms, doub
     // the user is still reviewing. Publishing the clock matters here too -- a
     // second clip opened over a first would otherwise leave the gate holding the
     // previous clip's value and drop this very frame.
-    session_->SeekTo(0);
+    session_->SeekTo(0, request_generation_);
     syncClock();
-    emit openFinished(true, {});
+    publishOpenResult(true, {});
 }
 
 void EditPlayerWorker::close() {
+    timeline_playing_ = false;
+    publishPlaybackState(false);
     if (render_audio_)
         render_audio_->Shutdown();
     render_audio_.reset();
     render_reader_.reset();
+    render_snapshot_ = {};
     if (tick_timer_ != nullptr)
         tick_timer_->stop();
     if (session_) {
@@ -77,13 +156,24 @@ void EditPlayerWorker::close() {
         session_.reset();
     }
     position_ms_ = 0;
+    position_us_ = 0;
     sink_->publishClock(-1);
     emit monitoringChanged({}, false);
 }
 
 void EditPlayerWorker::play(qint64 from_ms) {
+    from_ms = std::max<qint64>(from_ms, 0);
+    if (from_ms > std::numeric_limits<qint64>::max() / 1000) {
+        publishOpenResult(false, tr("The requested time is outside the supported range."));
+        return;
+    }
+    playUs(from_ms * 1000);
+}
+
+void EditPlayerWorker::playUs(qint64 from_us) {
+    from_us = std::max<qint64>(from_us, 0);
     if (timeline_mode_) {
-        seekTimeline(from_ms >= workspace_.duration() / 1000 ? 0 : from_ms, true);
+        seekTimeline(from_us >= workspace_.duration() ? 0 : from_us, true);
         return;
     }
     if (!session_)
@@ -93,21 +183,19 @@ void EditPlayerWorker::play(qint64 from_ms) {
         emit monitoringRejected(tr("Confirm the audio monitoring selection before playback."));
         return;
     }
-    position_ms_ = from_ms;
+    position_us_ = from_us;
+    position_ms_ = from_us / 1000;
     ensureTimer();
     tick_timer_->setInterval(EditPreviewTickMsFor(session_->VideoFrameRate(), screen_hz_));
     elapsed_.restart();
     tick_timer_->start();
-    // Continuous decode is only engaged when there is audio to pace it against;
-    // a silent clip is driven entirely by the per-tick SeekTo fallback below,
-    // since continuous decode would race through the file unthrottled for frames
-    // nothing consumes.
-    if (session_->HasAudioStream())
-        session_->Play(position_ms_ * 1000);
+    session_->Play(position_us_, request_generation_);
+    publishPlaybackState(true);
     syncClock();
 }
 
 void EditPlayerWorker::pause() {
+    publishPlaybackState(false);
     timeline_playing_ = false;
     if (tick_timer_ != nullptr)
         tick_timer_->stop();
@@ -120,22 +208,45 @@ void EditPlayerWorker::pause() {
 }
 
 void EditPlayerWorker::seek(qint64 position_ms) {
-    if (timeline_mode_) {
-        seekTimeline(position_ms, false);
+    if (position_ms > std::numeric_limits<qint64>::max() / 1000) {
+        publishOpenResult(false, tr("The requested time is outside the supported range."));
         return;
     }
-    position_ms_ = position_ms;
-    if (!session_)
-        return;
-    session_->SeekTo(position_ms * 1000);
-    // A seek result is the frame the user asked for: never gate it.
-    syncClock();
+    seekUs(std::max<qint64>(position_ms, 0) * 1000);
 }
 
+void EditPlayerWorker::seekUs(qint64 target_us) {
+    pause();
+    target_us = std::max<qint64>(target_us, 0);
+    if (timeline_mode_) {
+        seekTimeline(target_us, false);
+        return;
+    }
+    position_us_ = target_us;
+    position_ms_ = target_us / 1000;
+    if (!session_)
+        return;
+    session_->SeekTo(target_us, request_generation_);
+    syncClock();
+}
 void EditPlayerWorker::setScreenRefreshHz(double screen_hz) {
     screen_hz_ = screen_hz;
     if (tick_timer_ != nullptr && session_)
         tick_timer_->setInterval(EditPreviewTickMsFor(session_->VideoFrameRate(), screen_hz_));
+}
+
+void EditPlayerWorker::publishOpenResult(bool opened, const QString& error) {
+    if (!opened)
+        pause();
+    emit openFinishedForGeneration(request_generation_, opened, error);
+    emit openFinished(opened, error);
+}
+
+void EditPlayerWorker::publishPlaybackState(bool playing) {
+    if (published_playing_ == playing)
+        return;
+    published_playing_ = playing;
+    emit playbackStateChanged(playing);
 }
 
 void EditPlayerWorker::ensureTimer() {
@@ -162,22 +273,31 @@ void EditPlayerWorker::onTick() {
         if (!timeline_playing_)
             return;
         const auto* clip = workspace_.clip(active_clip_);
-        if (clip && session_ && session_->HasAudioStream()) {
-            position_ms_ = (clip->start - clip->source_in) / 1000 + session_->CurrentPositionMs();
+        if (clip && session_) {
+            const auto offset = SubtractTime(clip->start, clip->source_in);
+            const auto timeline_time = offset ? AddTime(session_->CurrentPositionUs(), *offset) : std::nullopt;
+            if (!timeline_time) {
+                pause();
+                publishOpenResult(false, tr("The source time is outside the supported range."));
+                return;
+            }
+            position_us_ = *timeline_time;
+            position_ms_ = position_us_ / 1000;
             syncClock();
         } else {
-            position_ms_ += elapsed_.restart();
-            if (clip && session_) {
-                session_->SeekTo(position_ms_ * 1000 - clip->start + clip->source_in);
-                syncClock();
-            }
+            position_us_ += elapsed_.restart() * 1000;
+            position_ms_ = position_us_ / 1000;
         }
-        const auto* next = EvaluatedClip(workspace_, position_ms_ * 1000);
+        const auto* next = EvaluatedClip(workspace_, position_us_);
         if ((next ? next->id : 0) != active_clip_)
-            seekTimeline(position_ms_, true);
-        position_ms_ = std::min<qint64>(position_ms_, workspace_.duration() / 1000);
+            seekTimeline(position_us_, true);
+        else if (!next && position_us_ < workspace_.duration())
+            presentBlank(position_us_);
+        position_us_ = std::min<qint64>(position_us_, workspace_.duration());
+        position_ms_ = position_us_ / 1000;
+        emit positionAdvancedUs(position_us_);
         emit positionAdvanced(position_ms_);
-        if (position_ms_ >= workspace_.duration() / 1000) {
+        if (position_us_ >= workspace_.duration()) {
             pause();
             emit reachedEnd();
         }
@@ -186,58 +306,81 @@ void EditPlayerWorker::onTick() {
     if (!session_)
         return;
     const qint64 total = std::max<qint64>(duration_ms_, 0);
-    if (session_->HasAudioStream()) {
-        // Audio is the pacing AND position source of truth while it exists.
-        position_ms_ = std::clamp<qint64>(session_->CurrentPositionMs(), 0, total);
-        sink_->publishClock(session_->ClockSnapshotUs());
-    } else {
-        position_ms_ = std::clamp<qint64>(position_ms_ + elapsed_.restart(), 0, total);
-        session_->SeekTo(position_ms_ * 1000);
-        syncClock();
-    }
+    position_us_ = std::clamp<qint64>(session_->CurrentPositionUs(), 0, total * 1000);
+    position_ms_ = position_us_ / 1000;
+    syncClock();
+    emit positionAdvancedUs(position_us_);
     emit positionAdvanced(position_ms_);
     if (total > 0 && position_ms_ >= total) {
         tick_timer_->stop();
         session_->Pause();
+        publishPlaybackState(false);
         syncClock();
         emit reachedEnd();
     }
 }
 
 void EditPlayerWorker::setTimeline(edit::Workspace workspace) {
-    if (timeline_mode_ && !render_mode_ && workspace.clips() == workspace_.clips() &&
-        workspace.monitoringRevision() == workspace_.monitoringRevision())
+    const auto makeSnapshot = [this](const edit::Workspace& value) {
+        engine::TimelineRenderSnapshot snapshot;
+        snapshot.timeline = value.timeline();
+        for (const auto& asset : value.assets()) {
+            const std::filesystem::path path(asset.path);
+            const auto previous =
+                std::find_if(render_snapshot_.sources.begin(), render_snapshot_.sources.end(),
+                             [&](const auto& source) { return source.id == asset.id && source.path == path; });
+            auto metadata =
+                previous != render_snapshot_.sources.end() ? previous->metadata : engine::ProbeEditMedia(path);
+            snapshot.sources.push_back({asset.id, path, std::move(metadata), asset.monitor_selection});
+        }
+        return snapshot;
+    };
+    const bool use_render = NeedsComposition(workspace);
+    if (timeline_mode_ && render_mode_ && use_render && render_reader_) {
+        auto snapshot = makeSnapshot(workspace);
+        const auto plan =
+            engine::ClassifyEditExport(snapshot, {engine::TimelineExportEligibility::RenderRequired, {}}, false);
+        std::string error;
+        if (!render_reader_->UpdateSnapshot(snapshot, plan, error)) {
+            pause();
+            publishOpenResult(false, QString::fromStdString(error));
+            return;
+        }
+        workspace_ = std::move(workspace);
+        render_snapshot_ = std::move(snapshot);
+        render_plan_ = plan;
+        if (!timeline_playing_) {
+            position_us_ = std::clamp<qint64>(workspace_.playhead(), 0, workspace_.duration());
+            position_ms_ = position_us_ / 1000;
+            renderTimeline(position_us_);
+        }
         return;
+    }
     pause();
     close();
     sink_->clear();
     workspace_ = std::move(workspace);
     timeline_mode_ = true;
     active_clip_ = 0;
-    render_mode_ = !workspace_.transitions().empty();
+    render_mode_ = use_render;
     if (render_mode_) {
-        engine::TimelineRenderSnapshot snapshot;
-        snapshot.timeline = workspace_.timeline();
-        for (const auto& asset : workspace_.assets()) {
-            const std::filesystem::path path(asset.path);
-            snapshot.sources.push_back({asset.id, path, engine::ProbeEditMedia(path), asset.monitor_selection});
-        }
+        auto snapshot = makeSnapshot(workspace_);
         render_plan_ =
             engine::ClassifyEditExport(snapshot, {engine::TimelineExportEligibility::RenderRequired, {}}, false);
         std::string error;
         render_reader_ = std::make_unique<engine::EditTimelineReader>();
-        if (!render_reader_->Open(std::move(snapshot), render_plan_, error)) {
+        if (!render_reader_->Open(snapshot, render_plan_, error)) {
             render_reader_.reset();
-            emit openFinished(false, QString::fromStdString(error));
+            publishOpenResult(false, QString::fromStdString(error));
             return;
         }
-        emit openFinished(true, {});
+        render_snapshot_ = std::move(snapshot);
+        publishOpenResult(true, {});
     }
-    seekTimeline(workspace_.playhead() / 1000, false);
+    seekTimeline(workspace_.playhead(), false);
     if (!EvaluatedClip(workspace_, workspace_.playhead()))
-        emit openFinished(workspace_.duration() > 0, {});
+        publishOpenResult(workspace_.duration() > 0, {});
 }
-
 void EditPlayerWorker::publishMonitoring() {
     if (!session_) {
         emit monitoringChanged({}, false);
@@ -308,12 +451,13 @@ void EditPlayerWorker::setVolume(double volume) {
         session_->SetVolume(static_cast<float>(volume));
 }
 
-void EditPlayerWorker::seekTimeline(qint64 position_ms, bool resume) {
+void EditPlayerWorker::seekTimeline(qint64 position_us, bool resume) {
     if (render_mode_) {
         if (!render_reader_)
             return;
         pause();
-        position_ms_ = std::clamp<qint64>(position_ms, 0, workspace_.duration() / 1000);
+        position_us_ = std::clamp<qint64>(position_us, 0, workspace_.duration());
+        position_ms_ = position_us_ / 1000;
         const auto prepareMonitoring = [this](const edit::Clip& clip) {
             const auto* asset = workspace_.asset(clip.asset);
             if (!asset || asset->state != edit::AssetState::Available)
@@ -349,18 +493,19 @@ void EditPlayerWorker::seekTimeline(qint64 position_ms, bool resume) {
                 }
             }
         }
-        if (const auto* clip = EvaluatedClip(workspace_, position_ms_ * 1000))
+        if (const auto* clip = EvaluatedClip(workspace_, position_us_))
             prepareMonitoring(*clip);
         else
             emit monitoringChanged({}, false);
         if (render_audio_)
             render_audio_->Stop();
         render_reader_->ResetAudio();
-        position_ms_ = std::clamp<qint64>(position_ms, 0, workspace_.duration() / 1000);
-        render_origin_ms_ = position_ms_;
-        audio_sample_ = position_ms_ * 48;
+        position_us_ = std::clamp<qint64>(position_us, 0, workspace_.duration());
+        position_ms_ = position_us_ / 1000;
+        render_origin_us_ = position_us_;
+        audio_sample_ = SampleAt(position_us_);
         timeline_playing_ = resume;
-        if (!renderTimeline(position_ms_))
+        if (!renderTimeline(position_us_, engine::VideoReadMode::RandomAccess))
             return;
         ensureTimer();
         tick_timer_->setInterval(
@@ -378,7 +523,7 @@ void EditPlayerWorker::seekTimeline(qint64 position_ms, bool resume) {
                 if (!render_audio_->Init(error)) {
                     render_audio_.reset();
                     timeline_playing_ = false;
-                    emit openFinished(false, QString::fromStdString(error));
+                    publishOpenResult(false, QString::fromStdString(error));
                     return;
                 }
             }
@@ -386,10 +531,10 @@ void EditPlayerWorker::seekTimeline(qint64 position_ms, bool resume) {
                 std::vector<float> initial;
                 std::string error;
                 const auto count =
-                    static_cast<uint32_t>(std::min<int64_t>(9600, workspace_.duration() * 48 / 1000 - audio_sample_));
+                    static_cast<uint32_t>(std::min<int64_t>(9600, SampleAt(workspace_.duration()) - audio_sample_));
                 if (!render_reader_->AudioAt(audio_sample_, count, initial, error)) {
                     pause();
-                    emit openFinished(false, QString::fromStdString(error));
+                    publishOpenResult(false, QString::fromStdString(error));
                     return;
                 }
                 for (auto& sample : initial)
@@ -397,18 +542,20 @@ void EditPlayerWorker::seekTimeline(qint64 position_ms, bool resume) {
                 render_audio_->Start(initial, true);
                 if (!render_audio_->Running()) {
                     pause();
-                    emit openFinished(false, tr("The audio output could not start."));
+                    publishOpenResult(false, tr("The audio output could not start."));
                     return;
                 }
                 audio_sample_ += count;
             }
             tickRenderTimeline();
-            tick_timer_->start();
+            if (timeline_playing_)
+                tick_timer_->start();
         } else
             tick_timer_->stop();
+        publishPlaybackState(timeline_playing_);
         return;
     }
-    const auto* clip = EvaluatedClip(workspace_, position_ms * 1000);
+    const auto* clip = EvaluatedClip(workspace_, position_us);
     const auto* asset = clip ? workspace_.asset(clip->asset) : nullptr;
     const auto id = clip ? clip->id : 0;
     if (id != active_clip_ || (clip && !session_)) {
@@ -418,23 +565,36 @@ void EditPlayerWorker::seekTimeline(qint64 position_ms, bool resume) {
         if (asset && asset->state == edit::AssetState::Available)
             open(QString::fromStdWString(asset->path), asset->duration / 1000, screen_hz_);
         else
-            emit openFinished(workspace_.duration() > 0, asset ? tr("Media unavailable") : QString());
+            publishOpenResult(workspace_.duration() > 0, asset ? tr("Media unavailable") : QString());
     }
-    position_ms_ = position_ms;
+    position_us_ = position_us;
+    position_ms_ = position_us / 1000;
     if (session_ && clip) {
-        const auto source_us = position_ms * 1000 - clip->start + clip->source_in;
-        session_->SeekTo(source_us);
+        const auto offset = SubtractTime(position_us, clip->start);
+        const auto source = offset ? AddTime(*offset, clip->source_in) : std::nullopt;
+        if (!source) {
+            pause();
+            publishOpenResult(false, tr("The source time is outside the supported range."));
+            return;
+        }
+        const auto source_us = *source;
+        session_->SeekTo(source_us, request_generation_);
         if (resume && session_->MonitoringConfirmationRequired()) {
             pause();
             publishMonitoring();
             emit monitoringRejected(tr("Confirm the audio monitoring selection before playback."));
             return;
         }
-        if (resume && session_->HasAudioStream())
-            session_->Play(source_us);
+        if (resume)
+            session_->Play(source_us, request_generation_);
         syncClock();
     }
+    // Valid blank time is a presented black frame, not a pending decode: the
+    // seek converges and playback continues on the wall clock.
+    if (!clip && workspace_.duration() > 0)
+        presentBlank(position_us);
     timeline_playing_ = resume;
+    publishPlaybackState(timeline_playing_);
     ensureTimer();
     elapsed_.restart();
     if (resume)
@@ -443,14 +603,14 @@ void EditPlayerWorker::seekTimeline(qint64 position_ms, bool resume) {
         tick_timer_->stop();
 }
 
-bool EditPlayerWorker::renderTimeline(qint64 position_ms) {
+bool EditPlayerWorker::renderTimeline(qint64 position_us, engine::VideoReadMode mode) {
     if (!render_reader_)
         return false;
     engine::TimelineVideoFrame frame;
     std::string error;
-    if (!render_reader_->VideoAt(position_ms * 1000, frame, error)) {
+    if (!render_reader_->VideoAt(position_us, frame, error, mode, 0)) {
         sink_->clear();
-        emit openFinished(false, QString::fromStdString(error));
+        publishOpenResult(false, QString::fromStdString(error));
         pause();
         return false;
     }
@@ -459,45 +619,53 @@ bool EditPlayerWorker::renderTimeline(qint64 position_ms) {
     return true;
 }
 
+void EditPlayerWorker::presentBlank(qint64 position_us) {
+    sink_->publishClock(-1);
+    sink_->deliverTimeline({position_us, BlankGeometry(workspace_), {}}, request_generation_);
+}
+
 void EditPlayerWorker::tickRenderTimeline() {
     if (!timeline_playing_ || !render_reader_)
         return;
-    position_ms_ =
-        render_origin_ms_ +
-        (render_audio_ ? static_cast<qint64>(render_audio_->FramesPlayed() * 1000 / render_audio_->SampleRate())
-                       : elapsed_.elapsed());
-    position_ms_ = std::min<qint64>(position_ms_, workspace_.duration() / 1000);
+    position_us_ =
+        render_origin_us_ +
+        (render_audio_ ? static_cast<qint64>(render_audio_->FramesPlayed() * 1'000'000 / render_audio_->SampleRate())
+                       : elapsed_.nsecsElapsed() / 1000);
+    position_us_ = std::min<qint64>(position_us_, workspace_.duration());
+    position_ms_ = position_us_ / 1000;
     if (render_audio_) {
         if (!render_audio_->Running()) {
             pause();
-            emit openFinished(false, tr("The audio output stopped unexpectedly."));
+            publishOpenResult(false, tr("The audio output stopped unexpectedly."));
             return;
         }
         const auto consumed = render_audio_->TimelineConsumedFrames();
-        const int64_t origin = render_origin_ms_ * 48;
+        const int64_t origin = SampleAt(render_origin_us_);
         audio_sample_ = std::max(audio_sample_, origin + static_cast<int64_t>(consumed));
         const int64_t through =
             origin + static_cast<int64_t>(engine::TimelineAudioRenderThrough(
-                         static_cast<uint64_t>(workspace_.duration() * 48 / 1000 - origin), consumed));
+                         static_cast<uint64_t>(SampleAt(workspace_.duration()) - origin), consumed));
         std::vector<float> samples;
         std::string error;
         while (audio_sample_ < through) {
             const auto count = static_cast<uint32_t>(std::min<int64_t>(9600, through - audio_sample_));
             if (!render_reader_->AudioAt(audio_sample_, count, samples, error)) {
                 pause();
-                emit openFinished(false, QString::fromStdString(error));
+                publishOpenResult(false, QString::fromStdString(error));
                 return;
             }
             for (auto& sample : samples)
                 sample *= static_cast<float>(volume_);
-            render_audio_->PushTimelineSamples(static_cast<uint64_t>(audio_sample_ - render_origin_ms_ * 48), samples);
+            render_audio_->PushTimelineSamples(static_cast<uint64_t>(audio_sample_ - SampleAt(render_origin_us_)),
+                                               samples);
             audio_sample_ += count;
         }
     }
-    if (!renderTimeline(position_ms_))
+    if (!renderTimeline(position_us_))
         return;
+    emit positionAdvancedUs(position_us_);
     emit positionAdvanced(position_ms_);
-    if (position_ms_ >= workspace_.duration() / 1000) {
+    if (position_us_ >= workspace_.duration()) {
         pause();
         emit reachedEnd();
     }
