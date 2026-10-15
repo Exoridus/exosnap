@@ -41,6 +41,18 @@ TestCase {
         compare(probe.placeholder.length > 0, true);
     }
 
+    function test_seek_into_blank_time_presents_black_and_converges() {
+        const probe = testMediaPreview.gapSeekProbe();
+        compare(probe.blankLayers, 0);
+        verify(probe.blankWidth > 0);
+        compare(probe.ready, true);
+        compare(probe.seekPending, false);
+        compare(probe.presented, 110000000);
+        compare(probe.requested, 110000000);
+        compare(probe.missingUnavailable, true);
+        verify(probe.missingPlaceholder.length > 0);
+    }
+
     function test_seeks_against_a_busy_worker_keep_one_running_and_the_newest_pending() {
         const probe = testMediaPreview.seekCoalescingProbe();
         compare(probe.heldActive, true);

@@ -3817,7 +3817,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditRender</name>
     <message>
-        <location filename="../../libs/engine/src/edit_timeline_reader.cpp" line="+34"/>
+        <location filename="../../libs/engine/src/edit_timeline_reader.cpp" line="+79"/>
         <source>Render export currently supports Matroska with PCM audio. Choose MKV.</source>
         <translation>Renderexport unterstützt derzeit Matroska mit PCM-Audio. MKV auswählen.</translation>
     </message>
@@ -3832,7 +3832,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Eine Quelle der Zeitleiste ist nicht verfügbar oder ihr Clip überschreitet den Quellbereich.</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+17"/>
         <source>Independent audio edits are not supported by render export.</source>
         <translation>Renderexport unterstützt keine unabhängige Audiobearbeitung.</translation>
     </message>
@@ -3843,12 +3843,17 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Rendern mit „Wie Quelle“ benötigt gerade Videomaße und eine exakte positive Bildrate.</translation>
     </message>
     <message>
-        <location filename="../../libs/engine/src/edit_timeline_export.cpp" line="+395"/>
+        <location line="+5"/>
+        <source>Too many video layers are visible at the same time. Disable or shorten overlapping clips.</source>
+        <translation>Zu viele Videoebenen sind gleichzeitig sichtbar. Deaktivieren oder kürzen Sie überlappende Clips.</translation>
+    </message>
+    <message>
+        <location filename="../../libs/engine/src/edit_timeline_export.cpp" line="+396"/>
         <source>Render export requires explicitly tagged 8-bit BT.709 4:2:0 SDR with known range. HDR and unsupported color paths remain lossless-only.</source>
         <translation>Renderexport benötigt ausdrücklich gekennzeichnetes SDR-Video mit 8 Bit, BT.709, 4:2:0 und bekanntem Wertebereich. HDR und nicht unterstützte Farbformate bleiben auf verlustlosen Export beschränkt.</translation>
     </message>
     <message>
-        <location filename="../../libs/engine/src/render_audio_manifest.cpp" line="+47"/>
+        <location filename="../../libs/engine/src/render_audio_manifest.cpp" line="+48"/>
         <source>Rendered Mix</source>
         <translation>Gerenderter Mix</translation>
     </message>
@@ -10264,21 +10269,21 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::EditPlayerWorker</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPlayerWorker.cpp" line="+71"/>
+        <location filename="../quick/ExoSnap/Quick/EditPlayerWorker.cpp" line="+116"/>
         <location line="+165"/>
-        <location line="+294"/>
+        <location line="+296"/>
         <source>The source time is outside the supported range.</source>
         <translation>Die Quellzeit liegt außerhalb des unterstützten Bereichs.</translation>
     </message>
     <message>
-        <location line="-408"/>
+        <location line="-410"/>
         <location line="+45"/>
         <source>The requested time is outside the supported range.</source>
         <translation>Die angeforderte Zeit liegt außerhalb des unterstützten Bereichs.</translation>
     </message>
     <message>
         <location line="-29"/>
-        <location line="+306"/>
+        <location line="+308"/>
         <location line="+94"/>
         <source>Confirm the audio monitoring selection before playback.</source>
         <translation>Bestätige die Auswahl der Audioüberwachung vor der Wiedergabe.</translation>
@@ -10299,7 +10304,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Medium nicht verfügbar</translation>
     </message>
     <message>
-        <location line="+62"/>
+        <location line="+71"/>
         <source>The audio output stopped unexpectedly.</source>
         <translation>Die Audioausgabe wurde unerwartet beendet.</translation>
     </message>

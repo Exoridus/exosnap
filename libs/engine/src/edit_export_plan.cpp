@@ -321,6 +321,9 @@ std::shared_ptr<const EditExportPlan> PrepareEditExport(TimelineRenderSnapshot s
         if (p->audio_path == EditAudioPath::Unsupported)
             issue(EditExportIssueCode::UnsupportedProfile, EditExportIssueScope::Audio);
     }
+    if (p->video_path == EditVideoPath::Render &&
+        !AssessTimelineVideoAdmission(p->snapshot, p->span_in_us, p->span_out_us).admitted)
+        issue(EditExportIssueCode::ResourceLimitExceeded, EditExportIssueScope::Video);
     if (!p->facts.deviations.empty())
         issue(EditExportIssueCode::BoundaryConsentRequired, EditExportIssueScope::Video);
     p->hash = Hash(*p);

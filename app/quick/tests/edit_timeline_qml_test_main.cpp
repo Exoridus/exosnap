@@ -257,6 +257,54 @@ class MediaPreviewDriver final : public QObject {
                 {"failed", player.previewState() == EditPlayerAdapter::Failed},
                 {"placeholder", player.placeholderText()}};
     }
+    // A seek into blank timeline time presents a black frame for that time and
+    // converges; a seek onto unavailable media stays a distinct degraded state.
+    Q_INVOKABLE QVariantMap gapSeekProbe() {
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        exosnap::quick::ExoEditPlayerItem item;
+        player.setSession(&session);
+        item.setPlayerAdapter(&player);
+        session.setEditContext(FixtureContext());
+        auto later = FixtureContext();
+        later.duration_seconds = 5.0;
+        session.setEditContext(later, 120'000);
+        const auto settle = [&](qint64 time_us) {
+            QElapsedTimer deadline;
+            deadline.start();
+            while (deadline.elapsed() < 5'000) {
+                auto pending = item.takePendingFrame();
+                if (pending.timeline && pending.timeline->time_us == time_us) {
+                    item.publishRenderStateFromRenderThread(pending.generation, true, QSize(2, 2), {},
+                                                            pending.timeline_time_us);
+                    QCoreApplication::processEvents();
+                    return QVariantMap{{"layers", static_cast<int>(pending.timeline->layers.size())},
+                                       {"width", static_cast<int>(pending.timeline->output.width)}};
+                }
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            }
+            return QVariantMap{};
+        };
+        session.requestSeekUs(110'000'000);
+        const auto blank = settle(110'000'000);
+        QVariantMap result{{"blankLayers", blank.value("layers", -1)},
+                           {"blankWidth", blank.value("width", 0)},
+                           {"ready", player.previewState() == EditPlayerAdapter::Ready},
+                           {"seekPending", player.seekPending()},
+                           {"presented", player.presentedTimeUs()},
+                           {"requested", player.requestedTimeUs()}};
+        session.requestSeekUs(50'000'000);
+        QElapsedTimer deadline;
+        deadline.start();
+        while (player.previewState() != EditPlayerAdapter::Degraded &&
+               player.previewState() != EditPlayerAdapter::Failed && deadline.elapsed() < 5'000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        result["missingUnavailable"] =
+            player.previewState() == EditPlayerAdapter::Degraded || player.previewState() == EditPlayerAdapter::Failed;
+        result["missingPlaceholder"] = player.placeholderText();
+        item.setPlayerAdapter(nullptr);
+        return result;
+    }
     Q_INVOKABLE QVariantMap seekCoalescingProbe() {
         using exosnap::quick::EditPlayerAdapterTestPeer;
         EditSessionAdapter session;

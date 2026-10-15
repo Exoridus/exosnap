@@ -200,7 +200,8 @@ Item {
             for (const position of seeks) {
                 testMediaPreview.seek(position);
                 tryVerify(() => { frame = testMediaPreview.takeFrame(); return frame.time === position; }, 5000);
-                compare(frame.layers, position >= 1500 && position < 2000 ? 2 : 1);
+                // The incoming clip has zero weight at the first instant of the overlap.
+                compare(frame.layers, position > 1500 && position < 2000 ? 2 : 1);
                 if (position === 1750) compare(frame.weight, 0.5);
                 compare(testMediaPreview.error, "");
             }

@@ -850,29 +850,129 @@ TEST(EditSourceImport, VerifiedRecordedDefaultSelectsOnlyItsStreams) {
     EXPECT_EQ(ImportedAudioEnables(metadata), (std::vector<bool>{false, true}));
 }
 
-TEST(EditSourceImport, ResolvingAnAmbiguousMixEnablesOnlyTheChosenStreams) {
-    const auto metadata = ProbedSource({2, 1});
+namespace {
+// A recorded master (stream 10) beside two stems (11, 12), imported with an
+// undecided starting mix.
+struct UndecidedMix {
     Workspace workspace;
-    Asset asset;
-    asset.path = L"probed.mkv";
-    asset.duration = metadata.duration_us;
-    auto imported = DescribeSourceImport(metadata);
-    asset.source_descriptor = imported.descriptor;
-    asset.input_mix_selection = imported.input_mix;
-    asset.mix_decision_required = imported.mix_decision_required;
-    const auto id = workspace.addAsset(std::move(asset));
-    ASSERT_TRUE(workspace.insert(id, 0));
-    ASSERT_TRUE(workspace.resolveInputMix(id, {exosnap::engine::AudioTrackId{{11}}}));
-    EXPECT_FALSE(workspace.asset(id)->mix_decision_required);
-    std::vector<bool> enabled;
-    for (const auto& clip : workspace.clips())
-        if (clip.stream && clip.stream->kind == exosnap::engine::TimelineStreamKind::Audio)
-            enabled.push_back(clip.enabled);
-    EXPECT_EQ(enabled, (std::vector<bool>{false, true}));
-    ASSERT_TRUE(workspace.undo());
-    for (const auto& clip : workspace.clips())
-        if (clip.stream && clip.stream->kind == exosnap::engine::TimelineStreamKind::Audio)
-            EXPECT_FALSE(clip.enabled);
+    Id asset = 0;
+    UndecidedMix() {
+        const auto metadata = ProbedSource({2, 1, 1});
+        Asset value;
+        value.path = L"probed.mkv";
+        value.duration = metadata.duration_us;
+        auto imported = DescribeSourceImport(metadata);
+        value.source_descriptor = imported.descriptor;
+        value.input_mix_selection = imported.input_mix;
+        value.mix_decision_required = imported.mix_decision_required;
+        asset = workspace.addAsset(std::move(value));
+        EXPECT_TRUE(workspace.insert(asset, 0));
+    }
+    [[nodiscard]] std::vector<bool> enabled() const {
+        std::vector<bool> result;
+        for (const auto& clip : workspace.clips())
+            if (clip.stream && clip.stream->kind == exosnap::engine::TimelineStreamKind::Audio)
+                result.push_back(clip.enabled);
+        return result;
+    }
+    [[nodiscard]] Id audioClip(uint8_t identity) const {
+        for (const auto& clip : workspace.clips())
+            if (clip.stream && clip.stream->stream_identity == exosnap::engine::AudioTrackId{{identity}})
+                return clip.id;
+        return 0;
+    }
+    [[nodiscard]] size_t audible() const {
+        return EvaluateTimeline(workspace.timeline(), Second).audio.size();
+    }
+};
+const std::vector<exosnap::engine::AudioTrackId> kStems{exosnap::engine::AudioTrackId{{11}},
+                                                        exosnap::engine::AudioTrackId{{12}}};
+} // namespace
+
+TEST(EditSourceImport, ResolvingAnAmbiguousMixEnablesOnlyTheChosenStreams) {
+    UndecidedMix mix;
+    EXPECT_EQ(mix.enabled(), (std::vector<bool>{false, false, false}));
+    EXPECT_EQ(mix.audible(), 0u);
+    ASSERT_TRUE(mix.workspace.resolveInputMix(mix.asset, kStems));
+    EXPECT_FALSE(mix.workspace.asset(mix.asset)->mix_decision_required);
+    EXPECT_EQ(mix.workspace.asset(mix.asset)->input_mix_selection->selected_stream_identities, kStems);
+    EXPECT_EQ(mix.enabled(), (std::vector<bool>{false, true, true}));
+    EXPECT_EQ(mix.audible(), 2u);
+}
+
+TEST(EditSourceImport, ConfirmedMixIsProvenanceThatUndoAndRedoNeverContradict) {
+    UndecidedMix mix;
+    const auto stem = mix.audioClip(11);
+    ASSERT_EQ(mix.workspace.apply(Move{{stem}, Second, {}, {}, false}, mix.workspace.revision()).status,
+              CommandStatus::Applied);
+    ASSERT_TRUE(mix.workspace.resolveInputMix(mix.asset, kStems));
+    const auto resolved = mix.enabled();
+    // Undo reaches the move made before the decision and the insert itself; no
+    // step brings back the undecided all-disabled state.
+    ASSERT_TRUE(mix.workspace.undo());
+    EXPECT_EQ(mix.enabled(), resolved);
+    EXPECT_EQ(mix.workspace.clip(stem)->start, 0);
+    ASSERT_TRUE(mix.workspace.undo());
+    EXPECT_TRUE(mix.workspace.clips().empty());
+    ASSERT_TRUE(mix.workspace.redo());
+    EXPECT_EQ(mix.enabled(), resolved);
+    ASSERT_TRUE(mix.workspace.redo());
+    EXPECT_EQ(mix.enabled(), resolved);
+    EXPECT_EQ(mix.workspace.clip(stem)->start, Second);
+    EXPECT_FALSE(mix.workspace.asset(mix.asset)->mix_decision_required);
+    // The decision is made once; a second confirmation cannot rewrite it.
+    EXPECT_FALSE(mix.workspace.resolveInputMix(mix.asset, {exosnap::engine::AudioTrackId{{10}}}));
+    EXPECT_EQ(mix.workspace.asset(mix.asset)->input_mix_selection->selected_stream_identities, kStems);
+}
+
+TEST(EditSourceImport, ReenablingAStemNeverReactivatesTheRedundantMaster) {
+    UndecidedMix mix;
+    ASSERT_TRUE(mix.workspace.resolveInputMix(mix.asset, kStems));
+    const auto stem = mix.audioClip(11);
+    const auto master = mix.audioClip(10);
+    ASSERT_EQ(mix.workspace.apply(SetClipEnabled{stem, false}, mix.workspace.revision()).status,
+              CommandStatus::Applied);
+    ASSERT_EQ(mix.workspace.apply(SetClipEnabled{stem, true}, mix.workspace.revision()).status, CommandStatus::Applied);
+    EXPECT_FALSE(mix.workspace.clip(master)->enabled);
+    // Placing the source again follows the confirmed provenance, not every stream.
+    const auto before = mix.workspace.clips().size();
+    ASSERT_TRUE(mix.workspace.insert(mix.asset, 20 * Second));
+    for (const auto& clip : mix.workspace.clips())
+        if (clip.start == 20 * Second && clip.stream && clip.stream->kind == exosnap::engine::TimelineStreamKind::Audio)
+            EXPECT_EQ(clip.enabled, clip.stream->stream_identity != exosnap::engine::AudioTrackId{{10}});
+    EXPECT_EQ(mix.workspace.clips().size(), before * 2);
+}
+
+TEST(EditSourceImport, ConfirmedSilenceDiffersFromAnUnresolvedMix) {
+    UndecidedMix undecided;
+    UndecidedMix silent;
+    ASSERT_TRUE(silent.workspace.resolveInputMix(silent.asset, {}));
+    EXPECT_EQ(undecided.enabled(), silent.enabled());
+    EXPECT_TRUE(undecided.workspace.asset(undecided.asset)->mix_decision_required);
+    EXPECT_FALSE(silent.workspace.asset(silent.asset)->mix_decision_required);
+    ASSERT_TRUE(silent.workspace.asset(silent.asset)->input_mix_selection);
+    EXPECT_TRUE(silent.workspace.asset(silent.asset)->input_mix_selection->selected_stream_identities.empty());
+    EXPECT_EQ(silent.audible(), 0u);
+}
+
+TEST(EditSourceImport, ExplicitEnableEditsSurviveTheDecisionAndMonitoringNeverRewritesIt) {
+    UndecidedMix mix;
+    const auto master = mix.audioClip(10);
+    ASSERT_EQ(mix.workspace.apply(SetClipEnabled{master, true}, mix.workspace.revision()).status,
+              CommandStatus::Applied);
+    ASSERT_TRUE(mix.workspace.resolveInputMix(mix.asset, kStems));
+    EXPECT_EQ(mix.enabled(), (std::vector<bool>{true, true, true}));
+    ASSERT_TRUE(mix.workspace.undo());
+    EXPECT_EQ(mix.enabled(), (std::vector<bool>{false, true, true}));
+    // A later monitoring choice is transient preview state: it neither changes
+    // the provenance nor reaches the export snapshot.
+    exosnap::engine::MonitorSelectionSnapshot monitoring;
+    monitoring.tracks.push_back({exosnap::engine::AudioTrackId{{10}}, 1.0f, false});
+    ASSERT_TRUE(mix.workspace.setMonitorSelection(mix.asset, monitoring));
+    EXPECT_EQ(mix.workspace.asset(mix.asset)->input_mix_selection->selected_stream_identities, kStems);
+    for (const auto& asset : mix.workspace.snapshot()->assets)
+        EXPECT_FALSE(asset->monitor_selection);
+    EXPECT_EQ(mix.audible(), 2u);
 }
 
 TEST(EditSourceImport, UnboundBytesOrUnknownLayoutsKeepTheLinkedImport) {

@@ -157,5 +157,65 @@ TEST(EditorExportPlan, AuthoredGainNeverUsesStereoCopy) {
     f.facts.stereo_copy_qualified = true;
     EXPECT_EQ(f.prepare()->audio_path, EditAudioPath::RenderStereo);
 }
+
+// Stacks `count` simultaneously visible video clips, each on its own track.
+void StackVideo(Fixture& f, uint32_t count) {
+    f.facts.video_copy_qualified = false;
+    f.facts.video_render_available = true;
+    auto& t = f.snapshot.timeline;
+    for (uint32_t index = 1; index < count; ++index) {
+        const uint64_t track = 100 + index;
+        t.tracks.insert(t.tracks.begin(), {track, false});
+        TimelineClip clip{200 + index, 1, 0, false, 0, 0, t.duration_us};
+        clip.track = track;
+        t.clips.push_back(clip);
+    }
+}
+
+TEST(EditorExportPlan, VideoLayerAdmissionIsDecidedWhilePlanning) {
+    Fixture admitted;
+    StackVideo(admitted, kMaxTimelineVideoSources);
+    const auto within = AssessTimelineVideoAdmission(admitted.snapshot, 0, admitted.snapshot.timeline.duration_us);
+    EXPECT_EQ(within.peak_sources, kMaxTimelineVideoSources);
+    EXPECT_TRUE(within.admitted);
+    EXPECT_EQ(admitted.prepare()->video_path, EditVideoPath::Render);
+    EXPECT_TRUE(admitted.prepare()->ready());
+
+    Fixture excessive;
+    StackVideo(excessive, kMaxTimelineVideoSources + 1);
+    EXPECT_FALSE(AssessTimelineVideoAdmission(excessive.snapshot, 0, excessive.snapshot.timeline.duration_us).admitted);
+    const auto refused = excessive.prepare();
+    ASSERT_FALSE(refused->ready());
+    EXPECT_TRUE(std::any_of(refused->issues.begin(), refused->issues.end(), [](const auto& issue) {
+        return issue.code == EditExportIssueCode::ResourceLimitExceeded && issue.scope == EditExportIssueScope::Video;
+    }));
+    EXPECT_EQ(ClassifyEditExport(excessive.snapshot, {TimelineExportEligibility::RenderRequired, {}}, false).path,
+              EditExportPath::Unsupported);
+
+    // Clips that only touch end to start are never visible together.
+    Fixture sequential;
+    auto& t = sequential.snapshot.timeline;
+    t.clips.front().enabled = false;
+    for (uint32_t index = 1; index <= kMaxTimelineVideoSources + 1; ++index) {
+        TimelineClip clip{300 + index, 1, 0, false, index * 100'000, 0, 100'000};
+        clip.track = 1;
+        t.clips.push_back(clip);
+    }
+    EXPECT_EQ(AssessTimelineVideoAdmission(sequential.snapshot, 0, t.duration_us).peak_sources, 1u);
+
+    // A disabled layer or one outside the exported span costs nothing.
+    excessive.snapshot.timeline.clips.back().enabled = false;
+    EXPECT_TRUE(AssessTimelineVideoAdmission(excessive.snapshot, 0, excessive.snapshot.timeline.duration_us).admitted);
+}
+
+TEST(EditorExportPlan, VideoPixelBudgetBoundsLargeSources) {
+    Fixture f;
+    f.snapshot.sources.front().metadata.width = 7680;
+    f.snapshot.sources.front().metadata.height = 4320;
+    StackVideo(f, 2);
+    const auto assessed = AssessTimelineVideoAdmission(f.snapshot, 0, f.snapshot.timeline.duration_us);
+    EXPECT_EQ(assessed.peak_pixels, uint64_t{2} * 7680 * 4320);
+    EXPECT_FALSE(assessed.admitted);
+}
 } // namespace
 } // namespace exosnap::engine

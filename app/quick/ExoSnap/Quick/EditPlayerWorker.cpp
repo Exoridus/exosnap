@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace exosnap::quick {
 namespace {
@@ -33,10 +34,54 @@ int64_t SampleAt(int64_t time_us) {
     return time_us / 1000 * 48 + (time_us % 1000 * 48 + 500) / 1000;
 }
 
+// The front-most visible clip. Evaluation lists contributions back to front.
 const edit::Clip* EvaluatedClip(const edit::Workspace& workspace, int64_t time_us) {
     const auto evaluation = engine::EvaluateTimeline(workspace.timeline(), time_us);
-    return evaluation.error.empty() && !evaluation.video.empty() ? workspace.clip(evaluation.video.front().clip)
+    return evaluation.error.empty() && !evaluation.video.empty() ? workspace.clip(evaluation.video.back().clip)
                                                                  : nullptr;
+}
+
+// The single-clip session shows exactly one decoded source at full opacity.
+// Junctions, partial opacity, video edge fades and simultaneously visible
+// video clips need the compositing reader instead.
+bool NeedsComposition(const edit::Workspace& workspace) {
+    if (!workspace.transitions().empty())
+        return true;
+    std::vector<const edit::Clip*> video;
+    for (const auto& clip : workspace.clips()) {
+        const auto track = std::find_if(workspace.tracks().begin(), workspace.tracks().end(),
+                                        [&clip](const auto& value) { return value.id == clip.track; });
+        if (track == workspace.tracks().end() || track->type != edit::TrackType::Video || !track->edit_enabled ||
+            !clip.enabled)
+            continue;
+        if (clip.opacity != 1 || clip.fade_in.duration_us > 0 || clip.fade_out.duration_us > 0)
+            return true;
+        video.push_back(&clip);
+    }
+    std::sort(video.begin(), video.end(), [](const auto* a, const auto* b) { return a->start < b->start; });
+    int64_t reach = std::numeric_limits<int64_t>::min();
+    for (const auto* clip : video) {
+        if (clip->start < reach)
+            return true;
+        reach = std::max(reach, clip->end());
+    }
+    return false;
+}
+
+// Display geometry of an empty composition: the timeline output, else the
+// first video source. Only its aspect ratio is visible.
+engine::FrameSize BlankGeometry(const edit::Workspace& workspace) {
+    const auto even = [](int width, int height) {
+        return engine::FrameSize{static_cast<uint32_t>(std::max(2, width & ~1)),
+                                 static_cast<uint32_t>(std::max(2, height & ~1))};
+    };
+    const auto timeline = workspace.timeline();
+    if (timeline.output_width > 0 && timeline.output_height > 0)
+        return even(static_cast<int>(timeline.output_width), static_cast<int>(timeline.output_height));
+    for (const auto& asset : workspace.assets())
+        if (asset.width > 0 && asset.height > 0)
+            return even(asset.width, asset.height);
+    return {2, 2};
 }
 
 } // namespace
@@ -246,6 +291,8 @@ void EditPlayerWorker::onTick() {
         const auto* next = EvaluatedClip(workspace_, position_us_);
         if ((next ? next->id : 0) != active_clip_)
             seekTimeline(position_us_, true);
+        else if (!next && position_us_ < workspace_.duration())
+            presentBlank(position_us_);
         position_us_ = std::min<qint64>(position_us_, workspace_.duration());
         position_ms_ = position_us_ / 1000;
         emit positionAdvancedUs(position_us_);
@@ -288,7 +335,7 @@ void EditPlayerWorker::setTimeline(edit::Workspace workspace) {
         }
         return snapshot;
     };
-    const bool use_render = !workspace.transitions().empty();
+    const bool use_render = NeedsComposition(workspace);
     if (timeline_mode_ && render_mode_ && use_render && render_reader_) {
         auto snapshot = makeSnapshot(workspace);
         const auto plan =
@@ -542,6 +589,10 @@ void EditPlayerWorker::seekTimeline(qint64 position_us, bool resume) {
             session_->Play(source_us, request_generation_);
         syncClock();
     }
+    // Valid blank time is a presented black frame, not a pending decode: the
+    // seek converges and playback continues on the wall clock.
+    if (!clip && workspace_.duration() > 0)
+        presentBlank(position_us);
     timeline_playing_ = resume;
     publishPlaybackState(timeline_playing_);
     ensureTimer();
@@ -566,6 +617,11 @@ bool EditPlayerWorker::renderTimeline(qint64 position_us, engine::VideoReadMode 
     sink_->publishClock(-1);
     sink_->deliverTimeline(std::move(frame), request_generation_);
     return true;
+}
+
+void EditPlayerWorker::presentBlank(qint64 position_us) {
+    sink_->publishClock(-1);
+    sink_->deliverTimeline({position_us, BlankGeometry(workspace_), {}}, request_generation_);
 }
 
 void EditPlayerWorker::tickRenderTimeline() {

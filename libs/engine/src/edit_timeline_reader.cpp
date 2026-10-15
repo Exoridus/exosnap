@@ -23,6 +23,50 @@
 
 namespace exosnap::engine {
 
+TimelineVideoAdmission AssessTimelineVideoAdmission(const TimelineRenderSnapshot& snapshot, int64_t in_us,
+                                                    int64_t out_us) {
+    TimelineVideoAdmission result;
+    const auto& timeline = snapshot.timeline;
+    struct Event {
+        int64_t time_us = 0;
+        int sources = 0;
+        int64_t pixels = 0;
+    };
+    std::vector<Event> events;
+    for (const auto& clip : timeline.clips) {
+        if (clip.audio || !clip.enabled || clip.end_us() <= in_us || clip.start_us >= out_us)
+            continue;
+        const auto track = std::find_if(timeline.tracks.begin(), timeline.tracks.end(),
+                                        [&clip](const auto& value) { return value.id == clip.track; });
+        if (track != timeline.tracks.end() && !track->enabled)
+            continue;
+        const auto source = std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
+                                         [&clip](const auto& value) { return value.id == clip.asset; });
+        if (source == snapshot.sources.end() || source->metadata.width <= 0 || source->metadata.height <= 0) {
+            result.admitted = false;
+            continue;
+        }
+        const int64_t pixels = int64_t{source->metadata.width} * source->metadata.height;
+        events.push_back({std::max(clip.start_us, in_us), 1, pixels});
+        events.push_back({std::min(clip.end_us(), out_us), -1, -pixels});
+    }
+    // Ends sort before starts at one instant: clip intervals are half-open.
+    std::sort(events.begin(), events.end(), [](const auto& left, const auto& right) {
+        return left.time_us != right.time_us ? left.time_us < right.time_us : left.sources < right.sources;
+    });
+    int64_t sources = 0;
+    int64_t pixels = 0;
+    for (const auto& event : events) {
+        sources += event.sources;
+        pixels += event.pixels;
+        result.peak_sources = std::max(result.peak_sources, static_cast<size_t>(std::max<int64_t>(sources, 0)));
+        result.peak_pixels = std::max(result.peak_pixels, static_cast<uint64_t>(std::max<int64_t>(pixels, 0)));
+    }
+    result.admitted = result.admitted && result.peak_sources <= kMaxTimelineVideoSources &&
+                      result.peak_pixels <= kMaxTimelineVideoSourcePixels;
+    return result;
+}
+
 EditRenderPlan ClassifyEditExport(const TimelineRenderSnapshot& snapshot,
                                   const TimelineExportAssessment& copy_assessment, bool to_mp4) {
     EditRenderPlan plan;
@@ -50,6 +94,10 @@ EditRenderPlan ClassifyEditExport(const TimelineRenderSnapshot& snapshot,
             return plan;
         }
         if (clip.audio) {
+            // A per-stream audio clip has its own decoder cursor. Only the legacy
+            // single audio row follows its linked video placement.
+            if (clip.stream)
+                continue;
             const auto linked = std::find_if(
                 snapshot.timeline.clips.begin(), snapshot.timeline.clips.end(), [&clip](const auto& video) {
                     return !video.audio && video.group && video.group == clip.group && video.asset == clip.asset &&
@@ -92,6 +140,11 @@ EditRenderPlan ClassifyEditExport(const TimelineRenderSnapshot& snapshot,
             "EditRender", "Match source rendering needs even video dimensions and an exact positive frame rate.");
         return plan;
     }
+    if (!AssessTimelineVideoAdmission(snapshot, 0, snapshot.timeline.duration_us).admitted) {
+        plan.reason = EXOSNAP_TRANSLATABLE(
+            "EditRender", "Too many video layers are visible at the same time. Disable or shorten overlapping clips.");
+        return plan;
+    }
     plan.path = EditExportPath::Render;
     return plan;
 }
@@ -107,7 +160,7 @@ struct EditTimelineReader::Impl {
     static constexpr size_t kMaxAudioDecoders = 8;
     TimelineRenderSnapshot snapshot;
     EditRenderPlan plan;
-    std::array<Decoder, 2> video_decoders;
+    std::vector<Decoder> video_decoders;
     std::vector<Decoder> audio_decoders;
     size_t peak_decoders = 0;
     VideoReadMeasurements retired_video_measurements;
@@ -135,14 +188,19 @@ struct EditTimelineReader::Impl {
     }
 
     bool Prepare(const std::vector<TimelineContribution>& contributions, std::string& error) {
-        auto& decoders = video_decoders;
         std::set<uint64_t> clips;
         for (const auto& contribution : contributions)
             clips.insert(contribution.clip);
-        if (clips.size() > decoders.size()) {
-            error = "More than two simultaneous timeline sources are unsupported.";
+        if (clips.size() > kMaxTimelineVideoSources) {
+            error = "More simultaneous timeline video sources than the compositor admits.";
             return false;
         }
+        // Cursors of clips this frame does not show are retired before new ones
+        // open, so the open set never exceeds the admitted source count.
+        for (auto& decoder : video_decoders)
+            if (decoder.engine && !clips.contains(decoder.clip))
+                Retire(decoder, false);
+        std::erase_if(video_decoders, [](const auto& decoder) { return !decoder.engine; });
         for (const auto& contribution : contributions) {
             if (Find(contribution.clip))
                 continue;
@@ -152,21 +210,14 @@ struct EditTimelineReader::Impl {
                 error = "Timeline source is missing.";
                 return false;
             }
-            auto slot = std::find_if(decoders.begin(), decoders.end(), [](const auto& d) { return !d.engine; });
-            if (slot == decoders.end())
-                slot = std::find_if(decoders.begin(), decoders.end(),
-                                    [&clips](const auto& d) { return !clips.contains(d.clip); });
-            Retire(*slot, false);
-            slot->engine = std::make_unique<EditPlayerEngine>();
-            if (!slot->engine->Open(source->path, error)) {
-                slot->engine.reset();
+            Decoder decoder;
+            decoder.engine = std::make_unique<EditPlayerEngine>();
+            if (!decoder.engine->Open(source->path, error))
                 return false;
-            }
-            if (source->monitor_selection && !slot->engine->SetMonitorSelection(*source->monitor_selection, error)) {
-                slot->engine.reset();
+            if (source->monitor_selection && !decoder.engine->SetMonitorSelection(*source->monitor_selection, error))
                 return false;
-            }
-            slot->clip = contribution.clip;
+            decoder.clip = contribution.clip;
+            video_decoders.push_back(std::move(decoder));
         }
         peak_decoders = std::max(peak_decoders, OpenDecoders());
         return true;
@@ -336,14 +387,17 @@ bool EditTimelineReader::VideoAt(int64_t time_us, TimelineVideoFrame& output, st
     if (!impl_->Prepare(evaluation.video, error))
         return false;
     output = {time_us, impl_->plan.output, {}};
-    for (const auto& contribution : evaluation.video) {
-        auto frame = impl_->Find(contribution.clip)->ReadFrameAtRaw(contribution.source_us, mode, generation);
-        if (!frame) {
-            error = "Cannot decode a timeline video frame.";
-            return false;
+    // Evaluation lists layers back to front; the compositor draws a higher layer
+    // index in front.
+    for (uint32_t layer = 0; layer < evaluation.video_layers.size(); ++layer)
+        for (const auto& contribution : evaluation.video_layers[layer].contributions) {
+            auto frame = impl_->Find(contribution.clip)->ReadFrameAtRaw(contribution.source_us, mode, generation);
+            if (!frame) {
+                error = "Cannot decode a timeline video frame.";
+                return false;
+            }
+            output.layers.push_back({std::move(*frame), contribution.weight, contribution.opacity, layer});
         }
-        output.layers.push_back({std::move(*frame), contribution.weight});
-    }
     return true;
 }
 

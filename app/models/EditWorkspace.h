@@ -110,34 +110,61 @@ class Workspace {
         ++monitoring_revision_;
         return true;
     }
-    // Records the user's choice of starting mix for a source whose provenance was
-    // ambiguous. The audio clips of that source are enabled exactly for the chosen
-    // streams in one undoable edit; the choice itself is not undone with it.
+    // Records the first explicit choice of starting mix for a source whose
+    // provenance was ambiguous. The choice is source provenance, like the import
+    // itself, so it is not an undoable edit: it becomes the original enable state
+    // of that source's audio clips everywhere, including the clip values held by
+    // undo history. Clips still at their import default follow the choice; an
+    // explicit enable/disable edit keeps its value. An empty choice confirms a
+    // deliberately silent source. A later call for a resolved source is refused.
     bool resolveInputMix(Id asset_id, const std::vector<engine::AudioTrackId>& selected) {
         const auto found = std::find_if(assets_.begin(), assets_.end(),
                                         [asset_id](const auto& asset) { return asset.id == asset_id; });
-        if (found == assets_.end() || !found->source_descriptor)
+        if (found == assets_.end() || !found->source_descriptor || !found->mix_decision_required ||
+            revision_ == (std::numeric_limits<Revision>::max)())
             return false;
-        auto candidate = workingCopy();
-        for (auto& clip : candidate.clips_) {
-            if (clip.asset != asset_id || !clip.stream || clip.stream->kind != engine::TimelineStreamKind::Audio)
-                continue;
-            clip.enabled = std::find(selected.begin(), selected.end(), clip.stream->stream_identity) != selected.end();
-            clip.original_enabled = clip.enabled;
+        std::set<engine::AudioTrackId> chosen;
+        for (const auto identity : selected) {
+            const auto& streams = found->source_descriptor->streams;
+            if (std::none_of(streams.begin(), streams.end(),
+                             [&](const auto& stream) {
+                                 return stream.ref.kind == engine::TimelineStreamKind::Audio &&
+                                        stream.ref.stream_identity == identity;
+                             }) ||
+                !chosen.insert(identity).second) {
+                last_error_ = EditError{EditErrorCode::SourceChanged, {asset_id}, {}};
+                return false;
+            }
         }
+        const auto rebase = [&](std::vector<Clip>& clips) {
+            for (auto& clip : clips) {
+                if (clip.asset != asset_id || !clip.stream || clip.stream->kind != engine::TimelineStreamKind::Audio)
+                    continue;
+                const bool audible = chosen.contains(clip.stream->stream_identity);
+                if (clip.enabled == clip.original_enabled)
+                    clip.enabled = audible;
+                clip.original_enabled = audible;
+            }
+        };
+        auto candidate = workingCopy();
+        rebase(candidate.clips_);
         if (!candidate.validate()) {
             last_error_ = candidate.last_error_;
             return false;
         }
-        const bool changes = candidate.clips_ != clips_;
-        if (changes && !publish(candidate))
-            return false;
+        clips_ = std::move(candidate.clips_);
+        for (auto& command : history_) {
+            rebase(command.before);
+            rebase(command.after);
+        }
         InputMixSelection mix;
         mix.asset_identity_fingerprint = found->source_descriptor->asset_identity_fingerprint;
         mix.selected_stream_identities = selected;
         mix.authority = InputMixAuthority::UserConfirmed;
         found->input_mix_selection = std::move(mix);
         found->mix_decision_required = false;
+        ++revision_;
+        snapshot_cache_.reset();
         return true;
     }
     [[nodiscard]] const std::vector<Track>& tracks() const {

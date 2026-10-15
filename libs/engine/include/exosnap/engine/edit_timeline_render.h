@@ -35,6 +35,21 @@ struct EditRenderPlan {
     bool aac_audio = false;
 };
 
+struct TimelineVideoAdmission {
+    // Most enabled video clips visible at one instant of the assessed interval.
+    size_t peak_sources = 0;
+    // Most summed source pixels visible at one instant of the assessed interval.
+    uint64_t peak_pixels = 0;
+    // A source without probed geometry counts as unadmitted.
+    bool admitted = true;
+};
+
+// Peak decoder and composition demand of [in_us, out_us), evaluated before any
+// decoder opens. Unadmitted demand exceeds kMaxTimelineVideoSources or
+// kMaxTimelineVideoSourcePixels and must be refused while planning.
+[[nodiscard]] TimelineVideoAdmission AssessTimelineVideoAdmission(const TimelineRenderSnapshot& snapshot, int64_t in_us,
+                                                                  int64_t out_us);
+
 // Metadata and stream-copy eligibility are resolved before this pure policy.
 EditRenderPlan ClassifyEditExport(const TimelineRenderSnapshot& snapshot,
                                   const TimelineExportAssessment& copy_assessment, bool to_mp4);

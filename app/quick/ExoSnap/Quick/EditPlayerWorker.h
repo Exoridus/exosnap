@@ -72,6 +72,7 @@ class EditPlayerWorker : public QObject {
     void onTick();
     void seekTimeline(qint64 position_us, bool resume);
     bool renderTimeline(qint64 position_us, engine::VideoReadMode mode = engine::VideoReadMode::Sequential);
+    void presentBlank(qint64 position_us);
     void publishMonitoring();
     void tickRenderTimeline();
 
