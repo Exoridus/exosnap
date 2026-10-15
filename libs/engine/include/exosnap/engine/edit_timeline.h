@@ -1,5 +1,7 @@
 #pragma once
 
+#include <exosnap/engine/edit_types.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <string>
@@ -18,6 +20,15 @@ struct TimelineClip {
     [[nodiscard]] int64_t end_us() const {
         return start_us + source_out_us - source_in_us;
     }
+    uint64_t track = 0;
+    std::optional<TimelineStreamRef> stream;
+    bool enabled = true;
+    double gain_db = 0;
+    double opacity = 1;
+    EdgeFade fade_in;
+    EdgeFade fade_out;
+    bool original_enabled = true;
+    bool operator==(const TimelineClip&) const = default;
 };
 
 struct TimelineCrossfade {
@@ -26,10 +37,42 @@ struct TimelineCrossfade {
     int64_t duration_us = 0;
 };
 
+struct TimelineTrack {
+    uint64_t id = 0;
+    bool audio = false;
+    bool enabled = true;
+    double gain_db = 0;
+    bool operator==(const TimelineTrack&) const = default;
+};
+
+struct TimelineJunction {
+    uint64_t id = 0;
+    uint64_t track = 0;
+    uint64_t outgoing = 0;
+    uint64_t incoming = 0;
+    JunctionKind kind = JunctionKind::Crossfade;
+    int64_t in_us = 0;
+    int64_t out_us = 0;
+    int64_t cut_us = 0;
+    CurveSpec curve;
+    AudioGainLaw audio_law = AudioGainLaw::EqualGain;
+    JunctionAnchor anchor = JunctionAnchor::FullOverlap;
+    bool operator==(const TimelineJunction&) const = default;
+};
+
 struct TimelineSnapshot {
     std::vector<TimelineClip> clips;
     std::vector<TimelineCrossfade> crossfades;
     int64_t duration_us = 0;
+    std::vector<TimelineTrack> tracks;
+    std::vector<TimelineJunction> junctions;
+    uint64_t revision = 0;
+    int64_t result_in_us = 0;
+    int64_t result_out_us = -1;
+    uint32_t output_fps_num = 0;
+    uint32_t output_fps_den = 1;
+    uint32_t output_width = 0;
+    uint32_t output_height = 0;
 };
 
 struct TimelineContribution {

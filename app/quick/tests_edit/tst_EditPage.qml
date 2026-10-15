@@ -6,7 +6,7 @@ import ExoSnap.Quick.EditTestControls
 Item {
     id: root
     width: 860
-    height: 600
+    height: 700
 
     Component {
         id: pageComponent
@@ -38,47 +38,135 @@ Item {
             return item;
         }
 
-        function test_splitters_restore_clamp_resize_and_keyboard() {
+        function test_EmptyViewerStable() {
+            const page = make();
+            const viewer = child(page, "editViewer");
+            const card = child(page, "editTimelineZone");
+            compare(page.mediaOpen, false);
+            compare(page.detailsOpen, false);
+            compare(testPageSession.media.length, 0);
+            compare(testPageSession.durationMs, 0);
+            verify(child(page, "editEmptyViewerTitle").visible);
+            tryVerify(() => viewer.width > 0 && card.height >= 220);
+            const geometry = [viewer.x, viewer.y, viewer.width, viewer.height, card.x, card.y, card.width, card.height];
+            while (testSession.canUndo) testSession.undo();
+            testSession.appendAsset(testSession.media[0].id);
+            page.session = testSession;
+            wait(0);
+            compare([viewer.x, viewer.y, viewer.width, viewer.height, card.x, card.y, card.width, card.height], geometry);
+            while (testSession.canUndo) testSession.undo();
+        }
+
+        function test_ToolbarAtFourSizes_data() {
+            return [
+                { tag: "860", width: 860, height: 700 },
+                { tag: "1280", width: 1280, height: 800 },
+                { tag: "1600", width: 1600, height: 1000 },
+                { tag: "1920", width: 1920, height: 1080 }
+            ];
+        }
+
+        function test_ToolbarAtFourSizes(data) {
+            const page = make({ width: data.width, height: data.height });
+            const header = child(page, "editTimelineHeader");
+            const footer = child(page, "editTimelineFooter");
+            const actions = child(page, "editActionGroup");
+            const transport = child(page, "editTransportGroup");
+            const output = child(page, "editOutputGroup");
+            tryVerify(() => actions.x + actions.width <= transport.x);
+            verify(transport.x + transport.width <= output.x);
+            verify(output.x + output.width <= header.width);
+            verify(header.height >= 46 && footer.height >= 42);
+            if (data.width >= 1000) compare(Math.round(transport.x + transport.width / 2), Math.round(header.width / 2));
+            for (const name of ["editUndo", "editRedo", "editSplit", "editDelete", "editTransportPlay", "editVolume", "editExport", "editMediaAccess", "editDetailsAccess", "editSnapping", "editZoomOut", "editZoomIn"]) {
+                const control = child(page, name);
+                const p = control.mapToItem(page, 0, 0);
+                verify(control.width >= 34 && control.height >= 32, name);
+                verify(p.x >= 0 && p.x + control.width <= page.width, name);
+                verify(p.y >= 0 && p.y + control.height <= page.height, name);
+            }
+        }
+
+        function test_ActionTogglePanelDistinct() {
+            const page = make();
+            const action = child(page, "editUndo");
+            const toggle = child(page, "editSnapping");
+            const panel = child(page, "editMediaAccess");
+            compare(action.checkable, false);
+            compare(action.panelAccess, false);
+            compare(toggle.checkable, true);
+            compare(toggle.checked, true);
+            compare(toggle.Accessible.checkable, true);
+            compare(toggle.Accessible.checked, true);
+            compare(panel.panelAccess, true);
+            compare(panel.checkable, false);
+            compare(panel.expanded, false);
+            panel.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Space);
+            tryCompare(panel, "expanded", true);
+            compare(panel.Accessible.name, qsTr("Media"));
+            verify(panel.Accessible.description.length > 0);
+            verify(child(page, "editMediaPanel").visible);
+            child(page, "editDetailsAccess").forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Space);
+            tryCompare(page, "mediaOpen", false);
+            compare(page.detailsOpen, true);
+        }
+
+        function test_PinIsExplicit() {
+            const page = make({ width: 1280, height: 800 });
+            const viewer = child(page, "editViewer");
+            const fullWidth = viewer.width;
+            page.toggleMedia();
+            tryVerify(() => !!findChild(page, "editMediaPin"));
+            compare(page.mediaPinned, false);
+            compare(viewer.width, fullWidth);
+            const pin = child(page, "editMediaPin");
+            pin.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Space);
+            tryCompare(page, "mediaPinned", true);
+            verify(viewer.width < fullWidth);
+            verify(viewer.width >= 480);
+            const outerMargins = page.width - child(page, "editViewerStage").width;
+            page.width = 480 + page.panelWidth + 8 + outerMargins;
+            tryCompare(viewer, "width", 480);
+            compare(page.mediaPinned, true);
+            page.width -= 1;
+            tryCompare(page, "mediaPinned", false);
+            compare(page.canPinMedia, false);
+            page.width += 1;
+            tryCompare(page, "canPinMedia", true);
+            compare(page.mediaPinned, false);
+            page.width = 760;
+            tryCompare(page, "mediaPinned", false);
+            page.width = 1280;
+            compare(page.mediaPinned, false);
+            page.toggleMedia();
+            compare(page.mediaOpen, false);
+            page.width = 1600;
+            compare(page.mediaOpen, false);
+        }
+
+        function test_vertical_split_restore_clamp_and_keyboard() {
             const page = make();
             const preferences = child(page, "editLayoutPreferences");
-            const source = child(page, "editSourceBrowser");
             const timeline = child(page, "editTimelineZone");
-            const upper = child(page, "editHorizontalSplit");
-            preferences.sourceFraction = 0.4;
             preferences.timelineFraction = 0.55;
-            page.restoreHorizontal();
             page.restoreVertical();
-            tryVerify(() => Math.abs(source.width / (upper.width - 6) - 0.4) < 0.01);
-            verify(timeline.height > 250);
-            page.width = 1500;
-            page.height = 1000;
-            tryVerify(() => Math.abs(source.width / (upper.width - 6) - 0.4) < 0.01);
-            page.width = 760;
+            tryVerify(() => timeline.height > 250);
             page.height = 520;
-            preferences.sourceFraction = 0.99;
             preferences.timelineFraction = 0.99;
-            page.restoreHorizontal();
             page.restoreVertical();
-            tryVerify(() => source.width >= 220 && upper.width - source.width - 6 >= 239);
-            verify(timeline.height >= 200);
-            verify(upper.height >= 160);
-            const horizontal = child(page, "editHorizontalSplitHandle");
-            preferences.sourceFraction = 0.4;
-            page.restoreHorizontal();
-            horizontal.forceActiveFocus(Qt.TabFocusReason);
-            keyClick(Qt.Key_Right);
-            compare(preferences.sourceFraction, 0.43);
+            verify(timeline.height >= 220);
+            verify(child(page, "editViewerStage").height >= 160);
             const vertical = child(page, "editVerticalSplitHandle");
             preferences.timelineFraction = 0.4;
             vertical.forceActiveFocus(Qt.TabFocusReason);
             keyClick(Qt.Key_Up);
             compare(preferences.timelineFraction, 0.43);
-            preferences.sourceFraction = NaN;
             preferences.timelineFraction = -1;
-            page.restoreHorizontal();
             page.restoreVertical();
-            verify(source.width >= 220);
-            preferences.sourceFraction = 0.29;
+            verify(timeline.height >= 220);
             preferences.timelineFraction = 0.37;
         }
 
@@ -93,16 +181,13 @@ Item {
             } else {
                 compare(preferences.sourceFraction, 0.41);
                 compare(preferences.timelineFraction, 0.53);
-                page.width = 1500;
+                compare(page.mediaOpen, false);
+                compare(page.detailsOpen, false);
                 page.height = 1000;
-                const source = child(page, "editSourceBrowser");
-                const upper = child(page, "editHorizontalSplit");
-                tryVerify(() => Math.abs(source.width / (upper.width - 6) - 0.41) < 0.01);
-                page.width = 760;
-                page.height = 520;
-                tryVerify(() => source.width >= 220 && upper.width - source.width - 6 >= 239);
+                tryVerify(() => child(page, "editTimelineZone").height > 450);
             }
         }
+
 
         function test_real_media_worker_seeks_generation_and_playback() {
             if (!testMediaPreview.available)
@@ -174,6 +259,7 @@ Item {
             compare(testSession.transitions[0].durationMs, 501);
             keyClick(Qt.Key_Escape);
             tryCompare(popup, "visible", false);
+            page.toggleMedia();
             child(page, "editSourceBrowser").currentTab = 2;
             if (testVisualDirectory.length > 0) {
                 let saved = false;
@@ -216,7 +302,7 @@ Item {
                 { tag: "delete", objectName: "editDelete", label: qsTr("Delete"), shortcut: "Delete", enabled: false },
                 { tag: "volume", objectName: "editVolume", label: qsTr("Preview volume"), shortcut: "", enabled: true },
                 { tag: "snap", objectName: "editSnapping", label: qsTr("Snapping"), shortcut: "", enabled: true },
-                { tag: "export", objectName: "editExport", label: qsTr("Export — %1").arg(testPageExporter.profileOptions[0].label), shortcut: "", enabled: false }
+                { tag: "export", objectName: "editExport", label: qsTr("Export"), shortcut: "", enabled: false }
             ];
         }
 
@@ -226,7 +312,7 @@ Item {
             compare(action.Accessible.name, data.label);
             compare(action.enabled, data.enabled);
             verify(action.glyph !== ExoGlyph.Invalid);
-            compare(action.width, action.height);
+            verify(action.width >= 34 && action.height >= 32);
             verify(action.ToolTip.text.indexOf(data.label) >= 0);
             if (data.shortcut.length > 0)
                 verify(action.ToolTip.text.indexOf(data.shortcut) >= 0);
@@ -237,6 +323,7 @@ Item {
 
         function test_empty_sources_and_keyboard_tabs() {
             const page = make();
+            page.toggleMedia();
             const history = child(page, "editHistoryTab");
             const media = child(page, "editMediaTab");
             const transitions = child(page, "editTransitionsTab");
@@ -292,6 +379,7 @@ Item {
 
         function test_hidden_resident_page_retains_source_and_zoom() {
             const page = make();
+            page.toggleMedia();
             const media = child(page, "editMediaTab");
             const timeline = child(page, "editClipTimeline");
             media.forceActiveFocus(Qt.TabFocusReason);
@@ -326,23 +414,17 @@ Item {
             tryCompare(button, "activeFocus", true);
         }
 
-        function test_export_profile_menu_contains_only_supported_profiles() {
+        function test_export_profile_selector_contains_only_supported_profiles() {
             const page = make();
-            const button = child(page, "editExportProfiles");
-            const menu = child(page, "editExportProfileMenu");
-            verify(button.Accessible.name.length > 0);
-            button.forceActiveFocus(Qt.TabFocusReason);
-            keyClick(Qt.Key_Space);
-            tryCompare(menu, "opened", true);
-            compare(menu.count, testPageExporter.profileOptions.filter(option => option.selectable).length);
-            compare(menu.itemAt(0).text, testPageExporter.profileOptions[0].label);
-            verify(menu.itemAt(0).checked);
-            keyClick(Qt.Key_Escape);
-            tryCompare(menu, "visible", false);
+            page.toggleDetails();
+            const profiles = child(page, "editExportProfiles");
+            verify(profiles.Accessible.name.length > 0);
+            compare(profiles.count, testPageExporter.profileOptions.filter(option => option.selectable).length);
+            compare(profiles.currentValue, testPageExporter.profileKey);
         }
-
         function test_source_tabs_scroll_without_truncating_labels() {
             const page = make();
+            page.toggleMedia();
             const browser = child(page, "editSourceBrowser");
             const scroll = child(page, "editSourceTabs");
             const history = child(page, "editHistoryTab");
