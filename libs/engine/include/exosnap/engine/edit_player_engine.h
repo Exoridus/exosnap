@@ -223,7 +223,7 @@ class EditPlayerEngine {
     [[nodiscard]] std::optional<RawDecodedVideoFrame> DecodeFrameAtRaw(int64_t target_us);
     [[nodiscard]] std::optional<RawDecodedVideoFrame> ReadFrameAtRaw(int64_t target_us, VideoReadMode mode,
                                                                      uint64_t generation = 0);
-    [[nodiscard]] VideoReadMeasurements VideoReadStats() const noexcept;
+    [[nodiscard]] const VideoReadMeasurements& VideoReadStats() const noexcept;
 
     // Synchronous, single-owner range decode for timeline rendering. The output
     // is exactly frame_count stereo Float32 frames at 48 kHz, with source gaps

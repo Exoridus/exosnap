@@ -30,8 +30,8 @@ enum class EditExportIssueCode {
 };
 enum class EditExportIssueScope { Timeline, Source, Video, Audio, Destination };
 struct EditExportIssue {
-    EditExportIssueCode code;
-    EditExportIssueScope scope;
+    EditExportIssueCode code = EditExportIssueCode::InvalidTimeline;
+    EditExportIssueScope scope = EditExportIssueScope::Timeline;
     std::vector<uint64_t> affected_ids;
 };
 

@@ -1404,7 +1404,7 @@ std::optional<RawDecodedVideoFrame> EditPlayerEngine::ReadFrameAtRaw(int64_t tar
         impl_->cursor_valid = false;
     return frame;
 }
-VideoReadMeasurements EditPlayerEngine::VideoReadStats() const noexcept {
+const VideoReadMeasurements& EditPlayerEngine::VideoReadStats() const noexcept {
     return impl_->video_read_measurements;
 }
 

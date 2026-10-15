@@ -125,11 +125,12 @@ struct EditTimelineReader::Impl {
     BrickwallLimiter limiter{BrickwallLimiter::Config{}};
 
     [[nodiscard]] size_t OpenDecoders() const {
-        const auto count = [](const auto& slots) {
-            return static_cast<size_t>(
-                std::count_if(slots.begin(), slots.end(), [](const auto& d) { return bool(d.engine); }));
-        };
-        return count(video_decoders) + count(audio_decoders);
+        size_t open = 0;
+        for (const auto& decoder : video_decoders)
+            open += decoder.engine ? 1 : 0;
+        for (const auto& decoder : audio_decoders)
+            open += decoder.engine ? 1 : 0;
+        return open;
     }
 
     bool Prepare(const std::vector<TimelineContribution>& contributions, std::string& error) {

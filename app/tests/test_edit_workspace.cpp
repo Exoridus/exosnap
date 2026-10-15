@@ -780,7 +780,7 @@ TEST(EditAudioContracts, EditMuteIncluded) {
 }
 
 namespace {
-exosnap::engine::EditMediaMetadata ProbedSource(std::vector<uint32_t> audio_channels) {
+exosnap::engine::EditMediaMetadata ProbedSource(const std::vector<uint32_t>& audio_channels) {
     using namespace exosnap::engine;
     EditMediaMetadata metadata;
     metadata.duration_us = 10 * Second;
