@@ -55,6 +55,7 @@ pub enum StepId {
     /// new module cannot slip past by not being named.
     QmlLint,
     Build,
+    ClangTidy,
     /// `exo-dev test` in process: builds the tree, runs ctest with isolated
     /// configuration and Qt, and writes the tree's test receipt. CI excludes the
     /// `live` label: those tests read real machine state and are excluded rather
@@ -63,7 +64,6 @@ pub enum StepId {
     /// the offscreen desktop tests or keep the live ones.
     Tests,
     CppCheck,
-    ClangTidy,
     PackagingSmoke,
     /// The A/V-sync analyzer against the committed golden clapper clip. The
     /// 25 ms budget is loose on purpose: a 4 s clip's residual drift is bounded by
@@ -125,9 +125,9 @@ impl StepId {
         StepId::Configure,
         StepId::QmlLint,
         StepId::Build,
+        StepId::ClangTidy,
         StepId::Tests,
         StepId::CppCheck,
-        StepId::ClangTidy,
         StepId::PackagingSmoke,
         StepId::AvSyncGolden,
         StepId::Samples,
@@ -227,8 +227,10 @@ impl StepId {
                 ..step("cppcheck", SANITY)
             },
             // clang-tidy reads compile_commands.json, which configure writes and
-            // the build keeps in step with the source. The tree lock keeps a
-            // concurrent configure from rewriting it mid-read.
+            // the build keeps in step with the source. Changed-header scope also
+            // reads Ninja dependencies recorded by the completed build. Run before
+            // CTest to report blocking findings without spending the test budget.
+            // The tree lock prevents concurrent configure from rewriting it mid-read.
             StepId::ClangTidy => StepInfo {
                 windows_only: true,
                 ci_only: Some(

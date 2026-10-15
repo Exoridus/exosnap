@@ -29,6 +29,33 @@ Record run-specific counts, commands and analysis with review evidence. Promote 
 
 Include-cleaner checks direct standard and project dependencies. Its Windows SDK provider exception preserves public umbrella headers instead of recommending internal SDK headers for Win32 declarations. Positive fixtures retain missing standard and project providers under the same configuration. The check analyzes the main translation unit, so its clean result does not by itself prove every header is self-contained.
 
+## Manual include-cleaner repairs
+
+`cargo exo-dev lint clang-tidy` is read-only and has no `--fix` or `--apply` option. Hooks and CI do not apply clang-tidy replacements. Debug CI runs configure, `all_qmllint`, build, blocking clang-tidy, then the complete CTest suite excluding `live`. The completed build supplies Ninja dependency data for changed-header scope. Blocking analysis failures stop before CTest.
+
+For a narrow repair, first run the read-only gate against the configured and built Ninja tree. `--base HEAD` selects uncommitted changes against HEAD. Use another explicit revision when reviewing committed changes:
+
+```powershell
+cargo exo-dev lint clang-tidy --build-dir build/windows-x64-ninja-debug --base HEAD --jobs 1
+```
+
+The output reports the resolved `clang-tidy` executable. Use that exact path for a native one-off export, preserving compatibility with the compilation database's Visual Studio compiler. Select one first-party translation unit explicitly. Run from the repository root in the same compiler environment and finish each export/review before starting another. For example, substitute the reported executable path below:
+
+```powershell
+$tidy = Read-Host 'Exact clang-tidy executable path reported by exo-dev'
+$fixes = Join-Path $env:TEMP ('exosnap-includes-' + [guid]::NewGuid().ToString() + '.yaml')
+& $tidy -p build/windows-x64-ninja-debug '--checks=-*,misc-include-cleaner' '--warnings-as-errors=-*' '--extra-arg=-D_CRT_USE_BUILTIN_OFFSETOF' "--export-fixes=$fixes" libs/engine/src/edit_timeline_compositor.cpp
+Get-Content -LiteralPath $fixes
+```
+
+This exports proposed replacements without changing source. A compiler error or failed analysis is not a valid repair proposal. Keep the repository configuration, including its Windows SDK provider exception. Inspect every replacement's `FilePath`, byte offset, length and replacement text against the current file. Apply only individually reviewed include edits to the explicitly selected project translation unit with an editor. Preserve existing dirty edits and reject proposals for headers, other translation units, SDK, vendor, generated or build files. If source changes after export, regenerate the proposal before applying it.
+
+The Windows runner requests the UCRT builtin `offsetof` implementation for Clang. Its pointer-cast fallback is not a C++ constant expression in that frontend, so valid layout assertions can otherwise prevent analysis. This preserves the assertions and blocking rules; it does not change production compiler flags. Analysis cache identity includes this option.
+
+Neither `--header-filter` nor a selected translation unit bounds native `--fix` writes. Do not pass `--fix`, `--fix-errors` or a directory of replacements to an automatic applier here. A bounded Rust apply subcommand that validates replacement paths, source identity and overlapping edits is not implemented. Until that exists, applying replacements is an explicit manual edit. Never stage or commit automatically.
+
+Inspect `git diff` after editing, then rerun the read-only blocking gate with the same build directory and base. A fix-it proposal does not prove correctness or replace the blocking check.
+
 ## Advisory reports
 
 Run `cargo exo-dev lint quality --only clang-tidy --report-path build/advisory/clang-tidy.txt` against a configured Ninja build. The runner selects actual repository translation units from `compile_commands.json`, excludes generated and vendored sources, and retains every batch's output. It writes raw text, normalized JSON and a Markdown summary beside the requested report path. The identity is `(repository-relative file, line, column, check)` with tracked path spelling and case-insensitive lookup on Windows. Reports record commit, dirty-tree status, tool version, translation-unit count, timing, raw and unique counts, and per-check/per-layer counts. Compare matching tool versions and input scopes.

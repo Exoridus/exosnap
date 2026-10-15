@@ -327,6 +327,46 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn debug_ci_tidy_failure_stops_before_ctest() {
+        let scope = Scope::everything();
+        let plan = plan::build(&input(Profile::CiBuildDebug, &scope));
+        let mut fake = Fake::failing(&["clang-tidy"]);
+        let result = run(&plan, &mut fake);
+        assert!(!result.passed);
+        assert_eq!(result.check("build").status, Status::Pass);
+        assert_eq!(result.check("clang-tidy").status, Status::Fail);
+        assert_eq!(result.check("tests").status, Status::NotRun);
+        assert_eq!(
+            result.check("tests").detail,
+            "stopped after 'clang-tidy' failed"
+        );
+        assert!(!fake.started.contains(&"tests"));
+    }
+
+    #[test]
+    fn debug_ci_tidy_success_runs_the_complete_test_suite() {
+        let scope = Scope::everything();
+        let plan = plan::build(&input(Profile::CiBuildDebug, &scope));
+        let mut fake = Fake::failing(&[]);
+        let result = run(&plan, &mut fake);
+        assert!(result.passed);
+        assert_eq!(
+            fake.started,
+            vec![
+                "sanity",
+                "configure",
+                "qmllint",
+                "build",
+                "clang-tidy",
+                "tests"
+            ]
+        );
+        assert_eq!(result.check("tests").status, Status::Pass);
+        assert_eq!(result.check("tests").evidence["filter"], "");
+        assert_eq!(result.check("tests").evidence["excludeLabel"], "live");
+    }
+
+    #[test]
     fn a_failed_build_never_leaves_a_passing_test_result() {
         let mut fake = Fake::failing(&["build"]);
         let run = run_with_spec(full_test_spec(false), &Scope::everything(), &mut fake);

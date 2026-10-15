@@ -523,16 +523,16 @@ jobs:
           restore-keys: |
             clang-tidy-blocking-${{ runner.os }}-
 
-      # Configure (sccache on), qmllint over every QML module, build, the test
-      # suite through exo-dev test without the `live` label (this runner has no
-      # GPU, and a test reading real machine state is excluded rather than
-      # trusted to skip itself), then the scoped blocking clang-tidy set against
-      # HEAD^. Tests and clang-tidy only run behind a build that passed in the
-      # same invocation.
+      # Configure (sccache on), qmllint over every QML module, build, the scoped
+      # blocking clang-tidy set against HEAD^, then the complete test suite through
+      # exo-dev test without the `live` label (this runner has no GPU). The build
+      # supplies the compile database and Ninja dependencies used by clang-tidy.
+      # A blocking tidy failure stops the run before CTest. Both steps require a
+      # build that passed in the same invocation.
       #
       # PowerShell, not bash: Git Bash puts its own link.exe ahead of MSVC's on
       # PATH, and the compiler processes inherit this step's environment.
-      - name: Build, qmllint, test and clang-tidy (exo-dev ci-build-debug)
+      - name: Configure, qmllint, build, clang-tidy and tests (exo-dev ci-build-debug)
         env:
           EVENT: ${{ github.event_name }}
           TIDY_CACHE: ${{ runner.temp }}/clang-tidy-cache
