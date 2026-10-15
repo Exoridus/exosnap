@@ -12,7 +12,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -97,11 +99,15 @@ struct EditTimelineReader::Impl {
     struct Decoder {
         uint64_t clip = 0;
         std::unique_ptr<EditPlayerEngine> engine;
+        // Unset only for a clip without a stream reference over a source with
+        // several audio streams; that legacy path mixes the confirmed selection.
+        std::optional<uint32_t> stream;
     };
+    static constexpr size_t kMaxAudioDecoders = 8;
     TimelineRenderSnapshot snapshot;
     EditRenderPlan plan;
     std::array<Decoder, 2> video_decoders;
-    std::array<Decoder, 2> audio_decoders;
+    std::vector<Decoder> audio_decoders;
     size_t peak_decoders = 0;
     VideoReadMeasurements retired_video_measurements;
 
@@ -118,8 +124,16 @@ struct EditTimelineReader::Impl {
     }
     BrickwallLimiter limiter{BrickwallLimiter::Config{}};
 
-    bool Prepare(const std::vector<TimelineContribution>& contributions, std::string& error, bool audio = false) {
-        auto& decoders = audio ? audio_decoders : video_decoders;
+    [[nodiscard]] size_t OpenDecoders() const {
+        const auto count = [](const auto& slots) {
+            return static_cast<size_t>(
+                std::count_if(slots.begin(), slots.end(), [](const auto& d) { return bool(d.engine); }));
+        };
+        return count(video_decoders) + count(audio_decoders);
+    }
+
+    bool Prepare(const std::vector<TimelineContribution>& contributions, std::string& error) {
+        auto& decoders = video_decoders;
         std::set<uint64_t> clips;
         for (const auto& contribution : contributions)
             clips.insert(contribution.clip);
@@ -128,7 +142,7 @@ struct EditTimelineReader::Impl {
             return false;
         }
         for (const auto& contribution : contributions) {
-            if (Find(contribution.clip, audio))
+            if (Find(contribution.clip))
                 continue;
             const auto source = std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
                                              [&contribution](const auto& s) { return s.id == contribution.asset; });
@@ -140,7 +154,7 @@ struct EditTimelineReader::Impl {
             if (slot == decoders.end())
                 slot = std::find_if(decoders.begin(), decoders.end(),
                                     [&clips](const auto& d) { return !clips.contains(d.clip); });
-            Retire(*slot, audio);
+            Retire(*slot, false);
             slot->engine = std::make_unique<EditPlayerEngine>();
             if (!slot->engine->Open(source->path, error)) {
                 slot->engine.reset();
@@ -152,16 +166,55 @@ struct EditTimelineReader::Impl {
             }
             slot->clip = contribution.clip;
         }
-        const auto count = [](const auto& slots) {
-            return static_cast<size_t>(
-                std::count_if(slots.begin(), slots.end(), [](const auto& d) { return bool(d.engine); }));
-        };
-        peak_decoders = std::max(peak_decoders, count(video_decoders) + count(audio_decoders));
+        peak_decoders = std::max(peak_decoders, OpenDecoders());
         return true;
     }
-    EditPlayerEngine* Find(uint64_t clip, bool audio = false) {
-        auto& decoders = audio ? audio_decoders : video_decoders;
-        for (auto& decoder : decoders)
+
+    Decoder* AudioDecoder(const AudioIntervalContribution& contribution, std::string& error) {
+        for (auto& decoder : audio_decoders)
+            if (decoder.clip == contribution.clip && decoder.engine)
+                return &decoder;
+        const auto source = std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
+                                         [&contribution](const auto& s) { return s.id == contribution.asset; });
+        if (source == snapshot.sources.end()) {
+            error = "Timeline source is missing.";
+            return nullptr;
+        }
+        std::optional<uint32_t> stream;
+        if (contribution.stream) {
+            if (contribution.stream->kind != TimelineStreamKind::Audio) {
+                error = "The selected container stream is not audio.";
+                return nullptr;
+            }
+            stream = contribution.stream->container_index;
+        } else {
+            size_t audio_streams = 0;
+            for (const auto& descriptor : source->metadata.streams)
+                if (descriptor.kind == TimelineStreamKind::Audio) {
+                    ++audio_streams;
+                    stream = descriptor.container_index;
+                }
+            if (audio_streams != 1)
+                stream.reset();
+        }
+        if (audio_decoders.size() >= kMaxAudioDecoders) {
+            error = "Too many simultaneous timeline audio sources.";
+            return nullptr;
+        }
+        Decoder decoder{contribution.clip, std::make_unique<EditPlayerEngine>(), stream};
+        const bool opened = stream ? decoder.engine->OpenAudioStream(source->path, *stream, error)
+                                   : decoder.engine->Open(source->path, error);
+        if (!opened)
+            return nullptr;
+        if (!stream && source->monitor_selection &&
+            !decoder.engine->SetMonitorSelection(*source->monitor_selection, error))
+            return nullptr;
+        audio_decoders.push_back(std::move(decoder));
+        peak_decoders = std::max(peak_decoders, OpenDecoders());
+        return &audio_decoders.back();
+    }
+    EditPlayerEngine* Find(uint64_t clip) {
+        for (auto& decoder : video_decoders)
             if (decoder.clip == clip && decoder.engine)
                 return decoder.engine.get();
         return nullptr;
@@ -239,6 +292,7 @@ bool EditTimelineReader::UpdateSnapshot(TimelineRenderSnapshot snapshot, const E
     for (auto& decoder : impl_->audio_decoders)
         if (decoder.engine && !compatible(decoder, true))
             impl_->Retire(decoder, true);
+    std::erase_if(impl_->audio_decoders, [](const auto& decoder) { return !decoder.engine; });
     impl_->snapshot = std::move(snapshot);
     impl_->plan = plan;
     return true;
@@ -285,52 +339,66 @@ bool EditTimelineReader::VideoAt(int64_t time_us, TimelineVideoFrame& output, st
 }
 
 bool EditTimelineReader::AudioAt(int64_t first_sample, uint32_t count, std::vector<float>& output, std::string& error) {
-    if (first_sample < 0 || count > 48000) {
+    constexpr int64_t kRate = 48000;
+    constexpr int64_t kMicroseconds = 1'000'000;
+    if (first_sample < 0 || count > kRate ||
+        first_sample > (std::numeric_limits<int64_t>::max)() / kMicroseconds - kRate) {
         error = "Invalid timeline audio block.";
         return false;
     }
     output.assign(static_cast<size_t>(count) * 2, 0);
-    uint32_t offset = 0;
-    while (offset < count) {
-        const int64_t sample = first_sample + offset;
-        const int64_t time = sample * 1'000'000 / 48000;
-        const auto evaluation = EvaluateTimeline(impl_->snapshot.timeline, time);
-        if (!evaluation.error.empty() || !impl_->Prepare(evaluation.audio, error, true)) {
-            if (!evaluation.error.empty())
-                error = evaluation.error;
-            return false;
-        }
-        uint32_t length = count - offset;
-        for (const auto& clip : impl_->snapshot.timeline.clips)
-            for (const int64_t boundary : {clip.start_us, clip.end_us()}) {
-                const int64_t boundary_sample = (boundary * 48000 + 999'999) / 1'000'000;
-                if (boundary_sample > sample)
-                    length = static_cast<uint32_t>(std::min<int64_t>(length, boundary_sample - sample));
-            }
-        std::vector<float> source;
-        for (const auto& contribution : evaluation.audio) {
-            auto* decoder = impl_->Find(contribution.clip, true);
-            if (!decoder) {
-                error = "Timeline audio source is unavailable.";
+    if (count == 0)
+        return true;
+    const int64_t last_sample = first_sample + count;
+    const auto intervals = EvaluateAudioIntervals(impl_->snapshot.timeline, first_sample * kMicroseconds / kRate,
+                                                  (last_sample * kMicroseconds + kRate - 1) / kRate);
+    if (!intervals.error.empty()) {
+        error = intervals.error;
+        return false;
+    }
+    std::set<uint64_t> used;
+    std::vector<float> source;
+    for (const auto& interval : intervals.intervals) {
+        const int64_t begin = std::max(first_sample, AudioSampleIndex(interval.in_us));
+        const int64_t end = std::min(last_sample, AudioSampleIndex(interval.out_us));
+        for (const auto& contribution : interval.contributions) {
+            const int64_t clip_begin = AudioSampleIndex(contribution.clip_start_us);
+            const int64_t clip_end =
+                AudioSampleIndex(contribution.clip_start_us + (contribution.source_out_us - contribution.source_in_us));
+            const int64_t from = std::max(begin, clip_begin);
+            const int64_t to = std::min(end, clip_end);
+            if (to <= from)
+                continue;
+            auto* decoder = impl_->AudioDecoder(contribution, error);
+            if (!decoder)
+                return false;
+            used.insert(contribution.clip);
+            const auto source_sample = AudioSourceSample(contribution, from);
+            if (!source_sample) {
+                error = "The source audio position is outside the supported range.";
                 return false;
             }
-            const int64_t source_sample = (contribution.source_us * 48000 + 500'000) / 1'000'000;
-            if (!decoder->DecodeAudioRange(source_sample, length, source, error))
+            const auto length = static_cast<uint32_t>(to - from);
+            const bool decoded =
+                decoder->stream
+                    ? decoder->engine->DecodeAudioStreamRange(*decoder->stream, *source_sample, length, source, error)
+                    : decoder->engine->DecodeAudioRange(*source_sample, length, source, error);
+            if (!decoded)
                 return false;
             for (uint32_t frame = 0; frame < length; ++frame) {
-                const auto weights = EvaluateTimeline(impl_->snapshot.timeline, (sample + frame) * 1'000'000 / 48000);
-                const auto weight =
-                    std::find_if(weights.audio.begin(), weights.audio.end(),
-                                 [&contribution](const auto& c) { return c.clip == contribution.clip; });
-                if (weight == weights.audio.end())
-                    continue;
+                const auto gain = EvaluateAudioGain(contribution, from + frame);
+                if (!gain) {
+                    error = "Invalid timeline audio envelope.";
+                    return false;
+                }
+                const auto at = static_cast<size_t>(from - first_sample + frame) * 2;
                 for (size_t channel = 0; channel < 2; ++channel)
-                    output[static_cast<size_t>(offset + frame) * 2 + channel] +=
-                        source[static_cast<size_t>(frame) * 2 + channel] * static_cast<float>(weight->weight);
+                    output[at + channel] +=
+                        source[static_cast<size_t>(frame) * 2 + channel] * static_cast<float>(*gain);
             }
         }
-        offset += length;
     }
+    std::erase_if(impl_->audio_decoders, [&used](const auto& decoder) { return !used.contains(decoder.clip); });
     impl_->limiter.Process(output.data(), count);
     return true;
 }

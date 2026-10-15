@@ -1935,6 +1935,13 @@ exosnap_add_gtest(
 )
 
 exosnap_add_gtest(
+    NAME test_editor_audio_mix
+    TEST_PREFIX engine.
+    SOURCES tests/test_editor_audio_mix.cpp
+    LIBRARIES exosnap_engine FFmpeg::mux
+)
+
+exosnap_add_gtest(
     NAME test_edit_hard_cut_render
     TEST_PREFIX engine.
     SOURCES tests/test_edit_hard_cut_render.cpp
