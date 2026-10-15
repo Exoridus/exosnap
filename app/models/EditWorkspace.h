@@ -196,20 +196,11 @@ class Workspace {
     }
     bool removeCrossfade(Id outgoing) {
         const auto found = std::find_if(transitions_.begin(), transitions_.end(),
-                                        [outgoing](const auto& t) { return t.outgoing == outgoing; });
-        if (found == transitions_.end())
+                                        [outgoing](const auto& junction) { return junction.outgoing == outgoing; });
+        if (found == transitions_.end() || found->kind != TransitionKind::Crossfade)
             return false;
-        const auto* incoming = clip(found->incoming);
-        if (!incoming)
-            return false;
-        auto after = clips_;
-        for (auto& c : after)
-            if (c.start >= incoming->start)
-                if (!addTime(c.start, found->duration, c.start))
-                    return false;
-        auto transitions = transitions_;
-        std::erase_if(transitions, [outgoing](const auto& t) { return t.outgoing == outgoing; });
-        return commit(std::move(after), outgoing, std::move(transitions));
+        const auto midpoint = found->in_us + (found->out_us - found->in_us) / 2;
+        return apply(SetHardCut{found->id, midpoint}, revision_).status == CommandStatus::Applied;
     }
     [[nodiscard]] Id selection() const {
         return selection_;
@@ -448,6 +439,277 @@ class Workspace {
     Clip* mutableClip(Id id) {
         const auto found = std::find_if(clips_.begin(), clips_.end(), [id](const auto& c) { return c.id == id; });
         return found == clips_.end() ? nullptr : &*found;
+    }
+    bool fitFades(Clip& clip, std::optional<FadeEdge> edited = {}) {
+        if (clip.fade_in.duration_us < 0 || clip.fade_out.duration_us < 0 ||
+            !engine::EvaluateCurve(clip.fade_in.curve, 0) || !engine::EvaluateCurve(clip.fade_out.curve, 0)) {
+            fail(EditErrorCode::InvalidCurve, {clip.id});
+            return false;
+        }
+        const auto duration = clip.duration();
+        clip.fade_in.duration_us = std::min(clip.fade_in.duration_us, duration);
+        clip.fade_out.duration_us = std::min(clip.fade_out.duration_us, duration);
+        if (clip.fade_in.duration_us <= duration - clip.fade_out.duration_us)
+            return true;
+        if (edited == FadeEdge::In) {
+            clip.fade_in.duration_us = duration - clip.fade_out.duration_us;
+        } else if (edited == FadeEdge::Out) {
+            clip.fade_out.duration_us = duration - clip.fade_in.duration_us;
+        } else {
+            Time total = 0;
+            if (!addTime(clip.fade_in.duration_us, clip.fade_out.duration_us, total)) {
+                fail(EditErrorCode::InvalidTime, {clip.id});
+                return false;
+            }
+            const auto incoming = scaleRatio(clip.fade_in.duration_us, duration, total);
+            if (!incoming) {
+                fail(EditErrorCode::InvalidTime, {clip.id});
+                return false;
+            }
+            clip.fade_in.duration_us = *incoming;
+            clip.fade_out.duration_us = duration - *incoming;
+        }
+        return true;
+    }
+    Transition* mutableJunction(Id id) {
+        const auto found =
+            std::find_if(transitions_.begin(), transitions_.end(), [id](const auto& item) { return item.id == id; });
+        return found == transitions_.end() ? nullptr : &*found;
+    }
+    Time quantizeBoundary(Time requested, bool audio) const {
+        const auto grid = audio ? RationalFps{48000, 1} : output_fps_;
+        if (!grid.valid())
+            return requested;
+        const auto before = requested == (std::numeric_limits<Time>::max)() ? grid.previousFrame(requested)
+                                                                            : grid.previousFrame(requested + 1);
+        const auto after = requested == 0 ? std::optional<Time>{0} : grid.nextFrame(requested - 1);
+        if (!before)
+            return after.value_or(requested);
+        if (!after)
+            return *before;
+        return requested - *before < *after - requested ? *before : *after;
+    }
+    void execute(const SetJunctionWindow& command) {
+        auto* junction = mutableJunction(command.junction_id);
+        if (!junction) {
+            fail(EditErrorCode::InvalidTarget, {command.junction_id});
+            return;
+        }
+        const auto* a = clip(junction->outgoing);
+        const auto* b = clip(junction->incoming);
+        if (!a || !b || command.span.in_us < b->start || command.span.out_us > a->end() ||
+            command.span.out_us <= command.span.in_us) {
+            fail(EditErrorCode::InvalidTime, {command.junction_id});
+            return;
+        }
+        junction->kind = TransitionKind::Crossfade;
+        junction->anchor = command.anchor;
+        junction->in_us = command.anchor == JunctionAnchor::FullOverlap ? b->start : command.span.in_us;
+        junction->out_us = command.anchor == JunctionAnchor::FullOverlap ? a->end() : command.span.out_us;
+        junction->incoming_anchor_us = b->start;
+    }
+    void execute(const SetJunctionCurve& command) {
+        auto* junction = mutableJunction(command.junction_id);
+        if (!junction)
+            fail(EditErrorCode::InvalidTarget, {command.junction_id});
+        else if (!engine::EvaluateCurve(command.curve, 0))
+            fail(EditErrorCode::InvalidCurve, {command.junction_id});
+        else
+            junction->curve = command.curve;
+    }
+    void execute(const SetAudioLaw& command) {
+        auto* junction = mutableJunction(command.junction_id);
+        const auto* track = junction ? mutableTrack(junction->track) : nullptr;
+        if (!junction || !track || track->type != TrackType::Audio)
+            fail(EditErrorCode::WrongTrackKind, {command.junction_id});
+        else if (command.law != AudioGainLaw::EqualGain && command.law != AudioGainLaw::EqualPower)
+            fail(EditErrorCode::InvalidCurve, {command.junction_id});
+        else
+            junction->audio_law = command.law;
+    }
+    void execute(const SetHardCut& command) {
+        auto* junction = mutableJunction(command.junction_id);
+        if (!junction) {
+            fail(EditErrorCode::InvalidTarget, {command.junction_id});
+            return;
+        }
+        const auto* a = clip(junction->outgoing);
+        const auto* b = clip(junction->incoming);
+        if (!a || !b || command.cut_us < b->start || command.cut_us > a->end()) {
+            fail(EditErrorCode::InvalidTime, {command.junction_id});
+            return;
+        }
+        const auto* track = mutableTrack(a->track);
+        if (!track) {
+            fail(EditErrorCode::InvalidTarget, {command.junction_id});
+            return;
+        }
+        junction->kind = TransitionKind::HardCut;
+        junction->cut_us =
+            std::clamp(quantizeBoundary(command.cut_us, track->type == TrackType::Audio), b->start, a->end());
+        junction->anchor = JunctionAnchor::Custom;
+        junction->incoming_anchor_us = b->start;
+    }
+    static std::optional<Time> scaleRatio(Time value, Time multiplier, Time divisor) {
+        if (value < 0 || multiplier < 0 || divisor <= 0)
+            return std::nullopt;
+        uint64_t quotient = 0;
+        uint64_t remainder = 0;
+        const auto d = static_cast<uint64_t>(divisor);
+        const auto m = static_cast<uint64_t>(multiplier);
+        constexpr auto limit = static_cast<uint64_t>((std::numeric_limits<Time>::max)());
+        for (int bit = 63; bit >= 0; --bit) {
+            if (quotient > limit / 2)
+                return std::nullopt;
+            quotient *= 2;
+            remainder *= 2;
+            if (remainder >= d) {
+                remainder -= d;
+                if (quotient == limit)
+                    return std::nullopt;
+                ++quotient;
+            }
+            if ((static_cast<uint64_t>(value) >> bit) & 1u) {
+                if (m / d > limit - quotient)
+                    return std::nullopt;
+                quotient += m / d;
+                const auto add = m % d;
+                if (remainder >= d - add) {
+                    remainder -= d - add;
+                    if (quotient == limit)
+                        return std::nullopt;
+                    ++quotient;
+                } else {
+                    remainder += add;
+                }
+            }
+        }
+        return static_cast<Time>(quotient);
+    }
+    void execute(const CopyJunctionToLinked& command) {
+        const auto* found = mutableJunction(command.source_junction_id);
+        if (!found) {
+            fail(EditErrorCode::InvalidTarget, {command.source_junction_id});
+            return;
+        }
+        const auto source = *found;
+        const auto* source_a = clip(source.outgoing);
+        const auto* source_b = clip(source.incoming);
+        if (!source_a || !source_b || !source_a->group || !source_b->group) {
+            fail(EditErrorCode::InvalidTarget, {source.id});
+            return;
+        }
+        const auto source_duration = source_a->end() - source_b->start;
+        for (const auto id : command.targets) {
+            auto* target = mutableJunction(id);
+            const auto* a = target ? clip(target->outgoing) : nullptr;
+            const auto* b = target ? clip(target->incoming) : nullptr;
+            if (!target || !a || !b || a->group != source_a->group || b->group != source_b->group) {
+                fail(EditErrorCode::InvalidTarget, {id});
+                return;
+            }
+            const auto duration = a->end() - b->start;
+            const auto start = scaleRatio(source.in_us - source_b->start, duration, source_duration);
+            const auto end = scaleRatio(source.out_us - source_b->start, duration, source_duration);
+            const auto cut = scaleRatio(source.cut_us - source_b->start, duration, source_duration);
+            if ((source.kind == TransitionKind::Crossfade && (!start || !end)) ||
+                (source.kind == TransitionKind::HardCut && !cut)) {
+                fail(EditErrorCode::InvalidTime, {id});
+                return;
+            }
+            target->kind = source.kind;
+            target->curve = source.curve;
+            target->audio_law = source.audio_law;
+            target->anchor = JunctionAnchor::Custom;
+            target->incoming_anchor_us = b->start;
+            if (source.kind == TransitionKind::HardCut) {
+                target->cut_us = b->start + *cut;
+            } else {
+                target->in_us = b->start + *start;
+                target->out_us = b->start + *end;
+                if (*end <= *start) {
+                    target->kind = TransitionKind::HardCut;
+                    target->cut_us = target->in_us;
+                }
+            }
+        }
+    }
+    bool normalizeJunctions() {
+        std::vector<Transition> retained;
+        for (auto junction : transitions_) {
+            const auto* a = clip(junction.outgoing);
+            const auto* b = clip(junction.incoming);
+            if (!a || !b || a->end() <= b->start)
+                continue;
+            if (a->track != b->track || a->start >= b->start || a->end() >= b->end()) {
+                fail(EditErrorCode::UnsupportedOverlap, {junction.outgoing, junction.incoming});
+                return false;
+            }
+            const auto overlap = a->end() - b->start;
+            const auto previous_anchor = junction.incoming_anchor_us ? junction.incoming_anchor_us : junction.in_us;
+            const auto midpoint = junction.in_us + (junction.out_us - junction.in_us) / 2;
+            if (junction.kind == TransitionKind::HardCut) {
+                const auto offset = std::clamp(junction.cut_us - previous_anchor, Time{0}, overlap);
+                junction.cut_us = b->start + offset;
+            } else if (junction.anchor == JunctionAnchor::FullOverlap) {
+                junction.in_us = b->start;
+                junction.out_us = a->end();
+            } else {
+                junction.in_us = b->start + std::clamp(junction.in_us - previous_anchor, Time{0}, overlap);
+                junction.out_us = b->start + std::clamp(junction.out_us - previous_anchor, Time{0}, overlap);
+                if (junction.out_us <= junction.in_us) {
+                    junction.kind = TransitionKind::HardCut;
+                    junction.cut_us = b->start + std::clamp(midpoint - previous_anchor, Time{0}, overlap);
+                }
+            }
+            junction.incoming_anchor_us = b->start;
+            junction.duration = overlap;
+            junction.track = a->track;
+            if (!junction.id) {
+                junction.id = nextId();
+                mutableClip(a->id)->fade_out = {};
+                mutableClip(b->id)->fade_in = {};
+            }
+            retained.push_back(std::move(junction));
+        }
+        transitions_ = std::move(retained);
+        const Clip* previous = nullptr;
+        const Clip* penultimate = nullptr;
+        for (const auto& item : clips_) {
+            if (!previous || previous->track != item.track) {
+                penultimate = nullptr;
+                previous = &item;
+                continue;
+            }
+            if (previous->end() > item.start) {
+                if (previous->start >= item.start || previous->end() >= item.end() ||
+                    (penultimate && penultimate->end() > item.start)) {
+                    fail(EditErrorCode::UnsupportedOverlap, {previous->id, item.id});
+                    return false;
+                }
+                const auto count = std::count_if(transitions_.begin(), transitions_.end(), [&](const auto& junction) {
+                    return junction.outgoing == previous->id && junction.incoming == item.id;
+                });
+                if (count > 1) {
+                    fail(EditErrorCode::InvalidTarget, {previous->id, item.id});
+                    return false;
+                }
+                if (count == 0) {
+                    Transition junction{previous->id, item.id, TransitionKind::Crossfade, previous->end() - item.start};
+                    junction.id = nextId();
+                    junction.track = item.track;
+                    junction.in_us = item.start;
+                    junction.out_us = previous->end();
+                    junction.incoming_anchor_us = item.start;
+                    transitions_.push_back(std::move(junction));
+                    mutableClip(previous->id)->fade_out = {};
+                    mutableClip(item.id)->fade_in = {};
+                }
+            }
+            penultimate = previous;
+            previous = &item;
+        }
+        return !last_error_;
     }
     static std::vector<Span> unite(std::vector<Span> intervals) {
         std::sort(intervals.begin(), intervals.end(), [](const auto& a, const auto& b) { return a.in_us < b.in_us; });
@@ -915,8 +1177,8 @@ class Workspace {
                 } else {
                     clip.source_out += delta;
                 }
-                clip.fade_in.duration_us = std::min(clip.fade_in.duration_us, clip.duration());
-                clip.fade_out.duration_us = std::min(clip.fade_out.duration_us, clip.duration());
+                if (!fitFades(clip, command.edge == TrimEdge::Left ? FadeEdge::In : FadeEdge::Out))
+                    return;
             } else if (command.mode == TrimMode::Ripple && clip.start >= suffix) {
                 if (!addTime(clip.start, shift, clip.start)) {
                     fail(EditErrorCode::InvalidTime, {clip.id});
@@ -1027,12 +1289,21 @@ class Workspace {
             fail(EditErrorCode::InvalidTarget, {command.clip_id});
             return;
         }
-        if (command.fade.duration_us < 0 || command.fade.duration_us > clip->duration() ||
-            !std::isfinite(command.fade.curve.bias) || std::abs(command.fade.curve.bias) > 1) {
+        if (command.fade.duration_us < 0 || !engine::EvaluateCurve(command.fade.curve, 0)) {
             fail(EditErrorCode::InvalidCurve, {command.clip_id});
             return;
         }
-        (command.edge == FadeEdge::In ? clip->fade_in : clip->fade_out) = command.fade;
+        if (command.fade.duration_us > 0 &&
+            std::any_of(transitions_.begin(), transitions_.end(), [&](const auto& junction) {
+                return command.edge == FadeEdge::Out ? junction.outgoing == clip->id : junction.incoming == clip->id;
+            })) {
+            fail(EditErrorCode::TransitionBoundaryConflict, {command.clip_id});
+            return;
+        }
+        auto fade = command.fade;
+        const auto& opposite = command.edge == FadeEdge::In ? clip->fade_out : clip->fade_in;
+        fade.duration_us = std::min(fade.duration_us, clip->duration() - opposite.duration_us);
+        (command.edge == FadeEdge::In ? clip->fade_in : clip->fade_out) = fade;
     }
     template <typename T> void execute(const T&) {
         fail(EditErrorCode::UnsupportedProfile);
@@ -1136,40 +1407,11 @@ class Workspace {
                 return false;
             }
         }
-        for (auto& transition : transitions_) {
-            const auto* a = clip(transition.outgoing);
-            const auto* b = clip(transition.incoming);
-            if (!a || !b || a->track != b->track || a->start >= b->start || a->end() >= b->end() ||
-                transition.duration <= 0 || a->end() - b->start != transition.duration) {
-                fail(EditErrorCode::UnsupportedOverlap, {transition.outgoing, transition.incoming});
+        if (!normalizeJunctions())
+            return false;
+        for (auto& clip : clips_)
+            if (!fitFades(clip))
                 return false;
-            }
-            if (!transition.id)
-                transition.id = nextId();
-            transition.track = a->track;
-            if (transition.anchor == JunctionAnchor::FullOverlap) {
-                transition.in_us = b->start;
-                transition.out_us = a->end();
-            }
-        }
-        const auto permitted = [&](const Clip& a, const Clip& b) {
-            return std::any_of(transitions_.begin(), transitions_.end(), [&](const auto& t) {
-                const auto* outgoing = clip(t.outgoing);
-                const auto* incoming = clip(t.incoming);
-                return outgoing && incoming && linked(a, *outgoing) && linked(b, *incoming) &&
-                       a.start == outgoing->start && a.end() == outgoing->end() && b.start == incoming->start &&
-                       b.end() == incoming->end();
-            });
-        };
-        const Clip* previous = nullptr;
-        for (const auto& item : clips_) {
-            if (previous && previous->track == item.track && previous->end() > item.start &&
-                !permitted(*previous, item)) {
-                fail(EditErrorCode::UnsupportedOverlap, {previous->id, item.id});
-                return false;
-            }
-            previous = &item;
-        }
         const auto total = duration();
         result_range_.in_us = std::clamp(result_range_.in_us, Time{0}, total);
         result_range_.out_us = result_range_.out_mode == ResultOutMode::FollowTimelineEnd

@@ -204,6 +204,7 @@ struct Transition {
     CurveSpec curve;
     AudioGainLaw audio_law = AudioGainLaw::EqualGain;
     JunctionAnchor anchor = JunctionAnchor::FullOverlap;
+    Time incoming_anchor_us = 0;
     bool operator==(const Transition&) const = default;
 };
 
@@ -336,9 +337,31 @@ struct SetFade {
     FadeEdge edge = FadeEdge::In;
     EdgeFade fade;
 };
+struct SetJunctionWindow {
+    Id junction_id = 0;
+    Span span;
+    JunctionAnchor anchor = JunctionAnchor::Custom;
+};
+struct SetJunctionCurve {
+    Id junction_id = 0;
+    CurveSpec curve;
+};
+struct SetAudioLaw {
+    Id junction_id = 0;
+    AudioGainLaw law = AudioGainLaw::EqualGain;
+};
+struct SetHardCut {
+    Id junction_id = 0;
+    Time cut_us = 0;
+};
+struct CopyJunctionToLinked {
+    Id source_junction_id = 0;
+    std::vector<Id> targets;
+};
 using EditCommand = std::variant<AddAssetGroup, Split, LiftClips, RippleRemoveClips, LiftRange, RippleRemoveRange,
                                  KeepRange, Trim, Move, CreateTrack, DeleteTrack, ReorderTrack, SetResultRange, Unlink,
-                                 Relink, SetTrackEnabled, SetClipEnabled, SetGain, SetClipOpacity, SetFade>;
+                                 Relink, SetTrackEnabled, SetClipEnabled, SetGain, SetClipOpacity, SetFade,
+                                 SetJunctionWindow, SetJunctionCurve, SetAudioLaw, SetHardCut, CopyJunctionToLinked>;
 
 struct EditSnapshot {
     Revision revision = 0;

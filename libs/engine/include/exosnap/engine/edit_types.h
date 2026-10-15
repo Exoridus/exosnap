@@ -2,6 +2,8 @@
 
 #include <exosnap/engine/recording_media_types.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 
@@ -36,6 +38,20 @@ struct EdgeFade {
 enum class JunctionKind { Crossfade, HardCut };
 enum class JunctionAnchor { FullOverlap, Custom };
 
-[[nodiscard]] std::optional<double> EvaluateCurve(CurveSpec curve, double progress);
+[[nodiscard]] inline std::optional<double> EvaluateCurve(CurveSpec curve, double progress) {
+    if (!std::isfinite(progress) || !std::isfinite(curve.bias) || curve.bias < -1 || curve.bias > 1)
+        return std::nullopt;
+    const double q = std::clamp(progress, 0.0, 1.0);
+    switch (curve.kind) {
+    case CurveKind::Linear:
+        return q;
+    case CurveKind::Smooth:
+        return q * q * (3 - 2 * q);
+    case CurveKind::Bias:
+        return curve.bias >= 0 ? std::pow(q, std::pow(2.0, 2 * curve.bias))
+                               : 1 - std::pow(1 - q, std::pow(2.0, -2 * curve.bias));
+    }
+    return std::nullopt;
+}
 
 } // namespace exosnap::engine
