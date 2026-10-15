@@ -11,9 +11,12 @@
 #include <exosnap/engine/recording_media_types.h>
 #include <exosnap/engine/sdr_transfer.h>
 
+#include "test_unique_temp.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -41,6 +44,82 @@ TimelineRenderSnapshot Fixture(const std::filesystem::path& directory) {
     return result;
 }
 } // namespace
+
+class EditCopyBaseline : public testing::Test {
+  protected:
+    std::filesystem::path output = exosnap_test::UniqueTempPath("hdr-copy.mp4");
+    void TearDown() override {
+        std::error_code error;
+        std::filesystem::remove(output, error);
+    }
+};
+
+TEST_F(EditCopyBaseline, BaselinePreviewFailureCopy) {
+    const auto source = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    const auto metadata = ProbeEditMedia(source);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    const TimelineExportClip clip{source, 0, metadata.duration_us, 0};
+    ASSERT_EQ(AssessTimelineExport({clip}, true).eligibility, TimelineExportEligibility::StreamCopy);
+    EditPlayerEngine player;
+    std::string error;
+    std::atomic<bool> cancelled{true};
+    ASSERT_FALSE(player.Open(source, error, &cancelled));
+    ASSERT_FALSE(error.empty());
+    EXPECT_FALSE(player.HasVideoStream());
+    const auto assessment = AssessTimelineExport({clip}, true);
+    ASSERT_EQ(assessment.eligibility, TimelineExportEligibility::StreamCopy) << assessment.reason;
+    TimelineRenderSnapshot snapshot;
+    snapshot.sources = {{1, source, metadata}};
+    snapshot.timeline = {{{1, 1, 1, false, 0, 0, metadata.duration_us}}, {}, metadata.duration_us};
+    EXPECT_EQ(ClassifyEditExport(snapshot, assessment, true).path, EditExportPath::StreamCopy);
+    const auto copied = ExportTimelineStreamCopy({clip}, output, true);
+    ASSERT_TRUE(copied.success) << copied.message;
+    ASSERT_TRUE(player.Open(output, error)) << error;
+    EXPECT_TRUE(player.DecodeFrameAtRaw(0));
+    EXPECT_TRUE(player.DecodeFrameAtRaw(metadata.duration_us / 2));
+}
+
+TEST_F(EditCopyBaseline, BaselineHdrCopy) {
+    const auto root = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path();
+    const auto source = root / ".workspace" / "test-fixtures" / "hdr10_test_1080p60.mp4";
+    if (!std::filesystem::exists(source))
+        GTEST_SKIP() << "No native HDR10 fixture present: " << source.string();
+    const auto metadata = ProbeEditMedia(source);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    ASSERT_FALSE(metadata.render_color_supported);
+    ASSERT_FALSE(metadata.render_color_reason.empty());
+    EditPlayerEngine original;
+    std::string error;
+    ASSERT_TRUE(original.Open(source, error)) << error;
+    const auto original_frame = original.DecodeFrameAtRaw(0);
+    ASSERT_TRUE(original_frame);
+    ASSERT_TRUE(original_frame->is_pq_source);
+    ASSERT_EQ(original_frame->format, DecodedPixelFormat::Yuv420P10);
+    TimelineRenderSnapshot snapshot;
+    snapshot.sources = {{1, source, metadata}};
+    snapshot.timeline = {{{1, 1, 1, false, 0, 0, metadata.duration_us}}, {}, metadata.duration_us};
+    const TimelineExportClip clip{source, 0, metadata.duration_us, 0};
+    const auto assessment = AssessTimelineExport({clip}, true);
+    ASSERT_EQ(assessment.eligibility, TimelineExportEligibility::StreamCopy) << assessment.reason;
+    EXPECT_EQ(ClassifyEditExport(snapshot, assessment, true).path, EditExportPath::StreamCopy);
+    const auto rendered = ClassifyEditExport(snapshot, {TimelineExportEligibility::RenderRequired, {}}, false);
+    EXPECT_EQ(rendered.path, EditExportPath::Unsupported);
+    EXPECT_EQ(rendered.reason, metadata.render_color_reason);
+    const auto result = ExportTimelineStreamCopy({clip}, output, true);
+    ASSERT_TRUE(result.success) << result.message;
+    EditPlayerEngine copied;
+    ASSERT_TRUE(copied.Open(output, error)) << error;
+    const auto copied_frame = copied.DecodeFrameAtRaw(0);
+    ASSERT_TRUE(copied_frame);
+    EXPECT_TRUE(copied_frame->is_pq_source);
+    EXPECT_EQ(copied_frame->format, original_frame->format);
+    EXPECT_EQ(copied_frame->primaries, original_frame->primaries);
+    EXPECT_EQ(copied_frame->transfer, original_frame->transfer);
+    EXPECT_EQ(copied_frame->matrix, original_frame->matrix);
+    EXPECT_EQ(copied_frame->range, original_frame->range);
+    EXPECT_EQ(copied_frame->width, original_frame->width);
+    EXPECT_EQ(copied_frame->height, original_frame->height);
+}
 
 TEST(EditRenderPlan, StreamCopyRemainsIndependentOfRenderColorAndContainerLimits) {
     TimelineRenderSnapshot snapshot;
