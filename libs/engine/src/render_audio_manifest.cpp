@@ -1,4 +1,5 @@
 #include "render_audio_manifest.h"
+#include <exosnap/engine/edit_types.h>
 
 #include "media_identity_sidecar.h"
 

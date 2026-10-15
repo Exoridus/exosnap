@@ -1,7 +1,10 @@
 #include "../src/matroska_stream_writer.h"
 #include "exosnap/engine/edit_timeline_export.h"
 #include "test_unique_temp.h"
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_player_engine.h>
+#include <exosnap/engine/edit_types.h>
+#include <exosnap/engine/recording_media_types.h>
 
 #include <gtest/gtest.h>
 

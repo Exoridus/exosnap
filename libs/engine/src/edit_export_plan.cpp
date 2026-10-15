@@ -1,6 +1,12 @@
+#include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/edit_export_plan.h>
+#include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_export.h>
+#include <exosnap/engine/edit_timeline_render.h>
+#include <exosnap/engine/edit_types.h>
+#include <exosnap/engine/mp4_remuxer.h>
 #include <exosnap/engine/output_geometry.h>
+#include <exosnap/engine/recorder_session.h>
 
 #include "ffmpeg_aac_encoder.h"
 
@@ -10,14 +16,19 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cmath>
+#include <cstdint>
 #include <cwchar>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <new>
 #include <set>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 namespace exosnap::engine {
 namespace {

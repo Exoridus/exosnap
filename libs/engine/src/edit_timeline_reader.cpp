@@ -4,6 +4,7 @@
 #include <exosnap/engine/edit_timeline_compositor.h>
 #include <exosnap/engine/edit_timeline_export.h>
 #include <exosnap/engine/edit_timeline_render.h>
+#include <exosnap/engine/edit_types.h>
 #include <exosnap/engine/output_geometry.h>
 
 #include "brickwall_limiter.h"
@@ -207,17 +208,19 @@ struct EditTimelineReader::Impl {
             error = "Too many simultaneous timeline audio sources.";
             return nullptr;
         }
-        Decoder decoder{contribution.clip, std::make_unique<EditPlayerEngine>(), stream};
+        auto& decoder = audio_decoders.emplace_back();
+        decoder.clip = contribution.clip;
+        decoder.stream = stream;
+        decoder.engine = std::make_unique<EditPlayerEngine>();
         const bool opened = stream ? decoder.engine->OpenAudioStream(source->path, *stream, error)
                                    : decoder.engine->Open(source->path, error);
-        if (!opened)
+        if (!opened || (!stream && source->monitor_selection &&
+                        !decoder.engine->SetMonitorSelection(*source->monitor_selection, error))) {
+            audio_decoders.pop_back();
             return nullptr;
-        if (!stream && source->monitor_selection &&
-            !decoder.engine->SetMonitorSelection(*source->monitor_selection, error))
-            return nullptr;
-        audio_decoders.push_back(std::move(decoder));
+        }
         peak_decoders = std::max(peak_decoders, OpenDecoders());
-        return &audio_decoders.back();
+        return &decoder;
     }
     EditPlayerEngine* Find(uint64_t clip) {
         for (auto& decoder : video_decoders)

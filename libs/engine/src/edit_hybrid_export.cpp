@@ -1,6 +1,7 @@
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_export.h>
 #include <exosnap/engine/edit_timeline_render.h>
+#include <exosnap/engine/mp4_remuxer.h>
 #include <exosnap/engine/packet_types.h>
 
 #include "audio_media_manifest_adapter.h"
@@ -11,7 +12,9 @@
 #include "render_audio_manifest.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -25,7 +28,9 @@ extern "C" {
 #include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/error.h>
 #include <libavutil/mathematics.h>
+#include <libavutil/rational.h>
 }
 
 namespace exosnap::engine {

@@ -1,5 +1,6 @@
 #include <capability/adapter_enum.h>
 #include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
 #include <exosnap/engine/edit_timeline_render.h>
 #include <exosnap/engine/encoder_device.h>

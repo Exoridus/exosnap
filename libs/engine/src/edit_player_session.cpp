@@ -3,7 +3,6 @@
 
 #include "exosnap/engine/edit_player_engine.h"
 #include "exosnap/engine/wasapi_audio_render.h"
-#include "playback_clock.h"
 
 #include <algorithm>
 #include <atomic>

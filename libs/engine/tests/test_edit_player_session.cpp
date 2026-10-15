@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/edit_player_engine.h"
 #include "exosnap/engine/edit_player_session.h"
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <thread>

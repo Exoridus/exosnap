@@ -1,16 +1,21 @@
 #include "test_unique_temp.h"
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_export.h>
 #include <exosnap/engine/edit_timeline_render.h>
+#include <exosnap/engine/edit_types.h>
 
 #include <gtest/gtest.h>
 
-#include <array>
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 extern "C" {
@@ -18,6 +23,7 @@ extern "C" {
 #include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
 #include <libavformat/avio.h>
+#include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/mathematics.h>
 }
