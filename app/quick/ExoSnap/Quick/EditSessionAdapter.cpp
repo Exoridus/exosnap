@@ -440,8 +440,36 @@ void EditSessionAdapter::setTrimUs(int64_t start_us, int64_t end_us) {
 }
 
 void EditSessionAdapter::setAssetMonitorSelection(edit::Id asset, engine::MonitorSelectionSnapshot selection) {
-    if (workspace_.setMonitorSelection(asset, std::move(selection)))
-        emit workspaceChanged();
+    // A source whose starting mix is still undecided takes the first confirmed
+    // monitoring choice as that decision. Unverified track identities are new on
+    // every open, so they are matched by their audio-stream order instead.
+    std::vector<engine::AudioTrackId> chosen;
+    const auto* source = workspace_.asset(asset);
+    const bool decide = source && source->mix_decision_required && source->source_descriptor;
+    if (decide) {
+        std::vector<engine::AudioTrackId> streams;
+        for (const auto& stream : source->source_descriptor->streams)
+            if (stream.ref.kind == engine::TimelineStreamKind::Audio)
+                streams.push_back(stream.ref.stream_identity);
+        for (const auto& track : selection.tracks) {
+            if (track.muted || track.gain_linear <= 0)
+                continue;
+            if (selection.unverified_asset_binding) {
+                const auto& actual = selection.unverified_asset_binding->actual_tracks;
+                const auto match = std::find_if(actual.begin(), actual.end(),
+                                                [&](const auto& value) { return value.track_id == track.track_id; });
+                if (match != actual.end() && match->stream_index.value < streams.size())
+                    chosen.push_back(streams[match->stream_index.value]);
+            } else if (std::find(streams.begin(), streams.end(), track.track_id) != streams.end()) {
+                chosen.push_back(track.track_id);
+            }
+        }
+    }
+    if (!workspace_.setMonitorSelection(asset, std::move(selection)))
+        return;
+    if (decide)
+        workspace_.resolveInputMix(asset, chosen);
+    emit workspaceChanged();
 }
 
 void EditSessionAdapter::applyReport(const EditContext& context) {

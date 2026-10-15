@@ -110,6 +110,34 @@ class Workspace {
         ++monitoring_revision_;
         return true;
     }
+    // Records the user's choice of starting mix for a source whose provenance was
+    // ambiguous. The audio clips of that source are enabled exactly for the chosen
+    // streams in one undoable edit; the choice itself is not undone with it.
+    bool resolveInputMix(Id asset_id, const std::vector<engine::AudioTrackId>& selected) {
+        const auto found = std::find_if(assets_.begin(), assets_.end(),
+                                        [asset_id](const auto& asset) { return asset.id == asset_id; });
+        if (found == assets_.end() || !found->source_descriptor)
+            return false;
+        auto candidate = workingCopy();
+        for (auto& clip : candidate.clips_) {
+            if (clip.asset != asset_id || !clip.stream || clip.stream->kind != engine::TimelineStreamKind::Audio)
+                continue;
+            clip.enabled = std::find(selected.begin(), selected.end(), clip.stream->stream_identity) != selected.end();
+            clip.original_enabled = clip.enabled;
+        }
+        if (!candidate.validate()) {
+            last_error_ = candidate.last_error_;
+            return false;
+        }
+        publish(candidate);
+        InputMixSelection mix;
+        mix.asset_identity_fingerprint = found->source_descriptor->asset_identity_fingerprint;
+        mix.selected_stream_identities = selected;
+        mix.authority = InputMixAuthority::UserConfirmed;
+        found->input_mix_selection = std::move(mix);
+        found->mix_decision_required = false;
+        return true;
+    }
     [[nodiscard]] const std::vector<Track>& tracks() const {
         return tracks_;
     }

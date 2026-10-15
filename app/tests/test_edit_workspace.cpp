@@ -850,6 +850,31 @@ TEST(EditSourceImport, VerifiedRecordedDefaultSelectsOnlyItsStreams) {
     EXPECT_EQ(ImportedAudioEnables(metadata), (std::vector<bool>{false, true}));
 }
 
+TEST(EditSourceImport, ResolvingAnAmbiguousMixEnablesOnlyTheChosenStreams) {
+    const auto metadata = ProbedSource({2, 1});
+    Workspace workspace;
+    Asset asset;
+    asset.path = L"probed.mkv";
+    asset.duration = metadata.duration_us;
+    auto imported = DescribeSourceImport(metadata);
+    asset.source_descriptor = imported.descriptor;
+    asset.input_mix_selection = imported.input_mix;
+    asset.mix_decision_required = imported.mix_decision_required;
+    const auto id = workspace.addAsset(std::move(asset));
+    ASSERT_TRUE(workspace.insert(id, 0));
+    ASSERT_TRUE(workspace.resolveInputMix(id, {exosnap::engine::AudioTrackId{{11}}}));
+    EXPECT_FALSE(workspace.asset(id)->mix_decision_required);
+    std::vector<bool> enabled;
+    for (const auto& clip : workspace.clips())
+        if (clip.stream && clip.stream->kind == exosnap::engine::TimelineStreamKind::Audio)
+            enabled.push_back(clip.enabled);
+    EXPECT_EQ(enabled, (std::vector<bool>{false, true}));
+    ASSERT_TRUE(workspace.undo());
+    for (const auto& clip : workspace.clips())
+        if (clip.stream && clip.stream->kind == exosnap::engine::TimelineStreamKind::Audio)
+            EXPECT_FALSE(clip.enabled);
+}
+
 TEST(EditSourceImport, UnboundBytesOrUnknownLayoutsKeepTheLinkedImport) {
     auto unbound = ProbedSource({2});
     unbound.content_identity_valid = false;
