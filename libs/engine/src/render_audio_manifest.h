@@ -14,6 +14,7 @@ struct RenderAudioPreflight {
 
 // Selections must already be validated against leased source assets.
 Outcome<AudioManifest1> BuildRenderAudioManifest(const std::vector<MonitorSelectionSnapshot>& validated_selections);
-Outcome<RenderAudioPreflight> PrepareRenderAudioManifest(const TimelineRenderSnapshot& snapshot);
+Outcome<RenderAudioPreflight> PrepareRenderAudioManifest(const TimelineRenderSnapshot& snapshot, int64_t span_in_us = 0,
+                                                         int64_t span_out_us = -1);
 
 } // namespace exosnap::engine

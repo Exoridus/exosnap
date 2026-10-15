@@ -88,6 +88,7 @@ class EditExportAdapter : public QObject {
     Q_PROPERTY(QString modeKey READ modeKey WRITE setModeKey NOTIFY optionsChanged FINAL)
     // "result" exports the result range; "entire" the whole timeline without changing that range.
     Q_PROPERTY(QString spanKey READ spanKey WRITE setSpanKey NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(QVariantList spanOptions READ spanOptions CONSTANT FINAL)
 
   public:
     enum State {
@@ -129,6 +130,9 @@ class EditExportAdapter : public QObject {
         return span_key_;
     }
     void setSpanKey(const QString& key);
+    [[nodiscard]] QVariantList spanOptions() const;
+    Q_INVOKABLE void setTimeSelection(qint64 in_ms, qint64 out_ms);
+    Q_INVOKABLE void setTimeSelectionUs(qint64 in_us, qint64 out_us);
     Q_INVOKABLE void chooseDestination();
 
     [[nodiscard]] int stateValue() const noexcept;
@@ -199,7 +203,10 @@ class EditExportAdapter : public QObject {
     std::function<engine::RecorderConfig()> render_config_;
     QString profile_key_ = QStringLiteral("match");
     QString mode_key_ = QStringLiteral("finishedStereo");
-    QString span_key_ = QStringLiteral("result");
+    QString span_key_ = QStringLiteral("entire");
+    qint64 selection_in_us_ = -1;
+    qint64 selection_out_us_ = -1;
+    bool span_explicit_ = false;
     std::optional<std::filesystem::path> chosen_output_;
     bool overwrite_confirmed_ = false;
     QVariantMap review_outcome_;

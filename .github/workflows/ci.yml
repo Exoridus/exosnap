@@ -485,7 +485,7 @@ jobs:
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
         # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
 
-      # Blocking static analysis runs inside this job, as the last step of the
+      # Blocking static analysis runs after build and before tests in the
       # ci-build-debug profile. Deliberately a step inside build-test-debug
       # rather than a job of its own: build-test-debug is already a required
       # check, so the required status-check set does not change (a brand-new

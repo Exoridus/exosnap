@@ -434,6 +434,28 @@ TEST(EditWorkspaceAdapter, PositionedSegmentsAreConsecutiveAndUndoAsOneOperation
     EXPECT_EQ(session.durationMs(), 25000);
 }
 
+TEST(EditWorkspaceAdapter, RecordingContextPlacementHonorsDisabledAutoCrossfade) {
+    EnsureApplication();
+    for (const bool segmented : {false, true}) {
+        SCOPED_TRACE(segmented ? "segmented recording" : "single recording");
+        EditSessionAdapter session;
+        session.setEditContext(MakeContext(10));
+        session.autoCrossfade = false;
+        EditContext incoming = MakeContext(10);
+        if (segmented)
+            incoming.segments = {{QStringLiteral("D:/Recordings/segment-0.mkv"), 10, true},
+                                 {QStringLiteral("D:/Recordings/segment-1.mkv"), 5, true}};
+
+        session.setEditContext(incoming, 5000);
+
+        ASSERT_TRUE(session.workspaceError().isEmpty());
+        ASSERT_EQ(session.workspace().transitions().size(), 2U);
+        for (const auto& junction : session.workspace().transitions())
+            EXPECT_EQ(junction.kind, edit::TransitionKind::HardCut);
+        EXPECT_EQ(session.durationMs(), segmented ? 20000 : 15000);
+    }
+}
+
 TEST(EditWorkspaceAdapter, OverlappingSegmentBatchChangesNoClipsAndAddsNoUndoCommand) {
     EnsureApplication();
     EditSessionAdapter session;
@@ -1061,6 +1083,7 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
     ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
     EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
     QFile source_file(fixture);
+    const auto original_size = source_file.size();
     ASSERT_TRUE(source_file.open(QIODevice::Append));
     ASSERT_EQ(source_file.write("x", 1), 1);
     source_file.close();
@@ -1075,6 +1098,9 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
         changed_source.exec();
     ASSERT_EQ(exporter->state(), EditExportAdapter::Failed) << exporter->errorText().toStdString();
     EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    ASSERT_TRUE(source_file.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(source_file.resize(original_size));
+    source_file.close();
     session.setAssetMonitorSelection(session.workspace().assets().front().id,
                                      {metadata.selection_media_id, {2}, {}, true, metadata.unverified_asset_binding});
     exporter->retry();
@@ -1557,6 +1583,159 @@ EditContext MakeUndecodableContext() {
     EditContext context = MakeContext();
     context.mkv_master_path = QStringLiteral("D:/Recordings/not-a-real-clip.mkv");
     return context;
+}
+
+TEST(EditSessionDrag, PreviewIsFrozenAndCommitCreatesOneUndoStep) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    session.snapping = false;
+    const auto id = session.workspace().clips().front().id;
+    const auto revision = session.workspace().revision();
+    session.beginClipDrag(id);
+    session.updateClipDrag(1000);
+    ASSERT_TRUE(session.dragValid());
+    EXPECT_EQ(session.workspace().revision(), revision);
+    EXPECT_EQ(session.workspace().clip(id)->start, 0);
+    EXPECT_EQ(session.dragClips().size(), 2);
+    session.updateClipDrag(2000);
+    EXPECT_EQ(session.workspace().clip(id)->start, 0);
+    ASSERT_TRUE(session.commitClipDrag());
+    EXPECT_EQ(session.workspace().revision(), revision + 1);
+    EXPECT_EQ(session.workspace().clip(id)->start, 2'000'000);
+    session.undo();
+    EXPECT_EQ(session.workspace().clip(id)->start, 0);
+}
+
+TEST(EditSessionDrag, CancellationInvalidAndStaleCandidatesHaveNoHistoryEntry) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    session.snapping = false;
+    const auto id = session.workspace().clips().front().id;
+    const auto revision = session.workspace().revision();
+    session.beginClipDrag(id);
+    session.updateClipDrag(-1000);
+    EXPECT_FALSE(session.dragValid());
+    EXPECT_FALSE(session.commitClipDrag());
+    EXPECT_EQ(session.workspace().revision(), revision);
+    session.beginClipDrag(id);
+    session.updateClipDrag(1000);
+    session.cancelClipDrag();
+    EXPECT_EQ(session.workspace().revision(), revision);
+    session.beginClipDrag(id);
+    session.updateClipDrag(1000);
+    session.moveClip(id, 500, false);
+    const auto changed_revision = session.workspace().revision();
+    EXPECT_FALSE(session.dragValid());
+    EXPECT_FALSE(session.commitClipDrag());
+    EXPECT_EQ(session.workspace().revision(), changed_revision);
+    EXPECT_FALSE(session.workspaceError().isEmpty());
+}
+
+TEST(EditSessionDrag, IndependentControlsAndFixedTrimPreserveUnselectedAudio) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    EXPECT_TRUE(session.snapping);
+    EXPECT_FALSE(session.ripple);
+    EXPECT_TRUE(session.autoCrossfade);
+    EXPECT_TRUE(session.linkedSelection);
+    session.linkedSelection = false;
+    session.snapping = false;
+    const auto id = session.workspace().clips().front().id;
+    const auto other = session.workspace().clips().back().id;
+    session.beginClipDrag(id, 0);
+    session.updateClipDrag(1000);
+    ASSERT_TRUE(session.dragValid());
+    EXPECT_EQ(session.dragClips().size(), 1);
+    ASSERT_TRUE(session.commitClipDrag());
+    EXPECT_EQ(session.workspace().clip(id)->start, 1'000'000);
+    EXPECT_EQ(session.workspace().clip(id)->source_in, 1'000'000);
+    EXPECT_EQ(session.workspace().clip(other)->start, 0);
+    EXPECT_EQ(session.workspace().clip(other)->source_in, 0);
+    session.deleteSelected(false);
+    ASSERT_EQ(session.workspace().clips().size(), 1);
+    EXPECT_EQ(session.workspace().clips().front().id, other);
+}
+
+TEST(EditSessionDrag, ExtremeMillisecondsRejectWithoutMutatingHistory) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    const auto id = session.workspace().clips().front().id;
+    const auto revision = session.workspace().revision();
+    session.beginClipDrag(id);
+    session.updateClipDrag((std::numeric_limits<qint64>::min)());
+    EXPECT_FALSE(session.dragValid());
+    EXPECT_FALSE(session.commitClipDrag());
+    EXPECT_EQ(session.workspace().revision(), revision);
+    session.beginClipDrag(id);
+    session.updateClipDrag((std::numeric_limits<qint64>::max)());
+    EXPECT_FALSE(session.dragValid());
+    session.cancelClipDrag();
+    session.setClipFade(id, true, (std::numeric_limits<qint64>::max)());
+    session.setFixedTimelineEnd(true, (std::numeric_limits<qint64>::max)());
+    EXPECT_EQ(session.workspace().revision(), revision);
+}
+
+TEST(EditSessionBlankTime, CopyPasteSpacerAndPreviewGapClosureAreUndoable) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    const auto id = session.workspace().clips().front().id;
+    const auto track = session.workspace().clips().front().track;
+    session.moveClip(id, 10000, false);
+    session.requestSeek(0);
+    session.selectGap(track, 5000);
+    ASSERT_EQ(session.selectedGap().value(QStringLiteral("endMs")).toLongLong(), 10000);
+    const auto gap_revision = session.workspace().revision();
+    session.deleteSelected(false);
+    EXPECT_EQ(session.workspace().revision(), gap_revision);
+    session.copyBlankDuration();
+    session.pasteSpacer();
+    ASSERT_EQ(session.spacers().size(), 1);
+    const auto spacer_id = session.spacers().front().toMap().value(QStringLiteral("id")).toULongLong();
+    session.beginSpacerDrag(spacer_id, 1);
+    session.updateClipDrag(-1000);
+    ASSERT_TRUE(session.dragValid());
+    EXPECT_EQ(session.spacers().front().toMap().value(QStringLiteral("durationMs")).toLongLong(), 10000);
+    ASSERT_TRUE(session.commitClipDrag());
+    EXPECT_EQ(session.spacers().front().toMap().value(QStringLiteral("durationMs")).toLongLong(), 9000);
+    session.selectSpacer(spacer_id);
+    session.deleteSelected(false);
+    EXPECT_TRUE(session.spacers().isEmpty());
+    EXPECT_EQ(session.workspace().clip(id)->start, 10'000'000);
+    session.selectGap(track, 5000);
+    session.previewCloseGap();
+    ASSERT_TRUE(session.dragValid());
+    EXPECT_EQ(session.workspace().clip(id)->start, 10'000'000);
+    ASSERT_TRUE(session.commitClipDrag());
+    EXPECT_EQ(session.workspace().clip(id)->start, 0);
+    session.undo();
+    EXPECT_EQ(session.workspace().clip(id)->start, 10'000'000);
+}
+
+TEST(EditSessionBlankTime, FixedEndAndTrackDeletionRejectStaleConfirmation) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    session.setFixedTimelineEnd(true, 20000);
+    EXPECT_TRUE(session.fixedTimelineEnd());
+    EXPECT_EQ(session.durationMs(), 20000);
+    const auto id = session.workspace().clips().front().id;
+    const auto track = session.workspace().clips().front().track;
+    EXPECT_FALSE(session.deleteTrack(track));
+    session.moveClip(id, 1000, false);
+    const auto revision = session.workspace().revision();
+    EXPECT_FALSE(session.deleteTrack(track, true));
+    EXPECT_EQ(session.workspace().revision(), revision);
+    EXPECT_EQ(session.workspace().tracks().size(), 2);
+    EXPECT_FALSE(session.deleteTrack(track));
+    EXPECT_TRUE(session.deleteTrack(track, true));
+    EXPECT_EQ(session.durationMs(), 20000);
+    session.undo();
+    EXPECT_EQ(session.workspace().tracks().size(), 2);
 }
 
 TEST(EditTimelinePreviewState, AClipWithNothingToShowIsIdleNotGenerating) {

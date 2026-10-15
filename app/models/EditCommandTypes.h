@@ -100,6 +100,12 @@ struct RationalFps {
 };
 
 enum class ResultOutMode { Fixed, FollowTimelineEnd };
+enum class TimelineEndMode { FollowContentEnd, FixedEnd };
+struct TimelineEnd {
+    TimelineEndMode mode = TimelineEndMode::FollowContentEnd;
+    Time end_us = 0;
+    bool operator==(const TimelineEnd&) const = default;
+};
 struct ResultRange {
     Time in_us = 0;
     ResultOutMode out_mode = ResultOutMode::FollowTimelineEnd;
@@ -194,6 +200,17 @@ struct Track {
     bool operator==(const Track&) const = default;
 };
 
+struct Spacer {
+    Id id = 0;
+    Id track = 0;
+    Time start_us = 0;
+    Time duration_us = 0;
+    [[nodiscard]] Time end() const {
+        return start_us + duration_us;
+    }
+    bool operator==(const Spacer&) const = default;
+};
+
 struct Transition {
     Id outgoing = 0;
     Id incoming = 0;
@@ -254,6 +271,7 @@ struct AddAssetGroup {
     std::vector<Id> audio_track_ids;
     std::optional<InputMixSelection> input_mix_selection;
     bool include_video = true;
+    bool auto_crossfade = true;
 };
 struct Split {
     std::vector<Id> targets;
@@ -283,9 +301,10 @@ struct Trim {
     Id lead_id = 0;
     TrimEdge edge = TrimEdge::Right;
     Time delta_us = 0;
-    TrimMode mode = TrimMode::Ripple;
+    TrimMode mode = TrimMode::Fixed;
     std::vector<Id> targets;
     bool expand_linked = true;
+    bool auto_crossfade = true;
 };
 struct Move {
     std::vector<Id> targets;
@@ -293,6 +312,9 @@ struct Move {
     std::vector<std::pair<Id, Id>> target_tracks;
     std::vector<Track> new_tracks;
     bool expand_linked = true;
+    bool auto_crossfade = true;
+    bool ripple = false;
+    bool new_video_front = false;
 };
 struct CreateTrack {
     TrackType kind = TrackType::Video;
@@ -309,6 +331,29 @@ struct ReorderTrack {
 };
 struct SetResultRange {
     ResultRange range;
+};
+struct SetTimelineEnd {
+    TimelineEnd value;
+};
+struct AddSpacer {
+    Id track_id = 0;
+    Time start_us = 0;
+    Time duration_us = 0;
+};
+struct MoveSpacer {
+    Id id = 0;
+    Time delta_us = 0;
+};
+struct TrimSpacer {
+    Id id = 0;
+    TrimEdge edge = TrimEdge::Right;
+    Time delta_us = 0;
+};
+struct RemoveSpacer {
+    Id id = 0;
+};
+struct CloseGap {
+    Span span;
 };
 struct Unlink {
     std::vector<Id> targets;
@@ -364,7 +409,8 @@ struct CopyJunctionToLinked {
 using EditCommand = std::variant<AddAssetGroup, Split, LiftClips, RippleRemoveClips, LiftRange, RippleRemoveRange,
                                  KeepRange, Trim, Move, CreateTrack, DeleteTrack, ReorderTrack, SetResultRange, Unlink,
                                  Relink, SetTrackEnabled, SetClipEnabled, SetGain, SetClipOpacity, SetFade,
-                                 SetJunctionWindow, SetJunctionCurve, SetAudioLaw, SetHardCut, CopyJunctionToLinked>;
+                                 SetJunctionWindow, SetJunctionCurve, SetAudioLaw, SetHardCut, CopyJunctionToLinked,
+                                 SetTimelineEnd, AddSpacer, MoveSpacer, TrimSpacer, RemoveSpacer, CloseGap>;
 
 struct EditSnapshot {
     Revision revision = 0;
@@ -377,6 +423,8 @@ struct EditSnapshot {
     int output_width = 0;
     int output_height = 0;
     Id id_high_watermark = 0;
+    std::vector<Spacer> spacers;
+    TimelineEnd timeline_end;
 };
 
 struct EditPreview {
@@ -387,6 +435,8 @@ struct EditPreview {
     std::vector<Clip> clips;
     std::vector<Transition> junctions;
     Time effective_delta_us = 0;
+    std::vector<Spacer> spacers;
+    TimelineEnd timeline_end;
 };
 
 EditPreview PreviewEdit(const EditSnapshot& snapshot, const EditCommand& command);

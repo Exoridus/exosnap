@@ -219,7 +219,7 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
             error = "Export cancelled.";
             return false;
         }
-        auto audio_preflight = PrepareRenderAudioManifest(snapshot);
+        auto audio_preflight = PrepareRenderAudioManifest(snapshot, plan.span_in_us, plan.span_out_us);
         if (!audio_preflight.succeeded()) {
             error = audio_preflight.error()->context;
             return false;

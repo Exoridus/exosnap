@@ -44,6 +44,8 @@ class Workspace {
         value->output_width = output_width_;
         value->output_height = output_height_;
         value->id_high_watermark = next_id_;
+        value->spacers = spacers_;
+        value->timeline_end = timeline_end_;
         for (const auto& source : assets_) {
             auto asset = std::make_shared<Asset>(source);
             asset->monitor_selection.reset();
@@ -62,7 +64,8 @@ class Workspace {
         if (candidate.last_error_)
             return {CommandStatus::Rejected, revision_, candidate.last_error_, {}, {}};
         if (candidate.clips_ == clips_ && candidate.tracks_ == tracks_ && candidate.transitions_ == transitions_ &&
-            candidate.result_range_ == result_range_ && candidate.output_fps_ == output_fps_ &&
+            candidate.result_range_ == result_range_ && candidate.spacers_ == spacers_ &&
+            candidate.timeline_end_ == timeline_end_ && candidate.output_fps_ == output_fps_ &&
             candidate.output_width_ == output_width_ && candidate.output_height_ == output_height_)
             return {CommandStatus::NoOp, revision_, {}, {}, {}};
         const auto old_ids = clips_;
@@ -83,6 +86,8 @@ class Workspace {
         for (const auto& track : tracks_)
             if (std::find(old_tracks.begin(), old_tracks.end(), track) == old_tracks.end())
                 result.changed_ids.push_back(track.id);
+        for (const auto& spacer : spacers_)
+            result.changed_ids.push_back(spacer.id);
         return result;
     }
     CommandResult undoCommand() {
@@ -241,8 +246,11 @@ class Workspace {
             return false;
         if (existing == transitions.end())
             transitions.push_back({outgoing, incoming, TransitionKind::Crossfade, duration});
-        else
+        else {
             existing->duration = duration;
+            existing->kind = TransitionKind::Crossfade;
+            existing->anchor = JunctionAnchor::FullOverlap;
+        }
         auto after = clips_;
         // Ripple the suffix as one transaction so later cuts do not acquire gaps.
         for (auto& c : after)
@@ -272,9 +280,11 @@ class Workspace {
         playhead_ = std::clamp<Time>(value, 0, duration());
     }
     [[nodiscard]] Time duration() const {
-        Time end = 0;
+        Time end = timeline_end_.mode == TimelineEndMode::FixedEnd ? timeline_end_.end_us : 0;
         for (const auto& c : clips_)
             end = std::max(end, c.end());
+        for (const auto& spacer : spacers_)
+            end = std::max(end, spacer.end());
         return end;
     }
     [[nodiscard]] const Asset* asset(Id id) const {
@@ -303,6 +313,10 @@ class Workspace {
     Id addAsset(Asset asset) {
         for (auto& current : assets_)
             if (current.path == asset.path && current.state == asset.state &&
+                ((!current.source_descriptor && !asset.source_descriptor) ||
+                 (current.source_descriptor && asset.source_descriptor &&
+                  current.source_descriptor->asset_identity_fingerprint ==
+                      asset.source_descriptor->asset_identity_fingerprint)) &&
                 (current.duration == asset.duration || current.duration <= 0)) {
                 if (current.duration <= 0 && asset.duration > 0) {
                     asset.id = current.id;
@@ -323,7 +337,7 @@ class Workspace {
     bool insert(Id asset_id, Time start = -1) {
         return insertAssets({asset_id}, start);
     }
-    bool insertAssets(const std::vector<Id>& ids, Time start = -1) {
+    bool insertAssets(const std::vector<Id>& ids, Time start = -1, bool auto_crossfade = true) {
         auto candidate = workingCopy();
         if (start < 0)
             start = duration();
@@ -332,7 +346,7 @@ class Workspace {
             const auto* source = asset(id);
             if (!source)
                 return false;
-            candidate.execute(AddAssetGroup{id, start, 0, {}, source->input_mix_selection, true});
+            candidate.execute(AddAssetGroup{id, start, 0, {}, source->input_mix_selection, true, auto_crossfade});
             if (candidate.last_error_)
                 return false;
             if (!first)
@@ -349,16 +363,18 @@ class Workspace {
             return false;
         return apply(Move{{id}, start - selected->start, {}, {}, true}, revision_).status == CommandStatus::Applied;
     }
-    bool trim(Id id, Time source_in, Time source_out) {
+    bool trim(Id id, Time source_in, Time source_out, bool auto_crossfade = true) {
         const auto* selected = clip(id);
         if (!selected || source_in < 0 || source_out <= source_in)
             return false;
         auto candidate = workingCopy();
-        candidate.execute(Trim{id, TrimEdge::Left, source_in - selected->source_in, TrimMode::Fixed, {id}, true});
+        candidate.execute(
+            Trim{id, TrimEdge::Left, source_in - selected->source_in, TrimMode::Fixed, {id}, true, auto_crossfade});
         if (candidate.last_error_)
             return false;
         const auto* adjusted = candidate.clip(id);
-        candidate.execute(Trim{id, TrimEdge::Right, source_out - adjusted->source_out, TrimMode::Fixed, {id}, true});
+        candidate.execute(
+            Trim{id, TrimEdge::Right, source_out - adjusted->source_out, TrimMode::Fixed, {id}, true, auto_crossfade});
         return !candidate.last_error_ && publish(candidate);
     }
     bool split(Id id, Time at) {
@@ -408,8 +424,11 @@ class Workspace {
         const auto& command = history_[--cursor_];
         apply(command.after, command.before);
         patchEntities(transitions_, command.transitions_after, command.transitions_before);
+        order(transitions_);
         patchTracks(command.tracks_after, command.tracks_before, command.order_before);
         result_range_ = command.range_before;
+        patchEntities(spacers_, command.spacers_after, command.spacers_before);
+        timeline_end_ = command.end_before;
         output_fps_ = command.fps_before;
         output_width_ = command.width_before;
         output_height_ = command.height_before;
@@ -426,8 +445,11 @@ class Workspace {
         const auto& command = history_[cursor_++];
         apply(command.before, command.after);
         patchEntities(transitions_, command.transitions_before, command.transitions_after);
+        order(transitions_);
         patchTracks(command.tracks_before, command.tracks_after, command.order_after);
         result_range_ = command.range_after;
+        patchEntities(spacers_, command.spacers_before, command.spacers_after);
+        timeline_end_ = command.end_after;
         output_fps_ = command.fps_after;
         output_width_ = command.width_after;
         output_height_ = command.height_after;
@@ -466,6 +488,8 @@ class Workspace {
         value.transitions_ = transitions_;
         value.revision_ = revision_;
         value.result_range_ = result_range_;
+        value.spacers_ = spacers_;
+        value.timeline_end_ = timeline_end_;
         value.output_fps_ = output_fps_;
         value.output_width_ = output_width_;
         value.output_height_ = output_height_;
@@ -696,9 +720,9 @@ class Workspace {
         for (auto junction : transitions_) {
             const auto* a = clip(junction.outgoing);
             const auto* b = clip(junction.incoming);
-            if (!a || !b || a->end() <= b->start)
+            if (!a || !b || a->track != b->track || a->end() <= b->start)
                 continue;
-            if (a->track != b->track || a->start >= b->start || a->end() >= b->end()) {
+            if (a->start >= b->start || a->end() >= b->end()) {
                 fail(EditErrorCode::UnsupportedOverlap, {junction.outgoing, junction.incoming});
                 return false;
             }
@@ -752,12 +776,18 @@ class Workspace {
                     return false;
                 }
                 if (count == 0) {
-                    Transition junction{previous->id, item.id, TransitionKind::Crossfade, previous->end() - item.start};
+                    Transition junction{previous->id, item.id,
+                                        auto_crossfade_ ? TransitionKind::Crossfade : TransitionKind::HardCut,
+                                        previous->end() - item.start};
                     junction.id = nextId();
                     junction.track = item.track;
                     junction.in_us = item.start;
                     junction.out_us = previous->end();
                     junction.incoming_anchor_us = item.start;
+                    const auto* track = mutableTrack(item.track);
+                    junction.cut_us = std::clamp(
+                        quantizeBoundary(item.start + junction.duration / 2, track->type == TrackType::Audio),
+                        item.start, previous->end());
                     transitions_.push_back(std::move(junction));
                     mutableClip(previous->id)->fade_out = {};
                     mutableClip(item.id)->fade_in = {};
@@ -816,6 +846,14 @@ class Workspace {
         std::erase_if(transitions_,
                       [&ids](const auto& t) { return contains(ids, t.outgoing) || contains(ids, t.incoming); });
         if (ripple) {
+            for (const auto& spacer : spacers_)
+                for (const auto interval : intervals)
+                    if (spacer.start_us < interval.out_us && spacer.end() > interval.in_us) {
+                        fail(EditErrorCode::RippleConflict, {spacer.id});
+                        return;
+                    }
+            for (auto& spacer : spacers_)
+                spacer.start_us = mapRemoval(spacer.start_us, intervals);
             for (auto& clip : clips_)
                 clip.start = mapRemoval(clip.start, intervals);
             for (auto& junction : transitions_) {
@@ -878,6 +916,7 @@ class Workspace {
         clips_.insert(clips_.end(), tails.begin(), tails.end());
     }
     void execute(const Move& command) {
+        auto_crossfade_ = command.auto_crossfade;
         const auto ids = targets(command.targets, command.expand_linked);
         if (last_error_ || ids.empty())
             return;
@@ -888,10 +927,35 @@ class Workspace {
             if (!track.id)
                 return;
             new_tracks[temporary] = track.id;
-            tracks_.push_back(std::move(track));
+            if (command.new_video_front && track.type == TrackType::Video)
+                tracks_.insert(tracks_.begin(), std::move(track));
+            else
+                tracks_.push_back(std::move(track));
+        }
+        Time suffix = 0;
+        for (const auto id : ids)
+            suffix = std::max(suffix, clip(id)->end());
+        if (command.ripple) {
+            for (const auto& item : clips_)
+                if (!contains(ids, item.id) && item.start < suffix && item.end() > suffix) {
+                    fail(EditErrorCode::RippleConflict, {item.id});
+                    return;
+                }
+            for (auto& spacer : spacers_) {
+                if (spacer.start_us < suffix && spacer.end() > suffix) {
+                    fail(EditErrorCode::RippleConflict, {spacer.id});
+                    return;
+                }
+                if (spacer.start_us >= suffix &&
+                    (!addTime(spacer.start_us, command.delta_us, spacer.start_us) || spacer.start_us < 0)) {
+                    fail(EditErrorCode::InvalidTime, {spacer.id});
+                    return;
+                }
+            }
         }
         for (auto& clip : clips_) {
-            if (!contains(ids, clip.id))
+            const bool selected = contains(ids, clip.id);
+            if (!selected && (!command.ripple || clip.start < suffix))
                 continue;
             Time start = 0;
             if (!addTime(clip.start, command.delta_us, start) || start < 0) {
@@ -899,6 +963,8 @@ class Workspace {
                 return;
             }
             clip.start = start;
+            if (!selected)
+                continue;
             for (const auto& [clip_id, requested_track] : command.target_tracks)
                 if (clip.id == clip_id) {
                     const auto target_id =
@@ -925,7 +991,104 @@ class Workspace {
         if (result_range_.out_mode == ResultOutMode::Fixed && result_range_.out_us == total)
             result_range_.out_mode = ResultOutMode::FollowTimelineEnd;
     }
+    void execute(const SetTimelineEnd& command) {
+        if ((command.value.mode != TimelineEndMode::FollowContentEnd &&
+             command.value.mode != TimelineEndMode::FixedEnd) ||
+            command.value.end_us < 0) {
+            fail(EditErrorCode::InvalidTime);
+            return;
+        }
+        Time content_end = 0;
+        for (const auto& clip : clips_)
+            content_end = std::max(content_end, clip.end());
+        for (const auto& spacer : spacers_)
+            content_end = std::max(content_end, spacer.end());
+        if (command.value.mode == TimelineEndMode::FixedEnd && command.value.end_us < content_end) {
+            fail(EditErrorCode::InvalidTime);
+            return;
+        }
+        timeline_end_ = command.value;
+        if (timeline_end_.mode == TimelineEndMode::FollowContentEnd)
+            timeline_end_.end_us = 0;
+    }
+    void execute(const AddSpacer& command) {
+        Time end = 0;
+        if (!mutableTrack(command.track_id) || command.start_us < 0 || command.duration_us <= 0 ||
+            !addTime(command.start_us, command.duration_us, end)) {
+            fail(EditErrorCode::InvalidTime, {command.track_id});
+            return;
+        }
+        spacers_.push_back({nextId(), command.track_id, command.start_us, command.duration_us});
+    }
+    void execute(const MoveSpacer& command) {
+        const auto found =
+            std::find_if(spacers_.begin(), spacers_.end(), [&](const auto& item) { return item.id == command.id; });
+        if (found == spacers_.end()) {
+            fail(EditErrorCode::InvalidTarget, {command.id});
+            return;
+        }
+        Time start = 0;
+        if (!addTime(found->start_us, command.delta_us, start) || start < 0)
+            fail(EditErrorCode::InvalidTime, {command.id});
+        else
+            found->start_us = start;
+    }
+    void execute(const TrimSpacer& command) {
+        const auto found =
+            std::find_if(spacers_.begin(), spacers_.end(), [&](const auto& item) { return item.id == command.id; });
+        if (found == spacers_.end()) {
+            fail(EditErrorCode::InvalidTarget, {command.id});
+            return;
+        }
+        Time value = 0;
+        if (command.edge == TrimEdge::Left) {
+            const auto end = found->end();
+            if (!addTime(found->start_us, command.delta_us, value) || value < 0 || value >= end)
+                fail(EditErrorCode::InvalidTime, {command.id});
+            else {
+                found->start_us = value;
+                found->duration_us = end - value;
+            }
+        } else if (!addTime(found->duration_us, command.delta_us, value) || value <= 0) {
+            fail(EditErrorCode::InvalidTime, {command.id});
+        } else {
+            found->duration_us = value;
+        }
+    }
+    void execute(const RemoveSpacer& command) {
+        if (!std::erase_if(spacers_, [&](const auto& item) { return item.id == command.id; }))
+            fail(EditErrorCode::InvalidTarget, {command.id});
+    }
+    void execute(const CloseGap& command) {
+        if (!checkRange(command.span))
+            return;
+        for (const auto& clip : clips_)
+            if (clip.start < command.span.out_us && clip.end() > command.span.in_us) {
+                fail(EditErrorCode::RippleConflict, {clip.id});
+                return;
+            }
+        for (const auto& spacer : spacers_)
+            if (spacer.start_us < command.span.out_us && spacer.end() > command.span.in_us &&
+                (spacer.start_us < command.span.in_us || spacer.end() > command.span.out_us)) {
+                fail(EditErrorCode::RippleConflict, {spacer.id});
+                return;
+            }
+        std::erase_if(spacers_, [&](const auto& spacer) {
+            return spacer.start_us >= command.span.in_us && spacer.end() <= command.span.out_us;
+        });
+        for (auto& spacer : spacers_)
+            spacer.start_us = mapRemoval(spacer.start_us, {command.span});
+        for (auto& clip : clips_)
+            clip.start = mapRemoval(clip.start, {command.span});
+        for (auto& junction : transitions_) {
+            junction.in_us = mapRemoval(junction.in_us, {command.span});
+            junction.out_us = mapRemoval(junction.out_us, {command.span});
+            junction.cut_us = mapRemoval(junction.cut_us, {command.span});
+        }
+        mapRange({command.span});
+    }
     void execute(const AddAssetGroup& command) {
+        auto_crossfade_ = command.auto_crossfade;
         const auto* source = asset(command.asset_id);
         if (!source || source->duration <= 0 || command.placement_us < 0) {
             fail(EditErrorCode::InvalidTarget, {command.asset_id});
@@ -1077,6 +1240,15 @@ class Workspace {
     void eraseRange(Span span, bool ripple) {
         if (!checkRange(span))
             return;
+        if (ripple) {
+            for (const auto& spacer : spacers_)
+                if (spacer.start_us < span.out_us && spacer.end() > span.in_us) {
+                    fail(EditErrorCode::RippleConflict, {spacer.id});
+                    return;
+                }
+            for (auto& spacer : spacers_)
+                spacer.start_us = mapRemoval(spacer.start_us, {span});
+        }
         std::vector<Clip> result;
         std::map<Id, Id> tail_groups;
         for (const auto& clip : clips_) {
@@ -1135,6 +1307,17 @@ class Workspace {
     void execute(const KeepRange& command) {
         if (!checkRange(command.span))
             return;
+        std::vector<Spacer> retained_spacers;
+        for (auto spacer : spacers_) {
+            const auto begin = std::max(spacer.start_us, command.span.in_us);
+            const auto end = std::min(spacer.end(), command.span.out_us);
+            if (begin < end) {
+                spacer.start_us = begin - command.span.in_us;
+                spacer.duration_us = end - begin;
+                retained_spacers.push_back(spacer);
+            }
+        }
+        spacers_ = std::move(retained_spacers);
         std::vector<Clip> result;
         for (const auto& clip : clips_) {
             const auto begin = std::max(clip.start, command.span.in_us);
@@ -1168,6 +1351,7 @@ class Workspace {
                 std::clamp(result_range_.out_us, command.span.in_us, command.span.out_us) - command.span.in_us;
     }
     void execute(const Trim& command) {
+        auto_crossfade_ = command.auto_crossfade;
         auto requested = command.targets;
         if (requested.empty())
             requested.push_back(command.lead_id);
@@ -1219,6 +1403,18 @@ class Workspace {
         if (delta == 0)
             return;
         const Time shift = command.edge == TrimEdge::Left ? -delta : delta;
+        if (command.mode == TrimMode::Ripple)
+            for (auto& spacer : spacers_) {
+                if (spacer.start_us < suffix && spacer.end() > suffix) {
+                    fail(EditErrorCode::RippleConflict, {spacer.id});
+                    return;
+                }
+                if (spacer.start_us >= suffix &&
+                    (!addTime(spacer.start_us, shift, spacer.start_us) || spacer.start_us < 0)) {
+                    fail(EditErrorCode::InvalidTime, {spacer.id});
+                    return;
+                }
+            }
         if (command.mode == TrimMode::Ripple)
             for (const auto& clip : clips_)
                 if (!contains(ids, clip.id) && clip.start < suffix && clip.end() > suffix) {
@@ -1315,11 +1511,14 @@ class Workspace {
         for (const auto& clip : clips_)
             if (clip.track == command.track_id)
                 removed.push_back(clip.id);
-        if (!removed.empty() && command.confirmed_contents_revision != revision_) {
+        const bool has_spacers = std::any_of(spacers_.begin(), spacers_.end(),
+                                             [&](const auto& item) { return item.track == command.track_id; });
+        if ((!removed.empty() || has_spacers) && command.confirmed_contents_revision != revision_) {
             fail(EditErrorCode::StaleRevision, {command.track_id});
             return;
         }
         removeTargets(removed, false, false);
+        std::erase_if(spacers_, [&](const auto& item) { return item.track == command.track_id; });
         std::erase_if(tracks_, [&](const auto& item) { return item.id == command.track_id; });
         if (std::none_of(tracks_.begin(), tracks_.end(),
                          [](const auto& item) { return item.type == TrackType::Video; }))
@@ -1376,6 +1575,10 @@ class Workspace {
         std::vector<Id> order_after;
         ResultRange range_before;
         ResultRange range_after;
+        std::vector<Spacer> spacers_before;
+        std::vector<Spacer> spacers_after;
+        TimelineEnd end_before;
+        TimelineEnd end_after;
         RationalFps fps_before;
         RationalFps fps_after;
         int width_before = 0;
@@ -1421,11 +1624,33 @@ class Workspace {
                 return false;
             }
         order(clips_);
+        std::set<Id> spacer_ids;
+        for (const auto& spacer : spacers_) {
+            Time end = 0;
+            if (!spacer.id || !spacer_ids.insert(spacer.id).second || !mutableTrack(spacer.track) ||
+                spacer.start_us < 0 || spacer.duration_us <= 0 || !addTime(spacer.start_us, spacer.duration_us, end)) {
+                fail(EditErrorCode::InvalidTime, {spacer.id});
+                return false;
+            }
+            for (const auto& clip : clips_)
+                if (clip.track == spacer.track && clip.start < end && clip.end() > spacer.start_us) {
+                    fail(EditErrorCode::UnsupportedOverlap, {spacer.id, clip.id});
+                    return false;
+                }
+            for (const auto& other : spacers_)
+                if (other.id != spacer.id && other.track == spacer.track && other.start_us < end &&
+                    other.end() > spacer.start_us) {
+                    fail(EditErrorCode::UnsupportedOverlap, {spacer.id, other.id});
+                    return false;
+                }
+        }
+        if (timeline_end_.mode == TimelineEndMode::FixedEnd)
+            timeline_end_.end_us = duration();
         for (const auto& clip : clips_) {
             const auto* source = asset(clip.asset);
             const auto* track = mutableTrack(clip.track);
             Time end = 0;
-            if (!clip.id || !clip_ids.insert(clip.id).second || !source || !track) {
+            if (!clip.id || spacer_ids.contains(clip.id) || !clip_ids.insert(clip.id).second || !source || !track) {
                 fail(EditErrorCode::InvalidTarget, {clip.id});
                 return false;
             }
@@ -1481,6 +1706,7 @@ class Workspace {
             sizeof(Command) + (command.before.capacity() + command.after.capacity()) * sizeof(Clip) +
             (command.transitions_before.capacity() + command.transitions_after.capacity()) * sizeof(Transition) +
             (command.tracks_before.capacity() + command.tracks_after.capacity()) * sizeof(Track) +
+            (command.spacers_before.capacity() + command.spacers_after.capacity()) * sizeof(Spacer) +
             (command.order_before.capacity() + command.order_after.capacity()) * sizeof(Id);
         for (const auto& track : command.tracks_before)
             bytes += track.name.capacity();
@@ -1494,7 +1720,8 @@ class Workspace {
             return false;
         }
         if (candidate.clips_ == clips_ && candidate.transitions_ == transitions_ && candidate.tracks_ == tracks_ &&
-            candidate.result_range_ == result_range_ && candidate.output_fps_ == output_fps_ &&
+            candidate.result_range_ == result_range_ && candidate.spacers_ == spacers_ &&
+            candidate.timeline_end_ == timeline_end_ && candidate.output_fps_ == output_fps_ &&
             candidate.output_width_ == output_width_ && candidate.output_height_ == output_height_)
             return false;
         if (!candidate_mode_) {
@@ -1515,6 +1742,10 @@ class Workspace {
                 command.order_after.push_back(track.id);
             command.range_before = result_range_;
             command.range_after = candidate.result_range_;
+            command.spacers_before = difference(spacers_, candidate.spacers_);
+            command.spacers_after = difference(candidate.spacers_, spacers_);
+            command.end_before = timeline_end_;
+            command.end_after = candidate.timeline_end_;
             command.fps_before = output_fps_;
             command.fps_after = candidate.output_fps_;
             command.width_before = output_width_;
@@ -1544,6 +1775,8 @@ class Workspace {
         tracks_ = std::move(candidate.tracks_);
         transitions_ = std::move(candidate.transitions_);
         result_range_ = candidate.result_range_;
+        spacers_ = std::move(candidate.spacers_);
+        timeline_end_ = candidate.timeline_end_;
         output_fps_ = candidate.output_fps_;
         output_width_ = candidate.output_width_;
         output_height_ = candidate.output_height_;
@@ -1564,6 +1797,10 @@ class Workspace {
                 return a.start < b.start;
             return a.id < b.id;
         });
+    }
+    static void order(std::vector<Transition>& junctions) {
+        std::sort(junctions.begin(), junctions.end(),
+                  [](const auto& left, const auto& right) { return left.id < right.id; });
     }
     bool commit(std::vector<Clip> after, Id selection) {
         return commit(std::move(after), selection, transitions_);
@@ -1586,6 +1823,9 @@ class Workspace {
     Revision revision_ = 0;
     size_t history_bytes_ = 0;
     ResultRange result_range_;
+    std::vector<Spacer> spacers_;
+    TimelineEnd timeline_end_;
+    bool auto_crossfade_ = true;
     RationalFps output_fps_;
     int output_width_ = 0;
     int output_height_ = 0;
@@ -1611,6 +1851,8 @@ inline EditPreview PreviewEdit(const EditSnapshot& snapshot, const EditCommand& 
     candidate.clips_ = snapshot.clips;
     candidate.transitions_ = snapshot.junctions;
     candidate.result_range_ = snapshot.result_range;
+    candidate.spacers_ = snapshot.spacers;
+    candidate.timeline_end_ = snapshot.timeline_end;
     candidate.output_fps_ = snapshot.output_fps;
     candidate.output_width_ = snapshot.output_width;
     candidate.output_height_ = snapshot.output_height;
@@ -1626,7 +1868,9 @@ inline EditPreview PreviewEdit(const EditSnapshot& snapshot, const EditCommand& 
             std::move(candidate.tracks_),
             std::move(candidate.clips_),
             std::move(candidate.transitions_),
-            0};
+            0,
+            std::move(candidate.spacers_),
+            candidate.timeline_end_};
 }
 
 } // namespace exosnap::edit

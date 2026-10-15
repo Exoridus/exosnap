@@ -105,6 +105,11 @@ QString IssueText(const engine::EditExportPlan& plan, const engine::EditExportIs
     switch (issue.code) {
     case EditExportIssueCode::EmptySpan:
         return QCoreApplication::translate("EditExportAdapter", "The selected export range is empty.");
+    case EditExportIssueCode::InvalidSelection:
+        return QCoreApplication::translate("EditExportAdapter", "Select clips or a valid time range for export.");
+    case EditExportIssueCode::PartialJunctionOwnership:
+        return QCoreApplication::translate("EditExportAdapter",
+                                           "The selected clips contain only one side of a transition.");
     case EditExportIssueCode::InvalidTimeline:
         return QCoreApplication::translate("EditExportAdapter", "The timeline contains an invalid clip.");
     case EditExportIssueCode::MissingSource:
@@ -171,6 +176,7 @@ struct EditExportAdapter::PreparedExport {
     std::vector<edit::Transition> transitions;
     std::vector<edit::Asset> assets;
     uint64_t monitoring_revision = 0;
+    uint64_t workspace_revision = 0;
     bool to_mp4 = false;
     bool replace_existing = false;
     engine::TimelineExportAssessment copy_assessment;
@@ -183,14 +189,14 @@ struct EditExportAdapter::PreparedExport {
     std::shared_ptr<const engine::EditExportPlan> edit_plan;
 
     [[nodiscard]] bool Planned() const {
-        return !snapshot.timeline.clips.empty() &&
-               std::all_of(snapshot.timeline.clips.begin(), snapshot.timeline.clips.end(),
+        return std::all_of(snapshot.timeline.clips.begin(), snapshot.timeline.clips.end(),
                            [](const auto& clip) { return clip.stream.has_value(); });
     }
 
     bool SameWorkspace(const edit::Workspace& workspace) const {
-        if (workspace.clips() != clips || workspace.transitions() != transitions ||
-            workspace.monitoringRevision() != monitoring_revision || workspace.assets().size() != assets.size())
+        if (workspace.revision() != workspace_revision || workspace.clips() != clips ||
+            workspace.transitions() != transitions || workspace.monitoringRevision() != monitoring_revision ||
+            workspace.assets().size() != assets.size())
             return false;
         for (size_t index = 0; index < assets.size(); ++index) {
             const auto& a = assets[index];
@@ -203,13 +209,30 @@ struct EditExportAdapter::PreparedExport {
     }
 
     bool PreparePlanned(std::string& error, const std::atomic<bool>& cancelled) {
+        const auto scoped = engine::SelectEditExportSnapshot(snapshot, intent);
+        const auto bounds = engine::EditExportBounds(scoped.timeline, intent);
         std::set<uint64_t> referenced;
-        for (const auto& clip : snapshot.timeline.clips)
-            referenced.insert(clip.asset);
+        for (const auto& clip : scoped.timeline.clips) {
+            const auto track = std::find_if(scoped.timeline.tracks.begin(), scoped.timeline.tracks.end(),
+                                            [&](const auto& value) { return value.id == clip.track; });
+            if (intent.mode == engine::EditExportMode::OriginalStreams ||
+                (clip.enabled && (track == scoped.timeline.tracks.end() || track->enabled) &&
+                 clip.start_us < bounds.second && clip.end_us() > bounds.first))
+                referenced.insert(clip.asset);
+        }
         for (auto& source : snapshot.sources) {
             if (!referenced.contains(source.id))
                 continue;
             source.metadata = engine::ProbeEditMedia(source.path, {}, {}, &cancelled);
+            const auto imported =
+                std::find_if(assets.begin(), assets.end(), [&](const auto& asset) { return asset.id == source.id; });
+            if (imported != assets.end() && imported->source_descriptor && source.metadata.content_identity_valid &&
+                source.metadata.content_sha256 != imported->source_descriptor->asset_identity_fingerprint) {
+                error = QCoreApplication::translate("EditExportAdapter",
+                                                    "A source changed after it was imported. Import it again.")
+                            .toStdString();
+                return false;
+            }
             if (cancelled.load()) {
                 error = "Export preparation cancelled.";
                 return false;
@@ -224,14 +247,22 @@ struct EditExportAdapter::PreparedExport {
             error = IssueText(*edit_plan, edit_plan->issues.front()).toStdString();
             return false;
         }
-        const auto first_video = std::find_if(snapshot.timeline.clips.begin(), snapshot.timeline.clips.end(),
-                                              [](const auto& clip) { return !clip.audio; });
+        const auto& planned_snapshot = edit_plan->snapshot;
+        const auto first_video = std::find_if(
+            planned_snapshot.timeline.clips.begin(), planned_snapshot.timeline.clips.end(), [&](const auto& clip) {
+                const auto track =
+                    std::find_if(planned_snapshot.timeline.tracks.begin(), planned_snapshot.timeline.tracks.end(),
+                                 [&](const auto& value) { return value.id == clip.track; });
+                return !clip.audio && clip.enabled &&
+                       (track == planned_snapshot.timeline.tracks.end() || track->enabled) &&
+                       clip.start_us < edit_plan->span_out_us && clip.end_us() > edit_plan->span_in_us;
+            });
         const auto first_source =
-            first_video == snapshot.timeline.clips.end()
-                ? snapshot.sources.end()
-                : std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
+            first_video == planned_snapshot.timeline.clips.end()
+                ? planned_snapshot.sources.end()
+                : std::find_if(planned_snapshot.sources.begin(), planned_snapshot.sources.end(),
                                [&](const auto& source) { return source.id == first_video->asset; });
-        if (first_source == snapshot.sources.end()) {
+        if (first_source == planned_snapshot.sources.end() && edit_plan->video_path != engine::EditVideoPath::Render) {
             error = "Export has no available video source.";
             return false;
         }
@@ -297,6 +328,13 @@ struct EditExportAdapter::PreparedExport {
     bool Prepare(std::string& error, const std::atomic<bool>& cancelled) {
         if (Planned())
             return PreparePlanned(error, cancelled);
+        if (intent.span != engine::EditExportSpan::EntireTimeline &&
+            intent.span != engine::EditExportSpan::ResultRange) {
+            error = QCoreApplication::translate("EditExportAdapter",
+                                                "Import this source again to export an occupied or selected range.")
+                        .toStdString();
+            return false;
+        }
         copy_assessment = engine::AssessTimelineExport(recipe, to_mp4, &cancelled);
         std::set<uint64_t> referenced;
         std::set<uint64_t> audio_assets;
@@ -412,7 +450,8 @@ struct EditExportAdapter::PreparedExport {
     }
 
     bool SourcesUnchanged(std::string& error, const std::atomic<bool>& cancelled) const {
-        for (const auto& source : snapshot.sources) {
+        const auto& reviewed_sources = edit_plan ? edit_plan->snapshot.sources : snapshot.sources;
+        for (const auto& source : reviewed_sources) {
             if (source.metadata.duration_us == 0)
                 continue;
             if (!SameMediaIdentity(source.metadata, engine::ProbeEditMedia(source.path, {}, {}, &cancelled))) {
@@ -536,9 +575,45 @@ void EditExportAdapter::setModeKey(const QString& key) {
 }
 
 void EditExportAdapter::setSpanKey(const QString& key) {
-    if (running() || span_key_ == key || (key != QStringLiteral("result") && key != QStringLiteral("entire")))
+    span_explicit_ = true;
+    if (running() || span_key_ == key ||
+        (key != QStringLiteral("result") && key != QStringLiteral("entire") && key != QStringLiteral("occupied") &&
+         key != QStringLiteral("time") && key != QStringLiteral("selected")))
         return;
     span_key_ = key;
+    discardPreparedExport();
+    emit optionsChanged();
+}
+
+QVariantList EditExportAdapter::spanOptions() const {
+    return {
+        QVariantMap{{QStringLiteral("key"), QStringLiteral("entire")},
+                    {QStringLiteral("label"), tr("Entire Timeline")}},
+        QVariantMap{{QStringLiteral("key"), QStringLiteral("occupied")},
+                    {QStringLiteral("label"), tr("Occupied Content")}},
+        QVariantMap{{QStringLiteral("key"), QStringLiteral("result")},
+                    {QStringLiteral("label"), tr("Edited result range")}},
+        QVariantMap{{QStringLiteral("key"), QStringLiteral("time")}, {QStringLiteral("label"), tr("I/O time range")}},
+        QVariantMap{{QStringLiteral("key"), QStringLiteral("selected")},
+                    {QStringLiteral("label"), tr("Selected clips")}}};
+}
+
+void EditExportAdapter::setTimeSelection(qint64 in_ms, qint64 out_ms) {
+    if (in_ms < 0 || out_ms <= in_ms || out_ms > (std::numeric_limits<qint64>::max)() / 1000)
+        setTimeSelectionUs(-1, -1);
+    else
+        setTimeSelectionUs(in_ms * 1000, out_ms * 1000);
+}
+
+void EditExportAdapter::setTimeSelectionUs(qint64 in_us, qint64 out_us) {
+    if (running() || (selection_in_us_ == in_us && selection_out_us_ == out_us))
+        return;
+    if (in_us < 0 || out_us <= in_us) {
+        selection_in_us_ = selection_out_us_ = -1;
+    } else {
+        selection_in_us_ = in_us;
+        selection_out_us_ = out_us;
+    }
     discardPreparedExport();
     emit optionsChanged();
 }
@@ -600,6 +675,16 @@ void EditExportAdapter::setSession(EditSessionAdapter* session) {
         emit optionsChanged();
     });
     connect(session_, &EditSessionAdapter::workspaceChanged, this, [this]() {
+        if (!running() && !span_explicit_) {
+            const auto range = session_->workspace().snapshot()->result_range;
+            const auto suggested = range.in_us > 0 || range.out_mode == edit::ResultOutMode::Fixed
+                                       ? QStringLiteral("result")
+                                       : QStringLiteral("entire");
+            if (suggested != span_key_) {
+                span_key_ = suggested;
+                emit optionsChanged();
+            }
+        }
         if (state_ == State::Review)
             discardPreparedExport();
     });
@@ -784,7 +869,7 @@ void EditExportAdapter::startExport() {
     emit progressChanged();
     emit resultChanged();
 
-    if (session_->workspace().clips().empty()) {
+    if (session_->workspace().duration() <= 0) {
         error_text_ = QCoreApplication::translate("EditExportAdapter", "No edit master available for export.");
         emit resultChanged();
         setState(State::Failed);
@@ -804,27 +889,47 @@ void EditExportAdapter::startExport() {
     render_snapshot.timeline = session_->workspace().timeline();
     for (const auto& asset : session_->workspace().assets())
         render_snapshot.sources.push_back({asset.id, std::filesystem::path(asset.path), {}, asset.monitor_selection});
+    engine::EditExportIntent export_intent;
+    export_intent.mode = mode_key_ == QStringLiteral("originalStreams") ? engine::EditExportMode::OriginalStreams
+                                                                        : engine::EditExportMode::FinishedStereo;
+    export_intent.span = span_key_ == QStringLiteral("occupied")   ? engine::EditExportSpan::OccupiedContent
+                         : span_key_ == QStringLiteral("selected") ? engine::EditExportSpan::SelectedClips
+                         : span_key_ == QStringLiteral("time")     ? engine::EditExportSpan::TimeRange
+                         : span_key_ == QStringLiteral("result")   ? engine::EditExportSpan::ResultRange
+                                                                   : engine::EditExportSpan::EntireTimeline;
+    export_intent.selection_in_us = selection_in_us_;
+    export_intent.selection_out_us = selection_out_us_;
+    if (export_intent.span == engine::EditExportSpan::SelectedClips) {
+        const auto* lead = session_->workspace().clip(session_->workspace().selection());
+        for (const auto& clip : session_->workspace().clips())
+            if (lead &&
+                (clip.id == lead->id || (session_->linkedSelection && lead->group && clip.group == lead->group)))
+                export_intent.selected_clip_ids.push_back(clip.id);
+    }
+    const auto scope_snapshot = engine::SelectEditExportSnapshot(render_snapshot, export_intent);
+    const auto scope_bounds = engine::EditExportBounds(scope_snapshot.timeline, export_intent);
     const auto render_config = render_config_ ? render_config_() : engine::RecorderConfig{};
     std::vector<RecordingMarker> timeline_markers;
     for (const auto& clip : session_->workspace().clips()) {
+        if (std::none_of(scope_snapshot.timeline.clips.begin(), scope_snapshot.timeline.clips.end(),
+                         [&](const auto& value) { return value.id == clip.id; }) ||
+            !clip.enabled || clip.start >= scope_bounds.second || clip.end() <= scope_bounds.first)
+            continue;
         const auto track = std::find_if(session_->workspace().tracks().begin(), session_->workspace().tracks().end(),
                                         [&clip](const auto& t) { return t.id == clip.track; });
-        if (track->type != edit::TrackType::Video)
+        if (track->type != edit::TrackType::Video || !track->edit_enabled)
             continue;
         const auto* asset = session_->workspace().asset(clip.asset);
-        if (asset->state != edit::AssetState::Available) {
-            error_text_ = tr("The timeline contains unavailable media.");
-            emit resultChanged();
-            setState(State::Failed);
-            return;
-        }
         recipe.push_back({std::filesystem::path(asset->path), clip.source_in, clip.source_out, clip.start});
         for (const auto& marker : asset->markers) {
             const auto source_us = static_cast<int64_t>(marker.time_ms) * 1000;
             if (source_us < clip.source_in || source_us >= clip.source_out)
                 continue;
             auto retimed = marker;
-            retimed.time_ms = static_cast<uint64_t>((clip.start + source_us - clip.source_in) / 1000);
+            const auto timeline_us = clip.start + source_us - clip.source_in;
+            if (timeline_us < scope_bounds.first || timeline_us >= scope_bounds.second)
+                continue;
+            retimed.time_ms = static_cast<uint64_t>((timeline_us - scope_bounds.first) / 1000);
             timeline_markers.push_back(std::move(retimed));
         }
     }
@@ -851,13 +956,18 @@ void EditExportAdapter::startExport() {
     prepared->transitions = session_->workspace().transitions();
     prepared->assets = session_->workspace().assets();
     prepared->monitoring_revision = session_->workspace().monitoringRevision();
+    prepared->workspace_revision = session_->workspace().revision();
     prepared->to_mp4 = to_mp4;
     prepared->replace_existing = replace_existing;
-    prepared->intent.mode = mode_key_ == QStringLiteral("originalStreams") ? engine::EditExportMode::OriginalStreams
-                                                                           : engine::EditExportMode::FinishedStereo;
-    prepared->intent.span = span_key_ == QStringLiteral("entire") ? engine::EditExportSpan::EntireTimeline
-                                                                  : engine::EditExportSpan::ResultRange;
-    for (const auto& clip : session_->workspace().clips()) {
+    prepared->intent = std::move(export_intent);
+    const auto scoped = engine::SelectEditExportSnapshot(prepared->snapshot, prepared->intent);
+    const auto bounds = engine::EditExportBounds(scoped.timeline, prepared->intent);
+    for (const auto& clip : scoped.timeline.clips) {
+        const auto track = std::find_if(scoped.timeline.tracks.begin(), scoped.timeline.tracks.end(),
+                                        [&](const auto& value) { return value.id == clip.track; });
+        if (!clip.enabled || (track != scoped.timeline.tracks.end() && !track->enabled) ||
+            clip.start_us >= bounds.second || clip.end_us() <= bounds.first)
+            continue;
         const auto* asset = session_->workspace().asset(clip.asset);
         if (asset && asset->mix_decision_required)
             prepared->input_mix_validated = false;

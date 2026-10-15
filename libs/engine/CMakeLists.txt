@@ -435,6 +435,10 @@ add_library(exosnap_engine STATIC
     src/playback_clock.cpp
     include/exosnap/engine/edit_player_session.h
     src/edit_player_session.cpp
+    include/exosnap/engine/media_cache_store.h
+    src/media_cache_store.cpp
+    include/exosnap/engine/waveform_cache.h
+    src/waveform_cache.cpp
 )
 
 target_include_directories(exosnap_engine
@@ -1864,6 +1868,16 @@ exosnap_add_gtest(
     TEST_PREFIX engine.
     SOURCES tests/test_edit_timeline_export.cpp
     LIBRARIES exosnap_engine FFmpeg::mux
+)
+
+# Persistent media caches: store envelope/atomicity/budget, waveform pyramid,
+# keys and analysis. One case decodes the red/blue fixtures named by
+# EXOSNAP_EDIT_RENDER_FIXTURES and skips without them.
+exosnap_add_gtest(
+    NAME test_media_caches
+    TEST_PREFIX engine.
+    SOURCES tests/test_media_cache_store.cpp tests/test_waveform_cache.cpp
+    LIBRARIES exosnap_engine
 )
 
 exosnap_add_gtest(

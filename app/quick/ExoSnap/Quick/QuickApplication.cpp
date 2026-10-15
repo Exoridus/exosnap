@@ -1,5 +1,7 @@
 #include "QuickApplication.h"
 
+#include "EditThumbnailImageProvider.h"
+
 #include "services/SystemAppearance.h"
 
 #include "NativeMenuAppearance.h"
@@ -3898,6 +3900,20 @@ void QuickApplication::initializeEditArea() {
     edit_timeline_adapter_.setSession(&edit_session_adapter_);
     edit_player_adapter_.setSession(&edit_session_adapter_);
     edit_export_adapter_.setSession(&edit_session_adapter_);
+    const auto update_cache_admission = [this]() {
+        edit_timeline_adapter_.setForegroundBusy(edit_player_adapter_.playing() || edit_player_adapter_.seekPending() ||
+                                                 edit_export_adapter_.running() ||
+                                                 record_view_model_adapter_.recording());
+    };
+    QObject::connect(&edit_player_adapter_, &EditPlayerAdapter::playingChanged, &edit_timeline_adapter_,
+                     update_cache_admission);
+    QObject::connect(&edit_player_adapter_, &EditPlayerAdapter::previewChanged, &edit_timeline_adapter_,
+                     update_cache_admission);
+    QObject::connect(&edit_export_adapter_, &EditExportAdapter::stateChanged, &edit_timeline_adapter_,
+                     update_cache_admission);
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::changed, &edit_timeline_adapter_,
+                     update_cache_admission);
+    update_cache_admission();
     edit_export_adapter_.setOutputDirectoryProvider(
         [this]() { return QString::fromStdWString(live_config_.output.output_folder.wstring()); });
     edit_export_adapter_.setRenderConfigProvider([this]() {
@@ -5769,6 +5785,8 @@ bool QuickApplication::load(bool no_activate) {
     }
     if (!edit_tile_provider_registered_) {
         engine_.addImageProvider(QLatin1String(kEditTileProviderId), edit_tile_provider_);
+        engine_.addImageProvider(QLatin1String(kEditThumbnailProviderId),
+                                 edit_timeline_adapter_.createThumbnailImageProvider());
         edit_tile_provider_registered_ = true;
     }
     if (!shell_icon_provider_registered_) {

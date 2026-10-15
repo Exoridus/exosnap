@@ -1,3 +1,4 @@
+#include <capability/translatable.h>
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/edit_export_plan.h>
 #include <exosnap/engine/edit_timeline.h>
@@ -90,6 +91,18 @@ bool OriginalRecipe(const EditExportPlan& plan) {
     for (const auto& clip : timeline.clips) {
         if (Effect(clip) || !clip.group)
             return false;
+        const auto source = std::find_if(plan.snapshot.sources.begin(), plan.snapshot.sources.end(),
+                                         [&](const auto& value) { return value.id == clip.asset; });
+        if (source == plan.snapshot.sources.end())
+            return false;
+        for (const auto& original : source->metadata.streams)
+            if (std::count_if(timeline.clips.begin(), timeline.clips.end(), [&](const auto& other) {
+                    return other.group == clip.group && other.asset == clip.asset && other.stream &&
+                           other.stream->container_index == original.container_index &&
+                           other.stream->kind == original.kind && other.start_us == clip.start_us &&
+                           other.source_in_us == clip.source_in_us && other.source_out_us == clip.source_out_us;
+                }) != 1)
+                return false;
         const auto group = std::find_if(plan.facts.original_groups.begin(), plan.facts.original_groups.end(),
                                         [&](const auto& g) { return g.group == clip.group; });
         if (group == plan.facts.original_groups.end() || group->streams.empty())
@@ -126,6 +139,11 @@ EditPlanHash Hash(const EditExportPlan& p) {
     h.number(i.quality);
     h.bytes(i.destination.generic_u8string());
     h.number(i.replace_destination);
+    h.number(i.selection_in_us);
+    h.number(i.selection_out_us);
+    h.number(i.selected_clip_ids.size());
+    for (const auto id : i.selected_clip_ids)
+        h.number(id);
     h.number(p.revision);
     h.number(p.span_in_us);
     h.number(p.span_out_us);
@@ -230,9 +248,63 @@ EditPlanHash Hash(const EditExportPlan& p) {
 }
 } // namespace
 
+TimelineRenderSnapshot SelectEditExportSnapshot(TimelineRenderSnapshot snapshot, const EditExportIntent& intent) {
+    if (intent.span != EditExportSpan::SelectedClips)
+        return snapshot;
+    const std::set<uint64_t> selected(intent.selected_clip_ids.begin(), intent.selected_clip_ids.end());
+    std::erase_if(snapshot.timeline.clips, [&](const auto& clip) { return !selected.contains(clip.id); });
+    std::erase_if(snapshot.timeline.junctions, [&](const auto& junction) {
+        return !selected.contains(junction.outgoing) || !selected.contains(junction.incoming);
+    });
+    std::erase_if(snapshot.timeline.crossfades, [&](const auto& junction) {
+        return !selected.contains(junction.outgoing) || !selected.contains(junction.incoming);
+    });
+    return snapshot;
+}
+
+std::pair<int64_t, int64_t> EditExportBounds(const TimelineSnapshot& timeline, const EditExportIntent& intent) {
+    if (intent.span == EditExportSpan::ResultRange)
+        return {timeline.result_in_us, timeline.result_out_us >= 0 ? timeline.result_out_us : timeline.duration_us};
+    if (intent.span == EditExportSpan::TimeRange)
+        return {intent.selection_in_us, intent.selection_out_us};
+    if (intent.span == EditExportSpan::EntireTimeline)
+        return {0, timeline.duration_us};
+    int64_t begin = timeline.duration_us;
+    int64_t end = 0;
+    for (const auto& clip : timeline.clips) {
+        const auto track = std::find_if(timeline.tracks.begin(), timeline.tracks.end(),
+                                        [&](const auto& value) { return value.id == clip.track; });
+        if (!clip.enabled || (track != timeline.tracks.end() && !track->enabled) ||
+            (intent.span == EditExportSpan::SelectedClips &&
+             std::find(intent.selected_clip_ids.begin(), intent.selected_clip_ids.end(), clip.id) ==
+                 intent.selected_clip_ids.end()))
+            continue;
+        begin = std::min(begin, clip.start_us);
+        end = std::max(end, clip.end_us());
+    }
+    return {begin, end};
+}
+
 std::shared_ptr<const EditExportPlan> PrepareEditExport(TimelineRenderSnapshot snapshot, EditExportIntent intent,
                                                         EditExportFacts facts) {
     auto p = std::make_shared<EditExportPlan>();
+    bool partial_junction = false;
+    bool invalid_selection = false;
+    if (intent.span == EditExportSpan::SelectedClips) {
+        const std::set<uint64_t> selected(intent.selected_clip_ids.begin(), intent.selected_clip_ids.end());
+        invalid_selection = selected.empty() || selected.size() != intent.selected_clip_ids.size();
+        for (const auto id : selected)
+            invalid_selection =
+                invalid_selection || std::none_of(snapshot.timeline.clips.begin(), snapshot.timeline.clips.end(),
+                                                  [id](const auto& clip) { return clip.id == id; });
+        for (const auto& junction : snapshot.timeline.junctions)
+            partial_junction =
+                partial_junction || selected.contains(junction.outgoing) != selected.contains(junction.incoming);
+        for (const auto& junction : snapshot.timeline.crossfades)
+            partial_junction =
+                partial_junction || selected.contains(junction.outgoing) != selected.contains(junction.incoming);
+    }
+    snapshot = SelectEditExportSnapshot(std::move(snapshot), intent);
     p->snapshot = std::move(snapshot);
     p->intent = std::move(intent);
     p->facts = std::move(facts);
@@ -240,14 +312,27 @@ std::shared_ptr<const EditExportPlan> PrepareEditExport(TimelineRenderSnapshot s
         source.monitor_selection.reset();
     const auto& t = p->snapshot.timeline;
     p->revision = t.revision;
-    p->span_in_us = p->intent.span == EditExportSpan::ResultRange ? t.result_in_us : 0;
-    p->span_out_us =
-        p->intent.span == EditExportSpan::ResultRange && t.result_out_us >= 0 ? t.result_out_us : t.duration_us;
+    const auto bounds = EditExportBounds(t, p->intent);
+    p->span_in_us = bounds.first;
+    p->span_out_us = bounds.second;
+    if (p->intent.mode == EditExportMode::FinishedStereo)
+        std::erase_if(p->snapshot.sources, [&](const auto& source) {
+            return std::none_of(t.clips.begin(), t.clips.end(), [&](const auto& clip) {
+                const auto track = std::find_if(t.tracks.begin(), t.tracks.end(),
+                                                [&](const auto& value) { return value.id == clip.track; });
+                return clip.asset == source.id && clip.enabled && (track == t.tracks.end() || track->enabled) &&
+                       clip.start_us < p->span_out_us && clip.end_us() > p->span_in_us;
+            });
+        });
     const auto issue = [&](EditExportIssueCode code, EditExportIssueScope scope, uint64_t id = 0) {
         p->issues.push_back({code, scope, id ? std::vector<uint64_t>{id} : std::vector<uint64_t>{}});
     };
     if (p->span_in_us < 0 || p->span_out_us <= p->span_in_us || p->span_out_us > t.duration_us)
         issue(EditExportIssueCode::EmptySpan, EditExportIssueScope::Timeline);
+    if (invalid_selection)
+        issue(EditExportIssueCode::InvalidSelection, EditExportIssueScope::Timeline);
+    if (partial_junction)
+        issue(EditExportIssueCode::PartialJunctionOwnership, EditExportIssueScope::Timeline);
     if (!p->facts.destination_admitted)
         issue(EditExportIssueCode::DestinationAliasesSource, EditExportIssueScope::Destination);
     bool video_effect = !t.crossfades.empty();
@@ -255,6 +340,12 @@ std::shared_ptr<const EditExportPlan> PrepareEditExport(TimelineRenderSnapshot s
     bool audio_effect = false;
     size_t audio_clips = 0;
     for (const auto& c : t.clips) {
+        const auto track =
+            std::find_if(t.tracks.begin(), t.tracks.end(), [&](const auto& value) { return value.id == c.track; });
+        const bool enabled = c.enabled && (track == t.tracks.end() || track->enabled);
+        if (p->intent.mode != EditExportMode::OriginalStreams &&
+            (!enabled || c.start_us >= p->span_out_us || c.end_us() <= p->span_in_us))
+            continue;
         const auto s = std::find_if(p->snapshot.sources.begin(), p->snapshot.sources.end(),
                                     [&](const auto& s) { return s.id == c.asset; });
         if (s == p->snapshot.sources.end() || !s->metadata.error.empty()) {
@@ -266,9 +357,6 @@ std::shared_ptr<const EditExportPlan> PrepareEditExport(TimelineRenderSnapshot s
         if (c.start_us < 0 || c.source_in_us < 0 || c.source_out_us <= c.source_in_us ||
             c.source_out_us > s->metadata.duration_us || !std::isfinite(c.gain_db) || !std::isfinite(c.opacity))
             issue(EditExportIssueCode::InvalidTimeline, EditExportIssueScope::Timeline, c.id);
-        const auto track =
-            std::find_if(t.tracks.begin(), t.tracks.end(), [&](const auto& track) { return track.id == c.track; });
-        const bool enabled = c.enabled && (track == t.tracks.end() || track->enabled);
         if (c.audio && enabled && c.start_us < p->span_out_us && c.end_us() > p->span_in_us) {
             has_audio = true;
             ++audio_clips;
@@ -335,13 +423,6 @@ bool AcceptsBoundaryConsent(const EditExportPlan& plan, const EditBoundaryConsen
 }
 namespace {
 
-std::pair<int64_t, int64_t> Span(const TimelineSnapshot& timeline, EditExportSpan span) {
-    const int64_t in = span == EditExportSpan::ResultRange ? timeline.result_in_us : 0;
-    const int64_t out = span == EditExportSpan::ResultRange && timeline.result_out_us >= 0 ? timeline.result_out_us
-                                                                                           : timeline.duration_us;
-    return {in, out};
-}
-
 bool TrackEnabled(const TimelineSnapshot& timeline, const TimelineClip& clip) {
     const auto track = std::find_if(timeline.tracks.begin(), timeline.tracks.end(),
                                     [&clip](const auto& value) { return value.id == clip.track; });
@@ -369,12 +450,13 @@ bool SameFile(const std::filesystem::path& a, const std::filesystem::path& b) {
 
 } // namespace
 
-EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& snapshot, const EditExportIntent& intent,
+EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& input_snapshot, const EditExportIntent& intent,
                                       bool input_mix_validated, const std::atomic<bool>* cancelled) {
     EditExportFacts facts;
+    const auto snapshot = SelectEditExportSnapshot(input_snapshot, intent);
     facts.input_mix_validated = input_mix_validated;
     const auto& timeline = snapshot.timeline;
-    const auto span = Span(timeline, intent.span);
+    const auto span = EditExportBounds(timeline, intent);
     const bool whole = span.first == 0 && span.second == timeline.duration_us;
     const bool mp4 = intent.container == EditExportContainer::Mp4;
     if (mp4) {
@@ -391,12 +473,15 @@ EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& snapshot, co
     std::vector<const TimelineClip*> video;
     std::set<uint64_t> video_tracks;
     for (const auto& clip : timeline.clips)
-        if (!clip.audio && TrackEnabled(timeline, clip)) {
+        if (!clip.audio && TrackEnabled(timeline, clip) && clip.start_us < span.second && clip.end_us() > span.first) {
             video.push_back(&clip);
             video_tracks.insert(clip.track);
         }
     std::sort(video.begin(), video.end(), [](const auto* a, const auto* b) { return a->start_us < b->start_us; });
-    bool render_video = !video.empty();
+    bool render_video = !video.empty() || (timeline.output_width > 0 && timeline.output_height > 0 &&
+                                           timeline.output_fps_num > 0 && timeline.output_fps_den > 0 &&
+                                           IsEncoderAlignedSize({static_cast<uint32_t>(timeline.output_width),
+                                                                 static_cast<uint32_t>(timeline.output_height)}));
     bool complete = !video.empty() && video_tracks.size() == 1 && whole;
     int64_t covered = 0;
     for (const auto* clip : video) {
@@ -504,26 +589,28 @@ RemuxResult ExecuteFinished(const EditExportPlan& plan, RecorderConfig config, c
     for (const auto& clip : timeline.clips)
         if (!clip.audio && !reference)
             reference = SourceOf(plan.snapshot, clip.asset);
-    if (!reference)
-        return RemuxResult::Fail(-1, "The timeline has no video source to render.");
     EditRenderPlan render;
     render.path = EditExportPath::Render;
     render.span_in_us = plan.span_in_us;
     render.span_out_us = plan.span_out_us;
     render.aac_audio = aac;
     render.output = plan.intent.geometry.IsValid() ? plan.intent.geometry
-                                                   : FrameSize{static_cast<uint32_t>(reference->metadata.width),
-                                                               static_cast<uint32_t>(reference->metadata.height)};
+                    : reference                    ? FrameSize{static_cast<uint32_t>(reference->metadata.width),
+                                            static_cast<uint32_t>(reference->metadata.height)}
+                                                   : FrameSize{timeline.output_width, timeline.output_height};
     if (plan.intent.fps_num) {
         render.fps_num = static_cast<int>(plan.intent.fps_num);
         render.fps_den = static_cast<int>(plan.intent.fps_den);
     } else if (timeline.output_fps_num) {
         render.fps_num = static_cast<int>(timeline.output_fps_num);
         render.fps_den = static_cast<int>(timeline.output_fps_den);
-    } else {
+    } else if (reference) {
         render.fps_num = reference->metadata.fps_num;
         render.fps_den = reference->metadata.fps_den;
     }
+    if (!IsEncoderAlignedSize(render.output) || render.fps_num <= 0 || render.fps_den <= 0)
+        return RemuxResult::Fail(-1,
+                                 EXOSNAP_TRANSLATABLE("EditRender", "The timeline has no established output format."));
     return RenderEditTimeline(plan.snapshot, render, std::move(config), staging, false, std::move(progress));
 }
 

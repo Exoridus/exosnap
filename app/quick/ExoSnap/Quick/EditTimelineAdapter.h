@@ -1,14 +1,18 @@
 #pragma once
 
+#include "EditThumbnailImageProvider.h"
 #include "EditTimelineModels.h"
 
+#include "services/ThumbnailCache.h"
 #include "services/TimelineThumbnailSource.h"
+#include "services/WaveformCacheService.h"
 
 #include <QAbstractItemModel>
 #include <QObject>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
+#include <QVariantList>
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <cstdint>
@@ -65,6 +69,7 @@ class EditTimelineAdapter : public QObject {
     Q_PROPERTY(QAbstractItemModel* markerModel READ markerModel CONSTANT FINAL)
     Q_PROPERTY(QString sourcePath READ sourcePath NOTIFY tileProgressChanged FINAL)
     Q_PROPERTY(QString posterSource READ posterSource NOTIFY tileProgressChanged FINAL)
+    Q_PROPERTY(QObject* waveformService READ waveformService CONSTANT FINAL)
 
     Q_PROPERTY(int trackWidth READ trackWidth WRITE setTrackWidth NOTIFY trackWidthChanged FINAL)
     Q_PROPERTY(int tileWidth READ tileWidth NOTIFY layoutChanged FINAL)
@@ -145,6 +150,56 @@ class EditTimelineAdapter : public QObject {
     void deliverRunFinishedForTest(quint64 run_id, int tiles_emitted, bool cancelled);
     void deliverClipOpenedForTest(int video_width, int video_height, const QStringList& audio_track_names);
 
+    // ---- Per-clip thumbnails ----
+    //
+    // Tiles for any visible clip, keyed by the source's validated content
+    // identity rather than by the single clip the strip above follows. Tiles are
+    // drawn through the image provider created by createThumbnailImageProvider(),
+    // which must be installed under kEditThumbnailProviderId.
+
+    // Replaces the thumbnail cache configuration. Only effective before the
+    // first source is registered or clip opened; a test seam and the hook for a
+    // non-default cache root.
+    void configureThumbnailCache(const ThumbnailRequestBroker::Config& config);
+
+    // Makes a source drawable. `identityHex` is the 64-character content SHA-256.
+    // Frame size and rate shape the tile grid; 0 means unknown. Returns false
+    // for a malformed identity.
+    Q_INVOKABLE bool registerThumbnailSource(const QString& identityHex, const QString& path, int videoWidth,
+                                             int videoHeight, int fpsNum, int fpsDen);
+
+    // Tiles covering one clip's source window drawn `widthPx` wide and
+    // `heightPx` high: a list of {timeUs, x, width, source}, `x` relative to
+    // the clip's left edge, `source` an image URL. Also queues a bounded
+    // prefetch of the neighbouring window on either side. Empty for an
+    // unregistered source.
+    Q_INVOKABLE QVariantList thumbnailTiles(const QString& identityHex, qint64 sourceInUs, qint64 sourceOutUs,
+                                            qreal widthPx, int heightPx);
+
+    // Pauses thumbnail decoding (strip and per-clip) between frames while
+    // playback, export or recording is active. Cached tiles are still served.
+    Q_INVOKABLE void setForegroundBusy(bool busy);
+
+    // Deletes every persisted thumbnail and the memory tier. Returns released
+    // disk bytes.
+    Q_INVOKABLE qint64 clearThumbnailCache();
+
+    // A new provider for QQmlEngine::addImageProvider(kEditThumbnailProviderId),
+    // which takes ownership. It shares this adapter's broker and stays valid
+    // after the adapter is destroyed; requests then resolve as unavailable.
+    [[nodiscard]] EditThumbnailImageProvider* createThumbnailImageProvider();
+    [[nodiscard]] QObject* waveformService() const;
+    Q_INVOKABLE QString waveformSource(const QString& identityHex, const QString& path, int containerIndex,
+                                       const QString& streamIdentityHex, qint64 sourceEndUs);
+    Q_INVOKABLE qint64 clearMediaCaches();
+
+    [[nodiscard]] const std::shared_ptr<ThumbnailRequestBroker>& thumbnailBroker() const noexcept {
+        return broker_;
+    }
+    [[nodiscard]] TimelineThumbnailSource* thumbnailSourceForTest() noexcept {
+        return source_.has_value() ? &source_.value() : nullptr;
+    }
+
   signals:
     void trackWidthChanged();
     void layoutChanged();
@@ -172,6 +227,10 @@ class EditTimelineAdapter : public QObject {
     EditTimelineTileProvider* provider_ = nullptr;
     EditTimelineTileModel tile_model_;
     EditMarkerModel marker_model_;
+    // Declared before source_ so the worker detaches from it before it goes.
+    std::shared_ptr<ThumbnailRequestBroker> broker_;
+    std::unique_ptr<WaveformCacheService> waveforms_;
+    bool foreground_busy_ = false;
     std::optional<TimelineThumbnailSource> source_;
 
     QTimer resize_debounce_;

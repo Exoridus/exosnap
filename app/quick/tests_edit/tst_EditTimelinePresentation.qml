@@ -20,6 +20,11 @@ TestCase {
         EditTimelineRuler { pixelsPerMs: 0.04; viewportX: 0; viewportWidth: 600 }
     }
     function init() {
+        testSession.cancelClipDrag();
+        testSession.snapping = true;
+        testSession.ripple = false;
+        testSession.autoCrossfade = true;
+        testSession.linkedSelection = true;
         while (testSession.canUndo) testSession.undo();
         testSession.appendAsset(testSession.media[0].id);
         testSession.requestSeek(0);
@@ -100,18 +105,26 @@ TestCase {
         const playhead = findChild(strip, "editPlayhead");
         scroll.contentX = 900;
         testSession.requestSeek(30000);
-        const before = playhead.mapToItem(strip, 0, 0).x;
+        const before = strip.timeAt(scroll.contentX + 198);
         mouseWheel(strip, 200, 100, 0, 120, Qt.NoButton, Qt.ControlModifier);
         verify(strip.pixelsPerSecond > 40);
-        compare(playhead.mapToItem(strip, 0, 0).x, before);
+        fuzzyCompare(strip.timeAt(scroll.contentX + 198), before, 1);
+        const playheadBeforeKeyboard = playhead.mapToItem(strip, 0, 0).x;
         strip.forceActiveFocus();
         keyClick(Qt.Key_Minus, Qt.ControlModifier);
         compare(strip.pixelsPerSecond, 40);
-        compare(playhead.mapToItem(strip, 0, 0).x, before);
-        strip.zoomTo(1000);
-        compare(strip.pixelsPerSecond, 250);
+        compare(playhead.mapToItem(strip, 0, 0).x, playheadBeforeKeyboard);
+        strip.zoomTo(200000);
+        compare(strip.pixelsPerSecond, strip.maximumZoom);
         strip.zoomTo(0);
-        compare(strip.pixelsPerSecond, 10);
+        compare(strip.pixelsPerSecond, strip.minimumZoom);
+    }
+    function test_frame_scale_ruler_has_readable_subframe_ticks() {
+        const strip = createTemporaryObject(timelineComponent, tests);
+        strip.pixelsPerSecond = 120000;
+        const ruler = findChild(strip, "editTimelineRuler");
+        compare(ruler.majorMs, 1);
+        verify(ruler.tickCount < 100);
     }
     function test_context_ripple_is_keyboard_accessible() {
         const strip = createTemporaryObject(timelineComponent, tests);
@@ -126,6 +139,66 @@ TestCase {
         tryCompare(menu, "visible", false);
         compare(testSession.durationMs, 50000);
         compare(testSession.visibleClips(0, 100000)[0].startMs, 0);
+    }
+    function test_drag_threshold_committed_geometry_and_escape() {
+        const strip = createTemporaryObject(timelineComponent, tests);
+        testSession.snapping = false;
+        const clip = testSession.visibleClips(0, 100000)[0];
+        const item = findChild(strip, "editClip" + clip.id);
+        const originalX = item.x;
+        mousePress(item, 100, 25);
+        mouseMove(item, 101, 25, 10);
+        verify(!testSession.dragActive);
+        mouseMove(item, 130, 25, 10);
+        verify(testSession.dragActive);
+        verify(testSession.dragValid);
+        compare(item.x, originalX);
+        const ghost = findChild(strip, "editDragGhost" + clip.id);
+        verify(ghost);
+        const scroll = findChild(strip, "editTimelineScroll");
+        verify(ghost.x >= scroll.contentX + strip.labelWidth);
+        verify(ghost.width <= scroll.width - strip.labelWidth);
+        keyClick(Qt.Key_Escape);
+        verify(!testSession.dragActive);
+        mouseRelease(item, 130, 25);
+        compare(testSession.visibleClips(0, 100000)[0].startMs, clip.startMs);
+    }
+    function test_drag_commit_moves_ghost_candidate_only_on_release() {
+        const strip = createTemporaryObject(timelineComponent, tests);
+        testSession.snapping = false;
+        const clip = testSession.visibleClips(0, 100000)[0];
+        const item = findChild(strip, "editClip" + clip.id);
+        mousePress(item, 100, 25);
+        mouseMove(item, 140, 25, 10);
+        verify(testSession.dragValid);
+        compare(testSession.visibleClips(0, 100000)[0].startMs, 0);
+        const candidate = testSession.dragClips[0].startMs;
+        mouseRelease(item, 140, 25);
+        compare(testSession.visibleClips(0, 100000)[0].startMs, candidate);
+        testSession.undo();
+        compare(testSession.visibleClips(0, 100000)[0].startMs, 0);
+    }
+    function test_gap_selection_copy_paste_and_escape_preview() {
+        const strip = createTemporaryObject(timelineComponent, tests);
+        const id = testSession.visibleClips(0, 100000)[0].id;
+        testSession.moveClip(id, 10000, false);
+        strip.forceActiveFocus();
+        mouseClick(strip, strip.positionAt(5000) + 2, 60);
+        compare(testSession.selectedGap.startMs, 0);
+        compare(testSession.selectedGap.endMs, 10000);
+        keyClick(Qt.Key_Delete);
+        compare(testSession.visibleClips(0, 200000)[0].startMs, 10000);
+        keyClick(Qt.Key_Delete, Qt.ShiftModifier);
+        verify(testSession.dragActive && testSession.dragValid);
+        compare(testSession.visibleClips(0, 200000)[0].startMs, 10000);
+        verify(findChild(strip, "editApplyGapPreview").visible);
+        keyClick(Qt.Key_Escape);
+        verify(!testSession.dragActive);
+        keyClick(Qt.Key_C, Qt.ControlModifier);
+        testSession.requestSeek(0);
+        keyClick(Qt.Key_V, Qt.ControlModifier);
+        compare(testSession.spacers.length, 1);
+        verify(findChild(strip, "editSpacer" + testSession.spacers[0].id));
     }
     function test_linked_idle_hover_selected() {
         const strip = createTemporaryObject(timelineComponent, tests);

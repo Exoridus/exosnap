@@ -78,7 +78,7 @@ Item {
             verify(output.x + output.width <= header.width);
             verify(header.height >= 46 && footer.height >= 42);
             if (data.width >= 1000) compare(Math.round(transport.x + transport.width / 2), Math.round(header.width / 2));
-            for (const name of ["editUndo", "editRedo", "editSplit", "editDelete", "editTransportPlay", "editVolume", "editExport", "editMediaAccess", "editDetailsAccess", "editSnapping", "editZoomOut", "editZoomIn"]) {
+            for (const name of ["editUndo", "editRedo", "editSplit", "editDelete", "editTransportPlay", "editVolume", "editExport", "editMediaAccess", "editDetailsAccess", "editSnapping", "editRipple", "editAutoCrossfade", "editLinkedSelection", "editZoomOut", "editZoomIn", "editZoomFit"]) {
                 const control = child(page, name);
                 const p = control.mapToItem(page, 0, 0);
                 verify(control.width >= 34 && control.height >= 32, name);
@@ -111,6 +111,29 @@ Item {
             keyClick(Qt.Key_Space);
             tryCompare(page, "mediaOpen", false);
             compare(page.detailsOpen, true);
+        }
+        function test_FourIndependentBehaviorControls() {
+            const page = make();
+            const session = page.session;
+            session.snapping = true;
+            session.ripple = false;
+            session.autoCrossfade = true;
+            session.linkedSelection = true;
+            for (const data of [
+                {name: "editSnapping", property: "snapping", initial: true},
+                {name: "editRipple", property: "ripple", initial: false},
+                {name: "editAutoCrossfade", property: "autoCrossfade", initial: true},
+                {name: "editLinkedSelection", property: "linkedSelection", initial: true}
+            ]) {
+                const control = child(page, data.name);
+                compare(control.checked, data.initial);
+                verify(control.ToolTip.text.length > 0);
+                control.forceActiveFocus(Qt.TabFocusReason);
+                keyClick(Qt.Key_Space);
+                compare(session[data.property], !data.initial);
+                keyClick(Qt.Key_Space);
+                compare(session[data.property], data.initial);
+            }
         }
 
         function test_PinIsExplicit() {
@@ -256,8 +279,10 @@ Item {
             tryCompare(popup, "opened", true);
             const duration = child(page, "editCrossfadeDuration");
             duration.forceActiveFocus(Qt.TabFocusReason);
-            keyClick(Qt.Key_Up);
-            compare(testSession.transitions[0].durationMs, 501);
+            const positions = testSession.visibleClips(0, 200000).map(clip => clip.startMs);
+            keyClick(Qt.Key_Down);
+            compare(testSession.transitions[0].durationMs, 499);
+            compare(testSession.visibleClips(0, 200000).map(clip => clip.startMs), positions);
             keyClick(Qt.Key_Escape);
             tryCompare(popup, "visible", false);
             page.toggleMedia();
@@ -271,7 +296,7 @@ Item {
             }
             child(page, "editCrossfadeOverlay").forceActiveFocus(Qt.TabFocusReason);
             keyClick(Qt.Key_Delete);
-            compare(testSession.durationMs, 199499);
+            compare(testSession.durationMs, 199500);
             compare(testSession.transitions[0].kind, "hardCut");
             while (testSession.canUndo) testSession.undo();
         }
@@ -430,18 +455,37 @@ Item {
             const span = child(page, "editExportSpan");
             compare(testPageExporter.modeKey, "finishedStereo");
             compare(original.checked, false);
-            compare(span.currentValue, "result");
+            compare(span.currentValue, "entire");
             original.toggledByUser(true);
             compare(testPageExporter.modeKey, "originalStreams");
             original.toggledByUser(false);
             compare(testPageExporter.modeKey, "finishedStereo");
             span.currentIndex = 1;
             span.activated(1);
-            compare(testPageExporter.spanKey, "entire");
+            compare(testPageExporter.spanKey, "occupied");
+            span.currentIndex = 2;
+            span.activated(2);
+            compare(testPageExporter.spanKey, "result");
+            const selection = child(page, "editExportSelectionSpan");
+            verify(selection.visible);
+            compare(selection.currentValue, "result");
+            selection.currentIndex = 1;
+            selection.activated(1);
+            compare(testPageExporter.spanKey, "time");
             testPageExporter.spanKey = "result";
             const fresh = make();
             fresh.toggleDetails();
-            compare(child(fresh, "editExportSpan").currentValue, "result");
+            compare(child(fresh, "editExportSpan").currentValue, "selection");
+            compare(child(fresh, "editExportSelectionSpan").currentValue, "result");
+            testPageExporter.spanKey = "entire";
+        }
+        function test_clear_media_cache_is_available_in_details() {
+            const page = make();
+            page.toggleDetails();
+            const clear = child(page, "editClearMediaCache");
+            verify(clear.enabled);
+            verify(clear.Accessible.name.length > 0);
+            verify(clear.ToolTip.text.length > 0);
         }
         function test_source_tabs_scroll_without_truncating_labels() {
             const page = make();

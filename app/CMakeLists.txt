@@ -923,6 +923,8 @@ exosnap_add_gtest(
         tests/test_timeline_thumbnail_source.cpp
         services/TimelineThumbnailSource.h
         services/TimelineThumbnailSource.cpp
+        services/ThumbnailCache.h
+        services/ThumbnailCache.cpp
     LIBRARIES Qt6::Core Qt6::Gui exosnap_engine
 )
 target_include_directories(timeline_thumbnail_source_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

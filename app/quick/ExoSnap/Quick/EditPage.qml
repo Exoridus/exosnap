@@ -46,6 +46,12 @@ FocusScope {
         property: "trackWidth"
         value: clips.width
     }
+    Connections {
+        target: root.session
+        function onTimeSelectionChanged(): void {
+            root.exporter.setTimeSelectionUs(root.session.timeSelectionInUs, root.session.timeSelectionOutUs);
+        }
+    }
     function toggleMedia(): void {
         root.mediaOpen = !root.mediaOpen;
         if (!root.mediaOpen) {
@@ -228,6 +234,70 @@ FocusScope {
                                         wrapMode: Text.Wrap
                                     }
                                 }
+                                Label { visible: root.session.selectedClip !== 0; text: qsTr("Fade in (ms)") }
+                                SpinBox {
+                                    objectName: "editDetailsFadeIn"
+                                    visible: root.session.selectedClip !== 0
+                                    from: 0; to: 2147483647; editable: true
+                                    value: root.session.selectedClipDetails.fadeInMs ?? 0
+                                    Accessible.name: qsTr("Fade in duration in milliseconds")
+                                    onValueModified: root.session.setClipFade(root.session.selectedClip, true, value)
+                                }
+                                Label { visible: root.session.selectedClip !== 0; text: qsTr("Fade out (ms)") }
+                                SpinBox {
+                                    objectName: "editDetailsFadeOut"
+                                    visible: root.session.selectedClip !== 0
+                                    from: 0; to: 2147483647; editable: true
+                                    value: root.session.selectedClipDetails.fadeOutMs ?? 0
+                                    Accessible.name: qsTr("Fade out duration in milliseconds")
+                                    onValueModified: root.session.setClipFade(root.session.selectedClip, false, value)
+                                }
+                                Label { visible: root.session.selectedTransition !== 0; text: qsTr("Junction start (ms)") }
+                                SpinBox {
+                                    objectName: "editDetailsJunctionStart"
+                                    visible: root.session.selectedTransition !== 0
+                                    from: 0; to: 2147483647; editable: true
+                                    value: root.session.selectedJunctionDetails.startMs ?? 0
+                                    Accessible.name: qsTr("Junction start in milliseconds")
+                                    onValueModified: root.session.setJunctionWindow(value, root.session.selectedJunctionDetails.endMs)
+                                }
+                                Label { visible: root.session.selectedTransition !== 0; text: qsTr("Junction end (ms)") }
+                                SpinBox {
+                                    objectName: "editDetailsJunctionEnd"
+                                    visible: root.session.selectedTransition !== 0
+                                    from: 0; to: 2147483647; editable: true
+                                    value: root.session.selectedJunctionDetails.endMs ?? 0
+                                    Accessible.name: qsTr("Junction end in milliseconds")
+                                    onValueModified: root.session.setJunctionWindow(root.session.selectedJunctionDetails.startMs, value)
+                                }
+                                ExoCheckBox {
+                                    objectName: "editFixedTimelineEnd"
+                                    text: qsTr("Fixed timeline end")
+                                    checked: root.session.fixedTimelineEnd
+                                    onToggledByUser: value => root.session.setFixedTimelineEnd(value, root.session.durationMs)
+                                }
+                                SpinBox {
+                                    objectName: "editTimelineEnd"
+                                    from: 0; to: 2147483647; editable: true
+                                    enabled: root.session.fixedTimelineEnd
+                                    value: root.session.durationMs
+                                    Accessible.name: qsTr("Timeline end in milliseconds")
+                                    onValueModified: root.session.setFixedTimelineEnd(true, value)
+                                }
+                                Button {
+                                    objectName: "editCloseGap"
+                                    visible: root.session.selectedGap.endMs !== undefined
+                                    text: qsTr("Close Gap (preview)")
+                                    onClicked: root.session.previewCloseGap()
+                                }
+                                Button {
+                                    objectName: "editClearMediaCache"
+                                    text: qsTr("Clear media cache")
+                                    Accessible.name: qsTr("Clear media cache")
+                                    onClicked: root.timeline.clearMediaCaches()
+                                    ToolTip.text: qsTr("Remove cached thumbnails and waveforms. Source recordings are kept.")
+                                    ToolTip.visible: hovered
+                                }
                                 Label {
                                     Layout.fillWidth: true
                                     visible: root.player.monitoringTracks.length > 0
@@ -279,14 +349,33 @@ FocusScope {
                                     objectName: "editExportSpan"
                                     Layout.fillWidth: true
                                     model: [
+                                        { value: "entire", label: qsTr("Entire Timeline") },
+                                        { value: "occupied", label: qsTr("Occupied Content") },
+                                        { value: "selection", label: qsTr("Selection") }
+                                    ]
+                                    textRole: "label"
+                                    valueRole: "value"
+                                    currentIndex: root.exporter.spanKey === "entire" ? 0 : root.exporter.spanKey === "occupied" ? 1 : 2
+                                    Accessible.name: qsTr("Export range")
+                                    onActivated: root.exporter.spanKey = currentValue === "selection" ? "result" : currentValue
+                                }
+                                ComboBox {
+                                    objectName: "editExportSelectionSpan"
+                                    Layout.fillWidth: true
+                                    visible: root.exporter.spanKey !== "entire" && root.exporter.spanKey !== "occupied"
+                                    model: [
                                         { value: "result", label: qsTr("Result range") },
-                                        { value: "entire", label: qsTr("Entire timeline") }
+                                        { value: "time", label: qsTr("I/O time range") },
+                                        { value: "selected", label: qsTr("Selected clips") }
                                     ]
                                     textRole: "label"
                                     valueRole: "value"
                                     currentIndex: model.findIndex(option => option.value === root.exporter.spanKey)
-                                    Accessible.name: qsTr("Export range")
-                                    onActivated: root.exporter.spanKey = currentValue
+                                    Accessible.name: qsTr("Selection source")
+                                    onActivated: {
+                                        root.exporter.setTimeSelectionUs(root.session.timeSelectionInUs, root.session.timeSelectionOutUs);
+                                        root.exporter.spanKey = currentValue;
+                                    }
                                 }
                                 ExoCheckBox {
                                     objectName: "editExportOriginalStreams"
@@ -337,8 +426,8 @@ FocusScope {
                         EditActionButton { objectName: "editUndo"; text: qsTr("Undo"); shortcutText: "Ctrl+Z"; glyph: ExoGlyph.Undo; enabled: root.session.canUndo; onClicked: root.session.undo() }
                         EditActionButton { objectName: "editRedo"; text: qsTr("Redo"); shortcutText: "Ctrl+Y"; glyph: ExoGlyph.Redo; enabled: root.session.canRedo; onClicked: root.session.redo() }
                         EditActionButton { objectName: "editSplit"; text: qsTr("Split"); shortcutText: "Ctrl+B"; glyph: ExoGlyph.Scissors; enabled: root.session.durationMs > 0; onClicked: root.session.splitSelected() }
-                        EditActionButton { objectName: "editDelete"; text: qsTr("Delete"); shortcutText: "Delete"; glyph: ExoGlyph.Trash; enabled: root.session.selectedClip !== 0; onClicked: root.session.deleteSelected(false) }
-                        EditActionButton { objectName: "editRippleDeleteAction"; text: qsTr("Ripple delete"); shortcutText: "Shift+Delete"; glyph: ExoGlyph.CloseGap; enabled: root.session.selectedClip !== 0; onClicked: root.session.deleteSelected(true) }
+                        EditActionButton { objectName: "editDelete"; text: qsTr("Delete"); shortcutText: "Delete"; glyph: ExoGlyph.Trash; enabled: root.session.selectedClip !== 0 || root.session.selectedSpacer !== 0; onClicked: root.session.deleteSelected(false) }
+                        EditActionButton { objectName: "editRippleDeleteAction"; text: qsTr("Ripple delete"); shortcutText: "Shift+Delete"; glyph: ExoGlyph.CloseGap; enabled: root.session.selectedClip !== 0 || root.session.selectedSpacer !== 0 || root.session.selectedGap.endMs !== undefined; onClicked: root.session.deleteSelected(true) }
                     }
                     Row {
                         id: transportGroup
@@ -445,19 +534,23 @@ FocusScope {
                     spacing: 4
                     EditActionButton { id: mediaAccess; objectName: "editMediaAccess"; text: qsTr("Media"); shortcutText: "Ctrl+M"; glyph: ExoGlyph.Folder; panelAccess: true; expanded: root.mediaOpen; pinned: root.mediaPinned; onClicked: root.toggleMedia() }
                     EditActionButton { id: detailsAccess; objectName: "editDetailsAccess"; text: qsTr("Details"); shortcutText: "Ctrl+D"; glyph: ExoGlyph.Info; panelAccess: true; expanded: root.detailsOpen; pinned: root.detailsPinned; onClicked: root.toggleDetails() }
-                    EditActionButton { objectName: "editSnapping"; text: qsTr("Snapping"); glyph: ExoGlyph.Magnet; checkable: true; checked: clips.snapping; onClicked: clips.snapping = checked }
+                    EditActionButton { objectName: "editSnapping"; text: qsTr("Snapping"); glyph: ExoGlyph.Magnet; checkable: true; checked: root.session.snapping; onClicked: root.session.snapping = checked }
+                    EditActionButton { objectName: "editRipple"; text: qsTr("Ripple"); glyph: ExoGlyph.CloseGap; checkable: true; checked: root.session.ripple; onClicked: root.session.ripple = checked }
+                    EditActionButton { objectName: "editAutoCrossfade"; text: qsTr("Auto Crossfade"); glyph: ExoGlyph.Layers; checkable: true; checked: root.session.autoCrossfade; onClicked: root.session.autoCrossfade = checked }
+                    EditActionButton { objectName: "editLinkedSelection"; text: qsTr("Linked Selection"); glyph: ExoGlyph.SplitTrack; checkable: true; checked: root.session.linkedSelection; onClicked: root.session.linkedSelection = checked }
                     Item { Layout.fillWidth: true }
                     EditActionButton { objectName: "editZoomOut"; text: qsTr("Zoom out"); glyph: ExoGlyph.Minus; onClicked: clips.zoomTo(clips.pixelsPerSecond / 1.25) }
                     Slider {
                         objectName: "editZoomSlider"
                         Layout.preferredWidth: root.width < 1000 ? 80 : 110
-                        from: 10
-                        to: 250
-                        value: clips.pixelsPerSecond
+                        from: Math.log(clips.minimumZoom)
+                        to: Math.log(clips.maximumZoom)
+                        value: Math.log(clips.pixelsPerSecond)
                         Accessible.name: qsTr("Timeline zoom")
-                        onMoved: clips.zoomTo(value)
+                        onMoved: clips.zoomTo(Math.exp(value))
                     }
                     EditActionButton { objectName: "editZoomIn"; text: qsTr("Zoom in"); glyph: ExoGlyph.Plus; onClicked: clips.zoomTo(clips.pixelsPerSecond * 1.25) }
+                    EditActionButton { objectName: "editZoomFit"; text: qsTr("Fit timeline"); glyph: ExoGlyph.AppWindow; onClicked: clips.fitTimeline() }
                 }
             }
         }
@@ -541,7 +634,7 @@ FocusScope {
             }
             Label {
                 Layout.fillWidth: true
-                visible: root.exporter.reviewOutcome.replaceExisting
+                visible: root.exporter.reviewOutcome.replaceExisting === true
                 text: qsTr("The existing destination file will be replaced.")
                 wrapMode: Text.Wrap
             }

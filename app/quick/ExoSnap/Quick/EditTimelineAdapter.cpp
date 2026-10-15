@@ -3,9 +3,11 @@
 
 #include "EditSessionAdapter.h"
 
+#include <QByteArray>
 #include <QColor>
 
 #include <algorithm>
+#include <cstring>
 
 namespace exosnap::quick {
 namespace {
@@ -46,7 +48,9 @@ bool TimelineTileRunAllowed(bool has_source, const QString& clip_path, const QSt
     return source_clip_path == clip_path;
 }
 
-EditTimelineAdapter::EditTimelineAdapter(QObject* parent) : QObject(parent) {
+EditTimelineAdapter::EditTimelineAdapter(QObject* parent)
+    : QObject(parent), broker_(std::make_shared<ThumbnailRequestBroker>()),
+      waveforms_(std::make_unique<WaveformCacheService>()) {
     resize_debounce_.setSingleShot(true);
     resize_debounce_.setInterval(kResizeDebounceMs);
     connect(&resize_debounce_, &QTimer::timeout, this, &EditTimelineAdapter::startTileRun);
@@ -107,7 +111,9 @@ void EditTimelineAdapter::setSession(EditSessionAdapter* session) {
 void EditTimelineAdapter::ensureThumbnailSource() {
     if (source_.has_value())
         return;
-    source_.emplace();
+    source_.emplace(broker_);
+    if (foreground_busy_)
+        source_->setForegroundBusy(true);
     connect(&source_.value(), &TimelineThumbnailSource::clipOpened, this, &EditTimelineAdapter::handleClipOpened);
     connect(&source_.value(), &TimelineThumbnailSource::tileReady, this, &EditTimelineAdapter::handleTileReady);
     connect(&source_.value(), &TimelineThumbnailSource::runFinished, this, &EditTimelineAdapter::handleRunFinished);
@@ -407,6 +413,96 @@ void EditTimelineAdapter::applyUnavailablePreviewsForHarness() {
         return;
     previews_unavailable_ = true;
     emit tileProgressChanged();
+}
+
+void EditTimelineAdapter::configureThumbnailCache(const ThumbnailRequestBroker::Config& config) {
+    if (source_.has_value())
+        return;
+    broker_ = std::make_shared<ThumbnailRequestBroker>(config);
+}
+
+bool EditTimelineAdapter::registerThumbnailSource(const QString& identityHex, const QString& path, int videoWidth,
+                                                  int videoHeight, int fpsNum, int fpsDen) {
+    const auto identity = ParseContentIdentity(identityHex);
+    if (!identity || path.isEmpty())
+        return false;
+    ensureThumbnailSource();
+    broker_->RegisterSource(identityHex.toLower().toStdString(),
+                            ThumbnailSourceInfo{std::filesystem::path(path.toStdWString()), *identity, videoWidth,
+                                                videoHeight, fpsNum, fpsDen});
+    return true;
+}
+
+QVariantList EditTimelineAdapter::thumbnailTiles(const QString& identityHex, qint64 sourceInUs, qint64 sourceOutUs,
+                                                 qreal widthPx, int heightPx) {
+    QVariantList result;
+    const QString identity = identityHex.toLower();
+    const auto source = broker_->Source(identity.toStdString());
+    if (!source)
+        return result;
+    const auto tiles = ThumbnailTilesForWindow(sourceInUs, sourceOutUs, widthPx, heightPx, source->video_width,
+                                               source->video_height, source->fps_num, source->fps_den);
+    result.reserve(static_cast<qsizetype>(tiles.size()));
+    for (const auto& tile : tiles) {
+        result.append(QVariantMap{{QStringLiteral("timeUs"), QVariant::fromValue<qint64>(tile.time_us)},
+                                  {QStringLiteral("x"), tile.x},
+                                  {QStringLiteral("width"), tile.width},
+                                  {QStringLiteral("source"), EditThumbnailUrl(identity, tile.time_us, heightPx)}});
+    }
+    // One window of lookahead on each side covers a pan or scroll by a view
+    // width without waiting for a decode.
+    constexpr std::size_t kPrefetchLimit = 64;
+    const qint64 span = sourceOutUs - sourceInUs;
+    if (span > 0 && widthPx > 0) {
+        const auto times = ThumbnailGridTimes(std::max<qint64>(0, sourceInUs - span), sourceOutUs + span,
+                                              static_cast<double>(span) / widthPx, heightPx, source->video_width,
+                                              source->video_height, source->fps_num, source->fps_den, kPrefetchLimit);
+        broker_->Prefetch(identity.toStdString(), times, heightPx);
+    }
+    return result;
+}
+
+void EditTimelineAdapter::setForegroundBusy(bool busy) {
+    waveforms_->setForegroundBusy(busy);
+    foreground_busy_ = busy;
+    if (source_.has_value())
+        source_->setForegroundBusy(busy);
+    else
+        broker_->SetForegroundBusy(busy);
+}
+
+qint64 EditTimelineAdapter::clearThumbnailCache() {
+    return static_cast<qint64>(broker_->Clear());
+}
+
+EditThumbnailImageProvider* EditTimelineAdapter::createThumbnailImageProvider() {
+    return new EditThumbnailImageProvider(broker_);
+}
+
+QObject* EditTimelineAdapter::waveformService() const {
+    return waveforms_.get();
+}
+
+QString EditTimelineAdapter::waveformSource(const QString& identityHex, const QString& path, int containerIndex,
+                                            const QString& streamIdentityHex, qint64 sourceEndUs) {
+    const auto identity = ParseContentIdentity(identityHex);
+    if (!identity || path.isEmpty() || containerIndex < 0 || sourceEndUs <= 0)
+        return {};
+    engine::WaveformSourceKey source;
+    source.content_sha256 = *identity;
+    source.container_index = static_cast<std::uint32_t>(containerIndex);
+    if (!streamIdentityHex.isEmpty()) {
+        const auto bytes = QByteArray::fromHex(streamIdentityHex.toLatin1());
+        if (bytes.size() != static_cast<qsizetype>(source.stream_identity.size()) ||
+            bytes.toHex() != streamIdentityHex.toLower().toLatin1())
+            return {};
+        std::memcpy(source.stream_identity.data(), bytes.constData(), source.stream_identity.size());
+    }
+    return waveforms_->request(source, path, sourceEndUs);
+}
+
+qint64 EditTimelineAdapter::clearMediaCaches() {
+    return clearThumbnailCache() + waveforms_->clearCache();
 }
 
 } // namespace exosnap::quick

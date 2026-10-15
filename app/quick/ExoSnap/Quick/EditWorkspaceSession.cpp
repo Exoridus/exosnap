@@ -1,5 +1,6 @@
 #include "EditSessionAdapter.h"
 
+#include "models/EditCommandTypes.h"
 #include "models/EditWorkspace.h"
 
 #include <QFileInfo>
@@ -14,17 +15,38 @@
 #include <QtCore/qtmetamacros.h>
 #include <QtCore/qtypes.h>
 
+#include <QByteArray>
 #include <QPointer>
 #include <QVariantMap>
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include <exosnap/engine/edit_timeline_export.h>
+#include <exosnap/engine/edit_types.h>
 
 namespace exosnap::quick {
+
+namespace {
+bool FitsMilliseconds(qint64 value) {
+    return value >= (std::numeric_limits<edit::Time>::min)() / 1000 &&
+           value <= (std::numeric_limits<edit::Time>::max)() / 1000;
+}
+
+std::optional<edit::Time> AddTimelineTime(edit::Time value, edit::Time delta) {
+    if ((delta > 0 && value > (std::numeric_limits<edit::Time>::max)() - delta) ||
+        (delta < 0 && value < (std::numeric_limits<edit::Time>::min)() - delta))
+        return std::nullopt;
+    return value + delta;
+}
+} // namespace
 
 QVariantList EditSessionAdapter::media() const {
     QVariantList rows;
@@ -51,7 +73,8 @@ QVariantList EditSessionAdapter::tracks() const {
             QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(track.id)},
                         {QStringLiteral("name"), QStringLiteral("%1%2")
                                                      .arg(is_video ? QStringLiteral("V") : QStringLiteral("A"))
-                                                     .arg(is_video ? ++video : ++audio)}});
+                                                     .arg(is_video ? ++video : ++audio)},
+                        {QStringLiteral("video"), is_video}});
     }
     return rows;
 }
@@ -65,29 +88,57 @@ QVariantList EditSessionAdapter::visibleClips(qint64 from_ms, qint64 to_ms) cons
         const auto* asset = workspace_.asset(clip.asset);
         const auto track = std::find_if(workspace_.tracks().begin(), workspace_.tracks().end(),
                                         [&clip](const auto& t) { return t.id == clip.track; });
-        rows.push_back(
-            QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(clip.id)},
-                        {QStringLiteral("name"), QString::fromStdString(asset->name)},
-                        {QStringLiteral("trackIndex"), static_cast<int>(track - workspace_.tracks().begin())},
-                        {QStringLiteral("video"), track->type == edit::TrackType::Video},
-                        {QStringLiteral("path"), QString::fromStdWString(asset->path)},
-                        {QStringLiteral("group"), QVariant::fromValue<qulonglong>(clip.group)},
-                        {QStringLiteral("startMs"), QVariant::fromValue<qint64>(clip.start / 1000)},
-                        {QStringLiteral("durationMs"), QVariant::fromValue<qint64>(clip.duration() / 1000)},
-                        {QStringLiteral("inMs"), QVariant::fromValue<qint64>(clip.source_in / 1000)},
-                        {QStringLiteral("outMs"), QVariant::fromValue<qint64>(clip.source_out / 1000)},
-                        {QStringLiteral("available"), asset->state == edit::AssetState::Available},
-                        {QStringLiteral("selected"),
-                         selected && (clip.id == selected->id || (clip.group != 0 && clip.group == selected->group))}});
+        rows.push_back(QVariantMap{
+            {QStringLiteral("id"), QVariant::fromValue<qulonglong>(clip.id)},
+            {QStringLiteral("name"), QString::fromStdString(asset->name)},
+            {QStringLiteral("trackIndex"), static_cast<int>(track - workspace_.tracks().begin())},
+            {QStringLiteral("video"), track->type == edit::TrackType::Video},
+            {QStringLiteral("path"), QString::fromStdWString(asset->path)},
+            {QStringLiteral("group"), QVariant::fromValue<qulonglong>(clip.group)},
+            {QStringLiteral("startMs"), QVariant::fromValue<qint64>(clip.start / 1000)},
+            {QStringLiteral("durationMs"), QVariant::fromValue<qint64>(clip.duration() / 1000)},
+            {QStringLiteral("inMs"), QVariant::fromValue<qint64>(clip.source_in / 1000)},
+            {QStringLiteral("outMs"), QVariant::fromValue<qint64>(clip.source_out / 1000)},
+            {QStringLiteral("available"), asset->state == edit::AssetState::Available},
+            {QStringLiteral("selected"), selected && (clip.id == selected->id || (linkedSelection && clip.group != 0 &&
+                                                                                  clip.group == selected->group))},
+            {QStringLiteral("fadeInMs"), clip.fade_in.duration_us / 1000},
+            {QStringLiteral("fadeOutMs"), clip.fade_out.duration_us / 1000}});
+        auto row = rows.back().toMap();
+        row.insert(QStringLiteral("sourceInUs"), QVariant::fromValue<qint64>(clip.source_in));
+        row.insert(QStringLiteral("sourceOutUs"), QVariant::fromValue<qint64>(clip.source_out));
+        row.insert(QStringLiteral("sourceEndUs"), QVariant::fromValue<qint64>(asset->duration));
+        row.insert(QStringLiteral("width"), asset->width);
+        row.insert(QStringLiteral("height"), asset->height);
+        row.insert(QStringLiteral("fpsNum"), asset->fps_num);
+        row.insert(QStringLiteral("fpsDen"), asset->fps_den);
+        row.insert(QStringLiteral("containerIndex"), clip.stream ? static_cast<int>(clip.stream->container_index) : -1);
+        row.insert(
+            QStringLiteral("sourceIdentity"),
+            asset->source_descriptor
+                ? QString::fromLatin1(QByteArray(reinterpret_cast<const char*>(
+                                                     asset->source_descriptor->asset_identity_fingerprint.data()),
+                                                 32)
+                                          .toHex())
+                : QString());
+        row.insert(
+            QStringLiteral("streamIdentity"),
+            clip.stream
+                ? QString::fromLatin1(
+                      QByteArray(reinterpret_cast<const char*>(clip.stream->stream_identity.bytes.data()), 16).toHex())
+                : QString());
+        rows.back() = row;
     }
     return rows;
 }
 
 void EditSessionAdapter::publishWorkspace(bool changed) {
+    if (changed)
+        selected_gap_track_ = 0;
     workspace_error_ = changed ? QString() : tr("The edit would overlap another clip or exceed the source.");
     duration_ms_ = workspace_.duration() / 1000;
     position_ms_ = workspace_.playhead() / 1000;
-    const bool open = !workspace_.clips().empty();
+    const bool open = workspace_.duration() > 0;
     if (open_ != open) {
         open_ = open;
         emit openChanged();
@@ -96,9 +147,12 @@ void EditSessionAdapter::publishWorkspace(bool changed) {
     emit durationChanged();
     emit positionChanged();
     emit unsavedEditsChanged();
+    emit dragChanged();
 }
 
 void EditSessionAdapter::selectClip(qulonglong id) {
+    selected_spacer_ = 0;
+    selected_gap_track_ = 0;
     selected_transition_ = 0;
     workspace_.select(id);
     emit workspaceChanged();
@@ -107,20 +161,31 @@ void EditSessionAdapter::selectClip(qulonglong id) {
 QVariantList EditSessionAdapter::transitions() const {
     QVariantList result;
     for (const auto& t : workspace_.transitions()) {
-        const auto* incoming = workspace_.clip(t.incoming);
-        result.push_back(
-            QVariantMap{{QStringLiteral("outgoing"), QVariant::fromValue<qulonglong>(t.outgoing)},
-                        {QStringLiteral("incoming"), QVariant::fromValue<qulonglong>(t.incoming)},
-                        {QStringLiteral("startMs"), incoming->start / 1000},
-                        {QStringLiteral("durationMs"), t.duration / 1000},
-                        {QStringLiteral("kind"), t.kind == edit::TransitionKind::HardCut ? QStringLiteral("hardCut")
-                                                                                         : QStringLiteral("crossfade")},
-                        {QStringLiteral("selected"), selected_transition_ == t.outgoing}});
+        const auto track = std::find_if(workspace_.tracks().begin(), workspace_.tracks().end(),
+                                        [&t](const auto& value) { return value.id == t.track; });
+        result.push_back(QVariantMap{
+            {QStringLiteral("outgoing"), QVariant::fromValue<qulonglong>(t.outgoing)},
+            {QStringLiteral("incoming"), QVariant::fromValue<qulonglong>(t.incoming)},
+            {QStringLiteral("id"), QVariant::fromValue<qulonglong>(t.id)},
+            {QStringLiteral("trackIndex"), static_cast<int>(track - workspace_.tracks().begin())},
+            {QStringLiteral("video"), track != workspace_.tracks().end() && track->type == edit::TrackType::Video},
+            {QStringLiteral("startMs"), t.in_us / 1000},
+            {QStringLiteral("endMs"), t.out_us / 1000},
+            {QStringLiteral("cutMs"), t.cut_us / 1000},
+            {QStringLiteral("curve"), static_cast<int>(t.curve.kind)},
+            {QStringLiteral("bias"), t.curve.bias},
+            {QStringLiteral("audioLaw"), static_cast<int>(t.audio_law)},
+            {QStringLiteral("durationMs"), (t.out_us - t.in_us) / 1000},
+            {QStringLiteral("kind"),
+             t.kind == edit::TransitionKind::HardCut ? QStringLiteral("hardCut") : QStringLiteral("crossfade")},
+            {QStringLiteral("selected"), selected_transition_ == t.outgoing}});
     }
     return result;
 }
 
 void EditSessionAdapter::selectTransition(qulonglong outgoing) {
+    selected_spacer_ = 0;
+    selected_gap_track_ = 0;
     const auto found = std::find_if(workspace_.transitions().begin(), workspace_.transitions().end(),
                                     [outgoing](const auto& t) { return t.outgoing == outgoing; });
     selected_transition_ = found == workspace_.transitions().end() ? 0 : outgoing;
@@ -140,6 +205,10 @@ bool EditSessionAdapter::canCrossfade(qulonglong outgoing) const {
 }
 
 bool EditSessionAdapter::applyCrossfade(qulonglong outgoing, qint64 duration_ms) {
+    if (duration_ms <= 0 || !FitsMilliseconds(duration_ms)) {
+        publishWorkspace(false);
+        return false;
+    }
     const auto* a = workspace_.clip(outgoing ? outgoing : workspace_.selection());
     bool changed = false;
     if (a) {
@@ -157,6 +226,8 @@ bool EditSessionAdapter::applyCrossfade(qulonglong outgoing, qint64 duration_ms)
 }
 
 bool EditSessionAdapter::dropCrossfade(qint64 at_ms, qint64 tolerance_ms) {
+    if (at_ms < 0 || !FitsMilliseconds(at_ms) || tolerance_ms < 0 || tolerance_ms > 250)
+        return false;
     for (const auto& clip : workspace_.clips())
         if (std::abs(clip.end() / 1000 - at_ms) <= tolerance_ms && canCrossfade(clip.id))
             return applyCrossfade(clip.id);
@@ -173,7 +244,15 @@ void EditSessionAdapter::removeTransition() {
 }
 
 void EditSessionAdapter::appendAsset(qulonglong id, qint64 at_ms) {
-    publishWorkspace(workspace_.insert(id, at_ms < 0 ? -1 : at_ms * 1000));
+    if (!FitsMilliseconds(at_ms)) {
+        publishWorkspace(false);
+        return;
+    }
+    edit::AddAssetGroup command{id, at_ms < 0 ? workspace_.duration() : at_ms * 1000};
+    if (const auto* source = workspace_.asset(id))
+        command.input_mix_selection = source->input_mix_selection;
+    command.auto_crossfade = autoCrossfade;
+    applyCommand(command);
 }
 
 void EditSessionAdapter::addHistory(const QString& path, qint64 at_ms) {
@@ -185,6 +264,10 @@ void EditSessionAdapter::importMedia(const QUrl& url, bool append, qint64 at_ms)
 }
 
 void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, qint64 at_ms) {
+    if (!FitsMilliseconds(at_ms)) {
+        publishWorkspace(false);
+        return;
+    }
     QPointer<EditSessionAdapter> self(this);
     keyframe_pool_.start([self, urls, append, at_ms]() {
         std::vector<edit::Asset> assets;
@@ -231,7 +314,8 @@ void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, 
                     ids.push_back(self->workspace_.addAsset(std::move(asset)));
                 self->workspace_error_.clear();
                 if (append)
-                    self->publishWorkspace(self->workspace_.insertAssets(ids, at_ms < 0 ? -1 : at_ms * 1000));
+                    self->publishWorkspace(
+                        self->workspace_.insertAssets(ids, at_ms < 0 ? -1 : at_ms * 1000, self->autoCrossfade));
                 else
                     emit self->workspaceChanged();
             },
@@ -239,14 +323,47 @@ void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, 
     });
 }
 void EditSessionAdapter::moveClip(qulonglong id, qint64 at_ms, bool snap) {
+    if (!FitsMilliseconds(at_ms)) {
+        publishWorkspace(false);
+        return;
+    }
     edit::Time at = std::max<qint64>(0, at_ms) * 1000;
     if (snap)
         at = workspace_.snap(at, id, 100000);
-    publishWorkspace(workspace_.move(id, at));
+    const auto* clip = workspace_.clip(id);
+    if (!clip)
+        return;
+    edit::Move command{{id}, at - clip->start};
+    command.expand_linked = linkedSelection;
+    command.auto_crossfade = autoCrossfade;
+    command.ripple = ripple;
+    applyCommand(command);
 }
 
 void EditSessionAdapter::trimClip(qulonglong id, qint64 in_ms, qint64 out_ms) {
-    publishWorkspace(workspace_.trim(id, in_ms * 1000, out_ms * 1000));
+    if (in_ms < 0 || out_ms < 0 || !FitsMilliseconds(in_ms) || !FitsMilliseconds(out_ms)) {
+        publishWorkspace(false);
+        return;
+    }
+    const auto* clip = workspace_.clip(id);
+    if (!clip)
+        return;
+    if (in_ms * 1000 != clip->source_in && out_ms * 1000 != clip->source_out) {
+        if (ripple || !linkedSelection) {
+            workspace_error_ = tr("Adjust one trim edge at a time for ripple or independent edits.");
+            emit workspaceChanged();
+        } else {
+            publishWorkspace(workspace_.trim(id, in_ms * 1000, out_ms * 1000, autoCrossfade));
+        }
+        return;
+    }
+    const bool left = in_ms * 1000 != clip->source_in;
+    edit::Trim command{id, left ? edit::TrimEdge::Left : edit::TrimEdge::Right,
+                       left ? in_ms * 1000 - clip->source_in : out_ms * 1000 - clip->source_out};
+    command.mode = ripple ? edit::TrimMode::Ripple : edit::TrimMode::Fixed;
+    command.expand_linked = linkedSelection;
+    command.auto_crossfade = autoCrossfade;
+    applyCommand(command);
 }
 
 void EditSessionAdapter::splitSelected() {
@@ -255,11 +372,34 @@ void EditSessionAdapter::splitSelected() {
     if (!selected || selected->start >= workspace_.playhead() || selected->end() <= workspace_.playhead())
         if (const auto* active = workspace_.active(workspace_.playhead()))
             id = active->id;
-    publishWorkspace(workspace_.split(id, workspace_.playhead()));
+    applyCommand(edit::Split{{id}, workspace_.playhead(), linkedSelection});
 }
 
-void EditSessionAdapter::deleteSelected(bool ripple) {
-    publishWorkspace(workspace_.remove(workspace_.selection(), ripple));
+void EditSessionAdapter::deleteSelected(bool ripple_delete) {
+    if (selected_spacer_) {
+        if (ripple_delete) {
+            for (const auto& spacer : workspace_.snapshot()->spacers)
+                if (spacer.id == selected_spacer_) {
+                    selected_gap_ = {spacer.start_us, spacer.end()};
+                    selected_gap_track_ = spacer.track;
+                    previewCloseGap();
+                    return;
+                }
+        } else {
+            const auto id = std::exchange(selected_spacer_, 0);
+            applyCommand(edit::RemoveSpacer{id});
+        }
+        return;
+    }
+    if (selected_gap_track_) {
+        if (ripple_delete)
+            previewCloseGap();
+        return;
+    }
+    if (ripple_delete)
+        applyCommand(edit::RippleRemoveClips{{workspace_.selection()}, linkedSelection});
+    else
+        applyCommand(edit::LiftClips{{workspace_.selection()}, linkedSelection});
 }
 void EditSessionAdapter::undo() {
     if (workspace_.undo())
@@ -285,13 +425,483 @@ void EditSessionAdapter::nudgeSelected(qint64 delta_ms, int edge) {
     const auto* clip = workspace_.clip(workspace_.selection());
     if (!clip)
         return;
+    if (!FitsMilliseconds(delta_ms)) {
+        publishWorkspace(false);
+        return;
+    }
     const auto delta = delta_ms * 1000;
+    const auto boundary = edge == 1 ? clip->source_in : edge == 2 ? clip->source_out : clip->start;
+    const auto requested = AddTimelineTime(boundary, delta);
+    if (!requested) {
+        publishWorkspace(false);
+        return;
+    }
     if (edge == 1)
-        publishWorkspace(workspace_.trim(clip->id, clip->source_in + delta, clip->source_out));
+        trimClip(clip->id, *requested / 1000, clip->source_out / 1000);
     else if (edge == 2)
-        publishWorkspace(workspace_.trim(clip->id, clip->source_in, clip->source_out + delta));
+        trimClip(clip->id, clip->source_in / 1000, *requested / 1000);
     else
-        publishWorkspace(workspace_.move(clip->id, clip->start + delta));
+        moveClip(clip->id, *requested / 1000, false);
+}
+
+bool EditSessionAdapter::applyCommand(const edit::EditCommand& command) {
+    const auto result = workspace_.apply(command, workspace_.revision());
+    publishWorkspace(result.status != edit::CommandStatus::Rejected);
+    return result.status != edit::CommandStatus::Rejected;
+}
+
+void EditSessionAdapter::beginClipDrag(qulonglong id, int edge) {
+    cancelClipDrag();
+    if (!workspace_.clip(id))
+        return;
+    selected_gap_track_ = 0;
+    drag_snapshot_ = workspace_.snapshot();
+    drag_clip_ = id;
+    drag_playhead_ = workspace_.playhead();
+    drag_edge_ = edge;
+    updateClipDrag(0);
+}
+
+void EditSessionAdapter::beginJunctionDrag(qulonglong outgoing, int edge) {
+    cancelClipDrag();
+    const auto found = std::find_if(workspace_.transitions().begin(), workspace_.transitions().end(),
+                                    [outgoing](const auto& junction) { return junction.outgoing == outgoing; });
+    if (found == workspace_.transitions().end())
+        return;
+    selected_gap_track_ = 0;
+    drag_snapshot_ = workspace_.snapshot();
+    drag_junction_ = found->id;
+    drag_edge_ = edge;
+    updateClipDrag(0);
+}
+
+void EditSessionAdapter::beginSpacerDrag(qulonglong id, int edge) {
+    cancelClipDrag();
+    const auto snapshot = workspace_.snapshot();
+    if (std::none_of(snapshot->spacers.begin(), snapshot->spacers.end(),
+                     [id](const auto& value) { return value.id == id; }))
+        return;
+    selected_gap_track_ = 0;
+    drag_snapshot_ = snapshot;
+    drag_spacer_ = id;
+    drag_edge_ = edge;
+    updateClipDrag(0);
+}
+
+void EditSessionAdapter::updateClipDrag(qint64 delta_ms, qulonglong track, int new_track, bool insert,
+                                        qint64 tolerance_ms) {
+    if (!drag_snapshot_)
+        return;
+    const auto reject = [this]() {
+        drag_command_.reset();
+        drag_preview_.valid = false;
+        emit dragChanged();
+    };
+    if (!FitsMilliseconds(delta_ms)) {
+        reject();
+        return;
+    }
+    auto delta = delta_ms * 1000;
+    if (drag_spacer_) {
+        if (drag_edge_ < 0)
+            drag_command_ = edit::MoveSpacer{drag_spacer_, delta_ms * 1000};
+        else
+            drag_command_ = edit::TrimSpacer{
+                drag_spacer_, drag_edge_ == 0 ? edit::TrimEdge::Left : edit::TrimEdge::Right, delta_ms * 1000};
+        drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
+        emit dragChanged();
+        return;
+    }
+    if (drag_junction_) {
+        const auto junction = std::find_if(drag_snapshot_->junctions.begin(), drag_snapshot_->junctions.end(),
+                                           [this](const auto& value) { return value.id == drag_junction_; });
+        if (junction == drag_snapshot_->junctions.end())
+            return;
+        const auto start = AddTimelineTime(junction->in_us, drag_edge_ == 0 ? delta : 0);
+        const auto end = AddTimelineTime(junction->out_us, drag_edge_ == 1 ? delta : 0);
+        if (!start || !end) {
+            reject();
+            return;
+        }
+        drag_command_ = edit::SetJunctionWindow{junction->id, {*start, *end}};
+        drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
+        emit dragChanged();
+        return;
+    }
+    const auto lead = std::find_if(drag_snapshot_->clips.begin(), drag_snapshot_->clips.end(),
+                                   [this](const auto& clip) { return clip.id == drag_clip_; });
+    if (lead == drag_snapshot_->clips.end())
+        return;
+    if (drag_edge_ >= 2) {
+        const bool incoming = drag_edge_ == 2;
+        const auto duration = AddTimelineTime(incoming ? lead->fade_in.duration_us : lead->fade_out.duration_us,
+                                              incoming ? delta : -delta);
+        if (!duration) {
+            reject();
+            return;
+        }
+        drag_command_ = edit::SetFade{
+            lead->id, incoming ? edit::FadeEdge::In : edit::FadeEdge::Out, {std::max<edit::Time>(0, *duration)}};
+        drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
+        emit dragChanged();
+        return;
+    }
+    if (snapping) {
+        const auto boundary = drag_edge_ == 1 ? lead->end() : lead->start;
+        const auto requested = AddTimelineTime(boundary, delta);
+        if (!requested) {
+            reject();
+            return;
+        }
+        auto best = static_cast<uint64_t>(std::clamp<qint64>(tolerance_ms, 0, 250) * 1000 + 1);
+        auto snapped = delta;
+        const auto consider = [&](edit::Time marker) {
+            if (marker < 0)
+                return;
+            const auto distance = marker >= *requested
+                                      ? static_cast<uint64_t>(marker) - static_cast<uint64_t>(*requested)
+                                      : static_cast<uint64_t>(*requested) - static_cast<uint64_t>(marker);
+            if (distance < best) {
+                best = distance;
+                snapped = marker - boundary;
+            }
+        };
+        consider(0);
+        consider(drag_snapshot_->result_range.in_us);
+        if (drag_snapshot_->result_range.out_mode == edit::ResultOutMode::Fixed)
+            consider(drag_snapshot_->result_range.out_us);
+        consider(drag_playhead_);
+        if (time_selection_in_us_ >= 0)
+            consider(time_selection_in_us_);
+        if (time_selection_out_us_ >= 0)
+            consider(time_selection_out_us_);
+        for (const auto& source : drag_snapshot_->assets)
+            if (source->id == lead->asset)
+                for (const auto& marker : source->markers) {
+                    if (marker.time_ms > static_cast<uint64_t>((std::numeric_limits<edit::Time>::max)() / 1000))
+                        continue;
+                    const auto relative = static_cast<edit::Time>(marker.time_ms) * 1000 - lead->source_in;
+                    if (const auto position = AddTimelineTime(lead->start, relative))
+                        consider(*position);
+                }
+        for (const auto& clip : drag_snapshot_->clips)
+            if (clip.id != lead->id && (!linkedSelection || !lead->group || clip.group != lead->group)) {
+                consider(clip.start);
+                consider(clip.end());
+            }
+        delta = snapped;
+    }
+    if (drag_edge_ >= 0) {
+        edit::Trim command{drag_clip_, drag_edge_ == 0 ? edit::TrimEdge::Left : edit::TrimEdge::Right, delta};
+        command.mode = ripple ? edit::TrimMode::Ripple : edit::TrimMode::Fixed;
+        command.expand_linked = linkedSelection;
+        command.auto_crossfade = autoCrossfade;
+        drag_command_ = command;
+    } else {
+        edit::Move command{{drag_clip_}, delta};
+        command.expand_linked = linkedSelection;
+        command.auto_crossfade = autoCrossfade;
+        command.ripple = ripple || insert;
+        if (new_track >= 0) {
+            const auto kind = new_track == 2 ? edit::TrackType::Audio : edit::TrackType::Video;
+            track = drag_snapshot_->id_high_watermark + 1;
+            command.new_tracks.push_back({track, kind});
+            command.new_video_front = new_track == 0;
+            if (linkedSelection && lead->group) {
+                std::vector<std::pair<edit::Id, edit::Id>> destinations{{lead->track, track}};
+                for (const auto& clip : drag_snapshot_->clips) {
+                    if (clip.id == lead->id || clip.group != lead->group)
+                        continue;
+                    auto destination = std::find_if(destinations.begin(), destinations.end(),
+                                                    [&clip](const auto& value) { return value.first == clip.track; });
+                    if (destination == destinations.end()) {
+                        const auto source_track =
+                            std::find_if(drag_snapshot_->tracks.begin(), drag_snapshot_->tracks.end(),
+                                         [&clip](const auto& value) { return value.id == clip.track; });
+                        const auto temporary = drag_snapshot_->id_high_watermark + command.new_tracks.size() + 1;
+                        command.new_tracks.push_back({temporary, source_track->type});
+                        destinations.emplace_back(clip.track, temporary);
+                        destination = destinations.end() - 1;
+                    }
+                    command.target_tracks.emplace_back(clip.id, destination->second);
+                }
+            }
+        }
+        if (track)
+            command.target_tracks.emplace_back(drag_clip_, track);
+        drag_command_ = command;
+    }
+    drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
+    emit dragChanged();
+}
+
+bool EditSessionAdapter::commitClipDrag() {
+    if (!drag_snapshot_ || !drag_command_ || !dragValid()) {
+        workspace_error_ = tr("The drag is unavailable or the timeline changed. Try again.");
+        cancelClipDrag();
+        emit workspaceChanged();
+        return false;
+    }
+    const auto result = workspace_.apply(*drag_command_, drag_snapshot_->revision);
+    cancelClipDrag();
+    publishWorkspace(result.status != edit::CommandStatus::Rejected);
+    return result.status != edit::CommandStatus::Rejected;
+}
+
+void EditSessionAdapter::cancelClipDrag() {
+    drag_snapshot_.reset();
+    drag_command_.reset();
+    drag_preview_ = {};
+    drag_junction_ = 0;
+    drag_spacer_ = 0;
+    emit dragChanged();
+}
+
+QVariantList EditSessionAdapter::dragTracks() const {
+    QVariantList rows;
+    for (const auto& track : drag_preview_.tracks)
+        rows.push_back(QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(track.id)},
+                                   {QStringLiteral("video"), track.type == edit::TrackType::Video}});
+    return rows;
+}
+
+QVariantList EditSessionAdapter::dragClips() const {
+    QVariantList rows;
+    if (!drag_snapshot_)
+        return rows;
+    for (const auto& clip : drag_preview_.clips) {
+        if (std::find(drag_snapshot_->clips.begin(), drag_snapshot_->clips.end(), clip) != drag_snapshot_->clips.end())
+            continue;
+        const auto track = std::find_if(drag_preview_.tracks.begin(), drag_preview_.tracks.end(),
+                                        [&clip](const auto& value) { return value.id == clip.track; });
+        rows.push_back(
+            QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(clip.id)},
+                        {QStringLiteral("trackIndex"), static_cast<int>(track - drag_preview_.tracks.begin())},
+                        {QStringLiteral("startMs"), clip.start / 1000.0},
+                        {QStringLiteral("durationMs"), clip.duration() / 1000.0},
+                        {QStringLiteral("fadeInMs"), clip.fade_in.duration_us / 1000.0},
+                        {QStringLiteral("fadeOutMs"), clip.fade_out.duration_us / 1000.0}});
+    }
+    return rows;
+}
+
+QVariantList EditSessionAdapter::dragTransitions() const {
+    QVariantList rows;
+    for (const auto& junction : drag_preview_.junctions) {
+        const auto track = std::find_if(drag_preview_.tracks.begin(), drag_preview_.tracks.end(),
+                                        [&junction](const auto& value) { return value.id == junction.track; });
+        rows.push_back(
+            QVariantMap{{QStringLiteral("startMs"), junction.in_us / 1000.0},
+                        {QStringLiteral("durationMs"), (junction.out_us - junction.in_us) / 1000.0},
+                        {QStringLiteral("trackIndex"), static_cast<int>(track - drag_preview_.tracks.begin())}});
+    }
+    return rows;
+}
+
+void EditSessionAdapter::requestFrameStep(int direction) {
+    const auto fps = workspace_.snapshot()->output_fps;
+    const auto next = direction < 0 ? fps.previousFrame(workspace_.playhead()) : fps.nextFrame(workspace_.playhead());
+    if (next)
+        requestSeekUs(*next);
+}
+
+void EditSessionAdapter::setSelectionBoundary(bool out) {
+    if (out)
+        time_selection_out_us_ = workspace_.playhead();
+    else
+        time_selection_in_us_ = workspace_.playhead();
+    emit timeSelectionChanged();
+}
+
+void EditSessionAdapter::setJunctionWindow(qint64 start_ms, qint64 end_ms) {
+    if (!FitsMilliseconds(start_ms) || !FitsMilliseconds(end_ms)) {
+        publishWorkspace(false);
+        return;
+    }
+    for (const auto& junction : workspace_.transitions())
+        if (junction.outgoing == selected_transition_) {
+            applyCommand(edit::SetJunctionWindow{junction.id, {start_ms * 1000, end_ms * 1000}});
+            return;
+        }
+}
+void EditSessionAdapter::setJunctionCurve(int kind, double bias) {
+    for (const auto& junction : workspace_.transitions())
+        if (junction.outgoing == selected_transition_) {
+            applyCommand(edit::SetJunctionCurve{junction.id, {static_cast<engine::CurveKind>(kind), bias}});
+            return;
+        }
+}
+void EditSessionAdapter::setJunctionAudioLaw(int law) {
+    for (const auto& junction : workspace_.transitions())
+        if (junction.outgoing == selected_transition_) {
+            applyCommand(edit::SetAudioLaw{junction.id, static_cast<edit::AudioGainLaw>(law)});
+            return;
+        }
+}
+void EditSessionAdapter::setJunctionCut(qint64 at_ms) {
+    if (!FitsMilliseconds(at_ms)) {
+        publishWorkspace(false);
+        return;
+    }
+    for (const auto& junction : workspace_.transitions())
+        if (junction.outgoing == selected_transition_) {
+            applyCommand(edit::SetHardCut{junction.id, at_ms * 1000});
+            return;
+        }
+}
+void EditSessionAdapter::setClipFade(qulonglong id, bool incoming, qint64 duration_ms) {
+    if (!FitsMilliseconds(duration_ms)) {
+        publishWorkspace(false);
+        return;
+    }
+    applyCommand(edit::SetFade{id, incoming ? edit::FadeEdge::In : edit::FadeEdge::Out, {duration_ms * 1000}});
+}
+
+QVariantMap EditSessionAdapter::selectedClipDetails() const {
+    for (const auto& value : visibleClips(0, duration_ms_))
+        if (value.toMap().value(QStringLiteral("id")).toULongLong() == workspace_.selection())
+            return value.toMap();
+    return {};
+}
+
+QVariantMap EditSessionAdapter::selectedJunctionDetails() const {
+    for (const auto& value : transitions())
+        if (value.toMap().value(QStringLiteral("selected")).toBool())
+            return value.toMap();
+    return {};
+}
+
+bool EditSessionAdapter::deleteTrack(qulonglong id, bool confirmed) {
+    if (!confirmed) {
+        pending_track_delete_ = id;
+        pending_track_delete_revision_ = workspace_.revision();
+        return applyCommand(edit::DeleteTrack{id});
+    }
+    if (id != pending_track_delete_)
+        return false;
+    const auto result =
+        workspace_.apply(edit::DeleteTrack{id, pending_track_delete_revision_}, pending_track_delete_revision_);
+    pending_track_delete_ = 0;
+    publishWorkspace(result.status != edit::CommandStatus::Rejected);
+    return result.status != edit::CommandStatus::Rejected;
+}
+
+namespace {
+QVariantList SpacerRows(const std::vector<edit::Spacer>& spacers, const std::vector<edit::Track>& tracks) {
+    QVariantList rows;
+    for (const auto& spacer : spacers) {
+        const auto track = std::find_if(tracks.begin(), tracks.end(),
+                                        [&spacer](const auto& value) { return value.id == spacer.track; });
+        rows.push_back(QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(spacer.id)},
+                                   {QStringLiteral("trackIndex"), static_cast<int>(track - tracks.begin())},
+                                   {QStringLiteral("startMs"), spacer.start_us / 1000.0},
+                                   {QStringLiteral("durationMs"), spacer.duration_us / 1000.0}});
+    }
+    return rows;
+}
+} // namespace
+
+QVariantList EditSessionAdapter::spacers() const {
+    const auto snapshot = workspace_.snapshot();
+    return SpacerRows(snapshot->spacers, snapshot->tracks);
+}
+
+QVariantList EditSessionAdapter::dragSpacers() const {
+    return SpacerRows(drag_preview_.spacers, drag_preview_.tracks);
+}
+
+void EditSessionAdapter::selectSpacer(qulonglong id) {
+    const auto snapshot = workspace_.snapshot();
+    if (std::none_of(snapshot->spacers.begin(), snapshot->spacers.end(),
+                     [id](const auto& value) { return value.id == id; }))
+        return;
+    selected_spacer_ = id;
+    selected_gap_track_ = 0;
+    selected_transition_ = 0;
+    workspace_.select(0);
+    emit workspaceChanged();
+}
+
+QVariantMap EditSessionAdapter::selectedGap() const {
+    if (!selected_gap_track_)
+        return {};
+    const auto track = std::find_if(workspace_.tracks().begin(), workspace_.tracks().end(),
+                                    [this](const auto& value) { return value.id == selected_gap_track_; });
+    return {{QStringLiteral("startMs"), selected_gap_.in_us / 1000},
+            {QStringLiteral("endMs"), selected_gap_.out_us / 1000},
+            {QStringLiteral("trackIndex"), static_cast<int>(track - workspace_.tracks().begin())}};
+}
+
+void EditSessionAdapter::selectGap(qulonglong track, qint64 at_ms) {
+    if (!FitsMilliseconds(at_ms))
+        return;
+    if (std::none_of(workspace_.tracks().begin(), workspace_.tracks().end(),
+                     [track](const auto& value) { return value.id == track; }))
+        return;
+    const auto at = at_ms * 1000;
+    edit::Span span{0, workspace_.duration()};
+    const auto inspect = [&](edit::Time start, edit::Time end) {
+        if (start <= at && at < end)
+            span = {0, 0};
+        else if (end <= at)
+            span.in_us = std::max(span.in_us, end);
+        else if (start > at)
+            span.out_us = std::min(span.out_us, start);
+    };
+    for (const auto& clip : workspace_.clips())
+        if (clip.track == track)
+            inspect(clip.start, clip.end());
+    for (const auto& spacer : workspace_.snapshot()->spacers)
+        if (spacer.track == track)
+            inspect(spacer.start_us, spacer.end());
+    if (span.out_us <= span.in_us || at < span.in_us || at >= span.out_us)
+        return;
+    selected_gap_ = span;
+    selected_gap_track_ = track;
+    selected_spacer_ = 0;
+    selected_transition_ = 0;
+    workspace_.select(0);
+    emit workspaceChanged();
+}
+
+void EditSessionAdapter::copyBlankDuration() {
+    if (selected_spacer_)
+        for (const auto& spacer : workspace_.snapshot()->spacers)
+            if (spacer.id == selected_spacer_) {
+                copied_blank_duration_ = spacer.duration_us;
+                copied_blank_track_ = spacer.track;
+                return;
+            }
+    if (!selected_gap_track_)
+        return;
+    copied_blank_duration_ = selected_gap_.out_us - selected_gap_.in_us;
+    copied_blank_track_ = selected_gap_track_;
+}
+
+void EditSessionAdapter::pasteSpacer() {
+    if (copied_blank_duration_ > 0)
+        applyCommand(edit::AddSpacer{selected_gap_track_ ? selected_gap_track_ : copied_blank_track_,
+                                     workspace_.playhead(), copied_blank_duration_});
+}
+
+void EditSessionAdapter::previewCloseGap() {
+    if (!selected_gap_track_)
+        return;
+    cancelClipDrag();
+    drag_snapshot_ = workspace_.snapshot();
+    drag_command_ = edit::CloseGap{selected_gap_};
+    drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
+    emit dragChanged();
+}
+
+void EditSessionAdapter::setFixedTimelineEnd(bool fixed, qint64 time_ms) {
+    if (!FitsMilliseconds(time_ms)) {
+        publishWorkspace(false);
+        return;
+    }
+    applyCommand(
+        edit::SetTimelineEnd{{fixed ? edit::TimelineEndMode::FixedEnd : edit::TimelineEndMode::FollowContentEnd,
+                              fixed ? time_ms * 1000 : 0}});
 }
 
 } // namespace exosnap::quick
