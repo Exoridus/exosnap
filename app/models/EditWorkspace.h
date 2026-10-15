@@ -129,7 +129,9 @@ class Workspace {
             last_error_ = candidate.last_error_;
             return false;
         }
-        publish(candidate);
+        const bool changes = candidate.clips_ != clips_;
+        if (changes && !publish(candidate))
+            return false;
         InputMixSelection mix;
         mix.asset_identity_fingerprint = found->source_descriptor->asset_identity_fingerprint;
         mix.selected_stream_identities = selected;

@@ -441,7 +441,9 @@ RemuxResult ExecuteEditExport(const EditExportPlan& plan, RecorderConfig config,
         return ExportTimelineStreamCopy(plan.facts.copy_recipe, staging, mp4, std::move(progress));
     if (plan.video_path == EditVideoPath::Copy)
         return ExportEditTimelineWithCopiedVideo(plan.snapshot, plan.facts.copy_recipe, staging,
-                                                 plan.audio_path == EditAudioPath::RenderStereo, std::move(progress));
+                                                 plan.audio_path == EditAudioPath::RenderStereo ||
+                                                     plan.audio_path == EditAudioPath::CopyStereo,
+                                                 std::move(progress));
     if (plan.video_path != EditVideoPath::Render || mp4)
         return RemuxResult::Fail(-1, "This export path is unavailable.");
     const auto& timeline = plan.snapshot.timeline;

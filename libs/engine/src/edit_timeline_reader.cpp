@@ -170,10 +170,15 @@ struct EditTimelineReader::Impl {
         return true;
     }
 
-    Decoder* AudioDecoder(const AudioIntervalContribution& contribution, std::string& error) {
+    Decoder* AudioDecoder(const AudioIntervalContribution& contribution, int64_t at_sample, std::string& error) {
         for (auto& decoder : audio_decoders)
             if (decoder.clip == contribution.clip && decoder.engine)
                 return &decoder;
+        std::erase_if(audio_decoders, [&](const auto& decoder) {
+            const auto clip = std::find_if(snapshot.timeline.clips.begin(), snapshot.timeline.clips.end(),
+                                           [&](const auto& value) { return value.id == decoder.clip; });
+            return clip == snapshot.timeline.clips.end() || AudioSampleIndex(clip->end_us()) <= at_sample;
+        });
         const auto source = std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
                                          [&contribution](const auto& s) { return s.id == contribution.asset; });
         if (source == snapshot.sources.end()) {
@@ -369,7 +374,7 @@ bool EditTimelineReader::AudioAt(int64_t first_sample, uint32_t count, std::vect
             const int64_t to = std::min(end, clip_end);
             if (to <= from)
                 continue;
-            auto* decoder = impl_->AudioDecoder(contribution, error);
+            auto* decoder = impl_->AudioDecoder(contribution, from, error);
             if (!decoder)
                 return false;
             used.insert(contribution.clip);

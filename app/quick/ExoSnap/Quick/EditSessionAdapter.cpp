@@ -444,6 +444,7 @@ void EditSessionAdapter::setAssetMonitorSelection(edit::Id asset, engine::Monito
     // monitoring choice as that decision. Unverified track identities are new on
     // every open, so they are matched by their audio-stream order instead.
     std::vector<engine::AudioTrackId> chosen;
+    size_t requested = 0;
     const auto* source = workspace_.asset(asset);
     const bool decide = source && source->mix_decision_required && source->source_descriptor;
     if (decide) {
@@ -454,6 +455,7 @@ void EditSessionAdapter::setAssetMonitorSelection(edit::Id asset, engine::Monito
         for (const auto& track : selection.tracks) {
             if (track.muted || track.gain_linear <= 0)
                 continue;
+            ++requested;
             if (selection.unverified_asset_binding) {
                 const auto& actual = selection.unverified_asset_binding->actual_tracks;
                 const auto match = std::find_if(actual.begin(), actual.end(),
@@ -467,7 +469,9 @@ void EditSessionAdapter::setAssetMonitorSelection(edit::Id asset, engine::Monito
     }
     if (!workspace_.setMonitorSelection(asset, std::move(selection)))
         return;
-    if (decide)
+    // A selection that names a stream this source does not have leaves the
+    // decision open instead of resolving it to fewer streams than were chosen.
+    if (decide && chosen.size() == requested)
         workspace_.resolveInputMix(asset, chosen);
     emit workspaceChanged();
 }

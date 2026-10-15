@@ -34,7 +34,7 @@ inline engine::AudioTrackId SyntheticIdentity(uint8_t kind, uint32_t container_i
 } // namespace source_import_detail
 
 // Describes every video/audio stream of a probed source and resolves the
-// starting mix once (S04.2): a single audio stream, or a verified recorded
+// starting mix once: a single audio stream, or a verified recorded
 // default without overlapping alternatives, needs no question. Ambiguous
 // provenance returns `mix_decision_required` with no selection. A positive
 // `declared_duration_us` (a recording segment's own length) bounds every span.
