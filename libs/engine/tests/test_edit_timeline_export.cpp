@@ -1,6 +1,7 @@
 #include "../src/matroska_stream_writer.h"
 #include "exosnap/engine/edit_timeline_export.h"
 #include "test_unique_temp.h"
+#include <exosnap/engine/edit_player_engine.h>
 
 #include <gtest/gtest.h>
 
@@ -56,7 +57,7 @@ class TimelineExportTest : public ::testing::Test {
     }
 };
 
-bool WritePcmMatroska(const std::filesystem::path& path) {
+bool WritePcmMatroska(const std::filesystem::path& path, int16_t amplitude = 0) {
     AVFormatContext* context = nullptr;
     if (avformat_alloc_output_context2(&context, nullptr, "matroska", path.string().c_str()) < 0 || !context)
         return false;
@@ -79,6 +80,10 @@ bool WritePcmMatroska(const std::filesystem::path& path) {
         avformat_write_header(context, nullptr) < 0)
         return false;
     std::array<uint8_t, 960> silence{};
+    for (size_t index = 0; index < silence.size(); index += 2) {
+        silence[index] = static_cast<uint8_t>(amplitude);
+        silence[index + 1] = static_cast<uint8_t>(static_cast<uint16_t>(amplitude) >> 8);
+    }
     for (int i = 0; i < 100; ++i) {
         AVPacket packet{};
         packet.data = silence.data();
@@ -461,4 +466,61 @@ TEST_F(TimelineExportTest, ExistingDestinationIsNeverTruncated) {
     std::string contents;
     existing >> contents;
     EXPECT_EQ(contents, "preserved");
+}
+
+TEST_F(TimelineExportTest, SourceDescriptorsUseGlobalContainerIndices) {
+    AudioManifest1 manifest;
+    ASSERT_NO_FATAL_FAILURE(WriteFourTrackMatroska(audio_source, manifest));
+    const auto metadata = ProbeEditMedia(audio_source);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    ASSERT_EQ(metadata.streams.size(), 5u);
+    EXPECT_EQ(metadata.streams.front().kind, TimelineStreamKind::Video);
+    EXPECT_EQ(metadata.streams.front().container_index, 0u);
+    ASSERT_TRUE(metadata.timestamp_origin_us);
+    for (size_t index = 0; index < manifest.tracks.size(); ++index) {
+        const auto& stream = metadata.streams[index + 1];
+        EXPECT_EQ(stream.kind, TimelineStreamKind::Audio);
+        EXPECT_EQ(stream.container_index, index + 1);
+        ASSERT_TRUE(stream.stream_identity);
+        EXPECT_EQ(*stream.stream_identity, manifest.tracks[index].container.track_id);
+        EXPECT_EQ(stream.codec.channels, 2u);
+        EXPECT_EQ(stream.codec.channel_layout, "stereo");
+        EXPECT_EQ(stream.codec.sample_rate, 48000u);
+    }
+}
+
+TEST_F(TimelineExportTest, ExplicitAudioStreamIgnoresMonitorSelection) {
+    AudioManifest1 manifest;
+    ASSERT_NO_FATAL_FAILURE(WriteFourTrackMatroska(audio_source, manifest));
+    EditPlayerEngine reader;
+    std::string error;
+    ASSERT_TRUE(reader.OpenAudioStream(audio_source, 2, error)) << error;
+    EXPECT_FALSE(reader.HasVideoStream());
+    ASSERT_TRUE(reader.SetMonitorSelection({manifest.media_id, {2}, {}, true, {}}, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(reader.DecodeAudioStreamRange(2, 4800, 480, samples, error)) << error;
+    ASSERT_EQ(samples.size(), 960u);
+    for (const auto sample : samples)
+        EXPECT_FLOAT_EQ(sample, 2048.0f / 32768.0f);
+}
+
+TEST_F(TimelineExportTest, EnabledAudioReferenceToVideoStreamFails) {
+    AudioManifest1 manifest;
+    ASSERT_NO_FATAL_FAILURE(WriteFourTrackMatroska(audio_source, manifest));
+    EditPlayerEngine reader;
+    std::string error;
+    EXPECT_FALSE(reader.OpenAudioStream(audio_source, 0, error));
+    EXPECT_FALSE(error.empty());
+}
+
+TEST_F(TimelineExportTest, AudioOnlyMonoDuplicatesAtUnityGain) {
+    ASSERT_TRUE(WritePcmMatroska(audio_source, 8192));
+    EditPlayerEngine reader;
+    std::string error;
+    ASSERT_TRUE(reader.OpenAudioStream(audio_source, 0, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(reader.DecodeAudioStreamRange(0, 4800, 480, samples, error)) << error;
+    ASSERT_EQ(samples.size(), 960u);
+    for (const auto sample : samples)
+        EXPECT_FLOAT_EQ(sample, 0.25f);
 }

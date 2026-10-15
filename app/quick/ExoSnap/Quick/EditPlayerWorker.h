@@ -42,6 +42,7 @@ class EditPlayerWorker : public QObject {
     void play(qint64 from_ms);
     void pause();
     void seek(qint64 position_ms);
+    void seekUs(qint64 target_us);
     void setScreenRefreshHz(double screen_hz);
     void setVolume(double volume);
     void confirmMonitoring(const QStringList& track_ids, bool overlap_confirmed);
@@ -63,8 +64,8 @@ class EditPlayerWorker : public QObject {
     // the gate and the picture stays frozen.
     void syncClock();
     void onTick();
-    void seekTimeline(qint64 position_ms, bool resume);
-    bool renderTimeline(qint64 position_ms);
+    void seekTimeline(qint64 position_us, bool resume);
+    bool renderTimeline(qint64 position_us, engine::VideoReadMode mode = engine::VideoReadMode::Sequential);
     void publishMonitoring();
     void tickRenderTimeline();
 
@@ -74,6 +75,7 @@ class EditPlayerWorker : public QObject {
     QElapsedTimer elapsed_;
     qint64 duration_ms_ = 0;
     qint64 position_ms_ = 0;
+    qint64 position_us_ = 0;
     double screen_hz_ = 0.0;
     edit::Workspace workspace_;
     edit::Id active_clip_ = 0;
@@ -85,7 +87,8 @@ class EditPlayerWorker : public QObject {
     std::unique_ptr<engine::EditTimelineReader> render_reader_;
     std::unique_ptr<engine::WasapiAudioRenderer> render_audio_;
     engine::EditRenderPlan render_plan_;
-    qint64 render_origin_ms_ = 0;
+    engine::TimelineRenderSnapshot render_snapshot_;
+    qint64 render_origin_us_ = 0;
     int64_t audio_sample_ = 0;
     uint64_t monitor_revision_ = 0;
 };

@@ -331,8 +331,51 @@ EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source, const std:
     }
     result.audio_metadata = input.metadata;
     result.duration_us = std::max<int64_t>(0, input.context->duration);
+    if (input.context->start_time != AV_NOPTS_VALUE)
+        result.timestamp_origin_us = input.context->start_time;
+    size_t audio_ordinal = 0;
     for (unsigned i = 0; i < input.context->nb_streams; ++i) {
         auto* stream = input.context->streams[i];
+        const auto* parameters = stream->codecpar;
+        if (parameters->codec_type != AVMEDIA_TYPE_VIDEO && parameters->codec_type != AVMEDIA_TYPE_AUDIO)
+            continue;
+        EditSourceStream descriptor;
+        descriptor.container_index = static_cast<uint32_t>(stream->index);
+        descriptor.kind =
+            parameters->codec_type == AVMEDIA_TYPE_AUDIO ? TimelineStreamKind::Audio : TimelineStreamKind::Video;
+        descriptor.codec.codec_id = avcodec_get_name(parameters->codec_id);
+        if (parameters->extradata && parameters->extradata_size > 0)
+            descriptor.codec.codec_private.assign(parameters->extradata,
+                                                  parameters->extradata + parameters->extradata_size);
+        descriptor.time_base_num = stream->time_base.num;
+        descriptor.time_base_den = stream->time_base.den;
+        if (stream->start_time != AV_NOPTS_VALUE && result.timestamp_origin_us)
+            descriptor.start_us =
+                av_rescale_q(stream->start_time, stream->time_base, kMicroseconds) - *result.timestamp_origin_us;
+        if (stream->duration != AV_NOPTS_VALUE && stream->duration >= 0)
+            descriptor.duration_us = av_rescale_q(stream->duration, stream->time_base, kMicroseconds);
+        descriptor.width = parameters->width;
+        descriptor.height = parameters->height;
+        if (descriptor.kind == TimelineStreamKind::Video) {
+            const auto fps = stream->avg_frame_rate.num > 0 ? stream->avg_frame_rate : stream->r_frame_rate;
+            descriptor.fps_num = fps.num;
+            descriptor.fps_den = fps.den;
+        } else {
+            if (audio_ordinal < result.audio_metadata.actual_tracks.size()) {
+                const auto& audio = result.audio_metadata.actual_tracks[audio_ordinal];
+                descriptor.stream_identity = audio.track_id;
+                descriptor.codec = audio.codec;
+            } else {
+                descriptor.codec.sample_rate = static_cast<uint32_t>(std::max(0, parameters->sample_rate));
+                descriptor.codec.channels = static_cast<uint32_t>(std::max(0, parameters->ch_layout.nb_channels));
+                descriptor.codec.codec_delay_samples = static_cast<uint32_t>(std::max(0, parameters->initial_padding));
+                char layout[256]{};
+                if (av_channel_layout_describe(&parameters->ch_layout, layout, sizeof(layout)) >= 0)
+                    descriptor.codec.channel_layout = layout;
+            }
+            ++audio_ordinal;
+        }
+        result.streams.push_back(std::move(descriptor));
         if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && result.width == 0) {
             ResolveDecodedColor(input.context, stream);
             result.video_codec = avcodec_get_name(stream->codecpar->codec_id);

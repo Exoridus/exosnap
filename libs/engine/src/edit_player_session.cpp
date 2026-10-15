@@ -7,11 +7,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -35,12 +38,18 @@ struct EditPlayerSession::Impl {
     // of this class's public API contract), so no extra synchronization is
     // needed to read it from that same method.
     int64_t playback_start_us = 0;
+    int64_t paused_position_us = 0;
+    std::chrono::steady_clock::time_point playback_started;
+    std::atomic<bool> independent_clock{false};
+    std::atomic<bool> presentation_stopped{true};
+    std::mutex presentation_mutex;
+    std::condition_variable presentation_cv;
 
     // GPU render path (2026-08-03 design) -- the callback Play()/SeekTo()
     // drive; see SetOnFrameReady's doc comment. Delivered directly from the
     // engine's own decode/seek thread, with no intermediate queue: pacing/
     // drop decisions live in EditPlayerRenderer::PresentFrame instead.
-    std::function<void(RawDecodedVideoFrame)> on_frame;
+    std::function<void(RawDecodedVideoFrame, uint64_t)> on_frame;
     std::mutex callback_mutex; // guards on_frame against concurrent Set/invoke
 
     // Scrub seek: only ever one in flight. A new SeekTo() bumps the
@@ -50,6 +59,27 @@ struct EditPlayerSession::Impl {
     std::atomic<uint64_t> seek_generation{0};
     std::thread seek_thread;
     std::mutex seek_thread_mutex;
+    std::condition_variable seek_cv;
+    struct SeekRequest {
+        int64_t target_us;
+        uint64_t generation;
+        uint64_t presentation_generation;
+    };
+    std::optional<SeekRequest> pending_seek;
+    bool seek_stopped = false;
+
+    void StopSeek() {
+        {
+            std::lock_guard lock(seek_thread_mutex);
+            seek_stopped = true;
+            pending_seek.reset();
+            seek_generation.fetch_add(1);
+        }
+        seek_cv.notify_all();
+        if (seek_thread.joinable())
+            seek_thread.join();
+        seek_stopped = false;
+    }
 
     // Playback clock snapshot in absolute media time, or -1 when there is no
     // clock. Refreshed from the caller's own thread on every presentation
@@ -65,10 +95,10 @@ struct EditPlayerSession::Impl {
     // clock would have discarded -- never the other way round.
     std::atomic<int64_t> media_clock_us{-1};
 
-    void DeliverFrame(RawDecodedVideoFrame frame) {
+    void DeliverFrame(RawDecodedVideoFrame frame, uint64_t generation) {
         std::lock_guard<std::mutex> lock(callback_mutex);
         if (on_frame)
-            on_frame(std::move(frame));
+            on_frame(std::move(frame), generation);
     }
 };
 
@@ -103,15 +133,11 @@ bool EditPlayerSession::Open(const std::filesystem::path& path, std::string& out
 
 void EditPlayerSession::Close() {
     Pause();
-    {
-        std::lock_guard<std::mutex> lock(impl_->seek_thread_mutex);
-        impl_->seek_generation.fetch_add(1); // supersede any in-flight seek
-        if (impl_->seek_thread.joinable())
-            impl_->seek_thread.join();
-    }
+    impl_->StopSeek();
     impl_->audio.Shutdown();
     impl_->engine.Close();
     impl_->has_audio = false;
+    impl_->paused_position_us = 0;
 }
 
 bool EditPlayerSession::HasAudioStream() const noexcept {
@@ -123,6 +149,15 @@ double EditPlayerSession::VideoFrameRate() const noexcept {
 }
 
 void EditPlayerSession::SetOnFrameReady(std::function<void(RawDecodedVideoFrame)> callback) {
+    if (!callback) {
+        SetOnFrameReadyWithGeneration({});
+        return;
+    }
+    SetOnFrameReadyWithGeneration(
+        [callback = std::move(callback)](RawDecodedVideoFrame frame, uint64_t) { callback(std::move(frame)); });
+}
+
+void EditPlayerSession::SetOnFrameReadyWithGeneration(std::function<void(RawDecodedVideoFrame, uint64_t)> callback) {
     std::lock_guard<std::mutex> lock(impl_->callback_mutex);
     impl_->on_frame = std::move(callback);
 }
@@ -143,33 +178,22 @@ bool EditPlayerSession::MonitoringConfirmationRequired() const {
     return impl_->engine.AudioMetadata().monitoring_confirmation_required;
 }
 
-void EditPlayerSession::Play(int64_t start_us) {
-    if (impl_->playing || MonitoringConfirmationRequired())
+void EditPlayerSession::Play(int64_t start_us, uint64_t generation) {
+    if (impl_->playing || !impl_->engine.HasVideoStream() || MonitoringConfirmationRequired())
         return;
 
-    // Ensure any in-flight scrub seek (spawned by SeekTo) has fully finished
-    // before playback starts. EditPlayerEngine's DecodeFrameAtRaw (the scrub
-    // path) and its continuous playback thread share the same demux/decode
-    // contexts with no internal synchronization between the two -- that is
-    // the engine's documented single-writer contract, enforced by callers,
-    // not by the engine itself. SeekTo() already guarantees the other
-    // direction (it calls Pause() before seeking), but without this join the
-    // normal resume-on-release flow (scrub -> SeekTo spawns a background
-    // seek -> user releases -> Play()) could start the playback thread while
-    // that seek thread is still running DecodeFrameAtRaw on the same
-    // contexts -- a genuine data race, not just a redundant frame delivery.
-    {
-        std::lock_guard<std::mutex> lock(impl_->seek_thread_mutex);
-        if (impl_->seek_thread.joinable())
-            impl_->seek_thread.join();
-    }
+    impl_->StopSeek();
 
     impl_->playing = true;
     impl_->playback_start_us = start_us;
+    impl_->paused_position_us = start_us;
+    impl_->playback_started = std::chrono::steady_clock::now();
+    impl_->independent_clock.store(!impl_->has_audio);
+    impl_->presentation_stopped.store(false);
     // Seed the clock the decode thread reads before it can produce anything:
     // the frames between the preceding keyframe and start_us are already in
     // the past and must not be paid a colour conversion for.
-    impl_->media_clock_us.store(impl_->has_audio ? start_us : -1);
+    impl_->media_clock_us.store(start_us);
 
     if (impl_->has_audio)
         impl_->audio.Start();
@@ -179,7 +203,20 @@ void EditPlayerSession::Play(int64_t start_us) {
     // -- EditPlayerRenderer::PresentFrame does the present-time clock gate
     // that used to live in a queue/poll path.
     impl_->engine.StartPlaybackDecode(
-        start_us, [this](RawDecodedVideoFrame frame) { impl_->DeliverFrame(std::move(frame)); },
+        start_us,
+        [this, generation](RawDecodedVideoFrame frame) {
+            // The engine publishes this before spawning workers. The owner
+            // thread may not yet have observed audio setup failure.
+            if (!impl_->engine.PlaybackDeliversAudio()) {
+                const auto deadline =
+                    impl_->playback_started + std::chrono::microseconds(frame.pts_us - impl_->playback_start_us);
+                std::unique_lock lock(impl_->presentation_mutex);
+                impl_->presentation_cv.wait_until(lock, deadline,
+                                                  [this] { return impl_->presentation_stopped.load(); });
+            }
+            if (!impl_->presentation_stopped.load())
+                impl_->DeliverFrame(std::move(frame), generation);
+        },
         [this](DecodedAudioBlock block) {
             if (impl_->has_audio && block.interleaved_stereo) {
                 const float volume = impl_->volume.load();
@@ -209,14 +246,21 @@ void EditPlayerSession::Play(int64_t start_us) {
     if (impl_->has_audio && !impl_->engine.PlaybackDeliversAudio()) {
         impl_->has_audio = false;
         impl_->audio.Stop();
-        impl_->media_clock_us.store(-1); // no clock: the decode thread stops discarding against it
+        impl_->independent_clock.store(true);
+        impl_->media_clock_us.store(start_us);
     }
 }
 
 void EditPlayerSession::Pause() {
     if (!impl_->playing)
         return;
+    impl_->paused_position_us = CurrentPositionUs();
     impl_->playing = false;
+    impl_->presentation_stopped.store(true);
+    {
+        std::lock_guard lock(impl_->presentation_mutex);
+        impl_->presentation_cv.notify_all();
+    }
     // Must run BEFORE engine.StopPlaybackDecode(): its join() cannot wake a
     // decode thread parked in a wait that belongs to this class. audio.Stop()
     // wakes a PushSamples() blocked on a full ring (dropping its remaining
@@ -229,36 +273,58 @@ void EditPlayerSession::Pause() {
     impl_->media_clock_us.store(-1);
 }
 
-void EditPlayerSession::SeekTo(int64_t target_us) {
-    Pause(); // scrubbing pauses; resume-on-release is the caller's job (matches existing UI contract)
-
-    const uint64_t my_generation = impl_->seek_generation.fetch_add(1) + 1;
-
-    std::lock_guard<std::mutex> lock(impl_->seek_thread_mutex);
-    if (impl_->seek_thread.joinable())
-        impl_->seek_thread.join(); // the previous seek already saw a bumped generation and is winding down
-
-    // GPU render path (see SetOnFrameReady's doc comment).
-    impl_->seek_thread = std::thread([this, target_us, my_generation]() {
-        auto frame = impl_->engine.DecodeFrameAtRaw(target_us);
-        if (frame.has_value() && impl_->seek_generation.load() == my_generation)
-            impl_->DeliverFrame(std::move(*frame));
-    });
+void EditPlayerSession::SeekTo(int64_t target_us, uint64_t generation) {
+    Pause();
+    if (!impl_->engine.HasVideoStream())
+        return;
+    impl_->paused_position_us = std::max<int64_t>(target_us, 0);
+    std::lock_guard lock(impl_->seek_thread_mutex);
+    const auto seek_generation = impl_->seek_generation.fetch_add(1) + 1;
+    impl_->pending_seek = Impl::SeekRequest{impl_->paused_position_us, seek_generation, generation};
+    if (!impl_->seek_thread.joinable()) {
+        impl_->seek_thread = std::thread([this] {
+            std::unique_lock seek_lock(impl_->seek_thread_mutex);
+            for (;;) {
+                impl_->seek_cv.wait(seek_lock,
+                                    [this] { return impl_->seek_stopped || impl_->pending_seek.has_value(); });
+                if (impl_->seek_stopped)
+                    return;
+                const auto request = *impl_->pending_seek;
+                impl_->pending_seek.reset();
+                seek_lock.unlock();
+                auto frame =
+                    impl_->engine.ReadFrameAtRaw(request.target_us, VideoReadMode::RandomAccess, request.generation);
+                seek_lock.lock();
+                if (!impl_->seek_stopped && frame && impl_->seek_generation.load() == request.generation)
+                    impl_->DeliverFrame(std::move(*frame), request.presentation_generation);
+            }
+        });
+    }
+    impl_->seek_cv.notify_one();
 }
-
 int64_t EditPlayerSession::ClockSnapshotUs() const noexcept {
     return impl_->media_clock_us.load(std::memory_order_relaxed);
 }
 
 int64_t EditPlayerSession::CurrentPositionMs() const noexcept {
-    if (!impl_->has_audio)
-        return 0;
-    const int64_t position_ms =
-        impl_->playback_start_us / 1000 + AudioClockMs(impl_->audio.FramesPlayed(), impl_->audio.SampleRate());
-    // Also refreshes the decode thread's clock snapshot (see ClockSnapshotUs)
-    // on every presentation tick, not just the ones where a new frame lands.
-    impl_->media_clock_us.store(position_ms * 1000);
-    return position_ms;
+    return CurrentPositionUs() / 1000;
 }
 
+int64_t EditPlayerSession::CurrentPositionUs() const noexcept {
+    if (!impl_->playing)
+        return impl_->paused_position_us;
+    const int64_t position_us =
+        impl_->independent_clock.load()
+            ? impl_->playback_start_us + std::chrono::duration_cast<std::chrono::microseconds>(
+                                             std::chrono::steady_clock::now() - impl_->playback_started)
+                                             .count()
+            : impl_->playback_start_us + [&] {
+                  const auto frames = impl_->audio.FramesPlayed();
+                  const auto rate = impl_->audio.SampleRate();
+                  return rate == 0 ? int64_t{0}
+                                   : static_cast<int64_t>(frames / rate * 1'000'000 + frames % rate * 1'000'000 / rate);
+              }();
+    impl_->media_clock_us.store(position_us);
+    return position_us;
+}
 } // namespace exosnap::engine

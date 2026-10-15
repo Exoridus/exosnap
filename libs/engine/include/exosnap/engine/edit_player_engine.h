@@ -132,6 +132,16 @@ struct RawDecodedVideoFrame {
 
 using VideoFrameCallback = std::function<void(RawDecodedVideoFrame)>;
 
+enum class VideoReadMode { RandomAccess, Sequential };
+
+struct VideoReadMeasurements {
+    uint64_t seeks = 0;
+    uint64_t flushes = 0;
+    uint64_t decoded = 0;
+    uint64_t selected = 0;
+    uint64_t held = 0;
+};
+
 class EditPlayerEngine {
   public:
     EditPlayerEngine();
@@ -145,6 +155,11 @@ class EditPlayerEngine {
     // (missing file, unreadable container, no decodable video stream).
     // Cancellation applies to opening. Playback is stopped separately.
     bool Open(const std::filesystem::path& path, std::string& out_error, const std::atomic<bool>* cancelled = nullptr);
+
+    // Opens one global container audio stream without a video decoder.
+    // The selected stream is independent of transient monitoring selection.
+    bool OpenAudioStream(const std::filesystem::path& path, uint32_t container_index, std::string& out_error,
+                         const std::atomic<bool>* cancelled = nullptr);
 
     // Closes the file and stops any running playback decode (see Task 6).
     void Close();
@@ -206,11 +221,19 @@ class EditPlayerEngine {
     // thumbnail decoding is off the playback critical path, so there is
     // nothing for a GPU hop to save there.
     [[nodiscard]] std::optional<RawDecodedVideoFrame> DecodeFrameAtRaw(int64_t target_us);
+    [[nodiscard]] std::optional<RawDecodedVideoFrame> ReadFrameAtRaw(int64_t target_us, VideoReadMode mode,
+                                                                     uint64_t generation = 0);
+    [[nodiscard]] VideoReadMeasurements VideoReadStats() const noexcept;
 
     // Synchronous, single-owner range decode for timeline rendering. The output
     // is exactly frame_count stereo Float32 frames at 48 kHz, with source gaps
     // filled by silence. Fails if any declared audio track cannot be decoded.
     bool DecodeAudioRange(int64_t first_sample, uint32_t frame_count, std::vector<float>& output, std::string& error);
+
+    // Reads one global container audio stream at unity gain, independent of
+    // monitor controls. first_sample is absolute media-local 48 kHz time.
+    bool DecodeAudioStreamRange(uint32_t container_index, int64_t first_sample, uint32_t frame_count,
+                                std::vector<float>& output, std::string& error);
 
     // Every audio track the open file carries, in stream order. `name` comes
     // from the container's track name and is empty for recordings written
@@ -283,6 +306,8 @@ class EditPlayerEngine {
     void StopPlaybackDecode();
 
   private:
+    bool OpenSource(const std::filesystem::path& path, std::string& out_error, const std::atomic<bool>* cancelled,
+                    std::optional<uint32_t> audio_stream);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

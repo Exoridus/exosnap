@@ -296,3 +296,60 @@ TEST(EditTimelineMedia, SharedReaderSeeksAudioAndRealExportReopens) {
               << " peak_decoders=" << stats.peak_decoders << " peak_encoder_backlog=" << stats.peak_encoder_backlog
               << " cancel_ms=" << cancel_ms << '\n';
 }
+
+TEST(EditTimelineReader, PresentationRevisionRetainsSourceCursor) {
+    const auto path = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    const auto metadata = ProbeEditMedia(path);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    ASSERT_TRUE(metadata.content_identity_valid);
+    TimelineRenderSnapshot snapshot;
+    snapshot.sources = {{1, path, metadata}};
+    snapshot.timeline = {{{1, 1, 1, false, 0, 0, metadata.duration_us}}, {}, metadata.duration_us};
+    const EditRenderPlan plan{EditExportPath::Render, {}, {64, 64}, 30, 1};
+    EditTimelineReader reader;
+    std::string error;
+    ASSERT_TRUE(reader.Open(snapshot, plan, error)) << error;
+    TimelineVideoFrame first;
+    ASSERT_TRUE(reader.VideoAt(0, first, error)) << error;
+    ASSERT_EQ(first.layers.size(), 1u);
+    snapshot.timeline.revision = 2;
+    snapshot.timeline.clips.front().gain_db = -6;
+    snapshot.timeline.clips.front().opacity = 0.5;
+    ASSERT_TRUE(reader.UpdateSnapshot(snapshot, plan, error)) << error;
+    TimelineVideoFrame updated;
+    ASSERT_TRUE(reader.VideoAt(0, updated, error)) << error;
+    ASSERT_EQ(updated.layers.size(), 1u);
+    EXPECT_EQ(first.layers.front().frame.backing_frame, updated.layers.front().frame.backing_frame);
+    const auto stats = reader.VideoReadStats();
+    EXPECT_EQ(stats.seeks, 1u);
+    EXPECT_EQ(stats.selected, 2u);
+    EXPECT_EQ(stats.held, 1u);
+}
+
+TEST(EditTimelineReader, MappingChangeRetiresCursorWithoutLosingMeasurements) {
+    const auto path = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    const auto metadata = ProbeEditMedia(path);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    ASSERT_TRUE(metadata.content_identity_valid);
+    TimelineRenderSnapshot snapshot;
+    snapshot.sources = {{1, path, metadata}};
+    snapshot.timeline = {{{1, 1, 1, false, 0, 0, metadata.duration_us}}, {}, metadata.duration_us};
+    const EditRenderPlan plan{EditExportPath::Render, {}, {64, 64}, 30, 1};
+    EditTimelineReader reader;
+    std::string error;
+    ASSERT_TRUE(reader.Open(snapshot, plan, error)) << error;
+    TimelineVideoFrame frame;
+    ASSERT_TRUE(reader.VideoAt(0, frame, error)) << error;
+    snapshot.timeline.clips.front().source_in_us = 1'000'000;
+    ASSERT_TRUE(reader.UpdateSnapshot(snapshot, plan, error)) << error;
+    ASSERT_TRUE(reader.VideoAt(0, frame, error)) << error;
+    ASSERT_EQ(frame.layers.size(), 1u);
+    EXPECT_EQ(frame.layers.front().frame.pts_us, 1'000'000);
+    EXPECT_EQ(reader.VideoReadStats().seeks, 2u);
+    EXPECT_EQ(reader.VideoReadStats().selected, 2u);
+    snapshot.timeline.clips.clear();
+    ASSERT_TRUE(reader.UpdateSnapshot(snapshot, plan, error)) << error;
+    EXPECT_EQ(reader.VideoReadStats().seeks, 2u);
+    ASSERT_TRUE(reader.Open(snapshot, plan, error)) << error;
+    EXPECT_EQ(reader.VideoReadStats().seeks, 0u);
+}

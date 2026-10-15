@@ -100,11 +100,26 @@ struct EditTimelineReader::Impl {
     };
     TimelineRenderSnapshot snapshot;
     EditRenderPlan plan;
-    std::array<Decoder, 2> decoders;
+    std::array<Decoder, 2> video_decoders;
+    std::array<Decoder, 2> audio_decoders;
     size_t peak_decoders = 0;
+    VideoReadMeasurements retired_video_measurements;
+
+    void Retire(Decoder& decoder, bool audio) {
+        if (decoder.engine && !audio) {
+            const auto stats = decoder.engine->VideoReadStats();
+            retired_video_measurements.seeks += stats.seeks;
+            retired_video_measurements.flushes += stats.flushes;
+            retired_video_measurements.decoded += stats.decoded;
+            retired_video_measurements.selected += stats.selected;
+            retired_video_measurements.held += stats.held;
+        }
+        decoder = {};
+    }
     BrickwallLimiter limiter{BrickwallLimiter::Config{}};
 
-    bool Prepare(const std::vector<TimelineContribution>& contributions, std::string& error) {
+    bool Prepare(const std::vector<TimelineContribution>& contributions, std::string& error, bool audio = false) {
+        auto& decoders = audio ? audio_decoders : video_decoders;
         std::set<uint64_t> clips;
         for (const auto& contribution : contributions)
             clips.insert(contribution.clip);
@@ -113,7 +128,7 @@ struct EditTimelineReader::Impl {
             return false;
         }
         for (const auto& contribution : contributions) {
-            if (Find(contribution.clip))
+            if (Find(contribution.clip, audio))
                 continue;
             const auto source = std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
                                              [&contribution](const auto& s) { return s.id == contribution.asset; });
@@ -125,7 +140,7 @@ struct EditTimelineReader::Impl {
             if (slot == decoders.end())
                 slot = std::find_if(decoders.begin(), decoders.end(),
                                     [&clips](const auto& d) { return !clips.contains(d.clip); });
-            *slot = {};
+            Retire(*slot, audio);
             slot->engine = std::make_unique<EditPlayerEngine>();
             if (!slot->engine->Open(source->path, error)) {
                 slot->engine.reset();
@@ -137,12 +152,15 @@ struct EditTimelineReader::Impl {
             }
             slot->clip = contribution.clip;
         }
-        peak_decoders =
-            std::max(peak_decoders, static_cast<size_t>(std::count_if(decoders.begin(), decoders.end(),
-                                                                      [](const auto& d) { return bool(d.engine); })));
+        const auto count = [](const auto& slots) {
+            return static_cast<size_t>(
+                std::count_if(slots.begin(), slots.end(), [](const auto& d) { return bool(d.engine); }));
+        };
+        peak_decoders = std::max(peak_decoders, count(video_decoders) + count(audio_decoders));
         return true;
     }
-    EditPlayerEngine* Find(uint64_t clip) {
+    EditPlayerEngine* Find(uint64_t clip, bool audio = false) {
+        auto& decoders = audio ? audio_decoders : video_decoders;
         for (auto& decoder : decoders)
             if (decoder.clip == clip && decoder.engine)
                 return decoder.engine.get();
@@ -165,7 +183,88 @@ bool EditTimelineReader::Open(TimelineRenderSnapshot snapshot, const EditRenderP
     return true;
 }
 
+bool EditTimelineReader::UpdateSnapshot(TimelineRenderSnapshot snapshot, const EditRenderPlan& plan,
+                                        std::string& error) {
+    if (plan.path != EditExportPath::Render) {
+        error = plan.reason;
+        return false;
+    }
+    const auto same_monitor = [](const auto& before, const auto& after) {
+        if (before.has_value() != after.has_value())
+            return false;
+        if (!before)
+            return true;
+        if (before->media_id != after->media_id || before->revision != after->revision ||
+            before->overlap_confirmed != after->overlap_confirmed ||
+            before->unverified_asset_binding != after->unverified_asset_binding ||
+            before->tracks.size() != after->tracks.size())
+            return false;
+        for (size_t index = 0; index < before->tracks.size(); ++index) {
+            const auto& a = before->tracks[index];
+            const auto& b = after->tracks[index];
+            if (a.track_id != b.track_id || a.gain_linear != b.gain_linear || a.muted != b.muted)
+                return false;
+        }
+        return true;
+    };
+    const auto compatible = [&](const Impl::Decoder& decoder, bool audio) {
+        const auto find_clip = [&](const auto& clips) {
+            return std::find_if(clips.begin(), clips.end(), [&](const auto& clip) { return clip.id == decoder.clip; });
+        };
+        const auto before = find_clip(impl_->snapshot.timeline.clips);
+        const auto after = find_clip(snapshot.timeline.clips);
+        if (before == impl_->snapshot.timeline.clips.end() || after == snapshot.timeline.clips.end() ||
+            before->asset != after->asset || before->stream != after->stream || before->audio != after->audio ||
+            before->start_us != after->start_us || before->source_in_us != after->source_in_us ||
+            before->source_out_us != after->source_out_us)
+            return false;
+        const auto find_source = [&](const auto& sources) {
+            return std::find_if(sources.begin(), sources.end(),
+                                [&](const auto& source) { return source.id == before->asset; });
+        };
+        const auto source_before = find_source(impl_->snapshot.sources);
+        const auto source_after = find_source(snapshot.sources);
+        if (source_before == impl_->snapshot.sources.end() || source_after == snapshot.sources.end())
+            return false;
+        const auto& a = source_before->metadata;
+        const auto& b = source_after->metadata;
+        return source_before->path == source_after->path && a.content_identity_valid && b.content_identity_valid &&
+               a.file_identity == b.file_identity && a.file_size == b.file_size &&
+               a.content_sha256 == b.content_sha256 &&
+               (!audio || same_monitor(source_before->monitor_selection, source_after->monitor_selection));
+    };
+    for (auto& decoder : impl_->video_decoders)
+        if (decoder.engine && !compatible(decoder, false))
+            impl_->Retire(decoder, false);
+    for (auto& decoder : impl_->audio_decoders)
+        if (decoder.engine && !compatible(decoder, true))
+            impl_->Retire(decoder, true);
+    impl_->snapshot = std::move(snapshot);
+    impl_->plan = plan;
+    return true;
+}
+
+VideoReadMeasurements EditTimelineReader::VideoReadStats() const noexcept {
+    VideoReadMeasurements result = impl_->retired_video_measurements;
+    for (const auto& slot : impl_->video_decoders) {
+        if (!slot.engine)
+            continue;
+        const auto stats = slot.engine->VideoReadStats();
+        result.seeks += stats.seeks;
+        result.flushes += stats.flushes;
+        result.decoded += stats.decoded;
+        result.selected += stats.selected;
+        result.held += stats.held;
+    }
+    return result;
+}
+
 bool EditTimelineReader::VideoAt(int64_t time_us, TimelineVideoFrame& output, std::string& error) {
+    return VideoAt(time_us, output, error, VideoReadMode::Sequential, 0);
+}
+
+bool EditTimelineReader::VideoAt(int64_t time_us, TimelineVideoFrame& output, std::string& error, VideoReadMode mode,
+                                 uint64_t generation) {
     const auto evaluation = EvaluateTimeline(impl_->snapshot.timeline, time_us);
     if (!evaluation.error.empty()) {
         error = evaluation.error;
@@ -175,7 +274,7 @@ bool EditTimelineReader::VideoAt(int64_t time_us, TimelineVideoFrame& output, st
         return false;
     output = {time_us, impl_->plan.output, {}};
     for (const auto& contribution : evaluation.video) {
-        auto frame = impl_->Find(contribution.clip)->DecodeFrameAtRaw(contribution.source_us);
+        auto frame = impl_->Find(contribution.clip)->ReadFrameAtRaw(contribution.source_us, mode, generation);
         if (!frame) {
             error = "Cannot decode a timeline video frame.";
             return false;
@@ -196,7 +295,7 @@ bool EditTimelineReader::AudioAt(int64_t first_sample, uint32_t count, std::vect
         const int64_t sample = first_sample + offset;
         const int64_t time = sample * 1'000'000 / 48000;
         const auto evaluation = EvaluateTimeline(impl_->snapshot.timeline, time);
-        if (!evaluation.error.empty() || !impl_->Prepare(evaluation.video, error)) {
+        if (!evaluation.error.empty() || !impl_->Prepare(evaluation.audio, error, true)) {
             if (!evaluation.error.empty())
                 error = evaluation.error;
             return false;
@@ -210,15 +309,9 @@ bool EditTimelineReader::AudioAt(int64_t first_sample, uint32_t count, std::vect
             }
         std::vector<float> source;
         for (const auto& contribution : evaluation.audio) {
-            const auto audio_clip =
-                std::find_if(impl_->snapshot.timeline.clips.begin(), impl_->snapshot.timeline.clips.end(),
-                             [&contribution](const auto& c) { return c.id == contribution.clip; });
-            const auto video_clip =
-                std::find_if(impl_->snapshot.timeline.clips.begin(), impl_->snapshot.timeline.clips.end(),
-                             [&audio_clip](const auto& c) { return !c.audio && c.group == audio_clip->group; });
-            auto* decoder = video_clip == impl_->snapshot.timeline.clips.end() ? nullptr : impl_->Find(video_clip->id);
+            auto* decoder = impl_->Find(contribution.clip, true);
             if (!decoder) {
-                error = "Timeline audio is not linked to an active video source.";
+                error = "Timeline audio source is unavailable.";
                 return false;
             }
             const int64_t source_sample = (contribution.source_us * 48000 + 500'000) / 1'000'000;

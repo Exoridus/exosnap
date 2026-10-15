@@ -8,6 +8,7 @@
 #include <exosnap/engine/recording_media_types.h>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <new>
 #include <optional>
 #include <string>
@@ -520,6 +521,13 @@ bool TryAttachD3D11VA(AVCodecContext* vctx) {
 } // namespace
 
 struct EditPlayerEngine::Impl {
+    VideoReadMeasurements video_read_measurements;
+    std::optional<RawDecodedVideoFrame> cursor_frame;
+    std::optional<RawDecodedVideoFrame> cursor_lookahead;
+    int64_t cursor_target_us = -1;
+    uint64_t cursor_generation = 0;
+    bool cursor_valid = false;
+    bool cursor_draining = false;
     std::atomic<const std::atomic<bool>*> opening_cancelled{nullptr};
     std::shared_ptr<void> media_read_lease;
     InputCtxGuard fmt;
@@ -576,6 +584,9 @@ struct EditPlayerEngine::Impl {
     [[nodiscard]] bool IsOpen() const noexcept {
         return fmt.ctx != nullptr;
     }
+
+    bool DecodeAudioRange(std::optional<uint32_t> stream, int64_t first_sample, uint32_t frame_count,
+                          std::vector<float>& output, std::string& error);
 
     [[nodiscard]] float MonitorGain(int stream_index) const {
         const auto description =
@@ -639,6 +650,11 @@ EditPlayerEngine::~EditPlayerEngine() {
 
 bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_error,
                             const std::atomic<bool>* cancelled) {
+    return OpenSource(path, out_error, cancelled, std::nullopt);
+}
+
+bool EditPlayerEngine::OpenSource(const std::filesystem::path& path, std::string& out_error,
+                                  const std::atomic<bool>* cancelled, std::optional<uint32_t> audio_stream) {
     Close();
     struct ResetOpeningCancellation {
         std::atomic<const std::atomic<bool>*>& token;
@@ -690,85 +706,93 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
         return false;
     }
 
-    // The best video stream (av_find_best_stream picks the most likely primary
-    // stream of a type -- correct for our own single-video-track recordings).
-    // Audio descriptions enumerate actual streams even when provenance is
-    // unavailable. Monitoring is selected separately after identity validation.
-    const int video_idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-
-    if (video_idx < 0) {
-        out_error = "no decodable video stream found";
+    if (audio_stream && (*audio_stream >= fmt_ctx->nb_streams ||
+                         fmt_ctx->streams[*audio_stream]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)) {
+        out_error = "The selected container stream is not audio.";
         Close();
         return false;
     }
+    if (!audio_stream) {
+        // The best video stream (av_find_best_stream picks the most likely primary
+        // stream of a type -- correct for our own single-video-track recordings).
+        // Audio descriptions enumerate actual streams even when provenance is
+        // unavailable. Monitoring is selected separately after identity validation.
+        const int video_idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
 
-    AVStream* vst = fmt_ctx->streams[video_idx];
-    const AVCodec* vcodec = avcodec_find_decoder(vst->codecpar->codec_id);
-    if (vcodec == nullptr) {
-        out_error = "no decoder available for the video codec";
-        Close();
-        return false;
-    }
-    AVCodecContext* vctx = avcodec_alloc_context3(vcodec);
-    bool vctx_ready = vctx != nullptr && avcodec_parameters_to_context(vctx, vst->codecpar) >= 0;
-    if (vctx_ready) {
-        // 0 = let libavcodec pick the count itself: it derives one from
-        // av_cpu_count() (which honours this process's affinity mask) and caps
-        // it at its own MAX_AUTO_THREADS, then writes the resolved value back
-        // into thread_count during avcodec_open2. Deliberately NOT the host's
-        // raw std::thread::hardware_concurrency(): that removes the cap, and
-        // on a high-core-count machine more frame-threading depth means more
-        // in-flight decode latency on the latency-sensitive scrub path plus
-        // proportionally more decoder frame-pool memory at 4K, for no measured
-        // throughput gain. Frame threading costs a few frames of latency
-        // either way, which is irrelevant for a player paced by an audio clock.
-        vctx->thread_count = 0;
-        vctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
-        // Attempt hardware decode for every clip, not narrowly gated to a
-        // specific codec/chroma combination -- see the design doc for why
-        // this is safe to try generically. TryAttachD3D11VA leaves vctx
-        // untouched when it cannot create a device at all; the per-stream
-        // profile/chroma/bit-depth negotiation happens inside avcodec_open2
-        // itself, so a hardware-incompatible stream simply fails to open
-        // here and falls back once, cleanly, to the exact call this codebase
-        // already made before hardware decode existed.
-        const char* software_decode = std::getenv("EXOSNAP_EDIT_SOFTWARE_DECODE");
-        if (!software_decode || std::string_view(software_decode) != "1")
-            TryAttachD3D11VA(vctx);
-        vctx_ready = avcodec_open2(vctx, vcodec, nullptr) >= 0;
-        if (!vctx_ready && vctx->hw_device_ctx != nullptr) {
-            av_buffer_unref(&vctx->hw_device_ctx);
-            vctx_ready = avcodec_open2(vctx, vcodec, nullptr) >= 0;
+        if (video_idx < 0) {
+            out_error = "no decodable video stream found";
+            Close();
+            return false;
         }
+
+        AVStream* vst = fmt_ctx->streams[video_idx];
+        const AVCodec* vcodec = avcodec_find_decoder(vst->codecpar->codec_id);
+        if (vcodec == nullptr) {
+            out_error = "no decoder available for the video codec";
+            Close();
+            return false;
+        }
+        AVCodecContext* vctx = avcodec_alloc_context3(vcodec);
+        bool vctx_ready = vctx != nullptr && avcodec_parameters_to_context(vctx, vst->codecpar) >= 0;
+        if (vctx_ready) {
+            // 0 = let libavcodec pick the count itself: it derives one from
+            // av_cpu_count() (which honours this process's affinity mask) and caps
+            // it at its own MAX_AUTO_THREADS, then writes the resolved value back
+            // into thread_count during avcodec_open2. Deliberately NOT the host's
+            // raw std::thread::hardware_concurrency(): that removes the cap, and
+            // on a high-core-count machine more frame-threading depth means more
+            // in-flight decode latency on the latency-sensitive scrub path plus
+            // proportionally more decoder frame-pool memory at 4K, for no measured
+            // throughput gain. Frame threading costs a few frames of latency
+            // either way, which is irrelevant for a player paced by an audio clock.
+            vctx->thread_count = 0;
+            vctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+            // Attempt hardware decode for every clip, not narrowly gated to a
+            // specific codec/chroma combination -- see the design doc for why
+            // this is safe to try generically. TryAttachD3D11VA leaves vctx
+            // untouched when it cannot create a device at all; the per-stream
+            // profile/chroma/bit-depth negotiation happens inside avcodec_open2
+            // itself, so a hardware-incompatible stream simply fails to open
+            // here and falls back once, cleanly, to the exact call this codebase
+            // already made before hardware decode existed.
+            const char* software_decode = std::getenv("EXOSNAP_EDIT_SOFTWARE_DECODE");
+            if (!software_decode || std::string_view(software_decode) != "1")
+                TryAttachD3D11VA(vctx);
+            vctx_ready = avcodec_open2(vctx, vcodec, nullptr) >= 0;
+            if (!vctx_ready && vctx->hw_device_ctx != nullptr) {
+                av_buffer_unref(&vctx->hw_device_ctx);
+                vctx_ready = avcodec_open2(vctx, vcodec, nullptr) >= 0;
+            }
+        }
+        if (!vctx_ready) {
+            if (vctx)
+                avcodec_free_context(&vctx);
+            out_error = "failed to open the video decoder";
+            Close();
+            return false;
+        }
+        impl_->video_codec.ctx = vctx;
+        impl_->video_stream_idx = video_idx;
+        // The clip's own frame rate drives the caller's presentation cadence and
+        // queue sizing (see VideoFrameRate). av_guess_frame_rate prefers the
+        // container's r_frame_rate/avg_frame_rate and falls back to the codec
+        // time base, so it stays sane for files whose header lies.
+        impl_->frame_rate = av_guess_frame_rate(fmt_ctx, vst, nullptr);
+        impl_->matrix = MapMatrix(vst->codecpar->color_space);
+        impl_->range = MapRange(vst->codecpar->color_range);
+        // Assigned unconditionally, so opening an SDR clip after an HDR one cannot
+        // leave the tone-mapper standing.
+        //
+        // Same reference tone-map curve as the capture preview and snapshot path
+        // (the shared reference curve, not an independent tone-map). Display peak:
+        // the engine is UI-agnostic and has no screen to ask, so this is the
+        // reference-peak fallback (kHdrFallbackPeakNits) -- that shifts only where
+        // the highlight roll-off begins, not whether the image is readable at all.
+        // Recorded in KNOWN_LIMITATIONS.
+        impl_->pq_converter = IsPqTonemapSource(vst->codecpar->color_trc, vst->codecpar->format)
+                                  ? std::make_unique<P010PqMonitorConverter>(HdrPeakScale(false, 0.0f, 0.0f))
+                                  : nullptr;
     }
-    if (!vctx_ready) {
-        if (vctx)
-            avcodec_free_context(&vctx);
-        out_error = "failed to open the video decoder";
-        Close();
-        return false;
-    }
-    impl_->video_codec.ctx = vctx;
-    impl_->video_stream_idx = video_idx;
-    // The clip's own frame rate drives the caller's presentation cadence and
-    // queue sizing (see VideoFrameRate). av_guess_frame_rate prefers the
-    // container's r_frame_rate/avg_frame_rate and falls back to the codec
-    // time base, so it stays sane for files whose header lies.
-    impl_->frame_rate = av_guess_frame_rate(fmt_ctx, vst, nullptr);
-    impl_->matrix = MapMatrix(vst->codecpar->color_space);
-    impl_->range = MapRange(vst->codecpar->color_range);
-    // Assigned unconditionally, so opening an SDR clip after an HDR one cannot
-    // leave the tone-mapper standing.
-    //
-    // Same reference tone-map curve as the capture preview and snapshot path
-    // (the shared reference curve, not an independent tone-map). Display peak:
-    // the engine is UI-agnostic and has no screen to ask, so this is the
-    // reference-peak fallback (kHdrFallbackPeakNits) -- that shifts only where
-    // the highlight roll-off begins, not whether the image is readable at all.
-    // Recorded in KNOWN_LIMITATIONS.
-    impl_->pq_converter = IsPqTonemapSource(vst->codecpar->color_trc, vst->codecpar->format)
-                              ? std::make_unique<P010PqMonitorConverter>(HdrPeakScale(false, 0.0f, 0.0f))
-                              : nullptr;
 
     impl_->audio_metadata = ReadAudioMediaMetadata(path, fmt_ctx, {}, {}, cancelled);
     if (cancelled && cancelled->load(std::memory_order_relaxed)) {
@@ -806,6 +830,9 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
             description.name = title->value;
         impl_->audio_track_descriptions.push_back(std::move(description));
 
+        if (audio_stream && i != *audio_stream)
+            continue;
+
         const AVCodec* acodec = avcodec_find_decoder(ast->codecpar->codec_id);
         if (acodec == nullptr) {
             LogWarn("no decoder available for an audio track's codec -- that track stays silent");
@@ -826,13 +853,32 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
         impl_->audio_tracks.push_back(std::move(track));
     }
 
+    if (audio_stream && impl_->audio_tracks.empty()) {
+        out_error = "The selected audio stream has no usable decoder.";
+        Close();
+        return false;
+    }
     return true;
+}
+
+bool EditPlayerEngine::OpenAudioStream(const std::filesystem::path& path, uint32_t container_index,
+                                       std::string& out_error, const std::atomic<bool>* cancelled) {
+    return OpenSource(path, out_error, cancelled, container_index);
+}
+
+bool EditPlayerEngine::DecodeAudioStreamRange(uint32_t container_index, int64_t first_sample, uint32_t frame_count,
+                                              std::vector<float>& output, std::string& error) {
+    return impl_->DecodeAudioRange(container_index, first_sample, frame_count, output, error);
 }
 
 void EditPlayerEngine::Close() {
     StopPlaybackDecode();
     // Safe only after the join above: the audio thread owns every track's
     // decoder and resampler while it runs.
+    impl_->cursor_valid = false;
+    impl_->cursor_frame.reset();
+    impl_->cursor_lookahead.reset();
+    impl_->video_read_measurements = {};
     impl_->audio_tracks.clear();
     impl_->audio_track_descriptions.clear();
     if (impl_->video_codec.ctx)
@@ -1139,90 +1185,66 @@ std::optional<DecodedVideoFrame> DecodeForwardToTarget(AVFormatContext* fmt_ctx,
     }
 }
 
-// Same shape and same GOP-spanning-decode strategy as DecodeForwardToTarget
-// above (DecodeFrameAt's own helper), but for DecodeFrameAtRaw: the candidate
-// frame is wrapped via WrapRawDecodedFrame instead of converted, so it stays
-// FFmpeg-refcounted rather than becoming a fresh BGRA allocation.
-std::optional<RawDecodedVideoFrame> DecodeForwardToTargetRaw(AVFormatContext* fmt_ctx, AVCodecContext* vctx,
-                                                             int video_stream_idx, int64_t target_us,
-                                                             MatrixCoefficients matrix, ColorRange range,
-                                                             const P010PqMonitorConverter* pq) {
+// Receive before submitting another packet: a previous pull may have stopped
+// with additional presentation-order frames still buffered inside the codec.
+std::optional<RawDecodedVideoFrame>
+ReadForwardToTargetRaw(AVFormatContext* fmt_ctx, AVCodecContext* vctx, int video_stream_idx, int64_t target_us,
+                       MatrixCoefficients matrix, ColorRange range, const P010PqMonitorConverter* pq, bool& draining,
+                       std::optional<RawDecodedVideoFrame>& selected, std::optional<RawDecodedVideoFrame>& lookahead,
+                       VideoReadMeasurements& measurements) {
     PacketGuard pkt(av_packet_alloc());
     FrameGuard frame(av_frame_alloc());
-    FrameGuard held(av_frame_alloc());
-    if (pkt.pkt == nullptr || frame.frame == nullptr || held.frame == nullptr)
+    if (!pkt.pkt || !frame.frame)
         return std::nullopt;
-
-    bool have_candidate = false;
-    int64_t candidate_pts_us = 0;
     const AVRational tb = fmt_ctx->streams[video_stream_idx]->time_base;
-
-    const auto finish = [&]() -> std::optional<RawDecodedVideoFrame> {
-        if (!have_candidate)
-            return std::nullopt;
-        const bool is_pq = pq != nullptr && held.frame->format == AV_PIX_FMT_YUV420P10LE;
-        return WrapRawDecodedFrame(held.frame, candidate_pts_us, matrix, range, is_pq);
-    };
-
-    while (true) {
-        const int read_ret = av_read_frame(fmt_ctx, pkt.pkt);
-        if (read_ret < 0) {
-            avcodec_send_packet(vctx, nullptr); // enter drain mode (flush)
-        } else if (pkt.pkt->stream_index != video_stream_idx) {
-            av_packet_unref(pkt.pkt);
-            continue;
-        } else {
-            // EAGAIN cannot happen here: the inner loop below always drains
-            // the decoder to EAGAIN before the next send, which the avcodec
-            // API contract guarantees leaves the decoder accepting input. A
-            // real send error (e.g. a corrupt packet) is logged and skipped;
-            // the loop keeps reading forward.
-            const int send_ret = avcodec_send_packet(vctx, pkt.pkt);
-            av_packet_unref(pkt.pkt);
-            if (send_ret < 0)
-                LogWarn((std::string("avcodec_send_packet failed: ") + av_err2str(send_ret)).c_str());
-        }
-
-        for (;;) {
-            const int recv_ret = avcodec_receive_frame(vctx, frame.frame);
-            if (recv_ret == AVERROR(EAGAIN)) {
-                break; // need more input
-            }
-            if (recv_ret < 0) {
-                // AVERROR_EOF (fully drained) or a real decode error: stop
-                // either way with the last frame decoded before it, if any.
-                return finish();
-            }
-
-            // Hardware readback normalizes back to a plain software pixel
-            // format before anything below inspects frame.frame->format.
+    for (;;) {
+        const int received = avcodec_receive_frame(vctx, frame.frame);
+        if (received >= 0) {
+            ++measurements.decoded;
             NormalizeHwFrame(frame.frame);
-
-            // best_effort_timestamp already falls back from a missing pts to
-            // the interpolated dts-based estimate; a frame with neither is
-            // treated as t=0 rather than fed to av_rescale_q as
-            // AV_NOPTS_VALUE (which would rescale into garbage).
-            const int64_t raw_pts =
-                (frame.frame->best_effort_timestamp != AV_NOPTS_VALUE) ? frame.frame->best_effort_timestamp : 0;
-            const int64_t pts_us = av_rescale_q(raw_pts, tb, AVRational{1, AV_TIME_BASE});
-
             if (IsConvertibleFrame(frame.frame)) {
-                av_frame_unref(held.frame);
-                if (av_frame_ref(held.frame, frame.frame) == 0) {
-                    have_candidate = true;
-                    candidate_pts_us = pts_us;
+                const int64_t raw_pts =
+                    frame.frame->best_effort_timestamp != AV_NOPTS_VALUE ? frame.frame->best_effort_timestamp : 0;
+                const int64_t pts_us = av_rescale_q(raw_pts, tb, AVRational{1, AV_TIME_BASE});
+                const bool is_pq = pq != nullptr && frame.frame->format == AV_PIX_FMT_YUV420P10LE;
+                auto owned = WrapRawDecodedFrame(frame.frame, pts_us, matrix, range, is_pq);
+                av_frame_unref(frame.frame);
+                if (!owned)
+                    return std::nullopt;
+                if (pts_us > target_us) {
+                    lookahead = std::move(owned);
+                    return selected;
                 }
+                selected = std::move(owned);
+                if (pts_us == target_us)
+                    return selected;
+            } else {
+                av_frame_unref(frame.frame);
             }
-
-            if (pts_us >= target_us)
-                return finish();
+            continue;
         }
+        if (received == AVERROR_EOF)
+            return selected;
+        if (received != AVERROR(EAGAIN) || draining)
+            return std::nullopt;
 
-        if (read_ret < 0)
-            return finish(); // reached EOF while flushing
+        int read = 0;
+        do {
+            av_packet_unref(pkt.pkt);
+            read = av_read_frame(fmt_ctx, pkt.pkt);
+        } while (read >= 0 && pkt.pkt->stream_index != video_stream_idx);
+        if (read < 0) {
+            draining = true;
+            if (avcodec_send_packet(vctx, nullptr) < 0)
+                return selected;
+        } else {
+            const int sent = avcodec_send_packet(vctx, pkt.pkt);
+            av_packet_unref(pkt.pkt);
+            if (sent < 0)
+                LogWarn((std::string("avcodec_send_packet failed: ") + av_err2str(sent)).c_str());
+        }
     }
 }
-
 // ---- Continuous playback decode helpers ----
 
 // Fixed playback audio output format (see DecodedAudioBlock's contract):
@@ -1236,7 +1258,7 @@ constexpr uint32_t kPlaybackOutChannels = 2;
 // convention as OutputFormatAudioSrc::BuildSwrContext. Returns nullptr on
 // failure; the CALLER decides what that costs -- one track of several drops
 // out, the last one leaves the run video-only.
-SwrContext* BuildPlaybackResampler(AVCodecContext* actx) {
+SwrContext* BuildPlaybackResampler(AVCodecContext* actx, bool unity_mono = false) {
     AVChannelLayout out_layout{};
     av_channel_layout_default(&out_layout, static_cast<int>(kPlaybackOutChannels));
     SwrContext* swr = nullptr;
@@ -1246,6 +1268,13 @@ SwrContext* BuildPlaybackResampler(AVCodecContext* actx) {
     if (ret < 0 || swr == nullptr) {
         LogWarn("swr_alloc_set_opts2 failed -- this audio track cannot be played back");
         return nullptr;
+    }
+    if (unity_mono && actx->ch_layout.nb_channels == 1) {
+        const double matrix[] = {1.0, 1.0};
+        if (swr_set_matrix(swr, matrix, 1) < 0) {
+            swr_free(&swr);
+            return nullptr;
+        }
     }
     if (swr_init(swr) < 0) {
         swr_free(&swr);
@@ -1300,6 +1329,9 @@ std::optional<DecodedVideoFrame> EditPlayerEngine::DecodeFrameAt(int64_t target_
     AVCodecContext* vctx = impl_->video_codec.ctx;
     AVStream* vst = fmt_ctx->streams[impl_->video_stream_idx];
 
+    impl_->cursor_valid = false;
+    impl_->cursor_frame.reset();
+    impl_->cursor_lookahead.reset();
     // av_seek_frame()'s timestamp unit is the target stream's own time_base
     // when a specific stream index is passed (only the stream_index == -1
     // form takes AV_TIME_BASE), so rescale from microseconds first -- same as
@@ -1319,28 +1351,61 @@ std::optional<DecodedVideoFrame> EditPlayerEngine::DecodeFrameAt(int64_t target_
 }
 
 std::optional<RawDecodedVideoFrame> EditPlayerEngine::DecodeFrameAtRaw(int64_t target_us) {
+    auto frame = ReadFrameAtRaw(target_us, VideoReadMode::RandomAccess);
+    if (impl_->cursor_lookahead)
+        return impl_->cursor_lookahead;
+    return frame;
+}
+
+std::optional<RawDecodedVideoFrame> EditPlayerEngine::ReadFrameAtRaw(int64_t target_us, VideoReadMode mode,
+                                                                     uint64_t generation) {
     if (!impl_->IsOpen() || impl_->video_stream_idx < 0)
         return std::nullopt;
-
     target_us = std::max<int64_t>(target_us, 0);
-
-    AVFormatContext* fmt_ctx = impl_->fmt.ctx;
-    AVCodecContext* vctx = impl_->video_codec.ctx;
-    AVStream* vst = fmt_ctx->streams[impl_->video_stream_idx];
-
-    // Same seek convention as DecodeFrameAt: AVSEEK_FLAG_BACKWARD snaps to
-    // the keyframe at or before the target so decode-forward starts clean.
-    const int64_t seek_ts = av_rescale_q(target_us, AVRational{1, AV_TIME_BASE}, vst->time_base);
-    const int seek_ret = av_seek_frame(fmt_ctx, impl_->video_stream_idx, seek_ts, AVSEEK_FLAG_BACKWARD);
-    if (seek_ret < 0) {
-        LogWarn((std::string("av_seek_frame failed: ") + av_err2str(seek_ret)).c_str());
-        return std::nullopt;
+    auto* format = impl_->fmt.ctx;
+    auto* codec = impl_->video_codec.ctx;
+    if (mode == VideoReadMode::RandomAccess || !impl_->cursor_valid || generation != impl_->cursor_generation ||
+        target_us < impl_->cursor_target_us) {
+        impl_->cursor_valid = false;
+        impl_->cursor_frame.reset();
+        impl_->cursor_lookahead.reset();
+        impl_->cursor_draining = false;
+        const auto time_base = format->streams[impl_->video_stream_idx]->time_base;
+        const auto timestamp = av_rescale_q(target_us, AVRational{1, AV_TIME_BASE}, time_base);
+        ++impl_->video_read_measurements.seeks;
+        if (av_seek_frame(format, impl_->video_stream_idx, timestamp, AVSEEK_FLAG_BACKWARD) < 0)
+            return std::nullopt;
+        avcodec_flush_buffers(codec);
+        ++impl_->video_read_measurements.flushes;
+        impl_->cursor_valid = true;
+        impl_->cursor_generation = generation;
     }
-    // Discard any decoder-buffered frames from before the seek.
-    avcodec_flush_buffers(vctx);
-
-    return DecodeForwardToTargetRaw(fmt_ctx, vctx, impl_->video_stream_idx, target_us, impl_->matrix, impl_->range,
-                                    impl_->pq_converter.get());
+    impl_->cursor_target_us = target_us;
+    if (impl_->cursor_frame && (impl_->cursor_frame->pts_us == target_us ||
+                                (impl_->cursor_lookahead && impl_->cursor_lookahead->pts_us > target_us))) {
+        ++impl_->video_read_measurements.held;
+        ++impl_->video_read_measurements.selected;
+        return impl_->cursor_frame;
+    }
+    if (impl_->cursor_lookahead) {
+        impl_->cursor_frame = std::move(impl_->cursor_lookahead);
+        impl_->cursor_lookahead.reset();
+        if (impl_->cursor_frame->pts_us == target_us) {
+            ++impl_->video_read_measurements.selected;
+            return impl_->cursor_frame;
+        }
+    }
+    auto frame = ReadForwardToTargetRaw(format, codec, impl_->video_stream_idx, target_us, impl_->matrix, impl_->range,
+                                        impl_->pq_converter.get(), impl_->cursor_draining, impl_->cursor_frame,
+                                        impl_->cursor_lookahead, impl_->video_read_measurements);
+    if (frame)
+        ++impl_->video_read_measurements.selected;
+    else
+        impl_->cursor_valid = false;
+    return frame;
+}
+VideoReadMeasurements EditPlayerEngine::VideoReadStats() const noexcept {
+    return impl_->video_read_measurements;
 }
 
 std::vector<AudioTrackDescription> EditPlayerEngine::AudioTracks() const {
@@ -1408,27 +1473,45 @@ bool EditPlayerEngine::SetMonitorSelection(MonitorSelectionSnapshot selection, s
 
 bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_count, std::vector<float>& output,
                                         std::string& error) {
-    std::lock_guard lock(impl_->playback_mutex);
-    if (!impl_->IsOpen() || first_sample < 0 || frame_count > 48000) {
+    return impl_->DecodeAudioRange(std::nullopt, first_sample, frame_count, output, error);
+}
+
+bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, int64_t first_sample,
+                                              uint32_t frame_count, std::vector<float>& output, std::string& error) {
+    std::lock_guard lock(playback_mutex);
+    if (!IsOpen() || first_sample < 0 || frame_count > 48000 ||
+        first_sample > (std::numeric_limits<int64_t>::max)() - frame_count) {
         error = "Invalid timeline audio range.";
         return false;
     }
     output.assign(static_cast<size_t>(frame_count) * 2, 0);
-    if (impl_->playback_running.load() || impl_->audio_metadata.monitoring_confirmation_required) {
+    if (playback_running.load() || (!stream && audio_metadata.monitoring_confirmation_required)) {
         error = "Audio monitoring requires a confirmed selection and stopped playback.";
+        return false;
+    }
+    if (stream &&
+        (*stream >= fmt.ctx->nb_streams || fmt.ctx->streams[*stream]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)) {
+        error = "The selected container stream is not audio.";
         return false;
     }
     std::vector<AudioTrack*> selected_tracks;
     std::vector<float> selected_gains;
-    for (const auto& description : impl_->audio_track_descriptions) {
-        const float gain = impl_->MonitorGain(description.stream_index);
+    for (const auto& description : audio_track_descriptions) {
+        if (stream && static_cast<uint32_t>(description.stream_index) != *stream)
+            continue;
+        const float gain = stream ? 1.0f : MonitorGain(description.stream_index);
         if (gain == 0)
             continue;
-        const auto found = std::find_if(impl_->audio_tracks.begin(), impl_->audio_tracks.end(), [&](const auto& track) {
+        const auto found = std::find_if(audio_tracks.begin(), audio_tracks.end(), [&](const auto& track) {
             return track->stream_index == description.stream_index;
         });
-        if (found == impl_->audio_tracks.end()) {
+        if (found == audio_tracks.end()) {
             error = "A selected audio track has no usable decoder.";
+            return false;
+        }
+        if (stream &&
+            ((*found)->codec.ctx->ch_layout.nb_channels < 1 || (*found)->codec.ctx->ch_layout.nb_channels > 2)) {
+            error = "The selected audio layout has no qualified stereo result matrix.";
             return false;
         }
         selected_tracks.push_back(found->get());
@@ -1436,11 +1519,21 @@ bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_cou
     }
     if (selected_tracks.empty() || frame_count == 0)
         return true;
-    auto* format = impl_->fmt.ctx;
-    const int64_t start_us = first_sample * 1'000'000 / 48000;
+    auto* format = fmt.ctx;
+    const int64_t start_us = av_rescale_q(first_sample, AVRational{1, 48000}, AVRational{1, AV_TIME_BASE});
+    const int64_t origin_us = stream && format->start_time != AV_NOPTS_VALUE ? format->start_time : 0;
+    const int64_t origin_sample = av_rescale_q(origin_us, AVRational{1, AV_TIME_BASE}, AVRational{1, 48000});
     // Decode preroll through the normal resampler so range boundaries do not
     // reset its filter at an audible sample.
-    const int64_t seek_us = std::max<int64_t>(0, start_us - 1'000'000);
+    const int64_t preroll_us = std::max<int64_t>(0, start_us - 1'000'000);
+    if (origin_us > 0 && preroll_us > (std::numeric_limits<int64_t>::max)() - origin_us) {
+        error = "The source audio timestamp is outside the supported range.";
+        return false;
+    }
+    const int64_t seek_us = preroll_us + origin_us;
+    cursor_valid = false;
+    cursor_frame.reset();
+    cursor_lookahead.reset();
     if (av_seek_frame(format, -1, seek_us, AVSEEK_FLAG_BACKWARD) < 0) {
         error = "Cannot seek source audio.";
         return false;
@@ -1449,7 +1542,7 @@ bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_cou
         avcodec_flush_buffers(track->codec.ctx);
         if (track->resampler.ctx)
             swr_free(&track->resampler.ctx);
-        track->resampler.ctx = BuildPlaybackResampler(track->codec.ctx);
+        track->resampler.ctx = BuildPlaybackResampler(track->codec.ctx, stream.has_value());
         if (!track->resampler.ctx) {
             error = "Cannot resample source audio to stereo Float32.";
             return false;
@@ -1482,7 +1575,7 @@ bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_cou
             }
             int64_t at = timestamp == AV_NOPTS_VALUE ? *next_sample[index]
                                                      : av_rescale_q(timestamp, track.time_base, AVRational{1, 48000}) -
-                                                           swr_get_delay(track.resampler.ctx, 48000);
+                                                           swr_get_delay(track.resampler.ctx, 48000) - origin_sample;
             // Container ticks can be coarser than one sample. Preserve contiguous
             // decoded sample counts instead of duplicating/dropping their rounded edges.
             const int64_t tolerance = av_rescale_q_rnd(1, track.time_base, AVRational{1, 48000}, AV_ROUND_UP);
@@ -1602,6 +1695,9 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     // current position rather than producing nothing (same convention as
     // DecodeFrameAt).
     const int64_t seek_ts = av_rescale_q(start_us, AVRational{1, AV_TIME_BASE}, vst->time_base);
+    impl->cursor_valid = false;
+    impl->cursor_frame.reset();
+    impl->cursor_lookahead.reset();
     const int seek_ret = av_seek_frame(fmt_ctx, impl->video_stream_idx, seek_ts, AVSEEK_FLAG_BACKWARD);
     if (seek_ret < 0)
         LogWarn((std::string("playback av_seek_frame failed: ") + av_err2str(seek_ret)).c_str());

@@ -39,7 +39,14 @@ class EditTimelineReader {
     EditTimelineReader();
     ~EditTimelineReader();
     bool Open(TimelineRenderSnapshot snapshot, const EditRenderPlan& plan, std::string& error);
+    // Retains cursors whose source identity and clip-to-source mapping remain
+    // compatible. Presentation-only revisions do not reposition decoders.
+    bool UpdateSnapshot(TimelineRenderSnapshot snapshot, const EditRenderPlan& plan, std::string& error);
+    // Cumulative since Open, including retired video cursors. Single-owner read.
+    [[nodiscard]] VideoReadMeasurements VideoReadStats() const noexcept;
     bool VideoAt(int64_t time_us, TimelineVideoFrame& output, std::string& error);
+    bool VideoAt(int64_t time_us, TimelineVideoFrame& output, std::string& error, VideoReadMode mode,
+                 uint64_t generation = 0);
     bool AudioAt(int64_t first_sample, uint32_t count, std::vector<float>& output, std::string& error);
     void ResetAudio();
     [[nodiscard]] size_t PeakDecoders() const;

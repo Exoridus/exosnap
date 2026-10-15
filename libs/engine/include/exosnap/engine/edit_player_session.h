@@ -72,6 +72,7 @@ class EditPlayerSession {
     // against CurrentPositionMs(), which stays the clock source of truth),
     // not in this class.
     void SetOnFrameReady(std::function<void(RawDecodedVideoFrame)> callback);
+    void SetOnFrameReadyWithGeneration(std::function<void(RawDecodedVideoFrame, uint64_t)> callback);
 
     // Starts continuous playback (decode thread + audio renderer, if
     // present) from start_us. No-op if not open. The caller is responsible
@@ -83,7 +84,7 @@ class EditPlayerSession {
     // Drives the engine's RAW playback decode (EditPlayerEngine::
     // StartPlaybackDecode) and delivers through SetOnFrameReady's callback --
     // see that method's doc comment.
-    void Play(int64_t start_us = 0);
+    void Play(int64_t start_us = 0, uint64_t generation = 0);
 
     // Pauses continuous playback. No-op if not open or not playing.
     void Pause();
@@ -98,7 +99,7 @@ class EditPlayerSession {
     // Drives the engine's RAW seek (EditPlayerEngine::DecodeFrameAtRaw) and
     // delivers through SetOnFrameReady's callback -- see that method's doc
     // comment.
-    void SeekTo(int64_t target_us);
+    void SeekTo(int64_t target_us, uint64_t generation = 0);
 
     // Current playback position derived from the audio master clock (0 if no
     // audio stream). While paused, holds steady at the position playback
@@ -108,6 +109,7 @@ class EditPlayerSession {
     // Called once per presentation tick from the caller's UI thread, alongside
     // ClockSnapshotUs() below.
     [[nodiscard]] int64_t CurrentPositionMs() const noexcept;
+    [[nodiscard]] int64_t CurrentPositionUs() const noexcept;
 
     // Thread-safe atomic snapshot of the playback clock in absolute media
     // time (microseconds), or a negative value when no clock is available --

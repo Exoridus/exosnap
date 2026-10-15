@@ -723,4 +723,88 @@ TEST(EditPlayerEngine, DecodeFrameAtRawDetectsNativeHdr10Source) {
     EXPECT_GT(frame->height, 0u);
 }
 
+TEST(EditPlayerEngine, ForwardPlaybackDoesNotReseekEachFrame) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.Open(fixture, error)) << error;
+    for (int64_t index = 0; index < 30; ++index) {
+        const auto target = index * 1'000'000 / 30;
+        const auto frame = engine.ReadFrameAtRaw(target, exosnap::engine::VideoReadMode::Sequential, 1);
+        ASSERT_TRUE(frame) << index;
+        EXPECT_LE(frame->pts_us, target);
+        EXPECT_LT(target - frame->pts_us, 34'000);
+    }
+    const auto measurements = engine.VideoReadStats();
+    EXPECT_EQ(measurements.seeks, 1u);
+    EXPECT_EQ(measurements.flushes, 1u);
+    EXPECT_EQ(measurements.selected, 30u);
+    EXPECT_LE(measurements.decoded, 31u);
+}
+
+TEST(EditPlayerEngine, ForwardCursorRetainsOwnedFrameAndReseeksOnDiscontinuity) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.Open(fixture, error)) << error;
+    const auto first = engine.ReadFrameAtRaw(0, exosnap::engine::VideoReadMode::Sequential, 1);
+    ASSERT_TRUE(first);
+    const auto pixel = first->y_plane[0];
+    ASSERT_TRUE(engine.ReadFrameAtRaw(1'000'000, exosnap::engine::VideoReadMode::Sequential, 1));
+    ASSERT_TRUE(engine.ReadFrameAtRaw(100'000, exosnap::engine::VideoReadMode::Sequential, 1));
+    EXPECT_EQ(engine.VideoReadStats().seeks, 2u);
+    ASSERT_TRUE(engine.ReadFrameAtRaw(200'000, exosnap::engine::VideoReadMode::Sequential, 2));
+    EXPECT_EQ(engine.VideoReadStats().seeks, 3u);
+    engine.Close();
+    EXPECT_EQ(first->y_plane[0], pixel);
+}
+
+TEST(EditPlayerEngine, ForwardCursorHoldsSelectedFrameWithoutDecodingAgain) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.Open(fixture, error)) << error;
+    const auto first = engine.ReadFrameAtRaw(1, exosnap::engine::VideoReadMode::Sequential);
+    ASSERT_TRUE(first);
+    const auto decoded = engine.VideoReadStats().decoded;
+    const auto held = engine.ReadFrameAtRaw(2, exosnap::engine::VideoReadMode::Sequential);
+    ASSERT_TRUE(held);
+    EXPECT_EQ(first->pts_us, held->pts_us);
+    EXPECT_EQ(engine.VideoReadStats().decoded, decoded);
+    EXPECT_EQ(engine.VideoReadStats().held, 1u);
+}
+
+TEST(EditPlayerEngine, ForwardCursorNeverSelectsPastRequestedSourceTime) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.Open(fixture, error)) << error;
+    constexpr int64_t source_in = 1'000'000;
+    for (const auto mode : {exosnap::engine::VideoReadMode::RandomAccess, exosnap::engine::VideoReadMode::Sequential}) {
+        const auto first = engine.ReadFrameAtRaw(source_in, mode, 7);
+        ASSERT_TRUE(first);
+        ASSERT_EQ(first->pts_us, source_in);
+        const auto before_next = engine.ReadFrameAtRaw(source_in + 33'332, mode, 7);
+        ASSERT_TRUE(before_next);
+        EXPECT_EQ(before_next->pts_us, source_in);
+        const auto after_next = engine.ReadFrameAtRaw(source_in + 33'334, mode, 7);
+        ASSERT_TRUE(after_next);
+        EXPECT_GT(after_next->pts_us, source_in);
+        EXPECT_LE(after_next->pts_us, source_in + 33'334);
+        const auto backward = engine.ReadFrameAtRaw(source_in + 1, mode, 8);
+        ASSERT_TRUE(backward);
+        EXPECT_EQ(backward->pts_us, source_in);
+        EXPECT_EQ(first->y_plane[0], backward->y_plane[0]);
+    }
+}
+
+TEST(EditPlayerEngine, LegacyRawSeekStillSelectsAtOrAfterRequestedTime) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.Open(fixture, error)) << error;
+    const auto frame = engine.DecodeFrameAtRaw(1'033'332);
+    ASSERT_TRUE(frame);
+    EXPECT_GE(frame->pts_us, 1'033'332);
+}
 } // namespace

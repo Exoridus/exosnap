@@ -424,6 +424,7 @@ add_library(exosnap_engine STATIC
     src/edit_frame_gpu_converter.cpp
     src/edit_timeline_compositor.cpp
     src/edit_timeline_reader.cpp
+    src/edit_export_plan.cpp
     src/edit_timeline_render.cpp
     src/render_audio_manifest.cpp
     src/edit_audio_mix.h
@@ -1925,6 +1926,13 @@ exosnap_add_gtest(
 target_include_directories(test_render_audio_manifest PRIVATE src)
 target_compile_definitions(test_render_audio_manifest PRIVATE NOMINMAX)
 set_tests_properties(engine.test_render_audio_manifest PROPERTIES ENVIRONMENT "EXOSNAP_EDIT_SOFTWARE_DECODE=1")
+
+exosnap_add_gtest(
+    NAME test_editor_export_plan
+    TEST_PREFIX engine.
+    SOURCES tests/test_editor_export_plan.cpp
+    LIBRARIES exosnap_engine
+)
 
 exosnap_add_gtest(
     NAME test_edit_hard_cut_render
