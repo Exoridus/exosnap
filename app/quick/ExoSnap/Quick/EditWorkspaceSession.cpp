@@ -208,6 +208,10 @@ void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, 
             asset.fps_num = metadata.fps_num;
             asset.fps_den = metadata.fps_den;
             asset.audio = metadata.has_audio;
+            auto imported = edit::DescribeSourceImport(metadata);
+            asset.source_descriptor = std::move(imported.descriptor);
+            asset.input_mix_selection = std::move(imported.input_mix);
+            asset.mix_decision_required = imported.mix_decision_required;
             assets.push_back(std::move(asset));
         }
         if (!self)

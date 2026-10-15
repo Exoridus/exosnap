@@ -649,7 +649,7 @@ TEST(EditWorkspaceAdapter, UnknownSegmentDurationIsResolvedBeforeOrderedPosition
     split.segments = {{unknown, 0, true}, {known, 2, true}};
     QEventLoop loop;
     QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &loop, [&]() {
-        if (session.workspace().clips().size() == 6)
+        if (session.workspace().clips().size() == 4)
             loop.quit();
     });
     QTimer::singleShot(5000, &loop, &QEventLoop::quit);
@@ -659,7 +659,8 @@ TEST(EditWorkspaceAdapter, UnknownSegmentDurationIsResolvedBeforeOrderedPosition
 
     ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
     ASSERT_EQ(session.workspace().assets().size(), 3U);
-    ASSERT_EQ(session.workspace().clips().size(), 6U);
+    // The fixture has no audio stream, so each probed segment adds one video clip.
+    ASSERT_EQ(session.workspace().clips().size(), 4U);
     const auto& resolved = session.workspace().assets()[1];
     ASSERT_GT(resolved.duration, 0);
     EXPECT_EQ(resolved.path, unknown.toStdWString());

@@ -155,6 +155,9 @@ struct Asset {
     std::optional<engine::MonitorSelectionSnapshot> monitor_selection;
     std::shared_ptr<const ValidatedSourceDescriptor> source_descriptor;
     std::optional<InputMixSelection> input_mix_selection;
+    // The imported audio streams are all disabled until the user chooses the
+    // starting mix; a finished export must not proceed before that choice.
+    bool mix_decision_required = false;
     std::optional<OriginalRecipeAnchor> original_recipe;
 };
 

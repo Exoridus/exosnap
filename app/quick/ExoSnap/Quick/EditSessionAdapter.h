@@ -1,6 +1,7 @@
 #pragma once
 
 #include "models/EditContext.h"
+#include "models/EditSourceImport.h"
 #include "models/EditWorkspace.h"
 
 #include <QObject>
@@ -207,6 +208,8 @@ class EditSessionAdapter : public QObject {
     void closeRequested();
 
   private:
+    void applyEditContext(const EditContext& context, qint64 timeline_start_ms,
+                          std::vector<edit::SourceImport> imports);
     edit::Id selected_transition_ = 0;
     void publishWorkspace(bool changed);
     void applyReport(const EditContext& context);

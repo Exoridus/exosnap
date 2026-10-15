@@ -1,4 +1,5 @@
 #include "models/EditExportProfile.h"
+#include "models/EditSourceImport.h"
 #include "models/EditWorkspace.h"
 #include <algorithm>
 #include <gtest/gtest.h>
@@ -776,4 +777,82 @@ TEST(EditAudioContracts, EditMuteIncluded) {
     EXPECT_TRUE(EvaluateTimeline(workspace.timeline(), Second).audio_gap);
     ASSERT_TRUE(workspace.undo());
     EXPECT_EQ(EvaluateTimeline(workspace.timeline(), Second).audio.size(), 1u);
+}
+
+namespace {
+exosnap::engine::EditMediaMetadata ProbedSource(std::vector<uint32_t> audio_channels) {
+    using namespace exosnap::engine;
+    EditMediaMetadata metadata;
+    metadata.duration_us = 10 * Second;
+    metadata.content_identity_valid = true;
+    metadata.content_sha256[0] = 7;
+    EditSourceStream video;
+    video.container_index = 0;
+    video.kind = TimelineStreamKind::Video;
+    video.fps_num = 60;
+    video.fps_den = 1;
+    metadata.streams.push_back(video);
+    for (uint32_t index = 0; index < audio_channels.size(); ++index) {
+        EditSourceStream audio;
+        audio.container_index = index + 1;
+        audio.kind = TimelineStreamKind::Audio;
+        audio.codec.channels = audio_channels[index];
+        audio.stream_identity = AudioTrackId{{static_cast<uint8_t>(index + 10)}};
+        metadata.streams.push_back(audio);
+    }
+    return metadata;
+}
+
+std::vector<bool> ImportedAudioEnables(const exosnap::engine::EditMediaMetadata& metadata) {
+    Workspace workspace;
+    Asset asset;
+    asset.path = L"probed.mkv";
+    asset.duration = metadata.duration_us;
+    auto imported = DescribeSourceImport(metadata);
+    asset.source_descriptor = imported.descriptor;
+    asset.input_mix_selection = imported.input_mix;
+    asset.mix_decision_required = imported.mix_decision_required;
+    EXPECT_TRUE(workspace.insert(workspace.addAsset(std::move(asset)), 0));
+    std::vector<bool> enabled;
+    for (const auto& clip : workspace.clips()) {
+        EXPECT_TRUE(clip.stream);
+        if (clip.stream && clip.stream->kind == exosnap::engine::TimelineStreamKind::Audio)
+            enabled.push_back(clip.enabled);
+    }
+    return enabled;
+}
+} // namespace
+
+TEST(EditSourceImport, SingleAudioStreamIsSelectedWithoutAQuestion) {
+    const auto metadata = ProbedSource({2});
+    const auto imported = DescribeSourceImport(metadata);
+    ASSERT_TRUE(imported.descriptor);
+    EXPECT_EQ(imported.descriptor->streams.size(), 2u);
+    EXPECT_FALSE(imported.mix_decision_required);
+    EXPECT_EQ(ImportedAudioEnables(metadata), std::vector<bool>{true});
+}
+
+TEST(EditSourceImport, AmbiguousStreamsImportDisabledAndRequireADecision) {
+    const auto metadata = ProbedSource({2, 1});
+    const auto imported = DescribeSourceImport(metadata);
+    ASSERT_TRUE(imported.descriptor);
+    EXPECT_TRUE(imported.mix_decision_required);
+    EXPECT_EQ(ImportedAudioEnables(metadata), (std::vector<bool>{false, false}));
+}
+
+TEST(EditSourceImport, VerifiedRecordedDefaultSelectsOnlyItsStreams) {
+    auto metadata = ProbedSource({2, 2});
+    metadata.audio_metadata.status = exosnap::engine::AudioMetadataStatus::Verified;
+    metadata.audio_metadata.monitoring_confirmation_required = false;
+    metadata.audio_metadata.manifest.emplace();
+    metadata.audio_metadata.manifest->default_monitor_track_ids = {exosnap::engine::AudioTrackId{{11}}};
+    EXPECT_FALSE(DescribeSourceImport(metadata).mix_decision_required);
+    EXPECT_EQ(ImportedAudioEnables(metadata), (std::vector<bool>{false, true}));
+}
+
+TEST(EditSourceImport, UnboundBytesOrUnknownLayoutsKeepTheLinkedImport) {
+    auto unbound = ProbedSource({2});
+    unbound.content_identity_valid = false;
+    EXPECT_FALSE(DescribeSourceImport(unbound).descriptor);
+    EXPECT_FALSE(DescribeSourceImport(ProbedSource({6})).descriptor);
 }

@@ -61,31 +61,42 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
     if (pending.segments.empty())
         pending.segments.push_back({context.mkv_master_path.isEmpty() ? context.output_path : context.mkv_master_path,
                                     context.duration_seconds, true});
-    const auto needs_probe = [](const auto& segment) {
-        return segment.succeeded && segment.duration_seconds <= 0 && QFileInfo::exists(segment.path);
-    };
+    // Existing media is probed once off the UI thread: the per-stream import
+    // needs the exact stream inventory and content identity of each segment.
+    const auto needs_probe = [](const auto& segment) { return segment.succeeded && QFileInfo::exists(segment.path); };
     if (std::any_of(pending.segments.begin(), pending.segments.end(), needs_probe)) {
         QPointer<EditSessionAdapter> self(this);
         keyframe_pool_.start([self, pending = std::move(pending), timeline_start_ms, needs_probe]() mutable {
-            for (auto& segment : pending.segments) {
+            std::vector<edit::SourceImport> imports(pending.segments.size());
+            for (size_t index = 0; index < pending.segments.size(); ++index) {
+                auto& segment = pending.segments[index];
                 if (!needs_probe(segment))
                     continue;
                 const auto metadata = engine::ProbeEditMedia(std::filesystem::path(segment.path.toStdWString()));
-                segment.duration_seconds = static_cast<double>(metadata.duration_us) / 1000000.0;
-                segment.succeeded = metadata.error.empty() && metadata.duration_us > 0;
+                if (segment.duration_seconds <= 0) {
+                    segment.duration_seconds = static_cast<double>(metadata.duration_us) / 1000000.0;
+                    segment.succeeded = metadata.error.empty() && metadata.duration_us > 0;
+                }
+                imports[index] = edit::DescribeSourceImport(
+                    metadata, static_cast<edit::Time>(std::llround(segment.duration_seconds * 1000000.0)));
             }
             if (self)
                 QMetaObject::invokeMethod(
                     self,
-                    [self, pending = std::move(pending), timeline_start_ms]() {
+                    [self, pending = std::move(pending), timeline_start_ms, imports = std::move(imports)]() mutable {
                         if (self)
-                            self->setEditContext(pending, timeline_start_ms);
+                            self->applyEditContext(pending, timeline_start_ms, std::move(imports));
                     },
                     Qt::QueuedConnection);
         });
         emit editPageRequested();
         return;
     }
+    applyEditContext(pending, timeline_start_ms, {});
+}
+
+void EditSessionAdapter::applyEditContext(const EditContext& context, qint64 timeline_start_ms,
+                                          std::vector<edit::SourceImport> imports) {
     context_ = context;
     const qint64 append_start = timeline_start_ms < 0 ? workspace_.duration() : timeline_start_ms * 1000;
     std::vector<edit::Id> assets;
@@ -94,8 +105,14 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
         segments.push_back({context.mkv_master_path.isEmpty() ? context.output_path : context.mkv_master_path,
                             context.duration_seconds, true});
     uint64_t segment_start_ms = 0;
-    for (const auto& segment : segments) {
+    for (size_t index = 0; index < segments.size(); ++index) {
+        const auto& segment = segments[index];
         edit::Asset asset;
+        if (index < imports.size()) {
+            asset.source_descriptor = std::move(imports[index].descriptor);
+            asset.input_mix_selection = std::move(imports[index].input_mix);
+            asset.mix_decision_required = imports[index].mix_decision_required;
+        }
         asset.path = segment.path.toStdWString();
         asset.name = QFileInfo(segment.path).fileName().toStdString();
         asset.duration = static_cast<int64_t>(std::llround(segment.duration_seconds * 1000000.0));
