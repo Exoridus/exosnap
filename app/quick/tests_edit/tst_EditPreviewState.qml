@@ -60,4 +60,40 @@ TestCase {
         compare(probe.drained, true);
         compare(probe.requested, 4000);
     }
+    function test_superseded_open_retains_real_decode_and_playback_readiness_data() {
+        return [{tag: "single-clip", composed: false}, {tag: "composed", composed: true}];
+    }
+    function test_superseded_open_retains_real_decode_and_playback_readiness(data) {
+        if (!testMediaPreview.available)
+            skip("Set EXOSNAP_EDIT_RENDER_FIXTURES for real media.");
+        const probe = testMediaPreview.supersededOpenReadinessProbe(data.composed);
+        console.log(JSON.stringify(probe));
+        compare(probe.imported, true);
+        compare(probe.supersededOpen, true);
+        compare(probe.generationSuperseded, true);
+        compare(probe.decoded, true);
+        compare(probe.clipOpen, true);
+        compare(probe.playbackAdvanced, true);
+        verify(probe.playbackFrames >= 3);
+        compare(probe.volume, 0);
+        compare(probe.hasPresentedTime, false);
+    }
+    function test_imported_thumbnail_source_keys_survive_edits_and_disk_reopen() {
+        if (!testMediaPreview.available)
+            skip("Set EXOSNAP_EDIT_RENDER_FIXTURES for real media.");
+        const probe = testMediaPreview.thumbnailEditReuseProbe();
+        console.log(JSON.stringify(probe));
+        compare(probe.imported, true);
+        compare(probe.initial, true);
+        compare(probe.sources, 2);
+        verify(probe.sourceKeys > 0);
+        verify(probe.coldDecodes > 0);
+        compare(probe.trimmed, true);
+        compare(probe.split, true);
+        compare(probe.moved, true);
+        compare(probe.warmDecodes, probe.coldDecodes);
+        compare(probe.diskReused, true);
+        compare(probe.reopenDecodes, 0);
+        verify(probe.diskHits > 0);
+    }
 }

@@ -78,6 +78,7 @@ FocusScope {
     Settings {
         id: layoutPreferences
         objectName: "editLayoutPreferences"
+        location: root.session.layoutSettingsLocation
         category: "EditLayout"
         property real sourceFraction: 0.29
         property real timelineFraction: 0.37

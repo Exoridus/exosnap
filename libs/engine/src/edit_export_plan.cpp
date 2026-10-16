@@ -505,8 +505,9 @@ EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& input_snapsh
     if (!facts.copy_recipe.empty() && video_tracks.size() == 1 && whole) {
         facts.original_copy_qualified = AssessTimelineExport(facts.copy_recipe, mp4, cancelled).eligibility ==
                                         TimelineExportEligibility::StreamCopy;
-        facts.video_copy_qualified =
-            complete && facts.original_copy_qualified && std::abs(covered - timeline.duration_us) <= 1000;
+        facts.video_copy_qualified = complete && facts.original_copy_qualified &&
+                                     std::abs(covered - timeline.duration_us) <= 1000 &&
+                                     HasUsableCopiedVideoTimestamps(facts.copy_recipe, cancelled);
     }
 
     std::map<uint64_t, EditOriginalGroup> groups;

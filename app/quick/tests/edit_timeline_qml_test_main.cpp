@@ -18,6 +18,7 @@
 
 #include "viewmodels/RecordViewModel.h"
 
+#include <cstdlib>
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_player_engine.h>
 #include <filesystem>
@@ -27,11 +28,14 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QMap>
 #include <QObject>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickStyle>
 #include <QSemaphore>
+#include <QTemporaryDir>
+#include <QUrl>
 #include <QtQuickTest>
 
 namespace exosnap::quick {
@@ -338,6 +342,246 @@ class MediaPreviewDriver final : public QObject {
                                 EditPlayerAdapterTestPeer::pendingSeekUs(player) < 0},
                 {"requested", player.requestedTimeUs()}};
     }
+    Q_INVOKABLE QVariantMap supersededOpenReadinessProbe(bool composed) {
+        using exosnap::quick::EditPlayerAdapterTestPeer;
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        exosnap::quick::ExoEditPlayerItem item;
+        player.setVolume(0);
+        player.setSession(&session);
+        QSemaphore entered;
+        QSemaphore release;
+        auto* worker = EditPlayerAdapterTestPeer::worker(player);
+        QMetaObject::invokeMethod(
+            worker,
+            [&entered, &release]() {
+                entered.release();
+                release.acquire();
+            },
+            Qt::QueuedConnection);
+        entered.acquire();
+        session.importMedia(QUrl::fromLocalFile(qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES") + "/red.mkv"),
+                            true, 0);
+        QElapsedTimer deadline;
+        deadline.start();
+        while (!session.open() && deadline.elapsed() < 5'000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        if (!session.open()) {
+            release.release();
+            return {{"imported", false}, {"error", session.workspaceError()}};
+        }
+        if (composed)
+            session.setClipFade(session.workspace().clips().front().id, true, 200);
+        const auto open_generation = EditPlayerAdapterTestPeer::generation(player);
+        bool superseded_open = false;
+        connect(worker, &exosnap::quick::EditPlayerWorker::openFinishedForGeneration, &player,
+                [&player, &superseded_open](qulonglong generation, bool opened, const QString&) {
+                    if (opened && generation != EditPlayerAdapterTestPeer::generation(player))
+                        superseded_open = true;
+                });
+        item.setPlayerAdapter(&player);
+        session.requestSeekUs(500'000);
+        const auto seek_generation = EditPlayerAdapterTestPeer::generation(player);
+        release.release();
+        qint64 decoded_time = -1;
+        const auto observe = [&]() {
+            const auto pending = item.takePendingFrame();
+            if ((pending.frame && pending.frame->width > 0) || (pending.timeline && !pending.timeline->layers.empty() &&
+                                                                pending.timeline->layers.front().frame.width > 0)) {
+                decoded_time = pending.timeline_time_us.value_or(-1);
+                return true;
+            }
+            return false;
+        };
+        deadline.restart();
+        bool decoded = false;
+        while (!decoded && deadline.elapsed() < 5'000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            decoded = observe() && std::abs(decoded_time - 500'000) <= 100'000;
+        }
+        deadline.restart();
+        while ((EditPlayerAdapterTestPeer::dispatchActive(player) ||
+                EditPlayerAdapterTestPeer::pendingSeekUs(player) >= 0) &&
+               deadline.elapsed() < 5'000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        const bool clip_open = player.clipOpen();
+        int playback_frames = 0;
+        bool advanced = false;
+        if (clip_open) {
+            bool monitoring_requested = false;
+            player.setPlaying(true);
+            deadline.restart();
+            while (!advanced && deadline.elapsed() < 5'000) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                if (player.monitoringConfirmationRequired() && !monitoring_requested &&
+                    !player.monitoringTracks().empty()) {
+                    const auto id = player.monitoringTracks().front().toMap().value(QStringLiteral("id")).toString();
+                    player.confirmMonitoring({id}, true);
+                    monitoring_requested = true;
+                }
+                if (monitoring_requested && !player.monitoringConfirmationRequired() && !player.playing())
+                    player.setPlaying(true);
+                if (observe())
+                    ++playback_frames;
+                advanced = player.playing() && session.positionUs() >= 750'000 && playback_frames >= 3;
+            }
+            player.setPlaying(false);
+        }
+        const bool presented = player.presentedTimeUs().isValid();
+        item.setPlayerAdapter(nullptr);
+        return {{"imported", true},
+                {"supersededOpen", superseded_open},
+                {"generationSuperseded", seek_generation > open_generation},
+                {"decoded", decoded},
+                {"clipOpen", clip_open},
+                {"playbackAdvanced", advanced},
+                {"playbackFrames", playback_frames},
+                {"hasPresentedTime", presented},
+                {"volume", player.volume()},
+                {"positionUs", session.positionUs()},
+                {"monitoringRequired", player.monitoringConfirmationRequired()},
+                {"placeholder", player.placeholderText()}};
+    }
+    Q_INVOKABLE QVariantMap thumbnailEditReuseProbe() {
+        QTemporaryDir directory;
+        EditSessionAdapter session;
+        const auto fixture = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+        session.importMediaBatch(
+            {QUrl::fromLocalFile(fixture + "/red.mkv"), QUrl::fromLocalFile(fixture + "/blue.mkv")}, true, 0);
+        QElapsedTimer deadline;
+        deadline.start();
+        while (session.media().size() < 2 && deadline.elapsed() < 5'000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        if (!directory.isValid() || session.media().size() != 2)
+            return {{"imported", false}, {"error", session.workspaceError()}};
+        exosnap::ThumbnailRequestBroker::Config config;
+        config.disk_root = std::filesystem::path(directory.path().toStdWString());
+        QMap<QString, QImage> reference;
+        QStringList identities;
+        const auto register_rows = [&](EditTimelineAdapter& timeline) {
+            bool registered = true;
+            for (const auto& value : session.visibleClips(0, 10'000)) {
+                const auto row = value.toMap();
+                if (row.value("video").toBool()) {
+                    const auto identity = row.value("sourceIdentity").toString();
+                    if (!identities.contains(identity))
+                        identities.append(identity);
+                    registered = timeline.registerThumbnailSource(
+                                     row.value("sourceIdentity").toString(), row.value("path").toString(),
+                                     row.value("width").toInt(), row.value("height").toInt(),
+                                     row.value("fpsNum").toInt(), row.value("fpsDen").toInt()) &&
+                                 registered;
+                }
+            }
+            return registered;
+        };
+        const auto request_rows = [&](EditTimelineAdapter& timeline,
+                                      exosnap::quick::EditThumbnailImageProvider& provider, bool cold) {
+            int requested = 0;
+            for (const auto& value : session.visibleClips(0, 10'000)) {
+                const auto row = value.toMap();
+                if (!row.value("video").toBool())
+                    continue;
+                const auto in = row.value("sourceInUs").toLongLong();
+                const auto out = row.value("sourceOutUs").toLongLong();
+                const auto tiles = timeline.thumbnailTiles(row.value("sourceIdentity").toString(), in, out,
+                                                           (out - in) * 96.0 / 1'000'000, 48);
+                if (tiles.empty())
+                    return false;
+                for (const auto& tile : tiles) {
+                    const auto url = tile.toMap().value("source").toString();
+                    std::unique_ptr<QQuickImageResponse> response(
+                        provider.requestImageResponse(QUrl(url).path().mid(1), {}));
+                    bool finished = false;
+                    connect(response.get(), &QQuickImageResponse::finished, response.get(),
+                            [&finished]() { finished = true; });
+                    deadline.restart();
+                    while (!finished && deadline.elapsed() < 5'000)
+                        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                    if (!finished || !response->errorString().isEmpty())
+                        return false;
+                    std::unique_ptr<QQuickTextureFactory> texture(response->textureFactory());
+                    const auto image = texture ? texture->image().convertToFormat(QImage::Format_RGBA8888) : QImage();
+                    if (image.isNull() || image.height() != 48)
+                        return false;
+                    if (cold)
+                        reference.insert(url, image);
+                    else if (!reference.contains(url) || reference.value(url) != image)
+                        return false;
+                    ++requested;
+                }
+            }
+            return requested > 0;
+        };
+        bool initial = false;
+        bool trimmed = false;
+        bool split = false;
+        bool moved = false;
+        qulonglong cold_decodes = 0;
+        qulonglong warm_decodes = 0;
+        {
+            EditTimelineAdapter timeline;
+            timeline.configureThumbnailCache(config);
+            timeline.setSession(&session);
+            std::unique_ptr<exosnap::quick::EditThumbnailImageProvider> provider(
+                timeline.createThumbnailImageProvider());
+            initial = register_rows(timeline) && request_rows(timeline, *provider, true);
+            timeline.setForegroundBusy(true);
+            QElapsedTimer stable;
+            stable.start();
+            deadline.restart();
+            auto observed = timeline.thumbnailBroker()->Stats().decodes;
+            while (stable.elapsed() < 100 && deadline.elapsed() < 5'000) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                const auto count = timeline.thumbnailBroker()->Stats().decodes;
+                if (count != observed || timeline.thumbnailBroker()->HasWork()) {
+                    observed = count;
+                    stable.restart();
+                }
+            }
+            cold_decodes = timeline.thumbnailBroker()->Stats().decodes;
+            const auto red = session.visibleClips(0, 1'000).front().toMap();
+            session.trimClip(red.value("id").toULongLong(), 500, 2000);
+            trimmed = session.workspaceError().isEmpty() &&
+                      session.workspace().clip(red.value("id").toULongLong())->source_in == 500'000 &&
+                      request_rows(timeline, *provider, false);
+            session.selectClip(red.value("id").toULongLong());
+            session.requestSeek(1000);
+            session.splitSelected();
+            split = session.workspace().clips().size() == 6 && request_rows(timeline, *provider, false);
+            for (const auto& value : session.visibleClips(0, 10'000)) {
+                const auto row = value.toMap();
+                if (row.value("video").toBool() && row.value("sourceIdentity") == red.value("sourceIdentity") &&
+                    row.value("sourceInUs").toLongLong() == 1'000'000) {
+                    session.moveClip(row.value("id").toULongLong(), 5000, false);
+                    moved = session.workspaceError().isEmpty() &&
+                            session.workspace().clip(row.value("id").toULongLong())->start == 5'000'000 &&
+                            request_rows(timeline, *provider, false);
+                    break;
+                }
+            }
+            warm_decodes = timeline.thumbnailBroker()->Stats().decodes;
+        }
+        EditTimelineAdapter reopened;
+        reopened.configureThumbnailCache(config);
+        reopened.setSession(&session);
+        reopened.setForegroundBusy(true);
+        std::unique_ptr<exosnap::quick::EditThumbnailImageProvider> provider(reopened.createThumbnailImageProvider());
+        const bool disk_reused = register_rows(reopened) && request_rows(reopened, *provider, false);
+        const auto stats = reopened.thumbnailBroker()->Stats();
+        return {{"imported", true},
+                {"initial", initial},
+                {"trimmed", trimmed},
+                {"split", split},
+                {"moved", moved},
+                {"coldDecodes", cold_decodes},
+                {"warmDecodes", warm_decodes},
+                {"diskReused", disk_reused},
+                {"reopenDecodes", QVariant::fromValue<qulonglong>(stats.decodes)},
+                {"diskHits", QVariant::fromValue<qulonglong>(stats.disk_hits)},
+                {"sourceKeys", reference.size()},
+                {"sources", identities.size()}};
+    }
   signals:
     void changed();
 
@@ -356,12 +600,14 @@ class Setup final : public QObject {
     Q_OBJECT
 
   public slots:
+    QVariantMap timelineCheckpoint() const {
+        return {{"revision", QVariant::fromValue<qulonglong>(session_->workspace().revision())},
+                {"historyBytes", QVariant::fromValue<qulonglong>(session_->workspace().historyBytes())}};
+    }
     void exportVisualState(int state) {
         page_exporter_->applyVisualState(static_cast<exosnap::quick::EditExportAdapter::State>(state), 25, {}, {});
     }
     void applicationAvailable() {
-        QCoreApplication::setOrganizationName(QStringLiteral("ExoSnap"));
-        QCoreApplication::setOrganizationDomain(QStringLiteral("exosnap.example"));
         QCoreApplication::setApplicationName(QStringLiteral("edit-timeline-qml-tests"));
         QQuickStyle::setStyle(QStringLiteral("Basic"));
     }

@@ -2,6 +2,7 @@
 
 #include "models/EditCommandTypes.h"
 
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_timeline_export.h>
 
 #include <algorithm>
@@ -46,6 +47,7 @@ inline engine::AudioTrackId SyntheticIdentity(uint8_t kind, uint32_t container_i
     auto descriptor = std::make_shared<ValidatedSourceDescriptor>();
     descriptor->file_identity = metadata.file_identity;
     descriptor->asset_identity_fingerprint = metadata.content_sha256;
+    descriptor->audio_identities_verified = metadata.audio_metadata.status == engine::AudioMetadataStatus::Verified;
     std::vector<engine::AudioTrackId> audio;
     bool has_video = false;
     for (const auto& stream : metadata.streams) {

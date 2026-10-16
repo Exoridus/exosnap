@@ -2,9 +2,12 @@
 
 #include "EditExportAdapter.h"
 #include "EditPlayerAdapter.h"
+#include "EditPlayerWorker.h"
 #include "EditSessionAdapter.h"
 #include "EditTimelineAdapter.h"
+#include "ExoEditPlayerItem.h"
 #include "QuickApplication.h"
+#include "ShellAdapter.h"
 
 #include "models/EditContextFactory.h"
 #include <exosnap/engine/edit_timeline_export.h>
@@ -14,6 +17,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -22,11 +26,28 @@
 #include <QStringList>
 #include <QThread>
 #include <QTimer>
+#include <QUrl>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+#include <psapi.h>
+#include <windows.h>
 
 namespace exosnap::quick {
+
+class EditPlayerAdapterTestPeer {
+  public:
+    static QObject* worker(EditPlayerAdapter& player) {
+        return player.worker_;
+    }
+};
+
 namespace {
 
 // A keyframe scan and a thumbnail run both decode; on a 1440p AV1 clip that is
@@ -119,18 +140,354 @@ void writeReport(const QString& path, const QJsonObject& report) {
         qWarning().noquote() << QStringLiteral("auto-edit: could not commit the report to %1").arg(path);
 }
 
+QJsonObject processSample() {
+    QJsonObject sample;
+    PROCESS_MEMORY_COUNTERS_EX memory{};
+    memory.cb = sizeof(memory);
+    if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),
+                             sizeof(memory))) {
+        sample.insert(QStringLiteral("workingSetBytes"), static_cast<qint64>(memory.WorkingSetSize));
+        sample.insert(QStringLiteral("peakWorkingSetBytes"), static_cast<qint64>(memory.PeakWorkingSetSize));
+        sample.insert(QStringLiteral("privateCommitBytes"), static_cast<qint64>(memory.PrivateUsage));
+    }
+    DWORD handles = 0;
+    if (GetProcessHandleCount(GetCurrentProcess(), &handles))
+        sample.insert(QStringLiteral("handles"), static_cast<qint64>(handles));
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+        const auto ticks = [](FILETIME time) { return (uint64_t{time.dwHighDateTime} << 32) | time.dwLowDateTime; };
+        sample.insert(QStringLiteral("cpuTime100ns"), static_cast<qint64>(ticks(kernel) + ticks(user)));
+    }
+    return sample;
+}
+
+QJsonObject cacheSample(EditTimelineAdapter* timeline) {
+    const auto stats = timeline->thumbnailBroker()->Stats();
+    const auto* waveforms = qobject_cast<WaveformCacheService*>(timeline->waveformService());
+    QJsonObject sample{{QStringLiteral("thumbnailMemoryHits"), static_cast<qint64>(stats.memory_hits)},
+                       {QStringLiteral("thumbnailDiskHits"), static_cast<qint64>(stats.disk_hits)},
+                       {QStringLiteral("thumbnailDecodes"), static_cast<qint64>(stats.decodes)}};
+    if (waveforms) {
+        sample.insert(QStringLiteral("waveformDecoderOpens"), static_cast<qint64>(waveforms->decoderOpensForTest()));
+        sample.insert(QStringLiteral("waveformDecodeCalls"), static_cast<qint64>(waveforms->decodeCallsForTest()));
+        sample.insert(QStringLiteral("waveformDecoderSeeks"), static_cast<qint64>(waveforms->decoderSeeksForTest()));
+        sample.insert(QStringLiteral("waveformDecodedFrames"), static_cast<qint64>(waveforms->decodedFramesForTest()));
+        sample.insert(QStringLiteral("waveformAnalysisMemoryBytes"),
+                      static_cast<qint64>(waveforms->analysisMemoryBytesForTest()));
+    }
+    return sample;
+}
+
+QJsonObject percentiles(std::vector<double> samples) {
+    std::sort(samples.begin(), samples.end());
+    QJsonObject result{{QStringLiteral("samples"), static_cast<int>(samples.size())},
+                       {QStringLiteral("unit"), QStringLiteral("ms")},
+                       {QStringLiteral("method"), QStringLiteral("nearest-rank")}};
+    if (!samples.empty()) {
+        for (const auto p : {50, 95, 99}) {
+            const auto rank = static_cast<size_t>(std::ceil(p * samples.size() / 100.0));
+            result.insert(QStringLiteral("p%1").arg(p), samples.at(rank - 1));
+        }
+    }
+    return result;
+}
+
+// A detached productive surface observes the generation-filtered decoded mailbox.
+// Consuming it cannot prove upload, composition, swap completion or physical display.
+int runIsolatedQualification(QuickApplication& application, const AutoEditOptions& options) {
+    StageLog log;
+    QJsonObject report{{QStringLiteral("qpa"), QGuiApplication::platformName()},
+                       {QStringLiteral("measurementBoundary"), QStringLiteral("decoder-to-item-mailbox-observed")},
+                       {QStringLiteral("pollIntervalMs"), 1}};
+    auto* session = application.editSessionAdapter();
+    auto* player = application.editPlayerAdapter();
+    auto* shell = application.shellAdapter();
+    player->setVolume(0);
+    QElapsedTimer total;
+    total.start();
+    QJsonArray cycles;
+    QJsonArray seeks;
+    QJsonArray edit_samples;
+    std::vector<double> seek_latencies;
+    std::vector<double> commit_latencies;
+    const auto initial = processSample();
+    ExoEditPlayerItem mailbox;
+    qint64 observed_time = -1;
+    const auto observe = [&]() {
+        const auto pending = mailbox.takePendingFrame();
+        const bool decoded =
+            (pending.frame && pending.frame->width > 0 && pending.frame->height > 0) ||
+            (pending.timeline && !pending.timeline->layers.empty() && pending.timeline->layers.front().frame.width > 0);
+        if (decoded && pending.timeline_time_us) {
+            observed_time = *pending.timeline_time_us;
+            return true;
+        }
+        return false;
+    };
+    const auto seek = [&](qint64 target, int cycle) {
+        observed_time = -1;
+        (void)mailbox.takePendingFrame();
+        QElapsedTimer clock;
+        clock.start();
+        session->requestSeekUs(target);
+        const bool arrived = waitFor("a decoded mailbox frame", 10000, 1,
+                                     [&]() { return observe() && std::llabs(observed_time - target) <= 100000; });
+        const double elapsed = static_cast<double>(clock.nsecsElapsed()) / 1000000.0;
+        seeks.append(QJsonObject{{QStringLiteral("cycle"), cycle},
+                                 {QStringLiteral("targetUs"), target},
+                                 {QStringLiteral("decodedTimelineUs"), observed_time},
+                                 {QStringLiteral("observedMs"), elapsed},
+                                 {QStringLiteral("passed"), arrived}});
+        if (arrived)
+            seek_latencies.push_back(elapsed);
+        return arrived;
+    };
+    for (int cycle = 0; cycle < 5; ++cycle) {
+        session->close();
+        pumpFor(100);
+        const auto before = processSample();
+        QElapsedTimer open_clock;
+        open_clock.start();
+        session->importMedia(QUrl::fromLocalFile(options.media_path), true, 0);
+        const bool imported = waitFor("the productive media import", kClipOpenTimeoutMs, 5,
+                                      [session]() { return session->open() && !session->workspace().clips().empty(); });
+        const qint64 import_ms = open_clock.elapsed();
+        log.record(QStringLiteral("cycle.%1.import").arg(cycle), imported, session->workspaceError());
+        if (!imported)
+            break;
+        emit shell->navigateToPageRequested(ShellAdapter::EditPage);
+        const bool visible =
+            waitFor("the resident editor", 10000, 5, [shell]() { return shell->editSurfaceVisible(); });
+        log.record(QStringLiteral("cycle.%1.editPage").arg(cycle), visible, QString());
+        // Attach after the resident QML surface, so it cannot replace this observer.
+        mailbox.setPlayerAdapter(nullptr);
+        mailbox.setPlayerAdapter(player);
+        const qint64 duration = session->workspace().duration();
+        if (options.export_enabled && duration < 6000000) {
+            log.record(QStringLiteral("cleanup.input"), false,
+                       QStringLiteral("The cleanup export workflow requires at least six seconds of media."));
+            break;
+        }
+        bool seek_ok = duration > 0;
+        for (int i = 0; i < 12; ++i) {
+            const qint64 target = duration * (1 + (i * 7) % 19) / 20;
+            seek_ok = seek(target, cycle) && seek_ok;
+        }
+        log.record(QStringLiteral("cycle.%1.seek").arg(cycle), seek_ok,
+                   QStringLiteral("12 correlated decoded targets"));
+        session->requestSeekUs(0);
+        pumpFor(50);
+        const qint64 before_play = session->positionUs();
+        int decoded_frames = 0;
+        bool monitoring_requested = false;
+        player->setPlaying(true);
+        const bool advanced = waitFor("muted playback and decoded frames", cycle == 0 ? 45000 : 20000, 1, [&]() {
+            if (player->monitoringConfirmationRequired() && !monitoring_requested &&
+                !player->monitoringTracks().empty()) {
+                const auto id = player->monitoringTracks().front().toMap().value(QStringLiteral("id")).toString();
+                player->confirmMonitoring({id}, true);
+                monitoring_requested = true;
+            }
+            if (monitoring_requested && !player->monitoringConfirmationRequired() && !player->playing())
+                player->setPlaying(true);
+            if (observe())
+                ++decoded_frames;
+            return session->positionUs() - before_play >=
+                       std::min<qint64>(duration / 2, cycle == 0 ? 30000000 : 8000000) &&
+                   decoded_frames >= 3;
+        });
+        log.record(QStringLiteral("cycle.%1.playback").arg(cycle), advanced && player->volume() == 0,
+                   QStringLiteral("%1 decoded mailbox observations; volume zero; open=%2; confirmation=%3; %4")
+                       .arg(decoded_frames)
+                       .arg(player->clipOpen())
+                       .arg(player->monitoringConfirmationRequired())
+                       .arg(player->placeholderText()));
+        const auto clips_before = session->workspace().clips();
+        const auto revision = session->workspace().revision();
+        emit shell->navigateToPageRequested(ShellAdapter::RecordPage);
+        const bool hidden = waitFor("Record navigation", 5000, 5, [shell, player]() {
+            return shell->currentPage() == ShellAdapter::RecordPage && !player->surfaceVisible() && !player->playing();
+        });
+        emit shell->navigateToPageRequested(ShellAdapter::EditPage);
+        const bool restored = waitFor("Edit navigation", 5000, 5, [shell, player]() {
+            return shell->editSurfaceVisible() && player->surfaceVisible() && !player->playing();
+        });
+        log.record(QStringLiteral("cycle.%1.navigation").arg(cycle),
+                   hidden && restored && session->workspace().revision() == revision &&
+                       session->workspace().clips() == clips_before,
+                   QStringLiteral("Record/Edit preserves edits and leaves playback paused"));
+        if (cycle == 4) {
+            const auto initial_count = session->workspace().clips().size();
+            bool split_ok = true;
+            for (int cut = 1; cut <= 32; ++cut) {
+                const qint64 at = duration * cut / 33;
+                const auto clips = session->workspace().clips();
+                const auto containing = std::find_if(
+                    clips.begin(), clips.end(), [at](const auto& clip) { return clip.start < at && clip.end() > at; });
+                if (containing == clips.end()) {
+                    split_ok = false;
+                    break;
+                }
+                session->selectClip(containing->id);
+                session->requestSeekUs(at);
+                const auto old_count = session->workspace().clips().size();
+                session->splitSelected();
+                split_ok = session->workspace().clips().size() > old_count && split_ok;
+            }
+            log.record(QStringLiteral("manyClips.split"), split_ok,
+                       QStringLiteral("%1 -> %2 clips").arg(initial_count).arg(session->workspace().clips().size()));
+            for (int i = 0; i < 12; ++i)
+                seek_ok = seek(duration * (1 + (i * 11) % 19) / 20, cycle) && seek_ok;
+            log.record(QStringLiteral("manyClips.seek"), seek_ok, QStringLiteral("12 targets after 32 linked splits"));
+        }
+        const auto& clips_for_edit = session->workspace().clips();
+        const auto last_clip = std::max_element(clips_for_edit.begin(), clips_for_edit.end(),
+                                                [](const auto& a, const auto& b) { return a.start < b.start; });
+        session->selectClip(last_clip->id);
+        bool edits_ok = true;
+        for (int i = 0; i < 16; ++i) {
+            const auto checkpoint = session->workspace().clips();
+            const auto old_revision = session->workspace().revision();
+            QElapsedTimer clock;
+            clock.start();
+            session->nudgeSelected(1);
+            const double elapsed = static_cast<double>(clock.nsecsElapsed()) / 1000000.0;
+            const bool committed = session->workspace().revision() != old_revision;
+            if (committed)
+                commit_latencies.push_back(elapsed);
+            session->undo();
+            edits_ok = committed && session->workspace().clips() == checkpoint && edits_ok;
+            edit_samples.append(QJsonObject{{QStringLiteral("cycle"), cycle},
+                                            {QStringLiteral("observedMs"), elapsed},
+                                            {QStringLiteral("passed"), committed}});
+        }
+        log.record(QStringLiteral("cycle.%1.editHistory").arg(cycle), edits_ok,
+                   QStringLiteral("16 nudge/undo round trips"));
+        if (cycle == 0 && options.export_enabled && duration >= 6000000) {
+            const auto original = session->workspace().snapshot();
+            const auto selected = session->workspace().clips().front().id;
+            session->trimClip(selected, 1000, 5000);
+            bool cleaned = session->workspaceError().isEmpty();
+            session->moveClip(selected, 0, false);
+            cleaned = cleaned && session->workspaceError().isEmpty();
+            session->selectClip(selected);
+            session->requestSeekUs(2000000);
+            session->splitSelected();
+            const auto split = session->workspace().clips();
+            const auto suffix =
+                std::find_if(split.begin(), split.end(), [](const auto& clip) { return clip.start == 2000000; });
+            cleaned = cleaned && session->workspaceError().isEmpty() && suffix != split.end();
+            if (cleaned) {
+                session->selectClip(suffix->id);
+                session->deleteSelected(false);
+                const auto removed = session->workspace().clips();
+                cleaned = cleaned && removed.size() == original->clips.size() &&
+                          std::all_of(removed.begin(), removed.end(),
+                                      [asset = original->clips.front().asset](const auto& clip) {
+                                          return clip.asset == asset && clip.start == 0 && clip.source_in == 1000000 &&
+                                                 clip.source_out == 3000000;
+                                      });
+                session->undo();
+                cleaned = cleaned && session->workspace().clips() == split;
+                session->redo();
+                cleaned =
+                    cleaned && session->workspace().clips() == removed && session->workspace().duration() == 2000000;
+            }
+            log.record(QStringLiteral("cleanup.trimSplitLiftUndoRedo"),
+                       cleaned && original->clips != session->workspace().clips(),
+                       QStringLiteral("source [1s,3s) remains after trim, split and removal"));
+            auto* exporter = application.editExportAdapter();
+            exporter->reset();
+            exporter->setSaveModeKey(QStringLiteral("new"));
+            exporter->setModeKey(QStringLiteral("finishedStereo"));
+            exporter->setSpanKey(QStringLiteral("entire"));
+            exporter->setContainerKey(QStringLiteral("mkv"));
+            const auto directory = QFileInfo(options.report_path).absolutePath();
+            exporter->setOutputDirectoryProvider([directory]() { return directory; });
+            exporter->startExport();
+            const bool prepared = waitFor("cleanup export review", kExportTimeoutMs, 5, [exporter]() {
+                return exporter->state() == EditExportAdapter::Review || exporter->state() == EditExportAdapter::Failed;
+            });
+            if (prepared && exporter->state() == EditExportAdapter::Review) {
+                report.insert(QStringLiteral("cleanupReview"), QJsonObject::fromVariantMap(exporter->reviewOutcome()));
+                exporter->confirmPreparedExport();
+            }
+            const bool finished = waitFor("cleanup export", kExportTimeoutMs, 5, [exporter]() {
+                return exporter->state() == EditExportAdapter::Done || exporter->state() == EditExportAdapter::Failed;
+            });
+            log.record(QStringLiteral("cleanup.export"), finished && exporter->state() == EditExportAdapter::Done,
+                       exporter->errorText());
+            report.insert(QStringLiteral("cleanupExportPath"), exporter->outputPath());
+            report.insert(QStringLiteral("cleanupExpectedDurationUs"), 2000000);
+        }
+        session->close();
+        mailbox.setPlayerAdapter(nullptr);
+        const auto drained = std::make_shared<std::atomic<bool>>(false);
+        QElapsedTimer close_clock;
+        close_clock.start();
+        QMetaObject::invokeMethod(
+            EditPlayerAdapterTestPeer::worker(*player), [drained]() { drained->store(true); }, Qt::QueuedConnection);
+        const bool worker_drained = waitFor("the player close barrier", 30000, 1, [&]() { return drained->load(); });
+        const qint64 close_ms = close_clock.elapsed();
+        log.record(QStringLiteral("cycle.%1.playerWorkerDrained").arg(cycle), worker_drained,
+                   QStringLiteral("%1 ms through queued close and earlier work").arg(close_ms));
+        pumpFor(50);
+        const bool closed = !session->open() && !player->playing() && !player->clipOpen();
+        log.record(QStringLiteral("cycle.%1.close").arg(cycle), closed, QString());
+        cycles.append(QJsonObject{{QStringLiteral("cycle"), cycle},
+                                  {QStringLiteral("elapsedMs"), open_clock.elapsed()},
+                                  {QStringLiteral("importMs"), import_ms},
+                                  {QStringLiteral("playerCloseDrainMs"), close_ms},
+                                  {QStringLiteral("before"), before},
+                                  {QStringLiteral("afterClose"), processSample()},
+                                  {QStringLiteral("cacheCounters"), cacheSample(application.editTimelineAdapter())}});
+    }
+    const auto final_sample = processSample();
+    report.insert(QStringLiteral("resourcesSource"),
+                  QStringLiteral("GetProcessMemoryInfo/GetProcessTimes/GetProcessHandleCount"));
+    report.insert(QStringLiteral("initial"), initial);
+    report.insert(QStringLiteral("final"), final_sample);
+    report.insert(QStringLiteral("elapsedMs"), total.elapsed());
+    report.insert(QStringLiteral("cycles"), cycles);
+    report.insert(QStringLiteral("seeks"), seeks);
+    report.insert(QStringLiteral("commits"), edit_samples);
+    report.insert(QStringLiteral("requestToDecodedMailboxObserved"), percentiles(seek_latencies));
+    report.insert(QStringLiteral("synchronousAdapterCommit"), percentiles(commit_latencies));
+    QJsonArray unavailable;
+    for (const auto* name : {"QtTextureHandoff", "pointerInputToVisualCommit", "physicalPresentationLatency",
+                             "physicalFrameDrops", "audioVideoDrift", "audioUnderruns", "gpuUtilization", "vramUsage"})
+        unavailable.append(QJsonObject{{QStringLiteral("metric"), QString::fromLatin1(name)},
+                                       {QStringLiteral("status"), QStringLiteral("SKIP")}});
+    report.insert(QStringLiteral("unavailable"), unavailable);
+    report.insert(QStringLiteral("stages"), log.stages);
+    report.insert(QStringLiteral("passed"), log.ok);
+    writeReport(options.report_path, report);
+    return log.ok ? 0 : 1;
+}
+
 } // namespace
 
 bool AutoEditRequested(const QStringList& args) {
-    return args.contains(QStringLiteral("--auto-edit"));
+    return args.contains(QStringLiteral("--auto-edit")) || args.contains(QStringLiteral("--auto-edit-qualify"));
 }
 
 bool ParseAutoEditOptions(const QStringList& args, AutoEditOptions* options, QString* error) {
     *options = AutoEditOptions{};
+    options->isolated_qualification = args.contains(QStringLiteral("--auto-edit-qualify"));
 
     options->media_path = optionValue(args, QStringLiteral("--auto-edit-media"));
     options->additional_media_path = optionValue(args, QStringLiteral("--auto-edit-add-media"));
     options->report_path = optionValue(args, QStringLiteral("--auto-edit-report"));
+
+    if (options->isolated_qualification && options->media_path.isEmpty()) {
+        *error = QStringLiteral("--auto-edit-qualify requires --auto-edit-media");
+        return false;
+    }
+
+    if (options->isolated_qualification && options->report_path.isEmpty()) {
+        *error = QStringLiteral("--auto-edit-qualify requires --auto-edit-report");
+        return false;
+    }
 
     const QString duration = optionValue(args, QStringLiteral("--auto-edit-duration"));
     if (!duration.isEmpty()) {
@@ -179,6 +536,8 @@ bool ParseAutoEditOptions(const QStringList& args, AutoEditOptions* options, QSt
 int RunQuickAutoEdit(QCoreApplication& app, QuickApplication& application, QQuickWindow* window,
                      const AutoEditOptions& options) {
     Q_UNUSED(app);
+    if (options.isolated_qualification)
+        return runIsolatedQualification(application, options);
 
     auto* session = application.editSessionAdapter();
     auto* player = application.editPlayerAdapter();
@@ -310,17 +669,17 @@ int RunQuickAutoEdit(QCoreApplication& app, QuickApplication& application, QQuic
     }
 
     // ---- seek ----------------------------------------------------------
-    // Three targets across the clip, each verified against the position the
-    // session reports back, so a seek that is accepted and then ignored fails.
+    // The scene-graph handoff must acknowledge the requested frame. Updating the
+    // optimistic playhead alone does not establish decoded or rendered pixels.
     QJsonArray seeks;
     bool seeks_ok = duration_ms > 0;
     for (const double fraction : {0.8, 0.1, 0.5}) {
         const qint64 target = static_cast<qint64>(std::llround(static_cast<double>(duration_ms) * fraction));
         session->requestSeek(target);
-        const bool landed = waitFor("the seek to land", 5000, 25, [session, target]() {
-            // 250 ms: a seek lands on the nearest decodable frame, not on an
-            // arbitrary millisecond.
-            return std::llabs(session->positionMs() - target) <= 250;
+        const bool landed = waitFor("the seek to land", 5000, 25, [player, target]() {
+            const auto presented = player->presentedTimeUs();
+            return player->previewState() == EditPlayerAdapter::Ready && !player->seekPending() &&
+                   presented.isValid() && std::llabs(presented.toLongLong() - target * 1000) <= 250000;
         });
         QJsonObject entry;
         entry.insert(QStringLiteral("targetMs"), target);
@@ -383,14 +742,18 @@ int RunQuickAutoEdit(QCoreApplication& app, QuickApplication& application, QQuic
 
     // ---- export --------------------------------------------------------
     if (options.export_enabled) {
-        // "copy" rather than overwrite: an E2E that overwrites its own source
-        // cannot be re-run against the same input, and destroys the evidence.
-        exporter->setSaveModeKey(QStringLiteral("copy"));
+        // A new output preserves the source for verification and repeated runs.
+        exporter->setSaveModeKey(QStringLiteral("new"));
         if (!exporter->canExport()) {
             log.record(QStringLiteral("export.start"), false,
                        QStringLiteral("the export panel refused: canExport is false"));
         } else {
             exporter->startExport();
+            const bool prepared = waitFor("export review", kExportTimeoutMs, 25, [exporter]() {
+                return exporter->state() == EditExportAdapter::Review || exporter->state() == EditExportAdapter::Failed;
+            });
+            if (prepared && exporter->state() == EditExportAdapter::Review)
+                exporter->confirmPreparedExport();
             const bool finished = waitFor("the export to finish", kExportTimeoutMs, 100, [exporter]() {
                 return exporter->state() == EditExportAdapter::Done || exporter->state() == EditExportAdapter::Failed;
             });

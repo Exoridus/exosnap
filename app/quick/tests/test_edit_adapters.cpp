@@ -11,7 +11,9 @@
 
 #include <capability/capability_builder.h>
 #include <capability/encoder_device_resolver.h>
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_player_engine.h>
+#include <exosnap/engine/edit_timeline_export.h>
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -20,6 +22,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPointer>
 #include <QScopeGuard>
 #include <QSemaphore>
@@ -37,9 +42,11 @@
 
 #include <chrono>
 #include <limits>
+#include <map>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace exosnap::quick {
@@ -811,6 +818,421 @@ TEST(EditExportAdapterOptions, MatchSourceIsTheDefaultAndRenderProfilesCannotBeS
     }
 }
 
+TEST(EditWorkspaceAdapter, SyntheticImportDescriptorRetainsVerifiedAudioIdentityAuthority) {
+    engine::EditMediaMetadata metadata;
+    metadata.content_identity_valid = true;
+    metadata.duration_us = 2'000'000;
+    metadata.content_sha256.fill(23);
+    engine::EditSourceStream stream;
+    stream.kind = engine::TimelineStreamKind::Audio;
+    stream.container_index = 4;
+    stream.codec.channels = 2;
+    stream.stream_identity = engine::AudioTrackId{{7, 8, 9}};
+    metadata.streams.push_back(stream);
+    for (const bool verified : {false, true}) {
+        metadata.audio_metadata.status =
+            verified ? engine::AudioMetadataStatus::Verified : engine::AudioMetadataStatus::Missing;
+        const auto imported = edit::DescribeSourceImport(metadata);
+        ASSERT_TRUE(imported.descriptor);
+        EXPECT_EQ(imported.descriptor->audio_identities_verified, verified);
+        ASSERT_EQ(imported.descriptor->streams.size(), 1u);
+        EXPECT_EQ(imported.descriptor->streams.front().ref.stream_identity, *stream.stream_identity);
+    }
+}
+
+TEST(EditWorkspaceAdapter, RealReimportReusesWaveformCacheWithoutChangingSemanticStreamIdentities) {
+    EnsureApplication();
+    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+    if (fixtures.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto path = directory.filePath(QStringLiteral("source.mkv"));
+    ASSERT_TRUE(QFile::copy(QDir(fixtures).filePath(QStringLiteral("red.mkv")), path));
+    const auto metadata = engine::ProbeEditMedia(std::filesystem::path(path.toStdWString()));
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    ASSERT_NE(metadata.audio_metadata.status, engine::AudioMetadataStatus::Verified);
+    const auto wait_for = [](const auto& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        return predicate();
+    };
+    EditSessionAdapter session;
+    WaveformCacheService::Config config;
+    config.root = std::filesystem::path(directory.filePath(QStringLiteral("waveforms")).toStdWString());
+    QString first_key;
+    engine::AudioTrackId first_semantic_identity;
+    std::vector<engine::WaveformPeak> first_peaks;
+    for (int cycle = 0; cycle < 2; ++cycle) {
+        SCOPED_TRACE(cycle);
+        session.importMedia(QUrl::fromLocalFile(path), true);
+        ASSERT_TRUE(wait_for(
+            [&]() { return session.workspace().assets().size() == 1 || !session.workspaceError().isEmpty(); }));
+        ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+        EditTimelineAdapter timeline;
+        timeline.configureWaveformCache(config);
+        auto* waveforms = qobject_cast<WaveformCacheService*>(timeline.waveformService());
+        ASSERT_NE(waveforms, nullptr);
+        QVariantMap audio;
+        for (const auto& row : session.visibleClips(0, session.durationMs()))
+            if (!row.toMap().value(QStringLiteral("video")).toBool()) {
+                ASSERT_TRUE(audio.isEmpty());
+                audio = row.toMap();
+            }
+        ASSERT_FALSE(audio.isEmpty());
+        const auto* clip = session.workspace().clip(audio.value(QStringLiteral("id")).toULongLong());
+        ASSERT_NE(clip, nullptr);
+        ASSERT_TRUE(clip->stream);
+        const auto semantic_identity = clip->stream->stream_identity;
+        const auto key = timeline.waveformSource(audio.value(QStringLiteral("sourceIdentity")).toString(),
+                                                 audio.value(QStringLiteral("path")).toString(),
+                                                 audio.value(QStringLiteral("containerIndex")).toInt(),
+                                                 audio.value(QStringLiteral("streamIdentity")).toString(),
+                                                 audio.value(QStringLiteral("sourceEndUs")).toLongLong());
+        ASSERT_FALSE(key.isEmpty());
+        ASSERT_TRUE(wait_for([&]() { return waveforms->state(key) == WaveformCacheService::State::Ready; }));
+        std::vector<engine::WaveformPeak> peaks;
+        ASSERT_TRUE(wait_for([&]() { return waveforms->readBlock(key, 0, 0, peaks) > 0; }));
+        EXPECT_EQ(clip->stream->stream_identity, semantic_identity);
+        if (cycle == 0) {
+            first_key = key;
+            first_semantic_identity = semantic_identity;
+            first_peaks = peaks;
+            EXPECT_EQ(waveforms->decoderOpensForTest(), 1u);
+            EXPECT_GT(waveforms->decodeCallsForTest(), 0u);
+        } else {
+            EXPECT_NE(semantic_identity, first_semantic_identity);
+            EXPECT_EQ(key, first_key);
+            EXPECT_EQ(peaks, first_peaks);
+            EXPECT_EQ(waveforms->decoderOpensForTest(), 0u);
+            EXPECT_EQ(waveforms->decodeCallsForTest(), 0u);
+            EXPECT_EQ(waveforms->decoderSeeksForTest(), 0u);
+        }
+        session.close();
+        EXPECT_TRUE(session.workspace().clips().empty());
+        EXPECT_TRUE(session.workspace().assets().empty());
+    }
+    const auto after = engine::ProbeEditMedia(std::filesystem::path(path.toStdWString()));
+    ASSERT_TRUE(after.error.empty()) << after.error;
+    EXPECT_EQ(after.content_sha256, metadata.content_sha256);
+}
+
+TEST(EditWorkspaceAdapter, RealEditingHistoryAndBlankTimeReachScopedExportsWithoutChangingSources) {
+    EnsureApplication();
+    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+    if (fixtures.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    QTemporaryDir sources;
+    QTemporaryDir output;
+    ASSERT_TRUE(sources.isValid());
+    ASSERT_TRUE(output.isValid());
+    const auto wait_for = [](const auto& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        return predicate();
+    };
+    QList<QUrl> urls;
+    QJsonArray source_manifest;
+    std::vector<engine::EditMediaMetadata> source_metadata;
+    for (const auto& name : {QStringLiteral("red.mkv"), QStringLiteral("blue.mkv")}) {
+        const auto path = sources.filePath(name);
+        ASSERT_TRUE(QFile::copy(QDir(fixtures).filePath(name), path));
+        auto metadata = engine::ProbeEditMedia(std::filesystem::path(path.toStdWString()));
+        ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+        ASSERT_EQ(metadata.duration_us, 2'000'000);
+        source_manifest.append(
+            QJsonObject{{QStringLiteral("name"), name},
+                        {QStringLiteral("path"), QDir(fixtures).absoluteFilePath(name)},
+                        {QStringLiteral("sha256"),
+                         QString::fromLatin1(QByteArray(reinterpret_cast<const char*>(metadata.content_sha256.data()),
+                                                        metadata.content_sha256.size())
+                                                 .toHex())}});
+        source_metadata.push_back(std::move(metadata));
+        urls.push_back(QUrl::fromLocalFile(path));
+    }
+    EditSessionAdapter session;
+    session.autoCrossfade = false;
+    session.importMedia(urls.front(), true);
+    ASSERT_TRUE(
+        wait_for([&]() { return session.workspace().assets().size() == 1 || !session.workspaceError().isEmpty(); }));
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    ASSERT_EQ(session.workspace().clips().size(), 2u);
+    ASSERT_EQ(session.durationMs(), 2000);
+    const auto red_asset = session.workspace().assets()[0].id;
+    const auto red = session.workspace().clips()[0].id;
+    const auto red_track = session.workspace().clip(red)->track;
+    EditExportAdapter exporter;
+    exporter.setSession(&session);
+    exporter.setRenderConfigProvider([] {
+        engine::RecorderConfig config;
+        config.video_codec = engine::VideoCodec::H264;
+        return config;
+    });
+    QString evidence;
+    if (const auto root = qEnvironmentVariable("EXOSNAP_EDIT_QUALIFICATION_OUTPUT"); !root.isEmpty()) {
+        ASSERT_TRUE(QDir(root).exists());
+        evidence = QDir(root).filePath(QStringLiteral("adapter-workflow-") + QFileInfo(output.path()).fileName());
+        ASSERT_TRUE(QDir().mkpath(evidence));
+    }
+    QJsonArray exports;
+    const auto export_scope = [&](const QString& scope, const QString& container, qint64 in_us, qint64 out_us,
+                                  const QJsonArray& windows) {
+        const auto destination =
+            output.filePath(scope + QLatin1Char('-') + container + QLatin1Char('-') + exporter.modeKey() +
+                            QLatin1Char('-') + QString::number(out_us - in_us));
+        ASSERT_TRUE(QDir().mkpath(destination));
+        exporter.reset();
+        exporter.setSpanKey(scope);
+        exporter.setContainerKey(container);
+        exporter.setOutputDirectoryProvider([destination] { return destination; });
+        exporter.startExport();
+        ASSERT_TRUE(wait_for([&]() { return exporter.state() != EditExportAdapter::Preparing; }));
+        ASSERT_EQ(exporter.state(), EditExportAdapter::Review) << exporter.errorText().toStdString();
+        EXPECT_FALSE(exporter.reviewOutcome().value(QStringLiteral("videoOnly")).toBool());
+        const auto reviewed = exporter.reviewOutcome();
+        if (session.workspace().assets().size() == 1) {
+            EXPECT_EQ(reviewed.value(QStringLiteral("path")).toString(),
+                      exporter.modeKey() == QStringLiteral("originalStreams") ? QStringLiteral("Copy")
+                                                                              : QStringLiteral("Render"));
+            if (exporter.modeKey() == QStringLiteral("finishedStereo")) {
+                const auto tracks = reviewed.value(QStringLiteral("outputAudioTracks")).toList();
+                ASSERT_EQ(tracks.size(), 1);
+                EXPECT_EQ(tracks.front().toMap().value(QStringLiteral("codec")).toString(), QStringLiteral("PCM24"));
+            }
+        }
+        exporter.confirmPreparedExport();
+        ASSERT_TRUE(wait_for([&]() { return !exporter.running(); }));
+        ASSERT_EQ(exporter.state(), EditExportAdapter::Done) << exporter.errorText().toStdString();
+        EXPECT_FALSE(session.exportRunning());
+        const auto media = engine::ProbeEditMedia(std::filesystem::path(exporter.outputPath().toStdWString()));
+        ASSERT_TRUE(media.error.empty()) << media.error;
+        EXPECT_NEAR(static_cast<double>(media.duration_us), static_cast<double>(out_us - in_us), 50'000);
+        EXPECT_TRUE(media.has_audio);
+        if (session.workspace().assets().size() == 1 && exporter.modeKey() == QStringLiteral("finishedStereo")) {
+            ASSERT_EQ(media.audio_metadata.status, engine::AudioMetadataStatus::Verified);
+            EditSessionAdapter recorded;
+            recorded.importMedia(QUrl::fromLocalFile(exporter.outputPath()), true);
+            ASSERT_TRUE(wait_for(
+                [&]() { return recorded.workspace().assets().size() == 1 || !recorded.workspaceError().isEmpty(); }));
+            ASSERT_TRUE(recorded.workspaceError().isEmpty()) << recorded.workspaceError().toStdString();
+            int audio_rows = 0;
+            for (const auto& value : recorded.visibleClips(0, recorded.durationMs())) {
+                const auto row = value.toMap();
+                if (row.value(QStringLiteral("video")).toBool())
+                    continue;
+                ++audio_rows;
+                const auto* clip = recorded.workspace().clip(row.value(QStringLiteral("id")).toULongLong());
+                ASSERT_NE(clip, nullptr);
+                ASSERT_TRUE(clip->stream);
+                const auto semantic =
+                    QByteArray(reinterpret_cast<const char*>(clip->stream->stream_identity.bytes.data()), 16).toHex();
+                EXPECT_NE(semantic, QByteArray(32, '0'));
+                EXPECT_EQ(row.value(QStringLiteral("streamIdentity")).toString().toLatin1(), semantic);
+            }
+            EXPECT_EQ(audio_rows, 1);
+        }
+        EXPECT_FALSE(QFileInfo::exists(exporter.outputPath() + QStringLiteral(".tmp")));
+        const auto filename = scope + QLatin1Char('-') + exporter.modeKey() + QLatin1Char('-') +
+                              QString::number(out_us - in_us) + QLatin1Char('.') + container;
+        if (!evidence.isEmpty())
+            ASSERT_TRUE(QFile::copy(exporter.outputPath(), QDir(evidence).filePath(filename)));
+        exports.append(
+            QJsonObject{{QStringLiteral("file"), filename},
+                        {QStringLiteral("path"),
+                         evidence.isEmpty() ? exporter.outputPath() : QDir(evidence).absoluteFilePath(filename)},
+                        {QStringLiteral("scope"), scope},
+                        {QStringLiteral("mode"), exporter.modeKey()},
+                        {QStringLiteral("review"), QJsonObject::fromVariantMap(reviewed)},
+                        {QStringLiteral("expectedDurationUs"), out_us - in_us},
+                        {QStringLiteral("timelineInUs"), in_us},
+                        {QStringLiteral("timelineOutUs"), out_us},
+                        {QStringLiteral("contentWindows"), windows}});
+    };
+    const auto window = [](qint64 in_us, qint64 out_us, const char* content) {
+        return QJsonObject{{QStringLiteral("inUs"), in_us},
+                           {QStringLiteral("outUs"), out_us},
+                           {QStringLiteral("content"), QString::fromLatin1(content)},
+                           {QStringLiteral("audioLevel"), std::string_view(content) == "red"    ? 0.25
+                                                          : std::string_view(content) == "blue" ? -0.25
+                                                                                                : 0.0}};
+    };
+    session.selectClip(red);
+    const auto copy_assessment = engine::AssessTimelineExport(
+        {{std::filesystem::path(urls.front().toLocalFile().toStdWString()), 0, 2'000'000, 0}}, false);
+    ASSERT_EQ(copy_assessment.eligibility, engine::TimelineExportEligibility::StreamCopy) << copy_assessment.reason;
+    exporter.setModeKey(QStringLiteral("originalStreams"));
+    export_scope(QStringLiteral("entire"), QStringLiteral("mkv"), 0, 2'000'000, {window(0, 2'000'000, "red")});
+    ASSERT_FALSE(HasFatalFailure());
+    exporter.setModeKey(QStringLiteral("finishedStereo"));
+    export_scope(QStringLiteral("entire"), QStringLiteral("mkv"), 0, 2'000'000, {window(0, 2'000'000, "red")});
+    ASSERT_FALSE(HasFatalFailure());
+    session.importMedia(urls.back(), true);
+    ASSERT_TRUE(
+        wait_for([&]() { return session.workspace().assets().size() == 2 || !session.workspaceError().isEmpty(); }));
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    ASSERT_EQ(session.workspace().clips().size(), 4u);
+    ASSERT_EQ(session.durationMs(), 4000);
+    const auto imported = session.workspace().snapshot();
+    const auto blue_asset = session.workspace().assets()[1].id;
+    const auto blue =
+        std::find_if(session.workspace().clips().begin(), session.workspace().clips().end(), [&](const auto& clip) {
+            return clip.asset == blue_asset && clip.stream && clip.stream->kind == engine::TimelineStreamKind::Video;
+        });
+    ASSERT_NE(blue, session.workspace().clips().end());
+    const auto blue_id = blue->id;
+    exporter.setModeKey(QStringLiteral("finishedStereo"));
+    WaveformCacheService::Config waveform_config;
+    waveform_config.root = std::filesystem::path(output.filePath(QStringLiteral("waveforms")).toStdWString());
+    auto waveforms = std::make_unique<WaveformCacheService>(waveform_config, WaveformCacheService::DecoderFactory{});
+    std::map<QString, std::vector<engine::WaveformPeak>> original_peaks;
+    const auto request_waveforms = [&](WaveformCacheService& service) {
+        for (const auto& value : session.visibleClips(0, session.durationMs())) {
+            const auto row = value.toMap();
+            if (row.value(QStringLiteral("video")).toBool())
+                continue;
+            engine::WaveformSourceKey source;
+            const auto identity =
+                QByteArray::fromHex(row.value(QStringLiteral("sourceIdentity")).toString().toLatin1());
+            const auto stream = QByteArray::fromHex(row.value(QStringLiteral("streamIdentity")).toString().toLatin1());
+            ASSERT_EQ(identity.size(), source.content_sha256.size());
+            ASSERT_EQ(stream.size(), source.stream_identity.size());
+            std::copy(identity.begin(), identity.end(), source.content_sha256.begin());
+            std::copy(stream.begin(), stream.end(), source.stream_identity.begin());
+            source.container_index = row.value(QStringLiteral("containerIndex")).toUInt();
+            const auto key = service.request(source, row.value(QStringLiteral("path")).toString(),
+                                             row.value(QStringLiteral("sourceEndUs")).toLongLong());
+            ASSERT_TRUE(wait_for([&]() { return service.state(key) == WaveformCacheService::State::Ready; }));
+            std::vector<engine::WaveformPeak> peaks;
+            ASSERT_TRUE(wait_for([&]() { return service.readBlock(key, 0, 0, peaks) > 0; }));
+            if (const auto found = original_peaks.find(key); found != original_peaks.end())
+                EXPECT_EQ(peaks, found->second);
+            else
+                original_peaks.emplace(key, std::move(peaks));
+        }
+    };
+    request_waveforms(*waveforms);
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_EQ(original_peaks.size(), 2u);
+    ASSERT_EQ(waveforms->decoderOpensForTest(), 2u);
+    const auto decode_calls = waveforms->decodeCallsForTest();
+    ASSERT_GT(decode_calls, 0u);
+    session.trimClip(red, 500, 1500);
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    const auto trimmed = session.workspace().snapshot();
+    session.selectClip(red);
+    session.requestSeek(1000);
+    session.splitSelected();
+    ASSERT_EQ(session.workspace().clips().size(), 6u);
+    const auto split = session.workspace().snapshot();
+    session.deleteSelected(false);
+    ASSERT_EQ(session.workspace().clips().size(), 4u);
+    const auto deleted = session.workspace().snapshot();
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), split->clips);
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), trimmed->clips);
+    session.redo();
+    session.redo();
+    EXPECT_EQ(session.workspace().clips(), deleted->clips);
+    EXPECT_EQ(imported->clips.size(), 4u);
+    EXPECT_EQ(imported->clips.front().source_in, 0);
+    EXPECT_EQ(imported->clips.front().source_out, 2'000'000);
+    const auto red_tail = std::find_if(session.workspace().clips().begin(), session.workspace().clips().end(),
+                                       [&](const auto& clip) { return clip.asset == red_asset; });
+    ASSERT_NE(red_tail, session.workspace().clips().end());
+    EXPECT_EQ(red_tail->source_in, 1'000'000);
+    EXPECT_EQ(red_tail->source_out, 1'500'000);
+    session.moveClip(blue_id, 2500, false);
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    session.setFixedTimelineEnd(true, 6000);
+    ASSERT_TRUE(session.fixedTimelineEnd());
+    ASSERT_EQ(session.durationMs(), 6000);
+    session.requestSeek(0);
+    session.selectGap(red_track, 500);
+    ASSERT_EQ(session.selectedGap().value(QStringLiteral("endMs")).toLongLong(), 1000);
+    session.copyBlankDuration();
+    session.pasteSpacer();
+    ASSERT_EQ(session.spacers().size(), 1);
+    const auto blank = session.workspace().snapshot();
+    session.undo();
+    EXPECT_TRUE(session.spacers().isEmpty());
+    session.redo();
+    EXPECT_EQ(session.workspace().snapshot()->spacers, blank->spacers);
+    EXPECT_EQ(session.workspace().clips(), blank->clips);
+    EXPECT_EQ(session.durationMs(), 6000);
+    request_waveforms(*waveforms);
+    ASSERT_FALSE(HasFatalFailure());
+    EXPECT_EQ(original_peaks.size(), 2u);
+    EXPECT_EQ(waveforms->decoderOpensForTest(), 2u);
+    EXPECT_EQ(waveforms->decodeCallsForTest(), decode_calls);
+    waveforms.reset();
+    WaveformCacheService reopened(waveform_config, {});
+    request_waveforms(reopened);
+    ASSERT_FALSE(HasFatalFailure());
+    EXPECT_EQ(reopened.decoderOpensForTest(), 0u);
+    EXPECT_EQ(reopened.decodeCallsForTest(), 0u);
+    EXPECT_EQ(reopened.decoderSeeksForTest(), 0u);
+    const auto timeline = session.workspace().timeline();
+    for (const auto& [time_us, asset, source_us] :
+         {std::tuple{250'000ll, edit::Id{0}, 0ll}, std::tuple{1'250'000ll, red_asset, 1'250'000ll},
+          std::tuple{2'000'000ll, edit::Id{0}, 0ll}, std::tuple{3'000'000ll, blue_asset, 500'000ll},
+          std::tuple{5'000'000ll, edit::Id{0}, 0ll}}) {
+        const auto evaluation = engine::EvaluateTimeline(timeline, time_us);
+        ASSERT_TRUE(evaluation.error.empty()) << evaluation.error;
+        if (!asset)
+            EXPECT_TRUE(evaluation.video.empty());
+        else {
+            ASSERT_EQ(evaluation.video.size(), 1u);
+            EXPECT_EQ(evaluation.video.front().asset, asset);
+            EXPECT_EQ(evaluation.video.front().source_us, source_us);
+        }
+    }
+    session.selectClip(blue_id);
+    session.requestSeekUs(750'000);
+    session.setSelectionBoundary(false);
+    session.requestSeekUs(3'000'000);
+    session.setSelectionBoundary(true);
+    exporter.setTimeSelectionUs(session.timeSelectionInUs(), session.timeSelectionOutUs());
+    const QJsonArray full{window(0, 1'000'000, "black"), window(1'000'000, 1'500'000, "red"),
+                          window(1'500'000, 2'500'000, "black"), window(2'500'000, 4'500'000, "blue"),
+                          window(4'500'000, 6'000'000, "black")};
+    export_scope(QStringLiteral("entire"), QStringLiteral("mkv"), 0, 6'000'000, full);
+    ASSERT_FALSE(HasFatalFailure());
+    export_scope(
+        QStringLiteral("occupied"), QStringLiteral("mkv"), 1'000'000, 4'500'000,
+        {window(0, 500'000, "red"), window(500'000, 1'500'000, "black"), window(1'500'000, 3'500'000, "blue")});
+    ASSERT_FALSE(HasFatalFailure());
+    export_scope(QStringLiteral("selected"), QStringLiteral("mp4"), 2'500'000, 4'500'000,
+                 {window(0, 2'000'000, "blue")});
+    ASSERT_FALSE(HasFatalFailure());
+    export_scope(QStringLiteral("time"), QStringLiteral("mkv"), 750'000, 3'000'000,
+                 {window(0, 250'000, "black"), window(250'000, 750'000, "red"), window(750'000, 1'750'000, "black"),
+                  window(1'750'000, 2'250'000, "blue")});
+    ASSERT_FALSE(HasFatalFailure());
+    export_scope(QStringLiteral("result"), QStringLiteral("mkv"), 0, 6'000'000, full);
+    ASSERT_FALSE(HasFatalFailure());
+    EXPECT_EQ(session.workspace().clips(), blank->clips);
+    EXPECT_EQ(session.workspace().snapshot()->spacers, blank->spacers);
+    for (qsizetype i = 0; i < urls.size(); ++i) {
+        const auto after = engine::ProbeEditMedia(std::filesystem::path(urls[i].toLocalFile().toStdWString()));
+        ASSERT_TRUE(after.error.empty()) << after.error;
+        EXPECT_EQ(after.content_sha256, source_metadata[i].content_sha256);
+    }
+    if (!evidence.isEmpty()) {
+        QFile manifest(QDir(evidence).filePath(QStringLiteral("manifest.json")));
+        ASSERT_TRUE(manifest.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        const auto bytes = QJsonDocument(QJsonObject{{QStringLiteral("sources"), source_manifest},
+                                                     {QStringLiteral("exports"), exports}})
+                               .toJson();
+        ASSERT_EQ(manifest.write(bytes), bytes.size());
+    }
+}
 TEST(EditExportAdapterRun, AnEmptyWorkspaceFailsBeforeAnyThreadIsStarted) {
     EnsureApplication();
     EditSessionAdapter session;
@@ -1771,6 +2193,8 @@ TEST(EditSessionDrag, CancellationInvalidAndStaleCandidatesHaveNoHistoryEntry) {
     session.updateClipDrag(1000);
     session.moveClip(id, 500, false);
     const auto changed_revision = session.workspace().revision();
+    EXPECT_FALSE(session.dragActive());
+    EXPECT_TRUE(session.dragClips().empty());
     EXPECT_FALSE(session.dragValid());
     EXPECT_FALSE(session.commitClipDrag());
     EXPECT_EQ(session.workspace().revision(), changed_revision);

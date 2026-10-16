@@ -121,18 +121,24 @@ QVariantList EditSessionAdapter::visibleClips(qint64 from_ms, qint64 to_ms) cons
                                                  32)
                                           .toHex())
                 : QString());
-        row.insert(
-            QStringLiteral("streamIdentity"),
-            clip.stream
-                ? QString::fromLatin1(
-                      QByteArray(reinterpret_cast<const char*>(clip.stream->stream_identity.bytes.data()), 16).toHex())
-                : QString());
+        auto cache_stream_identity = clip.stream ? clip.stream->stream_identity : engine::AudioTrackId{};
+        // Foreign track UUIDs bind one open, so persistent caches use only verified recording identities.
+        if (clip.stream && clip.stream->kind == engine::TimelineStreamKind::Audio && asset->source_descriptor &&
+            !asset->source_descriptor->audio_identities_verified)
+            cache_stream_identity = {};
+        row.insert(QStringLiteral("streamIdentity"),
+                   clip.stream
+                       ? QString::fromLatin1(
+                             QByteArray(reinterpret_cast<const char*>(cache_stream_identity.bytes.data()), 16).toHex())
+                       : QString());
         rows.back() = row;
     }
     return rows;
 }
 
 void EditSessionAdapter::publishWorkspace(bool changed) {
+    if (drag_snapshot_ && drag_snapshot_->revision != workspace_.revision())
+        cancelClipDrag();
     if (changed)
         selected_gap_track_ = 0;
     workspace_error_ = changed ? QString() : tr("The edit would overlap another clip or exceed the source.");

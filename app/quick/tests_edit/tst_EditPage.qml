@@ -194,13 +194,17 @@ Item {
         }
 
         function test_splitters_persist_across_processes() {
-            if (testPersistenceStage.length === 0) return;
+            if (testPersistenceStage.length === 0)
+                skip("Set EXOSNAP_EDIT_PERSISTENCE_STAGE for explicit write/read processes.");
             const page = make();
             const preferences = child(page, "editLayoutPreferences");
+            compare(preferences.location, testPageSession.layoutSettingsLocation);
             if (testPersistenceStage === "write") {
                 preferences.sourceFraction = 0.41;
                 preferences.timelineFraction = 0.53;
                 preferences.sync();
+                compare(preferences.sourceFraction, 0.41);
+                compare(preferences.timelineFraction, 0.53);
             } else {
                 compare(preferences.sourceFraction, 0.41);
                 compare(preferences.timelineFraction, 0.53);

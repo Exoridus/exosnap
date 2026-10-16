@@ -4,8 +4,10 @@
 #include "diagnostics/AppLog.h"
 #include "models/EditTimelineModel.h"
 #include "models/MarkerSidecar.h"
+#include "settings/ConfigPaths.h"
 #include <exosnap/engine/edit_timeline_export.h>
 
+#include <QDir>
 #include <QFileInfo>
 #include <QPointer>
 #include <QVariantMap>
@@ -16,6 +18,11 @@
 #include <system_error>
 
 namespace exosnap::quick {
+
+QUrl EditSessionAdapter::layoutSettingsLocation() const {
+    return QUrl::fromLocalFile(QDir(settings::ResolveAppConfigDir()).filePath(QStringLiteral("editor-layout.ini")));
+}
+
 namespace {
 
 const QString kEmptyValue = QStringLiteral("\xe2\x80\x94");

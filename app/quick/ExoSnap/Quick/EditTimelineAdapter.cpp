@@ -421,6 +421,10 @@ void EditTimelineAdapter::configureThumbnailCache(const ThumbnailRequestBroker::
     broker_ = std::make_shared<ThumbnailRequestBroker>(config);
 }
 
+void EditTimelineAdapter::configureWaveformCache(const WaveformCacheService::Config& config) {
+    waveforms_ = std::make_unique<WaveformCacheService>(config, WaveformCacheService::DecoderFactory{});
+}
+
 bool EditTimelineAdapter::registerThumbnailSource(const QString& identityHex, const QString& path, int videoWidth,
                                                   int videoHeight, int fpsNum, int fpsDen) {
     const auto identity = ParseContentIdentity(identityHex);

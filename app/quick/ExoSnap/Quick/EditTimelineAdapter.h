@@ -161,6 +161,8 @@ class EditTimelineAdapter : public QObject {
     // first source is registered or clip opened; a test seam and the hook for a
     // non-default cache root.
     void configureThumbnailCache(const ThumbnailRequestBroker::Config& config);
+    // Configure before loading QML or requesting waveforms; existing service pointers become invalid.
+    void configureWaveformCache(const WaveformCacheService::Config& config);
 
     // Makes a source drawable. `identityHex` is the 64-character content SHA-256.
     // Frame size and rate shape the tile grid; 0 means unknown. Returns false

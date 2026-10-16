@@ -255,6 +255,8 @@ class QuickApplication {
     // on, which is what makes the QApplication + QSystemTrayIcon startup path
     // automatically covered instead of only provable by hand.
     void applyTraySuppression(bool suppressed);
+    // Before load: suppress capture preview, native hooks and audible edit playback.
+    void applyIsolatedEditHarness();
 
     // The dev feed override (--update-base-url) and, when this process is itself
     // under a control channel, the run id the updater child is to be given.
@@ -808,6 +810,7 @@ class QuickApplication {
     // Verification reinstall, argv-armed for this run only; never persisted.
     bool verify_update_reinstall_ = false;
     bool tray_suppressed_ = false;
+    bool isolated_edit_harness_ = false;
     // Harness only. Empty unless the corresponding CLI option was given.
     QString pending_record_visual_state_;
     QString pending_overlay_visual_state_;

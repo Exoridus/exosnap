@@ -523,40 +523,122 @@ TEST(WaveformCacheService, DiskAndMemoryBudgetsHold) {
     EXPECT_EQ(service->state(survivor), WaveformCacheService::State::Unknown);
 }
 
+TEST(WaveformCacheService, SyntheticCorruptOrTruncatedEntryReanalysesOnceAndReopensWarm) {
+    for (const bool truncated : {false, true}) {
+        SCOPED_TRACE(truncated);
+        WaveformFixture fixture;
+        QString key;
+        std::filesystem::path entry;
+        std::vector<WaveformPeak> expected;
+        {
+            auto service = fixture.Service();
+            key = service->request(SourceKey(52), fixture.source_path, kThreeSecondsUs);
+            ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+            ASSERT_GT(ReadBlockBlocking(*service, key, 0, 0, expected), 0u);
+            entry = service->storeForTest().EntryPath(key.toStdString());
+        }
+        if (truncated) {
+            std::filesystem::resize_file(entry, 12);
+        } else {
+            std::fstream file(entry, std::ios::in | std::ios::out | std::ios::binary);
+            ASSERT_TRUE(file.good());
+            file.seekg(-1, std::ios::end);
+            const auto value = file.get();
+            ASSERT_NE(value, std::char_traits<char>::eof());
+            file.seekp(-1, std::ios::end);
+            file.put(static_cast<char>(value ^ 0xff));
+            ASSERT_TRUE(file.good());
+        }
+        {
+            auto service = fixture.Service();
+            EXPECT_EQ(service->request(SourceKey(52), fixture.source_path, kThreeSecondsUs), key);
+            ASSERT_TRUE(WaitFor([&]() {
+                return service->state(key) == WaveformCacheService::State::Ready ||
+                       service->state(key) == WaveformCacheService::State::Failed;
+            }));
+            ASSERT_EQ(service->state(key), WaveformCacheService::State::Ready);
+            EXPECT_EQ(service->storeForTest().Stats().rejected, 1u);
+            EXPECT_EQ(service->decoderOpensForTest(), 1u);
+            EXPECT_GT(service->decodeCallsForTest(), 0u);
+            std::vector<WaveformPeak> actual;
+            ASSERT_GT(ReadBlockBlocking(*service, key, 0, 0, actual), 0u);
+            EXPECT_EQ(actual, expected);
+            EXPECT_EQ(service->storeForTest().EntryCount(), 1u);
+            EXPECT_EQ(FilesWithSuffix(fixture.root, ".tmp"), 0u);
+        }
+        auto warm = fixture.Service();
+        warm->request(SourceKey(52), fixture.source_path, kThreeSecondsUs);
+        ASSERT_TRUE(WaitFor([&]() { return warm->state(key) == WaveformCacheService::State::Ready; }));
+        std::vector<WaveformPeak> actual;
+        ASSERT_GT(ReadBlockBlocking(*warm, key, 0, 0, actual), 0u);
+        EXPECT_EQ(actual, expected);
+        EXPECT_EQ(warm->decoderOpensForTest(), 0u);
+        EXPECT_EQ(warm->decodeCallsForTest(), 0u);
+    }
+}
+
 TEST(WaveformCacheService, RealFixturesThroughTheServiceAndThroughput) {
     const auto directory = FixtureDirectory();
     if (!directory)
         GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
     EnsureApplication();
     QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
     WaveformCacheService::Config config;
     config.root = std::filesystem::path(temp.filePath(QStringLiteral("waveforms")).toStdWString());
-    WaveformCacheService service(config, {});
     for (const auto& [name, level] : {std::pair{L"red.mkv", 0.25f}, std::pair{L"blue.mkv", -0.25f}}) {
         const auto path = *directory / name;
         const auto metadata = engine::ProbeEditMedia(path);
         ASSERT_TRUE(metadata.error.empty()) << metadata.error;
         engine::WaveformSourceKey source;
         source.content_sha256 = metadata.content_sha256;
+        bool found_audio = false;
         for (const auto& stream : metadata.streams)
-            if (stream.kind == engine::TimelineStreamKind::Audio)
+            if (stream.kind == engine::TimelineStreamKind::Audio) {
                 source.container_index = stream.container_index;
-        const auto started = std::chrono::steady_clock::now();
-        const QString key = service.request(source, QString::fromStdWString(path.wstring()), metadata.duration_us);
-        ASSERT_TRUE(WaitFor([&]() { return service.state(key) == WaveformCacheService::State::Ready; }));
-        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-        std::cout << "[waveform-service] " << path.filename().string() << ": "
-                  << static_cast<double>(service.totalSamples(key)) / 48000.0 << " s of audio ready in " << seconds
-                  << " s\n";
-        std::vector<WaveformPeak> peaks;
-        const auto buckets = ReadBlockBlocking(service, key, 0, 0, peaks);
-        ASSERT_GT(buckets, 8u);
-        for (std::uint32_t bucket = 2; bucket + 2 < buckets; ++bucket)
-            for (int channel = 0; channel < 2; ++channel) {
-                const auto& peak = peaks[bucket * 2 + channel];
-                ASSERT_EQ(peak.min, peak.max);
-                ASSERT_NEAR(engine::WaveformPeakToFloat(peak.max), level, 1e-3f);
+                found_audio = true;
+                break;
             }
+        ASSERT_TRUE(found_audio);
+        const auto started = std::chrono::steady_clock::now();
+        QString key;
+        std::vector<WaveformPeak> expected;
+        {
+            WaveformCacheService service(config, {});
+            key = service.request(source, QString::fromStdWString(path.wstring()), metadata.duration_us);
+            ASSERT_TRUE(WaitFor([&]() { return service.state(key) == WaveformCacheService::State::Ready; }));
+            const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+            std::cout << "[waveform-service] " << path.filename().string() << ": "
+                      << static_cast<double>(service.totalSamples(key)) / 48000.0 << " s of audio ready in " << seconds
+                      << " s\n";
+            EXPECT_EQ(service.decoderOpensForTest(), 1u);
+            EXPECT_GT(service.decodeCallsForTest(), 0u);
+            const auto buckets = ReadBlockBlocking(service, key, 0, 0, expected);
+            ASSERT_GT(buckets, 8u);
+            for (std::uint32_t bucket = 2; bucket + 2 < buckets; ++bucket)
+                for (int channel = 0; channel < 2; ++channel) {
+                    const auto& peak = expected[bucket * 2 + channel];
+                    ASSERT_EQ(peak.min, peak.max);
+                    ASSERT_NEAR(engine::WaveformPeakToFloat(peak.max), level, 1e-3f);
+                }
+        }
+        for (int cycle = 0; cycle < 4; ++cycle) {
+            SCOPED_TRACE(cycle);
+            WaveformCacheService warm(config, {});
+            EXPECT_EQ(warm.request(source, QString::fromStdWString(path.wstring()), metadata.duration_us), key);
+            ASSERT_TRUE(WaitFor([&]() { return warm.state(key) == WaveformCacheService::State::Ready; }));
+            std::vector<WaveformPeak> actual;
+            ASSERT_GT(ReadBlockBlocking(warm, key, 0, 0, actual), 0u);
+            EXPECT_EQ(actual, expected);
+            EXPECT_EQ(warm.decoderOpensForTest(), 0u);
+            EXPECT_EQ(warm.decodeCallsForTest(), 0u);
+            EXPECT_EQ(warm.decoderSeeksForTest(), 0u);
+            EXPECT_LE(warm.memoryBytesForTest(), config.memory_budget_bytes);
+            EXPECT_EQ(FilesWithSuffix(config.root, ".tmp"), 0u);
+        }
+        const auto after = engine::ProbeEditMedia(path);
+        ASSERT_TRUE(after.error.empty()) << after.error;
+        EXPECT_EQ(after.content_sha256, metadata.content_sha256);
     }
 }
 
@@ -1024,6 +1106,82 @@ TEST(ThumbnailBroker, ClipsOfOneSourceShareTilesAndScrollingBackNeverDecodes) {
     request_window(*broker, 500'000, 1'500'000, 400);
     EXPECT_EQ(worker.decodeCountForTest(), 0u);
     EXPECT_GT(broker->Stats().disk_hits, 0u);
+}
+
+TEST(ThumbnailBroker, RealFailedSourcesStayIsolatedAcrossWorkerTeardownAndWarmReopen) {
+    const auto directory = FixtureDirectory();
+    if (!directory)
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    ThumbnailFixture fixture;
+    ASSERT_TRUE(fixture.temp.isValid());
+    const auto path = std::filesystem::path(fixture.temp.filePath(QStringLiteral("source.mkv")).toStdWString());
+    ASSERT_TRUE(std::filesystem::copy_file(*directory / L"red.mkv", path));
+    const auto metadata = engine::ProbeEditMedia(path);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    const auto identity = engine::ToHex(metadata.content_sha256);
+    const auto missing_identity = engine::ToHex(Identity(71));
+    const auto invalid_path =
+        std::filesystem::path(fixture.temp.filePath(QStringLiteral("invalid.mkv")).toStdWString());
+    const std::array<std::uint8_t, 7> invalid_bytes{'n', 'o', 't', 'm', 'e', 'd', 'i'};
+    {
+        std::ofstream invalid(invalid_path, std::ios::binary);
+        invalid.write(reinterpret_cast<const char*>(invalid_bytes.data()), invalid_bytes.size());
+        ASSERT_TRUE(invalid.good());
+    }
+    const auto invalid_hash = engine::Sha256(invalid_bytes);
+    const auto invalid_identity = engine::ToHex(invalid_hash);
+    for (int cycle = 0; cycle < 4; ++cycle) {
+        SCOPED_TRACE(cycle);
+        {
+            auto broker = fixture.Broker();
+            broker->RegisterSource(identity, ThumbnailSourceInfo{path, metadata.content_sha256, metadata.width,
+                                                                 metadata.height, metadata.fps_num, metadata.fps_den});
+            auto unavailable = ThumbnailSourceInfo{
+                std::filesystem::path(fixture.temp.filePath(QStringLiteral("missing.mkv")).toStdWString()),
+                Identity(71),
+                metadata.width,
+                metadata.height,
+                metadata.fps_num,
+                metadata.fps_den};
+            broker->RegisterSource(missing_identity, unavailable);
+            unavailable.path = invalid_path;
+            unavailable.content_sha256 = invalid_hash;
+            broker->RegisterSource(invalid_identity, unavailable);
+            TimelineThumbnailSource worker(broker);
+            std::vector<std::shared_ptr<Result>> results;
+            for (const auto& [source, time_us] : {std::pair{missing_identity, 0ll}, std::pair{identity, 0ll},
+                                                  std::pair{invalid_identity, 0ll}, std::pair{identity, 1'000'000ll}}) {
+                results.push_back(std::make_shared<Result>());
+                broker->Request(source, time_us, 48, Capture(results.back()));
+            }
+            ASSERT_TRUE(WaitFor([&]() { return std::all_of(results.begin(), results.end(), Done); }));
+            for (std::size_t i = 0; i < results.size(); ++i) {
+                std::lock_guard lock(results[i]->mutex);
+                ASSERT_TRUE(results[i]->image.has_value());
+                EXPECT_EQ(results[i]->completions, 1);
+                if (i % 2 == 0)
+                    EXPECT_TRUE(results[i]->image->isNull());
+                else {
+                    ASSERT_FALSE(results[i]->image->isNull());
+                    const auto& image = *results[i]->image;
+                    const auto pixel = image.pixelColor(image.width() / 2, image.height() / 2);
+                    EXPECT_GT(pixel.red(), pixel.blue());
+                }
+            }
+            EXPECT_EQ(worker.decodeCountForTest(), cycle == 0 ? 2u : 0u);
+            EXPECT_EQ(broker->Disk()->store().EntryCount(), 2u);
+            EXPECT_FALSE(broker->Disk()->store().Contains(ThumbnailCacheKey(Identity(71), 0, 48)));
+            EXPECT_FALSE(broker->Disk()->store().Contains(ThumbnailCacheKey(invalid_hash, 0, 48)));
+            EXPECT_EQ(FilesWithSuffix(fixture.root, ".tmp"), 0u);
+        }
+        const auto handle =
+            CreateFileW(path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ASSERT_NE(handle, INVALID_HANDLE_VALUE) << "Source handle retained after worker teardown: " << GetLastError();
+        EXPECT_TRUE(CloseHandle(handle));
+    }
+    const auto after = engine::ProbeEditMedia(path);
+    ASSERT_TRUE(after.error.empty()) << after.error;
+    EXPECT_EQ(after.content_sha256, metadata.content_sha256);
 }
 
 TEST(ThumbnailBroker, ForegroundBusyDefersDecodesNotCacheHits) {

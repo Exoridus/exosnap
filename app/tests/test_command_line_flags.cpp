@@ -63,6 +63,13 @@ TEST(CommandLineFlags, CombinedAutoRecordAndAutoEditIsAccepted) {
         << error.toStdString();
 }
 
+TEST(CommandLineFlags, IsolatedEditorQualificationIsAccepted) {
+    QString error;
+    EXPECT_TRUE(ValidateCommandLine(
+        Cmd({"--auto-edit-qualify", "--auto-edit-media", "clip.mkv", "--auto-edit-report", "report.json"}), &error))
+        << error.toStdString();
+}
+
 TEST(CommandLineFlags, HarnessAndServiceInvocationsAreAccepted) {
     QString error;
     EXPECT_TRUE(ValidateCommandLine(Cmd({"--visual-test", "out.png", "--visual-page", "1", "--visual-test-size",

@@ -142,6 +142,7 @@ struct SourceStreamDescriptor {
 struct ValidatedSourceDescriptor {
     engine::FileIdentity file_identity;
     std::array<uint8_t, 32> asset_identity_fingerprint{};
+    bool audio_identities_verified = false;
     std::vector<SourceStreamDescriptor> streams;
 };
 

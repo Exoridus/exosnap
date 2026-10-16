@@ -40,6 +40,7 @@ class EditSessionAdapter : public QObject {
     QML_UNCREATABLE("EditSessionAdapter is provided by the application")
 
     Q_PROPERTY(bool open READ open NOTIFY openChanged FINAL)
+    Q_PROPERTY(QUrl layoutSettingsLocation READ layoutSettingsLocation CONSTANT FINAL)
     Q_PROPERTY(bool deliveryPending READ deliveryPending NOTIFY clipChanged FINAL)
     Q_PROPERTY(QString clipTitle READ clipTitle NOTIFY clipChanged FINAL)
     Q_PROPERTY(QString clipPath READ clipPath NOTIFY clipChanged FINAL)
@@ -157,6 +158,7 @@ class EditSessionAdapter : public QObject {
 
     explicit EditSessionAdapter(QObject* parent = nullptr);
     ~EditSessionAdapter() override;
+    [[nodiscard]] QUrl layoutSettingsLocation() const;
 
     [[nodiscard]] const edit::Workspace& workspace() const {
         return workspace_;

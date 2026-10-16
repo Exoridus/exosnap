@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -486,6 +487,59 @@ TEST_F(EditorExportScopeMedia, SelectedClipsExcludeSimultaneousUnselectedVideoAn
     intent.span = EditExportSpan::SelectedClips;
     intent.selected_clip_ids = {1, 2, 3, 4};
     ExportAndCheck(snapshot, intent, {1, 0, 1});
+}
+
+TEST_F(EditorExportMedia, MissingInitialMatroskaDtsRendersFinishedVideoButPreservesOriginalStreamCopy) {
+    const auto remux = RemuxToMkv(VideoFixture(), audio_source);
+    ASSERT_TRUE(remux.success) << remux.message;
+    {
+        AVFormatContext* context = nullptr;
+        ASSERT_GE(avformat_open_input(&context, audio_source.string().c_str(), nullptr, nullptr), 0);
+        std::unique_ptr<AVFormatContext, void (*)(AVFormatContext*)> input(
+            context, [](AVFormatContext* p) { avformat_close_input(&p); });
+        ASSERT_GE(avformat_find_stream_info(context, nullptr), 0);
+        auto free_packet = [](AVPacket* packet) { av_packet_free(&packet); };
+        std::unique_ptr<AVPacket, decltype(free_packet)> packet(av_packet_alloc(), free_packet);
+        ASSERT_NE(packet, nullptr);
+        ASSERT_GE(av_read_frame(context, packet.get()), 0);
+        ASSERT_NE(packet->pts, AV_NOPTS_VALUE);
+        ASSERT_EQ(packet->dts, AV_NOPTS_VALUE);
+    }
+    auto snapshot = Snapshot(false);
+    snapshot.sources.front().path = audio_source;
+    snapshot.sources.front().metadata = ProbeEditMedia(audio_source);
+    ASSERT_TRUE(snapshot.sources.front().metadata.error.empty());
+    snapshot.timeline.duration_us = snapshot.sources.front().metadata.duration_us;
+    snapshot.timeline.clips.front().source_out_us = snapshot.timeline.duration_us;
+    EditExportIntent intent;
+    intent.span = EditExportSpan::EntireTimeline;
+    intent.destination = output;
+    const auto original_duration = ProbeEditMedia(VideoFixture()).duration_us;
+    const std::vector<TimelineExportClip> consecutive{{VideoFixture(), 0, original_duration, 0},
+                                                      {VideoFixture(), 0, original_duration, original_duration}};
+    EXPECT_TRUE(HasUsableCopiedVideoTimestamps(consecutive));
+    auto overlapping = consecutive;
+    overlapping.back().timeline_start_us = 0;
+    EXPECT_FALSE(HasUsableCopiedVideoTimestamps(overlapping));
+    std::atomic<bool> cancelled{true};
+    EXPECT_FALSE(HasUsableCopiedVideoTimestamps(consecutive, &cancelled));
+    const auto facts = AssessEditExportFacts(snapshot, intent, true);
+    EXPECT_TRUE(facts.original_copy_qualified);
+    EXPECT_FALSE(facts.video_copy_qualified);
+    const auto finished = PrepareEditExport(snapshot, intent, facts);
+    ASSERT_TRUE(finished->ready());
+    EXPECT_EQ(finished->video_path, EditVideoPath::Render);
+    intent.mode = EditExportMode::OriginalStreams;
+    auto& video = snapshot.timeline.clips.front();
+    const auto& stream = snapshot.sources.front().metadata.streams.front();
+    video.stream = TimelineStreamRef{1, stream.stream_identity.value_or(AudioTrackId{{1}}), stream.container_index,
+                                     TimelineStreamKind::Video};
+    const auto original = PrepareEditExport(snapshot, intent, AssessEditExportFacts(snapshot, intent, true));
+    ASSERT_TRUE(original->ready()) << "issue count " << original->issues.size();
+    EXPECT_EQ(original->video_path, EditVideoPath::Copy);
+    const auto result = ExecuteEditExport(*original, {}, output, RemuxNoopCallback());
+    ASSERT_TRUE(result.success) << result.message;
+    EXPECT_EQ(DecodeFrames(output), DecodeFrames(VideoFixture()));
 }
 
 TEST_F(EditorExportMedia, UnchangedVideoIsCopiedBesideARenderedStereoMix) {

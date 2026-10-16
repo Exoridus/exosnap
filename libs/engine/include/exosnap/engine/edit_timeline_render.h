@@ -6,6 +6,7 @@
 #include <exosnap/engine/recorder_session.h>
 
 #include <array>
+#include <atomic>
 
 namespace exosnap::engine {
 
@@ -88,6 +89,11 @@ struct TimelineRenderMeasurements {
 RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const EditRenderPlan& plan,
                                RecorderConfig config, const std::filesystem::path& output, bool to_mp4,
                                RemuxProgressCallback progress, TimelineRenderMeasurements* measurements = nullptr);
+
+// Checks every video packet without accumulating payloads. Returns false for missing
+// timestamps, non-monotonic timeline DTS, unreadable sources or cancellation.
+[[nodiscard]] bool HasUsableCopiedVideoTimestamps(const std::vector<TimelineExportClip>& recipe,
+                                                  const std::atomic<bool>* cancelled = nullptr);
 
 // Copies the video packets of complete, compatible sources that cover the whole
 // timeline from zero and renders the result mix as 48 kHz stereo PCM beside

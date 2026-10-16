@@ -507,6 +507,8 @@ void EditPlayerWorker::seekTimeline(qint64 position_us, bool resume) {
         timeline_playing_ = resume;
         if (!renderTimeline(position_us_, engine::VideoReadMode::RandomAccess))
             return;
+        // A seek can supersede the original open result while reusing its reader.
+        publishOpenResult(true, {});
         ensureTimer();
         tick_timer_->setInterval(
             EditPreviewTickMsFor(static_cast<double>(render_plan_.fps_num) / render_plan_.fps_den, screen_hz_));
@@ -588,11 +590,14 @@ void EditPlayerWorker::seekTimeline(qint64 position_us, bool resume) {
         if (resume)
             session_->Play(source_us, request_generation_);
         syncClock();
+        publishOpenResult(true, {});
     }
     // Valid blank time is a presented black frame, not a pending decode: the
     // seek converges and playback continues on the wall clock.
-    if (!clip && workspace_.duration() > 0)
+    if (!clip && workspace_.duration() > 0) {
         presentBlank(position_us);
+        publishOpenResult(true, {});
+    }
     timeline_playing_ = resume;
     publishPlaybackState(timeline_playing_);
     ensureTimer();
